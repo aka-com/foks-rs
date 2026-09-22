@@ -12,10 +12,11 @@ import { useTabSheetState } from '../navigation-guard';
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Menu, Popover } from '/kit/overlay-primitives';
+import { ContextMenu, Menu, Popover } from '/kit/overlay-primitives';
 import type { ReactNode } from 'react';
 import { Band, Button, Chip, Icon, MenuButton, MenuItem } from '../components';
 import { InvitationPanel } from '../components/invitation-panel';
+import { InviteNewUserSheet } from '../components/invite-new-user-sheet';
 import { useTeamRequestCounts } from '../operation-queries';
 import {
   commandRecovery,
@@ -199,6 +200,7 @@ function TeamRow({
   requests = 0,
   menu,
   onOpen,
+  onContextMenu,
 }: {
   snapshot: AgentSnapshot;
   store: TeamStore;
@@ -206,6 +208,7 @@ function TeamRow({
   requests?: number;
   menu: ReactNode;
   onOpen: () => void;
+  onContextMenu: (point: { x: number; y: number }) => void;
 }): ReactNode {
   const state = storeDescriptionState(snapshot, store, { operation: 'teams' });
   const description = storeDescription(snapshot, store, { operation: 'teams' });
@@ -233,7 +236,18 @@ function TeamRow({
   return (
     // The row itself is the button that opens the team; its menu is a sibling
     // of that button, not a control nested inside one.
-    <div className="rowline">
+    <div
+      className="rowline"
+      onContextMenu={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest('[role="menu"], .rowmenu')
+        )
+          return;
+        event.preventDefault();
+        onContextMenu({ x: event.clientX, y: event.clientY });
+      }}
+    >
       <button
         type="button"
         className={state === 'normal' ? 'row' : 'row off'}
@@ -353,14 +367,30 @@ export function TeamsScreen({
       { replace: true, force: true },
     );
   }, [intent, actingId, location.store]);
+  const teamsRef = useRef(teams);
+  teamsRef.current = teams;
+  const [inviting, setInviting] = useState<TeamStore | null>(null);
+  const [context, setContext] = useState<{
+    x: number;
+    y: number;
+    store: TeamStore;
+  } | null>(null);
   useEffect(() => {
     const request = requested.current;
     const store = actingRef.current;
     if (intent || !request || !store) return;
     requested.current = null;
     if (request === 'create') setSheet({ kind: 'create', store });
-    else setJoining(store);
-  }, [intent, actingId, setSheet, setJoining]);
+    else if (request === 'join') setJoining(store);
+    else {
+      const team = teamsRef.current.find(
+        (candidate) => candidate.id === location.store,
+      );
+      if (!team) return;
+      if (request === 'invite') setInviting(team);
+      else setSheet({ kind: request, store: team });
+    }
+  }, [intent, actingId, location.store, setSheet, setJoining]);
   // The stuck creation a row asked to forget. Held apart from `sheet`, which
   // is the group sheet's own set of kinds.
   const [abandoning, setAbandoning] = useState<TeamStore | null>(null);
@@ -457,104 +487,135 @@ export function TeamsScreen({
   };
 
   /**
-   * A row's menu: actions only, inert where they do not apply, with the same
-   * reasons the team's own page gives.
+   * Share actions between the row menu and the right-click menu. Use the
+   * same availability checks and disabled-action explanations as team settings.
    */
-  const rowMenu = (store: TeamStore): ReactNode => {
+  const rowMenuItems = (store: TeamStore, close: () => void): ReactNode => {
     const rosterReason = manageReason(snapshot, store, 'roster');
     const federationReason = manageReason(snapshot, store, 'federation');
+    const serverName = displayServerName(snapshot, store);
+    const requests =
+      store.team_kind === 'named' ? (requestCounts.get(store.id) ?? 0) : 0;
     return (
-      <span className="rowmenu">
-        <MenuButton
-          variant="quiet"
-          icon="ellipsis"
-          trailingIcon={null}
-          label=""
-          menuLabel={`Actions for ${store.name}`}
-          aria-label={`Actions for ${store.name}`}
+      <>
+        {store.active === false ? (
+          <>
+            <MenuItem
+              icon="refresh"
+              onClick={() => {
+                close();
+                finishSetup(store);
+              }}
+            >
+              Finish setup…
+            </MenuItem>
+            {/* Offer removal for incomplete teams whose setup cannot be resumed. */}
+            <MenuItem
+              icon="trash"
+              danger
+              onClick={() => {
+                close();
+                setAbandoning(store);
+              }}
+            >
+              Remove team…
+            </MenuItem>
+            <div className="menu-separator" role="separator" />
+          </>
+        ) : null}
+        <MenuItem
+          icon="user"
+          reason={rosterReason}
+          onClick={() => {
+            close();
+            setSheet({ kind: 'add', store });
+          }}
         >
-          {(close) => (
-            <>
-              {store.active === false ? (
-                <>
-                  <MenuItem
-                    icon="refresh"
-                    onClick={() => {
-                      close();
-                      finishSetup(store);
-                    }}
-                  >
-                    Finish setup…
-                  </MenuItem>
-                  {/* Finishing cannot succeed for every stuck creation, so the
-                      row that offers it offers the way out beside it. */}
-                  <MenuItem
-                    icon="trash"
-                    danger
-                    onClick={() => {
-                      close();
-                      setAbandoning(store);
-                    }}
-                  >
-                    Remove team…
-                  </MenuItem>
-                  <div className="menu-separator" role="separator" />
-                </>
-              ) : null}
-              {/* Invitation options matching the team page: add an individual
-                  user or add a federated team from another server. Disabled
-                  options provide an explanatory reason directly in the menu. */}
-              <MenuItem
-                icon="user"
-                reason={rosterReason}
-                onClick={() => {
-                  close();
-                  setSheet({ kind: 'add', store });
-                }}
-              >
-                <span className="menu-choice">
-                  <span>Add a user…</span>
-                  <small>Invite by username</small>
-                </span>
-              </MenuItem>
-              <MenuItem
-                icon="users"
-                reason={federationReason}
-                onClick={() => {
-                  close();
-                  setSheet({ kind: 'add-team', store });
-                }}
-              >
-                <span className="menu-choice">
-                  <span>Add a team from another server…</span>
-                  <small>Add team via federation</small>
-                </span>
-              </MenuItem>
-              <div className="menu-separator" role="separator" />
-              <MenuItem
-                icon="copy"
-                onClick={() => {
-                  close();
-                  copyId(store);
-                }}
-              >
-                Copy team ID
-              </MenuItem>
-              <MenuItem
-                icon="externalLink"
-                onClick={() => {
-                  close();
-                  onNavigate({ kind: 'store', ref: store.id });
-                }}
-              >
-                Open in Files
-              </MenuItem>
-            </>
-          )}
-        </MenuButton>
-      </span>
+          <span className="menu-choice">
+            <span>Add FOKS user…</span>
+            <small>Someone with an account on {serverName}</small>
+          </span>
+        </MenuItem>
+        <MenuItem
+          icon="users"
+          reason={federationReason}
+          onClick={() => {
+            close();
+            setSheet({ kind: 'add-team', store });
+          }}
+        >
+          <span className="menu-choice">
+            <span>Add FOKS team…</span>
+            <small>A team from another server</small>
+          </span>
+        </MenuItem>
+        <MenuItem
+          icon="door"
+          reason={rosterReason}
+          onClick={() => {
+            close();
+            setInviting(store);
+          }}
+        >
+          <span className="menu-choice">
+            <span>Invite new user…</span>
+            <small>Create an invitation to share</small>
+          </span>
+        </MenuItem>
+        <div className="menu-separator" role="separator" />
+        {store.team_kind === 'named' ? (
+          <MenuItem
+            icon="shield"
+            reason={rosterReason}
+            onClick={() => {
+              close();
+              onNavigate({
+                kind: 'group-settings',
+                ref: store.id,
+                tab: 'requests',
+              });
+            }}
+          >
+            Review requests
+            {requests ? <kbd>{requests}</kbd> : null}
+          </MenuItem>
+        ) : null}
+        <MenuItem
+          icon="copy"
+          onClick={() => {
+            close();
+            copyId(store);
+          }}
+        >
+          Copy team ID
+        </MenuItem>
+        <MenuItem
+          icon="externalLink"
+          onClick={() => {
+            close();
+            onNavigate({ kind: 'store', ref: store.id });
+          }}
+        >
+          Open in Files
+        </MenuItem>
+      </>
     );
   };
+
+  const rowMenu = (store: TeamStore): ReactNode => (
+    <span className="rowmenu">
+      <MenuButton
+        variant="quiet"
+        icon="ellipsis"
+        trailingIcon={null}
+        label=""
+        menuLabel={`Actions for ${store.name}`}
+        aria-label={`Actions for ${store.name}`}
+      >
+        {(close) => rowMenuItems(store, close)}
+      </MenuButton>
+    </span>
+  );
 
   const teamRows = (list: readonly TeamStore[]): ReactNode =>
     list.map((store) => (
@@ -566,6 +627,7 @@ export function TeamsScreen({
           store.team_kind === 'named' ? (requestCounts.get(store.id) ?? 0) : 0
         }
         menu={rowMenu(store)}
+        onContextMenu={(point) => setContext({ ...point, store })}
         onOpen={() =>
           onNavigate({
             kind: 'group-settings',
@@ -703,11 +765,15 @@ export function TeamsScreen({
           sheet={sheet.kind}
           target={null}
           onClose={() => setSheet(null)}
-          // The add sheet's own switch between a person and another server's
-          // group: the sheet's store does not change, only what is added.
-          onSwitch={(next) => {
-            if (next) setSheet({ kind: next, store: sheet.store });
-          }}
+          onInvite={
+            sheet.store.kind === 'team'
+              ? () => {
+                  const team = sheet.store as TeamStore;
+                  setSheet(null);
+                  setInviting(team);
+                }
+              : undefined
+          }
           onApplied={async (message, options) => {
             // The list navigates to the team a creation just made, which it
             // can only find in the whole catalog, so this completion keeps
@@ -745,6 +811,38 @@ export function TeamsScreen({
               onNavigate({ kind: 'store', ref: createdStore.id });
           }}
           onMutationError={onMutationError}
+        />
+      ) : null}
+      {context ? (
+        <ContextMenu
+          point={context}
+          className="menu-portal"
+          onClose={() => setContext(null)}
+        >
+          <Menu
+            className="menu"
+            aria-label={`Actions for ${context.store.name}`}
+            initialFocus="first"
+            onClose={() => setContext(null)}
+          >
+            {rowMenuItems(context.store, () => setContext(null))}
+          </Menu>
+        </ContextMenu>
+      ) : null}
+      {inviting ? (
+        <InviteNewUserSheet
+          bridge={bridge}
+          team={inviting}
+          serverLabel={displayServerName(snapshot, inviting)}
+          approver={
+            snapshot.accounts.find(
+              (candidate) =>
+                candidate.alias === inviting.account &&
+                candidate.server === inviting.server,
+            )?.username
+          }
+          onClose={() => setInviting(null)}
+          onComplete={() => onRefresh('Invitation created', inviting.server)}
         />
       ) : null}
       {joining ? (

@@ -520,35 +520,36 @@ test('a Teams row menu says why an action does not apply', async () => {
   openRowMenu('Engineering');
   // The list asks the add question the way the team page does: two choices,
   // each with its own reason, and its own line saying how it works.
-  const user = choiceItem('Engineering', 'Add a user…');
+  const user = choiceItem('Engineering', 'Add FOKS user…');
   assert.equal(inert(user), false);
   assert.equal(
     user.querySelector('.menu-choice small')?.textContent,
-    'Invite by username',
+    'Someone with an account on Acme',
   );
-  const federated = choiceItem(
-    'Engineering',
-    'Add a team from another server…',
-  );
+  const federated = choiceItem('Engineering', 'Add FOKS team…');
   assert.equal(inert(federated), false);
   assert.equal(
     federated.querySelector('.menu-choice small')?.textContent,
-    'Add team via federation',
+    'A team from another server',
+  );
+  const invite = choiceItem('Engineering', 'Invite new user…');
+  assert.equal(inert(invite), false);
+  assert.equal(
+    invite.querySelector('.menu-choice small')?.textContent,
+    'Create an invitation to share',
   );
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Leave…' }), null);
 
   // An ad-hoc share has no membership to change, and its setup is unfinished.
   openRowMenu('Homelab');
-  const add = choiceItem('Homelab', 'Add a user…');
+  const add = choiceItem('Homelab', 'Add FOKS user…');
   assert.equal(inert(add), true);
   assert.equal(
     add.getAttribute('title'),
     'Memberships can’t be changed in an ad-hoc team.',
   );
-  assert.equal(
-    inert(choiceItem('Homelab', 'Add a team from another server…')),
-    true,
-  );
+  assert.equal(inert(choiceItem('Homelab', 'Add FOKS team…')), true);
+  assert.equal(inert(choiceItem('Homelab', 'Invite new user…')), true);
   assert.equal(inert(menuItem('Homelab', 'Finish setup…')), false);
   // Finishing cannot succeed for every stuck creation, so the way out sits
   // beside it — and only on a row whose setup never finished.
@@ -629,13 +630,10 @@ test('a roster failure gives the Teams row menu its own reasons', async () => {
   // Both ways in are refused for the same reason — the role that would permit
   // either is a roster fact, so an unread roster settles nothing about them —
   // and each choice states it for itself.
-  const add = choiceItem('Engineering', 'Add a user…');
+  const add = choiceItem('Engineering', 'Add FOKS user…');
   assert.equal(inert(add), true);
   assert.equal(add.getAttribute('title'), unread);
-  assert.equal(
-    inert(choiceItem('Engineering', 'Add a team from another server…')),
-    true,
-  );
+  assert.equal(inert(choiceItem('Engineering', 'Add FOKS team…')), true);
 });
 
 test('an unavailable account explains why discovery is disabled', async () => {

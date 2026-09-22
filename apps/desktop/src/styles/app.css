@@ -2092,3 +2092,55 @@
     0 0 0 2px var(--btn-bg),
     0 0 0 3.5px var(--accent);
 }
+
+.copybox .v pre.instructions {
+  margin: 0;
+  font: 12.5px/1.55 var(--mono);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+
+.pcard.requests .callout,
+.panel-body .callout {
+  margin-top: 8px;
+}
+
+.pcard.requests .callout .btn {
+  color: var(--ink);
+}
+
+.pcard .op .role-select,
+.panel-body .op .role-select {
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--chip-bg);
+  color: var(--chip-ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.pcard .op .role-select:disabled,
+.panel-body .op .role-select:disabled {
+  opacity: 0.6;
+}
+
+.pcard .op p.fn,
+.panel-body .op p.fn {
+  margin: 0;
+}
+
+.pcard .op .chip,
+.panel-body .op .chip {
+  margin-left: 6px;
+}
+
+.pcard .op .notice,
+.panel-body .op .notice {
+  margin: 4px 0 2px;
+}
+
+.sheet .ft .lnk {
+  padding: 0 4px;
+}

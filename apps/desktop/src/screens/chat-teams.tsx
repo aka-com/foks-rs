@@ -47,6 +47,7 @@ import { useChatInbox } from '../chat/inbox-provider';
 import type { TeamInbox } from '../chat/inbox-service';
 import { teamUnread } from '../chat/unread';
 import { GroupMark } from './group-mark';
+import { manageReason } from './group-model';
 
 /** The server a store belongs to, whatever its state. */
 function serverFor(
@@ -298,6 +299,7 @@ export interface ChatTeamColumnProps {
   onNewChat: () => void;
   /** Opens a team's page on the Teams tab, where its setup is finished. */
   onTeams: (ref: StoreRef) => void;
+  onAddPeople?: (ref: StoreRef, intent: 'add' | 'add-team' | 'invite') => void;
   /**
    * The window header's scoped search text. The column carries no field of its
    * own; it narrows to the teams and channels this matches.
@@ -315,6 +317,7 @@ export function ChatTeamColumn({
   onChannelInfo,
   onNewChat,
   onTeams,
+  onAddPeople,
   query: search = '',
 }: ChatTeamColumnProps): ReactNode {
   const { service, snapshot: inbox } = useChatInbox();
@@ -603,18 +606,22 @@ export function ChatTeamColumn({
                 </MenuItem>
               </>
             ) : context.team ? (
-              <MenuItem
-                icon="users"
-                reason={
-                  contextTeam ? undefined : 'This team is no longer available.'
-                }
-                onClick={() => {
-                  closeContext();
-                  onTeams(context.team!);
-                }}
-              >
-                Go to team
-              </MenuItem>
+              <>
+                <MenuItem
+                  icon="users"
+                  reason={
+                    contextTeam
+                      ? undefined
+                      : 'This team is no longer available.'
+                  }
+                  onClick={() => {
+                    closeContext();
+                    onTeams(context.team!);
+                  }}
+                >
+                  Go to team
+                </MenuItem>
+              </>
             ) : (
               <MenuItem
                 icon="plus"
@@ -627,6 +634,34 @@ export function ChatTeamColumn({
                 Create channel
               </MenuItem>
             )}
+            {context.team && onAddPeople ? (
+              <>
+                <div className="menu-separator" role="separator" />
+                {(
+                  [
+                    ['add', 'user', 'Add FOKS user…', 'roster'],
+                    ['add-team', 'users', 'Add FOKS team…', 'federation'],
+                    ['invite', 'door', 'Invite new user…', 'roster'],
+                  ] as const
+                ).map(([intent, icon, label, source]) => (
+                  <MenuItem
+                    key={intent}
+                    icon={icon}
+                    reason={
+                      contextTeam?.kind === 'team'
+                        ? manageReason(snapshot, contextTeam, source)
+                        : 'This team is no longer available.'
+                    }
+                    onClick={() => {
+                      closeContext();
+                      onAddPeople(context.team!, intent);
+                    }}
+                  >
+                    {label}
+                  </MenuItem>
+                ))}
+              </>
+            ) : null}
           </Menu>
         </ContextMenu>
       ) : null}

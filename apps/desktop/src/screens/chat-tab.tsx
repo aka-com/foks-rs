@@ -245,6 +245,9 @@ export function ChatTab({
         // it belongs to the column rather than to any one team's row.
         onNewChat={openNewChat}
         onTeams={(next) => onNavigate({ kind: 'teams', store: next })}
+        onAddPeople={(next, intent) =>
+          onNavigate({ kind: 'teams', store: next, open: intent })
+        }
         query={query}
       />
       <section

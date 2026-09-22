@@ -111,59 +111,42 @@ try {
       );
       await page.locator('.ghero', { hasText: 'Household' }).waitFor();
       assert.match(await page.locator('.rail .who').innerText(), /satoshi/);
-      // The Requests tab is the team page's own list of pending decisions.
-      // Issuing an invitation is an add action, so its form is reached from
-      // the third choice on Add people, which opens the panel as a sheet.
+      // Review pending membership requests on the Requests tab. Create new
+      // invitations in the sheet opened by Add people > Invite new user.
       await activate(page.getByRole('tab', { name: /^Requests/ }));
-      await page.getByRole('region', { name: 'Membership requests' }).waitFor();
-      await activate(page.getByRole('button', { name: 'Add people' }));
-      await activate(page.getByRole('menuitem', { name: /^By invitation/ }));
-      const invitations = page.getByRole('region', {
-        name: 'Team invitations and requests',
+      const requests = page.getByRole('region', {
+        name: 'Membership requests',
       });
+      await requests.waitFor();
+      await activate(page.getByRole('button', { name: 'Add people' }));
+      await activate(page.getByRole('menuitem', { name: /^Invite new user/ }));
+      const invite = page.getByRole('dialog');
       await activate(
-        invitations.getByRole('button', {
-          name: 'Create invitation',
-          exact: true,
-        }),
+        invite.getByRole('button', { name: 'Create invitation', exact: true }),
       );
-      await activate(
-        invitations.getByRole('button', { name: 'Submit', exact: true }),
-      );
-      await invitations.getByLabel('Shareable invitation').waitFor();
+      await invite.getByLabel('Shareable invitation').waitFor();
       assert.match(
-        await invitations.getByLabel('Shareable invitation').innerText(),
+        await invite.getByLabel('Shareable invitation').innerText(),
         /personal\/personal\/team:household/,
       );
-      await activate(
-        invitations.getByRole('button', {
-          name: 'Refresh requests',
-          exact: true,
-        }),
-      );
-      const first = invitations
+      await activate(invite.getByRole('button', { name: 'Done', exact: true }));
+      const first = requests
         .locator('article')
         .filter({ hasText: 'fixture-joiner' });
       await activate(
         first.getByRole('button', { name: 'Approve', exact: true }),
       );
-      const second = invitations
+      const second = requests
         .locator('article')
         .filter({ hasText: 'fixture-second-joiner' });
       await activate(
         second.getByRole('button', { name: 'Reject', exact: true }),
       );
       await activate(
-        invitations.getByRole('button', {
-          name: 'Refresh requests',
-          exact: true,
-        }),
+        requests.getByRole('button', { name: 'Refresh', exact: true }),
       );
-      assert.equal(await invitations.locator('article').count(), 0);
+      await requests.getByText('No requests yet.').waitFor();
       await shot('invitations');
-      await activate(
-        invitations.getByRole('button', { name: 'Close', exact: true }),
-      );
 
       await activate(page.getByRole('tab', { name: /^Channels/ }));
       await activate(

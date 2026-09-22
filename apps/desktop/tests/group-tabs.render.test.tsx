@@ -477,35 +477,31 @@ test('the Files tab links to the group vault', async () => {
   assert.equal(document.querySelector('.rt.bare'), null);
 });
 
-test('the add sheet switches between a person and another server’s group', async () => {
+test('the add sheets name the team and fix the server, each in its own words', async () => {
   const rendered = await group('team:eng', 'people');
-  addPeopleChoice(rendered, 'A user');
-  const seg = document.querySelector(
-    '[role="group"][aria-label="What to add"]',
+  addPeopleChoice(rendered, 'Add FOKS user…');
+  assert.ok(
+    rendered.getByRole('heading', { name: 'Add FOKS user to Engineering' }),
   );
-  assert.ok(seg);
-  const [person, remote] = [
-    ...seg.querySelectorAll<HTMLButtonElement>('button'),
-  ];
-  assert.equal(person.getAttribute('aria-pressed'), 'true');
-  assert.equal(person.textContent, 'Add a person');
-  assert.equal(remote.getAttribute('aria-pressed'), 'false');
-  assert.equal(remote.textContent, 'Add a team on another server');
+  assert.equal(
+    document.querySelector('[role="group"][aria-label="What to add"]'),
+    null,
+  );
   const serverRow = [...document.querySelectorAll('.sheet .fr')].find(
     (row) => row.querySelector('.k')?.textContent === 'Server',
   );
   assert.ok(serverRow);
   assert.equal(
     serverRow.querySelector('.a .chip')?.textContent,
-    'this team’s server',
+    'This team’s server',
   );
   assert.doesNotMatch(
     document.querySelector('.sheet')?.textContent ?? '',
     /They need an account on this server/,
   );
 
-  // The person half: the username, the server it is fixed to, and one role
-  // card per role, with the one this account cannot grant kept and explained.
+  // Show every role option, including disabled roles with an explanation
+  // of why this account cannot grant them.
   const roles = document.querySelector(
     '[role="radiogroup"][aria-label="Role in Engineering"]',
   );
@@ -538,13 +534,19 @@ test('the add sheet switches between a person and another server’s group', asy
     document.querySelector('.sheet .vis-value')?.textContent,
     'Visibility -1',
   );
-
-  // The group half: a picker over the remote groups this Mac holds.
-  await ui.act(async () => {
-    ui.fireEvent.click(remote);
-  });
+  // Offer the invitation flow for someone who has no account yet.
   assert.ok(
-    rendered.getByRole('heading', { name: 'Add a team to Engineering' }),
+    rendered.getByRole('button', { name: 'Invite them to Acme instead…' }),
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Cancel' }));
+  });
+
+  // List eligible remote teams and reset the visibility band when opening
+  // the team sheet after the user sheet.
+  addPeopleChoice(rendered, 'Add FOKS team…');
+  assert.ok(
+    rendered.getByRole('heading', { name: 'Add FOKS team to Engineering' }),
   );
   const picker = document.querySelector(
     '[role="radiogroup"][aria-label="Team"]',
@@ -561,13 +563,10 @@ test('the add sheet switches between a person and another server’s group', asy
     document.querySelector('.sheet')?.textContent ?? '',
     /The command admits a team/,
   );
-  // The band the person half was given belongs to that half: this one starts
-  // where a new federated membership starts, not where the other answer was left.
   assert.equal(
     document.querySelector('.sheet .vis-value')?.textContent,
     'Visibility 0',
   );
-  // Its steppers say what they change, as the person half's do.
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', { name: 'Raise the visibility band' }),
@@ -576,21 +575,6 @@ test('the add sheet switches between a person and another server’s group', asy
   assert.equal(
     document.querySelector('.sheet .vis-value')?.textContent,
     'Visibility 1',
-  );
-  // And switching back does not inherit the federated membership's band either. The
-  // switch is re-read: each half draws its own, so the earlier node is gone.
-  await ui.act(async () => {
-    const control = document.querySelector(
-      '[role="group"][aria-label="What to add"]',
-    );
-    assert.ok(control);
-    ui.fireEvent.click(
-      [...control.querySelectorAll<HTMLButtonElement>('button')][0],
-    );
-  });
-  assert.equal(
-    document.querySelector('.sheet .vis-value')?.textContent,
-    'Visibility 0',
   );
 });
 
@@ -603,7 +587,7 @@ test('the add sheet clears the agent’s refusal when the username changes', asy
       },
     }),
   });
-  addPeopleChoice(rendered, 'A user');
+  addPeopleChoice(rendered, 'Add FOKS user…');
   const field = rendered.getByLabelText('Username');
   await ui.act(async () => {
     ui.fireEvent.change(field, { target: { value: 'nobody.one' } });
@@ -638,7 +622,7 @@ test('add-member refusals remain in the sheet without a duplicate toast', async 
       reported.push(options ?? {});
     },
   });
-  addPeopleChoice(rendered, 'A user');
+  addPeopleChoice(rendered, 'Add FOKS user…');
   await ui.act(async () => {
     ui.fireEvent.change(rendered.getByLabelText('Username'), {
       target: { value: 'nobody.one' },
@@ -658,7 +642,7 @@ test('add-member refusals remain in the sheet without a duplicate toast', async 
 
 test('add member dialog rejects usernames already present in roster', async () => {
   const rendered = await group('team:eng', 'people');
-  addPeopleChoice(rendered, 'A user');
+  addPeopleChoice(rendered, 'Add FOKS user…');
   await ui.act(async () => {
     ui.fireEvent.change(rendered.getByLabelText('Username'), {
       target: { value: 'dana.okafor' },

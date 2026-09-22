@@ -97,7 +97,10 @@ export function invitationRecoveryQuery(
     // Full replies can contain invitation tokens. Retain only the count.
     return (
       rows(operations).filter(
-        (row) => row.team_id === team_id_hex && row.state !== 'cancelled',
+        (row) =>
+          row.team_id === team_id_hex &&
+          row.state !== 'cancelled' &&
+          row.state !== 'complete',
       ).length +
       rows(approvals).filter(
         (row) => row.request_id && row.state !== 'complete',

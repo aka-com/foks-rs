@@ -78,6 +78,7 @@ import {
 } from './scope';
 import type { FolderNode } from './scope';
 import { AccountMark } from './account-switcher';
+import { manageReason } from './group-model';
 import {
   itemActionProblem,
   StoreAccessTakeover,
@@ -1430,6 +1431,30 @@ export function ItemsScreen({
                   >
                     Team info
                   </MenuItem>
+                  <div role="separator" className="menu-separator" />
+                  {(
+                    [
+                      ['add', 'user', 'Add FOKS user…', 'roster'],
+                      ['add-team', 'users', 'Add FOKS team…', 'federation'],
+                      ['invite', 'door', 'Invite new user…', 'roster'],
+                    ] as const
+                  ).map(([intent, icon, label, source]) => (
+                    <MenuItem
+                      key={intent}
+                      icon={icon}
+                      reason={manageReason(snapshot, contextStore, source)}
+                      onClick={() => {
+                        setFolderMenu(null);
+                        locations.navigate({
+                          kind: 'teams',
+                          store: contextStore.id,
+                          open: intent,
+                        });
+                      }}
+                    >
+                      {label}
+                    </MenuItem>
+                  ))}
                 </>
               ) : null}
             </Menu>

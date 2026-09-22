@@ -58,9 +58,11 @@ export function InvitationRecovery({
   return count ? (
     <Band
       label="Invitation activity"
-      action={<Button onClick={onReview}>Review invitations</Button>}
+      action={<Button onClick={onReview}>Review</Button>}
     >
-      Recover saved invitations and finish pending requests for this team.
+      {count === 1
+        ? '1 invitation or approval has not finished.'
+        : `${count} invitations or approvals have not finished.`}
     </Band>
   ) : null;
 }

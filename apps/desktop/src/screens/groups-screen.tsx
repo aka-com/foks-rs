@@ -12,7 +12,10 @@ import {
 } from '../model/workflow-availability';
 import { useTabSheetState } from '../navigation-guard';
 import { InvitationRecovery } from '../components/invitation-recovery';
-import { InvitationPanel } from '../components/invitation-panel';
+import { InviteNewUserSheet } from '../components/invite-new-user-sheet';
+import { InvitationActivitySheet } from '../components/invitation-activity-sheet';
+import { MembershipRequests } from '../components/membership-requests';
+import { isNestingRefusal } from '../invitation-writes';
 import { useTeamRequestCounts } from '../operation-queries';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -30,7 +33,6 @@ import {
   RadioCard,
   RadioGroup,
   SectionLabel,
-  SegmentedControl,
   SheetDialog,
   tabId,
   tabPanelId,
@@ -101,12 +103,10 @@ type Sheet = GroupSheetKind | null;
 const VIS_MIN = -32768;
 const VIS_MAX = 32767;
 /**
- * What the two typed fields of the group sheets hint at. The suggestion is a
- * placeholder, never a value: an empty field has not been typed into, so
- * nothing is asked about it when the reader leaves, and nothing is submitted
- * that the reader did not write.
+ * Example text for the group name placeholder. Keep the input value empty
+ * until the user types so the example is neither submitted nor treated as
+ * an unsaved change by the navigation guard.
  */
-const SUGGESTED_MEMBER = 'jules.park';
 const SUGGESTED_GROUP = 'Platform';
 
 /**
@@ -881,6 +881,7 @@ function SettingsTab({
   onSheet,
   onNavigate,
   onCopy,
+  onRange,
   manageable,
   rekeyOpen,
 }: {
@@ -889,6 +890,7 @@ function SettingsTab({
   onSheet: (sheet: Sheet, party?: Party) => void;
   onNavigate: (location: Location) => void;
   onCopy: (text: string) => void;
+  onRange?: (raise: boolean) => void;
   manageable: boolean;
   rekeyOpen: boolean;
 }): ReactNode {
@@ -984,6 +986,24 @@ function SettingsTab({
           <code title={store.team_id_hex}>{shortId(store.team_id_hex)}</code>
         </InsetRow>
       </Inset>
+      {manageable && onRange && store.team_kind === 'named' ? (
+        <>
+          <SectionLabel>Team nesting order</SectionLabel>
+          <p className="fn">
+            A team joining another team must sit below it in the hierarchy.
+            These controls move {store.name}’s position and validate it against
+            existing memberships.
+          </p>
+          <div className="btns">
+            <Button onClick={() => onRange(false)}>
+              Lower this team’s range
+            </Button>
+            <Button onClick={() => onRange(true)}>
+              Raise this team’s range
+            </Button>
+          </div>
+        </>
+      ) : null}
       {store.team_kind === 'adhoc' ? (
         <p className="fn">
           An ad-hoc team has no name on the server and a fixed membership.
@@ -1188,7 +1208,6 @@ export function GroupSheet({
   sheet,
   target,
   onClose,
-  onSwitch,
   onInvite,
   onApplied,
   onMutationError,
@@ -1199,8 +1218,7 @@ export function GroupSheet({
   sheet: Exclude<Sheet, null>;
   target: Party | null;
   onClose: () => void;
-  onSwitch: (sheet: Sheet, target?: Party) => void;
-  /** Opens the invitation sheet, which belongs to an account, not a group. */
+  /** Starts the invitation flow for someone without a FOKS account. */
   onInvite?: () => void;
   onApplied: (
     message: string,
@@ -1295,18 +1313,16 @@ export function GroupSheet({
       : ['add', 'demote', 'remove'].includes(sheet)
         ? groupDetailFailure(snapshot, store.id, 'roster')
         : undefined;
-  // Adding a person and adding a federated team are the two halves of one sheet, so
-  // both read from the switch rather than from two separate titles.
-  const adding = sheet === 'add' || sheet === 'add-team';
-  const title = adding
-    ? sheet === 'add'
-      ? `Add someone to ${store.name}`
-      : `Add a team to ${store.name}`
-    : sheet === 'demote'
-      ? `Lower ${target ? `${partyName(target)}’s` : 'their'} role`
-      : sheet === 'remove'
-        ? `Remove ${target ? partyName(target) : 'them'} from ${store.name}?`
-        : 'Create a team';
+  const title =
+    sheet === 'add'
+      ? `Add FOKS user to ${store.name}`
+      : sheet === 'add-team'
+        ? `Add FOKS team to ${store.name}`
+        : sheet === 'demote'
+          ? `Lower ${target ? `${partyName(target)}’s` : 'their'} role`
+          : sheet === 'remove'
+            ? `Remove ${target ? partyName(target) : 'them'} from ${store.name}?`
+            : 'Create a team';
   const [demotion, setDemotion] = useState<RoleDto | null>(() =>
     target ? demotionFor(target) : null,
   );
@@ -1326,7 +1342,30 @@ export function GroupSheet({
       (party.username ?? '').toLowerCase() === username.trim().toLowerCase(),
   );
   const [refused, setRefused] = useState('');
+  const [rangeRefusal, setRangeRefusal] = useState('');
   const toasts = useToast();
+  const changeRange = async (raise: boolean): Promise<void> => {
+    if (store.kind !== 'team' || busy) return;
+    setBusy(true);
+    try {
+      await bridge.invitation(
+        store.server,
+        store.account,
+        { action: 'range', team_alias: store.alias, raise },
+        null,
+      );
+      setRangeRefusal('');
+      toasts.show(
+        raise
+          ? `${store.name}’s range raised.`
+          : `${store.name}’s range lowered.`,
+      );
+    } catch (error) {
+      await onMutationError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
   const addRefusal = username.trim()
     ? existing
       ? `${partyName(existing)} is already a member of ${store.name}. Change their role from the Members list instead.`
@@ -1369,6 +1408,7 @@ export function GroupSheet({
     if (sheet === 'add' && existing) return;
     setBusy(true);
     setRefused('');
+    setRangeRefusal('');
     const complete = async (options?: {
       created?: { accountStoreId: StoreRef; teamAlias: string };
       profile?: string;
@@ -1459,6 +1499,9 @@ export function GroupSheet({
       if (sheet === 'add') {
         setRefused(normalizeCommandError(error).message);
         await onMutationError(error, { report: false });
+      } else if (sheet === 'add-team' && isNestingRefusal(error)) {
+        setRangeRefusal(normalizeCommandError(error).message);
+        await onMutationError(error, { report: false });
       } else await onMutationError(error);
     } finally {
       setBusy(false);
@@ -1543,32 +1586,16 @@ export function GroupSheet({
             </p>
           </Notice>
         ) : null}
-        {/* Adding a person and admitting another server's group are the two
-            ways into this group, so they are one sheet with a switch rather
-            than two buttons over two tables. */}
-        {adding ? (
-          <SegmentedControl
-            label="What to add"
-            value={sheet}
-            items={[
-              { id: 'add' as const, label: 'Add a person' },
-              {
-                id: 'add-team' as const,
-                label: 'Add a team on another server',
-              },
-            ]}
-            onChange={(next) => {
-              if (next !== sheet) onSwitch(next);
-            }}
-          />
-        ) : null}
         {sheet === 'add' ? (
           <>
+            <p>
+              Add someone who already has an account on {serverName}. They get
+              access as soon as this finishes.
+            </p>
             <Inset>
               <Field
                 label="Username"
                 value={username}
-                placeholder={SUGGESTED_MEMBER}
                 // The agent's refusal was of the username that was sent, so a
                 // different one is not refused yet: the sentence goes with it.
                 onChange={(next) => {
@@ -1578,7 +1605,7 @@ export function GroupSheet({
               />
               {/* The server is fixed by the team, not chosen here, so the
                   value reads as stated rather than as an editable field. */}
-              <InsetRow label="Server" action={<Chip>this team’s server</Chip>}>
+              <InsetRow label="Server" action={<Chip>This team’s server</Chip>}>
                 <span className="dim">{serverName}</span>
               </InsetRow>
             </Inset>
@@ -1587,16 +1614,7 @@ export function GroupSheet({
                 {addRefusal}
               </p>
             ) : null}
-            {onInvite ? (
-              <p className="fn">
-                No account yet?{' '}
-                <Button size="sm" onClick={onInvite}>
-                  Invite them to {serverName}…
-                </Button>{' '}
-                You still add the username yourself when they reply.
-              </p>
-            ) : null}
-            <SectionLabel>Role</SectionLabel>
+            <SectionLabel>Role in {store.name}</SectionLabel>
             <Inset>
               <RadioGroup label={`Role in ${store.name}`}>
                 {(['Owner', 'Admin', 'Member'] as const).map((next) => {
@@ -1663,6 +1681,14 @@ export function GroupSheet({
               </Inset>
             ) : null}
           </>
+        ) : null}
+        {sheet === 'add' && onInvite ? (
+          <p className="fn">
+            No account yet?{' '}
+            <button type="button" className="lnk" onClick={onInvite}>
+              Invite them to {serverName} instead…
+            </button>
+          </p>
         ) : null}
         {sheet === 'demote' ? (
           <>
@@ -1771,6 +1797,39 @@ export function GroupSheet({
         ) : null}
         {sheet === 'add-team' ? (
           <>
+            <p>
+              Every member of the team you pick will be able to act as a Member
+              in {store.name}. Only teams you administer on another server are
+              listed.
+            </p>
+            {rangeRefusal ? (
+              <Notice
+                severity="crit"
+                title="Nesting order"
+                actions={
+                  <>
+                    <Button
+                      disabled={busy}
+                      onClick={() => void changeRange(false)}
+                    >
+                      Lower {store.name}’s range
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() => void changeRange(true)}
+                    >
+                      Raise {store.name}’s range
+                    </Button>
+                  </>
+                }
+              >
+                <p>
+                  {remote?.alias ?? 'The team'} cannot join {store.name} because
+                  of where the two teams sit in the hierarchy. A team must sit
+                  below the team it joins. {rangeRefusal}
+                </p>
+              </Notice>
+            ) : null}
             <SectionLabel>Team</SectionLabel>
             <Inset>
               {remotes.length ? (
@@ -1790,7 +1849,10 @@ export function GroupSheet({
                 </RadioGroup>
               ) : (
                 <InsetRow label="Team">
-                  <span className="dim">No eligible remote teams</span>
+                  <span className="dim">
+                    No eligible teams. You are not an Admin or Owner of any team
+                    on a server other than {serverName}.
+                  </span>
                 </InsetRow>
               )}
             </Inset>
@@ -1956,7 +2018,7 @@ export function GroupSettingsScreen({
     initial === 'invite',
     (value) => value,
   );
-  const [recoverInvitations, setRecoverInvitations] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const [addingChannel, setAddingChannel] = useTabSheetState(
     'groups.channel',
     false,
@@ -2099,6 +2161,7 @@ export function GroupSettingsScreen({
       setAbandoning(false);
       setRekeyArmed(false);
       setInviting(false);
+      setReviewing(false);
       // A channel preparation the agent may already hold is the exception:
       // it is settled where it was made, so the sheet stays until it is.
       if (!channelUnresolved.current) setAddingChannel(false);
@@ -2163,24 +2226,45 @@ export function GroupSettingsScreen({
       candidate.server === store.server &&
       candidate.account === store.account,
   );
+  const approver = snapshot.accounts.find(
+    (candidate) =>
+      candidate.alias === store.account && candidate.server === store.server,
+  )?.username;
   const inviteSheet = inviting ? (
-    <InvitationPanel
+    <InviteNewUserSheet
       bridge={bridge}
-      recover={recoverInvitations}
-      teamId={store.team_id_hex}
-      profile={store.server}
-      account={store.account}
-      teamAlias={store.alias}
-      presentation={{
-        title: 'Invitations and requests',
-        onClose: () => {
-          setInviting(false);
-          setRecoverInvitations(false);
-        },
-      }}
+      team={store}
+      serverLabel={serverName}
+      approver={approver}
+      onClose={() => setInviting(false)}
+      onComplete={() => onApplied('Invitation created', store.server)}
+    />
+  ) : null;
+  const activitySheet = reviewing ? (
+    <InvitationActivitySheet
+      bridge={bridge}
+      team={store}
+      onClose={() => setReviewing(false)}
       onComplete={() => onApplied('Team requests updated', store.server)}
     />
   ) : null;
+  const changeRange = (raise: boolean): void => {
+    void bridge
+      .invitation(
+        store.server,
+        store.account,
+        { action: 'range', team_alias: store.alias, raise },
+        null,
+      )
+      .then(() =>
+        toasts.show(
+          raise
+            ? `${store.name}’s range raised.`
+            : `${store.name}’s range lowered.`,
+        ),
+      )
+      .catch((error: unknown) => onMutationError(error));
+  };
   return (
     <>
       <div className="ghero">
@@ -2231,8 +2315,8 @@ export function GroupSettingsScreen({
                     }}
                   >
                     <span className="menu-choice">
-                      <b>A user</b>
-                      <small>Invite by username</small>
+                      <b>Add FOKS user…</b>
+                      <small>Someone with an account on {serverName}</small>
                     </span>
                   </MenuItem>
                   <MenuItem
@@ -2244,8 +2328,8 @@ export function GroupSettingsScreen({
                     }}
                   >
                     <span className="menu-choice">
-                      <b>A team from another server</b>
-                      <small>Add team via federation</small>
+                      <b>Add FOKS team…</b>
+                      <small>A team from another server</small>
                     </span>
                   </MenuItem>
                   <div className="menu-separator" role="separator" />
@@ -2261,8 +2345,8 @@ export function GroupSettingsScreen({
                     }}
                   >
                     <span className="menu-choice">
-                      <b>By invitation…</b>
-                      <small>Create or view invitations</small>
+                      <b>Invite new user…</b>
+                      <small>Create an invitation to share</small>
                     </span>
                   </MenuItem>
                 </>
@@ -2346,16 +2430,12 @@ export function GroupSettingsScreen({
         />
       ) : (
         <>
-          {/* The active invitation panel owns its reads while it is open. */}
-          {canManageRoster && !inviting ? (
+          {canManageRoster && !reviewing ? (
             <InvitationRecovery
               bridge={bridge}
               store={store}
               onError={onError}
-              onReview={() => {
-                setRecoverInvitations(true);
-                setInviting(true);
-              }}
+              onReview={() => setReviewing(true)}
             />
           ) : null}
           {membershipPending.map((operation) => (
@@ -2513,6 +2593,7 @@ export function GroupSettingsScreen({
                   onSheet={openSheet}
                   onNavigate={onNavigate}
                   onCopy={(text) => void copy(text, 'Team ID copied.')}
+                  onRange={changeRange}
                   manageable={canManageRoster}
                   rekeyOpen={rekeyArmed}
                 />
@@ -2523,16 +2604,17 @@ export function GroupSettingsScreen({
                   tab. */}
               {canManageRoster ? (
                 <div hidden={tab !== 'requests'}>
-                  <InvitationPanel
+                  <MembershipRequests
                     key={store.id}
                     bridge={bridge}
-                    profile={store.server}
-                    account={store.account}
-                    teamAlias={store.alias}
-                    requestsOnly
+                    team={store}
+                    serverLabel={serverName}
+                    servers={snapshot.servers}
                     onComplete={() =>
                       onApplied('Team requests updated', store.server)
                     }
+                    onInvite={() => setInviting(true)}
+                    onActivity={() => setReviewing(true)}
                   />
                 </div>
               ) : null}
@@ -2550,10 +2632,8 @@ export function GroupSettingsScreen({
           ) : null}
           {sheet ? (
             <GroupSheet
-              // Adding a person and adding a federated team are two halves of one
-              // sheet, but not one set of answers: the band, the role and the
-              // refusal belong to the half they were given on, so switching
-              // starts the other half rather than inheriting them.
+              // Remount when the sheet changes to reset its visibility band,
+              // selected role, and validation errors.
               key={sheet}
               snapshot={snapshot}
               bridge={bridge}
@@ -2561,7 +2641,6 @@ export function GroupSettingsScreen({
               sheet={sheet}
               target={targetParty}
               onClose={() => setSheet(null)}
-              onSwitch={openSheet}
               onInvite={
                 groupAccount
                   ? () => {
@@ -2624,6 +2703,7 @@ export function GroupSettingsScreen({
         />
       ) : null}
       {inviteSheet}
+      {activitySheet}
     </>
   );
 }

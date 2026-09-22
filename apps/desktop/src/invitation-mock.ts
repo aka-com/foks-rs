@@ -79,6 +79,17 @@ export function mockInvitations(
         return { state: 'complete' };
       case 'pending-approvals':
         return { rows: [] };
+      case 'cancel': {
+        const operation = operations.get(action.operation_id);
+        if (!operation || operation.owner !== owner)
+          throw new Error('Fixture operation not found.');
+        if (operation.row.state !== 'prepared')
+          throw new Error('Only an unsubmitted invitation can be cancelled.');
+        operation.row.state = 'cancelled';
+        return { operation_id: action.operation_id, state: 'cancelled' };
+      }
+      case 'range':
+        return { state: 'complete' };
       // The join journey needs a team to confirm before it can prepare a
       // request; the fixture resolves any invitation to the same one.
       case 'preview':

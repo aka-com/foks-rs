@@ -262,48 +262,123 @@ test('the join sheet names a configured profile rather than asking for one', asy
     invite: 'Invite123',
   });
 });
-test('local certificate operations stay local while a remote inbox profile is selected', async () => {
-  const { InvitationPanel } = (await vite.ssrLoadModule(
-    '/src/components/invitation-panel.tsx',
-  )) as typeof import('../src/components/invitation-panel');
+test('Invite new user prepares and submits in one press, then shares the token', async () => {
+  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
+    '/src/components/invite-new-user-sheet.tsx',
+  )) as typeof import('../src/components/invite-new-user-sheet');
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  );
+  assert.ok(team);
   const actions: string[] = [];
   const bridge = {
-    ...mockBridge(),
+    ...mockBridge(FIXTURE),
     invitation: async (
       _p: string,
       _a: string,
       a: InvitationAction,
     ): Promise<InvitationReply> => {
       actions.push(a.action);
+      if (a.action === 'list') return [];
       return {
         operation_id: '2'.repeat(32),
         state: a.action === 'create' ? 'prepared' : 'complete',
+        ...(a.action === 'attempt' ? { invite: 'Invite456' } : {}),
       };
     },
   };
   const r = ui.render(
-    createElement(InvitationPanel, {
-      bridge,
-      profile: 'local',
-      account: 'work',
-      teamAlias: 'project',
-      onComplete: () => {},
-    }),
+    await overlay(
+      createElement(InviteNewUserSheet, {
+        bridge,
+        team,
+        serverLabel: 'Example',
+        approver: 'ada',
+        onClose: () => {},
+      }),
+    ),
   );
-  ui.fireEvent.change(r.getByLabelText('Server profile'), {
-    target: { value: 'remote' },
+  assert.ok(r.getByText('Step 1 of 2'));
+  ui.fireEvent.change(r.getByLabelText('For'), {
+    target: { value: 'Sam, new contractor' },
   });
   ui.fireEvent.click(r.getByText('Create invitation'));
-  await ui.waitFor(() => assert.ok(r.getByText('Submit')));
-  ui.fireEvent.click(r.getByText('Submit'));
-  // The team side loads its own request list up front, so mounting is
-  // itself an "inbox" read before the person under test does anything.
-  await ui.waitFor(() =>
-    assert.deepEqual(actions, ['inbox', 'create', 'attempt']),
+  await ui.waitFor(() => assert.ok(r.getByLabelText('Shareable invitation')));
+  assert.deepEqual(actions, ['list', 'create', 'attempt']);
+  assert.ok(r.getByText('Step 2 of 2'));
+  assert.equal(
+    r.getByLabelText('Shareable invitation').textContent,
+    'Invite456',
   );
+  // The copied instructions must include the server, invitation token, and approver.
+  const instructions =
+    document.querySelector('.copybox pre')?.textContent ?? '';
+  assert.match(instructions, /Server: Example/);
+  assert.match(instructions, /Invite456/);
+  assert.match(instructions, /approved by ada/);
+});
+
+test('Invite new user asks for the security key PIN only when the key requires it', async () => {
+  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
+    '/src/components/invite-new-user-sheet.tsx',
+  )) as typeof import('../src/components/invite-new-user-sheet');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  );
+  assert.ok(team);
+  const received: Array<[string, string | null]> = [];
+  const operation = { operation_id: 'c'.repeat(32), state: 'prepared' };
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (
+      _p: string,
+      _a: string,
+      a: InvitationAction,
+      pin: string | null,
+    ): Promise<InvitationReply> => {
+      if (a.action === 'list') return [];
+      received.push([a.action, pin]);
+      if (a.action === 'create') return operation;
+      return pin
+        ? { ...operation, state: 'complete', invite: 'Invite789' }
+        : { ...operation, hardware_required: true };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(InviteNewUserSheet, {
+        bridge,
+        team,
+        serverLabel: 'Example',
+        onClose: () => {},
+      }),
+    ),
+  );
+  assert.equal(r.queryByLabelText('Security key PIN'), null);
+  ui.fireEvent.click(r.getByText('Create invitation'));
+  await ui.waitFor(() => assert.ok(r.getByLabelText('Security key PIN')));
+  assert.deepEqual(received, [
+    ['create', null],
+    ['attempt', null],
+  ]);
+  ui.fireEvent.change(r.getByLabelText('Security key PIN'), {
+    target: { value: '123456' },
+  });
+  ui.fireEvent.click(r.getByText('Finish creating'));
+  await ui.waitFor(() => assert.ok(r.getByLabelText('Shareable invitation')));
+  assert.deepEqual(received.at(-1), ['attempt', '123456']);
 });
 
 test('a resumed hardware-key request can receive its PIN on step one', async () => {
@@ -431,4 +506,220 @@ test('an invitation action discards the profile’s journal of unfinished operat
   now = 1_000;
   await journal.load();
   assert.equal(reads, 2);
+});
+
+test('remote requests select a configured server before verification and approval', async () => {
+  const { MembershipRequests } = (await vite.ssrLoadModule(
+    '/src/components/membership-requests.tsx',
+  )) as typeof import('../src/components/membership-requests');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  );
+  assert.ok(team);
+  const remoteServers = FIXTURE.servers.filter(
+    (server) => server.profileName !== team.server,
+  );
+  assert.ok(remoteServers.length >= 2);
+  const request = {
+    request_id: 'a'.repeat(32),
+    username: 'visitor',
+    remote: true,
+    verified: false,
+  };
+  const actions: InvitationAction[] = [];
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (
+      _p: string,
+      _a: string,
+      action: InvitationAction,
+    ): Promise<InvitationReply> => {
+      actions.push(action);
+      if (action.action === 'inbox') return { rows: [request] };
+      if (action.action === 'list') return [];
+      if (action.action === 'inspect-remote')
+        return {
+          ...request,
+          verified: true,
+          source_profile: action.remote_profile,
+        };
+      return { state: 'complete' };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(MembershipRequests, {
+        bridge,
+        team,
+        servers: FIXTURE.servers,
+        serverLabel: 'Example',
+        onComplete() {},
+        onInvite() {},
+        onActivity() {},
+      }),
+    ),
+  );
+  await ui.waitFor(() => assert.ok(r.getByText('Verify')));
+  assert.equal((r.getByText('Verify') as HTMLButtonElement).disabled, true);
+  ui.fireEvent.change(r.getByLabelText('Server for visitor'), {
+    target: { value: remoteServers[0].profileName },
+  });
+  ui.fireEvent.click(r.getByText('Verify'));
+  await ui.waitFor(() => assert.ok(r.getByText('Approve')));
+  assert.deepEqual(actions.at(-1), {
+    action: 'inspect-remote',
+    remote_profile: remoteServers[0].profileName,
+    team_alias: team.alias,
+    request_id: request.request_id,
+  });
+  // Require verification on the newly selected server before allowing approval.
+  ui.fireEvent.change(r.getByLabelText('Server for visitor'), {
+    target: { value: remoteServers[1].profileName },
+  });
+  assert.equal(r.queryByText('Approve'), null);
+  ui.fireEvent.click(r.getByText('Verify'));
+  await ui.waitFor(() => assert.ok(r.getByText('Approve')));
+  ui.fireEvent.click(r.getByText('Approve'));
+  await ui.waitFor(() =>
+    assert.ok(actions.some((action) => action.action === 'approve-remote')),
+  );
+  assert.deepEqual(
+    actions.find((action) => action.action === 'approve-remote'),
+    {
+      action: 'approve-remote',
+      remote_profile: remoteServers[1].profileName,
+      team_alias: team.alias,
+      request_id: request.request_id,
+      role: { member: { visibility: 0 } },
+    },
+  );
+});
+
+test('hardware inbox loads prompt for a PIN and use it only on explicit refresh', async () => {
+  const { MembershipRequests } = (await vite.ssrLoadModule(
+    '/src/components/membership-requests.tsx',
+  )) as typeof import('../src/components/membership-requests');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  );
+  assert.ok(team);
+  const pins: Array<string | null> = [];
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (
+      _p: string,
+      _a: string,
+      action: InvitationAction,
+      pin: string | null,
+    ): Promise<InvitationReply> => {
+      if (action.action !== 'inbox') return [];
+      pins.push(pin);
+      if (!pin) throw new Error('unlock the account key for invitations');
+      return {
+        rows: [
+          { request_id: 'b'.repeat(32), username: 'visitor', verified: true },
+        ],
+      };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(MembershipRequests, {
+        bridge,
+        team,
+        servers: FIXTURE.servers,
+        serverLabel: 'Example',
+        onComplete() {},
+        onInvite() {},
+        onActivity() {},
+      }),
+    ),
+  );
+  await ui.waitFor(() => assert.ok(r.getByLabelText('Security key PIN')));
+  ui.fireEvent.change(r.getByLabelText('Security key PIN'), {
+    target: { value: '123456' },
+  });
+  assert.deepEqual(pins, [null]);
+  ui.fireEvent.click(r.getByText('Refresh'));
+  await ui.waitFor(() => assert.ok(r.getByText('Approve')));
+  assert.deepEqual(pins, [null, '123456']);
+  assert.equal(r.queryByLabelText('Security key PIN'), null);
+  ui.fireEvent.click(r.getByText('Refresh'));
+  await ui.waitFor(() => assert.ok(r.getByLabelText('Security key PIN')));
+  assert.deepEqual(pins, [null, '123456', null]);
+});
+
+test('a failed invitation submission retries the original operation', async () => {
+  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
+    '/src/components/invite-new-user-sheet.tsx',
+  )) as typeof import('../src/components/invite-new-user-sheet');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  );
+  assert.ok(team);
+  const operation = { operation_id: 'c'.repeat(32), state: 'prepared' };
+  const actions: InvitationAction[] = [];
+  let attempts = 0;
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (
+      _p: string,
+      _a: string,
+      action: InvitationAction,
+    ): Promise<InvitationReply> => {
+      actions.push(action);
+      if (action.action === 'list') return [];
+      if (action.action === 'create') return operation;
+      if (++attempts === 1) throw new Error('Connection lost');
+      return { ...operation, state: 'complete', invite: 'RecoveredInvite' };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(InviteNewUserSheet, {
+        bridge,
+        team,
+        serverLabel: 'Example',
+        onClose() {},
+      }),
+    ),
+  );
+  ui.fireEvent.click(r.getByText('Create invitation'));
+  await ui.waitFor(() => assert.ok(r.getByText('Connection lost')));
+  ui.fireEvent.click(r.getByText('Finish creating'));
+  await ui.waitFor(() =>
+    assert.equal(
+      r.getByLabelText('Shareable invitation').textContent,
+      'RecoveredInvite',
+    ),
+  );
+  assert.equal(
+    actions.filter((action) => action.action === 'create').length,
+    1,
+  );
+  assert.deepEqual(
+    actions.filter((action) => action.action === 'attempt'),
+    [
+      { action: 'attempt', operation_id: operation.operation_id },
+      { action: 'attempt', operation_id: operation.operation_id },
+    ],
+  );
 });

@@ -2267,7 +2267,15 @@ test('sidebar context menus distinguish background, teams, and channels', async 
       .within(menu)
       .getAllByRole('menuitem')
       .map((item) => item.textContent),
-    ['Open channel', 'Edit channel', 'Delete channel', 'Channel info'],
+    [
+      'Open channel',
+      'Edit channel',
+      'Delete channel',
+      'Channel info',
+      'Add FOKS user…',
+      'Add FOKS team…',
+      'Invite new user…',
+    ],
   );
   for (const name of ['Edit channel', 'Delete channel']) {
     const item = ui.within(menu).getByRole('menuitem', { name });
@@ -2287,6 +2295,22 @@ test('sidebar context menus distinguish background, teams, and channels', async 
   assert.ok(
     await ui.screen.findByRole('complementary', { name: 'Channel info' }),
   );
+  for (const [label, intent] of [
+    ['Add FOKS user…', 'add'],
+    ['Add FOKS team…', 'add-team'],
+    ['Invite new user…', 'invite'],
+  ] as const) {
+    ui.fireEvent.contextMenu(channel);
+    const menu = ui.screen.getByRole('menu');
+    assert.ok(ui.within(menu).getByRole('separator'));
+    ui.fireEvent.click(ui.within(menu).getByRole('menuitem', { name: label }));
+    assert.equal(ui.screen.queryByRole('menu'), null);
+    assert.deepEqual(journal.at(-1), {
+      kind: 'teams',
+      store: 'team:eng',
+      open: intent,
+    });
+  }
   ui.fireEvent.contextMenu(document.querySelector('.chat-inbox-scroll')!);
   assert.ok(ui.screen.getByRole('menuitem', { name: 'Create channel' }));
   ui.fireEvent.keyDown(document, { key: 'Escape' });

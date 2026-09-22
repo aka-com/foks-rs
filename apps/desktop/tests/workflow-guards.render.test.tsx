@@ -12,7 +12,7 @@ import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge, GoProfileCandidate } from '../src/bridge';
 import type { GuardVerdict, Location, LocationStore } from '../src/location';
-import type { AgentSnapshot } from '../src/model';
+import type { TeamStore, AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -189,10 +189,22 @@ test('unsaved invitation input prompts before navigation and clears on confirmat
 
 test('a durable invitation creation allows navigation', async () => {
   const h = await harness();
-  const { store, rendered } = await invitationPanel(
-    h,
-    h.bridge({ invitation: () => never() }),
-    'household',
+  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
+    '/src/components/invite-new-user-sheet.tsx',
+  )) as typeof import('../src/components/invite-new-user-sheet');
+  const team = h.fixture.stores.find(
+    (candidate): candidate is TeamStore =>
+      candidate.kind === 'team' && candidate.alias === 'household',
+  );
+  assert.ok(team);
+  const { store, rendered } = h.mount(
+    createElement(InviteNewUserSheet, {
+      bridge: h.bridge({ invitation: () => never() }),
+      team,
+      serverLabel: 'Personal server',
+      onClose: () => {},
+    }),
+    true,
   );
   await ui.act(async () => {
     ui.fireEvent.click(
@@ -224,7 +236,6 @@ async function groupSheet(
       sheet,
       target: null,
       onClose,
-      onSwitch: () => {},
       onApplied: async () => {},
       onMutationError: async () => {},
     }),

@@ -245,6 +245,10 @@ test('vault and team roots expose scoped folder creation and team info without s
     null,
   );
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Team info' }), null);
+  assert.equal(
+    ui.screen.queryByRole('menuitem', { name: 'Invite new user…' }),
+    null,
+  );
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
   assert.deepEqual(mounted.folders, [{ storeId: 'acct:personal', path: '/' }]);
   const before = mounted.locations.getSnapshot();
@@ -255,6 +259,22 @@ test('vault and team roots expose scoped folder creation and team info without s
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Team info' }));
   assert.deepEqual(mounted.teamInfo, ['team:eng']);
   assert.equal(mounted.locations.getSnapshot(), before);
+  for (const [label, intent] of [
+    ['Add FOKS user…', 'add'],
+    ['Add FOKS team…', 'add-team'],
+    ['Invite new user…', 'invite'],
+  ] as const) {
+    ui.fireEvent.contextMenu(team);
+    const menu = ui.screen.getByRole('menu');
+    assert.equal(ui.within(menu).getAllByRole('separator').length, 2);
+    ui.fireEvent.click(ui.within(menu).getByRole('menuitem', { name: label }));
+    assert.equal(ui.screen.queryByRole('menu'), null);
+    assert.deepEqual(mounted.locations.getSnapshot().location, {
+      kind: 'teams',
+      store: 'team:eng',
+      open: intent,
+    });
+  }
 });
 
 test('tree and content folders target their own path and explain unsupported deletion', async () => {

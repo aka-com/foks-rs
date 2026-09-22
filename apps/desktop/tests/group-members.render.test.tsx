@@ -126,8 +126,8 @@ function sectionLabels(): string[] {
 }
 
 /**
- * The header's Add people menu item with this bold label — "A user" or "A
- * team from another server" — once the menu is open.
+ * The header's Add people menu item with this bold label — "Add FOKS user…",
+ * "Add FOKS team…" or "Invite new user…" — once the menu is open.
  */
 function addPeopleItem(label: string): HTMLButtonElement {
   const node = [
@@ -151,12 +151,13 @@ function addPeopleChoice(
 
 test('the roster is split into people, machines and federated teams', async () => {
   await group(await fixture());
-  // The invitation panel is mounted for the life of the page, so its own
-  // "Membership requests" heading is present — hidden — alongside Members.
+  // Inactive tabs stay mounted, so this DOM query also finds the hidden
+  // headings from the Requests tab.
   assert.deepEqual(sectionLabels(), [
     'Members— 6 members',
     'Machines— 1 connected',
-    'Membership requests',
+    'Membership requestsRefresh',
+    'Invitations you createdSee all',
   ]);
   // A machine is an ordinary party; its line says only what kind it is.
   assert.equal(
@@ -174,7 +175,7 @@ test('the roster is split into people, machines and federated teams', async () =
   assert.equal(rows.includes('generation'), false);
 });
 
-test('Members exposes invitation creation, requests and approval recovery for this group', async () => {
+test('Requests approves at the role chosen on the row, and Invite new user creates in one press', async () => {
   const calls: { profile: string; account: string; action: unknown }[] = [];
   const snapshot = await fixture();
   const store = snapshot.stores.find((entry) => entry.id === 'team:eng');
@@ -183,78 +184,101 @@ test('Members exposes invitation creation, requests and approval recovery for th
     invitation: async (profile, account, action) => {
       calls.push({ profile, account, action });
       if (action.action === 'inbox-count') return { count: 1 };
-      return action.action === 'inbox'
-        ? {
-            rows: [
-              {
-                request_id: '1'.repeat(32),
-                username: 'new-member',
-                verified: true,
-              },
-            ],
-          }
-        : { state: 'complete' };
+      if (action.action === 'list') return [];
+      if (action.action === 'pending-approvals') return { rows: [] };
+      if (action.action === 'inbox')
+        return {
+          rows: [
+            {
+              request_id: '1'.repeat(32),
+              username: 'new-member',
+              verified: true,
+            },
+            {
+              request_id: '2'.repeat(32),
+              username: 'other-member',
+              verified: true,
+            },
+          ],
+        };
+      if (action.action === 'create')
+        return { operation_id: 'a'.repeat(32), state: 'prepared' };
+      if (action.action === 'attempt')
+        return {
+          operation_id: 'a'.repeat(32),
+          state: 'complete',
+          invite: 'Invite123',
+        };
+      return { state: 'complete' };
     },
   });
   await ui.act(async () => {});
   calls.length = 0;
   ui.fireEvent.click(r.getByRole('tab', { name: /^Requests/ }));
-  // The tab holds the decisions and nothing else: issuing an invitation is
-  // an add action, so its form is not on a list of pending requests.
+  // Invitation creation and nesting-order controls belong outside Requests.
   assert.equal(r.queryByRole('button', { name: 'Create invitation' }), null);
-  assert.equal(r.queryByRole('button', { name: 'Refresh requests' }), null);
   assert.equal(ui.screen.queryByText('Team nesting order'), null);
-  // The tab draws no role select, so it admits as Member and says so.
-  for (const label of ['Approve as Member', 'Reject']) {
-    ui.fireEvent.click(r.getByRole('button', { name: label }));
-    await ui.act(async () => {});
-  }
-  // The form is reached from Add people's third choice, which opens the same
-  // panel as a sheet.
-  addPeopleChoice(r, 'By invitation…');
+  // Override the default Member role for this request only.
+  ui.fireEvent.change(r.getByLabelText('Role for new-member'), {
+    target: { value: 'admin' },
+  });
+  const first = r.getByRole('article', { name: 'Request from new-member' });
+  ui.fireEvent.click(ui.within(first).getByRole('button', { name: 'Approve' }));
   await ui.act(async () => {});
-  for (const label of [
-    'Create invitation',
-    'Refresh requests',
-    'Show pending approvals',
-    'Show pending operations',
-  ]) {
-    ui.fireEvent.click(r.getByRole('button', { name: label }));
-    await ui.act(async () => {});
-  }
+  const second = r.getByRole('article', {
+    name: 'Request from other-member',
+  });
+  ui.fireEvent.click(ui.within(second).getByRole('button', { name: 'Reject' }));
+  await ui.act(async () => {});
+  const written = calls.filter(
+    (call) =>
+      !['inbox', 'list', 'inbox-count', 'pending-approvals'].includes(
+        (call.action as { action: string }).action,
+      ),
+  );
   assert.deepEqual(
-    calls.map((call) => (call.action as { action: string }).action),
+    written.map((call) => call.action),
     [
-      // Confirmed or pending mutations refresh the visible recovery count
-      // and the shared request count the Requests tab, the Teams list and
-      // the rail read.
-      'approve',
-      'list',
-      'pending-approvals',
-      'inbox-count',
-      'reject',
-      'list',
-      'pending-approvals',
-      'inbox-count',
-      'create',
-      'inbox-count',
-      // These explicit read-only actions do not invalidate either again.
-      'inbox',
-      'pending-approvals',
-      'list',
+      {
+        action: 'approve',
+        team_alias: store.alias,
+        request_id: '1'.repeat(32),
+        role: 'admin',
+      },
+      { action: 'reject', team_alias: store.alias, request_id: '2'.repeat(32) },
     ],
+  );
+  // Approving or rejecting a request refreshes the shared request-count query.
+  assert.ok(
+    calls.some(
+      (call) => (call.action as { action: string }).action === 'inbox-count',
+    ),
+  );
+  calls.length = 0;
+  // Open Invite new user from Add people, then prepare and submit the
+  // invitation with a single click.
+  addPeopleChoice(r, 'Invite new user…');
+  await ui.act(async () => {});
+  const dialog = r.getByRole('dialog');
+  ui.fireEvent.click(
+    ui.within(dialog).getByRole('button', { name: 'Create invitation' }),
+  );
+  await ui.within(dialog).findByLabelText('Shareable invitation');
+  assert.deepEqual(
+    calls
+      .map((call) => (call.action as { action: string }).action)
+      .filter((action) => action === 'create' || action === 'attempt'),
+    ['create', 'attempt'],
+  );
+  assert.ok(ui.within(dialog).getByText('Step 2 of 2'));
+  assert.ok(
+    ui.within(dialog).getByRole('heading', { name: 'Share the invitation' }),
   );
   assert.ok(
     calls.every(
       (call) => call.profile === store.server && call.account === store.account,
     ),
   );
-  assert.deepEqual(calls[0].action, {
-    action: 'approve',
-    team_alias: store.alias,
-    request_id: '1'.repeat(32),
-    role: { member: { visibility: 0 } },
-  });
 });
 
 test('Members does not expose invitation administration to an ordinary member', async () => {
@@ -267,7 +291,7 @@ test('Members does not expose invitation administration to an ordinary member', 
         : party,
     ),
   });
-  assert.equal(ui.screen.queryByText('Invitations and requests'), null);
+  assert.equal(document.querySelector('.pcard.requests'), null);
   // There is nothing to request review of from here, so the tab itself is
   // not offered — the same as it was never a Toggle a Member could open.
   assert.equal(
@@ -278,8 +302,9 @@ test('Members does not expose invitation administration to an ordinary member', 
   );
   // Add people stays reachable, but neither choice applies to a Member.
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
-  assert.equal(inert(addPeopleItem('A user')), true);
-  assert.equal(inert(addPeopleItem('A team from another server')), true);
+  assert.equal(inert(addPeopleItem('Add FOKS user…')), true);
+  assert.equal(inert(addPeopleItem('Add FOKS team…')), true);
+  assert.equal(inert(addPeopleItem('Invite new user…')), true);
 });
 
 test('the Requests tab count matches what the panel lists, and none when nothing is pending', async () => {
@@ -292,11 +317,11 @@ test('the Requests tab count matches what the panel lists, and none when nothing
   // the panel is mounted for the life of the page, so the tab already knows.
   assert.equal(requestsTab.querySelector('.n')?.textContent, '2');
   ui.fireEvent.click(requestsTab);
-  const rows = [...document.querySelectorAll('.op')];
+  const rows = [...document.querySelectorAll('.pcard.requests .op')];
   assert.equal(rows.length, 2);
   assert.deepEqual(
-    rows.map((row) => row.querySelector('p')?.textContent),
-    ['fixture-joiner · local', 'fixture-second-joiner · local'],
+    rows.map((row) => row.querySelector('p b')?.textContent),
+    ['fixture-joiner', 'fixture-second-joiner'],
   );
   rendered.unmount();
 
@@ -433,8 +458,8 @@ test('a single-action alert puts its action at the right end of the alert', asyn
   // roster that failed to load leaves both Add people choices unable to
   // say whether they apply, and they say so rather than disappearing.
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
-  assert.equal(inert(addPeopleItem('A user')), true);
-  assert.equal(inert(addPeopleItem('A team from another server')), true);
+  assert.equal(inert(addPeopleItem('Add FOKS user…')), true);
+  assert.equal(inert(addPeopleItem('Add FOKS team…')), true);
 });
 
 test('duplicate roster and federation failures render one banner', async () => {
@@ -647,18 +672,23 @@ test('a member cannot act on their own row', async () => {
   );
 });
 
-test('Add people offers a person or a team from another server, each in its own words', async () => {
+test('Add people offers a FOKS user, a FOKS team or a new user, each in its own words', async () => {
   const rendered = await group(await fixture());
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Add people' }));
-  const person = addPeopleItem('A user');
-  const team = addPeopleItem('A team from another server');
+  const person = addPeopleItem('Add FOKS user…');
+  const team = addPeopleItem('Add FOKS team…');
+  const invite = addPeopleItem('Invite new user…');
   assert.equal(
     person.querySelector('.menu-choice small')?.textContent,
-    'Invite by username',
+    'Someone with an account on Acme',
   );
   assert.equal(
     team.querySelector('.menu-choice small')?.textContent,
-    'Add team via federation',
+    'A team from another server',
+  );
+  assert.equal(
+    invite.querySelector('.menu-choice small')?.textContent,
+    'Create an invitation to share',
   );
   // And the sheet it opens says what it will do, in its own words, naming
   // the group it was given rather than "group".
@@ -753,31 +783,49 @@ test('the Settings tab states the name, the join policy and why leaving is not o
   assert.equal(rendered.queryByRole('button', { name: 'Delete…' }), null);
 });
 
-test('Members invite action opens the group invitation workflow', async () => {
+test('the add sheet hands off to Invite new user for someone without an account', async () => {
   const calls: unknown[] = [];
   const r = await group(await fixture(), {
     invitation: async (_profile, _account, action) => {
       calls.push(action);
-      return action.action === 'inbox-count'
-        ? { count: 0 }
-        : { state: 'complete' };
+      if (action.action === 'inbox-count') return { count: 0 };
+      if (action.action === 'list') return [];
+      if (action.action === 'create')
+        return { operation_id: 'b'.repeat(32), state: 'prepared' };
+      return { operation_id: 'b'.repeat(32), state: 'complete' };
     },
   });
   await ui.act(async () => {});
   calls.length = 0;
-  addPeopleChoice(r, 'A user');
-  ui.fireEvent.click(r.getByRole('button', { name: 'Invite them to Acme…' }));
+  addPeopleChoice(r, 'Add FOKS user…');
+  ui.fireEvent.click(
+    r.getByRole('button', { name: 'Invite them to Acme instead…' }),
+  );
   const dialog = r.getByRole('dialog');
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByRole('heading', { name: 'Invite a new user to Engineering' }),
+  );
   ui.fireEvent.click(
     ui.within(dialog).getByRole('button', { name: 'Create invitation' }),
   );
   await ui.act(async () => {});
-  // The invitation is created, and the shared request count is read again
-  // for what it may have changed.
-  assert.deepEqual(calls, [
-    { action: 'create', team_alias: 'engineering' },
-    { action: 'inbox-count', team_alias: 'engineering' },
-  ]);
+  // Expect creation, submission, and a request-count refresh. Ignore the
+  // inbox and recovery reads that the page also triggers.
+  assert.deepEqual(
+    calls.filter(
+      (call) =>
+        !['list', 'inbox', 'pending-approvals'].includes(
+          (call as { action: string }).action,
+        ),
+    ),
+    [
+      { action: 'create', team_alias: 'engineering' },
+      { action: 'attempt', operation_id: 'b'.repeat(32) },
+      { action: 'inbox-count', team_alias: 'engineering' },
+    ],
+  );
 });
 
 test('an invitation prepared after unmount is recovered from the group banner', async () => {
@@ -809,10 +857,7 @@ test('an invitation prepared after unmount is recovered from the group banner', 
     return row;
   };
   const first = await group(snapshot, { invitation });
-  addPeopleChoice(first, 'A user');
-  ui.fireEvent.click(
-    first.getByRole('button', { name: 'Invite them to Acme…' }),
-  );
+  addPeopleChoice(first, 'Invite new user…');
   ui.fireEvent.click(
     ui
       .within(first.getByRole('dialog'))
@@ -823,10 +868,8 @@ test('an invitation prepared after unmount is recovered from the group banner', 
     release();
   });
   const returned = await group(snapshot, { invitation });
-  ui.fireEvent.click(
-    await returned.findByRole('button', { name: 'Review invitations' }),
-  );
+  ui.fireEvent.click(await returned.findByRole('button', { name: 'Review' }));
   const dialog = returned.getByRole('dialog');
-  await ui.within(dialog).findByText('prepared');
-  assert.ok(ui.within(dialog).getByRole('button', { name: 'Submit' }));
+  await ui.within(dialog).findByText(/Creation interrupted/);
+  assert.ok(ui.within(dialog).getByRole('button', { name: 'Finish creating' }));
 });

@@ -72,12 +72,16 @@ export const GROUP_SETTINGS_TABS: readonly GroupSettingsTab[] = [
  * pages of their own, so this is the only way another screen can send a
  * reader straight into one.
  */
-export type TeamsSheetIntent = 'create' | 'join';
+export type TeamsSheetIntent =
+  'create' | 'join' | 'add' | 'add-team' | 'invite';
 
 /** The intents a `?open=` value may name, for decoding an address. */
 export const TEAMS_SHEET_INTENTS: readonly TeamsSheetIntent[] = [
   'create',
   'join',
+  'add',
+  'add-team',
+  'invite',
 ];
 
 /** A step in the first-run state machine. */
@@ -99,8 +103,9 @@ export type Location =
   /** The Files roots page: All items, then vaults, groups and shares. */
   | { kind: 'files' }
   /**
-   * The Teams list, then the group settings the Groups pane carries. `store`
-   * names the account the create and discovery rows act as.
+   * The Teams list, optionally with a sheet open. `store` identifies the team
+   * for `add`, `add-team`, and `invite`; otherwise it selects the account used
+   * for creation, discovery, and joining.
    */
   | { kind: 'teams'; store?: StoreRef; open?: TeamsSheetIntent }
   /**
