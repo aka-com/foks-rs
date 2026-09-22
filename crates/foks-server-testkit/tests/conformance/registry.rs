@@ -32,9 +32,9 @@ const COVERAGE: &[Coverage] = &[
         name: "oidc_identity",
         run: crate::sso::migration_two_accounts_owner_proofs_late_link_and_erased_token_authorization_binding,
         routes: &[
-            ("Identity", "fennecCapabilities"),
-            ("Identity", "fennecChallenge"),
-            ("Identity", "fennecProve"),
+            ("Identity", "foksCapabilities"),
+            ("Identity", "foksChallenge"),
+            ("Identity", "foksProve"),
         ],
     },
     Coverage {
@@ -280,7 +280,7 @@ const COVERAGE: &[Coverage] = &[
     Coverage {
         name: "realtime_capabilities",
         run: crate::realtime::realtime_capabilities,
-        routes: &[("RealTime", "fennecChatCapabilities")],
+        routes: &[("RealTime", "foksChatCapabilities")],
     },
     Coverage {
         name: "realtime_text",

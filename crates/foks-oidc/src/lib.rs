@@ -198,7 +198,7 @@ mod tests {
     fn signed_claims_require_exact_identity_and_session_authority() {
         let validator = TokenValidator::new(
             "https://idp.example".into(),
-            "fennec".into(),
+            "foks".into(),
             fixture("jwks.json").as_bytes(),
         )
         .unwrap();

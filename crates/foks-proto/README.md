@@ -9,6 +9,7 @@ invitation certificates and requests, OIDC sessions and bindings, username
 changes, and locally negotiated chat-extension capability records.
 
 Authenticated inputs are decoded by `foks-snowpack`, schema checked here, and
-re-encoded canonically without any JSON or AKA application-type translation.
+re-encoded canonically without translating authenticated bytes through JSON or
+application-layer types.
 Unknown versions, union tags, entity types, field counts, and fixed-size blobs
 fail closed.

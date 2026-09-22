@@ -41,9 +41,9 @@ pub enum Invocation {
     Move(MoveArgs),
     #[serde(rename = "list-memberships")]
     Memberships(EmptyArgs),
-    #[serde(rename = "fennec_status")]
+    #[serde(rename = "foks_status")]
     Status(SubmissionArgs),
-    #[serde(rename = "fennec_pending")]
+    #[serde(rename = "foks_pending")]
     Pending(EmptyArgs),
     #[serde(rename = "team-list")]
     Members(TeamListArgs),
@@ -52,7 +52,7 @@ pub enum Invocation {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubmissionArgs {
-    pub fennec_submission_id: String,
+    pub submission_id: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -94,7 +94,7 @@ pub struct GetArgs {
 #[serde(deny_unknown_fields)]
 pub struct PutArgs {
     #[serde(default)]
-    pub fennec_submission_id: Option<String>,
+    pub submission_id: Option<String>,
     pub path: String,
     pub content: String,
     #[serde(default)]
@@ -117,7 +117,7 @@ impl Drop for PutArgs {
 #[serde(deny_unknown_fields)]
 pub struct MkdirArgs {
     #[serde(default)]
-    pub fennec_submission_id: Option<String>,
+    pub submission_id: Option<String>,
     pub path: String,
     #[serde(default)]
     pub team: Option<String>,
@@ -129,7 +129,7 @@ pub struct MkdirArgs {
 #[serde(deny_unknown_fields)]
 pub struct RemoveArgs {
     #[serde(default)]
-    pub fennec_submission_id: Option<String>,
+    pub submission_id: Option<String>,
     pub path: String,
     #[serde(default)]
     pub team: Option<String>,
@@ -141,7 +141,7 @@ pub struct RemoveArgs {
 #[serde(deny_unknown_fields)]
 pub struct MoveArgs {
     #[serde(default)]
-    pub fennec_submission_id: Option<String>,
+    pub submission_id: Option<String>,
     pub src: String,
     pub dst: String,
     #[serde(default)]
@@ -176,8 +176,8 @@ impl ToolSet {
                 "mkdir",
                 "rm",
                 "mv",
-                "fennec_status",
-                "fennec_pending",
+                "foks_status",
+                "foks_pending",
             ],
         }
     }
@@ -206,8 +206,8 @@ impl ToolSet {
             let (required, strings, flags): (&[&str], &[&str], &[&str]) = match (self, *name) {
                 (Self::Team, "list") => (&["team"], &["team"], &[]),
                 (Self::Team, _) => (&[], &[], &[]),
-                (_, "fennec_status") => (&["fennec_submission_id"], &["fennec_submission_id"], &[]),
-                (_, "fennec_pending") => (&[], &[], &[]),
+                (_, "foks_status") => (&["submission_id"], &["submission_id"], &[]),
+                (_, "foks_pending") => (&[], &[], &[]),
                 (_, "get") => (&["path"], &["path", "team"], &["base64"]),
                 (_, "put") => (&["path", "content"], &["path", "content", "team"], &["base64", "mkdir_p", "overwrite"]),
                 (_, "mkdir") => (&["path"], &["path", "team"], &["mkdir_p"]),
@@ -220,7 +220,7 @@ impl ToolSet {
             for key in strings { properties.insert((*key).to_owned(), json!({"type":"string"})); }
             for key in flags { properties.insert((*key).to_owned(), json!({"type":"boolean", "default":false})); }
             let writes = matches!(*name, "put" | "mkdir" | "rm" | "mv");
-            if writes { properties.insert("fennec_submission_id".into(), json!({"type":"string", "pattern":"^v1-[0-9a-f]{16}-[0-9a-f]{32}$"})); }
+            if writes { properties.insert("submission_id".into(), json!({"type":"string", "pattern":"^v1-[0-9a-f]{16}-[0-9a-f]{32}$"})); }
             serde_json::from_value(json!({
                 "name": name,
                 "description": format!("FOKS {} {name} in the selected account", if self == Self::Kv {"KV"} else {"team"}),

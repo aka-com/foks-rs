@@ -1541,7 +1541,7 @@ id_constant = "REAL_TIME_PROTOCOL_ID"
 # Explicit local extension; this position is not sourced from Go metadata.
 [[route]]
 protocol = "RealTime"
-method = "fennecChatCapabilities"
+method = "foksChatCapabilities"
 local_position = 65536
 position_constant = "RT_CHAT_CAPABILITIES_METHOD_POSITION"
 listeners = ["authenticated"]
@@ -1864,7 +1864,7 @@ supported = true
 coverage = ["team_remote_invitations"]
 
 
-# Fennec-owned protocol namespace; no upstream dispatch identity is changed.
+# FOKS Rust extension protocol namespace; no upstream dispatch identity is changed.
 [[protocol]]
 name = "Identity"
 local_id = 0xf04b0001
@@ -1872,7 +1872,7 @@ id_constant = "IDENTITY_PROTOCOL_ID"
 
 [[route]]
 protocol = "Identity"
-method = "fennecCapabilities"
+method = "foksCapabilities"
 local_position = 65536
 position_constant = "IDENTITY_CAPABILITIES_POSITION"
 listeners = ["public_services"]
@@ -1886,7 +1886,7 @@ coverage = ["oidc_identity"]
 
 [[route]]
 protocol = "Identity"
-method = "fennecChallenge"
+method = "foksChallenge"
 local_position = 65537
 position_constant = "IDENTITY_CHALLENGE_POSITION"
 listeners = ["public_services"]
@@ -1900,7 +1900,7 @@ coverage = ["oidc_identity"]
 
 [[route]]
 protocol = "Identity"
-method = "fennecProve"
+method = "foksProve"
 local_position = 65538
 position_constant = "IDENTITY_PROVE_POSITION"
 listeners = ["public_services"]

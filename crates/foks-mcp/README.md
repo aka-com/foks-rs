@@ -68,7 +68,7 @@ Every write returns structured content containing `submission_id`, `status`,
 text result; mkdir returns its directory ID. Recovery metadata is an additional
 local API, not a change to the FOKS remote protocol.
 
-Supply optional `fennec_submission_id` on a write to retain an explicit intent
+Supply optional `submission_id` on a write to retain an explicit intent
 across client restarts. Its canonical form is
 `v1-<16 lowercase hex Unix seconds>-<32 lowercase random hex>` (128 random bits).
 Legacy 32-hex IDs are rejected. Reuse it
@@ -78,8 +78,8 @@ optional ID, each explicit new write call creates a new intent.
 
 Normal KV mode adds two recovery tools:
 
-- `fennec_status({"fennec_submission_id":"…"})` reads/reconciles a recorded intent.
-- `fennec_pending({})` lists pending intents, including handles whose original
+- `foks_status({"submission_id":"…"})` reads/reconciles a recorded intent.
+- `foks_pending({})` lists pending intents, including handles whose original
   preparation or result reply was lost.
 
 Prepared means remote delivery has not begun; the same input and ID may execute

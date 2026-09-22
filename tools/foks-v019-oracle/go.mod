@@ -1,4 +1,4 @@
-module github.com/aka-proj/foks-v019-oracle
+module github.com/aka-com/foks-rs/tools/foks-v019-oracle
 
 go 1.25.0
 

@@ -9,8 +9,10 @@ use chacha20poly1305::{
 use foks_server_db::SsoSession;
 use zeroize::Zeroizing;
 
+const ENVELOPE_FORMAT: u8 = 2;
+
 fn aad(row: &SsoSession) -> Vec<u8> {
-    let mut out = b"fennec-oidc-session-v1".to_vec();
+    let mut out = b"foks-oidc-session-v2".to_vec();
     out.extend_from_slice(&row.host);
     out.extend_from_slice(&row.session_hash);
     out.extend_from_slice(&row.config_hash);
@@ -51,7 +53,7 @@ pub(super) fn seal_bytes(
     let encrypted = cipher
         .encrypt(&XNonce::from(nonce), Payload { msg: bytes, aad })
         .map_err(|_| Error::KeyCrypto)?;
-    let mut out = vec![1];
+    let mut out = vec![ENVELOPE_FORMAT];
     out.extend_from_slice(&secret.generation().as_bytes());
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&encrypted);
@@ -65,8 +67,13 @@ pub(super) fn open_bytes(
     aad: &[u8],
     bytes: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
-    if bytes.len() < 57 || bytes.len() > 2 * 1024 * 1024 || bytes[0] != 1 {
+    if bytes.len() < 57 || bytes.len() > 2 * 1024 * 1024 {
         return Err(Error::KeyCrypto);
+    }
+    if bytes[0] != ENVELOPE_FORMAT {
+        return Err(Error::Sso(
+            "SSO state format changed; reauthentication and relinking are required",
+        ));
     }
     let generation =
         KeyGenerationId::from_bytes(bytes[1..17].try_into().map_err(|_| Error::KeyCrypto)?);

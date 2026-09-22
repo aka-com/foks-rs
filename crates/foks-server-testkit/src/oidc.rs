@@ -94,7 +94,7 @@ impl TestOidcProvider {
             config_id: [50; 17],
             issuer: self.url.clone(),
             discovery_uri: format!("{}/discovery", self.url),
-            client_id: "fennec".into(),
+            client_id: "foks".into(),
             client_secret_file: secret_file,
             redirect_uri: format!("http://{}/oauth2/callback", self.callback),
             listen: self.callback,
@@ -179,7 +179,7 @@ async fn reply(
         "/jwks"=>response(200,include_str!("../../foks-oidc/tests/fixtures/jwks.json").into()),
         "/authorize"=>{
             let q=url::form_urlencoded::parse(query.as_bytes()).collect::<BTreeMap<_,_>>();
-            if q.get("redirect_uri").map(|s|s.as_ref())!=Some(&redirect)||q.get("client_id").map(|s|s.as_ref())!=Some("fennec")||q.get("code_challenge_method").map(|s|s.as_ref())!=Some("S256"){return Ok(response(400,"invalid authorization request".into()));}
+            if q.get("redirect_uri").map(|s|s.as_ref())!=Some(&redirect)||q.get("client_id").map(|s|s.as_ref())!=Some("foks")||q.get("code_challenge_method").map(|s|s.as_ref())!=Some("S256"){return Ok(response(400,"invalid authorization request".into()));}
             if state.denied { let mut uri=url::Url::parse(&redirect).unwrap();uri.query_pairs_mut().append_pair("state",q.get("state").unwrap()).append_pair("error","access_denied"); return Ok(Response::builder().status(303).header("location",uri.as_str()).body(Full::new(Bytes::new())).unwrap()); }
             state.next+=1;let code=format!("test-code-{}",state.next);
             let entry=Code{nonce:q.get("nonce").unwrap().to_string(),challenge:q.get("code_challenge").unwrap().to_string(),username:state.username.clone(),subject:state.subject.clone()};state.codes.insert(code.clone(),entry);
@@ -189,7 +189,7 @@ async fn reply(
         "/token"=>{
             use sha2::Digest as _;
             let q=url::form_urlencoded::parse(&body).collect::<BTreeMap<_,_>>();
-            if q.get("client_id").map(|s|s.as_ref())!=Some("fennec")||q.get("client_secret").map(|s|s.as_ref())!=Some("test-secret"){return Ok(response(400,json!({"error":"invalid_client"}).to_string()));}
+            if q.get("client_id").map(|s|s.as_ref())!=Some("foks")||q.get("client_secret").map(|s|s.as_ref())!=Some("test-secret"){return Ok(response(400,json!({"error":"invalid_client"}).to_string()));}
             let refreshing=q.get("grant_type").map(|s|s.as_ref())==Some("refresh_token");
             if state.invalid_grant{return Ok(response(400,json!({"error":"invalid_grant"}).to_string()));}
             let entry=if refreshing {state.refreshes+=1;state.refresh.remove(q.get("refresh_token").unwrap().as_ref())}else{state.codes.remove(q.get("code").unwrap().as_ref())};
@@ -201,7 +201,7 @@ async fn reply(
                 if !(27..=128).contains(&verifier.len())||URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes()))!=entry.challenge||q.get("redirect_uri").map(|s|s.as_ref())!=Some(&redirect){return Ok(response(400,json!({"error":"invalid_grant"}).to_string()));}
             }
             let now=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-            let mut claims=json!({"iss":root,"sub":entry.subject,"aud":"fennec","iat":now.saturating_sub(30),"exp":now+3600,"preferred_username":entry.username,"email":format!("{}@example.test",entry.username)});
+            let mut claims=json!({"iss":root,"sub":entry.subject,"aud":"foks","iat":now.saturating_sub(30),"exp":now+3600,"preferred_username":entry.username,"email":format!("{}@example.test",entry.username)});
             if !refreshing {claims["nonce"]=json!(entry.nonce);}
             let jwks:serde_json::Value=serde_json::from_str(include_str!("../../foks-oidc/tests/fixtures/jwks.json")).unwrap();
             let header=json!({"alg":"RS256","typ":"JWT","kid":jwks["keys"][0]["kid"]});let input=format!("{}.{}",URL_SAFE_NO_PAD.encode(header.to_string()),URL_SAFE_NO_PAD.encode(claims.to_string()));let signed=format!("{}.{}",input,URL_SAFE_NO_PAD.encode(key.sign(input.as_bytes()).to_bytes()));

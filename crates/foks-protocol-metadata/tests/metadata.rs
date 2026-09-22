@@ -65,7 +65,7 @@ fn rejects_unknown_policy_method() {
 fn local_policy() -> foks_protocol_metadata::Policy {
     let mut policy = parse_policy(POLICY).unwrap();
     let mut route = policy.routes[0].clone();
-    route.method = "fennecChatCapabilities".into();
+    route.method = "foksChatCapabilities".into();
     route.local_position = Some(65536);
     route.position_constant = Some("CHAT_CAPABILITIES_METHOD_POSITION".into());
     route.listeners = vec!["authenticated".into()];
@@ -88,7 +88,7 @@ fn local_extensions_use_the_same_policy_and_generation_path() {
     assert!(render_protocol_ids(&merged)
         .contains("pub const CHAT_CAPABILITIES_METHOD_POSITION: u64 = 65536;"));
     assert!(foks_protocol_metadata::render_routes(&merged)
-        .contains("RouteId::ProbeFennecChatCapabilities"));
+        .contains("RouteId::ProbeFoksChatCapabilities"));
     assert!(foks_protocol_metadata::render_contract(&merged)
         .contains("upstream_result = \"<local-extension>\""));
 }
@@ -102,15 +102,15 @@ fn extensions_cannot_override_upstream_or_bypass_policy() {
         |p: &mut foks_protocol_metadata::Policy| p.routes[1].local_position = None,
         |p: &mut foks_protocol_metadata::Policy| p.routes[1].upstream_method = Some("probe".into()),
         |p: &mut foks_protocol_metadata::Policy| p.routes[1].method = "probe".into(),
-        |p: &mut foks_protocol_metadata::Policy| p.routes[1].method = "fennec".into(),
-        |p: &mut foks_protocol_metadata::Policy| p.routes[1].method = "fennec-Chat".into(),
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].method = "foks".into(),
+        |p: &mut foks_protocol_metadata::Policy| p.routes[1].method = "foks-Chat".into(),
         |p: &mut foks_protocol_metadata::Policy| p.routes[1].position_constant = None,
         |p: &mut foks_protocol_metadata::Policy| p.routes[1].listeners = vec!["probe".into()],
         |p: &mut foks_protocol_metadata::Policy| p.routes[1].statuses = vec!["invented".into()],
         |p: &mut foks_protocol_metadata::Policy| p.routes[1].coverage.clear(),
         |p: &mut foks_protocol_metadata::Policy| {
             let mut duplicate = p.routes[1].clone();
-            duplicate.method = "fennecOther".into();
+            duplicate.method = "foksOther".into();
             duplicate.position_constant = Some("OTHER_METHOD_POSITION".into());
             p.routes.push(duplicate);
         },

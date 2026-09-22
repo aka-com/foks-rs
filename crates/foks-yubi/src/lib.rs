@@ -2,8 +2,8 @@
 //!
 //! The default build contains the deterministic mock provider used by the
 //! client/server integration suite. The `hardware` feature enables the
-//! macOS/Linux PIV provider. No API in this crate reads an AKA path or invokes
-//! a network service.
+//! macOS/Linux PIV provider. No API in this crate infers a state path from the
+//! user's home directory or invokes a network service.
 
 #![forbid(unsafe_code)]
 

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aka-proj/foks-protocol-sync/internal/model"
+	"github.com/aka-com/foks-rs/tools/foks-protocol-sync/internal/model"
 )
 
 type Class string

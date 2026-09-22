@@ -23,4 +23,5 @@ public, dedicated artifact repository and provide its narrowly scoped
 `FOKS_CANARY_PUBLISH_TOKEN`; the token is exposed only to the publication job.
 Clients authenticate the public bytes with the profile-pinned signing key.
 
-This crate has no AKA dependency and is excluded from default workspace builds.
+This crate has no dependency outside the FOKS workspace and is excluded from
+default workspace builds.

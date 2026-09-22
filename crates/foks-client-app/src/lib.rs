@@ -2,7 +2,7 @@
 //!
 //! This crate owns profiles, capability policy, credential serialization, and
 //! one-shot synchronization. It deliberately owns neither a UI nor a resident
-//! runtime, and it has no dependency on any AKA crate.
+//! runtime, and it has no dependency outside the FOKS workspace.
 
 #![forbid(unsafe_code)]
 

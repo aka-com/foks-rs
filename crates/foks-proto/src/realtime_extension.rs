@@ -1,4 +1,4 @@
-//! Explicit Fennec extensions. None of these values changes Go Basic RT schemas.
+//! Explicit FOKS Rust extensions. None of these values changes Go Basic RT schemas.
 use crate::{array, expect_unsigned, Error, RealtimeWire, Result, RtHostId, Value};
 
 /// Discovery is bound to the authenticated host, never a server version string.

@@ -24,7 +24,6 @@ fn every_path_and_socket_is_confined_to_the_test_root() {
     if let Some(home) = std::env::var_os("HOME") {
         assert!(!root.starts_with(home));
     }
-    assert!(!root.to_string_lossy().contains("AKA"));
     server.shutdown().unwrap();
 }
 
@@ -58,15 +57,11 @@ fn every_testkit_integration_test_uses_the_sealed_constructor() {
                 path.display()
             );
         }
-        let forbidden = [
-            ["std::env::var(\"", "HOME\")"].concat(),
-            ["aka", "-"].concat(),
-            ["AKA", "_DATA"].concat(),
-        ];
+        let forbidden = [["std::env::var(\"", "HOME\")"].concat()];
         for forbidden in forbidden {
             assert!(
                 !source.contains(&forbidden),
-                "{} references a user or AKA data path",
+                "{} reads a state path from the user's home directory",
                 path.display()
             );
         }

@@ -36,7 +36,7 @@ impl AgentBackend {
         )
         .map_err(|error| {
             format!(
-                "{error}; submission_id={id}; inspect fennec_pending/status before another write"
+                "{error}; submission_id={id}; inspect foks_pending or foks_status before another write"
             )
         })?;
         if prepared.submission_id != id {

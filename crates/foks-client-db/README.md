@@ -1,7 +1,7 @@
 # foks-client-db
 
 `foks-client-db` is the durable hard-state boundary for a native FOKS
-client. It deliberately contains no AKA vault types.
+client. It deliberately contains no application-layer vault types.
 
 The store accepts a host snapshot only after a protocol verifier has checked
 the exact Snowpack objects, signatures, host-chain extension, service

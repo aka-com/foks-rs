@@ -1985,7 +1985,7 @@ impl ProfileSession {
             host,
             &ClientVersionExt {
                 version: PINNED_CLIENT_VERSION,
-                linker_version: b"fennec".to_vec(),
+                linker_version: format!("foks-rs/{}", env!("CARGO_PKG_VERSION")).into_bytes(),
                 linker_packaging: b"rust".to_vec(),
             },
         )?;

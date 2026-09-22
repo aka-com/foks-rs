@@ -283,8 +283,7 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         .as_secs();
     let id = foks_agent_proto::data::SubmissionHandle::new(issued, [0x12; 16]).to_string();
     let body = "x".repeat(300 * 1024);
-    let args =
-        json!({"path":"/written/file", "content":body, "mkdir_p":true, "fennec_submission_id":id});
+    let args = json!({"path":"/written/file", "content":body, "mkdir_p":true, "submission_id":id});
     let put = writes.call("put", args.clone());
     assert_eq!(
         put["result"]["structuredContent"]["status"], "committed",
@@ -298,8 +297,8 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         "{repeated}"
     );
     assert_eq!(
-        writes.call("fennec_status", json!({"fennec_submission_id":id}))["result"]
-            ["structuredContent"]["status"],
+        writes.call("foks_status", json!({"submission_id":id}))["result"]["structuredContent"]
+            ["status"],
         "committed"
     );
     let moved = writes.call("mv", json!({"src":"/written/file", "dst":"/written/moved"}));
@@ -356,27 +355,30 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         "{removed}"
     );
     let fresh = foks_agent_proto::data::SubmissionHandle::new(issued, [0x81; 16]).to_string();
-    let fresh_status = writes.call("fennec_status", json!({"fennec_submission_id":fresh}));
+    let fresh_status = writes.call("foks_status", json!({"submission_id":fresh}));
     assert_eq!(
         fresh_status["result"]["structuredContent"]["status"], "not-recorded",
         "{fresh_status}"
     );
     let stale =
         foks_agent_proto::data::SubmissionHandle::new(issued - 86_401, [0x82; 16]).to_string();
-    let expired = writes.call("fennec_status", json!({"fennec_submission_id":stale}));
+    let expired = writes.call("foks_status", json!({"submission_id":stale}));
     assert_eq!(
         expired["result"]["structuredContent"]["status"], "expired",
         "{expired}"
     );
     let expired_write = writes.call(
         "put",
-        json!({"path":"/must-not-execute","content":"stale","fennec_submission_id":stale}),
+        json!({"path":"/must-not-execute","content":"stale","submission_id":stale}),
     );
     assert_eq!(
         expired_write["result"]["structuredContent"]["status"], "expired",
         "{expired_write}"
     );
-    let legacy=writes.call("put",json!({"path":"/must-not-execute","content":"legacy","fennec_submission_id":"12".repeat(16)}));
+    let legacy = writes.call(
+        "put",
+        json!({"path":"/must-not-execute","content":"legacy","submission_id":"12".repeat(16)}),
+    );
     assert_eq!(legacy["result"]["isError"], true, "{legacy}");
     // Local status has reserved worker capacity and contains counters only.
     let retention = foks_agent_client::AgentClient::new(state.join("foks-rs.sock"))
@@ -398,7 +400,7 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
             "put",
             json!({
                 "path":"/abandoned-upload", "content":"z".repeat(300 * 1024),
-                "fennec_submission_id":uncertain_id,
+                "submission_id":uncertain_id,
             }),
         );
         assert_eq!(environment.fault_hits(), hits + 1);
@@ -418,10 +420,7 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         }
         assert_eq!(reclaimed, 1);
         assert_eq!(server.metrics().reclaimed_uploads, 1);
-        let status = writes.call(
-            "fennec_status",
-            json!({"fennec_submission_id":uncertain_id}),
-        );
+        let status = writes.call("foks_status", json!({"submission_id":uncertain_id}));
         assert_eq!(
             status["result"]["structuredContent"]["status"], "submission-unknown",
             "{status}"
@@ -431,7 +430,7 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
             "put",
             json!({
                 "path":"/abandoned-upload", "content":"z".repeat(300 * 1024),
-                "fennec_submission_id":uncertain_id,
+                "submission_id":uncertain_id,
             }),
         );
         assert_eq!(

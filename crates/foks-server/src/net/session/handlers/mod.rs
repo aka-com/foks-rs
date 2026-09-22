@@ -28,7 +28,7 @@ pub(super) fn response(
 
     match call.route.id {
         UserNewWebAdminPanelURL | UserCheckURL => web_admin::response(data, call, principal),
-        IdentityFennecCapabilities | IdentityFennecChallenge | IdentityFennecProve => {
+        IdentityFoksCapabilities | IdentityFoksChallenge | IdentityFoksProve => {
             identity::response(data, call)
         }
         RegPollOAuth2SessionCompletion => Err(RpcStatus::Unsupported),
@@ -141,7 +141,7 @@ pub(super) fn response(
         LogSendLogSendInit | LogSendLogSendInitFile | LogSendLogSendUploadBlock => {
             logsend::response(data, call, principal)
         }
-        RealTimeFennecChatCapabilities
+        RealTimeFoksChatCapabilities
         | RealTimeRtNewChannel
         | RealTimeRtListAllChannelsForTeam
         | RealTimeRtSend

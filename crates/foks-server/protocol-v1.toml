@@ -1869,7 +1869,7 @@ coverage = ["kv_small"]
 [[route]]
 protocol = "RealTime"
 protocol_id = 0x4f58e7d4
-method = "fennecChatCapabilities"
+method = "foksChatCapabilities"
 position = 65536
 listeners = ["authenticated"]
 authentication = "active_device_mtls"
@@ -2294,7 +2294,7 @@ coverage = ["team_remote_invitations"]
 [[route]]
 protocol = "Identity"
 protocol_id = 0xf04b0001
-method = "fennecCapabilities"
+method = "foksCapabilities"
 position = 65536
 listeners = ["public_services"]
 authentication = "public"
@@ -2311,7 +2311,7 @@ coverage = ["oidc_identity"]
 [[route]]
 protocol = "Identity"
 protocol_id = 0xf04b0001
-method = "fennecChallenge"
+method = "foksChallenge"
 position = 65537
 listeners = ["public_services"]
 authentication = "public"
@@ -2328,7 +2328,7 @@ coverage = ["oidc_identity"]
 [[route]]
 protocol = "Identity"
 protocol_id = 0xf04b0001
-method = "fennecProve"
+method = "foksProve"
 position = 65538
 listeners = ["public_services"]
 authentication = "public"

@@ -387,7 +387,7 @@ impl Backend for AgentBackend {
                 let body = crate::contract::decode_content(&args.content, args.base64)
                     .map_err(|error| error.to_string())?;
                 self.write(
-                    args.fennec_submission_id.as_deref(),
+                    args.submission_id.as_deref(),
                     write_spec(
                         foks_agent_proto::data::DataWriteKind::Put,
                         &args.path,
@@ -403,7 +403,7 @@ impl Backend for AgentBackend {
                 )
             }
             Invocation::Mkdir(args) => self.write(
-                args.fennec_submission_id.as_deref(),
+                args.submission_id.as_deref(),
                 write_spec(
                     foks_agent_proto::data::DataWriteKind::Mkdir,
                     &args.path,
@@ -418,7 +418,7 @@ impl Backend for AgentBackend {
                 cancelled,
             ),
             Invocation::Remove(args) => self.write(
-                args.fennec_submission_id.as_deref(),
+                args.submission_id.as_deref(),
                 write_spec(
                     foks_agent_proto::data::DataWriteKind::Remove,
                     &args.path,
@@ -433,7 +433,7 @@ impl Backend for AgentBackend {
                 cancelled,
             ),
             Invocation::Move(args) => self.write(
-                args.fennec_submission_id.as_deref(),
+                args.submission_id.as_deref(),
                 write_spec(
                     foks_agent_proto::data::DataWriteKind::Move,
                     &args.src,
@@ -453,12 +453,12 @@ impl Backend for AgentBackend {
                     Operation::DataWriteStatus {
                         submission: foks_agent_proto::data::DataSubmission {
                             scope: self.account.clone(),
-                            submission_id: args.fennec_submission_id.clone(),
+                            submission_id: args.submission_id.clone(),
                         },
                     },
                     cancelled,
                 )?;
-                if result.submission_id != args.fennec_submission_id {
+                if result.submission_id != args.submission_id {
                     return Err("agent changed submission identity".into());
                 }
                 write_result(result)

@@ -1,13 +1,15 @@
 //! Extended chat context binding. Membership, sender assertions and semantic
 //! projections remain the caller's responsibility; shared keys are not signatures.
+//! The FOKS domain cutover is intentionally incompatible with bodies encrypted
+//! under the former extension domains.
 use super::*;
 use foks_proto::{RealtimeWire, RtChatContext};
 
 /// Assigned local domains: first eight bytes of SHA-256 of the ASCII labels
-/// `fennec.chat.v2.context-key` and `fennec.chat.v2.encrypted-body` respectively.
+/// `foks.chat.v2.context-key` and `foks.chat.v2.encrypted-body` respectively.
 /// These are not upstream Go type IDs.
-const CONTEXT_KEY: u64 = 0xa390_64b7_69c6_b249;
-const ENCRYPTED_BODY: u64 = 0x16b0_1866_0207_d95c;
+const CONTEXT_KEY: u64 = 0xe6fb_4c25_4e3d_d179;
+const ENCRYPTED_BODY: u64 = 0x4fc1_185a_6ab3_18ba;
 pub const CHAT_V2_MAX_PLAINTEXT_BYTES: usize = 64 * 1024;
 
 fn key(seed: &SecretSeed, context: &RtChatContext) -> Result<Zeroizing<[u8; 32]>> {

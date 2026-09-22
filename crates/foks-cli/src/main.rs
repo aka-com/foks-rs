@@ -28,7 +28,7 @@ use zeroize::Zeroizing;
 #[derive(clap::Parser)]
 #[command(name = "foks-rs", about = "Standalone Rust client for FOKS")]
 struct Arguments {
-    /// Application state directory. The CLI does not infer a default path or read AKA state.
+    /// Application state directory. Required; all state access stays beneath this directory.
     #[arg(long)]
     state_dir: PathBuf,
     #[arg(long, global = true)]

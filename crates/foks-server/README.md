@@ -101,7 +101,7 @@ delegated-purpose key rotation remains design-only.
 The probe certificate must be trusted by clients and cover the canonical
 hostname. Service certificates are generated under the delegated CA committed
 by the hostchain. Every state path and the 32-byte operator root-key file is
-explicit; there is no home-directory or AKA path default.
+explicit; the server does not infer state paths from the user's home directory.
 
 For a new self-contained installation, initialize once and run the generated
 versioned configuration:
@@ -457,16 +457,16 @@ tools/foks-server/test-small-team.sh
 tools/foks-server/test-small-team-repeat.sh 5
 ```
 
-The gate rejects any AKA dependency, any FOKS package defined outside
+The gate rejects any FOKS package defined outside
 `crates/foks-*` or `apps/desktop/src-tauri`, and any local path dependency that reaches
 outside those directories — under the default feature set and under
 `--all-features`, so a dependency hidden behind an optional feature is caught
 too. It inspects the Cargo graph rather than changed file paths to verify that
-FOKS packages remain strictly decoupled from AKA and shared-UI dependencies.
+FOKS packages retain a standalone dependency graph.
 The optional official-Go frame audit is
 `tools/foks-v019-oracle/run-live-team-compat.sh`; it needs a Go 1.25-compatible
-toolchain and may populate Go compiler/module caches, but does not use an AKA
-crate or user data path.
+toolchain and may populate Go compiler/module caches, but does not use a state
+path outside its test-owned temporary root.
 
 Run `tools/foks-server/generate-protocol.sh --write` only for a reviewed
 baseline or policy update. The scheduled
@@ -475,7 +475,7 @@ with upstream's immutable current commit, publishes semantic JSON/Markdown
 drift reports, and never edits the baseline or a lockfile.
 
 The standalone direct client, local agent, and desktop backend have a separate
-AKA-dependency and test gate:
+dependency-boundary and test gate:
 
 ```text
 tools/foks-client/check.sh

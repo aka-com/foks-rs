@@ -83,8 +83,8 @@ func TestOIDCClaimFixtures(t *testing.T) {
 		"empty-subject":            func(c jwt.MapClaims) { c["sub"] = "" },
 		"missing-expiry":           func(c jwt.MapClaims) { delete(c, "exp") },
 		"wrong-azp":                func(c jwt.MapClaims) { c["azp"] = "other" },
-		"multiple-audience-no-azp": func(c jwt.MapClaims) { c["aud"] = []string{"fennec", "other"} },
-		"multiple-audience":        func(c jwt.MapClaims) { c["aud"] = []string{"fennec", "other"}; c["azp"] = "fennec" },
+		"multiple-audience-no-azp": func(c jwt.MapClaims) { c["aud"] = []string{"foks", "other"} },
+		"multiple-audience":        func(c jwt.MapClaims) { c["aud"] = []string{"foks", "other"}; c["azp"] = "foks" },
 		"future-issued":            func(c jwt.MapClaims) { c["iat"] = 1700000200 },
 		"claim-type":               func(c jwt.MapClaims) { c["sub"] = 42 },
 		"missing-nonce":            func(c jwt.MapClaims) { delete(c, "nonce") },
@@ -92,7 +92,7 @@ func TestOIDCClaimFixtures(t *testing.T) {
 		"wrong-key-id":             func(c jwt.MapClaims) {},
 	}
 	for name, change := range cases {
-		claims := jwt.MapClaims{"iss": "https://idp.example", "sub": "stable-subject", "aud": "fennec", "nonce": "fixture-nonce", "iat": 1700000000, "exp": 1700000600, "preferred_username": "alice", "email": "alice@example.com"}
+		claims := jwt.MapClaims{"iss": "https://idp.example", "sub": "stable-subject", "aud": "foks", "nonce": "fixture-nonce", "iat": 1700000000, "exp": 1700000600, "preferred_username": "alice", "email": "alice@example.com"}
 		change(claims)
 		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 		token.Header["kid"] = "fixture"

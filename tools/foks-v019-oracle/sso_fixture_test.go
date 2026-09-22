@@ -75,7 +75,7 @@ func TestSSOFixtures(t *testing.T) {
 	}
 	put("verifier.txt", []byte(verifier))
 	put("challenge.txt", []byte(challenge))
-	cfg := p.SSOConfig{Active: p.SSOProtocolType_Oauth2, Oauth2: &p.OAuth2Config{Id: cfgid, ConfigURI: "https://idp.example/.well-known/openid-configuration", ClientID: "fennec", ClientSecret: "fixture-secret", RedirectURI: "https://host.example/oauth2/callback"}}
+	cfg := p.SSOConfig{Active: p.SSOProtocolType_Oauth2, Oauth2: &p.OAuth2Config{Id: cfgid, ConfigURI: "https://idp.example/.well-known/openid-configuration", ClientID: "foks", ClientSecret: "fixture-secret", RedirectURI: "https://host.example/oauth2/callback"}}
 	emit("config", &cfg)
 	cfg.Oauth2.ClientSecret = ""
 	emit("public-config", &cfg)

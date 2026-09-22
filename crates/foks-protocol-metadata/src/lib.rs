@@ -393,8 +393,8 @@ pub fn merge<'a>(artifact: &'a Artifact, policy: &'a Policy) -> Result<Merged<'a
         let (position, upstream_result) = if let Some(position) = route.local_position {
             if route.upstream_method.is_some()
                 || !(65536..=131071).contains(&position)
-                || !route.method.starts_with("fennec")
-                || route.method.len() == "fennec".len()
+                || !route.method.starts_with("foks")
+                || route.method.len() == "foks".len()
                 || !route
                     .method
                     .bytes()

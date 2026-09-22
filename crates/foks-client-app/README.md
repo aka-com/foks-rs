@@ -3,7 +3,7 @@
 Application composition for standalone Rust FOKS clients. It owns explicit
 profiles, per-profile state paths, encrypted account/team records, protocol
 capability gates, scheduling integration, and the direct operations shared by
-the CLI and local agent. It does not depend on AKA.
+the CLI and local agent. It has a standalone FOKS dependency graph.
 
 Each profile lives below a caller-supplied state directory and receives its own
 hard-state SQLite database, soft KV cache, mutation journal, and encrypted
@@ -92,8 +92,8 @@ and rollback enrollment, `registry` owns profiles and compatibility policy,
 records, and `runtime` owns process locks and scheduled execution. These are
 internal modules; the crate's existing public API remains the frontend seam.
 
-Tests use temporary state roots and loopback fixtures. No API infers an AKA or
-user-data path.
+Tests use temporary state roots and loopback fixtures. No API infers a state
+path from the user's home directory.
 
 ## Build and platform boundary
 
@@ -101,7 +101,7 @@ The workspace builds these crates with stable Rust/Cargo (the current gate was
 run with Rust 1.95). The FOKS client graph builds bundled SQLite and AWS-LC, so
 a native C toolchain and CMake are build prerequisites even though neither is a
 runtime shared-library dependency. Normal builds require no Go, Node, webview,
-system SQLite, or AKA toolchain. Native YubiKey binaries additionally link the
+system SQLite, or external application toolchain. Native YubiKey binaries additionally link the
 platform PC/SC stack: macOS provides it, while Linux needs pcsc-lite
 development headers at build time and the PC/SC daemon at runtime. Go is used
 only by the optional pinned-upstream protocol/oracle audits.

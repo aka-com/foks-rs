@@ -46,8 +46,8 @@ impl<B: Backend> ServerHandler for Session<B> {
         info.protocol_version = ProtocolVersion::V_2025_11_25;
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info.name = match self.set {
-            ToolSet::Kv => "fennec-kv",
-            ToolSet::Team => "fennec-team",
+            ToolSet::Kv => "foks-kv",
+            ToolSet::Team => "foks-team",
         }
         .into();
         info.server_info.version = env!("CARGO_PKG_VERSION").into();

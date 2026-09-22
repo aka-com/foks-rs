@@ -27,8 +27,8 @@ state. No administrative API can change retry counts after enrollment.
 Hardware operations are serialized process-wide because PC/SC APDUs are
 stateful. A partially failed two-slot preparation can leave one slot
 changed; the caller must report that condition and require explicit card
-cleanup rather than retrying into a different slot layout. No API reads an AKA
-path or performs network I/O.
+cleanup rather than retrying into a different slot layout. No API infers a
+state path from the user's home directory or performs network I/O.
 
 macOS provides PC/SC. Linux builds need pcsc-lite development files and runtime
 access to a PC/SC daemon and the physical token. Normal library and test builds

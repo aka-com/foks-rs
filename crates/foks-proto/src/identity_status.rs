@@ -1,4 +1,4 @@
-//! Fennec identity extension. Public status requires an active owner-device proof.
+//! FOKS Rust identity extension. Public status requires an active owner-device proof.
 use crate::{
     array, binary, decode, encode, entity, fixed_blob, text, unsigned, EntityId, Error, Result,
     Signature, Value, ENTITY_HOST, ENTITY_USER,

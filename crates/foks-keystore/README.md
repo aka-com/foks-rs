@@ -1,7 +1,7 @@
 # foks-keystore
 
 Small, FOKS-only secret-store boundary used by the standalone client surfaces.
-It has no dependency on an `aka-*` crate.
+It has no dependency outside the FOKS workspace.
 
 `SecretStore` deliberately exposes only record operations. The in-memory
 implementation is for tests. `EncryptedFileSecretStore` is the portable
@@ -32,4 +32,4 @@ GNOME Keyring session for this test; it never uses a developer's collection.
 The crate needs stable Rust and Cargo only. Its cryptography and randomness are
 Rust crates. macOS links Security.framework; Linux talks to a Secret Service
 provider over the user D-Bus session. There is no Go toolchain, system SQLite
-library, or AKA runtime dependency.
+library, or desktop runtime dependency.

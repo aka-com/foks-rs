@@ -1,3 +1,3 @@
-module github.com/aka-proj/foks-protocol-sync
+module github.com/aka-com/foks-rs/tools/foks-protocol-sync
 
 go 1.19

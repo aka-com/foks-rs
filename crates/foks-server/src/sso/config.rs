@@ -106,7 +106,7 @@ impl OidcOperatorConfig {
     pub(crate) fn fingerprint(&self, secret: &str) -> Result<[u8; 32]> {
         // Versioned, length-delimited security projection. Operational file paths and
         // rollout state are deliberately absent; secret bytes remain zeroized.
-        let mut hash_input = zeroize::Zeroizing::new(b"fennec-oidc-provider-v1".to_vec());
+        let mut hash_input = zeroize::Zeroizing::new(b"foks-oidc-provider-v2".to_vec());
         for value in [
             self.config_id.as_slice(),
             self.issuer.as_bytes(),

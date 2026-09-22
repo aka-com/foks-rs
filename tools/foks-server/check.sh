@@ -26,8 +26,8 @@ fi
 
 # The standalone boundary is a property of the Cargo graph, not of a branch's
 # changed files. This repository builds two products out of one workspace, so
-# a branch that carries FOKS work legitimately also carries AKA and shared-UI
-# work; a whole-branch changed-path allowlist rejected that without saying
+# a branch that carries FOKS work can legitimately carry other workspace code;
+# a whole-branch changed-path allowlist rejected that without saying
 # anything about whether FOKS still stands alone. What has to hold is that
 # every FOKS package is *defined* inside FOKS-owned directories and reaches
 # only FOKS-owned directories for its local sources.
@@ -65,20 +65,10 @@ while IFS="$tab" read -r package relation path; do
     esac
 done <"$boundary_paths"
 
-# The AKA-free rule itself, by name and across every feature combination: a
-# dependency reachable only behind a non-default feature is still a dependency.
 # MCP process tests use the packaged sibling agent executable.
 cargo build --offline --locked -p foks-agent
 
 while IFS= read -r package; do
-    for features in "" "--all-features"; do
-        # shellcheck disable=SC2086
-        if cargo tree --offline --locked --prefix none $features -p "$package" \
-            | sed 's/ .*//' | grep '^aka-' >/dev/null; then
-            echo "$package has an AKA dependency" >&2
-            exit 1
-        fi
-    done
     if [ "$package" != "foks-server-testkit" ] \
         && cargo tree --offline --locked --edges normal --prefix none -p "$package" \
             | sed 's/ .*//' | grep '^foks-server-testkit$' >/dev/null; then

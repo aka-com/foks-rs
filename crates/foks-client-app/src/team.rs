@@ -18,8 +18,11 @@ static TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(test)]
-static TEST_FAIL_AFTER_DISCOVERY_PERSIST: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    static TEST_FAIL_AFTER_DISCOVERY_PERSIST: std::cell::Cell<bool> = const {
+        std::cell::Cell::new(false)
+    };
+}
 
 /// The name a named team is created under, derived from what the user typed.
 /// The server keeps this display form and a normalized form; the normalized
@@ -373,7 +376,7 @@ impl CheckedProfileSession<'_> {
             teams.push(TeamSummary::from_stored(alias, &stored));
 
             #[cfg(test)]
-            if TEST_FAIL_AFTER_DISCOVERY_PERSIST.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            if TEST_FAIL_AFTER_DISCOVERY_PERSIST.with(|failpoint| failpoint.replace(false)) {
                 return Err(Error::InvalidAccount(
                     "test interrupted team discovery after one persisted binding",
                 ));
@@ -2877,8 +2880,7 @@ mod tests {
                     let collision = StoredTeam::random_adhoc("invited_alpha", "personal")?;
                     let collision_id = collision.team_id.clone();
                     vault.put_team(&collision)?;
-                    TEST_FAIL_AFTER_DISCOVERY_PERSIST
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    TEST_FAIL_AFTER_DISCOVERY_PERSIST.with(|failpoint| failpoint.set(true));
                     let interrupted = session
                         .discover_teams("personal", &mut vault)
                         .expect_err("the discovery failpoint interrupts after one durable record");

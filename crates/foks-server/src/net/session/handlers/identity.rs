@@ -10,7 +10,7 @@ pub(super) fn response(data: &ServerData, call: RoutedCall) -> Result<Vec<u8>, R
         .map_err(|_| RpcStatus::TransactionRetry)?;
     let writer = data.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
     let result = match call.route.id {
-        RouteId::IdentityFennecCapabilities => {
+        RouteId::IdentityFoksCapabilities => {
             foks_rpc::arguments::decode_void(call.call.argument())
                 .map_err(super::super::bad_arguments)?;
             foks_snowpack::encode(&foks_snowpack::Value::Unsigned(
@@ -18,7 +18,7 @@ pub(super) fn response(data: &ServerData, call: RoutedCall) -> Result<Vec<u8>, R
             ))
             .map_err(|_| RpcStatus::TransactionRetry)?
         }
-        RouteId::IdentityFennecChallenge => {
+        RouteId::IdentityFoksChallenge => {
             let claim = IdentityClaim::decode(call.call.argument()).map_err(|_| denied())?;
             if claim.host.as_bytes() != host {
                 return Err(denied());
@@ -37,7 +37,7 @@ pub(super) fn response(data: &ServerData, call: RoutedCall) -> Result<Vec<u8>, R
                 .encoded()
                 .map_err(|_| RpcStatus::TransactionRetry)?
         }
-        RouteId::IdentityFennecProve => {
+        RouteId::IdentityFoksProve => {
             let proof = IdentityProof::decode(call.call.argument()).map_err(|_| denied())?;
             writer
                 .call_with_current_time(data.clock.clone(), move |db, now| {

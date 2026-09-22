@@ -68,7 +68,7 @@ func (s *strictOIDC) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(s.jwks)
 	case "/authorize":
 		q := r.URL.Query()
-		if q.Get("client_id") != "fennec" || q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" || len(q.Get("code_challenge")) != 43 || q.Get("nonce") == "" || q.Get("state") == "" {
+		if q.Get("client_id") != "foks" || q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" || len(q.Get("code_challenge")) != 43 || q.Get("nonce") == "" || q.Get("state") == "" {
 			http.Error(w, "invalid authorization", 400)
 			return
 		}
@@ -93,7 +93,7 @@ func (s *strictOIDC) serve(w http.ResponseWriter, r *http.Request) {
 		redirect.RawQuery = out.Encode()
 		http.Redirect(w, r, redirect.String(), http.StatusFound)
 	case "/token":
-		if r.Method != "POST" || r.ParseForm() != nil || r.Form.Get("client_id") != "fennec" {
+		if r.Method != "POST" || r.ParseForm() != nil || r.Form.Get("client_id") != "foks" {
 			http.Error(w, "invalid token request", 400)
 			return
 		}
@@ -133,7 +133,7 @@ func (s *strictOIDC) serve(w http.ResponseWriter, r *http.Request) {
 		refresh := fmt.Sprintf("rotated-%d", s.next)
 		s.refresh[refresh] = username
 		now := time.Now().Unix()
-		claims := jwt.MapClaims{"iss": s.server.URL, "sub": username + "-subject", "aud": "fennec", "iat": now, "exp": now + 600, "preferred_username": username, "email": username + "@example.test"}
+		claims := jwt.MapClaims{"iss": s.server.URL, "sub": username + "-subject", "aud": "foks", "iat": now, "exp": now + 600, "preferred_username": username, "email": username + "@example.test"}
 		if nonce != "" {
 			claims["nonce"] = nonce
 		}
@@ -171,7 +171,7 @@ func configureRustLiveSSO(t *testing.T, env *common.TestEnv, dir string) (func()
 	}
 	cb.Host = net.JoinHostPort(lookup, cb.Port())
 	idp.callback = cb.String()
-	err := shared.SetVHostSSOConfig(env.MetaContext(), &p.SSOConfig{Active: p.SSOProtocolType_Oauth2, Oauth2: &p.OAuth2Config{ConfigURI: p.URLString(idp.server.URL + "/discovery"), ClientID: "fennec"}})
+	err := shared.SetVHostSSOConfig(env.MetaContext(), &p.SSOConfig{Active: p.SSOProtocolType_Oauth2, Oauth2: &p.OAuth2Config{ConfigURI: p.URLString(idp.server.URL + "/discovery"), ClientID: "foks"}})
 	if err != nil {
 		t.Fatal(err)
 	}

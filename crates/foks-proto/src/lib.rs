@@ -2,7 +2,7 @@
 //!
 //! The generic Snowpack codec proves canonical encoding. This crate applies
 //! the v0.1.9 host, identity, team, key-distribution, mutation, and KV schemas
-//! without translating authenticated bytes through JSON or AKA types.
+//! without translating authenticated bytes through JSON or application-layer types.
 
 #![forbid(unsafe_code)]
 

@@ -195,7 +195,7 @@ impl SsoService {
     }
 }
 fn aad(row: &SsoAccess) -> Vec<u8> {
-    let mut out = b"fennec-oidc-access-v1".to_vec();
+    let mut out = b"foks-oidc-access-v2".to_vec();
     out.extend_from_slice(&row.host);
     out.extend_from_slice(&row.uid);
     out.extend_from_slice(&row.config_hash);

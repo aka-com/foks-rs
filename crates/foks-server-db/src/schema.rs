@@ -3,7 +3,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 47;
+pub const SCHEMA_VERSION: i64 = 48;
 
 const SCHEMA: &str = concat!(
     include_str!("schema/core.sql"),
@@ -41,13 +41,13 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         return Ok(());
     }
-    if application_id == APPLICATION_ID && matches!(version, 43..=46) {
+    if application_id == APPLICATION_ID && matches!(version, 43..=47) {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Recheck under the write lock: another opener may already have upgraded.
         let application_id =
             transaction.pragma_query_value(None, "application_id", |r| r.get(0))?;
         let version = transaction.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if application_id == APPLICATION_ID && matches!(version, 43..=46) {
+        if application_id == APPLICATION_ID && matches!(version, 43..=47) {
             if version == 43 {
                 transaction.execute_batch(
                     "ALTER TABLE rt_user_inboxes ADD COLUMN reconcile_dirty INTEGER NOT NULL
@@ -96,6 +96,16 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
                      RENAME COLUMN admission_hash TO source_hash;",
                 )?;
             }
+            // Version 48 changes the SSO provider fingerprint and the
+            // authenticated-encryption domains. Old browser flows cannot be
+            // resumed and old account links must be established again under
+            // the new provider identity.
+            transaction.execute_batch(
+                "DELETE FROM sso_binding_receipts;
+                 DELETE FROM sso_identity_challenges;
+                 DELETE FROM sso_access;
+                 DELETE FROM sso_sessions;",
+            )?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else {
             validate(application_id, version)?;

@@ -8,8 +8,8 @@ the upstream protocol requires it.
 This crate is the protocol client library. The standalone application
 composition, direct `foks-rs` executable, bounded local agent, and
 toolkit-independent desktop boundary live in `foks-client-app`, `foks-cli`,
-`foks-agent`, and `foks-desktop`. They use explicit state paths and do not
-depend on AKA crates. Run their isolated gate with
+`foks-agent`, and `foks-desktop`. They use explicit state paths and a standalone
+FOKS dependency graph. Run their isolated gate with
 `tools/foks-client/check.sh`.
 
 Delegated RPC connections are pooled by endpoint, authenticated HostID/TLS

@@ -1,4 +1,4 @@
-//! Local Fennec adapter identities; these are not Go FOKS wire mutation IDs.
+//! Local FOKS adapter submission identities; these are not Go FOKS wire mutation IDs.
 use std::{fmt, str::FromStr};
 
 /// A canonical issuance time and 128 random bits. Generic mutation IDs remain

@@ -1,7 +1,7 @@
 # foks-cli
 
 `foks-rs` is the direct, non-interactive standalone client. Every invocation
-requires `--state-dir`; it neither reads nor writes AKA state.
+requires `--state-dir` and reads or writes state only beneath that directory.
 
 The `mcp kv` and `mcp team` commands expose the account through the resident agent.
 See [MCP setup and recovery](../foks-mcp/README.md) for launch configuration, tool
@@ -46,7 +46,8 @@ team records under one canonical dual-profile lock. It persists the remote
 binding and removal key before networking, resumes the cross-host mutation
 without blind replay, and registers a federation reconciliation job. `team
 list-remote` reports the protected bindings; `jobs run-due` also handles their
-renewal. No command reads an AKA path or puts a bearer token in SQLite.
+renewal. No command infers state paths from the user's home directory or puts a
+bearer token in SQLite.
 
 Current hosted profiles require an Ed25519 compatibility artifact public key and the stable
 HTTPS URL polled by the agent:

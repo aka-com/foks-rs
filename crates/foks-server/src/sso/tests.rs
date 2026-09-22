@@ -118,7 +118,7 @@ impl Fixture {
             config_id: [50; 17],
             issuer: "https://idp.example".into(),
             discovery_uri: format!("{}/discovery", idp.url),
-            client_id: "fennec".into(),
+            client_id: "foks".into(),
             client_secret_file: secret,
             redirect_uri: "http://127.0.0.1:1234/oauth2/callback".into(),
             listen: "127.0.0.1:0".parse().unwrap(),
@@ -358,6 +358,14 @@ fn envelope_survives_operator_root_rotation_and_rejects_missing_or_wrong_keys() 
         envelope::open(&keys, &row).unwrap().as_slice(),
         b"token-SECRET"
     );
+    let mut legacy = row.clone();
+    legacy.ciphertext[0] = 1;
+    assert!(matches!(
+        envelope::open(&keys, &legacy),
+        Err(Error::Sso(
+            "SSO state format changed; reauthentication and relinking are required"
+        ))
+    ));
     let empty = crate::keys::MemoryKeyProvider::default();
     assert!(envelope::open(&empty, &row).is_err());
     assert!(envelope::seal(&empty, &crate::OsEntropy, &row, b"token").is_err());

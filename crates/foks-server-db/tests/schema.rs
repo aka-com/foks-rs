@@ -130,7 +130,7 @@ fn schema_objects(connection: &Connection) -> Vec<(String, String, Option<String
 }
 
 fn predecessor(connection: &Connection, version: i64) {
-    assert!(matches!(version, 43..=46));
+    assert!(matches!(version, 43..=47));
     if version <= 44 {
         for name in EXPIRY_INDEXES {
             connection
@@ -154,16 +154,18 @@ fn predecessor(connection: &Connection, version: i64) {
             .execute_batch("ALTER TABLE sso_policy RENAME COLUMN blocked_reason TO fence;")
             .unwrap();
     }
-    connection
-        .execute_batch(
-            "DROP INDEX sso_session_source;
-             ALTER TABLE sso_sessions RENAME COLUMN source_hash TO admission_hash;
-             CREATE INDEX sso_session_admission
-             ON sso_sessions(host, admission_hash, expires_at_ms);
-             ALTER TABLE sso_identity_challenges
-             RENAME COLUMN source_hash TO admission_hash;",
-        )
-        .unwrap();
+    if version <= 46 {
+        connection
+            .execute_batch(
+                "DROP INDEX sso_session_source;
+                 ALTER TABLE sso_sessions RENAME COLUMN source_hash TO admission_hash;
+                 CREATE INDEX sso_session_admission
+                 ON sso_sessions(host, admission_hash, expires_at_ms);
+                 ALTER TABLE sso_identity_challenges
+                 RENAME COLUMN source_hash TO admission_hash;",
+            )
+            .unwrap();
+    }
     connection
         .pragma_update(None, "user_version", version)
         .unwrap();
@@ -185,7 +187,7 @@ fn writer_upgrades_supported_predecessors_and_preserves_data_and_index_definitio
         })
     };
     let expected = indexes(&reference);
-    for version in [43, 44, 45, 46] {
+    for version in [43, 44, 45, 46, 47] {
         let test = common::TestDatabase::new();
         let path = test.path.clone();
         drop(test.database);
@@ -238,6 +240,59 @@ fn writer_upgrades_supported_predecessors_and_preserves_data_and_index_definitio
         drop(Database::open_existing(&path, Config::default()).unwrap());
         drop(foks_server_db::ReadDatabase::open(&path, Config::default()).unwrap());
     }
+}
+
+#[test]
+fn version_48_upgrade_expires_old_sso_envelopes_and_requires_relinking() {
+    let mut test = common::TestDatabase::new();
+    test.reserve(1_000_000);
+    test.commit(None).unwrap();
+    let path = test.path.clone();
+    drop(test.database);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .unwrap();
+    connection.execute_batch(
+        "INSERT INTO sso_policy(host,config_hash,rollout_id,issuer,mode,revision,authorization_epoch)
+         VALUES(zeroblob(33),zeroblob(32),zeroblob(16),'https://issuer.test',1,1,1);
+         INSERT INTO sso_sessions(host,session_hash,config_hash,source_hash,uid,state,revision,
+             authorization_epoch,expires_at_ms,ciphertext)
+         VALUES(zeroblob(33),zeroblob(32),zeroblob(32),zeroblob(32),NULL,0,1,1,1000,zeroblob(57));
+         INSERT INTO sso_access(host,uid,issuer,subject,config_hash,revision,authorization_epoch,
+             authorization_generation,state,expires_at_ms,ciphertext)
+         VALUES(zeroblob(33),X'010101010101010101010101010101010101010101010101010101010101010101',
+             'https://issuer.test','subject',zeroblob(32),1,1,1,0,1000,zeroblob(57));
+         INSERT INTO sso_identity_challenges(challenge,claim_hash,source_hash,expires_at_ms)
+         VALUES(zeroblob(32),zeroblob(32),zeroblob(32),1000);
+         INSERT INTO sso_binding_receipts(host,uid,commitment,purpose,authorization_epoch,
+             authorization_generation,expires_at_ms)
+         VALUES(zeroblob(33),X'010101010101010101010101010101010101010101010101010101010101010101',
+             zeroblob(32),0,1,1,1000);",
+    ).unwrap();
+    connection.pragma_update(None, "user_version", 47).unwrap();
+
+    drop(Database::open(&path, Config::default()).unwrap());
+    for table in [
+        "sso_sessions",
+        "sso_access",
+        "sso_identity_challenges",
+        "sso_binding_receipts",
+    ] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "{table} survived the SSO format cutover");
+    }
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM sso_policy", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
 }
 
 #[test]

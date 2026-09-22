@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aka.invalid/foks/mainline-diff.schema.json",
+  "$id": "https://foks.invalid/foks/mainline-diff.schema.json",
   "title": "FOKS normalized protocol drift report",
   "type": "object",
   "additionalProperties": false,

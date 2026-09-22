@@ -340,8 +340,8 @@ test('nameOf and prefixOf extract filename and parent directory from path', () =
   assert.equal(nameOf('/logins/github.com'), 'github.com');
   assert.equal(prefixOf('/logins/github.com'), 'logins');
   assert.equal(
-    nameOf('/documents/aka-recovery-kit-on-this-mac%20%281%29.txt'),
-    'aka-recovery-kit-on-this-mac (1).txt',
+    nameOf('/documents/foks-recovery-kit-on-this-mac%20%281%29.txt'),
+    'foks-recovery-kit-on-this-mac (1).txt',
   );
   assert.equal(
     prefixOf('/Project%20Files/Design%20Docs/brief.pdf'),

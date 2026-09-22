@@ -43,8 +43,8 @@ def main():
         entity(1, 4), blob(bytes([5]) * 16), array(member_role, b"\x01"),
         array(b"\x02", blob(bytes([6]) * 16), blob(bytes([7]) * 16), blob(bytes([8]) * 16)),
     )
-    key_domain = hashlib.sha256(b"fennec.chat.v2.context-key").digest()[:8]
-    body_domain = hashlib.sha256(b"fennec.chat.v2.encrypted-body").digest()[:8]
+    key_domain = hashlib.sha256(b"foks.chat.v2.context-key").digest()[:8]
+    body_domain = hashlib.sha256(b"foks.chat.v2.encrypted-body").digest()[:8]
     key = hmac.new(bytes([9]) * 32, key_domain + context, "sha512_256").digest()
     partial_nonce = bytes([10]) * 16
     body = b"original text"
