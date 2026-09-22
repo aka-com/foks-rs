@@ -47,11 +47,12 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring libpcsclite-dev
       - name: Test the isolated AKA-free client graph
+        if: runner.os != 'Linux'
         run: tools/foks-client/check.sh
       - name: Test macOS Keychain integration
         if: runner.os == 'macOS'
         run: cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
-      - name: Test Linux Secret Service integration
+      - name: Test the Linux client graph and Secret Service integration
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -60,6 +61,7 @@ jobs:
             mkdir -m 700 "$XDG_RUNTIME_DIR"
             mkdir -p "$HOME/.local/share/keyrings"
             printf "%s" "foks-ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            tools/foks-client/check.sh
             cargo test --locked -p foks-keystore --test native_credential_store -- --ignored
           '
 
@@ -79,7 +81,7 @@ jobs:
       - name: Fetch the locked dependency graph
         run: cargo fetch --locked
       - name: Install Linux server dependencies
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libpcsclite-dev libwebkit2gtk-4.1-dev
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring libgtk-3-dev libpcsclite-dev libwebkit2gtk-4.1-dev
       - name: Fetch the pinned Go protocol module
         working-directory: tools/foks-v019-oracle
         run: go mod download github.com/foks-proj/go-foks@v0.1.9
@@ -88,7 +90,15 @@ jobs:
       - name: Test offline Go descriptor and fixture guards
         run: go test -C tools/foks-v019-oracle ./...
       - name: Test the complete isolated FOKS graph
-        run: tools/foks-server/check.sh
+        shell: bash
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            export XDG_RUNTIME_DIR="$RUNNER_TEMP/foks-secret-service-runtime"
+            mkdir -m 700 "$XDG_RUNTIME_DIR"
+            mkdir -p "$HOME/.local/share/keyrings"
+            printf "%s" "foks-ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            tools/foks-server/check.sh
+          '
       - name: Verify the Rust client against Go v0.1.9
         run: tools/foks-v019-oracle/run-live-compat.sh
       - name: Verify OIDC software and hardware clients against Go v0.1.9
