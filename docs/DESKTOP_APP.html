@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FOKS Desktop — Architecture, Security & Systems Guide</title>
+<style>
+  :root {
+    --ink: #1c2530;
+    --dim: #5d6b7a;
+    --faint: #8a97a5;
+    --rule: #e3e8ee;
+    --bg: #ffffff;
+    --tint: #f6f8fa;
+    --a: #2f6fd0;
+    --k1: #3f7fd8;
+    --k2: #38a06a;
+    --k3: #c9822b;
+    --k4: #cf4f6a;
+    --k5: #8a63c9;
+    --rail: #0f2d59;
+    --unread: #ff6f21;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 17px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Georgia, serif;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: 56px;
+    max-width: 1160px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+  nav {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 56px 0 40px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  nav .navtitle {
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin-bottom: 14px;
+  }
+  nav a {
+    display: block;
+    color: var(--dim);
+    text-decoration: none;
+    padding: 4px 0;
+    border-left: 2px solid transparent;
+    padding-left: 12px;
+    margin-left: -14px;
+    transition: color .12s, border-color .12s;
+  }
+  nav a:hover {
+    color: var(--a);
+    border-left-color: var(--a);
+  }
+  main {
+    padding: 56px 0 160px;
+    max-width: 46em;
+  }
+  h1 {
+    font-size: 38px;
+    line-height: 1.2;
+    letter-spacing: -.5px;
+    margin: 0 0 10px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .standfirst {
+    font-size: 19px;
+    color: var(--dim);
+    margin: 0 0 32px;
+    line-height: 1.5;
+  }
+  .meta-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    padding: 14px 18px;
+    background: var(--tint);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--dim);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin-bottom: 48px;
+  }
+  .meta-bar strong { color: var(--ink); }
+  h2 {
+    font-size: 26px;
+    margin: 64px 0 8px;
+    padding-top: 24px;
+    border-top: 1px solid var(--rule);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    letter-spacing: -.3px;
+  }
+  h3 {
+    font-size: 19px;
+    margin: 36px 0 6px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    letter-spacing: -.15px;
+  }
+  p { margin: 15px 0; }
+  ul, ol { margin: 15px 0; padding-left: 24px; }
+  li { margin: 8px 0; }
+  a { color: var(--a); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  strong { font-weight: 650; }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .86em;
+    background: var(--tint);
+    padding: 2px 5px;
+    border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.05);
+  }
+  .pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13.5px;
+    line-height: 1.6;
+    background: var(--tint);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    white-space: pre;
+    margin: 22px 0;
+  }
+
+  .aside {
+    background: var(--tint);
+    border-left: 3px solid var(--a);
+    padding: 16px 20px;
+    margin: 26px 0;
+    border-radius: 0 5px 5px 0;
+    font-size: 15.5px;
+  }
+  .aside p:first-child { margin-top: 0; }
+  .aside p:last-child { margin-bottom: 0; }
+  .aside h4 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--faint);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .aside.q  { border-left-color: var(--k3); }
+  .aside.no { border-left-color: var(--k4); }
+  .aside.ok { border-left-color: var(--k2); }
+
+  figure { margin: 36px 0; }
+  figure svg { display: block; width: 100%; height: auto; }
+  figcaption {
+    font-size: 13.5px;
+    color: var(--faint);
+    margin-top: 10px;
+    text-align: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  svg text {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    fill: var(--ink);
+  }
+  .s-l { font-size: 12.5px; }
+  .s-s { font-size: 11px; fill: #657484; }
+  .s-b { font-size: 13px; font-weight: 650; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 24px 0;
+    font-size: 14.5px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  th, td {
+    text-align: left;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--faint);
+  }
+  tbody tr:nth-child(odd) { background: #fbfcfd; }
+
+  .keytable { margin: 28px 0; }
+  .keytable tbody tr { background: none; }
+  .keytable td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  .keytable td:first-child {
+    border-left: 3px solid var(--rule);
+    font-weight: 650;
+    color: var(--ink);
+    width: 28%;
+  }
+  .keytable td:nth-child(2) { color: var(--dim); width: 44%; }
+  .keytable td:last-child  { color: var(--faint); font-size: 13.5px; }
+  .keytable tr.k1 td:first-child { border-left-color: var(--k1); }
+  .keytable tr.k2 td:first-child { border-left-color: var(--k2); }
+  .keytable tr.k3 td:first-child { border-left-color: var(--k3); }
+  .keytable tr.k4 td:first-child { border-left-color: var(--k4); }
+  .keytable tr.k5 td:first-child { border-left-color: var(--k5); }
+
+  @media (max-width: 920px) {
+    .layout { grid-template-columns: 1fr; gap: 0; }
+    nav { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav>
+  <div class="navtitle">FOKS Desktop Guide</div>
+  <a href="#mandate">1. Trust & Process Architecture</a>
+  <a href="#hardening">2. Tauri v2 Security & ACL</a>
+  <a href="#supervision">3. Agent Daemon & Sockets</a>
+  <a href="#applock">4. AppLock & Host Auth</a>
+  <a href="#hygiene">5. Memory & Clipboard Hygiene</a>
+  <a href="#filestreaming">6. File Ingress & Streaming</a>
+  <a href="#hardware">7. YubiKey PIV Security Keys</a>
+  <a href="#shell">8. UI Shell & Grid Layout</a>
+  <a href="#navigation">9. Navigation & Guard Engine</a>
+  <a href="#coordination">10. State Coordination & Cache</a>
+  <a href="#onboarding">11. Setup Receipts & Pairing</a>
+  <a href="#identity">12. StoreRef & Team Federation</a>
+  <a href="#chat">13. Realtime Chat Subsystem</a>
+  <a href="#limitations">14. Systems Limits & Open Risks</a>
+</nav>
+
+<main>
+
+<h1>Inside the FOKS Desktop App</h1>
+<p class="standfirst">A systems and cryptographic guide to the three-tier desktop architecture: process sandboxing, capability lockdown, host-delegated authentication, memory zeroization, state coordination, and resilient federation.</p>
+
+<div class="meta-bar">
+  <div><strong>Crates:</strong> <code>foks-desktop-app</code>, <code>foks-desktop</code></div>
+  <div><strong>Frontend:</strong> React + TypeScript (Vite)</div>
+  <div><strong>Protocol Version:</strong> <code>PROTOCOL_VERSION = 29</code></div>
+  <div><strong>IPC Seam:</strong> Unix Domain Socket (<code>foks-rs.sock</code>)</div>
+  <div><strong>Target Platforms:</strong> macOS (WebKit, LAContext) & Linux (WebKitGTK, Polkit)</div>
+</div>
+
+<div class="aside ok">
+  <h4>Architecture Summary</h4>
+  <p>The FOKS desktop application is strictly engineered so that the browser-based webview is an untrusted presentation layer. Plaintext file bytes, SQLite vault keys, long-term private signing scalars, and master credentials <strong>never cross the IPC boundary</strong> into the webview renderer. All cryptographic authority remains sealed in a standalone native Rust daemon.</p>
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="mandate">1. Trust Boundaries & The Three-Tier Process Architecture</h2>
+
+<p>Most desktop credential managers run as a monolithic executable where frontend web code shares memory and OS capabilities with the cryptographic engine. A single cross-site scripting (XSS) vulnerability, malicious dependency in <code>node_modules</code>, or webview vulnerability compromises the entire vault.</p>
+
+<p>FOKS solves this by decomposing the desktop client into three isolated execution tiers with unidirectional privilege boundaries:</p>
+
+<figure>
+  <svg viewBox="0 0 740 480" role="img" aria-label="FOKS Three-Tier Process Architecture">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#5d6b7a"/>
+      </marker>
+      <marker id="arr-blue" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#2f6fd0"/>
+      </marker>
+    </defs>
+
+    <!-- Tier 1: Webview Renderer -->
+    <rect x="30" y="20" width="680" height="100" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+    <text x="50" y="48" class="s-b" fill="#0f2d59">Tier 1: Webview Renderer (Untrusted Presentation)</text>
+    <text x="50" y="70" class="s-l">WebKitGTK (Linux) / WKWebView (macOS) &bull; React, TypeScript &bull; Origin: tauri://localhost</text>
+    <text x="50" y="92" class="s-s">NO window.__TAURI__ &bull; Ephemeral metadata only &bull; Zero decrypted file bytes in memory</text>
+
+    <!-- IPC Connector 1 -->
+    <line x1="370" y1="120" x2="370" y2="168" stroke="#2f6fd0" stroke-width="2" marker-end="url(#arr-blue)"/>
+    <rect x="235" y="132" width="270" height="24" rx="4" fill="#eff6ff" stroke="#bfdbfe"/>
+    <text x="245" y="148" class="s-s" fill="#1e40af">Strict IPC: @tauri-apps/api/core invoke()</text>
+
+    <!-- Tier 2: Tauri Rust Core Host -->
+    <rect x="30" y="170" width="680" height="125" rx="8" fill="#ffffff" stroke="#3f7fd8" stroke-width="2"/>
+    <text x="50" y="198" class="s-b" fill="#1e3a8a">Tier 2: Tauri Rust Host Core (Privileged Supervisor &bull; foks-desktop-app)</text>
+    <text x="50" y="222" class="s-l">Commands Gatekeeper &bull; OS Biometrics (LAContext / Polkit) &bull; Clipboard Digest Sanitizer</text>
+    <text x="50" y="244" class="s-l">Native File Streaming (dialog / dragdrop) &bull; Supervised Child Process Lifecycle</text>
+    <text x="50" y="268" class="s-s">Enforces require_main_window &bull; Enforces require_unlocked &bull; In-memory catalog caching</text>
+
+    <!-- IPC Connector 2 -->
+    <line x1="370" y1="295" x2="370" y2="343" stroke="#5d6b7a" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+    <rect x="220" y="307" width="300" height="24" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="232" y="323" class="s-s" fill="#334155">Unix Domain Socket: foks-rs.sock (0o600 / 0o700)</text>
+
+    <!-- Tier 3: Standalone Daemon Agent -->
+    <rect x="30" y="345" width="460" height="115" rx="8" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="50" y="375" class="s-b" fill="#15803d">Tier 3: Cryptographic Authority (foks-agent daemon)</text>
+    <text x="50" y="398" class="s-l">ClientStateLease Locks &bull; SQLite Vault Database &bull; Ratchet Sync</text>
+    <text x="50" y="420" class="s-l">Decrypted Master Keys &bull; TLS Remote Federation &bull; YubiKey PCSC</text>
+    <text x="50" y="442" class="s-s">Independent Process &bull; Survives UI restarts &bull; Strict UID isolation</text>
+
+    <!-- Tier 3 Side: Hardware & OS -->
+    <rect x="510" y="345" width="200" height="115" rx="8" fill="#fefce8" stroke="#eab308" stroke-width="1.5"/>
+    <text x="525" y="375" class="s-b" fill="#854d0e">OS & Hardware</text>
+    <text x="525" y="398" class="s-l">YubiKey (PIV Smartcard)</text>
+    <text x="525" y="420" class="s-l">Touch ID / Apple Watch</text>
+    <text x="525" y="442" class="s-l">Linux Polkit D-Bus</text>
+  </svg>
+  <figcaption>Figure 1: The Three-Tier Process Isolation Model of the FOKS Desktop Architecture.</figcaption>
+</figure>
+
+<h3>Tier Responsibilities and Failure Domains</h3>
+<ul>
+  <li><strong>Tier 1 — Untrusted Webview:</strong> Executes the React application inside the WebKit engine. It runs under a strict Content Security Policy (CSP), has no direct filesystem access, and cannot access native OS APIs. It holds no long-term secrets.</li>
+  <li><strong>Tier 2 — Native Tauri Core (<code>foks-desktop-app</code>):</strong> A native Rust supervisor. It manages window chrome, handles native file drop events, talks to the OS biometric subsystem, enforces clipboard scrub timers, and arbitrates all communications with the background daemon.</li>
+  <li><strong>Tier 3 — Standalone Daemon (<code>foks-agent</code>):</strong> A resident, headless daemon process. It holds exclusive locks on the user's state directory (<code>ClientStateLease</code>), maintains the SQLite database containing encrypted vault ciphertext, manages the ratchet state for team communication, and executes cryptographic signing and decryption.</li>
+</ul>
+
+<div class="aside no">
+  <h4>Why Separate the Agent into Its Own Process?</h4>
+  <p>If the desktop application UI crashes, is reloaded by the user, or is restarted during an update, cryptographic operations in progress (such as an asynchronous multi-gigabyte vault synchronization, file upload, or federation ratcheting) are not interrupted. Furthermore, external CLI tools (<code>foks-rs</code>) connect to the identical daemon socket without requiring the GUI shell to be open.</p>
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="hardening">2. Tauri v2 Security Posture & ACL Lockdown</h2>
+
+<p>By default, a new Tauri application exposes a rich suite of host commands to JavaScript and injects the global object <code>window.__TAURI__</code>. In FOKS, this default configuration is treated as an unacceptable security liability.</p>
+
+<h3>Elimination of <code>window.__TAURI__</code></h3>
+<p>In <code>apps/desktop/src-tauri/tauri.conf.json</code>, the desktop explicitly sets:</p>
+<div class="pre">{
+  "app": {
+    "withGlobalTauri": false,
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; script-src 'self'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'"
+    }
+  }
+}</div>
+<p>Setting <code>withGlobalTauri: false</code> guarantees that <code>window.__TAURI__</code> is <strong>never defined</strong> in the DOM global scope. The only way to send messages over the Tauri IPC bridge is through bundled JavaScript modules that statically import <code>@tauri-apps/api/core</code> during compilation with Vite.</p>
+
+<h3>The Minimal Capability Allowlist (3 Commands Only)</h3>
+<p>Tauri v2 uses an Access Control List (ACL) system defined in JSON capabilities. Standard Tauri ships with <code>core:default</code>, which activates 9 capability sets containing <strong>92 individual commands</strong>. FOKS completely purges <code>core:default</code> and grants exactly 3 core commands in <code>capabilities/default.json</code>:</p>
+
+<table class="keytable">
+  <thead>
+    <tr>
+      <th>Command Name</th>
+      <th>Permission String</th>
+      <th>System Justification</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="k1">
+      <td><code>core:event|listen</code></td>
+      <td><code>core:event:allow-listen</code></td>
+      <td>Allows the main window to listen to unidirectional push notifications emitted from Rust (e.g. <code>foks://drop-hover</code>, <code>foks://drop-paths</code>, <code>foks://agent-connection-loss</code>).</td>
+    </tr>
+    <tr class="k2">
+      <td><code>core:event|unlisten</code></td>
+      <td><code>core:event:allow-unlisten</code></td>
+      <td>Enables React components to unsubscribe from event listeners upon unmounting, preventing memory leaks.</td>
+    </tr>
+    <tr class="k3">
+      <td><code>core:window|start_dragging</code></td>
+      <td><code>core:window:allow-start-dragging</code></td>
+      <td>Required by Tauri's <code>data-tauri-drag-region</code> to support window dragging across the custom borderless macOS/Linux title bar.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="aside no">
+  <h4>Why Were 89 Default Commands Stripped?</h4>
+  <p>The standard capability set includes <code>core:image:default</code>, which exposes <code>core:image|from_path</code> — allowing the webview to read arbitrary filesystem paths without permission checks. It also includes <code>core:webview:default</code>, exposing <code>internal_toggle_devtools</code> which could allow malicious scripts to inspect DOM memory. Dropping these closes critical exfiltration surfaces.</p>
+</div>
+
+<h3>Third-Party Plugin Isolation</h3>
+<p>While <code>foks-desktop-app</code> links against <code>tauri-plugin-dialog</code> and <code>tauri-plugin-clipboard-manager</code>, <strong>zero permissions are granted to the webview</strong> for either plugin. Webview attempts to call <code>invoke('plugin:dialog|open')</code> fail instantly at the Tauri ACL gate. File pickers and clipboard operations can only be initiated by trusted Rust code.</p>
+
+<h3>Defending Custom Commands</h3>
+<p>Custom commands registered via <code>tauri::generate_handler!</code> bypass the plugin ACL. FOKS defends them programmatically using two universal gatekeepers:</p>
+<ol>
+  <li><strong><code>require_main_window(&amp;webview)</code>:</strong> Inspects <code>webview.label()</code> and aborts if it is not <code>"main"</code>. This prevents auxiliary webviews (such as isolated administration frames) from invoking vault commands.</li>
+  <li><strong><code>require_unlocked(&amp;app)</code>:</strong> Asserts that the desktop application lock is disengaged before executing any value-bearing operation.</li>
+</ol>
+
+<!-- ======================================================================= -->
+<h2 id="supervision">3. Agent Daemon Supervision & Socket Security</h2>
+
+<p>The native desktop application discovers or spawns the background <code>foks-agent</code> daemon and establishes communication over a local Unix domain socket.</p>
+
+<h3>Endpoint Resolution Hierarchy</h3>
+<p>The desktop determines the agent socket address via <code>agent::resolve_endpoint</code> with the following precedence:</p>
+<ol>
+  <li>CLI argument: <code>--agent-socket &lt;PATH&gt;</code></li>
+  <li>Environment variable: <code>FOKS_AGENT_SOCKET</code></li>
+  <li>Default managed state directory: <code>~/.local/share/foks/foks-rs.sock</code> (Linux) or <code>~/Library/Application Support/FOKS/foks-rs.sock</code> (macOS).</li>
+</ol>
+
+<div class="aside">
+  <h4>Crash Directory Trust Boundary</h4>
+  <p>When an explicit socket path is passed via CLI or environment variable, FOKS sets <code>managed_crash_directory: None</code>. Custom socket targets are treated as external trust boundaries; FOKS will not create or supervise crash reporting directories for external daemons.</p>
+</div>
+
+<h3>Binary Validation & Spawning</h3>
+<p>Before launching a bundled agent binary, <code>validate_agent_binary</code> performs strict POSIX metadata verification:</p>
+<ul>
+  <li><strong>No Symlinks:</strong> <code>symlink_metadata(binary)</code> asserts the path is not a symlink.</li>
+  <li><strong>File Ownership:</strong> Asserts <code>metadata.uid() == libc::geteuid()</code> (must match the desktop runner).</li>
+  <li><strong>Permissions:</strong> Asserts <code>mode &amp; 0o022 == 0</code> (prohibits group/world writable binaries) and checks execution bits (<code>mode &amp; 0o111 != 0</code>).</li>
+  <li><strong>Advisory Locks:</strong> Acquires exclusive <code>flock</code> on <code>&lt;socket&gt;.desktop-agent.lock</code> (mode <code>0o600</code>) to prevent concurrent launcher race conditions.</li>
+</ul>
+
+<h3>Socket Takeover & Anti-TOCTOU Verification</h3>
+<p>If an existing socket is encountered but reports an incompatible protocol version, <code>foks-desktop-app</code> executes an audited takeover sequence (<code>AgentTakeover</code>):</p>
+<div class="pre">// Step 1: Verify socket metadata and ownership
+let metadata = std::fs::symlink_metadata(socket)?;
+if metadata.file_type().is_socket() && (metadata.mode() & 0o077 != 0) {
+    return Err(AgentError::new("unsafe-socket", "Socket permissions too open", false));
+}
+
+// Step 2: Extract peer PID using kernel credentials
+let peer_pid = unix_peer_pid(&stream)?; // SO_PEERCRED on Linux / LOCAL_PEERPID on macOS
+
+// Step 3: TOCTOU device/inode check before prompt
+let current = std::fs::symlink_metadata(socket)?;
+if current.dev() != metadata.dev() || current.ino() != metadata.ino() {
+    return Err(AgentError::new("agent-takeover-changed", "Socket inode changed", true));
+}
+
+// Step 4: Re-check device/inode immediately before SIGTERM
+stop_incompatible_agent(socket, &target)?;</div>
+
+<p>Takeover prompts the user via a native modal dialog displaying the target executable and PID. If the socket's inode or device changes while the modal is open, termination is aborted to prevent Time-of-Check to Time-of-Use (TOCTOU) exploits.</p>
+
+<!-- ======================================================================= -->
+<h2 id="applock">4. AppLock & Host-Delegated Authentication</h2>
+
+<p>FOKS delegates user authentication entirely to the host operating system. The application stores zero master passwords in memory or on disk, eliminating the threat of offline database dictionary attacks.</p>
+
+<figure>
+  <svg viewBox="0 0 740 380" role="img" aria-label="AppLock State Machine and Generation Binding">
+    <!-- State Unlocked -->
+    <rect x="40" y="40" width="280" height="120" rx="8" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+    <text x="60" y="70" class="s-b" fill="#15803d">UNLOCKED (generation = N)</text>
+    <text x="60" y="94" class="s-l">locked: false &bull; authenticating: false</text>
+    <text x="60" y="116" class="s-s">Value-returning commands permitted</text>
+    <text x="60" y="136" class="s-s">Catalog snapshot cached in memory</text>
+
+    <!-- Transition: Lock -->
+    <path d="M 320 80 L 440 80" stroke="#cf4f6a" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="330" y="72" class="s-s" fill="#cf4f6a">lock_app()</text>
+
+    <!-- State Locked -->
+    <rect x="450" y="40" width="250" height="120" rx="8" fill="#fef2f2" stroke="#ef4444" stroke-width="2"/>
+    <text x="470" y="70" class="s-b" fill="#b91c1c">LOCKED (generation = N + 1)</text>
+    <text x="470" y="94" class="s-l">locked: true</text>
+    <text x="470" y="116" class="s-s">Purge *catalog = None</text>
+    <text x="470" y="136" class="s-s">Close Web Admin windows & Chat</text>
+
+    <!-- Transition: Authenticate -->
+    <path d="M 575 160 L 575 220" stroke="#3f7fd8" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="585" y="195" class="s-s" fill="#3f7fd8">unlock_app()</text>
+
+    <!-- State Authenticating -->
+    <rect x="450" y="230" width="250" height="110" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="470" y="258" class="s-b" fill="#1d4ed8">AUTHENTICATING</text>
+    <text x="470" y="280" class="s-s">authenticating: true (blocks 2nd modal)</text>
+    <text x="470" y="300" class="s-s">macOS: LAContext (Touch ID / Pass)</text>
+    <text x="470" y="320" class="s-s">Linux: Polkit D-Bus (org.foks.desktop.unlock)</text>
+
+    <!-- Transition: Success -->
+    <path d="M 450 285 L 180 285 L 180 160" stroke="#22c55e" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="250" y="275" class="s-s" fill="#15803d">Success: locked.store(false)</text>
+  </svg>
+  <figcaption>Figure 2: The AppLock Lifecycle and Interval Generation Counter.</figcaption>
+</figure>
+
+<h3>Platform Authentication Drivers</h3>
+<ul>
+  <li><strong>macOS (LocalAuthentication):</strong> Uses Apple's <code>LAContext</code> framework. It first probes <code>LAPolicyDeviceOwnerAuthenticationWithBiometrics</code> (Touch ID / Apple Watch). If biometrics are unconfigured or fail, it falls back to <code>LAPolicyDeviceOwnerAuthentication</code> (system account password). Prompts enforce a 60-second hardware timeout.</li>
+  <li><strong>Linux (Polkit System Bus):</strong> Communicates with the PolicyKit daemon over the system D-Bus bus (<code>org.freedesktop.PolicyKit1</code>) requesting action <code>org.foks.desktop.unlock</code>. The installed policy file grants <code>&lt;allow_active&gt;auth_self&lt;/allow_active&gt;</code>, allowing active desktop session users to authenticate with their own password without requiring root or sudo access.</li>
+</ul>
+
+<div class="aside ok">
+  <h4>Anti-PID-Reuse Protection on Linux</h4>
+  <p>To prevent an attacker from terminating the FOKS desktop and rapidly spawning a malicious process with the same PID to inherit Polkit authorization, FOKS parses <code>/proc/{pid}/stat</code> field 20 (process start time in clock ticks). The start time is passed alongside the PID to Polkit's <code>CheckAuthorization</code> call, defeating PID recycling attacks.</p>
+</div>
+
+<h3>The Generation Counter & Atomic Interval Binding</h3>
+<p>AppLock maintains an atomic counter: <code>generation: AtomicU64</code>. Every locking event increments this value. When sensitive mutations or multi-chunk file transfers occur, the operation captures an <code>unlocked_generation</code> token:</p>
+<div class="pre">let access = crate::applock::unlocked_generation(app)?;
+// ... perform background preparation / fetch ...
+crate::applock::require_unlocked_generation(&app, access)?;</div>
+<p>If the application locked and unlocked while a background task was running, the generation moved from $N$ to $N+1$. The post-check fails immediately with <code>"app-locked"</code>, preventing data leakage across locking boundaries.</p>
+
+<h3>The Four-Step Lock Scrub</h3>
+<p>When <code>lock_app()</code> is triggered, the host executes four defensive purges in sequence:</p>
+<ol>
+  <li><strong>Catalog Purge:</strong> Wipes the cached catalog snapshot (<code>*self.catalog.lock() = None</code>) and advances the mutation epoch counter.</li>
+  <li><strong>Web Admin Window Termination:</strong> Iterates through all open auxiliary administration windows (<code>web_admin::close_all</code>) and forcibly closes them.</li>
+  <li><strong>Local Chat Concealment:</strong> Clears the active chat session generation token.</li>
+  <li><strong>Notification Center Purge:</strong> On macOS, invokes <code>UNUserNotificationCenter</code> to delete all delivered and pending push notifications, scrubbing message snippets from the macOS lock screen and notification shade.</li>
+</ol>
+
+<!-- ======================================================================= -->
+<h2 id="hygiene">5. Memory Hygiene & Zero-Knowledge Clipboard Management</h2>
+
+<p>Clipboard security is a major vulnerability in password management. Background clipboard logging tools and clipboard history extensions regularly archive plaintext credentials.</p>
+
+<h3>Digest-Only Fingerprinting</h3>
+<p>When a user copies a password or secret via <code>copy_item_value</code>, the secret is encapsulated in a <code>Zeroizing&lt;String&gt;</code> container. The string is written to the system pasteboard and dropped immediately:</p>
+<div class="pre">pub fn copy_with_hygiene(app: &AppHandle, value: Zeroizing<String>) -> Result<(), String> {
+    let expected = PendingClipboard {
+        digest: Sha256::digest(value.as_bytes()).into(),
+        generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
+    };
+    // Plaintext value is dropped and zeroized here!
+    *pending = Some(expected);
+    
+    // Auto-clearing thread spawned...
+}</div>
+
+<p>FOKS retains <strong>only the 32-byte SHA-256 hash</strong> of the secret. If an attacker inspects process memory or analyzes a core dump, no plaintext credential remains.</p>
+
+<h3>Timed Auto-Clearing with Non-Destructive Race Avoidance</h3>
+<ul>
+  <li><strong>Linux Timeout:</strong> 15 seconds.</li>
+  <li><strong>macOS Timeout:</strong> 30 seconds. Linux enforces a shorter window because Linux desktop environments lack a standardized clipboard concealment protocol.</li>
+  <li><strong>macOS Concealed Marker:</strong> On macOS, FOKS tags the pasteboard item with <code>org.nspasteboard.ConcealedType</code>, instructing utilities like Raycast, Alfred, and 1Password not to log the entry.</li>
+</ul>
+
+<div class="aside">
+  <h4>Non-Destructive Race Check</h4>
+  <p>When the clearing timer expires, FOKS hashes the current clipboard text. If the hash does not match <code>expected.digest</code> (because the user copied another string in the interim), the clipboard is left untouched. FOKS never clobbers unrelated user data.</p>
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="filestreaming">6. Native File Streaming & Drag-and-Drop Isolation</h2>
+
+<p>In standard web applications, file uploads load entire files into JavaScript <code>ArrayBuffer</code> or <code>Blob</code> objects. In FOKS, secret file bytes <strong>never touch the webview memory space</strong>.</p>
+
+<figure>
+  <svg viewBox="0 0 740 300" role="img" aria-label="Native File Streaming Pipeline">
+    <!-- OS File Drop -->
+    <rect x="30" y="40" width="180" height="90" rx="6" fill="#f8fafc" stroke="#94a3b8"/>
+    <text x="45" y="68" class="s-b">OS Drag-and-Drop</text>
+    <text x="45" y="90" class="s-l">Native File Path</text>
+    <text x="45" y="110" class="s-s">/home/user/secret.pdf</text>
+
+    <!-- Arrow to Rust -->
+    <path d="M 210 85 L 290 85" stroke="#2f6fd0" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="218" y="77" class="s-s" fill="#2f6fd0">OS Event</text>
+
+    <!-- Rust Core -->
+    <rect x="290" y="30" width="220" height="240" rx="8" fill="#ffffff" stroke="#3f7fd8" stroke-width="2"/>
+    <text x="310" y="58" class="s-b" fill="#1e3a8a">Tauri Rust Core</text>
+    <text x="310" y="80" class="s-s">1. Record upload_path</text>
+    <text x="310" y="100" class="s-s">2. Open regular file</text>
+    <text x="310" y="120" class="s-s">3. Stream 700KB frames</text>
+    <text x="310" y="140" class="s-s">4. Zeroize chunk buffers</text>
+    <text x="310" y="180" class="s-b" fill="#b91c1c">Downloads:</text>
+    <text x="310" y="200" class="s-s">1. Native save dialog</text>
+    <text x="310" y="220" class="s-s">2. Write to NamedTempFile</text>
+    <text x="310" y="240" class="s-s">3. Atomic fs::rename</text>
+
+    <!-- Webview (Bypassed) -->
+    <rect x="540" y="40" width="170" height="90" rx="6" fill="#fef2f2" stroke="#f87171" stroke-dasharray="4 3"/>
+    <text x="555" y="68" class="s-b" fill="#991b1b">Webview Renderer</text>
+    <text x="555" y="90" class="s-l" fill="#b91c1c">NO FILE BYTES</text>
+    <text x="555" y="110" class="s-s">Receives path token only</text>
+
+    <!-- Arrow to Daemon -->
+    <path d="M 400 270 L 400 310 L 120 310 L 120 200 L 120 170" stroke="#22c55e" stroke-width="2" marker-end="url(#arr)" fill="none"/>
+    <text x="130" y="250" class="s-s" fill="#15803d">Stream to foks-rs.sock</text>
+  </svg>
+  <figcaption>Figure 3: Native Drag-and-Drop Ingress and Streaming File Transfer.</figcaption>
+</figure>
+
+<h3>Drag-and-Drop Path Authorization</h3>
+<p>When a file is dragged onto the window, Tauri intercepts <code>WindowEvent::DragDrop</code>:</p>
+<ol>
+  <li>Rust checks the dropped paths. If exactly one UTF-8 path is dropped, it is stored in <code>pending_upload_paths</code>.</li>
+  <li>Rust emits <code>foks://drop-paths</code> with the path string to allow the UI to display the file name and size.</li>
+  <li>When the user clicks "Save", the webview sends <code>create_file_item(store_id, path, source_path)</code>.</li>
+  <li>Rust validates that <code>source_path</code> exists in <code>pending_upload_paths</code>. An unrecorded path (e.g. attempting to point to <code>/etc/shadow</code>) fails immediately with <code>drop-not-authorized</code>.</li>
+</ol>
+
+<h3>Thresholds & Frame Streaming</h3>
+<ul>
+  <li><code>MAXIMUM_INLINE_KV_BYTES = 128 KB</code>: Payloads smaller than 128 KB are transmitted inline.</li>
+  <li><code>MAXIMUM_KV_PAYLOAD_BYTES = 700 KB</code>: Payloads larger than 128 KB stream via <code>put_kv_stream</code> in 700 KB frames. Chunk buffers use <code>Zeroizing&lt;Vec&lt;u8&gt;&gt;</code> and are wiped immediately after socket transmission.</li>
+  <li><code>MAXIMUM_DOWNLOAD_BYTES = 512 MB</code>: Hard ceiling on vault file downloads.</li>
+</ul>
+
+<!-- ======================================================================= -->
+<h2 id="hardware">7. Hardware Cryptographic Tokens (YubiKey PIV)</h2>
+
+<p>FOKS natively interfaces with YubiKey hardware tokens over PC/SC smartcard protocols (using <code>PCSC.framework</code> on macOS and <code>libpcsclite</code> / <code>pcscd</code> on Linux).</p>
+
+<h3>Dedicated Retired PIV Slots & Dual-Slot Cryptography</h3>
+<p>Rather than using standard PIV authentication slots (which may conflict with corporate smartcard certificates), FOKS allocates keys from NIST SP 800-73-4 retired key slots (<code>0x82</code> through <code>0x95</code>):</p>
+<table class="keytable">
+  <thead>
+    <tr>
+      <th>PIV Slot Type</th>
+      <th>Cryptographic Algorithm</th>
+      <th>Role & Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="k1">
+      <td><strong>Signing Slot</strong></td>
+      <td>ECC P-256 (<code>secp256r1</code>)</td>
+      <td>Generates hardware-bound ECDSA signatures for account authentication and vault operations.</td>
+    </tr>
+    <tr class="k2">
+      <td><strong>PQ Seed Slot</strong></td>
+      <td>ECC P-256 (Derived Key ID)</td>
+      <td>Compressed public key derives <code>YubiPQKeyID</code> used for Post-Quantum ML-KEM key encapsulation.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="aside no">
+  <h4>Self-Revocation Protection</h4>
+  <p>In <code>require_software_revocation_signer</code>, FOKS enforces a strict security invariant: <strong>a hardware token cannot sign its own revocation certificate</strong>. Revoking a lost or retired YubiKey requires signing the revocation using a valid software device key (<code>dev-*</code>).</p>
+</div>
+
+<h3>Safe PIN Retry Configuration</h3>
+<p>Executing the standard PIV <code>SET PIN RETRIES</code> command inherently resets the token PIN to <code>123456</code> and PUK to <code>12345678</code>. To prevent tokens from being left in a factory-default state if an error or disconnection occurs mid-operation, FOKS enforces atomic preflight: retry configurations are accepted <strong>only on empty, unenrolled tokens</strong>, and custom PINs/PUKs are restored atomically before any cryptographic keys are generated.</p>
+
+<!-- ======================================================================= -->
+<h2 id="shell">8. The Desktop UI Shell & Grid Layout</h2>
+
+<p>The desktop UI is styled in <code>apps/desktop/src/styles/shell.css</code> and <code>apps/desktop/kit/tokens.css</code>. Custom layout properties are anchored directly on the <code>.app</code> container to eliminate layout thrashing:</p>
+
+<div class="pre">.app {
+  --topbar-h: 48px;
+  --side-w-open: 200px;
+  --side-w: var(--side-w-open);
+  --side-track: auto;
+  --details-w: 300px;
+  display: grid;
+  grid-template-columns: var(--side-track) minmax(0, 1fr);
+}</div>
+
+<h3>The Six-Tab Navigation Rail</h3>
+<p>The navigation rail (<code>nav.side.rail</code>) organizes the user experience into six primary destinations:</p>
+<ol>
+  <li><strong>Files:</strong> Flat and hierarchical vault items, small-file previews, and link pointers.</li>
+  <li><strong>Chat:</strong> Cross-team channel inbox and conversation view.</li>
+  <li><strong>Teams:</strong> Groups, shares, federation rosters, and member administration.</li>
+  <li><strong>Devices:</strong> Hardware keys, paired computers, and paper recovery keys.</li>
+  <li><strong>Settings:</strong> Preferences, server connection parameters, and security policies.</li>
+  <li><strong>Accounts:</strong> Acting account profile switcher, attention items, and server groupings.</li>
+</ol>
+
+<p>The rail collapses into an icon-only track of <strong>56px</strong> (<code>.is-narrow</code>). Width preferences persist in <code>localStorage</code> under <code>sideCollapsed</code>. Unread badges use the high-visibility token <code>--unread: #ff6f21</code>.</p>
+
+<h3>Blocking States and Veils</h3>
+<p>When the client is not in a normal operating state, non-intrusive veils take over:</p>
+<ul>
+  <li><strong>Starting:</strong> Rail and topbar remain visible but dimmed; content area renders <code>Starting the FOKS agent…</code>.</li>
+  <li><strong>Stopped (<code>restart-required</code> / <code>recovery-required</code>):</strong> Centered card displays actionable copyable CLI repair commands (e.g. <code>foks-rs state recover</code>).</li>
+  <li><strong>Locked:</strong> Full-window takeover covering rail and topbar with a 6px backdrop blur, hiding account names and unread counts.</li>
+</ul>
+
+<!-- ======================================================================= -->
+<h2 id="navigation">9. Navigation State Machine & Guard Architecture</h2>
+
+<h3>Deep Links & The <code>Location</code> Codec</h3>
+<p>All navigation states are represented by the TypeScript discriminated union <code>Location</code> and encoded into URL search parameters (<code>?state=&lt;kind&gt;&amp;store=&lt;StoreRef&gt;</code>). The desktop synchronizes state via <code>window.history.replaceState</code>, enabling instant reload restoration while disabling browser history stack pollution and native webview swipe gestures.</p>
+
+<h3>Trackpad Gesture Physics (Swipe-Back)</h3>
+<p>Horizontal swipe navigation is handled by a custom physics engine in <code>SwipeBackTracker</code>:</p>
+<ul>
+  <li><strong>Arming Threshold:</strong> <code>BACK_DISTANCE_PX = 120px</code> of horizontal travel required to trigger navigation.</li>
+  <li><strong>Idle Debounce Window:</strong> <code>GESTURE_GAP_MS = 120ms</code>. Navigation commits only after wheel events cease for 120ms.</li>
+  <li><strong>Momentum Absorption:</strong> Reversing direction before the finger leaves the trackpad decays progress back to zero, allowing cancellation.</li>
+  <li><strong>Exclusion Filters:</strong> Gestures are suppressed if vertical scroll dominates ($|\Delta X| \le 2|\Delta Y|$), if modifier keys are pressed, or if an open modal dialog owns the window.</li>
+</ul>
+
+<h3>The Navigation Guard Engine</h3>
+<p>Form screens register guards via <code>useNavigationGuard</code> to prevent data loss. A guard evaluates an intent and returns one of three verdicts:</p>
+<table class="keytable">
+  <thead>
+    <tr>
+      <th>Verdict</th>
+      <th>Behavior & Effect</th>
+      <th>Typical Usage</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="k2">
+      <td><code>null</code></td>
+      <td>Navigation proceeds unimpeded.</td>
+      <td>Unchanged views or read-only pages.</td>
+    </tr>
+    <tr class="k3">
+      <td><code>prompt</code></td>
+      <td>Displays an alert dialog (<code>NavigationPrompt</code>) with Discard / Cancel options.</td>
+      <td>Unsaved password drafts or pending invitations.</td>
+    </tr>
+    <tr class="k4">
+      <td><code>refuse</code></td>
+      <td>Hard halt. Emits a warning toast and aborts navigation immediately.</td>
+      <td>Active cryptographic writes or key enrollment in progress.</td>
+    </tr>
+  </tbody>
+</table>
+
+<figure>
+  <svg viewBox="0 0 740 320" role="img" aria-label="Navigation Guard Pipeline and Trackpad Physics">
+    <!-- Input: Trackpad Swipe or Link Click -->
+    <rect x="25" y="40" width="165" height="100" rx="6" fill="#f8fafc" stroke="#94a3b8"/>
+    <text x="38" y="66" class="s-b">Navigation Intent</text>
+    <text x="38" y="88" class="s-s">&bull; Trackpad Swipe (120px)</text>
+    <text x="38" y="106" class="s-s">&bull; Keyboard (Alt+&larr; / &rarr;)</text>
+    <text x="38" y="124" class="s-s">&bull; UI Link / Breadcrumb</text>
+
+    <!-- Arrow to Guard Pipeline -->
+    <path d="M 190 90 L 250 90" stroke="#2f6fd0" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="195" y="82" class="s-s" fill="#2f6fd0">intent</text>
+
+    <!-- Guard Evaluation Pipeline Box -->
+    <rect x="250" y="30" width="250" height="260" rx="8" fill="#ffffff" stroke="#3f7fd8" stroke-width="2"/>
+    <text x="270" y="58" class="s-b" fill="#1e3a8a">Guard Evaluation Pipeline</text>
+    <text x="270" y="80" class="s-l">for guard of [...guards]</text>
+
+    <!-- Guard Steps -->
+    <rect x="270" y="95" width="210" height="34" rx="4" fill="#fef2f2" stroke="#f87171"/>
+    <text x="280" y="117" class="s-s" fill="#991b1b">1. verdict == 'refuse' &rarr; HALT</text>
+
+    <rect x="270" y="140" width="210" height="34" rx="4" fill="#fefce8" stroke="#eab308"/>
+    <text x="280" y="162" class="s-s" fill="#854d0e">2. verdict == 'prompt' &rarr; PENDING</text>
+
+    <rect x="270" y="185" width="210" height="34" rx="4" fill="#f0fdf4" stroke="#86efac"/>
+    <text x="280" y="207" class="s-s" fill="#166534">3. verdict == null &rarr; ALLOW</text>
+
+    <text x="270" y="248" class="s-s" fill="#64748b">options.force == true: skips pipeline</text>
+    <text x="270" y="268" class="s-s" fill="#64748b">Refusal precedence wins over prompt</text>
+
+    <!-- Outcome: Refuse -->
+    <path d="M 480 112 L 550 112" stroke="#ef4444" stroke-width="2" marker-end="url(#arr)"/>
+    <rect x="550" y="95" width="165" height="34" rx="4" fill="#fef2f2" stroke="#ef4444"/>
+    <text x="560" y="117" class="s-s" fill="#b91c1c">Abort + Warning Toast</text>
+
+    <!-- Outcome: Prompt -->
+    <path d="M 480 157 L 550 157" stroke="#eab308" stroke-width="2" marker-end="url(#arr)"/>
+    <rect x="550" y="140" width="165" height="34" rx="4" fill="#fefce8" stroke="#ca8a04"/>
+    <text x="560" y="162" class="s-s" fill="#854d0e">Alert Modal (Discard?)</text>
+
+    <!-- Outcome: Commit -->
+    <path d="M 480 202 L 550 202" stroke="#22c55e" stroke-width="2" marker-end="url(#arr)"/>
+    <rect x="550" y="185" width="165" height="55" rx="4" fill="#f0fdf4" stroke="#22c55e"/>
+    <text x="560" y="206" class="s-s" fill="#15803d">Commit Location</text>
+    <text x="560" y="226" class="s-s" fill="#15803d">history.replaceState()</text>
+  </svg>
+  <figcaption>Figure 4: The Navigation Guard Decision Engine and Execution Precedence.</figcaption>
+</figure>
+
+<div class="aside no">
+  <h4>Refusal Precedence</h4>
+  <p>Guards are evaluated in registration order. Any guard returning <code>refuse</code> immediately aborts the entire pipeline. A confirmed <code>prompt</code> dialog can <strong>never</strong> bypass a subsequent guard's refusal.</p>
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="coordination">10. State Coordination, Caching & Inactivity Concealment</h2>
+
+<h3>Snapshot Serialization (<code>CatalogCoordinator</code>)</h3>
+<p>To prevent UI tearing during rapid mutations, <code>CatalogCoordinator</code> serializes catalog snapshots. Concurrent read requests coalesce into a single in-flight promise. If mutations occur during a fetch, the coordinator marks <code>dirty = true</code> and immediately schedules a single trailing refresh.</p>
+
+<h3>In-Memory Metadata Repository & Freshness</h3>
+<p>Device and group metadata is cached in-memory via <code>MetadataRepository</code> with a <strong>60-second freshness window</strong> (<code>freshFor = 60_000ms</code>). Switching tabs results in zero-latency rendering from memory. When a mutation occurs, <code>repository.invalidate(['account-devices', profile, store])</code> advances the cache generation token, rendering stale data without flicker while a background fetch refreshes the view.</p>
+
+<h3>Window Inactivity Concealment (<code>useConcealOnInactive</code>)</h3>
+<p>When the window loses focus or becomes hidden (<code>visibilitychange</code>), sensitive UI elements are masked:</p>
+<ul>
+  <li>Vault passwords and revealed recovery codes mask immediately.</li>
+  <li>Pairing offers and QR codes hide until focus returns.</li>
+  <li>If an asynchronous secret arrives after blur, <code>useLayoutEffect</code> masks it before paint.</li>
+</ul>
+
+<!-- ======================================================================= -->
+<h2 id="onboarding">11. First-Run Onboarding, Receipts & Pairing Ceremonies</h2>
+
+<h3>The Setup Routes</h3>
+<ul>
+  <li><strong>Invited Journey (<code>path='invited'</code> &bull; 4 Steps):</strong> Connect Server &rarr; Create Account &rarr; Backup Key &rarr; Discover & Join Team.</li>
+  <li><strong>Own Journey (<code>path='own'</code> &bull; 3 Steps):</strong> Connect/Launch Server &rarr; Account Creation/Recovery &rarr; Protection.</li>
+</ul>
+
+<h3>Account Operation Receipts (<code>account-operation-receipts-v1</code>)</h3>
+<p>To eliminate ghost accounts or replay attacks during network dropouts, account creation mutations record atomic on-disk receipts:</p>
+<div class="pre">{
+  "version": 2,
+  "state_id": "sha256-state-identity...",
+  "attempt": { "host_id": "02...", "account_alias": "alice" },
+  "outcome": "Unknown" // Initialized before network dispatch
+}</div>
+<p>Before sending the mutation to the server, the outcome is recorded as <code>Outcome::Unknown</code> and synced to disk (including a parent directory sync). If the agent crashes mid-mutation, the operation cannot be blindly re-dispatched without explicit resumption checks.</p>
+
+<h3>Pairing Phrases vs. Paper Backup Keys</h3>
+<table class="keytable">
+  <thead>
+    <tr>
+      <th>Mechanism</th>
+      <th>Token Composition</th>
+      <th>Entropy & Lifespan</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="k1">
+      <td><strong>Device Pairing (KEX)</strong></td>
+      <td><strong>13 tokens:</strong> 7 BIP-39 words alternating with 6 decimal numbers (0–255).</td>
+      <td>125-bit ephemeral secret. Used for peer-to-peer computer pairing.</td>
+    </tr>
+    <tr class="k2">
+      <td><strong>Paper Backup Key</strong></td>
+      <td><strong>17 tokens:</strong> 9 BIP-39 words alternating with 8 decimal numbers (up to 8,192).</td>
+      <td>203-bit long-term master root seed. Zero state written until confirmed.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ======================================================================= -->
+<h2 id="identity">12. StoreRef Hierarchy & Team Federation</h2>
+
+<h3>The Identity Triad & Anti-Spoofing Deep Links</h3>
+<p>FOKS differentiates between three identity concepts:</p>
+<ol>
+  <li><strong><code>alias</code>:</strong> A local display label (e.g. <code>work</code>). Ambiguous across servers.</li>
+  <li><strong><code>profile</code>:</strong> The server connection configuration.</li>
+  <li><strong><code>StoreRef</code>:</strong> A canonical, globally unambiguous JSON string encoding the profile, alias, and unique team ID.</li>
+</ol>
+
+<div class="aside no">
+  <h4>Alias Collision Defense</h4>
+  <p>Deep links strictly require <code>?store=&lt;StoreRef&gt;</code>. Legacy parameters such as <code>?account=personal</code> are <strong>explicitly rejected and stripped</strong>. If an attacker could trigger actions via <code>?account=personal</code>, a malicious link could trick a user into executing corporate operations against a personal vault.</p>
+</div>
+
+<h3>Team Rosters & Visibility Bands</h3>
+<p>Team members are categorized as People, Machines, or Remote Groups. The internal visibility band (<code>Member (0)</code>) is hidden from general UI views, appearing only when permissions diverge (e.g. restricted channels or non-zero visibility tiers).</p>
+
+<figure>
+  <svg viewBox="0 0 740 360" role="img" aria-label="StoreRef Identity and Team Federation Hierarchy">
+    <!-- Profile 1 Box -->
+    <rect x="25" y="30" width="335" height="150" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+    <text x="40" y="56" class="s-b" fill="#1e293b">Profile 1: "work" (Host: 02ab...14)</text>
+    <rect x="40" y="70" width="305" height="42" rx="4" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="50" y="88" class="s-s" fill="#475569">Alias: "personal" (Account Store)</text>
+    <text x="50" y="104" class="s-s" fill="#2563eb">StoreRef: {"kind":"account","profile":"work","accountAlias":"personal"}</text>
+    <rect x="40" y="120" width="305" height="46" rx="4" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="50" y="138" class="s-s" fill="#1e40af">Team: "security" (StoreRef: teamId 03ff...)</text>
+    <text x="50" y="154" class="s-s" fill="#64748b">Roster: 12 People, 4 Machines, 1 Admitted Group</text>
+
+    <!-- Profile 2 Box -->
+    <rect x="380" y="30" width="335" height="150" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+    <text x="395" y="56" class="s-b" fill="#1e293b">Profile 2: "personal" (Host: 02ef...89)</text>
+    <rect x="395" y="70" width="305" height="42" rx="4" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="405" y="88" class="s-s" fill="#475569">Alias: "personal" (Account Store)</text>
+    <text x="405" y="104" class="s-s" fill="#2563eb">StoreRef: {"kind":"account","profile":"personal","accountAlias":"personal"}</text>
+    <rect x="395" y="120" width="305" height="46" rx="4" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="405" y="138" class="s-s" fill="#1e40af">Team: "family" (StoreRef: teamId 03aa...)</text>
+    <text x="405" y="154" class="s-s" fill="#64748b">Roster: 4 People, 2 Machines</text>
+
+    <!-- Federation Bridge Section -->
+    <rect x="25" y="200" width="690" height="140" rx="8" fill="#ffffff" stroke="#3f7fd8" stroke-width="2"/>
+    <text x="45" y="228" class="s-b" fill="#1e3a8a">Federated Group Roster Reconciliation (admittedGroups)</text>
+
+    <!-- Entry 1: Normal -->
+    <rect x="45" y="245" width="205" height="75" rx="5" fill="#f0fdf4" stroke="#86efac"/>
+    <text x="55" y="268" class="s-b" fill="#15803d">Matched Roster Entry</text>
+    <text x="55" y="288" class="s-s">Roster entry &harr; Admission record</text>
+    <text x="55" y="306" class="s-s" fill="#166534">Status: Active Member (role: admin)</text>
+
+    <!-- Entry 2: No admission record -->
+    <rect x="265" y="245" width="210" height="75" rx="5" fill="#fefce8" stroke="#fde047"/>
+    <text x="275" y="268" class="s-b" fill="#854d0e">Unmatched Group</text>
+    <text x="275" y="288" class="s-s">In crypto roster, missing local state</text>
+    <text x="275" y="306" class="s-s" fill="#a16207">Chip: "No admission record"</text>
+
+    <!-- Entry 3: Ambiguous admission -->
+    <rect x="490" y="245" width="210" height="75" rx="5" fill="#fef2f2" stroke="#fca5a5"/>
+    <text x="500" y="268" class="s-b" fill="#991b1b">Ambiguous Admission</text>
+    <text x="500" y="288" class="s-s">1 roster item matches &gt;1 local records</text>
+    <text x="500" y="306" class="s-s" fill="#b91c1c">Chip: "Ambiguous admission"</text>
+  </svg>
+  <figcaption>Figure 5: StoreRef Identity Separation and Federated Team Roster Reconciliation.</figcaption>
+</figure>
+
+<p>When remote federated teams are admitted, FOKS tracks admission status. Discrepancies render as diagnostic chips:</p>
+<ul>
+  <li><code>No admission record</code>: Team is in the cryptographic roster, but local admission is missing.</li>
+  <li><code>Ambiguous admission</code>: Multiple local admission records match a single roster entry.</li>
+</ul>
+
+<!-- ======================================================================= -->
+<h2 id="chat">13. Realtime Chat Subsystem & Resilient Operations</h2>
+
+<p>The Chat tab provides cross-team conversation aggregation via <code>TeamInbox</code>. When chat is opened without parameters, it automatically opens the conversation with the most recent message across all reachable teams.</p>
+
+<h3>Durable Submission IDs</h3>
+<p>Channel creation generates a durable UUID submission token. If network connectivity drops during creation, the submission enters <code>state: 'unresolved'</code>. The UI re-polls the agent's pending ledger rather than creating duplicate channels.</p>
+
+<h3>Validation Parity with Rust Backend</h3>
+<table class="keytable">
+  <thead>
+    <tr>
+      <th>Constraint</th>
+      <th>Specification Limit</th>
+      <th>Validation Rule</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="k1">
+      <td><strong>Payload Size</strong></td>
+      <td><code>CHAT_TEXT_BYTES = 64 KiB</code></td>
+      <td>Hard UTF-8 byte ceiling per message.</td>
+    </tr>
+    <tr class="k2">
+      <td><strong>Channel Name</strong></td>
+      <td>3 to 32 characters</td>
+      <td>Measured in <strong>Unicode scalar values</strong> (not UTF-16 surrogate pairs); consecutive hyphens prohibited.</td>
+    </tr>
+    <tr class="k3">
+      <td><strong>Case Folding</strong></td>
+      <td><code>lowercaseChatText</code></td>
+      <td>Extracts only the first lowercased scalar to match Rust's <code>chars().next()</code> behavior.</td>
+    </tr>
+    <tr class="k4">
+      <td><strong>History Cache</strong></td>
+      <td>1,000 rows / 8 MiB</td>
+      <td>Bounded local SQLite history retention.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ======================================================================= -->
+<h2 id="limitations">14. Systems Limits & Open Risks</h2>
+
+<p>A secure system is defined as much by what it refuses to do as by what it implements.</p>
+
+<h3>Deliberate Desktop Omissions</h3>
+<ul>
+  <li><strong>No Global Directory Search:</strong> To prevent enumeration and metadata harvesting, FOKS provides no server user directory. Members must be invited by exact handle.</li>
+  <li><strong>No Inline Role Elevation:</strong> Members cannot be upgraded to Admin/Owner inline; role changes require explicit group administrative workflows.</li>
+  <li><strong>No Message Reactions or Deletion:</strong> Messages are immutable. Deletions and reactions are omitted until a cryptographic compaction standard is finalized.</li>
+  <li><strong>No Cross-Team Content Search:</strong> The search bar filters team names and channel labels, but does not execute full-text search across encrypted message history.</li>
+</ul>
+
+<h3>Documented Architectural Risks (from <code>ISSUES.md</code>)</h3>
+<div class="aside q">
+  <h4>Known System Boundaries</h4>
+  <ul>
+    <li><strong>Chat Server Retention (High Priority):</strong> Server-side message storage allows up to 1 MiB per message envelope with <strong>no current compaction or pruning path</strong>. A malicious member could flood messages to exhaust server SQLite disk space.</li>
+    <li><strong>Client Terminal Operation Bloat (Medium Priority):</strong> Confirmed and rejected chat operations remain permanently in client SQLite tables (<code>chat_operations</code>), accumulating indefinitely without tombstones.</li>
+    <li><strong>Server Invitation Limits (Medium Priority):</strong> The server enforces hard lifetime limits (65,536 remote requests, 1,000,000 local requests). Exceeding these limits permanently blocks new invitations.</li>
+    <li><strong>Realtime Member Fanout Cap (Lower Priority):</strong> Realtime delivery mutates after scanning at most 1,024 direct membership rows. Teams exceeding 1,024 members fail to deliver realtime notifications.</li>
+  </ul>
+</div>
+
+</main>
+</div>
+</body>
+</html>

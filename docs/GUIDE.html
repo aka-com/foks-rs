@@ -1,0 +1,1397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How FOKS Keeps Your Keys — a complete architectural and cryptographic guide</title>
+<style>
+:root {
+  --ink:#1c2530;
+  --dim:#5d6b7a;
+  --faint:#8a97a5;
+  --rule:#e3e8ee;
+  --bg:#ffffff;
+  --tint:#f6f8fa;
+  --a:#2f6fd0;
+  --k1:#3f7fd8;
+  --k2:#38a06a;
+  --k3:#c9822b;
+  --k4:#cf4f6a;
+  --k5:#8a63c9;
+  --k6:#2f9fb5;
+  --k7:#d97706;
+  --kr:#2f9fb5;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body {
+  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Georgia,serif;
+  color:var(--ink);
+  background:var(--bg);
+  -webkit-font-smoothing:antialiased;
+}
+.layout {
+  display:grid;
+  grid-template-columns:250px minmax(0,1fr);
+  gap:56px;
+  max-width:1160px;
+  margin:0 auto;
+  padding:0 32px;
+}
+nav {
+  position:sticky;
+  top:32px;
+  align-self:start;
+  padding-top:54px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:13px;
+  line-height:1.45;
+  max-height:calc(100vh - 48px);
+  overflow-y:auto;
+}
+.navtitle {
+  font-weight:700;
+  color:var(--faint);
+  text-transform:uppercase;
+  letter-spacing:0.08em;
+  font-size:11px;
+  margin-bottom:14px;
+}
+nav ol { list-style:none; }
+nav li { margin-bottom:8px; }
+nav a { color:var(--dim); text-decoration:none; display:block; padding:2px 0; }
+nav a:hover { color:var(--ink); }
+main {
+  max-width:48em;
+  padding:54px 0 96px;
+}
+h1 {
+  font:700 36px/1.15 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  letter-spacing:-0.02em;
+  margin-bottom:12px;
+}
+.standfirst {
+  font-size:19px;
+  line-height:1.5;
+  color:var(--dim);
+  margin-bottom:32px;
+}
+h2 {
+  font:600 24px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  letter-spacing:-0.01em;
+  margin:48px 0 16px;
+  padding-top:16px;
+  border-top:1px solid var(--rule);
+}
+h3 {
+  font:600 17px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  margin:28px 0 8px;
+}
+p { margin-bottom:16px; }
+ul, ol { margin:0 0 16px 22px; }
+li { margin-bottom:6px; }
+code {
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:0.88em;
+  background:var(--tint);
+  padding:2px 5px;
+  border-radius:4px;
+  border:1px solid #e1e6eb;
+}
+pre, .pre {
+  background:var(--tint);
+  border:1px solid var(--rule);
+  border-radius:6px;
+  padding:14px 16px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:13px;
+  line-height:1.55;
+  overflow-x:auto;
+  margin:18px 0;
+}
+.aside {
+  background:#f8fafd;
+  border-left:3px solid var(--a);
+  padding:14px 18px;
+  margin:24px 0;
+  font-size:14.5px;
+  line-height:1.55;
+  border-radius:0 6px 6px 0;
+}
+.aside.q {
+  background:#fffdfa;
+  border-left-color:var(--k3);
+}
+.aside.no {
+  background:#fffafa;
+  border-left-color:var(--k4);
+}
+.aside.ok {
+  background:#f6fbf8;
+  border-left-color:var(--k2);
+}
+.aside-title {
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-weight:600;
+  font-size:13px;
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+  margin-bottom:6px;
+  color:var(--dim);
+}
+.aside.q .aside-title { color:var(--k3); }
+.aside.no .aside-title { color:var(--k4); }
+.aside.ok .aside-title { color:var(--k2); }
+table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:14px;
+  margin:24px 0;
+  border:1px solid var(--rule);
+  border-radius:6px;
+  overflow:hidden;
+}
+th {
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-weight:600;
+  text-align:left;
+  background:var(--tint);
+  padding:10px 14px;
+  border-bottom:1px solid var(--rule);
+  color:var(--dim);
+  font-size:12px;
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+}
+td {
+  padding:10px 14px;
+  border-bottom:1px solid var(--rule);
+  vertical-align:top;
+}
+tr:last-child td { border-bottom:none; }
+tr:nth-child(even) td { background:#fafbfb; }
+
+.keytable td:first-child {
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:13px;
+  white-space:nowrap;
+  border-left:3px solid transparent;
+}
+tr.k1 td:first-child { border-left-color:var(--k1); }
+tr.k2 td:first-child { border-left-color:var(--k2); }
+tr.k3 td:first-child { border-left-color:var(--k3); }
+tr.k4 td:first-child { border-left-color:var(--k4); }
+tr.k5 td:first-child { border-left-color:var(--k5); }
+tr.k6 td:first-child { border-left-color:var(--k6); }
+tr.k7 td:first-child { border-left-color:var(--k7); }
+tr.kr td:first-child { border-left-color:var(--kr, #2f9fb5); }
+tr.kr td { border-top:1px solid var(--rule); }
+
+figure { margin:32px 0; }
+figure svg { display:block; width:100%; height:auto; }
+figcaption {
+  font-size:13.5px;
+  color:var(--dim);
+  margin-top:10px;
+  text-align:center;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+svg text {
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  fill:var(--ink);
+}
+.s-l { font-size:13px; }
+.s-s { font-size:11px; fill:#5d6b7a; }
+.s-b { font-size:13px; font-weight:650; }
+
+@media (max-width:900px) {
+  .layout { grid-template-columns:1fr; gap:0; padding:0 20px; }
+  nav { display:none; }
+  main { max-width:100%; padding-top:32px; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav>
+  <div class="navtitle">Contents</div>
+  <ol>
+    <li><a href="#what-we-are-trying-to-do">1. What we are trying to do</a></li>
+    <li><a href="#architecture-and-dual-wire-protocol">2. Architecture &amp; Dual Protocol</a></li>
+    <li><a href="#cryptographic-foundations">3. Cryptographic Foundations</a></li>
+    <li><a href="#secrecy-vs-authority">4. Secrecy vs Authority Chain</a></li>
+    <li><a href="#merkle-trees-and-epoch-dag">5. Merkle Trees &amp; Epoch DAG</a></li>
+    <li><a href="#client-daemon-stack">6. Client Daemon Stack</a></li>
+    <li><a href="#desktop-application">7. Desktop App &amp; Biometrics</a></li>
+    <li><a href="#server-architecture">8. Server Engine &amp; Federation</a></li>
+    <li><a href="#human-recovery-and-kex">9. Human Recovery &amp; KEX (HESP)</a></li>
+    <li><a href="#model-context-protocol">10. Model Context Protocol</a></li>
+    <li><a href="#upstream-compatibility">11. Upstream Go Compatibility</a></li>
+    <li><a href="#current-work-and-boundaries">12. Active Work &amp; Boundaries</a></li>
+  </ol>
+</nav>
+
+<main>
+<h1>How FOKS Keeps Your Keys</h1>
+<p class="standfirst">An architectural and cryptographic guide to the Federated Open Key Store: dual wire protocols, post-quantum hybrid public keys, Patricia Merkle epoch DAGs, resident daemon isolation, desktop endpoint security, and upstream Go compatibility.</p>
+
+<div class="aside q">
+  <div class="aside-title">Open Questions &amp; Active Engineering</div>
+  <p>This implementation addresses several strict protocol and systems boundaries currently active in the codebase:</p>
+  <ul>
+    <li><strong>Epoch 65,536 Canonicality Ceiling:</strong> At epoch 65,536, the DAG backpointer sequence reaches 16 elements, forcing an <code>array16</code> MessagePack encoding that triggers an upstream Go v0.1.9 signable validator rejection. The Merkle engine explicitly enforces this ceiling with <code>EpochLimitExceeded</code>.</li>
+    <li><strong>Server Expiry Cleanup Plan:</strong> SQLite schema version 45 introduces 7 targeted partial indexes across expiring reservations, challenges, view tokens, and log sends to prevent unbounded database degradation under high turnover.</li>
+    <li><strong>Basic Chat Retention &amp; Storage Isolation:</strong> Each <code>rt_messages</code> row permanently stores two 1 MiB encodings (the submitted envelope and the returned message) without compaction or per-team quotas. Work is underway to isolate chat storage from core identity and KV storage.</li>
+    <li><strong>Terminal Chat Operation Compaction:</strong> Local client hard state accumulates permanent terminal <code>chat_operations</code> and <code>chat_submissions</code> rows. Bounded replay evidence is being designed to allow pruning without creating replay vulnerabilities.</li>
+    <li><strong>Endpoint Security Support:</strong> Desktop application lock integrates native biometrics on macOS (<code>LocalAuthentication</code>) and Linux (<code>PolicyKit</code> D-Bus authority). Windows remains unsupported due to unverified named-pipe ACL primitives.</li>
+  </ul>
+</div>
+
+<h2 id="what-we-are-trying-to-do">1. What we are trying to do</h2>
+<p>The Federated Open Key Store (FOKS) is a zero-knowledge, end-to-end encrypted secret store, distributed file system, and real-time team collaboration platform. Its purpose is to allow individuals, teams, and autonomous AI agents to store secrets, synchronize key-value data, and exchange encrypted messages across federated hosts without placing trust in any server infrastructure.</p>
+
+<p>Traditional cloud key management systems treat the server as an authoritative, trusted entity that decrypts master key material or acts as a gatekeeper. If the server infrastructure is compromised, subpoenaed, or maliciously operated, stored secrets are exposed, and history can be silently manipulated. FOKS eliminates this vulnerability through a set of strict architectural invariants:</p>
+
+<ul>
+  <li><strong>Zero Server Trust:</strong> The server is treated as an untrusted, Byzantine storage relay and sequencing engine. It holds only public identity commitments, opaque encrypted parcels, and signed Merkle tree roots. The server never learns private seeds, plaintext secret entries, directory paths, or message cleartext.</li>
+  <li><strong>Local Cryptographic Verification:</strong> Every client endpoint independently verifies all cryptographic evidence. State transitions, team memberships, and directory mutations are authenticated via Ed25519 or P-256 signatures, compressed Patricia Merkle proofs, and hash chains before being admitted to local storage.</li>
+  <li><strong>Decoupling Authority from Secrecy:</strong> Governance (who has permission to modify a team or identity) is completely separated from confidentiality (who can decrypt data). Mutating a team requires an append-only signature chain; reading team secrets requires possessing a generational unsealing key.</li>
+  <li><strong>Forward Secrecy via Generational Seeds:</strong> When a device is revoked or a team member is removed, the identity advances to a new key generation. All subsequent data is encrypted under fresh generational keys. The evicted party is cryptographically prevented from reading future history, while legitimate members traverse backward seed chains to access past records.</li>
+  <li><strong>Post-Quantum Resistance:</strong> All public key encapsulation combines classical elliptic curves with NIST ML-KEM-768 (formerly Kyber-768), ensuring that encrypted data captured today cannot be decrypted by future quantum computers ("Harvest Now, Decrypt Later").</li>
+</ul>
+
+<h3>The Key Families</h3>
+<p>FOKS organizes cryptographic responsibility across seven distinct key families, ensuring strict domain separation and preventing key re-use across protocol boundaries:</p>
+
+<table class="keytable">
+  <thead>
+    <tr>
+      <th>Key Family</th>
+      <th>Algorithm &amp; Parameters</th>
+      <th>Scope &amp; Storage</th>
+      <th>Primary Responsibility</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="k1">
+      <td>Device Signing Key</td>
+      <td>Ed25519 (software) / P-256 ECDSA (YubiKey PIV 0x82..0x95)</td>
+      <td>Per-device; local keystore or hardware secure element</td>
+      <td>Signs sequential chain links, host registrations, mutual TLS assertions, and authentication requests.</td>
+    </tr>
+    <tr class="k2">
+      <td>Device Unsealing Key (HEPK)</td>
+      <td>Hybrid: X25519/P-256 + NIST ML-KEM-768</td>
+      <td>Per-device; public key registered on server; private key local</td>
+      <td>Decapsulates incoming generational PUK and PTK parcels using post-quantum hybrid cryptography.</td>
+    </tr>
+    <tr class="k3">
+      <td>Generational PUK/PTK Seed</td>
+      <td>32-byte CSPRNG seed; <code>derive_key</code> HKDF hierarchy</td>
+      <td>Per-user / Per-team; unwrapped in memory per generation</td>
+      <td>Master identity secret for generation <em>G<sub>k</sub></em>. Unseals prior generation seeds via <code>SeedChainBox</code> and derives app keys.</td>
+    </tr>
+    <tr class="k4">
+      <td>KV KeySet</td>
+      <td>Subkey 1: HMAC-SHA256 (MAC)<br>Subkey 2: XSalsa20-Poly1305 (Box)</td>
+      <td>Derived from PUK/PTK via app index 5 (<code>kv_app</code>)</td>
+      <td>Authenticates <code>KvRoot</code> structures via typed HMAC; encrypts directory seeds, dirents, and small/chunked files.</td>
+    </tr>
+    <tr class="k5">
+      <td>Local Storage Master Key</td>
+      <td>XChaCha20-Poly1305 (24-byte nonce, 16-byte tag)</td>
+      <td>OS Keyring (macOS Keychain, Linux Secret Service) or file</td>
+      <td>Protects local agent credentials, private seeds, and SQLite database encryption at rest (magic <code>FOKSKS\0\x01</code>).</td>
+    </tr>
+    <tr class="k6">
+      <td>Human Recovery Code (HESP)</td>
+      <td>203-bit entropy: 17 tokens (9 BIP-39 words + 8 numbers); Argon2id</td>
+      <td>Written on paper / offline vault; registered public box</td>
+      <td>Reconstitutes root user identity and unseals PUK parcel when all physical devices and keyrings are lost.</td>
+    </tr>
+    <tr class="k7">
+      <td>Pairing KEX Secret (HESP)</td>
+      <td>125-bit entropy: 13 tokens (7 BIP-39 words + 6 numbers)</td>
+      <td>Ephemeral short-lived exchange between two devices</td>
+      <td>Authenticates out-of-band Key Exchange (KEX) to provision a new secondary device without exposing master credentials.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="architecture-and-dual-wire-protocol">2. Architecture &amp; The Dual Wire Protocol</h2>
+<p>The FOKS architecture is divided into three distinct operational tiers: client frontends, a resident client daemon, and untrusted server relays. To balance desktop developer ergonomics with extreme cryptographic rigor, FOKS employs a <strong>Dual Wire Protocol</strong> design.</p>
+
+<p>Client applications—such as the React 18 desktop interface, the CLI, and the Model Context Protocol (MCP) server—never interact with the network directly, nor do they touch long-term private key material or SQLite databases. Instead, they communicate locally with <code>foks-agent</code>, a resident background daemon.</p>
+
+<figure>
+<svg viewBox="0 0 1000 520" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#8a97a5"/>
+    </marker>
+    <marker id="arr-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#3f7fd8"/>
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#38a06a"/>
+    </marker>
+  </defs>
+
+  <!-- Group 1: Frontends &amp; Clients -->
+  <rect x="20" y="30" width="200" height="460" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="120" y="60" text-anchor="middle" class="s-b" fill="#1e293b">Client Endpoints</text>
+  <text x="120" y="78" text-anchor="middle" class="s-s">Untrusted Boundary</text>
+
+  <!-- React Desktop UI -->
+  <rect x="35" y="95" width="170" height="85" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="120" y="118" text-anchor="middle" class="s-b" fill="#0f172a">React 18 + Vite</text>
+  <text x="120" y="136" text-anchor="middle" class="s-s">Desktop Webview</text>
+  <text x="120" y="152" text-anchor="middle" class="s-s" fill="#64748b">apps/desktop/kit</text>
+  <text x="120" y="168" text-anchor="middle" class="s-s" fill="#3f7fd8">UI Design Tokens</text>
+
+  <!-- Tauri v2 Shell -->
+  <rect x="35" y="195" width="170" height="85" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="120" y="218" text-anchor="middle" class="s-b" fill="#0f172a">Tauri v2 Shell</text>
+  <text x="120" y="236" text-anchor="middle" class="s-s">apps/desktop/src-tauri</text>
+  <text x="120" y="252" text-anchor="middle" class="s-s" fill="#e11d48">AppLock Biometrics</text>
+  <text x="120" y="268" text-anchor="middle" class="s-s" fill="#64748b">macOS LA / Linux Polkit</text>
+
+  <!-- CLI Client -->
+  <rect x="35" y="295" width="170" height="75" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="120" y="318" text-anchor="middle" class="s-b" fill="#0f172a">foks-cli</text>
+  <text x="120" y="336" text-anchor="middle" class="s-s">Interactive Terminal</text>
+  <text x="120" y="354" text-anchor="middle" class="s-s" fill="#64748b">Subcommand Dispatch</text>
+
+  <!-- MCP Agent Tool -->
+  <rect x="35" y="385" width="170" height="85" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="120" y="408" text-anchor="middle" class="s-b" fill="#0f172a">foks-mcp</text>
+  <text x="120" y="426" text-anchor="middle" class="s-s">Stdio JSON-RPC 2.0</text>
+  <text x="120" y="442" text-anchor="middle" class="s-s" fill="#8a63c9">AI Tool Surface</text>
+  <text x="120" y="458" text-anchor="middle" class="s-s" fill="#64748b">Durable Recovery IDs</text>
+
+  <!-- Arrow Frontends -> IPC -->
+  <line x1="205" y1="240" x2="245" y2="240" stroke="#8a97a5" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Local IPC Protocol Box -->
+  <rect x="250" y="110" width="125" height="260" rx="8" fill="#f0f7ff" stroke="#3f7fd8" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="312" y="135" text-anchor="middle" class="s-b" fill="#2563eb">Local IPC</text>
+  <text x="312" y="155" text-anchor="middle" class="s-s" fill="#1e40af">Unix Socket</text>
+  <text x="312" y="172" text-anchor="middle" class="s-s" fill="#475569">foks-rs.sock</text>
+  <line x1="262" y1="185" x2="362" y2="185" stroke="#bfdbfe" stroke-width="1"/>
+  <text x="312" y="205" text-anchor="middle" class="s-s" fill="#0f172a">4-byte BE Len</text>
+  <text x="312" y="222" text-anchor="middle" class="s-s" fill="#0f172a">+ JSON Payload</text>
+  <text x="312" y="242" text-anchor="middle" class="s-s" fill="#e11d48">Mode 0600/0700</text>
+  <text x="312" y="259" text-anchor="middle" class="s-s" fill="#e11d48">Peer UID Check</text>
+  <line x1="262" y1="272" x2="362" y2="272" stroke="#bfdbfe" stroke-width="1"/>
+  <text x="312" y="292" text-anchor="middle" class="s-s" fill="#475569">1 MiB Limit</text>
+  <text x="312" y="309" text-anchor="middle" class="s-s" fill="#475569">32 KiB Reserve</text>
+  <text x="312" y="326" text-anchor="middle" class="s-s" fill="#475569">700 KiB KV Cap</text>
+  <text x="312" y="350" text-anchor="middle" class="s-s" fill="#059669">.foks-rs.lock</text>
+
+  <!-- Arrow IPC -> Agent -->
+  <line x1="375" y1="240" x2="415" y2="240" stroke="#8a97a5" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Group 2: Resident Daemon foks-agent -->
+  <rect x="420" y="30" width="200" height="460" rx="10" fill="#fdfefe" stroke="#0ea5e9" stroke-width="1.8"/>
+  <text x="520" y="60" text-anchor="middle" class="s-b" fill="#0369a1">foks-agent</text>
+  <text x="520" y="78" text-anchor="middle" class="s-s">Resident Client Daemon</text>
+
+  <!-- Agent Workers &amp; Concurrency -->
+  <rect x="435" y="95" width="170" height="75" rx="6" fill="#f0fdf4" stroke="#86efac" stroke-width="1.2"/>
+  <text x="520" y="118" text-anchor="middle" class="s-b" fill="#15803d">Worker Semaphore</text>
+  <text x="520" y="136" text-anchor="middle" class="s-s">Bounded Concurrency</text>
+  <text x="520" y="152" text-anchor="middle" class="s-s" fill="#64748b">Dispatch Deadlines</text>
+
+  <!-- Key Storage &amp; Keystore -->
+  <rect x="435" y="180" width="170" height="95" rx="6" fill="#fefce8" stroke="#fde047" stroke-width="1.2"/>
+  <text x="520" y="203" text-anchor="middle" class="s-b" fill="#a16207">foks-keystore</text>
+  <text x="520" y="221" text-anchor="middle" class="s-s">XChaCha20-Poly1305</text>
+  <text x="520" y="237" text-anchor="middle" class="s-s" fill="#64748b">macOS Keychain</text>
+  <text x="520" y="253" text-anchor="middle" class="s-s" fill="#64748b">Linux Secret Service</text>
+  <text x="520" y="269" text-anchor="middle" class="s-s" fill="#64748b">Fallback Master File</text>
+
+  <!-- SQLite Hard State -->
+  <rect x="435" y="285" width="170" height="90" rx="6" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="520" y="308" text-anchor="middle" class="s-b" fill="#0f172a">foks-client-db (Hard)</text>
+  <text x="520" y="326" text-anchor="middle" class="s-s">SQLite Schema v39</text>
+  <text x="520" y="342" text-anchor="middle" class="s-s" fill="#64748b">App ID 'FOKS' (0x464F4B53)</text>
+  <text x="520" y="358" text-anchor="middle" class="s-s" fill="#0284c7">Anti-Rollback Pins</text>
+
+  <!-- SQLite Soft State -->
+  <rect x="435" y="385" width="170" height="85" rx="6" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+  <text x="520" y="408" text-anchor="middle" class="s-b" fill="#0f172a">Soft State &amp; Cache</text>
+  <text x="520" y="426" text-anchor="middle" class="s-s">Verified KV Roots &amp; Trees</text>
+  <text x="520" y="442" text-anchor="middle" class="s-s" fill="#64748b">Path-Version Vectors</text>
+  <text x="520" y="458" text-anchor="middle" class="s-s" fill="#64748b">Staged Upload Chunks</text>
+
+  <!-- Arrow Agent -> TLS -->
+  <line x1="620" y1="240" x2="655" y2="240" stroke="#8a97a5" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Remote Wire Protocol Box -->
+  <rect x="660" y="110" width="125" height="260" rx="8" fill="#fdf2f8" stroke="#db2777" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="722" y="135" text-anchor="middle" class="s-b" fill="#be185d">Remote RPC</text>
+  <text x="722" y="155" text-anchor="middle" class="s-s" fill="#9d174d">TLS 1.3 / TCP</text>
+  <text x="722" y="172" text-anchor="middle" class="s-s" fill="#475569">Port 4430</text>
+  <line x1="672" y1="185" x2="772" y2="185" stroke="#fbcfe8" stroke-width="1"/>
+  <text x="722" y="205" text-anchor="middle" class="s-s" fill="#0f172a">Snowpack Binary</text>
+  <text x="722" y="222" text-anchor="middle" class="s-s" fill="#0f172a">MsgPack Framing</text>
+  <text x="722" y="242" text-anchor="middle" class="s-s" fill="#be185d">Typed Hashes</text>
+  <text x="722" y="259" text-anchor="middle" class="s-s" fill="#be185d">Domain Separation</text>
+  <line x1="672" y1="272" x2="772" y2="272" stroke="#fbcfe8" stroke-width="1"/>
+  <text x="722" y="292" text-anchor="middle" class="s-s" fill="#475569">Strict Canonical</text>
+  <text x="722" y="309" text-anchor="middle" class="s-s" fill="#475569">Map Key Ordering</text>
+  <text x="722" y="326" text-anchor="middle" class="s-s" fill="#475569">Int Minimal Size</text>
+  <text x="722" y="350" text-anchor="middle" class="s-s" fill="#be185d">Signable Envelopes</text>
+
+  <!-- Arrow TLS -> Server -->
+  <line x1="785" y1="240" x2="820" y2="240" stroke="#8a97a5" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Group 3: Server &amp; Federation -->
+  <rect x="825" y="30" width="155" height="460" rx="10" fill="#fafafa" stroke="#6366f1" stroke-width="1.8"/>
+  <text x="902" y="60" text-anchor="middle" class="s-b" fill="#4338ca">foks-server</text>
+  <text x="902" y="78" text-anchor="middle" class="s-s">Untrusted Host Relay</text>
+
+  <!-- Axum RPC Engine -->
+  <rect x="838" y="95" width="130" height="75" rx="6" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.2"/>
+  <text x="902" y="118" text-anchor="middle" class="s-b" fill="#3730a3">Axum / Tower</text>
+  <text x="902" y="136" text-anchor="middle" class="s-s">RPC Handlers</text>
+  <text x="902" y="152" text-anchor="middle" class="s-s" fill="#64748b">Rate Limiting</text>
+
+  <!-- Single-Writer SQLite Actor -->
+  <rect x="838" y="180" width="130" height="110" rx="6" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.2"/>
+  <text x="902" y="203" text-anchor="middle" class="s-b" fill="#3730a3">Writer Actor</text>
+  <text x="902" y="221" text-anchor="middle" class="s-s">Single-Writer Task</text>
+  <text x="902" y="237" text-anchor="middle" class="s-s" fill="#64748b">SQLite WAL Mode</text>
+  <text x="902" y="253" text-anchor="middle" class="s-s" fill="#4338ca">Schema v45</text>
+  <text x="902" y="269" text-anchor="middle" class="s-s" fill="#16a34a">7 Expiry Indexes</text>
+  <text x="902" y="283" text-anchor="middle" class="s-s" fill="#64748b">Zero Write Lock Wait</text>
+
+  <!-- Read Connection Pool -->
+  <rect x="838" y="300" width="130" height="75" rx="6" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.2"/>
+  <text x="902" y="323" text-anchor="middle" class="s-b" fill="#3730a3">Read Pool</text>
+  <text x="902" y="341" text-anchor="middle" class="s-s">Concurrent Snapshots</text>
+  <text x="902" y="357" text-anchor="middle" class="s-s" fill="#64748b">WAL Nonblocking</text>
+
+  <!-- Enterprise OIDC &amp; Peer Federation -->
+  <rect x="838" y="385" width="130" height="85" rx="6" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.2"/>
+  <text x="902" y="408" text-anchor="middle" class="s-b" fill="#3730a3">OIDC Federation</text>
+  <text x="902" y="426" text-anchor="middle" class="s-s">IdP SSO Bridging</text>
+  <text x="902" y="442" text-anchor="middle" class="s-s" fill="#64748b">Ephemeral Proofs</text>
+  <text x="902" y="458" text-anchor="middle" class="s-s" fill="#64748b">Peer Cross-Host</text>
+</svg>
+<figcaption>Figure 1: Overall system topology and dual wire protocols. Frontends communicate with the resident daemon over a private Unix domain socket using length-prefixed JSON, while the daemon speaks canonical Snowpack RPC over TLS 1.3 to untrusted server relays.</figcaption>
+</figure>
+
+<h3>Protocol 1: Local Length-Prefixed JSON IPC</h3>
+<p>Frontends connect to <code>foks-agent</code> over a private Unix domain socket (defaulting to <code>foks-rs.sock</code> beneath the configured state directory). The framing is deliberately simple and robust:</p>
+<ul>
+  <li><strong>Framing Envelope:</strong> A 4-byte big-endian unsigned integer specifies the exact byte length of the UTF-8 JSON message that follows.</li>
+  <li><strong>Size Constraints:</strong> Messages are strictly capped at <code>MAXIMUM_MESSAGE_BYTES</code> = 1 MiB (1,048,576 bytes). Requests exceeding this limit are refused immediately before reading the full payload.</li>
+  <li><strong>Envelope Budget:</strong> To prevent JSON encoding drift, exactly <code>FRAME_ENVELOPE_RESERVE_BYTES</code> = 32 KiB is reserved for metadata (correlation IDs, status tags, path strings, and operation parameters). This leaves exactly 1,015,808 bytes for payload content.</li>
+  <li><strong>Base64 KV Payloads:</strong> Binary blobs (such as file uploads and downloads) travel as base64-encoded strings. A plaintext payload of <code>MAXIMUM_KV_PAYLOAD_BYTES</code> = 700 KiB (716,800 bytes) expands to 955,738 base64 bytes, which fits comfortably within the budget with 60,070 bytes of headroom.</li>
+  <li><strong>Socket Security & Permissions:</strong> On Unix, the daemon checks socket metadata on bind and connect. It verifies that the socket and state directory are owned by <code>rustix::process::geteuid()</code> and that permissions are restricted to <code>0o600</code> or <code>0o700</code> (rejecting group/world access). The daemon also checks the peer process credentials on every accepted connection, refusing any client whose effective UID does not match the daemon's UID.</li>
+  <li><strong>Process Mutual Exclusion:</strong> The daemon acquires an exclusive <code>fs2::FileExt::try_lock_exclusive()</code> on <code>.foks-rs.lock</code>. If another instance is already running, startup terminates immediately with an address-in-use error.</li>
+</ul>
+
+<h3>Protocol 2: Remote Canonical Snowpack RPC</h3>
+<p>Communication between <code>foks-agent</code> and <code>foks-server</code> occurs over TLS 1.3 (TCP port 4430). The transport uses MessagePack RPC framing containing strongly-typed, canonical <strong>Snowpack</strong> payloads:</p>
+<ul>
+  <li><strong>Canonical Snowpack vs MessagePack:</strong> While ordinary MessagePack allows arbitrary map key orderings and flexible integer encodings, Canonical Snowpack enforces strict determinism: map keys must be sorted lexicographically by their encoded bytes, integers must be encoded using the shortest possible byte representation, and empty collections must follow strict canonical forms.</li>
+  <li><strong>Cryptographic Hashability:</strong> Because canonical Snowpack guarantees that identical logical objects produce byte-for-byte identical binary encodings, clients and servers can compute cryptographic hashes directly over serialized bytes. Domain separation is enforced using 64-bit typed prefixes (e.g., <code>LINK_OUTER_V1_TYPE_ID</code>, <code>MERKLE_NODE_TYPE_ID</code>, <code>KV_ROOT_BINDING_PAYLOAD_TYPE_ID</code>).</li>
+  <li><strong>Untrusted Transport:</strong> Even if TLS is terminated by an enterprise proxy or intercepted by an attacker, the integrity of the data is completely protected by the inner Snowpack signatures and Merkle proofs. The server cannot tamper with records without invalidating their mathematical commitments.</li>
+</ul>
+
+<h2 id="cryptographic-foundations">3. Cryptographic Foundations &amp; Key Families</h2>
+<p>Security in FOKS is built on modern, quantum-resistant, and formally specified cryptographic primitives. Every identity, file, and permission is bound to explicit mathematical structures rather than implicit database associations.</p>
+
+<h3>Hybrid Encryption Public Keys (HEPK)</h3>
+<p>Traditional public key encryption relies on Diffie-Hellman over elliptic curves (such as Curve25519 or NIST P-256). While secure against current classical computers, these algorithms are vulnerable to Shor's algorithm running on large-scale quantum processors. To protect users against long-term data capture and retroactive decryption, FOKS requires <strong>Hybrid Encryption Public Keys (HEPK)</strong> across all user and team identities.</p>
+
+<p>Defined in <code>foks_proto::identity::hepk</code>, an HEPK combines two distinct public keys:</p>
+<pre><code>pub struct Hepk {
+    pub classical: DhPublicKey, // Curve25519 ([u8; 32]) or P256 ([u8; 33])
+    pub mlkem768: Vec&lt;u8&gt;,     // NIST ML-KEM-768 encapsulation key (1,184 bytes)
+}</code></pre>
+
+<p>When encrypting a secret parcel for a device (such as a generational PUK or PTK parcel), the sender performs a dual encapsulation:</p>
+<ol>
+  <li><strong>Classical Agreement:</strong> The sender generates an ephemeral curve keypair and computes a classical shared secret via X25519 ECDH (for software devices) or P-256 ECDH (for YubiKey hardware tokens).</li>
+  <li><strong>Post-Quantum KEM:</strong> The sender executes the NIST ML-KEM-768 encapsulation algorithm against the recipient's ML-KEM public key, yielding a 1,088-byte post-quantum ciphertext and a post-quantum shared secret.</li>
+  <li><strong>Hybrid Secret Derivation:</strong> The classical and post-quantum shared secrets are concatenated alongside domain separation tags and passed into SHA-512/256 (or HKDF). The resulting 32-byte master seed is used to encrypt the payload via XSalsa20-Poly1305.</li>
+</ol>
+<p>To decrypt, an attacker would have to break <em>both</em> the discrete logarithm problem on elliptic curves <em>and</em> the module learning-with-errors (MLWE) lattice problem. If either primitive remains secure, the plaintext remains unreadable.</p>
+
+<h3>Hardware Security: YubiKey PIV Integration</h3>
+<p>For high-assurance deployments, FOKS supports hardware tokens via the YubiKey PIV (Personal Identity Verification) interface. Implemented in <code>foks-yubi</code>, the system delegates signing and unsealing operations to smartcard hardware without exposing private key bytes to host RAM:</p>
+<ul>
+  <li><strong>Slot Architecture:</strong> PIV slots <code>0x82</code> through <code>0x95</code> (<code>SlotId::MIN = 0x82</code>, <code>SlotId::MAX = 0x95</code>) are allocated for FOKS credentials.</li>
+  <li><strong>Signing Slot:</strong> Configured for ECDSA over NIST P-256 with SHA-256. Signs host-chain links, Merkle commitments, and device authentication challenges.</li>
+  <li><strong>Unsealing Slot:</strong> Uses ECDH over NIST P-256. Because physical YubiKeys currently lack native on-chip ML-KEM acceleration, FOKS implements an authenticated hybrid subkey bridge: the YubiKey's hardware ECDH derives an intermediate master seed, which in turn deterministically derives the ML-KEM-768 keypair and delegates local cryptographic operations.</li>
+</ul>
+
+<h3>Generational PUK and PTK with SeedChainBox</h3>
+<p>FOKS manages user vaults via a <strong>Per-User Key (PUK)</strong> and team vaults via a <strong>Per-Team Key (PTK)</strong>. To enforce forward secrecy, these keys are strictly generational. Each generation <em>G<sub>k</sub></em> is represented by an independent, randomly sampled 32-byte seed.</p>
+
+<p>When an existing device is revoked or a team member is demoted or removed, the remaining authorized members advance the generation from <em>G<sub>k</sub></em> to <em>G<sub>k+1</sub></em>. The server receives newly encrypted parcels for the active members under their HEPKs. However, current members still need to decrypt historical files and messages encrypted under older generations.</p>
+
+<p>FOKS solves this with <strong>SeedChainBox</strong> recursion (defined in <code>foks_proto::key_material</code>):</p>
+<pre><code>pub struct SeedChainBox {
+    pub generation: u32,
+    pub role: KeyRole,
+    pub secret_box: BoxEnvelope, // Encrypted seed G_(k-1) under G_k
+}</code></pre>
+<p>Inside generation <em>G<sub>k</sub></em>'s parcel, a <code>SeedChainBox</code> contains the seed for generation <em>G<sub>k-1</sub></em> encrypted under the seed of <em>G<sub>k</sub></em> using XSalsa20-Poly1305. An active member possessing <em>G<sub>k</sub></em> can recursively unwrap the chain backwards: <em>G<sub>k</sub> &rarr; G<sub>k-1</sub> &rarr; G<sub>k-2</sub> &rarr; &hellip; &rarr; G<sub>1</sub></em>. However, an evicted member holding only <em>G<sub>k-1</sub></em> has no mathematical pathway to derive <em>G<sub>k</sub></em>, guaranteeing forward secrecy.</p>
+
+<h3>KV KeySet and Vault Derivation</h3>
+<p>The generational seed is never used directly to encrypt user files or directory metadata. Instead, the client invokes <code>derive_key(seed, app_index, context)</code> using HKDF-SHA256. For key-value vault operations, application index <code>5</code> derives the <code>kv_app</code> key, which splits into a two-part <strong>KV KeySet</strong> (defined in <code>foks_crypto::KvKeySet</code>):</p>
+<ul>
+  <li><strong>Subkey 1 (MAC Key):</strong> A 32-byte Zeroizing key used exclusively with HMAC-SHA256 to authenticate the <code>KvRoot</code> structure. It binds the root directory ID, directory version vector, team/user party ID, and key generation into a cryptographic tag (<code>KV_ROOT_BINDING_PAYLOAD_TYPE_ID</code>). The server cannot forge or tamper with the root pointer.</li>
+  <li><strong>Subkey 2 (Box Key):</strong> A 32-byte Zeroizing key used with XSalsa20-Poly1305 (24-byte nonce, 16-byte Poly1305 authenticator). It encrypts directory seeds (<code>DIR_KEY_SEED_TYPE_ID</code>), directory entries (dirents), small file payloads (<code>SMALL_FILE_PAYLOAD_TYPE_ID</code>), and chunked file blocks.</li>
+</ul>
+
+<h3>Local Keystore Encryption</h3>
+<p>Private device seeds, PUK seeds, and account metadata must be persisted locally between agent restarts. The <code>foks-keystore</code> crate encrypts all local credentials using XChaCha20-Poly1305 with domain separation AAD <code>b"foks-keystore-record-v1"</code> and magic header <code>b"FOKSKS\0\x01"</code>.</p>
+<p>The master encryption key is managed through platform-native secure credential stores:</p>
+<ul>
+  <li><strong>macOS:</strong> Stored as a generic-password item in the user's macOS Keychain (<code>login</code> keychain).</li>
+  <li><strong>Linux:</strong> Stored via the FreeDesktop Secret Service D-Bus API in the default collection using encrypted peer-to-peer session keys.</li>
+  <li><strong>File Fallback:</strong> Where desktop keyrings are unavailable (e.g. headless servers or CI runners), FOKS generates an owner-restricted master key file (<code>0o600</code> permissions) via <code>create_master_key_file</code>.</li>
+</ul>
+
+<h2 id="secrecy-vs-authority">4. Secrecy Chain vs Authority Chain</h2>
+<p>The defining architectural insight of FOKS is the complete decoupling of the <strong>Secrecy Chain</strong> (confidentiality) from the <strong>Authority Chain</strong> (integrity and governance). In naive designs, identity and encryption are tangled: signing keys are conflated with decryption keys, or server access tokens grant read access to records. FOKS treats these as two orthogonal, independently verifiable chains.</p>
+
+<figure>
+<svg viewBox="0 0 1000 520" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr-g2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#38a06a"/>
+    </marker>
+    <marker id="arr-b2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#3f7fd8"/>
+    </marker>
+    <marker id="arr-o2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#c9822b"/>
+    </marker>
+  </defs>
+
+  <!-- TOP HALF: SECRECY CHAIN -->
+  <rect x="20" y="25" width="960" height="230" rx="10" fill="#f0fdf4" stroke="#86efac" stroke-width="1.8"/>
+  <text x="40" y="52" class="s-b" fill="#166534" font-size="15">THE SECRECY CHAIN — Reading Secrets &amp; Decryption</text>
+  <text x="40" y="70" class="s-s" fill="#15803d">Confidentiality path: Generational key unwrapping and hierarchical derivation. Server holds only sealed envelopes.</text>
+
+  <!-- Step S1: Device Unsealing Key -->
+  <rect x="40" y="90" width="125" height="135" rx="6" fill="#ffffff" stroke="#22c55e" stroke-width="1.2"/>
+  <text x="102" y="112" text-anchor="middle" class="s-b" fill="#15803d">Device HEPK Key</text>
+  <text x="102" y="130" text-anchor="middle" class="s-s">X25519 / P-256</text>
+  <text x="102" y="146" text-anchor="middle" class="s-s">+ ML-KEM-768</text>
+  <line x1="50" y1="158" x2="155" y2="158" stroke="#dcfce7" stroke-width="1"/>
+  <text x="102" y="175" text-anchor="middle" class="s-s" fill="#64748b">Private Decaps Key</text>
+  <text x="102" y="191" text-anchor="middle" class="s-s" fill="#64748b">Held in OS Keystore</text>
+  <text x="102" y="207" text-anchor="middle" class="s-s" fill="#15803d">Post-Quantum Safe</text>
+
+  <!-- Arrow S1 -> S2 -->
+  <line x1="165" y1="155" x2="190" y2="155" stroke="#38a06a" stroke-width="1.6" marker-end="url(#arr-g2)"/>
+
+  <!-- Step S2: PUK Parcel -->
+  <rect x="195" y="90" width="125" height="135" rx="6" fill="#ffffff" stroke="#22c55e" stroke-width="1.2"/>
+  <text x="257" y="112" text-anchor="middle" class="s-b" fill="#15803d">PUK Parcel</text>
+  <text x="257" y="130" text-anchor="middle" class="s-s">Hybrid Ciphertext</text>
+  <line x1="205" y1="142" x2="310" y2="142" stroke="#dcfce7" stroke-width="1"/>
+  <text x="257" y="160" text-anchor="middle" class="s-s" fill="#64748b">Fetched from Server</text>
+  <text x="257" y="176" text-anchor="middle" class="s-s" fill="#64748b">Sealed to Device</text>
+  <text x="257" y="192" text-anchor="middle" class="s-s" fill="#64748b">Classical + KEM</text>
+  <text x="257" y="208" text-anchor="middle" class="s-s" fill="#15803d">Role &amp; Gen Bound</text>
+
+  <!-- Arrow S2 -> S3 -->
+  <line x1="320" y1="155" x2="345" y2="155" stroke="#38a06a" stroke-width="1.6" marker-end="url(#arr-g2)"/>
+
+  <!-- Step S3: Generational Seed -->
+  <rect x="350" y="90" width="125" height="135" rx="6" fill="#ffffff" stroke="#22c55e" stroke-width="1.2"/>
+  <text x="412" y="112" text-anchor="middle" class="s-b" fill="#15803d">PUK/PTK Seed</text>
+  <text x="412" y="130" text-anchor="middle" class="s-s">Generation G_k</text>
+  <line x1="360" y1="142" x2="465" y2="142" stroke="#dcfce7" stroke-width="1"/>
+  <text x="412" y="160" text-anchor="middle" class="s-s" fill="#64748b">32-byte Zeroizing</text>
+  <text x="412" y="176" text-anchor="middle" class="s-s" fill="#64748b">Current Epoch Master</text>
+  <text x="412" y="192" text-anchor="middle" class="s-s" fill="#64748b">Rotates on Revocation</text>
+  <text x="412" y="208" text-anchor="middle" class="s-s" fill="#15803d">Forward Secrecy</text>
+
+  <!-- Arrow S3 -> S4 -->
+  <line x1="475" y1="155" x2="500" y2="155" stroke="#38a06a" stroke-width="1.6" marker-end="url(#arr-g2)"/>
+
+  <!-- Step S4: SeedChainBox Backward -->
+  <rect x="505" y="90" width="130" height="135" rx="6" fill="#ffffff" stroke="#22c55e" stroke-width="1.2"/>
+  <text x="570" y="112" text-anchor="middle" class="s-b" fill="#15803d">SeedChainBox</text>
+  <text x="570" y="130" text-anchor="middle" class="s-s">Retro-Unsealing</text>
+  <line x1="515" y1="142" x2="625" y2="142" stroke="#dcfce7" stroke-width="1"/>
+  <text x="570" y="160" text-anchor="middle" class="s-s" fill="#64748b">G_k opens G_(k-1)</text>
+  <text x="570" y="176" text-anchor="middle" class="s-s" fill="#64748b">G_(k-1) opens G_(k-2)</text>
+  <text x="570" y="192" text-anchor="middle" class="s-s" fill="#64748b">Access Historical</text>
+  <text x="570" y="208" text-anchor="middle" class="s-s" fill="#b45309">Cannot Advance Fwd</text>
+
+  <!-- Arrow S4 -> S5 -->
+  <line x1="635" y1="155" x2="660" y2="155" stroke="#38a06a" stroke-width="1.6" marker-end="url(#arr-g2)"/>
+
+  <!-- Step S5: KV KeySet -->
+  <rect x="665" y="90" width="145" height="135" rx="6" fill="#ffffff" stroke="#22c55e" stroke-width="1.2"/>
+  <text x="737" y="112" text-anchor="middle" class="s-b" fill="#15803d">KV KeySet</text>
+  <text x="737" y="130" text-anchor="middle" class="s-s">derive_key(seed, 5)</text>
+  <line x1="675" y1="142" x2="800" y2="142" stroke="#dcfce7" stroke-width="1"/>
+  <text x="737" y="160" text-anchor="middle" class="s-s" fill="#0369a1">Subkey 1: MAC Key</text>
+  <text x="737" y="176" text-anchor="middle" class="s-s" fill="#64748b">HMAC for KvRoot</text>
+  <text x="737" y="192" text-anchor="middle" class="s-s" fill="#b45309">Subkey 2: Box Key</text>
+  <text x="737" y="208" text-anchor="middle" class="s-s" fill="#64748b">XSalsa20-Poly1305</text>
+
+  <!-- Arrow S5 -> S6 -->
+  <line x1="810" y1="155" x2="835" y2="155" stroke="#38a06a" stroke-width="1.6" marker-end="url(#arr-g2)"/>
+
+  <!-- Step S6: Plaintext Secret -->
+  <rect x="840" y="90" width="125" height="135" rx="6" fill="#ffffff" stroke="#22c55e" stroke-width="1.2"/>
+  <text x="902" y="112" text-anchor="middle" class="s-b" fill="#15803d">Plaintext Vault</text>
+  <text x="902" y="130" text-anchor="middle" class="s-s">Directory Seeds</text>
+  <line x1="850" y1="142" x2="955" y2="142" stroke="#dcfce7" stroke-width="1"/>
+  <text x="902" y="160" text-anchor="middle" class="s-s" fill="#64748b">Encrypted Dirents</text>
+  <text x="902" y="176" text-anchor="middle" class="s-s" fill="#64748b">Small File Payloads</text>
+  <text x="902" y="192" text-anchor="middle" class="s-s" fill="#64748b">Chunk Ciphertexts</text>
+  <text x="902" y="208" text-anchor="middle" class="s-s" fill="#15803d">Decrypted In-Mem</text>
+
+  <!-- BOTTOM HALF: AUTHORITY CHAIN -->
+  <rect x="20" y="270" width="960" height="230" rx="10" fill="#f0f7ff" stroke="#93c5fd" stroke-width="1.8"/>
+  <text x="40" y="297" class="s-b" fill="#1e40af" font-size="15">THE AUTHORITY CHAIN — Mutating History &amp; State Proofs</text>
+  <text x="40" y="315" class="s-s" fill="#1d4ed8">Integrity path: Append-only signed link sequence, Merkle tree commitments, and client anti-rollback pins.</text>
+
+  <!-- Step A1: Device Signing Key -->
+  <rect x="40" y="335" width="125" height="135" rx="6" fill="#ffffff" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="102" y="357" text-anchor="middle" class="s-b" fill="#1d4ed8">Device Sign Key</text>
+  <text x="102" y="375" text-anchor="middle" class="s-s">Ed25519 (Software)</text>
+  <text x="102" y="391" text-anchor="middle" class="s-s">P-256 (YubiKey PIV)</text>
+  <line x1="50" y1="403" x2="155" y2="403" stroke="#dbeafe" stroke-width="1"/>
+  <text x="102" y="420" text-anchor="middle" class="s-s" fill="#64748b">Slots 0x82..0x95</text>
+  <text x="102" y="436" text-anchor="middle" class="s-s" fill="#64748b">Private Key Non-Export</text>
+  <text x="102" y="452" text-anchor="middle" class="s-s" fill="#1d4ed8">Hardware Backed</text>
+
+  <!-- Arrow A1 -> A2 -->
+  <line x1="165" y1="400" x2="190" y2="400" stroke="#3f7fd8" stroke-width="1.6" marker-end="url(#arr-b2)"/>
+
+  <!-- Step A2: Sequential Link -->
+  <rect x="195" y="335" width="125" height="135" rx="6" fill="#ffffff" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="257" y="357" text-anchor="middle" class="s-b" fill="#1d4ed8">Signed Link L_k</text>
+  <text x="257" y="375" text-anchor="middle" class="s-s">Sequence k</text>
+  <line x1="205" y1="387" x2="310" y2="387" stroke="#dbeafe" stroke-width="1"/>
+  <text x="257" y="405" text-anchor="middle" class="s-s" fill="#64748b">Commits prev_hash</text>
+  <text x="257" y="421" text-anchor="middle" class="s-s" fill="#64748b">Binds New Device</text>
+  <text x="257" y="437" text-anchor="middle" class="s-s" fill="#64748b">or PUK Rotation</text>
+  <text x="257" y="453" text-anchor="middle" class="s-s" fill="#1d4ed8">No Backtracking</text>
+
+  <!-- Arrow A2 -> A3 -->
+  <line x1="320" y1="400" x2="345" y2="400" stroke="#3f7fd8" stroke-width="1.6" marker-end="url(#arr-b2)"/>
+
+  <!-- Step A3: Stacked Signatures -->
+  <rect x="350" y="335" width="125" height="135" rx="6" fill="#ffffff" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="412" y="357" text-anchor="middle" class="s-b" fill="#1d4ed8">Stacked Sigs</text>
+  <text x="412" y="375" text-anchor="middle" class="s-s">Multi-Party Proof</text>
+  <line x1="360" y1="387" x2="465" y2="387" stroke="#dbeafe" stroke-width="1"/>
+  <text x="412" y="405" text-anchor="middle" class="s-s" fill="#64748b">Sig 1: Acting Device</text>
+  <text x="412" y="421" text-anchor="middle" class="s-s" fill="#64748b">Sig 2: Admin/Owner</text>
+  <text x="412" y="437" text-anchor="middle" class="s-s" fill="#64748b">Sig 3: YubiKey Subkey</text>
+  <text x="412" y="453" text-anchor="middle" class="s-s" fill="#1d4ed8">Co-Signed Authority</text>
+
+  <!-- Arrow A3 -> A4 -->
+  <line x1="475" y1="400" x2="500" y2="400" stroke="#3f7fd8" stroke-width="1.6" marker-end="url(#arr-b2)"/>
+
+  <!-- Step A4: Patricia Leaf Mutation -->
+  <rect x="505" y="335" width="130" height="135" rx="6" fill="#ffffff" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="570" y="357" text-anchor="middle" class="s-b" fill="#1d4ed8">Patricia Leaf</text>
+  <text x="570" y="375" text-anchor="middle" class="s-s">Key-Value Commit</text>
+  <line x1="515" y1="387" x2="625" y2="387" stroke="#dbeafe" stroke-width="1"/>
+  <text x="570" y="405" text-anchor="middle" class="s-s" fill="#64748b">Key: User/Team ID</text>
+  <text x="570" y="421" text-anchor="middle" class="s-s" fill="#64748b">Val: Chain Tail Hash</text>
+  <text x="570" y="437" text-anchor="middle" class="s-s" fill="#64748b">Leaf Tag b"1"</text>
+  <text x="570" y="453" text-anchor="middle" class="s-s" fill="#1d4ed8">Radix Compressed</text>
+
+  <!-- Arrow A4 -> A5 -->
+  <line x1="635" y1="400" x2="660" y2="400" stroke="#3f7fd8" stroke-width="1.6" marker-end="url(#arr-b2)"/>
+
+  <!-- Step A5: Merkle Root &amp; DAG -->
+  <rect x="665" y="335" width="145" height="135" rx="6" fill="#ffffff" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="737" y="357" text-anchor="middle" class="s-b" fill="#1d4ed8">Merkle Root &amp; DAG</text>
+  <text x="737" y="375" text-anchor="middle" class="s-s">Epoch E Root Hash</text>
+  <line x1="675" y1="387" x2="800" y2="387" stroke="#dbeafe" stroke-width="1"/>
+  <text x="737" y="405" text-anchor="middle" class="s-s" fill="#64748b">back_pointer_sequence</text>
+  <text x="737" y="421" text-anchor="middle" class="s-s" fill="#64748b">Skip List Powers of 2</text>
+  <text x="737" y="437" text-anchor="middle" class="s-s" fill="#64748b">Signed by Host Key</text>
+  <text x="737" y="453" text-anchor="middle" class="s-s" fill="#dc2626">Ceiling: 65,536 Epoch</text>
+
+  <!-- Arrow A5 -> A6 -->
+  <line x1="810" y1="400" x2="835" y2="400" stroke="#3f7fd8" stroke-width="1.6" marker-end="url(#arr-b2)"/>
+
+  <!-- Step A6: SQLite Anti-Rollback Pin -->
+  <rect x="840" y="335" width="125" height="135" rx="6" fill="#ffffff" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="902" y="357" text-anchor="middle" class="s-b" fill="#1d4ed8">Client DB Pin</text>
+  <text x="902" y="375" text-anchor="middle" class="s-s">foks-client-db v39</text>
+  <line x1="850" y1="387" x2="955" y2="387" stroke="#dbeafe" stroke-width="1"/>
+  <text x="902" y="405" text-anchor="middle" class="s-s" fill="#64748b">Hard Monotonic Pin</text>
+  <text x="902" y="421" text-anchor="middle" class="s-s" fill="#64748b">epoch >= E_stored</text>
+  <text x="902" y="437" text-anchor="middle" class="s-s" fill="#64748b">Rejects Forks &amp; Skew</text>
+  <text x="902" y="453" text-anchor="middle" class="s-s" fill="#16a34a">Atomic Rollback Proof</text>
+</svg>
+<figcaption>Figure 2: The fundamental cryptographic duality in FOKS. The Secrecy Chain (top) governs confidentiality via generational seeds and recursive unsealing. The Authority Chain (bottom) governs integrity via sequential signed links, Merkle leaf commitments, and client anti-rollback pins.</figcaption>
+</figure>
+
+<h3>The Secrecy Chain: How Data is Read</h3>
+<p>The Secrecy Chain operates top-down from device private keys to cleartext secrets:</p>
+<ol>
+  <li>The local device activates its private unsealing key (Curve25519/P-256 private key and ML-KEM-768 decapsulation key) from the OS keystore.</li>
+  <li>The client fetches the latest encrypted <code>PukParcel</code> or <code>PtkParcel</code> from the server.</li>
+  <li>The device unseals the parcel, recovering the 32-byte generational seed <em>G<sub>k</sub></em>.</li>
+  <li>If the user is accessing historical records, the client reads the nested <code>SeedChainBox</code> structures to recursively unwrap older generation seeds (<em>G<sub>k-1</sub>, G<sub>k-2</sub>, &hellip;</em>).</li>
+  <li>From the appropriate generation seed, the client derives the application key (index 5) to produce the <code>KvKeySet</code>.</li>
+  <li>The MAC key verifies the integrity of the server's directory root, and the Box key decrypts the directory seed and dirent metadata.</li>
+  <li>Finally, individual file chunks are decrypted in memory using XSalsa20-Poly1305. Plaintext is never written to unencrypted disk caches.</li>
+</ol>
+
+<h3>The Authority Chain: How History is Mutated</h3>
+<p>The Authority Chain operates bottom-up from device signatures to Merkle roots and client pins:</p>
+<ol>
+  <li>To perform an action (e.g., provision a device, rotate a PUK, add a team member, or revoke credentials), an authorized device constructs a strongly-typed link structure (e.g., <code>LinkOuterV1</code>).</li>
+  <li>The link contains the target party ID, the action payload, the sequence number <em>k</em>, and the cryptographic hash of the previous link (<code>prev_link_hash</code>). This forms an immutable, append-only hash chain.</li>
+  <li>The acting device signs the link with its Ed25519 or P-256 private signing key. Where required, stacked signatures are appended (e.g., a founding owner countersignature or YubiKey subkey proof).</li>
+  <li>The signed link is submitted to <code>foks-server</code>. The server updates its compressed Patricia Merkle tree, inserting or updating the leaf node corresponding to the user or team ID with the hash of the new chain tail.</li>
+  <li>The server increments the Merkle epoch <em>E</em>, computes the new root node hash <em>R<sub>E</sub></em>, generates the epoch DAG backpointers, and signs the epoch head using its delegated host Merkle key.</li>
+  <li>When clients synchronize, they verify the server's signed Merkle root, validate the presence proof connecting the Merkle root to the user's chain tail, and check the sequential link signatures.</li>
+  <li>Upon successful validation, <code>foks-client-db</code> advances its local anti-rollback pin in SQLite. If the server ever attempts to present an older epoch or a conflicting fork, the client detects the sequence regression and halts immediately.</li>
+</ol>
+
+<table>
+  <thead>
+    <tr>
+      <th>Dimension</th>
+      <th>The Secrecy Chain</th>
+      <th>The Authority Chain</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Core Question</strong></td>
+      <td>"Can this entity read the plaintext secrets?"</td>
+      <td>"Did an authorized device approve this state change?"</td>
+    </tr>
+    <tr>
+      <td><strong>Cryptographic Primitives</strong></td>
+      <td>Hybrid KEM (X25519/P-256 + ML-KEM-768), XSalsa20-Poly1305, HKDF</td>
+      <td>Digital Signatures (Ed25519, P-256 ECDSA), SHA-256, Blake3</td>
+    </tr>
+    <tr>
+      <td><strong>Structural Topology</strong></td>
+      <td>Generational tree: <code>SeedChainBox</code> links <em>G<sub>k</sub> &rarr; G<sub>k-1</sub> &rarr; &hellip; &rarr; G<sub>1</sub></em></td>
+      <td>Sequential append-only link chain: <em>L<sub>1</sub> &larr; L<sub>2</sub> &larr; &hellip; &larr; L<sub>k</sub></em></td>
+    </tr>
+    <tr>
+      <td><strong>Revocation Impact</strong></td>
+      <td>Advances generation to <em>G<sub>k+1</sub></em>; excludes evicted entity from new parcels.</td>
+      <td>Appends revocation link signed by active admin; invalidates revoked signing key.</td>
+    </tr>
+    <tr>
+      <td><strong>Server Visibility</strong></td>
+      <td>Opaque ciphertexts and role labels; server cannot inspect keys.</td>
+      <td>Validates signature formatting and Merkle commitments; cannot forge links.</td>
+    </tr>
+    <tr>
+      <td><strong>Client Persistence</strong></td>
+      <td>Private keys in OS keystore; unwrapped seeds ephemeral in RAM.</td>
+      <td>Verified link bytes, Merkle heads, and epoch pins in <code>foks-client-db</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="merkle-trees-and-epoch-dag">5. Compressed Patricia Merkle Trees &amp; The Epoch DAG</h2>
+<p>To enable thousands of lightweight clients to verify identity states, team memberships, and public keys without downloading entire transaction ledgers, FOKS employs a <strong>Radix Compressed Patricia Merkle Tree</strong> coupled with an <strong>Epoch Directed Acyclic Graph (DAG)</strong>.</p>
+
+<figure>
+<svg viewBox="0 0 1000 540" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr-m3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#8a97a5"/>
+    </marker>
+    <marker id="arr-red3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#dc2626"/>
+    </marker>
+    <marker id="arr-p3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#8a63c9"/>
+    </marker>
+  </defs>
+
+  <!-- TOP PANEL: COMPRESSED PATRICIA MERKLE TREE -->
+  <rect x="20" y="20" width="960" height="260" rx="10" fill="#faf5ff" stroke="#d8b4fe" stroke-width="1.8"/>
+  <text x="40" y="46" class="s-b" fill="#6b21a8" font-size="15">RADIX COMPRESSED PATRICIA MERKLE TREE</text>
+  <text x="40" y="64" class="s-s" fill="#7e22ce">Zero-leakage dictionary: interior nodes collapse common bit substrings; leaves store exact 32-byte key/value hashes.</text>
+
+  <!-- Tree Root Node -->
+  <rect x="420" y="80" width="160" height="42" rx="6" fill="#ffffff" stroke="#9333ea" stroke-width="1.5"/>
+  <text x="500" y="98" text-anchor="middle" class="s-b" fill="#6b21a8">Root Node (Hash R_E)</text>
+  <text x="500" y="114" text-anchor="middle" class="s-s" fill="#475569">Interior: tag b"0"</text>
+
+  <!-- Branches from Root -->
+  <line x1="460" y1="122" x2="260" y2="150" stroke="#a855f7" stroke-width="1.4" marker-end="url(#arr-p3)"/>
+  <line x1="540" y1="122" x2="740" y2="150" stroke="#a855f7" stroke-width="1.4" marker-end="url(#arr-p3)"/>
+  <text x="340" y="132" class="s-s" fill="#9333ea" font-weight="bold">bit 0 (Left)</text>
+  <text x="630" y="132" class="s-s" fill="#9333ea" font-weight="bold">bit 1 (Right)</text>
+
+  <!-- Interior Node Left -->
+  <rect x="170" y="150" width="180" height="48" rx="6" fill="#ffffff" stroke="#a855f7" stroke-width="1.2"/>
+  <text x="260" y="168" text-anchor="middle" class="s-b" fill="#6b21a8">Interior Node [Prefix 010...]</text>
+  <text x="260" y="184" text-anchor="middle" class="s-s" fill="#475569">start: 1, count: 3, bytes: [0x40]</text>
+
+  <!-- Interior Node Right -->
+  <rect x="650" y="150" width="180" height="48" rx="6" fill="#ffffff" stroke="#a855f7" stroke-width="1.2"/>
+  <text x="740" y="168" text-anchor="middle" class="s-b" fill="#6b21a8">Interior Node [Prefix 111...]</text>
+  <text x="740" y="184" text-anchor="middle" class="s-s" fill="#475569">start: 1, count: 4, bytes: [0xe0]</text>
+
+  <!-- Lines from Interior to Leaves -->
+  <line x1="210" y1="198" x2="110" y2="225" stroke="#8a97a5" stroke-width="1.2" marker-end="url(#arr-m3)"/>
+  <line x1="310" y1="198" x2="410" y2="225" stroke="#8a97a5" stroke-width="1.2" marker-end="url(#arr-m3)"/>
+  <line x1="700" y1="198" x2="600" y2="225" stroke="#8a97a5" stroke-width="1.2" marker-end="url(#arr-m3)"/>
+  <line x1="780" y1="198" x2="880" y2="225" stroke="#8a97a5" stroke-width="1.2" marker-end="url(#arr-m3)"/>
+
+  <!-- Leaf 1 -->
+  <rect x="40" y="225" width="140" height="42" rx="5" fill="#ffffff" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="110" y="242" text-anchor="middle" class="s-b" fill="#1d4ed8">Leaf: Alice Tail</text>
+  <text x="110" y="258" text-anchor="middle" class="s-s" fill="#64748b">tag b"1" [k_hash, v_hash]</text>
+
+  <!-- Leaf 2 -->
+  <rect x="340" y="225" width="140" height="42" rx="5" fill="#ffffff" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="410" y="242" text-anchor="middle" class="s-b" fill="#1d4ed8">Leaf: Bob Tail</text>
+  <text x="410" y="258" text-anchor="middle" class="s-s" fill="#64748b">tag b"1" [k_hash, v_hash]</text>
+
+  <!-- Leaf 3 -->
+  <rect x="530" y="225" width="140" height="42" rx="5" fill="#ffffff" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="600" y="242" text-anchor="middle" class="s-b" fill="#1d4ed8">Leaf: Team Alpha</text>
+  <text x="600" y="258" text-anchor="middle" class="s-s" fill="#64748b">tag b"1" [k_hash, v_hash]</text>
+
+  <!-- Leaf 4 -->
+  <rect x="810" y="225" width="140" height="42" rx="5" fill="#ffffff" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="880" y="242" text-anchor="middle" class="s-b" fill="#1d4ed8">Leaf: Team Beta</text>
+  <text x="880" y="258" text-anchor="middle" class="s-s" fill="#64748b">tag b"1" [k_hash, v_hash]</text>
+
+
+  <!-- BOTTOM PANEL: EPOCH DAG BACKPOINTERS &amp; CEILING GUARD -->
+  <rect x="20" y="295" width="960" height="230" rx="10" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.8"/>
+  <text x="40" y="320" class="s-b" fill="#991b1b" font-size="15">EPOCH DAG SKIP-POINTERS &amp; THE 65,536 BOUNDARY GUARD</text>
+  <text x="40" y="338" class="s-s" fill="#b91c1c">Logarithmic historical verification: back_pointer_sequence(E) steps back powers of 2. Bug-for-bug Go v0.1.9 ceiling.</text>
+
+  <!-- Epoch Timeline Boxes -->
+  <rect x="50" y="360" width="75" height="45" rx="5" fill="#ffffff" stroke="#ef4444" stroke-width="1.2"/>
+  <text x="87" y="378" text-anchor="middle" class="s-b" fill="#991b1b">Epoch 992</text>
+  <text x="87" y="394" text-anchor="middle" class="s-s" fill="#64748b">Root R_992</text>
+
+  <rect x="175" y="360" width="75" height="45" rx="5" fill="#ffffff" stroke="#ef4444" stroke-width="1.2"/>
+  <text x="212" y="378" text-anchor="middle" class="s-b" fill="#991b1b">Epoch 994</text>
+  <text x="212" y="394" text-anchor="middle" class="s-s" fill="#64748b">Root R_994</text>
+
+  <rect x="300" y="360" width="75" height="45" rx="5" fill="#ffffff" stroke="#ef4444" stroke-width="1.2"/>
+  <text x="337" y="378" text-anchor="middle" class="s-b" fill="#991b1b">Epoch 996</text>
+  <text x="337" y="394" text-anchor="middle" class="s-s" fill="#64748b">Root R_996</text>
+
+  <rect x="425" y="360" width="75" height="45" rx="5" fill="#ffffff" stroke="#ef4444" stroke-width="1.2"/>
+  <text x="462" y="378" text-anchor="middle" class="s-b" fill="#991b1b">Epoch 997</text>
+  <text x="462" y="394" text-anchor="middle" class="s-s" fill="#64748b">Root R_997</text>
+
+  <rect x="550" y="360" width="85" height="45" rx="5" fill="#ffffff" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="592" y="378" text-anchor="middle" class="s-b" fill="#15803d">Epoch 998</text>
+  <text x="592" y="394" text-anchor="middle" class="s-s" fill="#16a34a">Head R_998</text>
+
+  <!-- Backpointer curved arcs from 998 backwards -->
+  <!-- 998 -> 997 (dist 1) -->
+  <path d="M 550 375 Q 525 360 500 375" fill="none" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arr-m3)"/>
+  <text x="525" y="358" class="s-s" text-anchor="middle" fill="#2563eb">-1</text>
+
+  <!-- 998 -> 996 (dist 2) -->
+  <path d="M 550 382 Q 460 335 375 382" fill="none" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arr-m3)"/>
+  <text x="460" y="345" class="s-s" text-anchor="middle" fill="#2563eb">-2</text>
+
+  <!-- 998 -> 994 (dist 4) -->
+  <path d="M 550 390 Q 380 320 250 390" fill="none" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arr-m3)"/>
+  <text x="380" y="335" class="s-s" text-anchor="middle" fill="#2563eb">-4</text>
+
+  <!-- 998 -> 992 (dist 6) via 994 -> 992 -->
+  <path d="M 175 382 Q 150 365 125 382" fill="none" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arr-m3)"/>
+  <text x="150" y="365" class="s-s" text-anchor="middle" fill="#2563eb">-2</text>
+
+  <!-- Fast Skip Advance Explanation -->
+  <rect x="50" y="425" width="585" height="85" rx="6" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="65" y="445" class="s-b" fill="#1e293b">Fast Logarithmic Advance (collect_roots):</text>
+  <text x="65" y="465" class="s-s" fill="#475569">A client pinned at Epoch 995 verifying Head 998 traverses skip pointers [998 -> 997, 998 -> 996, 996 -> 994].</text>
+  <text x="65" y="482" class="s-s" fill="#475569">It proves monotonic continuation in O(log N) hashes without downloading intermediary Patricia trees.</text>
+  <text x="65" y="499" class="s-s" fill="#16a34a">Result: Atomic, rollback-proof head acceptance verified in memory before hard-state commit.</text>
+
+  <!-- BOUNDARY GUARD CALLOUT BOX -->
+  <rect x="660" y="345" width="305" height="165" rx="8" fill="#fff1f2" stroke="#e11d48" stroke-width="1.8"/>
+  <text x="812" y="368" text-anchor="middle" class="s-b" fill="#be123c">Epoch 65,536 Boundary Guard</text>
+  <line x1="675" y1="378" x2="950" y2="378" stroke="#fecdd3" stroke-width="1"/>
+  <text x="675" y="396" class="s-s" fill="#0f172a">1. At Epoch 65,536 (2^16), DAG requires 16 pointers.</text>
+  <text x="675" y="413" class="s-s" fill="#0f172a">2. MsgPack fixarray holds up to 15 items (0x90..0x9f).</text>
+  <text x="675" y="430" class="s-s" fill="#0f172a">3. Pointer count 16 encodes as array16 (0xdc 0x00 0x10).</text>
+  <text x="675" y="447" class="s-s" fill="#9f1239">4. Go v0.1.9 signable validator rejects array16!</text>
+  <text x="675" y="464" class="s-s" fill="#9f1239">5. Upstream Go clients fail unrecoverably.</text>
+  <line x1="675" y1="474" x2="950" y2="474" stroke="#fecdd3" stroke-width="1"/>
+  <text x="812" y="493" text-anchor="middle" class="s-b" fill="#be123c">foks-rs: Error::EpochLimitExceeded</text>
+</svg>
+<figcaption>Figure 3: Radix compressed Patricia Merkle tree structure (top) and epoch DAG backpointer graph (bottom). At epoch 65,536, the 16th backpointer forces array16 encoding, triggering an upstream Go canonicality validation rejection. FOKS enforces this ceiling via EpochLimitExceeded.</figcaption>
+</figure>
+
+<h3>Patricia Merkle Tree Architecture</h3>
+<p>Implemented in <code>crates/foks-merkle-store</code>, the tree is a deterministic, authenticated key-value dictionary mapping 32-byte keys (e.g. hashed user IDs or team IDs) to 32-byte values (the hash of that entity's current chain tail). Every node is represented by one of two variants (defined in <code>foks_merkle_store::node</code>):</p>
+<ul>
+  <li><strong>Leaf Nodes (<code>Node::Leaf</code>):</strong> Tagged with byte <code>b"1"</code> (discriminant 0). Contains the 32-byte key and 32-byte value. The node hash is computed using typed domain separation: <code>prefixed_hash_signable(MERKLE_NODE_TYPE_ID, ...)</code>.</li>
+  <li><strong>Interior Nodes (<code>Node::Interior</code>):</strong> Tagged with byte <code>b"0"</code> (discriminant 1). Contains:
+    <ul>
+      <li><code>prefix_bit_start</code>: The starting bit offset of the common path in the 256-bit key space.</li>
+      <li><code>prefix_bit_count</code>: The length of the shared prefix in bits.</li>
+      <li><code>prefix</code>: A byte vector storing the shared prefix bit slice.</li>
+      <li><code>left</code>: 32-byte hash of the left child (branching on bit value <code>0</code>).</li>
+      <li><code>right</code>: 32-byte hash of the right child (branching on bit value <code>1</code>).</li>
+    </ul>
+  </li>
+</ul>
+<p>By collapsing non-branching paths into interior nodes via radix prefix compression, the tree remains extremely compact. A proof of presence (or proof of absence) consists of a short list of sibling hashes and prefix slices along the path from the root to the target leaf, allowing clients to verify an identity in sub-millisecond time.</p>
+
+<h3>Epoch DAG Backpointers and Skip-List Advance</h3>
+<p>Each mutation on the server increments the global Merkle epoch <em>E</em>. Rather than maintaining a simple linear list of historical roots, FOKS links epochs into a DAG using a logarithmic skip-pointer sequence. Defined in <code>foks_merkle_store::history::back_pointer_sequence(epoch)</code>, an epoch commits to prior epoch roots at power-of-two backward distances:</p>
+<pre><code>// For epoch E, backpointers step backwards by powers of 2:
+// Pointers = [E - 1, E - 2, E - 4, E - 8, E - 16, ...]
+pub fn back_pointer_sequence(epoch: u64) -&gt; Vec&lt;u64&gt; {
+    let mut pointers = Vec::new();
+    let mut step = 1u64;
+    while step &lt; epoch {
+        pointers.push(epoch - step);
+        step &lt;&lt;= 1;
+    }
+    pointers
+}</code></pre>
+
+<p>When a client that last verified epoch 992 connects to a server at epoch 998, it does not need to download and verify the six intermediary trees. Instead, it invokes <code>collect_roots(992, 998)</code>. Using the skip-pointer graph, the client traverses logarithmic jumps (e.g., 998 &rarr; 997, 998 &rarr; 996, 996 &rarr; 994, 994 &rarr; 992) and cryptographically proves that epoch 998 is a strict, unbroken descendant of epoch 992 in <em>O(log N)</em> steps.</p>
+
+<h3>The Go v0.1.9 Boundary Guard (Epoch 65,536 Ceiling)</h3>
+<p>The FOKS Rust implementation maintains bug-for-bug wire compatibility with the reference Go v0.1.9 implementation (<code>github.com/foks-proj/go-foks</code>). This strict requirement revealed a critical boundary condition at epoch 65,536.</p>
+
+<p>The mathematical and encoding conflict arises as follows:</p>
+<ol>
+  <li><strong>Skip Pointer Count:</strong> At epoch 65,536 ($2^16$), the number of backpointers in <code>back_pointer_sequence(65536)</code> reaches exactly 16 elements (indices 16 through 31).</li>
+  <li><strong>MessagePack Array Encoding:</strong> In MessagePack format, an array of up to 15 items is encoded as a <em>fixarray</em> (byte range <code>0x90</code> to <code>0x9f</code>). An array of 16 items can no longer fit in a fixarray; the <code>go-codec</code> serializer switches to the 3-byte <code>array16</code> format (byte <code>0xdc</code> followed by <code>0x00 0x10</code>).</li>
+  <li><strong>Upstream Go Validator Bug:</strong> The signable canonical validator in Go v0.1.9 contains an overzealous check designed to reject non-minimal encodings. However, due to an off-by-one boundary flaw, the validator rejects <em>any</em> <code>array16</code> header whose element count could fit in earlier structures—and erroneously flags length 16 as an illegal encoding!</li>
+  <li><strong>Unrecoverable Failure:</strong> Consequently, any Go v0.1.9 node attempting to serialize or verify epoch 65,536 crashes with an unresolvable canonical validation error.</li>
+</ol>
+
+<p>To prevent corrupting state or diverging from upstream nodes, <code>crates/foks-merkle-store/src/history.rs</code> enforces an explicit ceiling:</p>
+<pre><code>pub const MAX_CANONICAL_MERKLE_EPOCH: u64 = 65_536;
+
+pub fn back_pointer_hash(...) -&gt; Result&lt;[u8; 32]&gt; {
+    if (16..=31).contains(&amp;pointers.len()) {
+        return Err(Error::EpochLimitExceeded);
+    }
+    // ...
+}</code></pre>
+<p>If a tree reaches epoch 65,536, the Rust engine refuses to emit the broken <code>array16</code> payload, failing closed with <code>Error::EpochLimitExceeded</code>. The server returns a structured <code>MERKLE_VERIFY_ERROR</code>, preserving database integrity until a synchronized upstream protocol upgrade can be deployed.</p>
+
+<h2 id="client-daemon-stack">6. The Client Daemon Stack</h2>
+<p>The client side of FOKS is built around three collaborating layers: <code>foks-agent</code> (the resident service daemon), <code>foks-client</code> / <code>foks-client-app</code> (the protocol execution engine), and <code>foks-client-db</code> (the persistent local database).</p>
+
+<h3>The Resident Daemon: foks-agent</h3>
+<p>To avoid requiring every CLI invocation or UI window to independently initialize SQLite connections, unlock OS keyrings, and synchronize network Merkle anchors, <code>foks-agent</code> runs as a long-lived resident daemon. Owned by the operating system user, it maintains exclusive ownership of client credentials and database locks.</p>
+
+<p>The daemon architecture enforces strict operational boundaries:</p>
+<ul>
+  <li><strong>Exclusive Lockfile (<code>.foks-rs.lock</code>):</strong> During startup in <code>--state-dir</code>, the daemon opens <code>.foks-rs.lock</code> with <code>O_NOFOLLOW</code>, verifies that the file is owned by the current UID with mode <code>0o600</code>, and calls <code>fs2::FileExt::try_lock_exclusive()</code>. If another process holds the lock, startup aborts immediately.</li>
+  <li><strong>Socket Hygiene:</strong> The Unix domain socket (<code>foks-rs.sock</code>) is protected against race conditions and stale socket hijacking. Before binding, the daemon inspects the path; if a socket exists, it verifies that the socket is owned by the current UID with mode <code>0o600</code>, tests whether a live agent is responding, and removes stale sockets atomically. A <code>SocketGuard</code> struct records the socket's device and inode numbers, ensuring that an exiting agent never deletes a successor's socket.</li>
+  <li><strong>Peer Authentication:</strong> Every accepted connection checks <code>rustix::process::geteuid()</code> against the peer process credentials. Connections from different UIDs are rejected immediately.</li>
+  <li><strong>Bounded Worker Semaphore:</strong> Background jobs and incoming RPC requests execute through a bounded concurrency semaphore. Requests carry cancellation deadlines that propagate into the synchronous network client. If an operation times out, the local connection is closed because the durable network outcome may be ambiguous.</li>
+  <li><strong>Bootstrap vs Ready Mode:</strong> If a state directory lacks initialized credentials, the daemon enters a restricted <em>Bootstrap Mode</em>. In this state, it accepts only <code>AgentStatus</code> and <code>InitializeState</code> requests; all data access attempts fail with <code>BootstrapRequired</code>. Once master credentials are generated or imported, the daemon moves atomically to <code>Ready</code> mode and starts background synchronization.</li>
+</ul>
+
+<h3>Durable Storage: foks-client-db (Schema v39)</h3>
+<p>Durable client state is managed by <code>foks-client-db</code>, an embedded SQLite store that enforces strict cryptographic monotonicity. The database is strictly partitioned into <strong>Hard State</strong> and <strong>Soft State</strong>.</p>
+
+<h4>Hard State</h4>
+<p>The hard-state database uses SQLite application ID <code>0x464F_4B53</code> (ASCII <code>'FOKS'</code>) and schema version <code>39</code>. It stores only cryptographically verified, immutable evidence. Private device seeds and PUK seeds are <em>explicitly excluded</em> and stored in the encrypted keystore.</p>
+<p>In a single atomic transaction, the hard-state store commits:</p>
+<ul>
+  <li>Discovery name to permanent <code>HostID</code> cryptographic pin.</li>
+  <li>Exact authenticated host-chain bytes and indexed chain tails.</li>
+  <li>Active delegated service endpoints (Merkle, Identity, Realtime, KV).</li>
+  <li>Latest signed Merkle root bytes, indexed epoch, and root node hash.</li>
+  <li>Flat trusted-local Merkle checkpoints.</li>
+  <li>Verified user/team chain links and public device/PUK HEPK records.</li>
+</ul>
+<p>The database layer enforces monotonicity checks as defense-in-depth: it rejects lookup-name identity substitutions, chain rollbacks, Merkle epoch regressions, and same-sequence forks. Even if a compromised server presents conflicting data, SQLite transactions fail closed.</p>
+
+<h4>Soft State</h4>
+<p>Soft state is maintained in a separate SQLite database file. It acts as an accelerated caching and staging layer:</p>
+<ul>
+  <li>Stores complete verified KV directory trees, dirent versions, and content projections.</li>
+  <li>Reconstructs path-version vectors for fast <code>kvCacheCheck</code> RPC synchronization.</li>
+  <li>Stages large-file plaintext in bounded chunk rows. Incomplete staging chunks from crashed processes are invisible to normal readers and safely reclaimed during maintenance passes.</li>
+</ul>
+
+<h2 id="desktop-application">7. The Desktop Application &amp; Endpoint Security</h2>
+<p>The FOKS desktop interface provides an enterprise-grade graphical experience built on modern web standards and native operating system integration.</p>
+
+<h3>Frontend &amp; Tauri Architecture</h3>
+<p>The desktop stack consists of a <strong>React 18 + Vite</strong> application (located at <code>apps/desktop/src</code>) running inside a <strong>Tauri v2</strong> native shell (<code>apps/desktop/src-tauri</code>):</p>
+<ul>
+  <li><strong>Design Tokens:</strong> The user interface is styled using a dedicated tokenized design kit (<code>apps/desktop/kit</code>) supporting dark/light system adaptation, fluid typography, and accessible component states.</li>
+  <li><strong>Detached Daemon Lifecycle:</strong> When the desktop application launches, it spawns <code>foks-agent</code> with detached standard streams. The desktop shell does not hold a child process handle; closing or reloading the UI window leaves the daemon running undisturbed, preserving active network leases and background sync.</li>
+</ul>
+
+<h3>AppLock: Hardware Biometrics &amp; Polkit</h3>
+<p>To prevent unauthorized access to local vaults when a workstation is unattended, FOKS implements <strong>AppLock</strong> runtime access control. Implemented in <code>apps/desktop/src-tauri/src/applock.rs</code>, all value-returning IPC commands are gated by an atomic lock generation:</p>
+<ul>
+  <li><strong>macOS Biometrics:</strong> Leverages the Apple <code>LocalAuthentication</code> framework (via <code>objc2_local_authentication</code>). The desktop evaluates <code>LAPolicy::DeviceOwnerAuthenticationWithBiometrics</code>, prompting the user for Touch ID, Apple Watch confirmation, or the system account password.</li>
+  <li><strong>Linux PolicyKit (Polkit):</strong> Connects to the system D-Bus authority (<code>org.freedesktop.PolicyKit1</code>) at interface <code>/org/freedesktop/PolicyKit1/Authority</code>. The desktop queries and evaluates action <code>org.foks.desktop.unlock</code> (defined in <code>org.foks.desktop.policy</code>), displaying the native system authentication dialog.</li>
+  <li><strong>Zero Account Password Storage:</strong> FOKS never prompts for or stores master passwords. Authentication is entirely delegated to the host operating system.</li>
+  <li><strong>Generation Gating:</strong> When locked, the lock generation increments, immediately invalidating the in-memory catalog cache, closing web-admin windows, and concealing active chat messages.</li>
+</ul>
+
+<h3>Real-Time Chat Notification Consumer & The Active Thread Invariant</h3>
+<p>The desktop chat subsystem (located in <code>apps/desktop/src/chat/notification-consumer.ts</code>) synchronizes team channels, unread indicators, and message banners in the background.</p>
+
+<p>Because querying dozens of team channels can exhaust server capacity or introduce latency, the consumer implements an adaptive backoff schedule governed by the <strong>Active Thread Invariant</strong>:</p>
+<pre><code>const FALLBACK_MS = 5000;       // 5 seconds base interval
+const FALLBACK_MAX_MS = 60_000;  // 60 seconds maximum backoff</code></pre>
+<ul>
+  <li><strong>The Invariant:</strong> The currently viewed, active channel <em>never backs off</em> from <code>FALLBACK_MS</code> (5 seconds), regardless of how long it has been quiet. Because the user is looking directly at that conversation, staleness is unacceptable.</li>
+  <li><strong>Adaptive Backoff for Quiet Channels:</strong> Unviewed, background channels double their polling interval on each pass that discovers no new messages (5s &rarr; 10s &rarr; 20s &rarr; 40s &rarr; 60s max).</li>
+  <li><strong>Instant Reset:</strong> As soon as a read operation discovers a new incoming message in any channel, that channel's polling interval is immediately reset to the base 5-second interval.</li>
+</ul>
+
+<h3>Real-Process Chat Benchmark</h3>
+<p>The chat pipeline is continuously verified using a real-process benchmark that executes compiled release Rust agent and server binaries alongside desktop TypeScript services. Driving a sustained load of 6 incoming messages per second with concurrent foreground history reads and message writes, Linux x86_64 testing produces the following p95 latency results:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Workload Scenario</th>
+      <th>Foreground History p95 Latency</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Steady traffic across 70 concurrent channels</td>
+      <td>43.7 ms</td>
+    </tr>
+    <tr>
+      <td>Message backlog across 70 concurrent channels</td>
+      <td>38.4 ms</td>
+    </tr>
+    <tr>
+      <td>Steady traffic across 200 concurrent channels</td>
+      <td>45.1 ms</td>
+    </tr>
+  </tbody>
+</table>
+<p>These measurements reflect the complete end-to-end service, agent IPC, network RPC, and database transaction path.</p>
+
+<h2 id="server-architecture">8. Server Architecture, Transaction Engine &amp; Federation</h2>
+<p>The FOKS server (<code>crates/foks-server</code>) is designed as a stateless, high-throughput network engine built on <strong>Axum</strong> and <strong>Tower</strong>, backed by an authoritative SQLite persistence layer (<code>crates/foks-server-db</code>).</p>
+
+<h3>The Single-Writer SQLite Transaction Actor</h3>
+<p>SQLite provides exceptional performance when configured correctly, but concurrent write transactions in multi-threaded servers can encounter lock contention (<code>SQLITE_BUSY</code>). FOKS completely eliminates write contention using an actor-based architecture:</p>
+<ul>
+  <li><strong>Single Dedicated Writer:</strong> The database is opened in WAL (Write-Ahead Logging) mode. Exactly one dedicated background OS thread owns the write connection and holds an adjacent filesystem lock.</li>
+  <li><strong>MPSC Channel Queuing:</strong> All mutating RPC endpoints (user signup, link submission, Merkle root advancement, message sends) send transactional closures across a bounded Tokio MPSC channel to the writer actor. Mutations execute sequentially and commit atomically.</li>
+  <li><strong>Read Connection Pool:</strong> Concurrent read operations (Merkle queries, parcel downloads, public key lookups) execute through a separate pool of read-only SQLite connections. Because SQLite WAL mode permits readers to proceed concurrently with the writer without blocking, read latency remains predictable regardless of write volume.</li>
+</ul>
+
+<h3>Modular Database Schemas</h3>
+<p>The server's storage layout is divided into specialized SQL schema modules (located in <code>crates/foks-server-db/src/schema/</code>):</p>
+<ul>
+  <li><code>core.sql</code>: Server settings, host identification, TLS certificates, and service capabilities.</li>
+  <li><code>identity.sql</code>: User accounts, usernames, device registrations, public HEPKs, and PUK parcels.</li>
+  <li><code>team.sql</code>: Named and ad-hoc team definitions, member roles, and PTK parcels.</li>
+  <li><code>kv.sql</code>: Key-value roots, directory metadata, and version vector allocations.</li>
+  <li><code>realtime.sql</code>: Real-time channels, memberships, inbox sequences, and message rows (<code>rt_messages</code>).</li>
+  <li><code>team_invitations.sql</code>: Shareable invitation certificates, pending requests, and RSVP decisions.</li>
+  <li><code>sso.sql</code>: OpenID Connect enterprise sessions, verification flows, and authorization assertions.</li>
+</ul>
+
+<h3>Enterprise OIDC Federation</h3>
+<p>FOKS integrates with corporate identity systems via OpenID Connect (OIDC). Using <code>foks-oidc</code>, users can authenticate using corporate Single Sign-On (Google Workspace, Okta, Microsoft Entra ID). The server verifies the IdP's signed JWT tokens and validates email domain claims.</p>
+<p>However, conforming to the zero-knowledge threat model, the IdP <em>never learns or derives vault encryption keys</em>. SSO acts purely as an identity verification mechanism; vault decryption remains strictly gated by the user's local device private keys or HESP recovery phrases.</p>
+
+<h3>The Server Threat Model</h3>
+<p>FOKS defines a rigorous, mathematically enforced threat model specifying exactly what the server can and cannot observe or manipulate:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>What the Server CAN See &amp; Do</th>
+      <th>What the Server CANNOT See or Do</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Can observe public account usernames, hostnames, and device IDs.</td>
+      <td><strong>Cannot read secret plaintext:</strong> Personal and team passwords, API tokens, and files are end-to-end encrypted.</td>
+    </tr>
+    <tr>
+      <td>Can observe the size and timing of encrypted parcels and network requests.</td>
+      <td><strong>Cannot inspect directory trees:</strong> Directory names, file paths, and metadata are encrypted under <code>KvKeySet</code>.</td>
+    </tr>
+    <tr>
+      <td>Can sequence Merkle epochs and publish signed root commitments.</td>
+      <td><strong>Cannot read message content:</strong> Real-time chat messages travel inside encrypted XSalsa20-Poly1305 envelopes.</td>
+    </tr>
+    <tr>
+      <td>Can enforce rate limits and refuse malformed or unauthenticated requests.</td>
+      <td><strong>Cannot forge identity links:</strong> Mutating an account or team requires valid Ed25519/P-256 signatures from authorized devices.</td>
+    </tr>
+    <tr>
+      <td>Can track channel membership counts and inbox sequence numbers.</td>
+      <td><strong>Cannot rewind history undetected:</strong> Client databases pin the latest seen Merkle epoch and reject rollback attempts.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="human-recovery-and-kex">9. Human Recovery &amp; Out-of-Band Pairing (HESP)</h2>
+<p>A fatal flaw in many end-to-end encrypted systems is the recovery mechanism: users either rely on memorable (and easily guessed) passwords, or they are forced to store fragile paper seed phrases that fail when partially obscured. FOKS introduces <strong>Human-Exact Secret Phrases (HESP)</strong> for root recovery and device pairing.</p>
+
+<h3>203-Bit Backup Recovery Key</h3>
+<p>When an account is founded, the client generates a 203-bit root recovery secret (defined in <code>foks_crypto::backup</code>). This secret is encoded into exactly <strong>17 tokens</strong>, alternating between standard BIP-39 English words and precise numbers:</p>
+<pre><code>BACKUP_SEED_BYTES    = 26 (203 bits entropy, top mask 0x07)
+BACKUP_PHRASE_TOKENS = 17 tokens:
+  - 9 BIP-39 words   (11 bits each = 99 bits entropy)
+  - 8 numbers        (13 bits each, range 0..8191 = 104 bits entropy)
+  Total entropy      = 99 + 104 = 203 bits</code></pre>
+
+<p>The interleaved word-number structure serves three vital purposes:</p>
+<ol>
+  <li><strong>Grammatical & Visual Cadence:</strong> Alternating words and numbers (e.g., <code>apple 4092 zebra 1842 &hellip;</code>) drastically reduces human transcription errors compared to uniform word lists.</li>
+  <li><strong>Immunity to Dictionary Attacks:</strong> The 104 bits of numeric entropy completely break standard natural language cracking dictionaries and language-model predictors.</li>
+  <li><strong>Argon2id PPE Stretching:</strong> Passphrase-Protected Encryption (PPE) combines the HESP secret with Argon2id key stretching, ensuring resistance against high-speed GPU or ASIC offline cracking.</li>
+</ol>
+<p>From this 203-bit secret, FOKS derives an account recovery signing key and a recovery unsealing key. A public recovery box is registered on the server. Whenever active devices rotate the PUK to a new generation, they re-encrypt the new seed under the public recovery key. If all physical devices are destroyed, the user enters the 17-token phrase, reconstitutes the recovery keys, unseals the latest PUK parcel, and provisions a replacement device.</p>
+
+<h3>125-Bit Key Exchange (KEX) Pairing</h3>
+<p>Provisioning a second device (such as adding a laptop when an enrolled smartphone is present) uses an ephemeral <strong>125-bit KEX Secret</strong> (defined in <code>foks_crypto::kex</code>):</p>
+<pre><code>KEX_SEED_BYTES    = 16 (125 bits entropy, top mask 0x1f)
+KEX_PHRASE_TOKENS = 13 tokens:
+  - 7 BIP-39 words  (11 bits each = 77 bits entropy)
+  - 6 numbers       (8 bits each, range 0..255 = 48 bits entropy)
+  Total entropy     = 77 + 48 = 125 bits</code></pre>
+<p>The user initiates pairing on Device A, which displays the 13-token phrase. Device B enters the phrase. The two devices establish an authenticated out-of-band encrypted channel over the server relay. Device A verifies Device B's newly generated HEPK, wraps the current PUK seed, signs a new device provisioning link, and commits the mutation to the Authority Chain. Device B is enrolled without master seeds ever leaving local memory.</p>
+
+<h2 id="model-context-protocol">10. Model Context Protocol (MCP) Integration</h2>
+<p>Modern engineering workflows increasingly rely on autonomous AI agents (such as Claude, Antigravity, and coding assistants). Giving AI agents raw database credentials or unencrypted filesystem access creates severe security liabilities. FOKS provides a dedicated <strong>Model Context Protocol (MCP)</strong> daemon (<code>crates/foks-mcp</code>) that allows AI models to interact safely with encrypted vaults over standard JSON-RPC 2.0 stdio.</p>
+
+<h3>Tool Surfaces: KV & Team</h3>
+<p>The MCP server exposes two specialized toolsets (defined in <code>foks_mcp::contract</code>):</p>
+<ul>
+  <li><strong>KV Toolset:</strong> Gives agents structured tools to inspect and modify encrypted vaults:
+    <ul>
+      <li><code>list</code>: Lists files and directories with pagination (<code>PAGE_ROWS = 1000</code>).</li>
+      <li><code>get</code>: Fetches file content up to <code>MAX_FILE_BYTES = 4 MiB</code>.</li>
+      <li><code>stat</code>: Retrieves file metadata, sizes, and version vectors.</li>
+      <li><code>put</code>: Encrypts and writes new files (payloads up to <code>MAX_INPUT_BYTES = 8 MiB</code>).</li>
+      <li><code>mkdir</code>, <code>rm</code>, <code>mv</code>: Directory creation, atomic removal, and renaming.</li>
+    </ul>
+  </li>
+  <li><strong>Team Toolset:</strong> Inspects organization and access status:
+    <ul>
+      <li><code>usage</code>: Reports storage consumption and quota boundaries.</li>
+      <li><code>list-memberships</code>: Queries all personal and team vaults accessible to the agent profile.</li>
+      <li><code>team-list</code>: Enumerates active team members and cryptographic roles.</li>
+    </ul>
+  </li>
+</ul>
+
+<h3>Durable Write Recovery with fennec_submission_id</h3>
+<p>LLM tool calls frequently experience network timeouts, process terminations, or context truncations. In naive implementations, retrying a timed-out write can create duplicate files or trigger race conditions.</p>
+<p>FOKS solves this via <strong>Durable Write Recovery</strong>:</p>
+<pre><code>pub struct SubmissionArgs {
+    pub fennec_submission_id: String,
+}</code></pre>
+<p>Every mutating tool call accepts an optional client-supplied idempotency key (<code>fennec_submission_id</code>). When <code>foks-agent</code> executes the write, it records the submission ID in SQLite alongside the transaction outcome. If an AI agent times out or crashes, it can invoke <code>fennec_status</code> or <code>fennec_pending</code> upon restarting. The agent learns whether the prior write succeeded, failed, or is still in flight—guaranteeing exactly-once execution semantics without manual intervention.</p>
+
+<h2 id="upstream-compatibility">11. Upstream Go v0.1.9 Compatibility &amp; Differential Testing</h2>
+<p>FOKS is not an isolated implementation; it is designed to run in mixed environments alongside the reference Go implementation (<code>github.com/foks-proj/go-foks@v0.1.9</code>). To guarantee zero drift and absolute wire compatibility, the repository includes an extensive differential testing framework.</p>
+
+<figure>
+<svg viewBox="0 0 1000 480" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr-m4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#8a97a5"/>
+    </marker>
+    <marker id="arr-g4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#15803d"/>
+    </marker>
+    <marker id="arr-b4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#1d4ed8"/>
+    </marker>
+  </defs>
+
+  <!-- Box 1: Pinned Go Oracle -->
+  <rect x="20" y="30" width="280" height="420" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.8"/>
+  <text x="160" y="58" text-anchor="middle" class="s-b" fill="#1e293b" font-size="14">tools/foks-v019-oracle</text>
+  <text x="160" y="76" text-anchor="middle" class="s-s" fill="#475569">Pinned Upstream Go v0.1.9 Reference</text>
+
+  <!-- Oracle Features -->
+  <rect x="35" y="95" width="250" height="75" rx="6" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <text x="160" y="118" text-anchor="middle" class="s-b" fill="#0f172a">Live Probe Capture</text>
+  <text x="160" y="136" text-anchor="middle" class="s-s">Captures foks.app:4430</text>
+  <text x="160" y="152" text-anchor="middle" class="s-s" fill="#64748b">Authenticates Probe &amp; Tail</text>
+
+  <rect x="35" y="180" width="250" height="120" rx="6" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <text x="160" y="202" text-anchor="middle" class="s-b" fill="#0f172a">Immutable .snowp Canaries</text>
+  <text x="160" y="220" text-anchor="middle" class="s-s" fill="#3f7fd8">user/ (Eldest, Provision, Revoke)</text>
+  <text x="160" y="236" text-anchor="middle" class="s-s" fill="#3f7fd8">signup/ (Username Reservation)</text>
+  <text x="160" y="252" text-anchor="middle" class="s-s" fill="#3f7fd8">user-mutations/ (Ad-Hoc / Named)</text>
+  <text x="160" y="268" text-anchor="middle" class="s-s" fill="#3f7fd8">yubi/ (PIV Mock Subkeys &amp; Stacks)</text>
+  <text x="160" y="284" text-anchor="middle" class="s-s" fill="#64748b">realtime/ (Phase-1 Frames)</text>
+
+  <rect x="35" y="310" width="250" height="120" rx="6" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <text x="160" y="332" text-anchor="middle" class="s-b" fill="#0f172a">Canonical Encoding Oracle</text>
+  <text x="160" y="350" text-anchor="middle" class="s-s">Enforces Map Sort Keys</text>
+  <text x="160" y="366" text-anchor="middle" class="s-s">Smallest Int Representation</text>
+  <text x="160" y="382" text-anchor="middle" class="s-s" fill="#b91c1c">Preserves Founding Seq 0 Quirk</text>
+  <text x="160" y="398" text-anchor="middle" class="s-s" fill="#b91c1c">Records Reverse Rotated Sig Quirk</text>
+  <text x="160" y="414" text-anchor="middle" class="s-s" fill="#475569">Manifest Hash Commitments</text>
+
+  <!-- Arrow 1 -> 2 -->
+  <line x1="300" y1="240" x2="340" y2="240" stroke="#8a97a5" stroke-width="1.5" marker-end="url(#arr-m4)"/>
+
+  <!-- Box 2: Rust Verification Engine -->
+  <rect x="350" y="30" width="290" height="420" rx="10" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.8"/>
+  <text x="495" y="58" text-anchor="middle" class="s-b" fill="#15803d" font-size="14">Differential Engine</text>
+  <text x="495" y="76" text-anchor="middle" class="s-s" fill="#166534">Byte-Exact Rust Conformance</text>
+
+  <!-- Differential components -->
+  <rect x="365" y="95" width="260" height="85" rx="6" fill="#ffffff" stroke="#86efac" stroke-width="1.2"/>
+  <text x="495" y="118" text-anchor="middle" class="s-b" fill="#15803d">foks-snowpack</text>
+  <text x="495" y="136" text-anchor="middle" class="s-s">Canonical Decoder &amp; Encoder</text>
+  <text x="495" y="152" text-anchor="middle" class="s-s" fill="#64748b">prefixed_hash_signable</text>
+  <text x="495" y="168" text-anchor="middle" class="s-s" fill="#166534">0 Drift from Upstream Bytes</text>
+
+  <rect x="365" y="190" width="260" height="85" rx="6" fill="#ffffff" stroke="#86efac" stroke-width="1.2"/>
+  <text x="495" y="213" text-anchor="middle" class="s-b" fill="#15803d">foks-verify</text>
+  <text x="495" y="231" text-anchor="middle" class="s-s">Stateless Chain Verifier</text>
+  <text x="495" y="247" text-anchor="middle" class="s-s" fill="#64748b">verify_user_chain &amp; Merkle</text>
+  <text x="495" y="263" text-anchor="middle" class="s-s" fill="#166534">Accepts Captured Fixtures</text>
+
+  <rect x="365" y="285" width="260" height="80" rx="6" fill="#ffffff" stroke="#86efac" stroke-width="1.2"/>
+  <text x="495" y="308" text-anchor="middle" class="s-b" fill="#15803d">foks-go-interop</text>
+  <text x="495" y="326" text-anchor="middle" class="s-s">Legacy Go Hard State Reader</text>
+  <text x="495" y="342" text-anchor="middle" class="s-s" fill="#64748b">Parses Go SQLite &amp; foks-secrets</text>
+  <text x="495" y="358" text-anchor="middle" class="s-s" fill="#64748b">0x8456933bbb8a54ae Bundle</text>
+
+  <rect x="365" y="375" width="260" height="60" rx="6" fill="#ffffff" stroke="#86efac" stroke-width="1.2"/>
+  <text x="495" y="398" text-anchor="middle" class="s-b" fill="#15803d">Rotated Sig Quirk Support</text>
+  <text x="495" y="416" text-anchor="middle" class="s-s" fill="#b45309">Preserves Go Inverted Sig Order</text>
+
+  <!-- Arrow 2 -> 3 -->
+  <line x1="640" y1="240" x2="680" y2="240" stroke="#8a97a5" stroke-width="1.5" marker-end="url(#arr-m4)"/>
+
+  <!-- Box 3: Dual-Direction Live Fleet -->
+  <rect x="690" y="30" width="290" height="420" rx="10" fill="#f0f7ff" stroke="#3b82f6" stroke-width="1.8"/>
+  <text x="835" y="58" text-anchor="middle" class="s-b" fill="#1d4ed8" font-size="14">Live Integration Fleet</text>
+  <text x="835" y="76" text-anchor="middle" class="s-s" fill="#1e40af">Docker Postgres 17 Testcontainers</text>
+
+  <!-- Live directions -->
+  <rect x="705" y="95" width="260" height="75" rx="6" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="835" y="118" text-anchor="middle" class="s-b" fill="#1d4ed8">Go Client -> Rust Server</text>
+  <text x="835" y="136" text-anchor="middle" class="s-s">go_client_rust_live_test.go</text>
+  <text x="835" y="152" text-anchor="middle" class="s-s" fill="#15803d">Unmodified Upstream Go Client</text>
+
+  <rect x="705" y="180" width="260" height="75" rx="6" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="835" y="203" text-anchor="middle" class="s-b" fill="#1d4ed8">Rust Client -> Go Server</text>
+  <text x="835" y="221" text-anchor="middle" class="s-s">run-live-compat.sh</text>
+  <text x="835" y="237" text-anchor="middle" class="s-s" fill="#15803d">Full Postgres 17 Stack</text>
+
+  <rect x="705" y="265" width="260" height="85" rx="6" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="835" y="288" text-anchor="middle" class="s-b" fill="#1d4ed8">Specialized CI Gates</text>
+  <text x="835" y="306" text-anchor="middle" class="s-s">run-host-rotation-compat.sh</text>
+  <text x="835" y="322" text-anchor="middle" class="s-s">run-invitation-compat.sh</text>
+  <text x="835" y="338" text-anchor="middle" class="s-s">run-mcp-compat.sh</text>
+
+  <rect x="705" y="360" width="260" height="75" rx="6" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+  <text x="835" y="383" text-anchor="middle" class="s-b" fill="#1d4ed8">Realtime Chat Interop</text>
+  <text x="835" y="401" text-anchor="middle" class="s-s">run-live-chat-compat.sh</text>
+  <text x="835" y="417" text-anchor="middle" class="s-s" fill="#16a34a">Bi-directional Text &amp; Inbox</text>
+</svg>
+<figcaption>Figure 4: Upstream Go v0.1.9 differential verification and live compatibility fleet. Pinned oracle captures canonical Snowpack fixtures, verified byte-for-byte by Rust crates, alongside dual-direction live integration tests against PostgreSQL 17 testcontainers.</figcaption>
+</figure>
+
+<h3>The Reference Oracle: tools/foks-v019-oracle</h3>
+<p>Located at <code>tools/foks-v019-oracle</code>, this tool wraps the unmodified Go v0.1.9 codebase. It connects to live hosts (e.g. <code>foks.app:4430</code>) or replays test transcripts to emit immutable <strong>Canary Fixtures</strong> (stored under <code>crates/foks-snowpack/tests/fixtures/foks-v0.1.9/</code>):</p>
+<ul>
+  <li><code>probe-response.snowp</code>: Exact canonical Snowpack probe response containing host identity, CA certificates, and signed Merkle root.</li>
+  <li><code>user/</code>: Authenticated user chains, eldest links, second-device provisioning, revocation links, and generational PUK rotations.</li>
+  <li><code>signup/</code>: Software registration requests, username reservations, and hidden location commitments.</li>
+  <li><code>user-mutations/</code>: Ad-hoc and named team creation, local-user additions, demotions, and PTK rotations.</li>
+  <li><code>yubi/</code>: YubiKey PIV mock bus fixtures, delegated Ed25519 subkeys, and triple-signature stacks.</li>
+</ul>
+
+<h3>Differential Testing &amp; The foks-snowpack Engine</h3>
+<p>During testing, the Rust test suite loads these binary fixtures, parses them using <code>foks-snowpack</code>, re-serializes them, and verifies that the resulting bytes match the Go oracle byte-for-byte. Key properties verified include:</p>
+<ul>
+  <li><strong>Lexicographical Map Ordering:</strong> Keys must be sorted by raw binary bytes rather than UTF-8 string sorting rules.</li>
+  <li><strong>Minimal Integer Sizing:</strong> Positive and negative integers must occupy the smallest valid MessagePack representation (e.g. <code>posfixint</code> &rarr; <code>uint8</code> &rarr; <code>uint16</code> &rarr; <code>uint32</code> &rarr; <code>uint64</code>).</li>
+  <li><strong>Prefixed Signable Hashing:</strong> The Rust verifier (<code>crates/foks-verify</code>) computes hashes using identical 64-bit domain separation prefixes, ensuring that signatures verified in Rust match those generated in Go.</li>
+</ul>
+
+<h3>The Rotated Invitation Signature Quirk</h3>
+<p>Differential testing uncovered an upstream cryptographic anomaly in Go v0.1.9's invitation verification. When verifying stacked signatures on a rotated invitation certificate, the Go implementation evaluates signatures in <em>reverse order</em> compared to standard chain links. Rather than breaking compatibility with existing Go servers and clients, the Rust verifier explicitly accounts for this order inversion during invitation verification.</p>
+
+<h3>Legacy State Ingestion: foks-go-interop</h3>
+<p>Users migrating from the Go client can transition seamlessly using <code>crates/foks-go-interop</code>. This crate parses legacy Go client directories, reads the encrypted <code>foks-secrets</code> bundle (type ID <code>0x8456_933b_bb8a_54ae</code>), and imports historical SQLite state tables into the modern <code>foks-client-db</code> schema without re-enrolling devices.</p>
+
+<h3>Live Dual-Direction Integration Fleet</h3>
+<p>In addition to static fixtures, the project maintains a live, dual-direction automated integration fleet powered by Docker and PostgreSQL 17 testcontainers:</p>
+<ul>
+  <li><strong>Direction 1 (Go Client &rarr; Rust Server):</strong> Executed by <code>go_client_rust_live_test.go</code>, an unmodified official Go v0.1.9 client executes signups, device provisioning, and file writes against a compiled Rust <code>foks-server</code> binary.</li>
+  <li><strong>Direction 2 (Rust Client &rarr; Go Server):</strong> Executed by <code>run-live-compat.sh</code> and <code>run-live-chat-compat.sh</code>, the Rust client and agent execute against the reference Go server with full PostgreSQL persistence.</li>
+  <li><strong>Specialized Conformance Gates:</strong> Dedicated scripts test host key rotation (<code>run-host-rotation-compat.sh</code>), mixed-host invitation workflows (<code>run-invitation-compat.sh</code>), and stdio MCP tool parity (<code>run-mcp-compat.sh</code>).</li>
+</ul>
+
+<h2 id="current-work-and-boundaries">12. Current Work, Active Issues &amp; Boundaries</h2>
+<p>While the core cryptographic and storage layers of FOKS are fully operational, active engineering continues across several scaling, lifecycle, and platform boundaries.</p>
+
+<h3>Stage 1: Basic Chat Server Retention &amp; Quotas</h3>
+<div class="aside no">
+  <div class="aside-title">Active Implementation Issue</div>
+  <p>Basic chat currently lacks per-account, per-team, and per-channel retained byte and message quotas. In <code>crates/foks-server-db/src/schema/realtime.sql</code>, each <code>rt_messages</code> row permanently stores both the submitted envelope and the returned message (permitting up to 1 MiB each). There is currently no production compaction or deletion lifecycle. A single authorized user sending large payloads could consume shared server disk capacity and interfere with unrelated host services.</p>
+</div>
+<p>Planned resolution includes enforcing strict per-team and per-channel storage quotas, reserving independent database capacity for identity and KV operations, and defining explicit retention and archival lifecycles before lifting pre-release constraints.</p>
+
+<h3>Stage 2: Terminal Chat Operation Compaction</h3>
+<p>In <code>foks-client-db</code>, prepared chat operations record state in <code>chat_operations</code> and <code>chat_submissions</code>. While sensitive payload material is cleared upon terminal completion, the hard-state rows remain indefinitely. Engineering work is underway to compact terminal operations into bounded replay evidence while ensuring that pruned identifiers cannot be maliciously replayed as fresh submissions.</p>
+
+<h3>Stage 3: Server Expiry Cleanup Plan (Schema v45)</h3>
+<p>To eliminate unbounded row growth from transient records, SQLite schema version <code>45</code> introduces <strong>7 targeted partial indexes</strong> (defined in <code>crates/foks-server-db/src/schema/expiry_indexes.sql</code>):</p>
+<ol>
+  <li><code>names_reservation_expiry</code>: On <code>names(expires_at) WHERE uid IS NULL</code>. Accelerates pruning of abandoned username reservations.</li>
+  <li><code>team_names_reservation_expiry</code>: On <code>team_names(team_id, expires_at) WHERE team_id IS NULL</code>. Prunes expired team name holds.</li>
+  <li><code>recovery_challenges_cleanup</code>: On <code>recovery_challenges(consumed, expires_at)</code>. Reclaims one-time recovery tokens.</li>
+  <li><code>team_view_tokens_expiry</code>: On <code>team_view_tokens(expires_at)</code>. Purges expired cross-team viewing tokens.</li>
+  <li><code>team_view_challenges_expiry</code>: On <code>team_view_challenges(expires_at)</code>. Cleans up pending authentication challenges.</li>
+  <li><code>team_admin_tokens_expiry</code>: On <code>team_admin_tokens(expires_at)</code>. Reclaims obsolete admin authorization tokens.</li>
+  <li><code>log_sends_created_at</code>: On <code>log_sends(created_at)</code>. Manages diagnostics log pruning windows.</li>
+</ol>
+<p>These indexes allow recurring maintenance sweeps to execute in constant time, preventing SQLite WAL degradation during high user turnover.</p>
+
+<h3>What FOKS Does Not Do Yet</h3>
+<p>To maintain absolute security integrity, FOKS deliberately discloses what is currently outside its supported feature set:</p>
+<ul>
+  <li><strong>No Windows Support:</strong> The resident agent and desktop workflows currently support macOS and Linux. Windows is unsupported because authenticated named-pipe transport and OS ACL validation are not yet implemented. Connecting across an unverified pipe on Windows would breach the local security boundary.</li>
+  <li><strong>No Federated or Ad-Hoc Team Chat:</strong> Real-time messaging currently supports named teams with direct same-host user memberships only. Ad-hoc and cross-host federated team chat remain disabled until multi-host broadcast routing is finalized.</li>
+  <li><strong>Deferred Extended Chat Features:</strong> Extended collaboration features—such as message edits, reactions, threaded replies, user mentions, and large binary attachments—remain disabled in production builds.</li>
+  <li><strong>Merkle Epoch 65,536 Barrier:</strong> Until the upstream Go implementation fixes its signable validator canonicality bug and relaxes the <code>array16</code> constraint, FOKS trees cannot advance past epoch 65,536 without causing upstream client desynchronization.</li>
+</ul>
+
+<div class="aside ok">
+  <div class="aside-title">Conclusion</div>
+  <p>FOKS provides a complete, mathematically verified blueprint for sovereign secret management. By combining post-quantum hybrid cryptography, clear separation of secrecy from authority, logarithmic Merkle history verification, and strict operating system process boundaries, it establishes a key store that remains provably secure even in untrusted, hostile computing environments.</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>

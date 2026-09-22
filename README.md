@@ -8,14 +8,30 @@ The desktop app is a client for the local FOKS agent. The FOKS agent
 owns credentials, sessions, protocol verification, resumable
 operations, and access to personal and team key-value stores.
 
-The local agent stores hard state and cached soft state in separate SQLite
-databases per profile. The standalone server uses an authoritative SQLite
-database with a single writer and concurrent WAL read connections. Transactions
-can atomically update multiple tables, while writes serialize per database.
-Busy deployments require attention to transaction duration, writer queueing,
-checkpointing, and backup strategy. SQLite can perform well for this
-architecture; performance relative to PostgreSQL-based FOKS depends on workload
-and deployment.
+<picture>
+  <source
+    media="(prefers-color-scheme: dark)"
+    srcset="docs/foks-rs-desktop-heavy.png"
+  />
+  <img
+    src="docs/foks-rs-desktop-light.png"
+    alt="FOKS desktop app showing personal and team files"
+  />
+</picture>
+
+Desktop screenshots: [Light mode](docs/foks-rs-desktop-light.png) ·
+[Dark mode](docs/foks-rs-desktop-heavy.png).
+
+The local agent stores hard state and cached soft state in separate
+SQLite databases per profile. The standalone server uses an
+authoritative SQLite database with a single writer and concurrent WAL
+read connections.
+
+Transactions are used to atomically update multiple tables, while
+writes are serialized per database. High-traffic deployments require
+attention to transaction duration, writer queueing, checkpointing, and
+backup strategy. SQLite can perform well for this architecture;
+performance relative to PostgreSQL-based FOKS depends on workload.
 
 ## Development
 
@@ -107,3 +123,7 @@ for reproduction.
 The root `package.json` and `package-lock.json` own frontend dependencies and
 commands. The desktop has no separate npm package; run npm commands from the
 repository root. The root Cargo workspace and lockfile cover all Rust crates.
+
+## License
+
+MIT (C) 2026

@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>An Introduction to FOKS Desktop — a sovereign key store on your screen</title>
+<style>
+  :root {
+    --ink:#1c2530; --dim:#5d6b7a; --faint:#8a97a5;
+    --rule:#e3e8ee; --bg:#ffffff; --tint:#f6f8fa;
+    --a:#2f6fd0; --k1:#3f7fd8; --k2:#38a06a; --k3:#c9822b; --k4:#cf4f6a; --k5:#8a63c9; --kr:#2f9fb5;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html { scroll-behavior:smooth; }
+  body {
+    background:var(--bg); color:var(--ink);
+    font:16.5px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Georgia, serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .layout {
+    display:grid; grid-template-columns:250px minmax(0,1fr); gap:56px;
+    max-width:1120px; margin:0 auto; padding:0 32px;
+  }
+  nav {
+    position:sticky; top:32px; align-self:start; max-height:calc(100vh - 48px);
+    overflow-y:auto; padding:48px 0 40px; font-size:14px; line-height:1.5;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  nav .navtitle {
+    font-weight:700; font-size:12px; letter-spacing:.09em;
+    text-transform:uppercase; color:var(--faint); margin-bottom:14px;
+  }
+  nav a {
+    display:block; color:var(--dim); text-decoration:none; padding:6px 0;
+    border-left:2px solid transparent; padding-left:12px; margin-left:-14px;
+    transition:color .15s, border-color .15s;
+  }
+  nav a:hover { color:var(--a); border-left-color:var(--a); }
+  main { padding:48px 0 160px; max-width:44em; }
+
+  h1 {
+    font-size:36px; line-height:1.2; letter-spacing:-.5px; margin:0 0 10px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  .standfirst { font-size:18px; color:var(--dim); margin:0 0 28px; line-height:1.5; }
+  .meta {
+    color:var(--faint); font-size:13.5px; margin:0 0 40px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+
+  h2 {
+    font-size:25px; margin:56px 0 10px; padding-top:24px; border-top:1px solid var(--rule);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; letter-spacing:-.3px;
+  }
+  h3 {
+    font-size:18.5px; margin:32px 0 6px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  p { margin:14px 0; }
+  ul,ol { margin:14px 0; padding-left:24px; }
+  li { margin:7px 0; }
+  a { color:var(--a); text-decoration:underline; text-underline-offset:2px; }
+
+  code {
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86em;
+    background:var(--tint); padding:2px 5px; border-radius:3px;
+    border:1px solid rgba(27,31,35,0.06);
+  }
+  .pre {
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px;
+    line-height:1.6; background:var(--tint); border:1px solid var(--rule);
+    border-radius:6px; padding:16px 18px; overflow-x:auto; white-space:pre; margin:20px 0;
+  }
+
+  .aside {
+    background:var(--tint); border-left:3px solid var(--a);
+    padding:16px 20px; margin:24px 0; border-radius:0 5px 5px 0; font-size:15.5px;
+  }
+  .aside p:first-child { margin-top:0; } .aside p:last-child { margin-bottom:0; }
+  .aside h4 {
+    margin:0 0 6px; font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--faint); font-family:-apple-system,sans-serif;
+  }
+  .aside.q  { border-left-color:var(--k3); }
+  .aside.no { border-left-color:var(--k4); }
+  .aside.ok { border-left-color:var(--k2); }
+
+  figure { margin:32px 0; }
+  figure svg { display:block; width:100%; height:auto; }
+  figcaption {
+    font-size:13.5px; color:var(--faint); margin-top:10px; text-align:center;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  svg text { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill:var(--ink); }
+  .s-l { font-size:13px; } .s-s { font-size:11px; fill:#7c8794; }
+  .s-b { font-size:13px; font-weight:650; }
+
+  table {
+    width:100%; border-collapse:collapse; margin:24px 0; font-size:15px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  th,td { text-align:left; padding:11px 14px; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); }
+  tbody tr:nth-child(odd) { background:#fbfcfd; }
+
+  .keytable { margin:24px 0; }
+  .keytable tbody tr { background:none; }
+  .keytable td { padding:12px 14px; border-bottom:1px solid var(--rule); vertical-align:top; }
+  .keytable td:first-child { border-left:3px solid var(--rule); font-weight:650; color:var(--ink); width:28%; }
+  .keytable td:nth-child(2) { color:var(--dim); width:44%; }
+  .keytable td:last-child  { color:var(--faint); font-size:14px; }
+  .keytable tr.k1 td:first-child { border-left-color:var(--k1); }
+  .keytable tr.k2 td:first-child { border-left-color:var(--k2); }
+  .keytable tr.k3 td:first-child { border-left-color:var(--k3); }
+  .keytable tr.k4 td:first-child { border-left-color:var(--k4); }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:0; }
+    nav{ display:none; }
+    main{ padding:32px 0 96px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav>
+  <div class="navtitle">Desktop Guide</div>
+  <a href="#architecture">1. The Two-Process Model</a>
+  <a href="#onboarding">2. First Run &amp; Device Setup</a>
+  <a href="#daily-use">3. Vaults, Groups &amp; Chat</a>
+  <a href="#applock-security">4. Endpoint Security &amp; App Lock</a>
+</nav>
+
+<main>
+
+<h1>An Introduction to FOKS Desktop</h1>
+<p class="standfirst">A plain-language guide to the desktop application: how it runs, how it keeps private keys out of the browser DOM, and how to use it for personal vaults, team secrets, and encrypted chat.</p>
+
+<div class="meta">foks-desktop &middot; Tauri v2 &middot; React 18 &middot; foks-agent daemon</div>
+
+<div class="aside ok">
+  <h4>Zero-Trust Desktop Design</h4>
+  <p>FOKS Desktop is not an Electron web wrapper talking directly to cloud servers. It is a lightweight presentation layer over a local, detached resident daemon (<code>foks-agent</code>). Your private cryptographic keys never enter the webview JavaScript memory, clipboard operations stay inside native Rust code, and closing the app window never interrupts background sync or drops your session.</p>
+</div>
+
+<!-- ===================================================================== -->
+<!-- SECTION 1 -->
+<!-- ===================================================================== -->
+<h2 id="architecture">1. The Two-Process Model: A UI for a Resident Daemon</h2>
+
+<p>Most desktop password managers run as a single monolithic process. If the window is closed, your connection is severed; if an attacker exploits a vulnerability in the rendering engine, they gain full access to decrypted master keys in memory.</p>
+
+<p>FOKS takes a fundamentally different approach by splitting the system into two distinct processes with an explicit security boundary:</p>
+
+<table class="keytable">
+<tbody>
+<tr class="k1">
+  <td>1. The Presentation Shell (foks-desktop)</td>
+  <td>A sandboxed Tauri v2 + React 18 interface. Manages navigation, displays decrypted entries in transient view panels, and passes opaque catalog references.</td>
+  <td>Holds no private keys. JavaScript cannot execute arbitrary OS calls.</td>
+</tr>
+<tr class="k2">
+  <td>2. The Resident Daemon (foks-agent)</td>
+  <td>A local background process. Owns credentials, holds the decrypted session cache, manages hard-state SQLite journals, and syncs with remote servers.</td>
+  <td>Independent of the window lifecycle; survives app restarts and window closures.</td>
+</tr>
+</tbody>
+</table>
+
+<figure>
+<svg viewBox="0 0 760 370" role="img" aria-label="Two-process architecture of FOKS Desktop: Tauri Webview and Native Shell communicating over a Unix Domain Socket to the detached foks-agent daemon">
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#98a3b0"/>
+    </marker>
+    <marker id="ar-a" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#2f6fd0"/>
+    </marker>
+  </defs>
+
+  <!-- Process 1: Desktop Shell -->
+  <rect x="20" y="24" width="310" height="280" rx="8" fill="#f7f9fc" stroke="#3f7fd8" stroke-width="1.5"/>
+  <text x="36" y="50" class="s-b" fill="#2f6fd0">foks-desktop (App Shell)</text>
+  <text x="36" y="68" class="s-s">Tauri v2 Native Host &#183; Window lifecycle</text>
+
+  <!-- Sub-box: Webview -->
+  <rect x="36" y="86" width="278" height="100" rx="5" fill="#ffffff" stroke="#d5dde5"/>
+  <text x="50" y="108" class="s-b">React 18 Webview</text>
+  <text x="50" y="126" class="s-s">&#8226; Zero master keys in DOM memory</text>
+  <text x="50" y="142" class="s-s">&#8226; Ephemeral detail panels (conceal on blur)</text>
+  <text x="50" y="158" class="s-s">&#8226; Global Tauri APIs disabled (sandboxed)</text>
+
+  <!-- Sub-box: Tauri Rust Bridge -->
+  <rect x="36" y="200" width="278" height="88" rx="5" fill="#ffffff" stroke="#d5dde5"/>
+  <text x="50" y="222" class="s-b">Native Tauri Commands &amp; AppLock</text>
+  <text x="50" y="240" class="s-s">&#8226; Touch ID / Polkit biometric gate</text>
+  <text x="50" y="256" class="s-s">&#8226; Clipboard copy stays in native code</text>
+  <text x="50" y="272" class="s-s">&#8226; File drag-and-drop streaming bridge</text>
+
+  <!-- Socket IPC Bridge -->
+  <path d="M330,164 L410,164" fill="none" stroke="#2f6fd0" stroke-width="2" marker-end="url(#ar-a)"/>
+  <path d="M410,184 L330,184" fill="none" stroke="#98a3b0" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="370" y="152" class="s-s" text-anchor="middle" fill="#2f6fd0">JSON IPC</text>
+  <text x="370" y="208" class="s-s" text-anchor="middle">Unix Socket</text>
+  <text x="370" y="224" class="s-s" text-anchor="middle" fill="#7c8794">0600 UID check</text>
+
+  <!-- Process 2: foks-agent Daemon -->
+  <rect x="420" y="24" width="320" height="280" rx="8" fill="#f0f8f3" stroke="#38a06a" stroke-width="1.5"/>
+  <text x="436" y="50" class="s-b" fill="#2b8355">foks-agent (Resident Daemon)</text>
+  <text x="436" y="68" class="s-s">Detached process &#183; Holds .foks-rs.lock</text>
+
+  <rect x="436" y="86" width="288" height="60" rx="5" fill="#ffffff" stroke="#d5dde5"/>
+  <text x="450" y="108" class="s-b">Cryptographic Session Ownership</text>
+  <text x="450" y="126" class="s-s">Holds decrypted seeds &amp; post-quantum keys</text>
+
+  <rect x="436" y="156" width="288" height="64" rx="5" fill="#ffffff" stroke="#d5dde5"/>
+  <text x="450" y="178" class="s-b">Local Hard-State (SQLite DB)</text>
+  <text x="450" y="196" class="s-s">Monotonic Merkle heads &#183; Schema v39</text>
+
+  <rect x="436" y="230" width="288" height="58" rx="5" fill="#ffffff" stroke="#d5dde5"/>
+  <text x="450" y="252" class="s-b">Remote Relay &amp; Federation Sync</text>
+  <text x="450" y="270" class="s-s">TLS 1.3 &#183; Snowpack RPC (TCP 4430)</text>
+
+  <!-- Bottom boundary annotation -->
+  <rect x="20" y="320" width="720" height="32" rx="4" fill="#f6f8fa" stroke="#e3e8ee"/>
+  <text x="380" y="341" class="s-s" text-anchor="middle">Window blur or closing the desktop UI never kills foks-agent &#8212; synchronization and message queues continue seamlessly.</text>
+</svg>
+<figcaption>Figure 1: The two-process architecture. The UI sends requests over a secured Unix domain socket; the agent maintains keys, storage, and network synchronization.</figcaption>
+</figure>
+
+<h3>Socket Security and Process Isolation</h3>
+<p>The desktop app connects to the resident daemon over a local Unix domain socket (<code>foks-rs.sock</code>). Before sending any request, the client strictly checks the socket's metadata:</p>
+<ul>
+  <li><strong>Exclusive Ownership:</strong> The socket file must have permissions restricted to <code>0600</code> (owner-only read/write). If group or world bits are set, the connection is aborted immediately.</li>
+  <li><strong>Effective UID Validation:</strong> The socket file owner UID must match the running user's effective UID (<code>rustix::process::geteuid()</code>). Other local users on the same machine cannot intercept or impersonate the socket.</li>
+  <li><strong>Lockfile Protection:</strong> The daemon maintains an advisory write lock on <code>.foks-rs.lock</code> opened with <code>O_NOFOLLOW</code>, preventing symlink substitution and multi-instance database corruption.</li>
+</ul>
+
+<div class="aside">
+  <h4>Memory Hygiene in the Webview</h4>
+  <p>When you click "Show" on a password, the secret is fetched from the daemon for that exact item version and displayed only inside the active detail panel. If you select another entry, hide the panel, minimize the app, or trigger AppLock, the cleartext secret is immediately wiped from memory. Operations like <strong>Copy value</strong> and <strong>Download file</strong> are executed directly within Rust to avoid pushing raw plaintext into the JavaScript heap or system clipboard history.</p>
+</div>
+
+
+<!-- ===================================================================== -->
+<!-- SECTION 2 -->
+<!-- ===================================================================== -->
+<h2 id="onboarding">2. First Run &amp; Device Setup: Enrolling Without Passwords</h2>
+
+<p>FOKS has no master password. A master password is a catastrophic single point of failure: humans choose weak words, reuse them across services, or type them into phishing websites.</p>
+
+<p>When you launch FOKS Desktop for the first time, you are presented with three enrollment paths, each anchored in verifiable cryptographic keys:</p>
+
+<ol>
+  <li><strong>Create a New Account:</strong> Your machine mints a brand-new cryptographic identity. It derives an Ed25519 signing key, an X25519 Diffie-Hellman key, and an ML-KEM-768 post-quantum keypair directly from local entropy. It then presents a printed <strong>Recovery Kit</strong>.</li>
+  <li><strong>Pair with an Existing Device (KEX):</strong> If you already have FOKS running on another laptop or phone, you can link the new machine in seconds using an ephemeral 13-token pairing code.</li>
+  <li><strong>Enroll a Hardware Security Key (YubiKey):</strong> You can anchor your account keys to a physical YubiKey hardware token using PIV smartcard slots.</li>
+</ol>
+
+<figure>
+<table class="keytable">
+<tbody>
+<tr class="k3">
+  <td>Human-Exact Recovery Key (HESP)</td>
+  <td>A printed emergency sheet consisting of <strong>17 tokens</strong>: exactly 9 BIP-39 dictionary words alternating with 8 numbers (0&ndash;8191), providing 203 bits of high-entropy security.</td>
+  <td>Stretched with Argon2id; used only when all devices are lost.</td>
+</tr>
+<tr class="k4">
+  <td>Device Pairing Code (KEX)</td>
+  <td>An out-of-band ephemeral code of <strong>13 tokens</strong>: 7 words alternating with 6 numbers (0&ndash;255), representing a 125-bit ephemeral key exchange secret.</td>
+  <td>Short-lived; establishes an encrypted channel between two local machines.</td>
+</tr>
+<tr class="k2">
+  <td>Hardware Token (YubiKey PIV)</td>
+  <td>Generates and stores NIST P-256 keys inside retired PIV slots (<code>0x82</code> through <code>0x95</code>). Physical touch is required to authorize signatures or decrypt vault keys.</td>
+  <td>Private keys cannot be extracted from the physical token.</td>
+</tr>
+</tbody>
+</table>
+</figure>
+
+<h3>The Recovery Kit (HESP)</h3>
+<p>Because there is no server-side password reset, losing all registered devices would permanently lock you out of your vault. To prevent this, FOKS generates a <strong>Human-Exact Secret Phrase</strong>:</p>
+
+<div class="pre">FOKS-RK1-abandon 4092 ability 1084 absorb 7192 accuse 0341 achieve 5521 acid 2091 acoustic 6812 acquire 4410 action</div>
+
+<p>This 17-token phrase provides 203 bits of entropy. It is stretched via <strong>Argon2id</strong> (64 MiB memory, 3 iterations) to derive a recovery unsealing key. During normal vault re-keying (such as when a teammate leaves), members automatically re-seal the new vault key to the recovery code's registered public identity&mdash;so a printed kit remains valid for years without reprinting.</p>
+
+<h3>Safe Resumability with Operation Receipts</h3>
+<p>If network connectivity drops or the laptop lid closes during first-run setup, FOKS never leaves you stranded with an uncertain account state. The desktop stores non-secret setup progress and durable operation receipts in <code>account-operation-receipts-v1</code>. When reopened, the app queries the agent for pending operations and offers an explicit <strong>Resume setup</strong> action rather than blindly creating duplicate accounts.</p>
+
+
+<!-- ===================================================================== -->
+<!-- SECTION 3 -->
+<!-- ===================================================================== -->
+<h2 id="daily-use">3. Everyday Use: Vaults, Groups, and Encrypted Chat</h2>
+
+<p>Once enrolled, the desktop interface provides four primary workspaces accessible from the navigation rail:</p>
+
+<h3>1. Profiles &amp; Multi-Account Switching</h3>
+<p>FOKS supports multiple active accounts on different servers (for example, a personal sovereign vault and an enterprise company server). Clicking the profile avatar in the rail opens the profile switcher. Switching accounts updates the active catalog and resets all in-memory view caches instantaneously.</p>
+
+<h3>2. The Vault: Encrypted Files and Key-Value Entries</h3>
+<p>The <strong>Vault</strong> stores passwords, API tokens, cryptographic certificates, and arbitrary binary files organized in a folder hierarchy:</p>
+<ul>
+  <li><strong>Zero Plaintext Storage:</strong> Directory paths are blinded with keyed HMAC hashes (<code>name_mac</code>). The server cannot see file names, folder structures, or secret lengths.</li>
+  <li><strong>Adaptive Size Padding:</strong> Secrets are padded into standardized buckets (small items to 32, 64, or 128 bytes; larger files to 4 KiB multiples) so network observers cannot deduce content type from ciphertext size.</li>
+  <li><strong>Streaming File Transfers:</strong> Uploading or downloading large attachments does not consume excessive RAM. The desktop streams files in encrypted 700 KiB frames directly through the native bridge to the local agent's writer channel.</li>
+</ul>
+
+<h3>3. Teams and Group Collaboration</h3>
+<p>Opening a team from the Teams list displays four dedicated tabs: <strong>Members</strong>, <strong>Channels</strong>, <strong>Files</strong>, and <strong>Settings</strong>.</p>
+<ul>
+  <li><strong>Role-Based Access Control:</strong> Members are assigned roles: <em>Owner</em>, <em>Manager</em>, <em>Member</em>, or <em>Reader</em>. Roles dictate who can invite members, create channels, or delete data.</li>
+  <li><strong>Forward Secrecy on Departure:</strong> When a teammate is removed, FOKS automatically generates a brand-new Per-Team Key (PTK), creates fresh encryption boxes for remaining members, and re-encrypts all team secrets. The departed member's cached keys are immediately rendered useless.</li>
+  <li><strong>Tamper-Proof Invitations:</strong> Inviting a colleague creates a cryptographically signed invitation certificate. The invite sets a strict role ceiling that cannot be escalated, even by an untrusted server administrator.</li>
+</ul>
+
+<h3>4. End-to-End Encrypted Team Chat</h3>
+<p>Each team includes encrypted real-time chat channels for secure communication:</p>
+
+<div class="aside ok">
+  <h4>The Active Thread Invariant</h4>
+  <p>To deliver real-time responsiveness without draining laptop battery life, the desktop notification service uses adaptive polling:
+  <br>&bull; The <strong>currently active conversation</strong> maintains a strict 5-second polling interval (<code>FALLBACK_MS = 5000</code>) and <strong>never backs off</strong>.
+  <br>&bull; Background, unviewed channels exponentially back off up to 60 seconds (<code>FALLBACK_MAX_MS = 60000</code>).
+  <br>&bull; The arrival of any new message immediately resets all intervals back to 5 seconds.</p>
+</div>
+
+
+<!-- ===================================================================== -->
+<!-- SECTION 4 -->
+<!-- ===================================================================== -->
+<h2 id="applock-security">4. Endpoint Security &amp; App Lock: Keeping Secrets Locked Down</h2>
+
+<p>A password manager's greatest vulnerability is an unattended, unlocked laptop. FOKS Desktop integrates directly with your operating system's native hardware security layer to enforce rapid locking and biometric unlock.</p>
+
+<h3>Platform Biometrics Integration</h3>
+<p>FOKS avoids custom password prompts in favor of trusted OS authentication:</p>
+<ul>
+  <li><strong>macOS:</strong> Integrates with Apple's <code>LocalAuthentication</code> framework. Unlocking uses <strong>Touch ID</strong>, Apple Watch proximity, or system account password (<code>LAPolicy::DeviceOwnerAuthenticationWithBiometrics</code>).</li>
+  <li><strong>Linux:</strong> Integrates with <strong>Polkit</strong> (PolicyKit) over system D-Bus. Evaluates action <code>org.foks.desktop.unlock</code>, displaying the native desktop environment authorization dialog.</li>
+  <li><strong>Native Credential Keystores:</strong> Master wrapping keys are stored in the <strong>macOS Keychain</strong> or Linux <strong>Secret Service</strong> (GNOME Keyring / KWallet), encrypted at rest with XChaCha20-Poly1305.</li>
+</ul>
+
+<h3>The AppLock State Machine</h3>
+<p>When AppLock activates&mdash;either by clicking the lock icon, stepping away from your machine, or letting the system sleep&mdash;the desktop initiates a comprehensive shutdown of sensitive state:</p>
+
+<ol>
+  <li><strong>Immediate DOM Concealment:</strong> All open secret values, chat messages, and folder contents are immediately obscured and removed from webview memory.</li>
+  <li><strong>Generation Counter Gate:</strong> AppLock increments an atomic 64-bit generation counter (<code>AtomicU64 generation</code>). Any in-flight background request issued before the lock event is automatically rejected with an <code>app-locked</code> or <code>chat-interrupted</code> error upon completion.</li>
+  <li><strong>Cache Invalidation:</strong> Catalog caches are marked stale (<code>invalidate_catalog()</code>). When unlocked via fingerprint or PIN, the application re-validates credentials with the daemon and reconstructs the view cleanly.</li>
+</ol>
+
+<table class="keytable">
+<tbody>
+<tr class="k1">
+  <td>Unlocked &amp; Active</td>
+  <td>User is present; biometric confirmation passed. Opaque catalog items loaded.</td>
+  <td>Detail panel shows secrets on explicit click; clipboard operations stay in Rust.</td>
+</tr>
+<tr class="k3">
+  <td>Auto-Lock / Timeout</td>
+  <td>Inactivity timer expires or laptop lid closes. Webview memory wiped.</td>
+  <td>Atomic generation incremented; in-flight network queries rejected.</td>
+</tr>
+<tr class="k4">
+  <td>Locked State</td>
+  <td>Lock screen overlay displayed. All secret panels concealed.</td>
+  <td>Only biometric unlock or app termination is accepted. Daemon continues sync.</td>
+</tr>
+</tbody>
+</table>
+
+<div class="aside q">
+  <h4>Windows Support Status</h4>
+  <p>FOKS Desktop currently supports macOS and Linux. Windows is not yet supported because native credential storage (DPAPI) and secure named-pipe IPC validation are still being implemented. FOKS deliberately refuses to run on Windows until it can guarantee the exact same process isolation and ACL verification enforced on Unix platforms.</p>
+</div>
+
+<p>With its two-process architecture, hardware-bound passkeys, and biometric locks, FOKS Desktop gives you sovereign control over your sensitive secrets without compromising on desktop speed or convenience.</p>
+
+</main>
+</div>
+</body>
+</html>
