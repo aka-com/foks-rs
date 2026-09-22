@@ -440,10 +440,10 @@ impl FoksClient {
             // call committed the Rejected transition but failed before erasure.
             if let Some(mutation_id) = saga.local_mutation_id {
                 match protected_store
-                    .remove(&crate::team::remote_addition_material_key(&mutation_id))
+                    .remove(&crate::team::remote_addition_request_key(&mutation_id))
                 {
                     Ok(()) | Err(ProtectedStoreError::Missing) => {}
-                    Err(error) => return Err(Error::ProtectedMaterial(error.to_string())),
+                    Err(error) => return Err(Error::ProtectedStore(error.to_string())),
                 }
             }
             return Err(Error::OperationBinding(
@@ -502,10 +502,10 @@ impl FoksClient {
                         // resubmit, so its encrypted remote-addition request
                         // material is dead; erase it (mirrors the Completed path).
                         match protected_store
-                            .remove(&crate::team::remote_addition_material_key(&mutation_id))
+                            .remove(&crate::team::remote_addition_request_key(&mutation_id))
                         {
                             Ok(()) | Err(ProtectedStoreError::Missing) => {}
-                            Err(error) => return Err(Error::ProtectedMaterial(error.to_string())),
+                            Err(error) => return Err(Error::ProtectedStore(error.to_string())),
                         }
                         return Err(Error::OperationBinding(
                             "local team mutation was rejected or superseded",
@@ -577,11 +577,11 @@ impl FoksClient {
             FederationSagaState::Completed,
             now_microseconds()?,
         )?;
-        match protected_store.remove(&crate::team::remote_addition_material_key(
+        match protected_store.remove(&crate::team::remote_addition_request_key(
             &added.operation_id,
         )) {
             Ok(()) | Err(ProtectedStoreError::Missing) => {}
-            Err(error) => return Err(Error::ProtectedMaterial(error.to_string())),
+            Err(error) => return Err(Error::ProtectedStore(error.to_string())),
         }
         Ok(AddFederatedTeamMemberOutcome {
             operation_id,

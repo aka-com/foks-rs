@@ -18,7 +18,7 @@ impl ChatSession<'_> {
             return Ok(op);
         }
         self.refresh()?;
-        match self.material(store, &op)? {
+        match self.protected_request(store, &op)? {
             RealtimeRequest::CreateChannel(arg) => {
                 if let Some(found) = self
                     .list_current_channels(rpc)?

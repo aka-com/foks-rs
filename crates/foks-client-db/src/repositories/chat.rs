@@ -113,19 +113,20 @@ impl HardStateStore {
         op: &ChatOperation,
         submission: Option<&ChatSubmission>,
     ) -> Result<()> {
-        self.chat_record_submission_with_material(op, submission, || Ok(()))
+        self.chat_record_submission_with_protected_request(op, submission, || Ok(()))
     }
 
-    /// Validate and stage the ledger rows before persisting protected material.
-    /// The callback must durably store material before returning, must not access
-    /// this database, and runs only for a new operation, under the writer lock.
+    /// Validate and stage the ledger rows before persisting the protected request.
+    /// The callback must durably store the protected request before returning,
+    /// must not access this database, and runs only for a new operation, under
+    /// the writer lock.
     /// Failure rolls back the ledger. A crash after the callback can still leave
-    /// orphan material; never delete it on an ambiguous commit outcome.
-    pub fn chat_record_submission_with_material<E: From<Error>>(
+    /// orphaned protected request; never delete it on an ambiguous commit outcome.
+    pub fn chat_record_submission_with_protected_request<E: From<Error>>(
         &mut self,
         op: &ChatOperation,
         submission: Option<&ChatSubmission>,
-        persist_material: impl FnOnce() -> std::result::Result<(), E>,
+        persist_protected_request: impl FnOnce() -> std::result::Result<(), E>,
     ) -> std::result::Result<(), E> {
         if op.state != ChatOperationState::Prepared
             || op.receipt.is_some()
@@ -193,7 +194,7 @@ impl HardStateStore {
             )
             .map_err(Error::from)?;
         }
-        persist_material()?;
+        persist_protected_request()?;
         tx.commit().map_err(Error::from)?;
         Ok(())
     }
@@ -601,9 +602,10 @@ mod tests {
             input_mac: [10; 32],
         };
         let revision = db.metadata().unwrap().revision;
-        let result = db.chat_record_submission_with_material(&op, Some(&submission), || {
-            Err(Error::ChatConflict("injected protected write failure"))
-        });
+        let result =
+            db.chat_record_submission_with_protected_request(&op, Some(&submission), || {
+                Err(Error::ChatConflict("injected protected write failure"))
+            });
         assert!(result.is_err());
         drop(db);
         let mut db = HardStateStore::open(&path).unwrap();
@@ -613,8 +615,12 @@ mod tests {
             .chat_submission(&op.scope, &submission)
             .unwrap()
             .is_none());
-        db.chat_record_submission_with_material::<Error>(&op, Some(&submission), || Ok(()))
-            .unwrap();
+        db.chat_record_submission_with_protected_request::<Error>(
+            &op,
+            Some(&submission),
+            || Ok(()),
+        )
+        .unwrap();
         assert_eq!(
             db.chat_submission(&op.scope, &submission).unwrap(),
             Some(op)
@@ -622,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn rejected_and_duplicate_preparations_do_not_write_material() {
+    fn rejected_and_duplicate_preparations_do_not_write_protected_request() {
         let dir = tempfile::tempdir().unwrap();
         let mut db = HardStateStore::open(&dir.path().join("hard")).unwrap();
         let op = prepared(1);
@@ -631,7 +637,7 @@ mod tests {
             input_mac: [10; 32],
         };
         db.chat_record_submission(&op, Some(&submission)).unwrap();
-        db.chat_record_submission_with_material::<Error>(&op, Some(&submission), || {
+        db.chat_record_submission_with_protected_request::<Error>(&op, Some(&submission), || {
             panic!("duplicate write")
         })
         .unwrap();
@@ -640,12 +646,12 @@ mod tests {
             ..submission
         };
         assert!(db
-            .chat_record_submission_with_material::<Error>(&op, Some(&changed), || panic!(
+            .chat_record_submission_with_protected_request::<Error>(&op, Some(&changed), || panic!(
                 "unbound submission"
             ))
             .is_err());
         assert!(db
-            .chat_record_submission_with_material::<Error>(
+            .chat_record_submission_with_protected_request::<Error>(
                 &prepared(2),
                 Some(&submission),
                 || panic!("conflicting write")
@@ -656,7 +662,7 @@ mod tests {
             db.chat_record(&prepared(id as u128)).unwrap();
         }
         assert!(matches!(
-            db.chat_record_submission_with_material::<Error>(
+            db.chat_record_submission_with_protected_request::<Error>(
                 &prepared(u128::MAX),
                 None,
                 || panic!("over-capacity write")

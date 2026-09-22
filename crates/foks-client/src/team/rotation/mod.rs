@@ -1085,7 +1085,7 @@ impl FoksClient {
             ));
         }
         // The actor is deliberately omitted from `remaining_parties`: it is
-        // supplied separately so its signing material can be selected. A
+        // supplied separately so its signing credentials can be selected. A
         // nested actor can nevertheless contain remote descendants, whose
         // authenticated heads must be rechecked just like every receiver
         // before we emit boxes or a signature.
@@ -1123,7 +1123,7 @@ impl FoksClient {
                 seed: rotation.seed,
             })
             .collect::<Vec<_>>();
-        let material = make_change_team_members_link(
+        let link_output = make_change_team_members_link(
             &ChangeTeamMembersInput {
                 actor: actor.party,
                 actor_source_role: actor_public.role,
@@ -1161,7 +1161,7 @@ impl FoksClient {
         for hepk in replacement_publics
             .iter()
             .map(|public| &public.hepk)
-            .chain(material.ptks.iter().map(|public| &public.hepk))
+            .chain(link_output.ptks.iter().map(|public| &public.hepk))
         {
             let fingerprint = foks_crypto::hepk_fingerprint(hepk)?;
             if hepk_fingerprints.insert(fingerprint) {
@@ -1169,8 +1169,8 @@ impl FoksClient {
             }
         }
         let encoded_request = encode_remove_team_member_request(&RemoveTeamMemberArgument {
-            link: &material.link,
-            next_tree_location: material.next_tree_location,
+            link: &link_output.link,
+            next_tree_location: link_output.next_tree_location,
             ptk_boxes: &ptk_boxes,
             seed_chain: &seed_chain,
             removals: &[],
@@ -1180,7 +1180,7 @@ impl FoksClient {
         })?;
         let binding = refresh_binding_from_request(request, &rotation_keys)?;
         let operation_id = refresh_operation_id(actor.party, team, &binding)?;
-        let material_key = team_rekey_material_key(&operation_id);
+        let request_key = team_member_key_refresh_request_key(&operation_id);
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         if hard_store.team_mutation(&operation_id)?.is_some() {
             // An existing journal may bind an older recipient manifest even
@@ -1194,19 +1194,19 @@ impl FoksClient {
         // A protected-only frame cannot have reached submission because
         // beginning submission records the public journal atomically. Rebuild
         // it against the freshly authenticated Merkle head.
-        remove_team_rekey_material(protected_store, &material_key)?;
-        match protected_store.put_if_absent(&material_key, &encoded_request) {
+        remove_team_request(protected_store, &request_key)?;
+        match protected_store.put_if_absent(&request_key, &encoded_request) {
             Ok(()) => {}
             Err(ProtectedStoreError::Conflict) => {
                 return Err(Error::OperationBinding(
                     "a concurrent team member-key refresh plan changed the protected request",
                 ));
             }
-            Err(error) => return Err(protected_material_error(error)),
+            Err(error) => return Err(protected_store_error(error)),
         }
         let protected_request = protected_store
-            .get(&material_key)
-            .map_err(protected_material_error)?;
+            .get(&request_key)
+            .map_err(protected_store_error)?;
         if protected_request.as_slice() != encoded_request {
             return Err(Error::OperationBinding(
                 "protected team member-key refresh request changed before journaling",
@@ -1222,7 +1222,7 @@ impl FoksClient {
         }
         // Bearer activation is a preflight: it cannot submit the edit. Do it
         // before entering an active journal state so a synchronous authority
-        // failure leaves only safely replaceable protected-only material.
+        // failure leaves only safely replaceable protected request.
         // Once Submitting is durable, every exit must conservatively assume
         // that the exact edit could have reached the server.
         let bearer = match &actor.secrets {
@@ -1335,7 +1335,7 @@ impl FoksClient {
                             TeamMutationState::Rejected,
                             now_microseconds()?,
                         )?;
-                        remove_team_rekey_material(protected_store, &material_key)?;
+                        remove_team_request(protected_store, &request_key)?;
                         return Err(error);
                     }
                     if request.rotations.iter().all(|rotation| {
@@ -1345,7 +1345,7 @@ impl FoksClient {
                             .any(|ptk| ptk.role == rotation.role && ptk.seed == *rotation.seed)
                     }) {
                         finish_team_mutation_journal(&mut hard_store, &operation_id)?;
-                        remove_team_rekey_material(protected_store, &material_key)?;
+                        remove_team_request(protected_store, &request_key)?;
                         return Ok(RotatedTeamPtks {
                             operation_id,
                             expected_seqno: request.expected_seqno,
@@ -1553,11 +1553,11 @@ impl FoksClient {
                 "team member-key refresh journal does not match supplied identities",
             ));
         }
-        let material_key = team_rekey_material_key(&operation.operation_id);
+        let request_key = team_member_key_refresh_request_key(&operation.operation_id);
         if operation.state != TeamMutationState::Verified {
             let exact_request = protected_store
-                .get(&material_key)
-                .map_err(protected_material_error)?;
+                .get(&request_key)
+                .map_err(protected_store_error)?;
             if prefixed_hash(TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &exact_request)
                 != operation.request_hash
             {
@@ -1575,7 +1575,7 @@ impl FoksClient {
                     TeamMutationState::Rejected,
                     now_microseconds()?,
                 )?;
-                remove_team_rekey_material(protected_store, &material_key)?;
+                remove_team_request(protected_store, &request_key)?;
                 return Err(Error::OperationBinding(
                     "authenticated team transition differs from the exact recorded team member-key refresh request",
                 ));
@@ -1663,9 +1663,9 @@ impl FoksClient {
         if operation.state != TeamMutationState::Verified {
             finish_team_mutation_journal(&mut hard_store, &operation_id)?;
         }
-        remove_team_rekey_material(
+        remove_team_request(
             protected_store,
-            &team_rekey_material_key(&operation.operation_id),
+            &team_member_key_refresh_request_key(&operation.operation_id),
         )?;
         Ok(RotatedTeamPtks {
             operation_id,
@@ -1832,10 +1832,10 @@ impl FoksClient {
                 "recorded team member-key refresh replay request is missing or changed",
             ));
         }
-        let material_key = team_rekey_material_key(&operation.operation_id);
+        let request_key = team_member_key_refresh_request_key(&operation.operation_id);
         let request = protected_store
-            .get(&material_key)
-            .map_err(protected_material_error)?;
+            .get(&request_key)
+            .map_err(protected_store_error)?;
         if prefixed_hash(TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &request) != operation.request_hash {
             return Err(Error::OperationBinding(
                 "protected team member-key refresh replay request changed",
@@ -2006,13 +2006,13 @@ impl FoksClient {
                 now_microseconds()?,
             )?;
         }
-        remove_team_rekey_material(
+        remove_team_request(
             protected_store,
-            &team_rekey_material_key(&operation.operation_id),
+            &team_member_key_refresh_request_key(&operation.operation_id),
         )
     }
 
-    /// Removes protected team member-key refresh material only when no public journal row proves
+    /// Removes protected team member-key refresh request only when no public journal row proves
     /// that submission could have begun. Callers use this to replace a stale
     /// pre-journal plan after re-authenticating all roster parties.
     pub fn discard_unrecorded_team_rekey(
@@ -2131,13 +2131,13 @@ impl FoksClient {
                 .collect::<Result<Vec<_>>>()?,
         };
         let operation_id = refresh_operation_id(actor, team, &binding)?;
-        self.discard_unjournaled_team_rekey_material(host, &operation_id, protected_store)
+        self.discard_unjournaled_team_rekey_request(host, &operation_id, protected_store)
     }
 
     /// Removes one protected pre-journal team member-key refresh frame only when no journal row
     /// exists for that exact operation identity. A different operation at the
     /// same sequence must never be mistaken for this caller-durable plan.
-    pub fn discard_unjournaled_team_rekey_material(
+    pub fn discard_unjournaled_team_rekey_request(
         &self,
         host: &PinnedHost,
         operation_id: &[u8; 16],
@@ -2148,18 +2148,21 @@ impl FoksClient {
             .is_some()
         {
             return Err(Error::OperationBinding(
-                "journaled team member-key refresh material cannot be discarded as unrecorded",
+                "journaled team member-key refresh request cannot be discarded as unrecorded",
             ));
         }
-        remove_team_rekey_material(protected_store, &team_rekey_material_key(operation_id))
+        remove_team_request(
+            protected_store,
+            &team_member_key_refresh_request_key(operation_id),
+        )
     }
 
-    /// Removes residual protected material after the public journal proves
+    /// Removes residual protected request after the public journal proves
     /// that this exact team member-key refresh transition was already authenticated. No current
     /// roster authority is needed because this path cannot submit or accept
     /// another transition.
     #[allow(clippy::too_many_arguments)]
-    pub fn cleanup_verified_team_rekey_material(
+    pub fn cleanup_verified_team_rekey_request(
         &self,
         host: &PinnedHost,
         team: &EntityId,
@@ -2185,9 +2188,9 @@ impl FoksClient {
                 "verified team member-key refresh cleanup does not match supplied identities",
             ));
         }
-        remove_team_rekey_material(
+        remove_team_request(
             protected_store,
-            &team_rekey_material_key(&operation.operation_id),
+            &team_member_key_refresh_request_key(&operation.operation_id),
         )
     }
 
@@ -2380,9 +2383,9 @@ impl FoksClient {
             }
         }
         finish_team_mutation_journal(&mut hard_store, recovery.expected_operation_id)?;
-        remove_team_rekey_material(
+        remove_team_request(
             protected_store,
-            &team_rotation_material_key(recovery.expected_operation_id),
+            &team_member_change_request_key(recovery.expected_operation_id),
         )?;
         Ok(RotatedTeamPtks {
             operation_id: *recovery.expected_operation_id,
@@ -2422,9 +2425,9 @@ impl FoksClient {
                 now_microseconds()?,
             )?,
         }
-        remove_team_rekey_material(
+        remove_team_request(
             protected_store,
-            &team_rotation_material_key(expected_operation_id),
+            &team_member_change_request_key(expected_operation_id),
         )
     }
 
@@ -2573,7 +2576,7 @@ impl FoksClient {
         let replacement_key = validate_replacement(target, destination_role, replacement)?;
         let observer_puk = if self_target {
             let (_, replacement_public) = replacement_key.ok_or(Error::TeamRequest(
-                "self team-member refresh requires replacement PUK material",
+                "self team-member refresh requires replacement PUK keys",
             ))?;
             actor_user
                 .puks
@@ -2676,7 +2679,7 @@ impl FoksClient {
             verify_key: key.verify_key.clone(),
             hepk: key.hepk.clone(),
         });
-        let material = make_change_team_member_link(
+        let link_output = make_change_team_member_link(
             &ChangeTeamMemberInput {
                 actor: uid,
                 actor_source_role: actor_public.role,
@@ -2747,7 +2750,7 @@ impl FoksClient {
         for hepk in replacement_public
             .iter()
             .map(|public| &public.hepk)
-            .chain(material.ptks.iter().map(|ptk| &ptk.hepk))
+            .chain(link_output.ptks.iter().map(|ptk| &ptk.hepk))
         {
             let fingerprint = foks_crypto::hepk_fingerprint(hepk)?;
             if seen_hepks.insert(fingerprint) {
@@ -2755,8 +2758,8 @@ impl FoksClient {
             }
         }
         let encoded_request = encode_remove_team_member_request(&RemoveTeamMemberArgument {
-            link: &material.link,
-            next_tree_location: material.next_tree_location,
+            link: &link_output.link,
+            next_tree_location: link_output.next_tree_location,
             ptk_boxes: &ptk_boxes,
             seed_chain: &seed_chain,
             removals: &removals,
@@ -2777,21 +2780,21 @@ impl FoksClient {
             &rotation_keys,
         )?;
         let operation_id = rotation_operation_id(uid, team, &binding)?;
-        let material_key = team_rotation_material_key(&operation_id);
+        let request_key = team_member_change_request_key(&operation_id);
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         let recorded = hard_store.team_mutation(&operation_id)?;
         if recorded.is_none() {
             // A protected-only record proves submission never began. Replace
             // it with the freshly authenticated head-bound frame.
-            remove_team_rekey_material(protected_store, &material_key)?;
+            remove_team_request(protected_store, &request_key)?;
         }
-        match protected_store.put_if_absent(&material_key, &encoded_request) {
+        match protected_store.put_if_absent(&request_key, &encoded_request) {
             Ok(()) | Err(ProtectedStoreError::Conflict) => {}
-            Err(error) => return Err(protected_material_error(error)),
+            Err(error) => return Err(protected_store_error(error)),
         }
         let protected_request = protected_store
-            .get(&material_key)
-            .map_err(protected_material_error)?;
+            .get(&request_key)
+            .map_err(protected_store_error)?;
         let decoded = decode_protected_team_edit_request(&protected_request)?;
         let protected_change = decoded.link.decode_team_group_change()?;
         validate_rotation_change(&protected_change, &binding)?;
@@ -2966,12 +2969,12 @@ impl FoksClient {
                             TeamMutationState::Rejected,
                             now_microseconds()?,
                         )?;
-                        remove_team_rekey_material(protected_store, &material_key)?;
+                        remove_team_request(protected_store, &request_key)?;
                         return Err(post_error.unwrap_or(wait_error));
                     }
                     // Not yet observable (never-arrived or Merkle-lagged): retain
                     // the ambiguous journal. Status replies are not authenticated
-                    // evidence that can safely release caller-held key material.
+                    // evidence that can safely release caller-held key link_output.
                     Ok(RotationOutcome::Unresolved) | Err(_) => {
                         return Err(post_error.unwrap_or(wait_error));
                     }
@@ -2979,7 +2982,7 @@ impl FoksClient {
             }
         };
         finish_team_mutation_journal(&mut hard_store, &operation_id)?;
-        remove_team_rekey_material(protected_store, &material_key)?;
+        remove_team_request(protected_store, &request_key)?;
         Ok(RotatedTeamPtks {
             operation_id,
             expected_seqno,
@@ -3079,11 +3082,11 @@ fn refresh_binding_from_request(
     })
 }
 
-fn team_rekey_material_key(operation_id: &[u8; 16]) -> Vec<u8> {
+fn team_member_key_refresh_request_key(operation_id: &[u8; 16]) -> Vec<u8> {
     crate::ProtectedRecordKey::TeamRekey(operation_id).encoded()
 }
 
-fn team_rotation_material_key(operation_id: &[u8; 16]) -> Vec<u8> {
+fn team_member_change_request_key(operation_id: &[u8; 16]) -> Vec<u8> {
     crate::ProtectedRecordKey::TeamRotation(operation_id).encoded()
 }
 
@@ -3136,14 +3139,14 @@ fn frame_protected_team_edit_with_bearer(
     )?)
 }
 
-fn protected_material_error(error: ProtectedStoreError) -> Error {
-    Error::ProtectedMaterial(error.to_string())
+fn protected_store_error(error: ProtectedStoreError) -> Error {
+    Error::ProtectedStore(error.to_string())
 }
 
-fn remove_team_rekey_material(store: &mut dyn ProtectedMutationStore, key: &[u8]) -> Result<()> {
+fn remove_team_request(store: &mut dyn ProtectedMutationStore, key: &[u8]) -> Result<()> {
     match store.remove(key) {
         Ok(()) | Err(ProtectedStoreError::Missing) => Ok(()),
-        Err(error) => Err(protected_material_error(error)),
+        Err(error) => Err(protected_store_error(error)),
     }
 }
 

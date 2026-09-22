@@ -6,7 +6,7 @@ use foks_verify::{VerifiedSharedKey, VerifiedTeamState, VerifiedUserState};
 use super::super::AuthenticatedTeamOutcome;
 use crate::{Error, FoksClient, PinnedHost, Result};
 
-/// Caller-durable new PTK material. Every role listed by the authenticated
+/// Caller-durable new PTK seeds. Every role listed by the authenticated
 /// removal schedule must appear exactly once.
 pub struct TeamPtkRotationSeed<'a> {
     pub role: Role,
@@ -21,7 +21,7 @@ pub struct TeamMutationRecovery<'a> {
 
 /// Inputs retained by the caller's encrypted secret store before submission.
 ///
-/// `remaining_users` supplies authenticated PUK material for every remaining
+/// `remaining_users` supplies authenticated PUK keys for every remaining
 /// local user except the actor, which is already available from authentication.
 pub struct RemoveLocalTeamMemberRequest<'a> {
     pub target_user: &'a EntityId,
@@ -362,7 +362,7 @@ pub struct ChangeTeamMemberRequest<'a> {
     pub destination_role: Role,
     pub replacement: Option<VerifiedMemberParty<'a>>,
     pub rotations: &'a [TeamPtkRotationSeed<'a>],
-    /// Complete post-transition roster material except the acting user and
+    /// Complete post-transition roster entries except the acting user and
     /// changed party, both of which are supplied by the authenticated session
     /// and `replacement` respectively.
     pub remaining_parties: &'a [VerifiedMemberParty<'a>],
@@ -388,7 +388,7 @@ pub struct RefreshTeamMemberKeysRequest<'a> {
     pub expected_seqno: u64,
     pub changes: &'a [TeamMemberKeyRefresh<'a>],
     pub rotations: &'a [TeamPtkRotationSeed<'a>],
-    /// Complete pre-transition roster material except the acting user and all
+    /// Complete pre-transition roster entries except the acting user and all
     /// changed parties. Each changed party is supplied by its replacement.
     pub remaining_parties: &'a [VerifiedMemberParty<'a>],
 }

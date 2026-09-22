@@ -98,10 +98,10 @@ impl ProtectedRecordDescriptor {
 
     /// Fingerprint and typed scope validation lives with the owning workflow.
     /// AEAD authentication is additionally performed by the encrypted store.
-    pub fn validate_material(&self, bytes: &[u8]) -> crate::Result<()> {
+    pub fn validate_payload(&self, bytes: &[u8]) -> crate::Result<()> {
         match (&self.owner, self.family) {
             (ProtectedRecordOwner::Mutation(op), ProtectedRecordFamily::Mutation) => {
-                crate::mutation::validate_material(op, bytes)
+                crate::mutation::validate_protected_request(op, bytes)
             }
             (ProtectedRecordOwner::Mutation(_), ProtectedRecordFamily::InvitationAck) => {
                 if !bytes.is_empty() {
@@ -110,7 +110,7 @@ impl ProtectedRecordDescriptor {
                 Ok(())
             }
             (ProtectedRecordOwner::Chat(op), ProtectedRecordFamily::Chat) => {
-                crate::realtime::validate_inventory_material(op, bytes).map(|_| ())
+                crate::realtime::validate_inventory_request(op, bytes).map(|_| ())
             }
             (ProtectedRecordOwner::Sso(flow), ProtectedRecordFamily::Sso(stage)) => {
                 crate::sso::validate_inventory_stage(flow, stage, bytes)
@@ -184,7 +184,7 @@ impl ProtectedRecordInventory {
                     break;
                 }
                 let name = EncryptedFileMutationStore::record_filename(&record.key)
-                    .map_err(|e| crate::Error::ProtectedMaterial(e.to_string()))?;
+                    .map_err(|e| crate::Error::ProtectedStore(e.to_string()))?;
                 if self.records.insert(name, record).is_some() {
                     self.saturated = true;
                     return Err(crate::Error::OperationBinding(

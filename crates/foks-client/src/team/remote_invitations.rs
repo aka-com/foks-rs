@@ -202,7 +202,7 @@ impl FoksClient {
     ) -> Result<super::InvitationProgress> {
         let mut op = self.invitation_operation(home, credential.uid(), id)?;
         if op.state.is_terminal() {
-            crate::mutation::remove_terminal_material(protected, &op.material_ref)?;
+            crate::mutation::remove_terminal_request(protected, &op.material_ref)?;
             return Ok(super::InvitationProgress {
                 operation: op,
                 receipt: None,
@@ -210,7 +210,7 @@ impl FoksClient {
             });
         }
         let intent = super::InvitationIntent::decode(
-            &MutationCoordinator::new(&home.database_path, protected).load_bound_material(&op)?,
+            &MutationCoordinator::new(&home.database_path, protected).load_bound_request(&op)?,
         )?;
         let super::InvitationIntent::RemoteAcceptance(p) = intent else {
             return Err(Error::OperationBinding(
@@ -232,7 +232,7 @@ impl FoksClient {
                 });
             }
             Err(ProtectedStoreError::Missing) => {}
-            Err(e) => return Err(Error::ProtectedMaterial(e.to_string())),
+            Err(e) => return Err(Error::ProtectedStore(e.to_string())),
         }
         let mut phase = HardStateStore::open(&home.database_path)?
             .invitation_delivery_phase(&id)?
@@ -296,7 +296,7 @@ impl FoksClient {
                 Ok(r) => {
                     protected
                         .put_if_absent(&ack_key, &zeroize::Zeroizing::new(r.encoded()?))
-                        .map_err(|e| Error::ProtectedMaterial(e.to_string()))?;
+                        .map_err(|e| Error::ProtectedStore(e.to_string()))?;
                     MutationCoordinator::new(&home.database_path, protected)
                         .remote_verified(&id)?;
                     receipt = Some(r);

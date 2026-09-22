@@ -390,12 +390,12 @@ impl FoksClient {
         EntityId::from_bytes(op.subject_id.clone())?
             .require_type(foks_proto::ENTITY_BOT_TOKEN_KEY)?;
         if op.state.is_terminal() {
-            crate::mutation::remove_terminal_material(protected, &op.material_ref)?;
+            crate::mutation::remove_terminal_request(protected, &op.material_ref)?;
             return Ok(op);
         }
         self.bound_user_mutation(host, id, kind, existing.uid(), protected)?;
         let frame =
-            MutationCoordinator::new(&host.database_path, protected).load_bound_material(&op)?;
+            MutationCoordinator::new(&host.database_path, protected).load_bound_request(&op)?;
         let call = foks_rpc::read_call(
             &mut std::io::Cursor::new(&*frame),
             foks_rpc::DEFAULT_MAX_FRAME_LENGTH,

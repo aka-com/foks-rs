@@ -2007,7 +2007,7 @@ impl CheckedProfileSession<'_> {
                                 return Ok(TeamRefreshAttempt::Complete);
                             }
                         } else {
-                            self.client.discard_unjournaled_team_rekey_material(
+                            self.client.discard_unjournaled_team_rekey_request(
                                 host,
                                 &pending.operation_id,
                                 protected_store,
@@ -2124,7 +2124,7 @@ impl CheckedProfileSession<'_> {
                     }
                     if occupant.is_some() {
                         drop(hard_store);
-                        self.client.discard_unjournaled_team_rekey_material(
+                        self.client.discard_unjournaled_team_rekey_request(
                             host,
                             &pending.operation_id,
                             protected_store,
@@ -2144,7 +2144,7 @@ impl CheckedProfileSession<'_> {
                         // Discarding it is safe and avoids stranding cleanup
                         // on a temporarily unavailable recursive witness.
                         drop(hard_store);
-                        self.client.discard_unjournaled_team_rekey_material(
+                        self.client.discard_unjournaled_team_rekey_request(
                             host,
                             &pending.operation_id,
                             protected_store,
@@ -2649,7 +2649,7 @@ impl CheckedProfileSession<'_> {
                 }
                 if operation.state == TeamMutationState::Verified {
                     drop(hard_store);
-                    self.client.cleanup_verified_team_rekey_material(
+                    self.client.cleanup_verified_team_rekey_request(
                         host,
                         team_id,
                         pending.expected_seqno,
@@ -2680,7 +2680,7 @@ impl CheckedProfileSession<'_> {
             }
             None => {
                 drop(hard_store);
-                self.client.discard_unjournaled_team_rekey_material(
+                self.client.discard_unjournaled_team_rekey_request(
                     host,
                     &pending.operation_id,
                     protected_store,

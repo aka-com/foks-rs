@@ -2,24 +2,28 @@ use super::*;
 use foks_server_db::{SsoAccess, SsoAccessState};
 use zeroize::Zeroize as _;
 impl SsoService {
-    pub(super) fn seal_access(&self, row: &SsoAccess, material: &Material) -> Result<Vec<u8>> {
+    pub(super) fn seal_access(
+        &self,
+        row: &SsoAccess,
+        payload: &SsoSessionPayload,
+    ) -> Result<Vec<u8>> {
         let bytes = Zeroizing::new(
-            serde_json::to_vec(material).map_err(|_| Error::Sso("invalid access encoding"))?,
+            serde_json::to_vec(payload).map_err(|_| Error::Sso("invalid access encoding"))?,
         );
         envelope::seal_bytes(self.keys.as_ref(), self.entropy.as_ref(), &aad(row), &bytes)
     }
-    fn access_material(&self, row: &SsoAccess) -> Result<Material> {
+    fn access_payload(&self, row: &SsoAccess) -> Result<SsoSessionPayload> {
         let bytes = envelope::open_bytes(self.keys.as_ref(), &aad(row), &row.ciphertext)?;
-        let material: Material =
+        let payload: SsoSessionPayload =
             serde_json::from_slice(&bytes).map_err(|_| Error::Sso("invalid protected access"))?;
-        if material.bound_uid.as_deref() != Some(row.uid.as_slice())
-            || material.issuer != row.issuer
-            || material.subject != row.subject
-            || material.expires_at_ms != row.expires_at_ms
+        if payload.bound_uid.as_deref() != Some(row.uid.as_slice())
+            || payload.issuer != row.issuer
+            || payload.subject != row.subject
+            || payload.expires_at_ms != row.expires_at_ms
         {
             return Err(Error::Sso("protected access binding mismatch"));
         }
-        Ok(material)
+        Ok(payload)
     }
     /// One refresh claim per account. Network I/O never owns a writer transaction.
     pub fn ensure_access(&self, uid: &[u8], credential: &[u8]) -> Result<()> {
@@ -92,8 +96,8 @@ impl SsoService {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Sso("provider refresh busy"))?;
-        let mut material = self.access_material(&row)?;
-        let Some(refresh) = material.refresh_token.as_deref() else {
+        let mut payload = self.access_payload(&row)?;
+        let Some(refresh) = payload.refresh_token.as_deref() else {
             return Err(Error::Sso("reauthentication required"));
         };
         // A discovery failure has not submitted a rotating credential and is safe to retry.
@@ -101,7 +105,7 @@ impl SsoService {
         let claimed = self.transition_access(
             &row,
             SsoAccessState::Refreshing,
-            &material,
+            &payload,
             &credential,
             sequence,
         )?;
@@ -109,7 +113,7 @@ impl SsoService {
             &self.http,
             &self.client_config(),
             refresh,
-            &material.nonce,
+            &payload.nonce,
             self.now_ms()?,
         );
         let (tokens, identity) = match result {
@@ -123,7 +127,7 @@ impl SsoService {
                 } else {
                     SsoAccessState::ReauthenticationRequired
                 };
-                self.transition_access(&claimed, state, &material, &credential, sequence)?;
+                self.transition_access(&claimed, state, &payload, &credential, sequence)?;
                 return Err(error.into());
             }
         };
@@ -135,7 +139,7 @@ impl SsoService {
             self.transition_access(
                 &claimed,
                 SsoAccessState::ReauthenticationRequired,
-                &material,
+                &payload,
                 &credential,
                 sequence,
             )?;
@@ -143,21 +147,21 @@ impl SsoService {
                 "refreshed provider identity mismatch or expired",
             ));
         }
-        material.access_token.zeroize();
-        material.access_token = tokens.access.to_string();
+        payload.access_token.zeroize();
+        payload.access_token = tokens.access.to_string();
         if !tokens.id.is_empty() {
-            material.id_token.zeroize();
-            material.id_token = tokens.id.to_string();
+            payload.id_token.zeroize();
+            payload.id_token = tokens.id.to_string();
         }
         if let Some(refresh) = tokens.refresh {
-            material.refresh_token.zeroize();
-            material.refresh_token = Some(refresh.to_string());
+            payload.refresh_token.zeroize();
+            payload.refresh_token = Some(refresh.to_string());
         }
-        material.expires_at_ms = tokens.access_expires_at_ms;
+        payload.expires_at_ms = tokens.access_expires_at_ms;
         self.transition_access(
             &claimed,
             SsoAccessState::Active,
-            &material,
+            &payload,
             &credential,
             sequence,
         )?;
@@ -167,7 +171,7 @@ impl SsoService {
         &self,
         old: &SsoAccess,
         state: SsoAccessState,
-        material: &Material,
+        payload: &SsoSessionPayload,
         credential: &[u8],
         sequence: u64,
     ) -> Result<SsoAccess> {
@@ -177,8 +181,8 @@ impl SsoService {
             .revision
             .checked_add(1)
             .ok_or(Error::Sso("access revision overflow"))?;
-        next.expires_at_ms = material.expires_at_ms;
-        next.ciphertext = self.seal_access(&next, material)?;
+        next.expires_at_ms = payload.expires_at_ms;
+        next.ciphertext = self.seal_access(&next, payload)?;
         let old = old.clone();
         let copy = next.clone();
         let credential = credential.to_vec();

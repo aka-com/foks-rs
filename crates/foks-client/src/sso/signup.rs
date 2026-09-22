@@ -65,7 +65,7 @@ impl FoksClient {
             id_token: result.tokens.id_token.clone(),
             binding: m.binding,
         };
-        let args = match store.get(&material_key(&id, 3)) {
+        let args = match store.get(&protected_payload_key(&id, 3)) {
             Ok(bytes) => {
                 let args = RegSsoArgs::decode(&bytes)?;
                 let RegSsoArgs::Oauth2 {

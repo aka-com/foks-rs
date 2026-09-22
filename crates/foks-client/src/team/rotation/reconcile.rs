@@ -153,11 +153,11 @@ impl FoksClient {
             .team_mutation(expected_operation_id)?
             .ok_or(Error::TeamRequest("team transition is not recorded"))?;
         validate_rotation_operation(&operation, host, uid, team, expected_seqno)?;
-        let material_key = super::team_rotation_material_key(expected_operation_id);
+        let request_key = super::team_member_change_request_key(expected_operation_id);
         if operation.state != TeamMutationState::Verified {
             let exact_request = protected_store
-                .get(&material_key)
-                .map_err(super::protected_material_error)?;
+                .get(&request_key)
+                .map_err(super::protected_store_error)?;
             if foks_crypto::prefixed_hash(crate::TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &exact_request)
                 != operation.request_hash
             {
@@ -175,7 +175,7 @@ impl FoksClient {
             }
             finish_team_mutation_journal(&mut hard_store, &operation.operation_id)?;
         }
-        super::remove_team_rekey_material(protected_store, &material_key)?;
+        super::remove_team_request(protected_store, &request_key)?;
         Ok(RotatedTeamPtks {
             operation_id: operation.operation_id,
             expected_seqno,
@@ -315,11 +315,11 @@ impl FoksClient {
                 "caller-retained PTKs do not match the authenticated team state",
             ));
         }
-        let material_key = super::team_rotation_material_key(&operation_id);
+        let request_key = super::team_member_change_request_key(&operation_id);
         if operation.state != TeamMutationState::Verified {
             let exact_request = protected_store
-                .get(&material_key)
-                .map_err(super::protected_material_error)?;
+                .get(&request_key)
+                .map_err(super::protected_store_error)?;
             if foks_crypto::prefixed_hash(crate::TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &exact_request)
                 != operation.request_hash
             {
@@ -337,7 +337,7 @@ impl FoksClient {
             }
             finish_team_mutation_journal(&mut hard_store, &operation_id)?;
         }
-        super::remove_team_rekey_material(protected_store, &material_key)?;
+        super::remove_team_request(protected_store, &request_key)?;
         Ok(RotatedTeamPtks {
             operation_id,
             expected_seqno,

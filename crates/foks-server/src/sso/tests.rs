@@ -185,9 +185,9 @@ fn callbacks_are_durable_nonreplayable_and_database_contains_only_envelopes() {
     assert_eq!(fixture.idp.calls.load(Ordering::SeqCst), 1);
     let row = service.row(&arg.id).unwrap();
     assert_eq!(row.state, SsoSessionState::Ready);
-    let material = service.material(&row).unwrap();
-    assert_eq!(material.subject, "stable-subject");
-    assert_eq!(material.access_token, "opaque-access-SECRET");
+    let payload = service.session_payload(&row).unwrap();
+    assert_eq!(payload.subject, "stable-subject");
+    assert_eq!(payload.access_token, "opaque-access-SECRET");
     assert!(!row.ciphertext.windows(6).any(|v| v == b"SECRET"));
     assert_eq!(
         service.session_state(&arg.id).unwrap(),
@@ -197,7 +197,7 @@ fn callbacks_are_durable_nonreplayable_and_database_contains_only_envelopes() {
     let reopened = fixture.open();
     assert_eq!(
         reopened
-            .material(&reopened.row(&arg.id).unwrap())
+            .session_payload(&reopened.row(&arg.id).unwrap())
             .unwrap()
             .refresh_token
             .as_deref(),
@@ -258,7 +258,7 @@ fn interrupted_exchange_is_fenced_on_restart_and_policy_rotation_fences_old_owne
         .transition(
             &row,
             SsoSessionState::Exchanging,
-            &service.material(&row).unwrap(),
+            &service.session_payload(&row).unwrap(),
         )
         .unwrap();
     drop(service);

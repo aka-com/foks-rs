@@ -110,7 +110,7 @@ impl FoksClient {
             team.as_bytes(),
             TeamMutationKind::MetadataChange,
         )? {
-            let key = team_index_range_material_key(&operation.operation_id);
+            let key = team_index_range_request_key(&operation.operation_id);
             match protected_store.get(&key) {
                 Ok(exact_request) => {
                     return self.resume_team_index_range_mutation(
@@ -133,7 +133,7 @@ impl FoksClient {
                         "pending team metadata mutation lost its protected request",
                     ));
                 }
-                Err(error) => return Err(Error::ProtectedMaterial(error.to_string())),
+                Err(error) => return Err(Error::ProtectedStore(error.to_string())),
             }
         }
 
@@ -156,7 +156,7 @@ impl FoksClient {
                 &merkle.root().encoded()?,
             )?,
         };
-        let material = make_team_index_range_link(
+        let link_output = make_team_index_range_link(
             &TeamMetadataInput {
                 actor: credential.uid(),
                 actor_source_role: actor_public.role,
@@ -172,8 +172,8 @@ impl FoksClient {
             &owner.seed,
         )?;
         let exact_request = encode_team_metadata_edit_request(&TeamMetadataEditArgument {
-            link: &material.link,
-            next_tree_location: material.next_tree_location,
+            link: &link_output.link,
+            next_tree_location: link_output.next_tree_location,
         })?;
         let operation_id = team_index_range_operation_id(
             host.host_id(),
@@ -182,14 +182,14 @@ impl FoksClient {
             expected_seqno,
             &next,
         )?;
-        let material_key = team_index_range_material_key(&operation_id);
-        match protected_store.put_if_absent(&material_key, &exact_request) {
+        let request_key = team_index_range_request_key(&operation_id);
+        match protected_store.put_if_absent(&request_key, &exact_request) {
             Ok(()) | Err(ProtectedStoreError::Conflict) => {}
-            Err(error) => return Err(Error::ProtectedMaterial(error.to_string())),
+            Err(error) => return Err(Error::ProtectedStore(error.to_string())),
         }
         let retained = protected_store
-            .get(&material_key)
-            .map_err(|error| Error::ProtectedMaterial(error.to_string()))?;
+            .get(&request_key)
+            .map_err(|error| Error::ProtectedStore(error.to_string()))?;
         let retained_target =
             validate_protected_team_index_range_request(&retained, team, expected_seqno)?;
         if !rational_range_equal(&retained_target, &next)? {
@@ -258,7 +258,7 @@ impl FoksClient {
                 &target,
             )?;
             super::membership::finish_team_mutation_journal(hard_store, &operation.operation_id)?;
-            remove_team_index_range_material(protected_store, &operation.operation_id)?;
+            remove_team_index_range_request(protected_store, &operation.operation_id)?;
             return Ok(TeamIndexRangeMutationOutcome {
                 operation_id: operation.operation_id,
                 range: target,
@@ -350,14 +350,14 @@ impl FoksClient {
                     TeamMutationState::Superseded,
                     now_microseconds()?,
                 )?;
-                remove_team_index_range_material(protected_store, &operation.operation_id)?;
+                remove_team_index_range_request(protected_store, &operation.operation_id)?;
                 return Err(error);
             }
             Err(_) if post_error.is_some() => return Err(post_error.expect("checked above")),
             Err(error) => return Err(error),
         };
         super::membership::finish_team_mutation_journal(hard_store, &operation.operation_id)?;
-        remove_team_index_range_material(protected_store, &operation.operation_id)?;
+        remove_team_index_range_request(protected_store, &operation.operation_id)?;
         Ok(TeamIndexRangeMutationOutcome {
             operation_id: operation.operation_id,
             range: target,
@@ -672,17 +672,17 @@ fn rational_value(value: &Rational) -> Value {
     ])
 }
 
-fn team_index_range_material_key(operation_id: &[u8; 16]) -> Vec<u8> {
+fn team_index_range_request_key(operation_id: &[u8; 16]) -> Vec<u8> {
     crate::ProtectedRecordKey::TeamMetadata(operation_id).encoded()
 }
 
-fn remove_team_index_range_material(
+fn remove_team_index_range_request(
     store: &mut dyn ProtectedMutationStore,
     operation_id: &[u8; 16],
 ) -> Result<()> {
-    match store.remove(&team_index_range_material_key(operation_id)) {
+    match store.remove(&team_index_range_request_key(operation_id)) {
         Ok(()) | Err(ProtectedStoreError::Missing) => Ok(()),
-        Err(error) => Err(Error::ProtectedMaterial(error.to_string())),
+        Err(error) => Err(Error::ProtectedStore(error.to_string())),
     }
 }
 

@@ -367,11 +367,11 @@ export function mockChat(snapshot?: AgentSnapshot) {
       const op = team.operations.get(action.operation);
       if (!op || op.channel !== action.channel || op.kind !== 'send-message')
         throw { code: 'chat-not-found', message: 'Operation not found.' };
-      const material = [...team.submissions.values()].find(
+      const storedSubmission = [...team.submissions.values()].find(
         (s) => s.op.id === op.id,
       );
-      const submitted = material
-        ? (JSON.parse(material.input) as ChatAction)
+      const submitted = storedSubmission
+        ? (JSON.parse(storedSubmission.input) as ChatAction)
         : null;
       result = {
         kind: 'operation-body',

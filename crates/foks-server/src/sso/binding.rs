@@ -52,13 +52,13 @@ impl SsoService {
                 }
                 _ => return Err(Error::Sso("authentication rejected or expired")),
             }
-            let mut material = self.material(&row)?;
-            if material.expires_at_ms <= self.now_ms()? {
+            let mut payload = self.session_payload(&row)?;
+            if payload.expires_at_ms <= self.now_ms()? {
                 return Err(Error::Sso("provider token expired"));
             }
-            if let Some(reservation) = &material.poll_reservation {
+            if let Some(reservation) = &payload.poll_reservation {
                 return Ok(Some(poll_result(
-                    &material,
+                    &payload,
                     UsernameReservation::decode(reservation)?,
                 )?));
             }
@@ -73,21 +73,21 @@ impl SsoService {
             let normalized = if arg.for_login {
                 None
             } else {
-                let name = foks_verify::normalize_username(material.username.as_bytes())
+                let name = foks_verify::normalize_username(payload.username.as_bytes())
                     .ok_or(Error::Sso("provider username is invalid"))?;
                 self.entropy.fill(&mut reservation.token)?;
                 reservation.sequence = 1;
-                reservation.expires_at = row.expires_at_ms.min(material.expires_at_ms);
+                reservation.expires_at = row.expires_at_ms.min(payload.expires_at_ms);
                 Some(name)
             };
-            let result = poll_result(&material, reservation.clone())?;
-            material.poll_reservation = Some(reservation.encoded()?);
+            let result = poll_result(&payload, reservation.clone())?;
+            payload.poll_reservation = Some(reservation.encoded()?);
             let mut next = row.clone();
             next.revision = next
                 .revision
                 .checked_add(1)
                 .ok_or(Error::Sso("session revision overflow"))?;
-            next.ciphertext = self.seal(&next, &material)?;
+            next.ciphertext = self.seal(&next, &payload)?;
             let ciphertext = next.ciphertext;
             match self
                 .writer
@@ -143,26 +143,26 @@ impl SsoService {
             return Err(Error::Sso("OIDC is required by this host"));
         };
         let row = self.row(id)?;
-        let mut material = self.material(&row)?;
-        let payload = foks_crypto::verify_oauth2_binding(binding)?;
+        let mut session_payload = self.session_payload(&row)?;
+        let binding_payload = foks_crypto::verify_oauth2_binding(binding)?;
         let uid_bytes: [u8; 33] = uid
             .as_bytes()
             .try_into()
             .map_err(|_| Error::Sso("invalid UID"))?;
         let hash = foks_crypto::prefixed_hash(0x68b3_c398_ea5f_d71e, &arg.encoded()?);
-        if payload.binding.uid != *uid
-            || payload.binding.host.as_bytes() != self.host
-            || foks_crypto::oauth2_binding_nonce(&payload.binding)? != material.nonce
-            || payload.id_token.expose() != material.id_token
-            || material.expires_at_ms <= self.now_ms()?
+        if binding_payload.binding.uid != *uid
+            || binding_payload.binding.host.as_bytes() != self.host
+            || foks_crypto::oauth2_binding_nonce(&binding_payload.binding)? != session_payload.nonce
+            || binding_payload.id_token.expose() != session_payload.id_token
+            || session_payload.expires_at_ms <= self.now_ms()?
         {
             return Err(Error::Sso("signed token binding mismatch"));
         }
         if row.state == SsoSessionState::Completed {
             if signup.is_none()
                 && row.uid == Some(uid_bytes)
-                && material.bound_uid.as_deref() == Some(uid_bytes.as_slice())
-                && material.binding_hash == Some(hash)
+                && session_payload.bound_uid.as_deref() == Some(uid_bytes.as_slice())
+                && session_payload.binding_hash == Some(hash)
             {
                 return Ok(None);
             }
@@ -173,7 +173,7 @@ impl SsoService {
         }
         let host = self.host;
         let config_hash = self.config_hash;
-        let root = payload.binding.root.clone();
+        let root = binding_payload.binding.root.clone();
         let device = binding.key.as_bytes().to_vec();
         let (old, sequence) = self.writer.call(move |db| {
             db.sso_require_policy(&host, &config_hash)?;
@@ -203,15 +203,15 @@ impl SsoService {
             .ok_or(Error::Sso("authorization generation overflow"))?;
         let revision = if let Some((device, username, email, reservation)) = signup {
             if binding.key != *device
-                || username != material.username.as_bytes()
-                || email != material.email.as_deref().unwrap_or("").as_bytes()
+                || username != session_payload.username.as_bytes()
+                || email != session_payload.email.as_deref().unwrap_or("").as_bytes()
                 || old.is_some()
                 || sequence.is_some()
             {
                 return Err(Error::Sso("signup provider identity or signer mismatch"));
             }
             let stored = UsernameReservation::decode(
-                material
+                session_payload
                     .poll_reservation
                     .as_deref()
                     .ok_or(Error::Sso("signup must use its reserved poll result"))?,
@@ -221,7 +221,7 @@ impl SsoService {
             }
             1
         } else if let Some(old) = old {
-            if old.issuer != material.issuer || old.subject != material.subject {
+            if old.issuer != session_payload.issuer || old.subject != session_payload.subject {
                 return Err(Error::Sso("provider subject mismatch"));
             }
             old.revision
@@ -233,30 +233,30 @@ impl SsoService {
             }
             1
         };
-        material.binding_hash = Some(hash);
-        material.bound_uid = Some(uid_bytes.to_vec());
+        session_payload.binding_hash = Some(hash);
+        session_payload.bound_uid = Some(uid_bytes.to_vec());
         let mut completed = row.clone();
         completed.state = SsoSessionState::Completed;
         completed.revision = completed
             .revision
             .checked_add(1)
             .ok_or(Error::Sso("session revision overflow"))?;
-        let completed_ciphertext = self.seal(&completed, &material)?;
+        let completed_ciphertext = self.seal(&completed, &session_payload)?;
         let mut access = SsoAccess {
             host: self.host,
             uid: uid_bytes,
-            issuer: material.issuer.clone(),
-            subject: material.subject.clone(),
+            issuer: session_payload.issuer.clone(),
+            subject: session_payload.subject.clone(),
             config_hash: self.config_hash,
             revision,
             authorization_epoch: row.authorization_epoch,
             authorization_generation,
             interrupted: false,
             state: SsoAccessState::Active,
-            expires_at_ms: material.expires_at_ms,
+            expires_at_ms: session_payload.expires_at_ms,
             ciphertext: Vec::new(),
         };
-        access.ciphertext = self.seal_access(&access, &material)?;
+        access.ciphertext = self.seal_access(&access, &session_payload)?;
         Ok(Some(SsoAccountBinding {
             purpose,
             commitment: hash,
@@ -283,13 +283,13 @@ pub(crate) fn status(error: Error) -> foks_rpc::RpcStatus {
     }
 }
 
-fn poll_result(material: &Material, reservation: UsernameReservation) -> Result<Vec<u8>> {
+fn poll_result(payload: &SsoSessionPayload, reservation: UsernameReservation) -> Result<Vec<u8>> {
     Ok(OAuth2PollResult {
         tokens: OAuth2TokenSet {
-            access_token: OAuth2Secret::new(material.access_token.clone()),
-            id_token: OAuth2Secret::new(material.id_token.clone()),
-            expires_at: material.expires_at_ms,
-            username: material.username.clone(),
+            access_token: OAuth2Secret::new(payload.access_token.clone()),
+            id_token: OAuth2Secret::new(payload.id_token.clone()),
+            expires_at: payload.expires_at_ms,
+            username: payload.username.clone(),
         },
         reservation,
     }

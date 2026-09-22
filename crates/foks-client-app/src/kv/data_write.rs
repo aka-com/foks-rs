@@ -300,7 +300,7 @@ impl CheckedProfileSession<'_> {
         }
         let mut protected = self.data_mutations(master)?;
         let material = MutationCoordinator::new(&self.paths.hard_database, &mut protected)
-            .load_bound_material(&op)?;
+            .load_bound_request(&op)?;
         if prefixed_hash(INTENT_HASH, &material) != op.request_hash {
             return Err(Error::InvalidAccount("adapter input binding changed"));
         }

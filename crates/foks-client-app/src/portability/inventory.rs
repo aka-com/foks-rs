@@ -299,7 +299,7 @@ impl ClientStateMaintenanceGuard {
                         None => Err(foks_client::ProtectedStoreError::Missing),
                     };
                     match material {
-                        Ok(bytes) => record.validate_material(&bytes)?,
+                        Ok(bytes) => record.validate_payload(&bytes)?,
                         Err(foks_client::ProtectedStoreError::Missing)
                             if record.presence != ProtectedPresence::Required => {}
                         Err(e) => return Err(e.into()),
@@ -832,7 +832,7 @@ mod tests {
                     };
                     // Simulate the legitimately erased Unknown stage without network
                     // work; the public journal remains nonterminal and export-blocking.
-                    db.sso_record_with_material(&flow, 1, || Ok::<_, Error>(()))?;
+                    db.sso_record_with_protected_payload(&flow, 1, || Ok::<_, Error>(()))?;
                     db.sso_transition(&flow.id, S::Prepared, S::AwaitingBrowser, None)?;
                     db.sso_transition(&flow.id, S::AwaitingBrowser, S::Ready, None)?;
                     db.sso_set_commitment(&flow.id, &[7; 32])?;

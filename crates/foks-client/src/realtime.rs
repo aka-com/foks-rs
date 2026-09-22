@@ -87,7 +87,7 @@ mod capabilities;
 mod history;
 mod inbox;
 mod operations;
-pub(crate) use operations::validate_inventory_material;
+pub(crate) use operations::validate_inventory_request;
 mod session;
 pub use history::{ChatContent, ChatHistory, ChatMessage};
 pub use inbox::{

@@ -169,7 +169,7 @@ impl FoksClient {
             return Ok(None);
         }
         let intent = InvitationIntent::decode(
-            &MutationCoordinator::new(&host.database_path, protected).load_bound_material(op)?,
+            &MutationCoordinator::new(&host.database_path, protected).load_bound_request(op)?,
         )?;
         Ok(match intent {
             InvitationIntent::RemoteAcceptance(p) => Some(p.invite.host),
@@ -203,7 +203,7 @@ impl FoksClient {
     ) -> Result<InvitationProgress> {
         let mut op = self.invitation_operation(host, credential.uid(), id)?;
         if op.state.is_terminal() {
-            crate::mutation::remove_terminal_material(protected, &op.material_ref)?;
+            crate::mutation::remove_terminal_request(protected, &op.material_ref)?;
             return Ok(InvitationProgress {
                 operation: op,
                 receipt: None,
@@ -211,7 +211,7 @@ impl FoksClient {
             });
         }
         let intent = InvitationIntent::decode(
-            &MutationCoordinator::new(&host.database_path, protected).load_bound_material(&op)?,
+            &MutationCoordinator::new(&host.database_path, protected).load_bound_request(&op)?,
         )?;
         if matches!(&intent, InvitationIntent::RemoteAcceptance(_)) {
             return Err(Error::OperationBinding(
@@ -223,7 +223,7 @@ impl FoksClient {
         let ack = match protected.get(&receipt_key) {
             Ok(bytes) => Some(bytes),
             Err(ProtectedStoreError::Missing) => None,
-            Err(e) => return Err(Error::ProtectedMaterial(e.to_string())),
+            Err(e) => return Err(Error::ProtectedStore(e.to_string())),
         };
         let invite = match &intent {
             InvitationIntent::Certificate { prepared, .. } => Some(prepared.invite.export()?),
@@ -265,7 +265,7 @@ impl FoksClient {
                         .unwrap_or_default();
                     protected
                         .put_if_absent(&receipt_key, &ack)
-                        .map_err(|e| Error::ProtectedMaterial(e.to_string()))?;
+                        .map_err(|e| Error::ProtectedStore(e.to_string()))?;
                     MutationCoordinator::new(&host.database_path, protected)
                         .remote_verified(&id)?;
                     receipt = r;

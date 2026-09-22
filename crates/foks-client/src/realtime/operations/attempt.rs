@@ -17,7 +17,7 @@ impl ChatSession<'_> {
             return self.reconcile_operation(rpc, store, id);
         }
         self.refresh()?;
-        let request = self.material(store, &op)?;
+        let request = self.protected_request(store, &op)?;
         match &request {
             RealtimeRequest::Send(arg) => {
                 let md = self.channel(rpc, RtChannelId(op.scope.channel), true)?;

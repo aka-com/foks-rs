@@ -1,9 +1,9 @@
-//! Scope-bound protected material and durable operation lifetimes.
+//! Scope-bound protected request and durable operation lifetimes.
 use super::*;
 
 impl ChatSession<'_> {
-    /// Recover only retained send material, after fresh channel read authorization.
-    /// This never attempts delivery, changes a receipt or retains terminal material.
+    /// Recover only retained send request, after fresh channel read authorization.
+    /// This never attempts delivery, changes a receipt or retains terminal request.
     pub fn recover_operation_text(
         &mut self,
         rpc: &mut impl ChatTransport,
@@ -19,12 +19,12 @@ impl ChatSession<'_> {
         }
         self.refresh()?;
         let md = self.channel(rpc, channel, false)?;
-        let bytes = match store.get(&material_key(&op)) {
+        let bytes = match store.get(&protected_request_key(&op)) {
             Ok(bytes) => bytes,
             Err(crate::ProtectedStoreError::Missing) => return Ok(None),
-            Err(error) => return Err(Error::ProtectedMaterial(error.to_string())),
+            Err(error) => return Err(Error::ProtectedStore(error.to_string())),
         };
-        let RealtimeRequest::Send(request) = decode_material(&op, &bytes)? else {
+        let RealtimeRequest::Send(request) = decode_protected_request(&op, &bytes)? else {
             return Err(Error::ChatIntegrity("retained operation is not a send"));
         };
         if request.send.metadata.id.0 != op.id || request.send.channel != channel.short() {
@@ -51,7 +51,7 @@ impl ChatSession<'_> {
             .map_err(|_| Error::ChatChannelIntegrity("retained send text is not UTF-8"))?;
         Ok(Some(Zeroizing::new(text.to_owned())))
     }
-    /// Resolve a durable submission without connecting or loading protected material.
+    /// Resolve a durable submission without connecting or loading protected request.
     pub fn submitted_operation(
         &self,
         submission: Option<&ChatSubmission>,
@@ -90,10 +90,10 @@ impl ChatSession<'_> {
             rejection_code: None,
         };
         self.hard()?
-            .chat_record_submission_with_material(&op, submission, || {
+            .chat_record_submission_with_protected_request(&op, submission, || {
                 store
-                    .put_if_absent(&material_key(&op), &bytes)
-                    .map_err(|e| Error::ProtectedMaterial(e.to_string()))
+                    .put_if_absent(&protected_request_key(&op), &bytes)
+                    .map_err(|e| Error::ProtectedStore(e.to_string()))
             })?;
         Ok(op)
     }
@@ -111,15 +111,15 @@ impl ChatSession<'_> {
         Ok(op)
     }
 
-    pub(super) fn material(
+    pub(super) fn protected_request(
         &self,
         store: &mut impl ProtectedMutationStore,
         op: &ChatOperation,
     ) -> Result<RealtimeRequest> {
         let bytes = store
-            .get(&material_key(op))
-            .map_err(|e| Error::ProtectedMaterial(e.to_string()))?;
-        decode_material(op, &bytes)
+            .get(&protected_request_key(op))
+            .map_err(|e| Error::ProtectedStore(e.to_string()))?;
+        decode_protected_request(op, &bytes)
     }
 
     pub fn list_cleanup_pending(&self) -> Result<Vec<ChatOperation>> {
@@ -149,7 +149,7 @@ impl ChatSession<'_> {
         self.terminal_outcome(store, id)
     }
 
-    /// Retry terminal material cleanup, without a network connection or PTKs.
+    /// Retry terminal request cleanup, without a network connection or PTKs.
     pub fn finalize_operation(
         &self,
         store: &mut impl ProtectedMutationStore,
@@ -181,26 +181,29 @@ impl ChatSession<'_> {
         store: &mut impl ProtectedMutationStore,
         op: &ChatOperation,
     ) -> Result<()> {
-        remove_terminal_material(store, op)?;
+        remove_terminal_request(store, op)?;
         self.hard()?.chat_complete_cleanup(&op.id)?;
         Ok(())
     }
 }
 
-fn remove_terminal_material(
+fn remove_terminal_request(
     store: &mut impl ProtectedMutationStore,
     op: &ChatOperation,
 ) -> Result<()> {
     if !op.state.is_terminal() {
         return Err(Error::ChatOperationState("operation is not terminal"));
     }
-    match store.remove(&material_key(op)) {
+    match store.remove(&protected_request_key(op)) {
         Ok(()) | Err(crate::ProtectedStoreError::Missing) => Ok(()),
-        Err(error) => Err(Error::ProtectedMaterial(error.to_string())),
+        Err(error) => Err(Error::ProtectedStore(error.to_string())),
     }
 }
 
-pub(crate) fn decode_material(op: &ChatOperation, bytes: &[u8]) -> Result<RealtimeRequest> {
+pub(crate) fn decode_protected_request(
+    op: &ChatOperation,
+    bytes: &[u8],
+) -> Result<RealtimeRequest> {
     if foks_crypto::prefixed_hash(REQUEST_HASH_DOMAIN, bytes) != op.request_hash {
         return Err(Error::ChatIntegrity("pending request changed"));
     }
@@ -211,7 +214,7 @@ pub(crate) fn decode_material(op: &ChatOperation, bytes: &[u8]) -> Result<Realti
     Ok(RealtimeRequest::decode_argument(pos, bytes)?)
 }
 
-fn material_key(op: &ChatOperation) -> Vec<u8> {
+fn protected_request_key(op: &ChatOperation) -> Vec<u8> {
     crate::ProtectedRecordKey::Chat(op).encoded()
 }
 
@@ -243,34 +246,37 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_preparation_leaves_only_protected_material_then_exact_retry_commits() {
+    fn interrupted_preparation_leaves_only_protected_request_then_exact_retry_commits() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("hard");
-        let material_path = dir.path().join("material");
+        let protected_request_path = dir.path().join("protected-request");
         let op = operation();
         let submission = ChatSubmission {
             id: [9; 16],
             input_mac: [10; 32],
         };
-        let key = material_key(&op);
+        let key = protected_request_key(&op);
         let mut db = HardStateStore::open(&db_path).unwrap();
-        let mut protected = store(&material_path);
+        let mut protected = store(&protected_request_path);
         // Unwind after the durable file write, before SQLite commit. Dropping the
         // transaction simulates the rollback observed when reopening after a crash.
         let interruption = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ =
-                db.chat_record_submission_with_material::<Error>(&op, Some(&submission), || {
+            let _ = db.chat_record_submission_with_protected_request::<Error>(
+                &op,
+                Some(&submission),
+                || {
                     protected
                         .put_if_absent(&key, b"retained encrypted request")
                         .unwrap();
                     panic!("interrupted before ledger commit");
-                });
+                },
+            );
         }));
         assert!(interruption.is_err());
         drop(db);
         drop(protected);
         let mut db = HardStateStore::open(&db_path).unwrap();
-        let mut protected = store(&material_path);
+        let mut protected = store(&protected_request_path);
         assert!(db.chat_operation(&op.id).unwrap().is_none());
         assert!(db
             .chat_submission(&op.scope, &submission)
@@ -280,10 +286,10 @@ mod tests {
             protected.get(&key).unwrap().as_slice(),
             b"retained encrypted request"
         );
-        db.chat_record_submission_with_material(&op, Some(&submission), || {
+        db.chat_record_submission_with_protected_request(&op, Some(&submission), || {
             protected
                 .put_if_absent(&key, b"retained encrypted request")
-                .map_err(|e| Error::ProtectedMaterial(e.to_string()))
+                .map_err(|e| Error::ProtectedStore(e.to_string()))
         })
         .unwrap();
         drop(db);
@@ -301,9 +307,9 @@ mod tests {
         fn put_if_absent(
             &mut self,
             key: &[u8],
-            material: &[u8],
+            value: &[u8],
         ) -> std::result::Result<(), ProtectedStoreError> {
-            self.0.put_if_absent(key, material)
+            self.0.put_if_absent(key, value)
         }
         fn get(
             &mut self,
@@ -322,23 +328,23 @@ mod tests {
     fn failed_terminal_cleanup_preserves_identity_and_retries_after_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("hard");
-        let material_path = dir.path().join("material");
+        let protected_request_path = dir.path().join("protected-request");
         let mut db = HardStateStore::open(&db_path).unwrap();
         let op = operation();
-        let mut protected = FailingRemoval(store(&material_path));
+        let mut protected = FailingRemoval(store(&protected_request_path));
         protected
-            .put_if_absent(&material_key(&op), b"request")
+            .put_if_absent(&protected_request_key(&op), b"request")
             .unwrap();
         db.chat_record(&op).unwrap();
         assert!(matches!(
-            remove_terminal_material(&mut protected, &op),
+            remove_terminal_request(&mut protected, &op),
             Err(Error::ChatOperationState(_))
         ));
         db.chat_cancel(&op.id).unwrap();
         let cancelled = db.chat_operation(&op.id).unwrap().unwrap();
         assert!(matches!(
-            remove_terminal_material(&mut protected, &cancelled),
-            Err(Error::ProtectedMaterial(_))
+            remove_terminal_request(&mut protected, &cancelled),
+            Err(Error::ProtectedStore(_))
         ));
         drop(db);
         drop(protected);
@@ -350,38 +356,38 @@ mod tests {
             vec![cancelled.clone()]
         );
         assert_eq!(cancelled.state, State::Cancelled);
-        let mut protected = store(&material_path);
-        assert!(protected.get(&material_key(&op)).is_ok());
-        remove_terminal_material(&mut protected, &cancelled).unwrap();
+        let mut protected = store(&protected_request_path);
+        assert!(protected.get(&protected_request_key(&op)).is_ok());
+        remove_terminal_request(&mut protected, &cancelled).unwrap();
         drop(db);
         drop(protected);
         let mut db = HardStateStore::open(&db_path).unwrap();
-        let mut protected = store(&material_path);
+        let mut protected = store(&protected_request_path);
         assert_eq!(
             db.chat_cleanup_pending(&op.scope.host, &op.scope.uid, &op.scope.team)
                 .unwrap(),
             vec![cancelled.clone()]
         );
-        remove_terminal_material(&mut protected, &cancelled).unwrap();
+        remove_terminal_request(&mut protected, &cancelled).unwrap();
         db.chat_complete_cleanup(&op.id).unwrap();
         assert!(db
             .chat_cleanup_pending(&op.scope.host, &op.scope.uid, &op.scope.team)
             .unwrap()
             .is_empty());
         assert!(matches!(
-            protected.get(&material_key(&op)),
+            protected.get(&protected_request_key(&op)),
             Err(ProtectedStoreError::Missing)
         ));
         assert_eq!(db.chat_operation(&op.id).unwrap(), Some(cancelled));
     }
 
     #[test]
-    fn retained_material_keys_bind_every_scope_component_and_operation() {
+    fn retained_request_keys_bind_every_scope_component_and_operation() {
         let dir = tempfile::tempdir().unwrap();
         let mut protected = store(dir.path());
         let op = operation();
         protected
-            .put_if_absent(&material_key(&op), b"request")
+            .put_if_absent(&protected_request_key(&op), b"request")
             .unwrap();
         for component in 0..5 {
             let mut changed = op.clone();
@@ -393,12 +399,15 @@ mod tests {
                 _ => changed.id[0] ^= 1,
             }
             assert!(matches!(
-                protected.get(&material_key(&changed)),
+                protected.get(&protected_request_key(&changed)),
                 Err(ProtectedStoreError::Missing)
             ));
         }
         assert_eq!(
-            protected.get(&material_key(&op)).unwrap().as_slice(),
+            protected
+                .get(&protected_request_key(&op))
+                .unwrap()
+                .as_slice(),
             b"request"
         );
     }

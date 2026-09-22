@@ -106,7 +106,7 @@ impl OidcOperatorConfig {
     pub(crate) fn fingerprint(&self, secret: &str) -> Result<[u8; 32]> {
         // Versioned, length-delimited security projection. Operational file paths and
         // rollout state are deliberately absent; secret bytes remain zeroized.
-        let mut material = zeroize::Zeroizing::new(b"fennec-oidc-provider-v1".to_vec());
+        let mut hash_input = zeroize::Zeroizing::new(b"fennec-oidc-provider-v1".to_vec());
         for value in [
             self.config_id.as_slice(),
             self.issuer.as_bytes(),
@@ -115,10 +115,13 @@ impl OidcOperatorConfig {
             self.redirect_uri.as_bytes(),
             secret.as_bytes(),
         ] {
-            material.extend_from_slice(&(value.len() as u64).to_be_bytes());
-            material.extend_from_slice(value);
+            hash_input.extend_from_slice(&(value.len() as u64).to_be_bytes());
+            hash_input.extend_from_slice(value);
         }
-        material.push(u8::from(self.client_secret_post));
-        Ok(foks_crypto::prefixed_hash(0x9125_9bfe_5daf_a940, &material))
+        hash_input.push(u8::from(self.client_secret_post));
+        Ok(foks_crypto::prefixed_hash(
+            0x9125_9bfe_5daf_a940,
+            &hash_input,
+        ))
     }
 }

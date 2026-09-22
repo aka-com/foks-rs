@@ -102,8 +102,8 @@ pub enum Error {
     KeyBinding(&'static str),
     #[error("FOKS mutation-journal binding failed: {0}")]
     OperationBinding(&'static str),
-    #[error("FOKS protected mutation material failed: {0}")]
-    ProtectedMaterial(String),
+    #[error("FOKS protected store failed: {0}")]
+    ProtectedStore(String),
     #[error("FOKS transition was not observed: {0}")]
     TransitionNotObserved(&'static str),
     #[error("pinned host is missing or has a malformed {0} service endpoint")]

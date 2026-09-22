@@ -503,7 +503,7 @@ impl FoksClient {
             .mutation(&operation_id)?
             .ok_or(Error::AccountRequest("signup operation is not recorded"))?;
         let material = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(&operation)?;
+            .load_bound_request(&operation)?;
         let (secrets, expected_username, request) = decode_signup_material(material)?;
         self.submit_or_reconcile_software_account(
             host,

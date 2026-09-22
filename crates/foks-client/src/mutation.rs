@@ -1,5 +1,5 @@
 //! Crash-safe mutation coordination across public SQLite state and protected
-//! retry material.
+//! retry request.
 
 use std::path::Path;
 
@@ -9,16 +9,16 @@ use zeroize::Zeroizing;
 
 use crate::{now_microseconds, Error, Result};
 
-const MATERIAL_HASH_TYPE_ID: u64 = 0x730c_cae1_c80d_4ec2;
+const PROTECTED_REQUEST_HASH_TYPE_ID: u64 = 0x730c_cae1_c80d_4ec2;
 
-/// Failure returned by a protected credential/material store.
+/// Failure returned by a protected store.
 #[derive(Debug, thiserror::Error)]
 pub enum ProtectedStoreError {
-    #[error("protected material already exists with different bytes")]
+    #[error("protected record already exists with different bytes")]
     Conflict,
-    #[error("protected material is absent")]
+    #[error("protected record is absent")]
     Missing,
-    #[error("protected material store failed: {0}")]
+    #[error("protected store failed: {0}")]
     Backend(String),
 }
 
@@ -29,14 +29,14 @@ pub trait ProtectedMutationStore {
     fn put_if_absent(
         &mut self,
         key: &[u8],
-        material: &[u8],
+        value: &[u8],
     ) -> std::result::Result<(), ProtectedStoreError>;
     fn get(&mut self, key: &[u8]) -> std::result::Result<Zeroizing<Vec<u8>>, ProtectedStoreError>;
     fn remove(&mut self, key: &[u8]) -> std::result::Result<(), ProtectedStoreError>;
 }
 
 /// Public binding fields for a new mutation. The coordinator computes and
-/// persists the protected-material fingerprint and initial timestamps.
+/// persists the protected-request fingerprint and initial timestamps.
 pub struct MutationDraft {
     pub operation_id: [u8; 16],
     pub kind: MutationKind,
@@ -61,9 +61,9 @@ enum JournalOwner {
 }
 
 /// Coordinates the required ordering between two durability domains:
-/// protected material first, then SQLite WAL. Remote verification remains
+/// protected request first, then SQLite WAL. Remote verification remains
 /// nonterminal until the application acknowledges its own durable commit;
-/// terminal SQLite state is committed before protected material is erased.
+/// terminal SQLite state is committed before protected request is erased.
 pub struct MutationCoordinator<'a, S: ProtectedMutationStore + ?Sized> {
     hard_database: &'a Path,
     protected: &'a mut S,
@@ -80,21 +80,21 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
     pub fn prepare(
         &mut self,
         draft: MutationDraft,
-        material: Zeroizing<Vec<u8>>,
+        protected_request: Zeroizing<Vec<u8>>,
     ) -> Result<MutationOperation> {
-        self.prepare_with_parent(draft, material, None)
+        self.prepare_with_parent(draft, protected_request, None)
     }
 
     /// Atomically binds a namespace step to its adapter intent before delivery.
     pub fn prepare_with_parent(
         &mut self,
         draft: MutationDraft,
-        material: Zeroizing<Vec<u8>>,
+        protected_request: Zeroizing<Vec<u8>>,
         parent: Option<([u8; 16], bool)>,
     ) -> Result<MutationOperation> {
         self.prepare_linked(
             draft,
-            material,
+            protected_request,
             match parent {
                 Some((parent, completion)) => JournalOwner::AdapterChild { parent, completion },
                 None => JournalOwner::Unowned,
@@ -105,22 +105,22 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
     pub(crate) fn prepare_sso_signup(
         &mut self,
         draft: MutationDraft,
-        material: Zeroizing<Vec<u8>>,
+        protected_request: Zeroizing<Vec<u8>>,
         flow: [u8; 16],
     ) -> Result<MutationOperation> {
-        self.prepare_linked(draft, material, JournalOwner::SsoSignup(flow))
+        self.prepare_linked(draft, protected_request, JournalOwner::SsoSignup(flow))
     }
 
     pub fn prepare_adapter_submission(
         &mut self,
         draft: MutationDraft,
-        material: Zeroizing<Vec<u8>>,
+        protected_request: Zeroizing<Vec<u8>>,
         handle: foks_proto::SubmissionHandle,
         sample: foks_client_db::AdapterTimeSample,
     ) -> Result<MutationOperation> {
         self.prepare_linked(
             draft,
-            material,
+            protected_request,
             JournalOwner::AdapterSubmission(handle, sample),
         )
     }
@@ -128,7 +128,7 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
     fn prepare_linked(
         &mut self,
         draft: MutationDraft,
-        material: Zeroizing<Vec<u8>>,
+        protected_request: Zeroizing<Vec<u8>>,
         owner: JournalOwner,
     ) -> Result<MutationOperation> {
         let material_ref = crate::ProtectedRecordKey::Mutation(&draft.operation_id).encoded();
@@ -142,7 +142,7 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
             expected_version: draft.expected_version,
             request_hash: draft.request_hash,
             material_ref: material_ref.clone(),
-            material_hash: prefixed_hash(MATERIAL_HASH_TYPE_ID, &material),
+            material_hash: prefixed_hash(PROTECTED_REQUEST_HASH_TYPE_ID, &protected_request),
             state: MutationState::Prepared,
             attempt_count: 0,
             created_at: now,
@@ -155,8 +155,8 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
             ));
         }
         self.protected
-            .put_if_absent(&material_ref, &material)
-            .map_err(material_error)?;
+            .put_if_absent(&material_ref, &protected_request)
+            .map_err(protected_store_error)?;
         let recorded = match owner {
             JournalOwner::AdapterChild { parent, completion } => {
                 hard_store.record_child_mutation(&operation, &parent, completion)
@@ -170,13 +170,13 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         if let Err(error) = recorded {
             // If another writer did not claim this exact operation ID, there
             // is no public journal that can refer to the newly installed
-            // material. Remove it so a chain-position conflict cannot leak a
-            // fresh encrypted request on every scheduler tick.
+            // protected request. Remove it so a chain-position conflict cannot
+            // leak a fresh encrypted request on every scheduler tick.
             if hard_store
                 .mutation(&operation.operation_id)
                 .is_ok_and(|recorded| recorded.is_none())
             {
-                remove_terminal_material(self.protected, &material_ref)?;
+                remove_terminal_request(self.protected, &material_ref)?;
             }
             return Err(error.into());
         }
@@ -187,7 +187,7 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         // Prove the protected record is still present and bound before the WAL
         // crosses the no-replay boundary.
         let operation = self.operation(operation_id)?;
-        self.load_bound_material(&operation)?;
+        self.load_bound_request(&operation)?;
         HardStateStore::open(self.hard_database)?
             .begin_mutation_submission(operation_id, now_microseconds()?)?;
         Ok(())
@@ -204,7 +204,7 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
 
     pub fn remote_verified(&mut self, operation_id: &[u8; 16]) -> Result<()> {
         let operation = self.operation(operation_id)?;
-        self.load_bound_material(&operation)?;
+        self.load_bound_request(&operation)?;
         HardStateStore::open(self.hard_database)?.advance_mutation(
             operation_id,
             MutationState::RemoteVerified,
@@ -215,7 +215,7 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
 
     /// Acknowledges that the consumer of a remotely verified mutation has
     /// durably committed its application-owned state. This is the only
-    /// successful path that erases protected mutation material.
+    /// successful path that erases protected mutation request.
     pub fn finalize(&mut self, operation_id: &[u8; 16]) -> Result<()> {
         let operation = self.operation(operation_id)?;
         HardStateStore::open(self.hard_database)?.advance_mutation(
@@ -225,7 +225,7 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
         )?;
         // A crash or backend failure leaves a terminal-owned protected record.
         // Its journal remains authoritative until owning-workflow cleanup succeeds.
-        remove_terminal_material(self.protected, &operation.material_ref)
+        remove_terminal_request(self.protected, &operation.material_ref)
     }
 
     pub fn remote_verified_and_finalize(&mut self, operation_id: &[u8; 16]) -> Result<()> {
@@ -240,7 +240,7 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
             MutationState::Rejected,
             now_microseconds()?,
         )?;
-        remove_terminal_material(self.protected, &operation.material_ref)
+        remove_terminal_request(self.protected, &operation.material_ref)
     }
 
     pub fn pending(&mut self, host_id: &[u8]) -> Result<Vec<MutationOperation>> {
@@ -249,16 +249,16 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
             .map_err(Error::from)
     }
 
-    pub fn load_bound_material(
+    pub fn load_bound_request(
         &mut self,
         operation: &MutationOperation,
     ) -> Result<Zeroizing<Vec<u8>>> {
-        let material = self
+        let protected_request = self
             .protected
             .get(&operation.material_ref)
-            .map_err(material_error)?;
-        validate_material(operation, &material)?;
-        Ok(material)
+            .map_err(protected_store_error)?;
+        validate_protected_request(operation, &protected_request)?;
+        Ok(protected_request)
     }
 
     fn operation(&self, operation_id: &[u8; 16]) -> Result<MutationOperation> {
@@ -270,26 +270,29 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
     }
 }
 
-pub(crate) fn validate_material(operation: &MutationOperation, bytes: &[u8]) -> Result<()> {
-    if prefixed_hash(MATERIAL_HASH_TYPE_ID, bytes) != operation.material_hash {
+pub(crate) fn validate_protected_request(
+    operation: &MutationOperation,
+    bytes: &[u8],
+) -> Result<()> {
+    if prefixed_hash(PROTECTED_REQUEST_HASH_TYPE_ID, bytes) != operation.material_hash {
         return Err(Error::OperationBinding(
-            "protected mutation material fingerprint changed",
+            "protected mutation request fingerprint changed",
         ));
     }
     Ok(())
 }
 
-fn material_error(error: ProtectedStoreError) -> Error {
-    Error::ProtectedMaterial(error.to_string())
+fn protected_store_error(error: ProtectedStoreError) -> Error {
+    Error::ProtectedStore(error.to_string())
 }
 
-pub(crate) fn remove_terminal_material<S: ProtectedMutationStore + ?Sized>(
+pub(crate) fn remove_terminal_request<S: ProtectedMutationStore + ?Sized>(
     store: &mut S,
     key: &[u8],
 ) -> Result<()> {
     match store.remove(key) {
         Ok(()) | Err(ProtectedStoreError::Missing) => Ok(()),
-        Err(error) => Err(material_error(error)),
+        Err(error) => Err(protected_store_error(error)),
     }
 }
 
@@ -310,13 +313,15 @@ mod tests {
         fn put_if_absent(
             &mut self,
             key: &[u8],
-            material: &[u8],
+            protected_request: &[u8],
         ) -> std::result::Result<(), ProtectedStoreError> {
             match self.0.get(key) {
-                Some(existing) if existing != material => Err(ProtectedStoreError::Conflict),
+                Some(existing) if existing != protected_request => {
+                    Err(ProtectedStoreError::Conflict)
+                }
                 Some(_) => Ok(()),
                 None => {
-                    self.0.insert(key.to_vec(), material.to_vec());
+                    self.0.insert(key.to_vec(), protected_request.to_vec());
                     Ok(())
                 }
             }
@@ -350,9 +355,9 @@ mod tests {
         fn put_if_absent(
             &mut self,
             key: &[u8],
-            material: &[u8],
+            protected_request: &[u8],
         ) -> std::result::Result<(), ProtectedStoreError> {
-            self.inner.put_if_absent(key, material)
+            self.inner.put_if_absent(key, protected_request)
         }
 
         fn get(
@@ -471,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_material_precedes_wal_and_survives_unknown_response() {
+    fn protected_request_precedes_wal_and_survives_unknown_response() {
         let temporary = tempfile::tempdir().unwrap();
         let database = temporary.path().join("hard.sqlite3");
         let snapshot = verify_public_host(
@@ -504,7 +509,7 @@ mod tests {
                         expected_version: Some(4),
                         request_hash: [5; 32],
                     },
-                    Zeroizing::new(b"encrypted retry material".to_vec()),
+                    Zeroizing::new(b"encrypted retry request".to_vec()),
                 )
                 .unwrap();
             coordinator
@@ -521,10 +526,10 @@ mod tests {
         assert_eq!(pending[0].state, MutationState::SubmissionUnknown);
         assert_eq!(
             restarted
-                .load_bound_material(&pending[0])
+                .load_bound_request(&pending[0])
                 .unwrap()
                 .as_slice(),
-            b"encrypted retry material"
+            b"encrypted retry request"
         );
         assert!(HardStateStore::open(&database)
             .unwrap()
@@ -537,10 +542,10 @@ mod tests {
         assert_eq!(awaiting[0].state, MutationState::RemoteVerified);
         assert_eq!(
             restarted
-                .load_bound_material(&awaiting[0])
+                .load_bound_request(&awaiting[0])
                 .unwrap()
                 .as_slice(),
-            b"encrypted retry material"
+            b"encrypted retry request"
         );
         restarted.finalize(&operation.operation_id).unwrap();
         restarted.finalize(&operation.operation_id).unwrap();
@@ -548,9 +553,9 @@ mod tests {
     }
 
     #[test]
-    fn protected_material_is_retained_until_application_acknowledged_finalization() {
+    fn protected_request_is_retained_until_application_acknowledged_finalization() {
         // Regression guard for the application-acknowledgment boundary added in
-        // 43a3119e8: protected retry material must survive every pre-`Finalized`
+        // 43a3119e8: protected retry request must survive every pre-`Finalized`
         // state, and neither `finalize` (before remote verification) nor
         // `rejected` (after it) may erase it early.
         let (_temporary, database, host_id) = initialized_database();
@@ -558,15 +563,15 @@ mod tests {
         let operation = MutationCoordinator::new(&database, &mut protected)
             .prepare(
                 draft([21; 16], &host_id),
-                Zeroizing::new(b"application-owned retry material".to_vec()),
+                Zeroizing::new(b"application-owned retry request".to_vec()),
             )
             .unwrap();
-        let material_present = |protected: &MemoryProtectedStore| {
+        let request_present = |protected: &MemoryProtectedStore| {
             protected
                 .0
                 .get(operation.material_ref.as_slice())
                 .map(Vec::as_slice)
-                == Some(b"application-owned retry material".as_slice())
+                == Some(b"application-owned retry request".as_slice())
         };
 
         // Finalizing a mutation in the `Submitting` state is rejected by the state
@@ -577,7 +582,7 @@ mod tests {
         assert!(MutationCoordinator::new(&database, &mut protected)
             .finalize(&operation.operation_id)
             .is_err());
-        assert!(material_present(&protected));
+        assert!(request_present(&protected));
         assert_eq!(
             HardStateStore::open(&database)
                 .unwrap()
@@ -595,19 +600,19 @@ mod tests {
         assert!(MutationCoordinator::new(&database, &mut protected)
             .finalize(&operation.operation_id)
             .is_err());
-        assert!(material_present(&protected));
+        assert!(request_present(&protected));
 
         // After remote verification the mutation is authenticated but NOT yet
         // terminal, so `rejected` (RemoteVerified -> Rejected is not a legal
-        // edge) must fail without erasing the still-needed material.
+        // edge) must fail without erasing the still-needed request.
         MutationCoordinator::new(&database, &mut protected)
             .remote_verified(&operation.operation_id)
             .unwrap();
-        assert!(material_present(&protected));
+        assert!(request_present(&protected));
         assert!(MutationCoordinator::new(&database, &mut protected)
             .rejected(&operation.operation_id)
             .is_err());
-        assert!(material_present(&protected));
+        assert!(request_present(&protected));
         assert_eq!(
             HardStateStore::open(&database)
                 .unwrap()
@@ -622,11 +627,11 @@ mod tests {
         MutationCoordinator::new(&database, &mut protected)
             .finalize(&operation.operation_id)
             .unwrap();
-        assert!(!material_present(&protected));
+        assert!(!request_present(&protected));
     }
 
     #[test]
-    fn rejected_chain_position_does_not_leave_orphaned_material() {
+    fn rejected_chain_position_does_not_leave_orphaned_request() {
         let (_temporary, database, host_id) = initialized_database();
         let mut protected = MemoryProtectedStore::default();
         {
@@ -654,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_material_tampering_is_detected_before_submission() {
+    fn protected_request_tampering_is_detected_before_submission() {
         let temporary = tempfile::tempdir().unwrap();
         let database = temporary.path().join("hard.sqlite3");
         let snapshot = verify_public_host(
@@ -708,14 +713,14 @@ mod tests {
 
     #[test]
     fn lost_response_and_restart_crash_matrix_never_replays_ambiguous_mutations() {
-        // Crash after protected material but before the SQLite WAL: the only
+        // Crash after protected request but before the SQLite WAL: the only
         // residue is an unreachable protected-store record, never a request
         // eligible for submission.
         {
             let (_temporary, database, _host_id) = initialized_database();
             let mut protected = MemoryProtectedStore::default();
             protected
-                .put_if_absent(&[10; 16], b"orphaned material")
+                .put_if_absent(&[10; 16], b"orphaned request")
                 .unwrap();
             assert!(HardStateStore::open(&database)
                 .unwrap()

@@ -4,8 +4,8 @@ mod binding;
 mod config;
 mod envelope;
 mod http;
-mod material;
 pub mod operator;
+mod payload;
 use crate::{keys::HostKeyProvider, Entropy, Error, Result, WriterHandle};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 pub(crate) use binding::status;
@@ -14,7 +14,7 @@ use foks_oidc::{NetworkPolicy, Provider, ProviderClient, ProviderHttp};
 use foks_proto::{InitOAuth2SessionArgument, OAuth2SessionId};
 use foks_server_db::{SsoSession, SsoSessionState};
 pub use http::OidcHttpServer;
-use material::Material;
+use payload::SsoSessionPayload;
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -236,11 +236,11 @@ impl SsoService {
                 .ok_or(Error::Sso("clock overflow"))?,
             ciphertext: Vec::new(),
         };
-        let mut material = Material::default();
-        material.id = arg.id.0;
-        material.verifier = verifier.into();
-        material.nonce = arg.nonce.expose().into();
-        row.ciphertext = self.seal(&row, &material)?;
+        let mut payload = SsoSessionPayload::default();
+        payload.id = arg.id.0;
+        payload.verifier = verifier.into();
+        payload.nonce = arg.nonce.expose().into();
+        row.ciphertext = self.seal(&row, &payload)?;
         let clock = self.clock.clone();
         self.writer.call_with_current_time(clock, move |db, now| {
             db.sso_insert_session(&row, now / 1000)?;
@@ -276,18 +276,18 @@ impl SsoService {
         }
         Ok(row)
     }
-    fn material(&self, row: &SsoSession) -> Result<Material> {
+    fn session_payload(&self, row: &SsoSession) -> Result<SsoSessionPayload> {
         let bytes = envelope::open(self.keys.as_ref(), row)?;
-        let value: Material =
+        let value: SsoSessionPayload =
             serde_json::from_slice(&bytes).map_err(|_| Error::Sso("invalid protected session"))?;
         if session_hash(&OAuth2SessionId(value.id)) != row.session_hash {
             return Err(Error::Sso("protected session mismatch"));
         }
         Ok(value)
     }
-    fn seal(&self, row: &SsoSession, material: &Material) -> Result<Vec<u8>> {
+    fn seal(&self, row: &SsoSession, payload: &SsoSessionPayload) -> Result<Vec<u8>> {
         let bytes = Zeroizing::new(
-            serde_json::to_vec(material).map_err(|_| Error::Sso("invalid session encoding"))?,
+            serde_json::to_vec(payload).map_err(|_| Error::Sso("invalid session encoding"))?,
         );
         envelope::seal(self.keys.as_ref(), self.entropy.as_ref(), row, &bytes)
     }
@@ -295,7 +295,7 @@ impl SsoService {
         &self,
         old: &SsoSession,
         state: SsoSessionState,
-        material: &Material,
+        payload: &SsoSessionPayload,
     ) -> Result<SsoSession> {
         let mut next = old.clone();
         next.state = state;
@@ -303,7 +303,7 @@ impl SsoService {
             .revision
             .checked_add(1)
             .ok_or(Error::Sso("session revision overflow"))?;
-        next.ciphertext = self.seal(&next, material)?;
+        next.ciphertext = self.seal(&next, payload)?;
         let old = old.clone();
         let bytes = next.ciphertext.clone();
         self.writer
@@ -324,13 +324,13 @@ impl SsoService {
         if row.state != SsoSessionState::Waiting {
             return Err(Error::Sso("session is no longer waiting"));
         }
-        let material = self.material(&row)?;
+        let payload = self.session_payload(&row)?;
         self.provider(false)?
             .authorization_url(
                 &self.client_config(),
                 state,
-                &material.nonce,
-                &material.verifier,
+                &payload.nonce,
+                &payload.verifier,
             )
             .map_err(Into::into)
     }
@@ -344,9 +344,9 @@ impl SsoService {
         if row.state != SsoSessionState::Waiting {
             return Err(Error::Sso("callback was already claimed"));
         }
-        let mut material = self.material(&row)?;
+        let mut payload = self.session_payload(&row)?;
         if denied {
-            self.transition(&row, SsoSessionState::Denied, &material)?;
+            self.transition(&row, SsoSessionState::Denied, &payload)?;
             return Ok(());
         }
         let code = code
@@ -354,13 +354,13 @@ impl SsoService {
             .ok_or(Error::Sso("missing authorization code"))?;
         // Discovery failure is safely retryable before the one-use code is claimed.
         let provider = self.provider(true)?;
-        let claimed = self.transition(&row, SsoSessionState::Exchanging, &material)?;
+        let claimed = self.transition(&row, SsoSessionState::Exchanging, &payload)?;
         let outcome = provider.exchange(
             &self.http,
             &self.client_config(),
             code,
-            &material.verifier,
-            &material.nonce,
+            &payload.verifier,
+            &payload.nonce,
             self.now_ms()?,
         );
         let (tokens, identity) = match outcome {
@@ -374,23 +374,23 @@ impl SsoService {
                 } else {
                     SsoSessionState::ExchangeUnknown
                 };
-                self.transition(&claimed, state, &material)?;
+                self.transition(&claimed, state, &payload)?;
                 return Err(error.into());
             }
         };
         if tokens.access_expires_at_ms <= self.now_ms()? {
-            self.transition(&claimed, SsoSessionState::Rejected, &material)?;
+            self.transition(&claimed, SsoSessionState::Rejected, &payload)?;
             return Err(Error::Sso("provider token expired during exchange"));
         }
-        material.access_token = tokens.access.to_string();
-        material.id_token = tokens.id.to_string();
-        material.refresh_token = tokens.refresh.as_ref().map(|v| v.to_string());
-        material.email = identity.email;
-        material.issuer = identity.issuer;
-        material.subject = identity.subject;
-        material.username = identity.username;
-        material.expires_at_ms = tokens.access_expires_at_ms;
-        self.transition(&claimed, SsoSessionState::Ready, &material)?;
+        payload.access_token = tokens.access.to_string();
+        payload.id_token = tokens.id.to_string();
+        payload.refresh_token = tokens.refresh.as_ref().map(|v| v.to_string());
+        payload.email = identity.email;
+        payload.issuer = identity.issuer;
+        payload.subject = identity.subject;
+        payload.username = identity.username;
+        payload.expires_at_ms = tokens.access_expires_at_ms;
+        self.transition(&claimed, SsoSessionState::Ready, &payload)?;
         Ok(())
     }
     pub fn session_state(&self, id: &OAuth2SessionId) -> Result<SsoSessionState> {

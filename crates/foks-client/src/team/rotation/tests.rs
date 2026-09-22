@@ -10,8 +10,8 @@ use zeroize::Zeroizing;
 
 use super::{
     frame_protected_team_edit_with_bearer, refresh_operation_id, required_rotation_roles,
-    rotation_operation_id, team_rekey_material_key, validate_rotation_change, RefreshBinding,
-    RefreshChange, RotationBinding,
+    rotation_operation_id, team_member_key_refresh_request_key, validate_rotation_change,
+    RefreshBinding, RefreshChange, RotationBinding,
 };
 use crate::{DeviceCredential, FoksClient, ProtectedMutationStore, ProtectedStoreError};
 
@@ -28,13 +28,13 @@ impl ProtectedMutationStore for MemoryProtectedStore {
     fn put_if_absent(
         &mut self,
         key: &[u8],
-        material: &[u8],
+        value: &[u8],
     ) -> std::result::Result<(), ProtectedStoreError> {
         match self.0.get(key) {
-            Some(existing) if existing != material => Err(ProtectedStoreError::Conflict),
+            Some(existing) if existing != value => Err(ProtectedStoreError::Conflict),
             Some(_) => Ok(()),
             None => {
-                self.0.insert(key.to_vec(), material.to_vec());
+                self.0.insert(key.to_vec(), value.to_vec());
                 Ok(())
             }
         }
@@ -265,14 +265,14 @@ fn protected_only_team_member_key_refresh_frame_can_be_rebuilt_but_a_journaled_f
 ) {
     let (_temporary, client, host) = initialized_host();
     let operation_id = [0x61; 16];
-    let key = team_rekey_material_key(&operation_id);
+    let key = team_member_key_refresh_request_key(&operation_id);
     let mut protected = MemoryProtectedStore::default();
     protected
         .put_if_absent(&key, b"stale head-bound frame")
         .unwrap();
 
     client
-        .discard_unjournaled_team_rekey_material(&host, &operation_id, &mut protected)
+        .discard_unjournaled_team_rekey_request(&host, &operation_id, &mut protected)
         .unwrap();
     assert!(matches!(
         protected.get(&key),
@@ -288,7 +288,7 @@ fn protected_only_team_member_key_refresh_frame_can_be_rebuilt_but_a_journaled_f
         .record_team_mutation(&operation)
         .unwrap();
     assert!(client
-        .discard_unjournaled_team_rekey_material(&host, &operation_id, &mut protected)
+        .discard_unjournaled_team_rekey_request(&host, &operation_id, &mut protected)
         .is_err());
     assert_eq!(
         protected.get(&key).unwrap().as_slice(),
@@ -297,7 +297,7 @@ fn protected_only_team_member_key_refresh_frame_can_be_rebuilt_but_a_journaled_f
 }
 
 #[test]
-fn superseded_member_edit_releases_its_journal_and_protected_material() {
+fn superseded_member_edit_releases_its_journal_and_protected_request() {
     let (_temporary, client, host) = initialized_host();
     let operation_id = [0x69; 16];
     let (operation, actor, team) = team_operation(&host, operation_id);
@@ -305,7 +305,7 @@ fn superseded_member_edit_releases_its_journal_and_protected_material() {
         .unwrap()
         .record_team_mutation(&operation)
         .unwrap();
-    let key = super::team_rotation_material_key(&operation_id);
+    let key = super::team_member_change_request_key(&operation_id);
     let mut protected = MemoryProtectedStore::default();
     protected.put_if_absent(&key, b"lost-race frame").unwrap();
     let credential = DeviceCredential {
@@ -346,7 +346,7 @@ fn recorded_team_member_key_refresh_cleanup_rejects_active_submission_without_a_
     let (_temporary, client, host) = initialized_host();
     let operation_id = [0x71; 16];
     let (operation, actor, team) = team_operation(&host, operation_id);
-    let key = team_rekey_material_key(&operation_id);
+    let key = team_member_key_refresh_request_key(&operation_id);
     let mut protected = MemoryProtectedStore::default();
     protected
         .put_if_absent(&key, b"exact submitted frame")
@@ -440,18 +440,18 @@ fn recorded_team_member_key_refresh_cleanup_rejects_active_submission_without_a_
 }
 
 #[test]
-fn verified_team_member_key_refresh_cleanup_tolerates_material_already_removed() {
+fn verified_team_member_key_refresh_cleanup_tolerates_request_already_removed() {
     let (_temporary, client, host) = initialized_host();
     let operation_id = [0x81; 16];
     let (operation, actor, team) = team_operation(&host, operation_id);
     let mut hard_store = HardStateStore::open(&host.database_path).unwrap();
     hard_store.record_team_mutation(&operation).unwrap();
     let mut protected = MemoryProtectedStore::default();
-    let key = team_rekey_material_key(&operation_id);
+    let key = team_member_key_refresh_request_key(&operation_id);
     protected.put_if_absent(&key, b"verified frame").unwrap();
 
     assert!(client
-        .cleanup_verified_team_rekey_material(
+        .cleanup_verified_team_rekey_request(
             &host,
             &team,
             operation.expected_seqno,
@@ -472,7 +472,7 @@ fn verified_team_member_key_refresh_cleanup_tolerates_material_already_removed()
     wrong_actor[32] ^= 1;
     let wrong_actor = foks_proto::EntityId::from_bytes(wrong_actor).unwrap();
     assert!(client
-        .cleanup_verified_team_rekey_material(
+        .cleanup_verified_team_rekey_request(
             &host,
             &team,
             operation.expected_seqno,
@@ -484,7 +484,7 @@ fn verified_team_member_key_refresh_cleanup_tolerates_material_already_removed()
     assert_eq!(protected.get(&key).unwrap().as_slice(), b"verified frame");
 
     client
-        .cleanup_verified_team_rekey_material(
+        .cleanup_verified_team_rekey_request(
             &host,
             &team,
             operation.expected_seqno,
@@ -494,7 +494,7 @@ fn verified_team_member_key_refresh_cleanup_tolerates_material_already_removed()
         )
         .unwrap();
     client
-        .cleanup_verified_team_rekey_material(
+        .cleanup_verified_team_rekey_request(
             &host,
             &team,
             operation.expected_seqno,

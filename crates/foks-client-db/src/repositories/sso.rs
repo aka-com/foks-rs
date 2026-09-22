@@ -95,7 +95,7 @@ impl HardStateStore {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
-    pub fn sso_record_with_material<E: From<Error>>(
+    pub fn sso_record_with_protected_payload<E: From<Error>>(
         &mut self,
         flow: &SsoFlow,
         now_ms: u64,
@@ -120,7 +120,7 @@ impl HardStateStore {
         tx.commit().map_err(Error::from)?;
         Ok(())
     }
-    /// Write once, before delivery. Nonsecret evidence survives protected-material erasure.
+    /// Write once, before delivery. Nonsecret evidence survives protected-payload erasure.
     pub fn sso_set_commitment(&mut self, id: &[u8; 16], commitment: &[u8; 32]) -> Result<()> {
         let tx = self.write_transaction()?;
         let changed=tx.execute("UPDATE sso_flows SET commitment=?2 WHERE operation_id=?1 AND state=2 AND (commitment IS NULL OR commitment=?2)",params![id,commitment])?;
@@ -190,12 +190,12 @@ mod tests {
         };
         let before = db.metadata().unwrap();
         assert!(db
-            .sso_record_with_material::<Error>(&flow, 0, || Err(Error::SsoState(
+            .sso_record_with_protected_payload::<Error>(&flow, 0, || Err(Error::SsoState(
                 "store unavailable"
             )))
             .is_err());
         assert!(db.sso_flow(&flow.id).unwrap().is_none());
-        db.sso_record_with_material::<Error>(&flow, 0, || Ok(()))
+        db.sso_record_with_protected_payload::<Error>(&flow, 0, || Ok(()))
             .unwrap();
         assert!(db.metadata().unwrap().revision > before.revision);
         db.sso_transition(
@@ -258,17 +258,17 @@ mod tests {
             .is_err());
         for i in 2..=4 {
             flow.id = [i; 16];
-            db.sso_record_with_material::<Error>(&flow, 0, || Ok(()))
+            db.sso_record_with_protected_payload::<Error>(&flow, 0, || Ok(()))
                 .unwrap();
         }
         flow.id = [5; 16];
         assert!(db
-            .sso_record_with_material::<Error>(&flow, 0, || panic!(
+            .sso_record_with_protected_payload::<Error>(&flow, 0, || panic!(
                 "full pool must not stage secrets"
             ))
             .is_err());
         // Expired browser flows don't consume active slots; ambiguous final mutations do.
-        db.sso_record_with_material::<Error>(
+        db.sso_record_with_protected_payload::<Error>(
             &SsoFlow {
                 expires_at_ms: 1_200_001,
                 ..flow.clone()

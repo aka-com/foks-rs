@@ -634,11 +634,11 @@ pub(crate) fn puk_for_role(
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or_else(permission_denied)?;
     let (role_type, visibility) = role_parts(role);
-    let material = database
+    let puk_record = database
         .puk_material(&identity.uid, &parent, role_type, visibility)
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or_else(|| RpcStatus::NotFound("PUK parcel not found".to_owned()))?;
-    let set = foks_proto::SharedKeyBoxSet::decode(&material.exact_box_set)
+    let set = foks_proto::SharedKeyBoxSet::decode(&puk_record.exact_box_set)
         .map_err(|_| RpcStatus::TransactionRetry)?;
     let index = set
         .boxes
@@ -646,8 +646,8 @@ pub(crate) fn puk_for_role(
         .position(|boxed| boxed.target.entity.as_bytes() == parent && boxed.role == role)
         .ok_or_else(|| RpcStatus::NotFound("PUK parcel target not found".to_owned()))?;
     let sender =
-        EntityId::from_bytes(material.sender_id).map_err(|_| RpcStatus::TransactionRetry)?;
-    let seed_chain = material
+        EntityId::from_bytes(puk_record.sender_id).map_err(|_| RpcStatus::TransactionRetry)?;
+    let seed_chain = puk_record
         .exact_seed_chain
         .iter()
         .map(|exact| {

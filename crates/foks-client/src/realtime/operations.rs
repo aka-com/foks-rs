@@ -15,8 +15,8 @@ use foks_rpc::{RealtimeRequest, RealtimeResponse};
 use zeroize::Zeroizing;
 
 mod attempt;
-mod material;
-pub(crate) use material::decode_material as validate_inventory_material;
+mod protected_request;
+pub(crate) use protected_request::decode_protected_request as validate_inventory_request;
 mod prepare;
 mod recovery;
 pub use prepare::normalize_chat_name;

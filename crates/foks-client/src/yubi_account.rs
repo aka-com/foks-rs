@@ -460,7 +460,7 @@ impl FoksClient {
                 "Yubi signup operation is not recorded",
             ))?;
         let material = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(&operation)?;
+            .load_bound_request(&operation)?;
         let (secrets, expected_username, request) = decode_yubi_signup_material(material)?;
         self.submit_or_reconcile_yubi_account(
             host,
@@ -504,7 +504,7 @@ impl FoksClient {
             (pending_secrets, expected_username, None)
         } else {
             let material = MutationCoordinator::new(&host.database_path, protected_store)
-                .load_bound_material(&operation)?;
+                .load_bound_request(&operation)?;
             let (secrets, expected_username, request) = decode_yubi_signup_material(material)?;
             (secrets, expected_username, Some(request))
         };

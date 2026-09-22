@@ -1,5 +1,5 @@
 use super::*;
-pub(super) struct Material {
+pub(super) struct SsoFlowPayload {
     pub(super) purpose: foks_proto::SsoPurpose,
     pub(super) device: EntityId,
     pub(super) expires_at_ms: u64,
@@ -8,7 +8,7 @@ pub(super) struct Material {
     pub(super) init: InitOAuth2SessionArgument,
     pub(super) issuer: String,
 }
-impl Material {
+impl SsoFlowPayload {
     pub(super) fn encoded(&self) -> Result<Zeroizing<Vec<u8>>> {
         Ok(Zeroizing::new(encode(&Value::Array(vec![
             Value::Binary(self.config.encoded()?),
@@ -43,7 +43,7 @@ impl Material {
         })
     }
 }
-pub(super) fn material_key(id: &[u8; 16], stage: u8) -> Vec<u8> {
+pub(super) fn protected_payload_key(id: &[u8; 16], stage: u8) -> Vec<u8> {
     crate::ProtectedRecordKey::Sso(id, stage).encoded()
 }
 pub(super) fn config_hash(config: &SsoConfig) -> Result<[u8; 32]> {
@@ -58,8 +58,8 @@ pub(super) fn get(
     stage: u8,
 ) -> Result<Zeroizing<Vec<u8>>> {
     store
-        .get(&material_key(id, stage))
-        .map_err(|_| Error::Sso("protected session material unavailable"))
+        .get(&protected_payload_key(id, stage))
+        .map_err(|_| Error::Sso("protected session payload unavailable"))
 }
 pub(super) fn put(
     store: &mut impl ProtectedMutationStore,
@@ -68,8 +68,8 @@ pub(super) fn put(
     bytes: &[u8],
 ) -> Result<()> {
     store
-        .put_if_absent(&material_key(id, stage), bytes)
-        .map_err(|_| Error::Sso("protected session material could not be retained"))
+        .put_if_absent(&protected_payload_key(id, stage), bytes)
+        .map_err(|_| Error::Sso("protected session payload could not be retained"))
 }
 pub(super) fn public_flow(host: &PinnedHost, id: &[u8; 16]) -> Result<SsoFlow> {
     let flow = HardStateStore::open(&host.database_path)?
@@ -80,12 +80,12 @@ pub(super) fn public_flow(host: &PinnedHost, id: &[u8; 16]) -> Result<SsoFlow> {
     }
     Ok(flow)
 }
-pub(super) fn erase_flow_material(
+pub(super) fn erase_flow_payload(
     store: &mut impl ProtectedMutationStore,
     id: &[u8; 16],
 ) -> Result<()> {
     for stage in 0..=3 {
-        match store.remove(&material_key(id, stage)) {
+        match store.remove(&protected_payload_key(id, stage)) {
             Ok(()) | Err(crate::ProtectedStoreError::Missing) => {}
             Err(_) => return Err(Error::Sso("terminal session cleanup failed")),
         }
@@ -96,7 +96,7 @@ pub(super) fn load(
     host: &PinnedHost,
     id: &[u8; 16],
     store: &mut impl ProtectedMutationStore,
-) -> Result<(SsoFlow, Material)> {
+) -> Result<(SsoFlow, SsoFlowPayload)> {
     let flow = HardStateStore::open(&host.database_path)?
         .sso_flow(id)?
         .ok_or(Error::Sso("unknown local session"))?;
@@ -104,10 +104,10 @@ pub(super) fn load(
         return Err(Error::Sso("session host mismatch"));
     }
     let bytes = get(store, id, 0)?;
-    if foks_crypto::prefixed_hash(MATERIAL_HASH, &bytes) != flow.material_hash {
+    if foks_crypto::prefixed_hash(PAYLOAD_HASH, &bytes) != flow.material_hash {
         return Err(Error::Sso("protected session fingerprint mismatch"));
     }
-    let m = Material::decode(&bytes)?;
+    let m = SsoFlowPayload::decode(&bytes)?;
     if m.purpose != flow.purpose
         || m.binding.uid.as_bytes() != flow.uid
         || m.binding.host != *host.host_id()
@@ -127,10 +127,10 @@ pub(super) fn load(
 pub(crate) fn validate_inventory_stage(flow: &SsoFlow, stage: u8, bytes: &[u8]) -> Result<()> {
     match stage {
         0 => {
-            if foks_crypto::prefixed_hash(MATERIAL_HASH, bytes) != flow.material_hash {
+            if foks_crypto::prefixed_hash(PAYLOAD_HASH, bytes) != flow.material_hash {
                 return Err(Error::Sso("protected session fingerprint mismatch"));
             }
-            let m = Material::decode(bytes)?;
+            let m = SsoFlowPayload::decode(bytes)?;
             if m.purpose != flow.purpose
                 || m.binding.uid.as_bytes() != flow.uid
                 || m.binding.host.as_bytes() != flow.host
@@ -222,7 +222,7 @@ mod tests {
         let device = foks_proto::OAuth2IdTokenBinding::decode(&fixture("signed-binding"))
             .unwrap()
             .key;
-        let m = Material {
+        let m = SsoFlowPayload {
             purpose: foks_proto::SsoPurpose::Signup,
             config: SsoConfig::decode(&fixture("public-config")).unwrap(),
             binding,
@@ -246,12 +246,12 @@ mod tests {
             purpose: foks_proto::SsoPurpose::Signup,
             commitment: None,
             state: SsoFlowState::Prepared,
-            material_hash: foks_crypto::prefixed_hash(MATERIAL_HASH, &bytes),
+            material_hash: foks_crypto::prefixed_hash(PAYLOAD_HASH, &bytes),
             config_hash: config_hash(&m.config).unwrap(),
             expires_at_ms: 1,
             final_operation: None,
         };
-        db.sso_record_with_material::<Error>(&flow, 0, || put(&mut store, &id, 0, &bytes))
+        db.sso_record_with_protected_payload::<Error>(&flow, 0, || put(&mut store, &id, 0, &bytes))
             .unwrap();
         load(&host, &id, &mut store).unwrap();
         validate_inventory_stage(&flow, 0, &bytes).unwrap();
@@ -297,11 +297,11 @@ mod tests {
             SsoFlowState::Expired
         );
         assert!(matches!(
-            store.get(&material_key(&id, 0)),
+            store.get(&protected_payload_key(&id, 0)),
             Err(crate::ProtectedStoreError::Missing)
         ));
         assert!(matches!(
-            store.get(&material_key(&id, 2)),
+            store.get(&protected_payload_key(&id, 2)),
             Err(crate::ProtectedStoreError::Missing)
         ));
         assert_eq!(

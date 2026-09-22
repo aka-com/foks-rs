@@ -34,7 +34,7 @@ use crate::{
     TEAM_MUTATION_REQUEST_HASH_TYPE_ID,
 };
 
-/// Caller-durable material for adding one local user to a named team.
+/// Caller-durable inputs for adding one local user to a named team.
 ///
 /// The removal key must be persisted in the application's encrypted secret
 /// store before submission. It is needed for later removal/rotation and for
@@ -45,7 +45,7 @@ pub struct AddLocalTeamMemberRequest<'a> {
     pub removal_key: &'a SecretSeed,
 }
 
-/// Authenticated material for admitting a remote named/ad-hoc team to a
+/// Authenticated inputs for admitting a remote named/ad-hoc team to a
 /// local named team. `remote_team` must have been loaded with the supplied
 /// permission, so its admin PTK is independently verified before boxing.
 pub struct AddRemoteTeamMemberRequest<'a> {
@@ -819,7 +819,7 @@ impl FoksClient {
             verify_key: target.verify_key.clone(),
             hepk: target.hepk.clone(),
         };
-        let material = make_add_scoped_team_member_link(
+        let link_output = make_add_scoped_team_member_link(
             &AddRemoteTeamMemberInput {
                 actor: uid,
                 actor_source_role: actor_public.role,
@@ -878,7 +878,7 @@ impl FoksClient {
             removal_metadata,
             [random_box_randomness()?, random_box_randomness()?],
         )?;
-        if removal_box.commitment != material.removal_key_commitment {
+        if removal_box.commitment != link_output.removal_key_commitment {
             return Err(Error::KeyBinding(
                 "remote member removal box does not match signed commitment",
             ));
@@ -920,8 +920,8 @@ impl FoksClient {
             encode_add_team_member_request
         };
         let encoded_request = encode_admission(&AddTeamMemberArgument {
-            link: &material.link,
-            next_tree_location: material.next_tree_location,
+            link: &link_output.link,
+            next_tree_location: link_output.next_tree_location,
             ptk_boxes: &ptk_boxes,
             removal_keys: &[removal_box],
             hepks: std::slice::from_ref(&target.hepk),
@@ -939,7 +939,7 @@ impl FoksClient {
             target_generation: target.generation,
             target_source_role: target.role,
             destination_role: request.destination_role,
-            removal_key_commitment: material.removal_key_commitment,
+            removal_key_commitment: link_output.removal_key_commitment,
             expected_seqno,
         };
         if let Some(plan) = request.plan {
@@ -1148,10 +1148,10 @@ impl FoksClient {
             }
         }
 
-        let material_key = remote_addition_material_key(&plan.operation_id);
+        let request_key = remote_addition_request_key(&plan.operation_id);
         let exact_request = protected_store
-            .get(&material_key)
-            .map_err(protected_material_error)?;
+            .get(&request_key)
+            .map_err(protected_store_error)?;
         if prefixed_hash(TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &exact_request)
             != operation.request_hash
         {
@@ -1377,10 +1377,10 @@ impl FoksClient {
             }
         }
 
-        let material = protected_store
-            .get(&remote_addition_material_key(&operation_id))
-            .map_err(protected_material_error)?;
-        if prefixed_hash(TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &material) != operation.request_hash {
+        let request = protected_store
+            .get(&remote_addition_request_key(&operation_id))
+            .map_err(protected_store_error)?;
+        if prefixed_hash(TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &request) != operation.request_hash {
             return Err(Error::OperationBinding(
                 "protected remote-team request changed",
             ));
@@ -1397,7 +1397,7 @@ impl FoksClient {
             .call_with_material(
                 host,
                 &host.user,
-                &material,
+                &request,
                 &credential.seed,
                 &credential.certificate_chain,
             )
@@ -1547,7 +1547,7 @@ impl FoksClient {
             verify_key: target.verify_key.clone(),
             hepk: target.hepk.clone(),
         };
-        let material = make_add_local_team_member_link(
+        let link_output = make_add_local_team_member_link(
             &AddLocalTeamMemberInput {
                 actor: uid,
                 actor_source_role: actor_public.role,
@@ -1603,7 +1603,7 @@ impl FoksClient {
             removal_metadata,
             [random_box_randomness()?, random_box_randomness()?],
         )?;
-        if removal_box.commitment != material.removal_key_commitment {
+        if removal_box.commitment != link_output.removal_key_commitment {
             return Err(Error::KeyBinding(
                 "member removal box does not match the signed commitment",
             ));
@@ -1614,8 +1614,8 @@ impl FoksClient {
             foks_rpc::encode_local_invitation_admission_request
         };
         let encoded_request = encode_admission(&AddTeamMemberArgument {
-            link: &material.link,
-            next_tree_location: material.next_tree_location,
+            link: &link_output.link,
+            next_tree_location: link_output.next_tree_location,
             ptk_boxes: &ptk_boxes,
             removal_keys: &[removal_box],
             hepks: std::slice::from_ref(&target.hepk),
@@ -1635,7 +1635,7 @@ impl FoksClient {
             target_generation: target.generation,
             target_source_role: target.role,
             destination_role: request.destination_role,
-            removal_key_commitment: material.removal_key_commitment,
+            removal_key_commitment: link_output.removal_key_commitment,
             expected_seqno,
         };
         if let Some(plan) = expected_plan {
@@ -1676,12 +1676,12 @@ impl FoksClient {
         let operation_id = addition_operation_id(uid, team, binding)?;
         let created_at = now_microseconds()?;
         let protected_request = if let Some(store) = protected_store {
-            let key = remote_addition_material_key(&operation_id);
+            let key = remote_addition_request_key(&operation_id);
             match store.put_if_absent(&key, encoded_request) {
                 Ok(()) | Err(ProtectedStoreError::Conflict) => {}
-                Err(error) => return Err(protected_material_error(error)),
+                Err(error) => return Err(protected_store_error(error)),
             }
-            Some(store.get(&key).map_err(protected_material_error)?)
+            Some(store.get(&key).map_err(protected_store_error)?)
         } else {
             None
         };
@@ -2216,12 +2216,12 @@ fn validate_local_addition_plan(
     Ok(())
 }
 
-pub(crate) fn remote_addition_material_key(operation_id: &[u8; 16]) -> Vec<u8> {
+pub(crate) fn remote_addition_request_key(operation_id: &[u8; 16]) -> Vec<u8> {
     crate::ProtectedRecordKey::RemoteAddition(operation_id).encoded()
 }
 
-fn protected_material_error(error: ProtectedStoreError) -> Error {
-    Error::ProtectedMaterial(error.to_string())
+fn protected_store_error(error: ProtectedStoreError) -> Error {
+    Error::ProtectedStore(error.to_string())
 }
 
 fn validate_addition_transition(
@@ -2295,9 +2295,9 @@ fn remove_addition_material(
     store: &mut dyn ProtectedMutationStore,
     operation_id: &[u8; 16],
 ) -> Result<()> {
-    match store.remove(&remote_addition_material_key(operation_id)) {
+    match store.remove(&remote_addition_request_key(operation_id)) {
         Ok(()) | Err(ProtectedStoreError::Missing) => Ok(()),
-        Err(error) => Err(protected_material_error(error)),
+        Err(error) => Err(protected_store_error(error)),
     }
 }
 

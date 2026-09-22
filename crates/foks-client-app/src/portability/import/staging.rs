@@ -187,7 +187,7 @@ pub(super) fn rekey(
             for record in profile.protected.values() {
                 match old.get(&record.key) {
                     Ok(bytes) => {
-                        record.validate_material(&bytes)?;
+                        record.validate_payload(&bytes)?;
                         hook("before-mutation-rekey")?;
                         new.put_if_absent(&record.key, &bytes)?;
                         hook("after-mutation-rekey")?;

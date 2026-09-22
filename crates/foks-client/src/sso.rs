@@ -13,7 +13,7 @@ use foks_proto::{
 use foks_snowpack::{decode, encode, Value};
 use zeroize::Zeroizing;
 
-const MATERIAL_HASH: u64 = 0xef13_321b_a6e8_27d0;
+const PAYLOAD_HASH: u64 = 0xef13_321b_a6e8_27d0;
 const CONFIG_HASH: u64 = 0xc872_c073_8ea5_11a4;
 #[derive(Clone)]
 pub struct SsoProgress {
@@ -38,9 +38,9 @@ pub struct SsoIntent {
     pub purpose: foks_proto::SsoPurpose,
 }
 mod identity;
-mod material;
-pub(crate) use material::validate_inventory_stage;
-use material::*;
+mod payload;
+pub(crate) use payload::validate_inventory_stage;
+use payload::*;
 mod signup;
 pub use signup::{SsoSigningKey, SsoSignupAuthorization};
 
@@ -103,7 +103,7 @@ impl FoksClient {
         let expires_at_ms = now
             .checked_add(foks_oidc::SESSION_LIFETIME_MS)
             .ok_or(Error::Sso("session expiration overflow"))?;
-        let material = Material {
+        let payload = SsoFlowPayload {
             purpose,
             device: device.clone(),
             expires_at_ms,
@@ -112,7 +112,7 @@ impl FoksClient {
             init,
             issuer: provider.metadata.issuer().as_str().to_owned(),
         };
-        let encoded = material.encoded()?;
+        let encoded = payload.encoded()?;
         let id = crate::random_bytes()?;
         let flow = SsoFlow {
             id,
@@ -121,13 +121,13 @@ impl FoksClient {
             device: device.as_bytes().to_vec(),
             purpose,
             state: SsoFlowState::Prepared,
-            material_hash: foks_crypto::prefixed_hash(MATERIAL_HASH, &encoded),
+            material_hash: foks_crypto::prefixed_hash(PAYLOAD_HASH, &encoded),
             config_hash: config_hash(&config)?,
             expires_at_ms,
             final_operation: None,
             commitment: None,
         };
-        HardStateStore::open(&host.database_path)?.sso_record_with_material::<Error>(
+        HardStateStore::open(&host.database_path)?.sso_record_with_protected_payload::<Error>(
             &flow,
             now,
             || put(store, &id, 0, &encoded),
@@ -143,7 +143,7 @@ impl FoksClient {
             host,
             &host.registration,
             &foks_rpc::encode_registration_select_vhost_request(host.host_id())?,
-            &foks_rpc::encode_init_oauth2_session_request_at(&material.init, 1)?,
+            &foks_rpc::encode_init_oauth2_session_request_at(&payload.init, 1)?,
         )?;
         let Value::Text(url) = decode(&reply)? else {
             return Err(Error::Sso("invalid browser start result"));
@@ -202,10 +202,10 @@ impl FoksClient {
                 | SsoFlowState::Expired
                 | SsoFlowState::Rejected
         ) {
-            erase_flow_material(store, &id)?;
+            erase_flow_payload(store, &id)?;
         }
         // Expired uncertain login attempts retain an honest receipt, not reusable tokens.
-        // Signup's final mutation owns its separate recovery material.
+        // Signup's final mutation owns its separate recovery payload.
         if flow.expires_at_ms <= crate::now_milliseconds()?
             && flow.final_operation.is_none()
             && matches!(flow.state, SsoFlowState::Binding | SsoFlowState::Unknown)
@@ -219,10 +219,10 @@ impl FoksClient {
                 )?;
                 flow.state = SsoFlowState::Unknown;
             }
-            erase_flow_material(store, &id)?;
+            erase_flow_payload(store, &id)?;
         }
         let browser_url = if flow.state == SsoFlowState::AwaitingBrowser {
-            match store.get(&material_key(&id, 1)) {
+            match store.get(&protected_payload_key(&id, 1)) {
                 Ok(url) => Some(
                     String::from_utf8(url.to_vec())
                         .map_err(|_| Error::Sso("invalid stored browser URL"))?,
@@ -349,7 +349,7 @@ impl FoksClient {
         &self,
         host: &PinnedHost,
         flow: &SsoFlow,
-        m: &Material,
+        m: &SsoFlowPayload,
         result: &OAuth2PollResult,
         http: &ProviderHttp,
     ) -> Result<foks_oidc::VerifiedIdentity> {
@@ -442,7 +442,7 @@ impl FoksClient {
             id_token: result.tokens.id_token.clone(),
             binding: m.binding,
         };
-        let request = match store.get(&material_key(&id, 3)) {
+        let request = match store.get(&protected_payload_key(&id, 3)) {
             Ok(request) => {
                 let mut input = std::io::Cursor::new(request.as_slice());
                 let call = foks_rpc::read_call(&mut input, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)?;

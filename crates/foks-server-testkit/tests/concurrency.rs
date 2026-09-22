@@ -376,7 +376,7 @@ fn write_and_read(
     let root = account.kv_projection[0].root_directory_id;
     let mut protected = client
         .open_protected_store()
-        .map_err(|error| foks_client::Error::ProtectedMaterial(error.to_string()))?;
+        .map_err(|error| foks_client::Error::ProtectedStore(error.to_string()))?;
     let mut session = client.foks().user_kv_write_session(
         host,
         &account.credential,

@@ -57,7 +57,7 @@ impl TestClient {
     ) -> foks_client::Result<CreatedSoftwareAccount> {
         let mut protected = self
             .open_protected_store()
-            .map_err(|error| foks_client::Error::ProtectedMaterial(error.to_string()))?;
+            .map_err(|error| foks_client::Error::ProtectedStore(error.to_string()))?;
         self.foks().create_software_account(
             host,
             SoftwareAccountRequest {

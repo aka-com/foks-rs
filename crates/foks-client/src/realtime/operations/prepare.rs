@@ -183,7 +183,7 @@ impl ChatSession<'_> {
         }
         let (op, md) = self.prepare_fresh_send(rpc, store, channel, text, Some(submission))?;
         before_delivery()?;
-        let request = self.material(store, &op)?;
+        let request = self.protected_request(store, &op)?;
         let RealtimeRequest::Send(arg) = &request else {
             return Err(Error::ChatIntegrity("fresh message is not a send").into());
         };

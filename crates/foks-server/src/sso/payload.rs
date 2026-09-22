@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Material {
+pub(super) struct SsoSessionPayload {
     pub id: [u8; 17],
     pub verifier: String,
     pub nonce: String,
@@ -18,7 +18,7 @@ pub(super) struct Material {
     pub email: Option<String>,
     pub poll_reservation: Option<Vec<u8>>,
 }
-impl Drop for Material {
+impl Drop for SsoSessionPayload {
     fn drop(&mut self) {
         self.id.zeroize();
         self.verifier.zeroize();

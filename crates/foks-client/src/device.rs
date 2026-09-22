@@ -1897,7 +1897,7 @@ impl FoksClient {
             protected_store,
         )?;
         let request = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(&operation)?;
+            .load_bound_request(&operation)?;
         let decoded = decode_persisted_puk_rotation(&request)?;
         let signer_id = signer.public_material()?.id;
         if operation.subject_id != signer_id.as_bytes()
@@ -1961,7 +1961,7 @@ impl FoksClient {
             protected_store,
         )?;
         let request = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(&operation)?;
+            .load_bound_request(&operation)?;
         let decoded = decode_persisted_puk_rotation(&request)?;
         if operation.subject_id != signer.parent.entity_id().as_bytes()
             || decoded.link.decode_group_change()?.signer != *signer.parent.entity_id()
@@ -2026,7 +2026,7 @@ impl FoksClient {
             protected_store,
         )?;
         let request = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(&operation)?;
+            .load_bound_request(&operation)?;
         let decoded = decode_persisted_puk_rotation(&request)?;
         let change = decoded.link.decode_group_change()?;
         if operation.subject_id != change.signer.as_bytes()
@@ -2075,7 +2075,7 @@ impl FoksClient {
             protected_store,
         )?;
         let request = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(&operation)?;
+            .load_bound_request(&operation)?;
         let decoded = decode_persisted_puk_rotation(&request)?;
         let change = decoded.link.decode_group_change()?;
         if operation.subject_id != change.signer.as_bytes()
@@ -2124,7 +2124,7 @@ impl FoksClient {
             protected_store,
         )?;
         let request = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(&operation)?;
+            .load_bound_request(&operation)?;
         let decoded = decode_persisted_puk_rotation(&request)?;
         if operation.subject_id != decoded.link.decode_group_change()?.signer.as_bytes() {
             return Err(Error::OperationBinding(
@@ -2155,7 +2155,7 @@ impl FoksClient {
             protected_store,
         )?;
         let request = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(&operation)?;
+            .load_bound_request(&operation)?;
         let decoded = decode_persisted_puk_rotation(&request)?;
         if operation.subject_id != decoded.link.decode_group_change()?.signer.as_bytes() {
             return Err(Error::OperationBinding(
@@ -2179,7 +2179,7 @@ impl FoksClient {
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<()> {
         let request = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(operation)?;
+            .load_bound_request(operation)?;
         let decoded = decode_persisted_puk_rotation(&request)?;
         if let Some(mut expected) = decoded.passphrase {
             let stored = self.fetch_ppe_parcel(host, credential)?;
@@ -2204,7 +2204,7 @@ impl FoksClient {
         protected_store: &mut impl ProtectedMutationStore,
     ) -> Result<()> {
         let request = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(operation)?;
+            .load_bound_request(operation)?;
         let decoded = decode_persisted_puk_rotation(&request)?;
         if let Some(mut expected) = decoded.passphrase {
             let stored = self.fetch_ppe_parcel_yubi(host, credential)?;
@@ -2238,7 +2238,7 @@ impl FoksClient {
             ));
         }
         let request = MutationCoordinator::new(&host.database_path, protected_store)
-            .load_bound_material(&operation)?;
+            .load_bound_request(&operation)?;
         if foks_crypto::prefixed_hash(USER_MUTATION_REQUEST_HASH_TYPE_ID, &request)
             != operation.request_hash
         {
@@ -2259,7 +2259,7 @@ impl FoksClient {
         match operation.state {
             MutationState::Prepared => {
                 let request = MutationCoordinator::new(&host.database_path, protected_store)
-                    .load_bound_material(operation)?;
+                    .load_bound_request(operation)?;
                 self.submit_user_mutation(
                     host,
                     credential,
@@ -2270,7 +2270,7 @@ impl FoksClient {
             }
             MutationState::Submitting | MutationState::SubmissionUnknown => {
                 let request = MutationCoordinator::new(&host.database_path, protected_store)
-                    .load_bound_material(operation)?;
+                    .load_bound_request(operation)?;
                 Ok(self.call_void(host, &host.user, &request, credential).err())
             }
             MutationState::RemoteVerified => Ok(None),
@@ -2290,7 +2290,7 @@ impl FoksClient {
         match operation.state {
             MutationState::Prepared => {
                 let request = MutationCoordinator::new(&host.database_path, protected_store)
-                    .load_bound_material(operation)?;
+                    .load_bound_request(operation)?;
                 self.submit_user_mutation_yubi(
                     host,
                     credential,
@@ -2301,7 +2301,7 @@ impl FoksClient {
             }
             MutationState::Submitting | MutationState::SubmissionUnknown => {
                 let request = MutationCoordinator::new(&host.database_path, protected_store)
-                    .load_bound_material(operation)?;
+                    .load_bound_request(operation)?;
                 Ok(self
                     .call_void_with_material(
                         host,

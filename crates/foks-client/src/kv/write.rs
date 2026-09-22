@@ -742,7 +742,7 @@ impl KvWriteSession<'_> {
         }
         let material =
             MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-                .load_bound_material(&operation)?;
+                .load_bound_request(&operation)?;
         let (precondition, dirents) = decode_namespace_material(&material)?;
         if foks_crypto::prefixed_hash(KV_NAMESPACE_REQUEST_HASH_TYPE_ID, &material)
             != operation.request_hash
@@ -802,7 +802,7 @@ impl KvWriteSession<'_> {
         }
         let material =
             MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
-                .load_bound_material(&operation)?;
+                .load_bound_request(&operation)?;
         if foks_crypto::prefixed_hash(KV_ROOT_REQUEST_HASH_TYPE_ID, &material)
             != operation.request_hash
         {
@@ -1260,7 +1260,7 @@ pub(crate) fn finalize_verified_material<S: crate::ProtectedMutationStore + ?Siz
         ));
     }
     let mut coordinator = MutationCoordinator::new(database, protected);
-    let material = coordinator.load_bound_material(operation)?;
+    let material = coordinator.load_bound_request(operation)?;
     let node = if operation.kind == MutationKind::KvNamespace {
         let (precondition, dirents) = decode_namespace_material(&material)?;
         validate_namespace_operation_binding(operation, &precondition, &dirents)?;
