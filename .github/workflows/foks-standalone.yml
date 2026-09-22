@@ -73,6 +73,8 @@ jobs:
           cache-dependency-path: tools/foks-v019-oracle/go.sum
       - name: Fetch the locked dependency graph
         run: cargo fetch --locked
+      - name: Install Linux server dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
       - name: Fetch the pinned Go protocol module
         working-directory: tools/foks-v019-oracle
         run: go mod download github.com/foks-proj/go-foks@v0.1.9
