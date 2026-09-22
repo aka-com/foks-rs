@@ -25,8 +25,8 @@ The package name and executable are both `foks-desktop`. The package contains:
 /usr/bin/foks-desktop
 /usr/bin/foks-agent
 /usr/share/applications/foks-desktop.desktop
-/usr/share/metainfo/org.foks.Desktop.metainfo.xml
-/usr/share/polkit-1/actions/org.foks.desktop.policy
+/usr/share/metainfo/com.aka.foks.desktop.metainfo.xml
+/usr/share/polkit-1/actions/com.aka.foks.desktop.policy
 ```
 
 Tauri generates the single desktop entry from `foks.desktop.hbs`. No launcher
@@ -43,7 +43,7 @@ agent.
 ## Why there is no AppImage
 
 Linux application lock authenticates through the installed
-`org.foks.desktop.policy`. An AppImage has no install step for that system
+`com.aka.foks.desktop.policy`. An AppImage has no install step for that system
 policy, so lock would be unavailable. The portable tarball has the same honest
 limitation and is an evaluation artifact; it is also not self-contained and
 requires host WebKitGTK 4.1, GTK 3, and PC/SC runtimes. Use the `.deb` for

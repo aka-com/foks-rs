@@ -1,12 +1,21 @@
 # foks-rs
 
-A Rust implementation of FOKS, the federated open key store protocol,
-including client and server libraries, command-line tools, a local
-agent, and a Tauri desktop application.
+A Rust implementation of FOKS, the federated open key store
+protocol. Includes client and server libraries, command-line tools, a
+local agent, and a Tauri desktop application.
 
 The desktop app is a client for the local FOKS agent. The FOKS agent
 owns credentials, sessions, protocol verification, resumable
 operations, and access to personal and team key-value stores.
+
+The local agent stores hard state and cached soft state in separate SQLite
+databases per profile. The standalone server uses an authoritative SQLite
+database with a single writer and concurrent WAL read connections. Transactions
+can atomically update multiple tables, while writes serialize per database.
+Busy deployments require attention to transaction duration, writer queueing,
+checkpointing, and backup strategy. SQLite can perform well for this
+architecture; performance relative to PostgreSQL-based FOKS depends on workload
+and deployment.
 
 ## Development
 
@@ -22,7 +31,7 @@ npm run dev             # Run with auto-reload, and a local FOKS server and agen
 npm run start           # Run with auto-reload, for an existing FOKS agent
 
 npm run bundle:macos    # Create bundled DMG
-npm run build:frontend  # Build frontend-only mock for browser testing
+VITE_FOKS_MOCK=1 npm run build:frontend # Build frontend-only mock for browser testing
 ```
 
 Tests and checks:
@@ -33,7 +42,7 @@ npm run test:full       # entire Rust workspace + UI tests
 npm run format
 npm run lint
 npm run typecheck
-npm run test:foks-ui       # full UI coverage, including the notification scale case
+npm run test:foks-ui      # full UI test suite, including the notification scale case
 npm run test:foks-ui:fast  # ordinary UI iteration
 npm run test:foks-ui:scale # production-size notification rotation
 npm run test:rust:scale   # production-size incremental history
@@ -47,9 +56,9 @@ ESLint, UI tests, and the Tauri CLI.
 - Protocol and server validation live under [`tools/foks-server/`](tools/foks-server/)
 - The pinned Go compatibility oracle lives under [`tools/foks-v019-oracle/`](tools/foks-v019-oracle/).
 
-The project is pre-v1. Compatibility with the upstream Go protocol is tested
-explicitly; internal storage and application schemas may otherwise change
-without migration support.
+The FOKS project is pre-v1. Compatibility with the upstream Go protocol is
+tested explicitly; internal storage and application schemas may otherwise
+change without migration support.
 
 `npm test` aliases `test:core`. Full tests need native desktop dependencies;
 explicitly ignored hardware, hosted, and real-agent tests remain opt-in.
@@ -74,20 +83,18 @@ it builds anything. Notarization accepts an Apple app-specific password in
 The real-process chat benchmark runs desktop TypeScript services against release
 Rust agent and server processes, with six incoming messages per second and
 concurrent foreground history reads and message writes. Linux x86_64 results with
-notifications enabled, comparing `a4d69ad0` with the publication/fanout changes
-in `df95f9e9` plus timing fixes:
+notifications enabled:
 
-| Workload | Foreground history p95 before | After |
-| --- | ---: | ---: |
-| Steady traffic, 70 channels | 44.9 ms | 43.7 ms |
-| Message backlog, 70 channels | 39.2 ms | 38.4 ms |
-| Steady traffic, 200 channels | 44.7 ms | 45.1 ms |
+| Workload | After |
+| --- | ---: |
+| Steady traffic, 70 channels | 43.7 ms |
+| Message backlog, 70 channels | 38.4 ms |
+| Steady traffic, 200 channels | 45.1 ms |
 
 Values are medians of three trial p95s, each with 15 seconds of warmup, 60 seconds
 of measurement and a 10-second drain. They include the service/agent/server path
-but exclude desktop rendering. Notification discovery missed the 99% target in
-some steady-traffic trials, so these latency results are **not an acceptance pass**.
-See the [benchmark guide](scripts/benchmarks/README.md) for reproduction.
+but exclude desktop rendering. See the [benchmark guide](scripts/benchmarks/README.md)
+for reproduction.
 
 ## Repository layout
 

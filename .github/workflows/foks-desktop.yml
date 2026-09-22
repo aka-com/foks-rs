@@ -58,7 +58,7 @@ jobs:
           app=target/release/bundle/macos/foks-desktop.app
           test -x "$app/Contents/MacOS/foks-desktop"
           test -x "$app/Contents/MacOS/foks-agent"
-          test "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = org.foks.desktop
+          test "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = com.aka.foks.desktop
           test -f "$app/Contents/Resources/icon.icns"
           dmgs=(target/release/bundle/dmg/*.dmg)
           test "${#dmgs[@]}" -eq 1
@@ -178,14 +178,14 @@ jobs:
           grep -F libpcsclite1 <<<"$depends"
           dpkg-deb -c "$deb" | grep -E '/usr/bin/foks-desktop$'
           dpkg-deb -c "$deb" | grep -E '/usr/bin/foks-agent$'
-          dpkg-deb -c "$deb" | grep -E '/usr/share/polkit-1/actions/org.foks.desktop.policy$'
-          dpkg-deb -c "$deb" | grep -E '/usr/share/metainfo/org.foks.Desktop.metainfo.xml$'
+          dpkg-deb -c "$deb" | grep -E '/usr/share/polkit-1/actions/com.aka.foks.desktop.policy$'
+          dpkg-deb -c "$deb" | grep -E '/usr/share/metainfo/com.aka.foks.desktop.metainfo.xml$'
           deb_root="$RUNNER_TEMP/foks-deb-root"
           mkdir -p "$deb_root"
           dpkg-deb -x "$deb" "$deb_root"
           npm run test:foks-desktop:packaged -- "$deb_root/usr/bin/foks-desktop"
           desktop-file-validate "$deb_root/usr/share/applications/foks-desktop.desktop"
-          appstreamcli validate --no-net "$deb_root/usr/share/metainfo/org.foks.Desktop.metainfo.xml"
+          appstreamcli validate --no-net "$deb_root/usr/share/metainfo/com.aka.foks.desktop.metainfo.xml"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: foks-desktop-linux

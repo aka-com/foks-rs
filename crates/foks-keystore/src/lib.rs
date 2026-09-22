@@ -160,8 +160,8 @@ mod native {
         }
     }
 
-    fn service(namespace: &str) -> String {
-        format!("org.foks.client.{namespace}")
+    pub(super) fn service(namespace: &str) -> String {
+        format!("com.aka.foks.client.{namespace}")
     }
 
     pub(super) fn label(key: &str) -> String {
@@ -827,6 +827,12 @@ mod tests {
             native::label("profile-publication.work.example"),
             "FOKS profile publication — work.example"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_keychain_service_uses_the_current_application_namespace() {
+        assert_eq!(native::service("desktop"), "com.aka.foks.client.desktop");
     }
 
     #[test]

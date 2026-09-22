@@ -8,8 +8,8 @@
         "depends": ["policykit-1", "libpcsclite1"],
         "desktopTemplate": "linux/foks.desktop.hbs",
         "files": {
-          "/usr/share/metainfo/org.foks.Desktop.metainfo.xml": "linux/org.foks.Desktop.metainfo.xml",
-          "/usr/share/polkit-1/actions/org.foks.desktop.policy": "linux/org.foks.desktop.policy"
+          "/usr/share/metainfo/com.aka.foks.desktop.metainfo.xml": "linux/com.aka.foks.desktop.metainfo.xml",
+          "/usr/share/polkit-1/actions/com.aka.foks.desktop.policy": "linux/com.aka.foks.desktop.policy"
         }
       }
     }

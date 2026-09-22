@@ -5,7 +5,7 @@
 <!--
   The polkit action behind the FOKS desktop app lock.
 
-  Installs to /usr/share/polkit-1/actions/org.foks.desktop.policy. If not
+  Installs to /usr/share/polkit-1/actions/com.aka.foks.desktop.policy. If not
   registered, polkit denies authorization requests and the app reports
   app lock as unavailable.
 
@@ -17,7 +17,7 @@
 -->
 <policyconfig>
   <vendor>FOKS</vendor>
-  <action id="org.foks.desktop.unlock">
+  <action id="com.aka.foks.desktop.unlock">
     <description>Unlock FOKS</description>
     <message>Authenticate to unlock FOKS and access your vault.</message>
     <defaults>

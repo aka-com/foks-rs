@@ -6,7 +6,7 @@ React product shell.
 
 - Rust package: `foks-desktop-app`; binary: `foks-desktop`.
 - Web app: `..`, served at `http://127.0.0.1:1421` in development.
-- Bundle identifier: `org.foks.desktop`.
+- Bundle identifier: `com.aka.foks.desktop`.
 - Managed helper: `foks-agent`, discovered beside the desktop executable (`Contents/MacOS` on macOS).
 
 ## Development

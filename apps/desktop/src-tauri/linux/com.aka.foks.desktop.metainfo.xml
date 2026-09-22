@@ -5,7 +5,7 @@
   AppStream metadata for the FOKS desktop application.
 -->
 <component type="desktop-application">
-  <id>org.foks.Desktop</id>
+  <id>com.aka.foks.desktop</id>
   <name>FOKS</name>
   <summary>Standalone client for FOKS identity, teams, and encrypted KV</summary>
   <metadata_license>MIT</metadata_license>

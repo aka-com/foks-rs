@@ -421,6 +421,10 @@ mod tests {
         assert_eq!(windows[0]["dragDropEnabled"], true);
         assert_eq!(configuration["app"]["withGlobalTauri"], false);
         assert_eq!(
+            configuration["identifier"], "com.aka.foks.desktop",
+            "the bundle identifier is also the desktop persistence boundary"
+        );
+        assert_eq!(
             configuration["bundle"]["externalBin"],
             serde_json::json!(["binaries/foks-agent"]),
             "every application bundle must include the managed agent"
