@@ -97,7 +97,7 @@ impl VerifiedRemoteUserRecipient {
 
 /// A team recipient whose complete direct roster was independently checked
 /// against current authenticated user/team projections. Recursively requiring
-/// this witness for child teams prevents a parent CLKR from boxing new PTKs to
+/// this witness for child teams prevents a parent team member-key refresh from boxing new PTKs to
 /// a team key that is still exposed through a stale descendant PUK/PTK.
 #[derive(Clone, Debug)]
 pub struct VerifiedTeamRecipient {
@@ -381,7 +381,7 @@ pub struct TeamMemberKeyRefresh<'a> {
     pub replacement_hepk_fingerprint: [u8; 32],
 }
 
-/// One atomic CLKR transition for every stale roster row observed in the same
+/// One atomic team member-key refresh transition for every stale roster row observed in the same
 /// authenticated team view. The PTK role list is the union required by all
 /// replacements, and no newly rotated PTK is boxed to a retired roster key.
 pub struct RefreshTeamMemberKeysRequest<'a> {

@@ -1910,7 +1910,7 @@ fn reconcile_user_membership_server_trust(
                                 // transition that admitted this party. The
                                 // server-trust projection reports the team's
                                 // current head, which advances after unrelated
-                                // roster edits and CLKR rotations.
+                                // roster edits and team member-key refresh rotations.
                                 && *team_sequence <= entry.team_sequence
                         }
                         _ => false,
@@ -3205,7 +3205,7 @@ impl FoksClient {
         }
         let user = self.authenticate_credential_and_pin(home, credential)?;
         let (seed, certs) = credential.transport();
-        // The destination may still name an older PUK until its CLKR runs.
+        // The destination may still name an older PUK until its team member-key refresh runs.
         // Historical seeds are opened through the authenticated home seed chain;
         // each attempt still proves the exact destination roster key and host.
         let mut last_error = None;

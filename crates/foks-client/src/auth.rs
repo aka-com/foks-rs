@@ -450,7 +450,7 @@ impl FoksClient {
     }
 
     /// Loads another local user's public chain through an already activated
-    /// team-view token. This is the Go TeamLoader authorization used by CLKR:
+    /// team-view token. This is the Go TeamLoader authorization used by team member-key refresh:
     /// the caller learns only authenticated public PUK material and never a
     /// target user's private parcel.
     pub fn load_and_pin_user_as_local_team(

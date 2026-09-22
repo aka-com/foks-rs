@@ -2202,7 +2202,7 @@ impl AccountVault<'_> {
             }
             if found.is_some() {
                 return Err(Error::InvalidAccount(
-                    "more than one caller-durable CLKR intent names the same team",
+                    "more than one caller-durable team member-key refresh intent names the same team",
                 ));
             }
             found = Some((alias, pending));

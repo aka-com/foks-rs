@@ -431,7 +431,7 @@ fn team_recipient_staleness_is_deferred(error: &foks_client::Error) -> bool {
 }
 
 /// Expands a blocked set upward through `(child, parent)` membership edges.
-/// A team whose caller-durable CLKR another unlocked device must recover
+/// A team whose caller-durable team member-key refresh another unlocked device must recover
 /// cannot be rotated yet, and neither can any team that depends on it, or the
 /// parent would be rekeyed against a roster that is about to change again.
 fn exclude_team_ancestors(
@@ -480,7 +480,7 @@ impl CheckedProfileSession<'_> {
             }
         }
         // Teams created or joined by another implementation do not have a
-        // local display alias. Their caller-durable CLKR state still needs a
+        // local display alias. Their caller-durable team member-key refresh state still needs a
         // stable vault key across crashes and restarts.
         let mut occupied = vault
             .team_aliases()?
@@ -628,7 +628,7 @@ impl CheckedProfileSession<'_> {
                 {
                     if pending.transport_uid != credential.uid().as_bytes() {
                         return Err(foks_client::Error::CredentialBinding(
-                            "caller-durable CLKR transport principal changed",
+                            "caller-durable team member-key refresh transport principal changed",
                         )
                         .into());
                     }
@@ -688,7 +688,7 @@ impl CheckedProfileSession<'_> {
                         }
                     } else {
                         return Err(foks_client::Error::TeamBinding(
-                            "visible CLKR has neither its recorded actor nor a current administrator observer",
+                            "visible team member-key refresh has neither its recorded actor nor a current administrator observer",
                         )
                         .into());
                     };
@@ -711,7 +711,7 @@ impl CheckedProfileSession<'_> {
                         }
                         TeamRefreshAttempt::TryStrongerCredential => {
                             return Err(foks_client::Error::TeamBinding(
-                                "visible CLKR cannot be reconciled by its recorded actor",
+                                "visible team member-key refresh cannot be reconciled by its recorded actor",
                             )
                             .into())
                         }
@@ -832,7 +832,7 @@ impl CheckedProfileSession<'_> {
                 let selected_actor = if let Some(pending) = pending.as_ref() {
                     if pending.transport_uid != credential.uid().as_bytes() {
                         return Err(foks_client::Error::CredentialBinding(
-                            "caller-durable CLKR transport principal changed",
+                            "caller-durable team member-key refresh transport principal changed",
                         )
                         .into());
                     }
@@ -906,12 +906,12 @@ impl CheckedProfileSession<'_> {
                         teams
                             .get(selected_actor.as_bytes())
                             .ok_or(foks_client::Error::TeamBinding(
-                            "caller-durable CLKR local-team actor is outside the membership graph",
+                            "caller-durable team member-key refresh local-team actor is outside the membership graph",
                         ))?;
                     let actor_recipient = recipients
                         .get(selected_actor.as_bytes())
                         .ok_or(foks_client::Error::TeamBinding(
-                        "caller-durable CLKR local-team actor lacks a current recipient witness",
+                        "caller-durable team member-key refresh local-team actor lacks a current recipient witness",
                     ))?;
                     self.refresh_local_team_member_keys(
                         host,
@@ -938,7 +938,7 @@ impl CheckedProfileSession<'_> {
                     }
                     TeamRefreshAttempt::TryStrongerCredential => {
                         return Err(foks_client::Error::TeamBinding(
-                            "authenticated membership graph selected an unauthorized CLKR actor",
+                            "authenticated membership graph selected an unauthorized team member-key refresh actor",
                         )
                         .into())
                     }
@@ -1555,7 +1555,7 @@ impl CheckedProfileSession<'_> {
                         .is_ok_and(|account| account.uid.as_bytes() == uid)
                 });
             if has_yubi {
-                // Team CLKR for hardware-only accounts is driven by the next
+                // Team member-key refresh for hardware-only accounts is driven by the next
                 // explicit unlock; unattended scheduling remains PIN-free.
                 return Ok(());
             }
@@ -1685,7 +1685,7 @@ impl CheckedProfileSession<'_> {
                                 continue 'credentials;
                             }
                             Err(Error::Client(foks_client::Error::TeamRequest(
-                                "CLKR snapshot does not match the latest authenticated Merkle root",
+                                "team member-key refresh snapshot does not match the latest authenticated Merkle root",
                             ))) if attempt < 2 => {
                                 user = self
                                     .client
@@ -1708,7 +1708,7 @@ impl CheckedProfileSession<'_> {
                                 std::thread::sleep(std::time::Duration::from_millis(25));
                             }
                             Err(error) => {
-                                return Err(format!("team refresh CLKR failed: {error}"));
+                                return Err(format!("team member-key refresh failed: {error}"));
                             }
                         }
                     }
@@ -1740,7 +1740,7 @@ impl CheckedProfileSession<'_> {
         }
     }
 
-    /// Runs the same local-team CLKR planner and exact crash-recovery path as
+    /// Runs the same local-team member-key refresh planner and exact crash-recovery path as
     /// the unattended software scheduler while a Yubi credential is already
     /// unlocked. No PIN or hardware handle crosses this call.
     pub(super) fn refresh_yubi_team_chains(
@@ -1758,7 +1758,7 @@ impl CheckedProfileSession<'_> {
             &self.paths.protected_mutations,
             derive_mutation_key(master_key),
         )?;
-        // A pending caller-durable CLKR that names a different device must be
+        // A pending caller-durable team member-key refresh that names a different device must be
         // recovered by exactly that device. Skipping such a team here (and,
         // through `exclude_team_ancestors`, everything that depends on it)
         // makes a multi-key sweep independent of the order the keys are
@@ -1860,7 +1860,7 @@ impl CheckedProfileSession<'_> {
                             ))
                         }
                         Err(Error::Client(foks_client::Error::TeamRequest(
-                            "CLKR snapshot does not match the latest authenticated Merkle root",
+                            "team member-key refresh snapshot does not match the latest authenticated Merkle root",
                         ))) if attempt < 2 => {
                             actor = self.client.authenticate_yubi_and_pin(host, credential)?;
                             team = self.client.load_and_pin_team_yubi(
@@ -1926,11 +1926,11 @@ impl CheckedProfileSession<'_> {
 
         // Reconcile a visible pending sequence before applying the local-only
         // planning scope. A later transition may have added a remote or nested
-        // member, but that must not strand an already committed CLKR intent.
+        // member, but that must not strand an already committed team member-key refresh intent.
         if let Some(pending) = vault.team_rekey(team_alias)? {
             if pending.team_id != team_id.as_bytes() {
                 return Err(foks_client::Error::CredentialBinding(
-                    "caller-durable CLKR intent belongs to another team",
+                    "caller-durable team member-key refresh intent belongs to another team",
                 )
                 .into());
             }
@@ -1987,7 +1987,7 @@ impl CheckedProfileSession<'_> {
                                 host.host_id().as_bytes(),
                             ) {
                                 return Err(foks_client::Error::OperationBinding(
-                                    "caller-durable CLKR journal binding changed",
+                                    "caller-durable team member-key refresh journal binding changed",
                                 )
                                 .into());
                             }
@@ -2044,7 +2044,7 @@ impl CheckedProfileSession<'_> {
                 // orchestrator. Never rotate while a roster recipient lacks
                 // an authenticated current-head projection.
                 return Err(foks_client::Error::TeamRequest(
-                    "CLKR requires an unmanaged nested or federated roster party",
+                    "team member-key refresh requires an unmanaged nested or federated roster party",
                 )
                 .into());
             }
@@ -2089,13 +2089,13 @@ impl CheckedProfileSession<'_> {
         if let Some(mut pending) = vault.team_rekey(team_alias)? {
             if pending.team_id != team_id.as_bytes() {
                 return Err(foks_client::Error::CredentialBinding(
-                    "caller-durable CLKR intent belongs to another team",
+                    "caller-durable team member-key refresh intent belongs to another team",
                 )
                 .into());
             }
             if team.verified.chain_seqno().checked_add(1) != Some(pending.expected_seqno) {
                 return Err(foks_client::Error::OperationBinding(
-                    "caller-durable CLKR intent is not adjacent to the team head",
+                    "caller-durable team member-key refresh intent is not adjacent to the team head",
                 )
                 .into());
             }
@@ -2118,7 +2118,7 @@ impl CheckedProfileSession<'_> {
                         )
                     }) {
                         return Err(foks_client::Error::OperationBinding(
-                            "another active mutation occupies the pending CLKR sequence",
+                            "another active mutation occupies the pending team member-key refresh sequence",
                         )
                         .into());
                     }
@@ -2210,7 +2210,7 @@ impl CheckedProfileSession<'_> {
                     ) =>
                 {
                     return Err(foks_client::Error::OperationBinding(
-                        "caller-durable CLKR journal binding changed",
+                        "caller-durable team member-key refresh journal binding changed",
                     )
                     .into());
                 }
@@ -2228,7 +2228,7 @@ impl CheckedProfileSession<'_> {
                 }
                 Some(operation) if operation.state == TeamMutationState::Verified => {
                     return Err(foks_client::Error::OperationBinding(
-                        "verified CLKR journal is ahead of the authenticated team head",
+                        "verified team member-key refresh journal is ahead of the authenticated team head",
                     )
                     .into());
                 }
@@ -2446,9 +2446,9 @@ impl CheckedProfileSession<'_> {
                         return Err(error.into());
                     }
                     return Err(foks_client::Error::TransitionNotObserved(if replay_safe {
-                        "replayed CLKR has not reached the authenticated team head"
+                        "replayed team member-key refresh has not reached the authenticated team head"
                     } else {
-                        "CLKR replay is deferred until its ambiguous sequence is visible"
+                        "team member-key refresh replay is deferred until its ambiguous sequence is visible"
                     })
                     .into());
                 }
@@ -2462,7 +2462,7 @@ impl CheckedProfileSession<'_> {
         };
         if actor.party_state().is_none() {
             // A current recursive recipient witness is mandatory before a
-            // fresh parent CLKR can mint boxes or a signature.
+            // fresh parent team member-key refresh can mint boxes or a signature.
             return Ok(TeamRefreshAttempt::TryStrongerCredential);
         }
 
@@ -2482,7 +2482,7 @@ impl CheckedProfileSession<'_> {
                 // A LocalParentTeam load authenticates the child's current
                 // public PTK well enough to prove that a no-op parent is
                 // current, but not to mint a new parent box. Defer only if
-                // this pass actually finds CLKR work below.
+                // this pass actually finds team member-key refresh work below.
                 has_public_only_team_recipient = true;
             }
             let key =
@@ -2517,7 +2517,7 @@ impl CheckedProfileSession<'_> {
         }
         if stale.is_empty() {
             // Higher-role stale rows are intentionally left for a suitably
-            // privileged responder, matching Go CLKR behavior.
+            // privileged responder, matching Go team member-key refresh behavior.
             return Ok(TeamRefreshAttempt::Complete);
         }
         let maximum_role = stale
@@ -2633,7 +2633,7 @@ impl CheckedProfileSession<'_> {
     ) -> Result<bool> {
         if pending.team_id != team_id.as_bytes() {
             return Err(foks_client::Error::CredentialBinding(
-                "caller-durable CLKR intent belongs to another team",
+                "caller-durable team member-key refresh intent belongs to another team",
             )
             .into());
         }
@@ -2643,7 +2643,7 @@ impl CheckedProfileSession<'_> {
             Some(operation) => {
                 if !team_mutation_matches_pending(&operation, pending, host.host_id().as_bytes()) {
                     return Err(foks_client::Error::OperationBinding(
-                        "caller-durable CLKR journal binding changed",
+                        "caller-durable team member-key refresh journal binding changed",
                     )
                     .into());
                 }
@@ -2775,7 +2775,7 @@ impl CheckedProfileSession<'_> {
                         party_states
                             .get(&(change.party.clone(), change.host.clone()))
                             .ok_or(foks_client::Error::TeamBinding(
-                                "caller-durable CLKR target party is unavailable",
+                                "caller-durable team member-key refresh target party is unavailable",
                             ))?
                             .verified(),
                     ),
@@ -2975,7 +2975,7 @@ impl CheckedProfileSession<'_> {
                         party_states
                             .get(&(change.party.clone(), change.host.clone()))
                             .ok_or(foks_client::Error::TeamBinding(
-                                "caller-durable CLKR target party is unavailable",
+                                "caller-durable team member-key refresh target party is unavailable",
                             ))?
                             .verified(),
                     )
@@ -3017,7 +3017,7 @@ impl CheckedProfileSession<'_> {
                     ))
                     .map(TeamRefreshParty::verified)
                     .ok_or(foks_client::Error::TeamBinding(
-                        "caller-durable CLKR remaining party is unavailable",
+                        "caller-durable team member-key refresh remaining party is unavailable",
                     ))
             })
             .collect::<foks_client::Result<Vec<_>>>()?;
@@ -3088,17 +3088,17 @@ impl CheckedProfileSession<'_> {
             ) => self
                 .client
                 .refresh_team_member_keys_and_rotate_ptks_as_local_team(
-                    host,
-                    credential,
-                    transport_user,
-                    actor_team,
-                    actor_recipient.ok_or(foks_client::Error::TeamBinding(
-                        "fresh nested CLKR lacks a current actor recipient witness",
-                    ))?,
-                    team.expect("fresh nested CLKR has an authenticated target"),
-                    &request,
-                    protected_store,
-                )?,
+                host,
+                credential,
+                transport_user,
+                actor_team,
+                actor_recipient.ok_or(foks_client::Error::TeamBinding(
+                    "fresh nested team member-key refresh lacks a current actor recipient witness",
+                ))?,
+                team.expect("fresh nested team member-key refresh has an authenticated target"),
+                &request,
+                protected_store,
+            )?,
             (
                 TeamRefreshCredential::Yubi(credential),
                 Some((transport_user, actor_team, actor_recipient)),
@@ -3107,17 +3107,17 @@ impl CheckedProfileSession<'_> {
             ) => self
                 .client
                 .refresh_team_member_keys_and_rotate_ptks_as_local_team_yubi(
-                    host,
-                    credential,
-                    transport_user,
-                    actor_team,
-                    actor_recipient.ok_or(foks_client::Error::TeamBinding(
-                        "fresh nested CLKR lacks a current actor recipient witness",
-                    ))?,
-                    team.expect("fresh nested CLKR has an authenticated target"),
-                    &request,
-                    protected_store,
-                )?,
+                host,
+                credential,
+                transport_user,
+                actor_team,
+                actor_recipient.ok_or(foks_client::Error::TeamBinding(
+                    "fresh nested team member-key refresh lacks a current actor recipient witness",
+                ))?,
+                team.expect("fresh nested team member-key refresh has an authenticated target"),
+                &request,
+                protected_store,
+            )?,
             (
                 TeamRefreshCredential::Software(credential),
                 Some((transport_user, actor_team, _)),
@@ -3330,7 +3330,7 @@ mod tests {
         foks_proto::EntityId::from_bytes(bytes).unwrap()
     }
 
-    /// A team whose caller-durable CLKR belongs to a device this sweep does
+    /// A team whose caller-durable team member-key refresh belongs to a device this sweep does
     /// not hold blocks every team that depends on it, so presenting two keys
     /// in either order converges. Unrelated teams stay rotatable.
     #[test]
@@ -3571,7 +3571,7 @@ mod tests {
                 );
                 session
                     .refresh_team_chains(primary.credential.uid.as_bytes(), &mut vault, &master)
-                    .expect("CLKR sweep defers recipients with a stale PUK");
+                    .expect("team member-key refresh sweep defers recipients with a stale PUK");
                 let still_stale = session
                     .client
                     .authenticate_and_pin(&host, &primary.credential)?;
@@ -3585,7 +3585,7 @@ mod tests {
                 assert_eq!(
                     unchanged_team.verified.chain_seqno(),
                     2,
-                    "CLKR must not box fresh PTKs to an unrotated revoked-device PUK"
+                    "team member-key refresh must not box fresh PTKs to an unrotated revoked-device PUK"
                 );
                 Ok::<_, crate::Error>(())
             })
@@ -3655,7 +3655,7 @@ mod tests {
                 assert_eq!(
                     team.verified.group_change_at(3)?.changes.len(),
                     2,
-                    "one atomic CLKR link must refresh both stale roster rows"
+                    "one atomic team member-key refresh link must refresh both stale roster rows"
                 );
                 for uid in [&active.credential.uid, &member.credential.uid] {
                     assert_eq!(

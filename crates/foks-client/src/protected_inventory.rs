@@ -37,7 +37,7 @@ impl ProtectedRecordKey<'_> {
         match self {
             Self::Mutation(id) => id.to_vec(),
             Self::Sso(id, stage) => [b"foks-client-sso-v1".as_slice(), id, &[stage]].concat(),
-            Self::TeamRekey(id) => [b"team-clkr-request-v1:".as_slice(), id].concat(),
+            Self::TeamRekey(id) => [b"team-member-key-refresh-request-v1:".as_slice(), id].concat(),
             Self::TeamRotation(id) => [b"team-rotation-request-v1:".as_slice(), id].concat(),
             Self::TeamMetadata(id) => [b"team-index-range:".as_slice(), id].concat(),
             Self::RemoteAddition(id) => {

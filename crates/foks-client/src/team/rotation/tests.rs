@@ -162,7 +162,7 @@ fn reconciliation_is_bound_to_the_exact_official_rotation() {
 }
 
 #[test]
-fn clkr_operation_identity_is_bound_to_the_actor_not_the_transport_device() {
+fn team_member_key_refresh_operation_identity_is_bound_to_the_actor_not_the_transport_device() {
     let mut actor = vec![0x22; 33];
     actor[0] = foks_proto::ENTITY_USER;
     let actor = foks_proto::EntityId::from_bytes(actor).unwrap();
@@ -218,7 +218,7 @@ fn clkr_operation_identity_is_bound_to_the_actor_not_the_transport_device() {
 }
 
 #[test]
-fn yubi_clkr_api_covers_prepare_submit_replay_resume_and_discard() {
+fn yubi_team_member_key_refresh_api_covers_prepare_submit_replay_resume_and_discard() {
     let _ = FoksClient::refresh_team_member_keys_operation_id_yubi;
     let _ = FoksClient::refresh_team_member_keys_and_rotate_ptks_yubi;
     let _ = FoksClient::replay_recorded_team_rekey_yubi;
@@ -261,7 +261,8 @@ fn membership_changes_rotate_the_required_role_keys() {
 }
 
 #[test]
-fn protected_only_clkr_frame_can_be_rebuilt_but_a_journaled_frame_cannot_be_discarded() {
+fn protected_only_team_member_key_refresh_frame_can_be_rebuilt_but_a_journaled_frame_cannot_be_discarded(
+) {
     let (_temporary, client, host) = initialized_host();
     let operation_id = [0x61; 16];
     let key = team_rekey_material_key(&operation_id);
@@ -341,7 +342,7 @@ fn superseded_member_edit_releases_its_journal_and_protected_material() {
 }
 
 #[test]
-fn recorded_clkr_cleanup_rejects_active_submission_without_a_witness() {
+fn recorded_team_member_key_refresh_cleanup_rejects_active_submission_without_a_witness() {
     let (_temporary, client, host) = initialized_host();
     let operation_id = [0x71; 16];
     let (operation, actor, team) = team_operation(&host, operation_id);
@@ -439,7 +440,7 @@ fn recorded_clkr_cleanup_rejects_active_submission_without_a_witness() {
 }
 
 #[test]
-fn verified_clkr_cleanup_tolerates_material_already_removed() {
+fn verified_team_member_key_refresh_cleanup_tolerates_material_already_removed() {
     let (_temporary, client, host) = initialized_host();
     let operation_id = [0x81; 16];
     let (operation, actor, team) = team_operation(&host, operation_id);
@@ -517,7 +518,7 @@ fn verified_clkr_cleanup_tolerates_material_already_removed() {
 }
 
 #[test]
-fn nested_clkr_bearer_is_attached_only_to_the_submission_frame() {
+fn nested_team_member_key_refresh_bearer_is_attached_only_to_the_submission_frame() {
     let link = UserLink::decode(&fixture("remove-member-link.snowp")).unwrap();
     let boxes = foks_proto::SharedKeyBoxSet::new([0x90; 16], Vec::new(), None).unwrap();
     let request =

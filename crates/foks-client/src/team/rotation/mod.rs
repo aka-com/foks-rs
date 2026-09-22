@@ -271,7 +271,7 @@ fn prepared_refresh_operation_id(
         || authenticated_team.verified.chain_seqno().checked_add(1) != Some(request.expected_seqno)
     {
         return Err(Error::OperationBinding(
-            "CLKR operation identity does not match the authenticated team head",
+            "team member-key refresh operation identity does not match the authenticated team head",
         ));
     }
     let rotations =
@@ -308,7 +308,7 @@ impl FoksClient {
         ))
     }
 
-    /// Derives the stable journal identity for one caller-durable CLKR plan
+    /// Derives the stable journal identity for one caller-durable team member-key refresh plan
     /// before any protected request or public journal row is written.
     pub fn refresh_team_member_keys_operation_id(
         &self,
@@ -320,7 +320,7 @@ impl FoksClient {
         prepared_refresh_operation_id(&credential.uid, team, authenticated_team, request)
     }
 
-    /// Hardware-backed identity derivation for a caller-durable CLKR plan.
+    /// Hardware-backed identity derivation for a caller-durable team member-key refresh plan.
     /// Credential kind and signing device are deliberately absent from the
     /// identity: the authenticated user, team transition, and retained PTKs
     /// bind the same operation across software and Yubi recovery paths.
@@ -334,7 +334,7 @@ impl FoksClient {
         prepared_refresh_operation_id(&credential.uid, team, authenticated_team, request)
     }
 
-    /// Stable CLKR identity when a local member team, rather than the
+    /// Stable team member-key refresh identity when a local member team, rather than the
     /// transport user, signs the target-team transition.
     pub fn refresh_team_member_keys_operation_id_for_actor(
         &self,
@@ -781,7 +781,7 @@ impl FoksClient {
     }
 
     /// Atomically advances multiple stale roster PUK generations and rotates
-    /// the union of exposed PTKs. This is the CLKR primitive: no retired key
+    /// the union of exposed PTKs. This is the team member-key refresh primitive: no retired key
     /// receives any PTK introduced by the transition.
     pub fn refresh_team_member_keys_and_rotate_ptks(
         &self,
@@ -881,7 +881,7 @@ impl FoksClient {
         )
     }
 
-    /// Runs CLKR with a local member team as the cryptographic actor while an
+    /// Runs team member-key refresh with a local member team as the cryptographic actor while an
     /// ordinary software device supplies only the authenticated transport.
     /// The target must have been loaded through that member team's view
     /// capability and `actor_recipient` must recursively prove the member
@@ -902,7 +902,7 @@ impl FoksClient {
             || transport_user.verified.host() != host.host_id()
         {
             return Err(Error::UserBinding(
-                "nested CLKR transport does not match the authenticated user",
+                "nested team member-key refresh transport does not match the authenticated user",
             ));
         }
         let actor = local_team_refresh_actor(actor_team, actor_recipient, target_team)?;
@@ -939,7 +939,7 @@ impl FoksClient {
             || transport_user.verified.host() != host.host_id()
         {
             return Err(Error::UserBinding(
-                "nested CLKR transport does not match the authenticated user",
+                "nested team member-key refresh transport does not match the authenticated user",
             ));
         }
         let subkey = derive_subkey_id(&credential.subkey_seed)?;
@@ -949,7 +949,7 @@ impl FoksClient {
                 && device.subkey.as_ref() == Some(&subkey)
         }) {
             return Err(Error::CredentialBinding(
-                "nested CLKR Yubi transport is not enrolled",
+                "nested team member-key refresh Yubi transport is not enrolled",
             ));
         }
         let actor = local_team_refresh_actor(actor_team, actor_recipient, target_team)?;
@@ -1024,7 +1024,7 @@ impl FoksClient {
                 let private = actor
                     .replacement_seed(replacement)?
                     .ok_or(Error::KeyBinding(
-                        "current replacement actor key is unavailable for self CLKR",
+                        "current replacement actor key is unavailable for self-refresh",
                     ))?;
                 if self_replacement.replace(private).is_some() {
                     return Err(Error::TeamRequest(
@@ -1081,7 +1081,7 @@ impl FoksClient {
                 .any(|party| !party.matches_authoritative_root(host.host_id(), &root))
         {
             return Err(Error::TeamRequest(
-                "CLKR snapshot does not match the latest authenticated Merkle root",
+                "team member-key refresh snapshot does not match the latest authenticated Merkle root",
             ));
         }
         // The actor is deliberately omitted from `remaining_parties`: it is
@@ -1184,11 +1184,11 @@ impl FoksClient {
         let mut hard_store = HardStateStore::open(&host.database_path)?;
         if hard_store.team_mutation(&operation_id)?.is_some() {
             // An existing journal may bind an older recipient manifest even
-            // though the public CLKR identity is unchanged. Only the explicit
+            // though the public team member-key refresh identity is unchanged. Only the explicit
             // replay/resume APIs revalidate that exact protected frame against
             // the current authenticated roster.
             return Err(Error::OperationBinding(
-                "recorded CLKR must be resumed through its exact replay path",
+                "recorded team member-key refresh must be resumed through its exact replay path",
             ));
         }
         // A protected-only frame cannot have reached submission because
@@ -1199,7 +1199,7 @@ impl FoksClient {
             Ok(()) => {}
             Err(ProtectedStoreError::Conflict) => {
                 return Err(Error::OperationBinding(
-                    "a concurrent CLKR plan changed the protected request",
+                    "a concurrent team member-key refresh plan changed the protected request",
                 ));
             }
             Err(error) => return Err(protected_material_error(error)),
@@ -1209,7 +1209,7 @@ impl FoksClient {
             .map_err(protected_material_error)?;
         if protected_request.as_slice() != encoded_request {
             return Err(Error::OperationBinding(
-                "protected CLKR request changed before journaling",
+                "protected team member-key refresh request changed before journaling",
             ));
         }
         let decoded = decode_protected_team_edit_request(&protected_request)?;
@@ -1217,7 +1217,7 @@ impl FoksClient {
             || decoded.link.decode_team_group_change()?.team != *team
         {
             return Err(Error::OperationBinding(
-                "protected CLKR request contains reusable authority or another team",
+                "protected team member-key refresh request contains reusable authority or another team",
             ));
         }
         // Bearer activation is a preflight: it cannot submit the edit. Do it
@@ -1287,7 +1287,7 @@ impl FoksClient {
 
         let mut last_error = None;
         for attempt in 0..40 {
-            // A self-CLKR invalidates the old generation's view capability.
+            // A self-refresh invalidates the old generation's view capability.
             // Retry activation sparsely until the roster transaction exposes
             // the replacement PUK, then reuse that one token for all polls.
             if let RefreshActorSecrets::User(user) = actor.secrets {
@@ -1358,7 +1358,7 @@ impl FoksClient {
                 }
                 Ok(_) => {
                     last_error = Some(Error::TransitionNotObserved(
-                        "team chain has not reached the prepared CLKR transition",
+                        "team chain has not reached the prepared team member-key refresh transition",
                     ));
                 }
                 Err(error) => last_error = Some(error),
@@ -1369,12 +1369,12 @@ impl FoksClient {
         }
         Err(post_error.unwrap_or_else(|| {
             last_error.unwrap_or(Error::TransitionNotObserved(
-                "CLKR transition was not observed",
+                "team member-key refresh transition was not observed",
             ))
         }))
     }
 
-    /// Finalizes a caller-durable CLKR intent after its exact transition is
+    /// Finalizes a caller-durable team member-key refresh intent after its exact transition is
     /// visible in the authenticated team chain.
     pub fn resume_refresh_team_member_keys_and_rotate_ptks(
         &self,
@@ -1387,7 +1387,7 @@ impl FoksClient {
     ) -> Result<RotatedTeamPtks> {
         if recovery.expected_seqno != request.expected_seqno {
             return Err(Error::OperationBinding(
-                "CLKR recovery sequence does not match the request",
+                "team member-key refresh recovery sequence does not match the request",
             ));
         }
         let user = self.authenticate_and_pin(host, credential)?;
@@ -1405,7 +1405,7 @@ impl FoksClient {
         )
     }
 
-    /// Hardware-backed reconciliation for a caller-durable CLKR intent. Like
+    /// Hardware-backed reconciliation for a caller-durable team member-key refresh intent. Like
     /// the software path, this never regenerates or reposts key material; it
     /// accepts only the exact authenticated transition bound to the journal.
     pub fn resume_refresh_team_member_keys_and_rotate_ptks_yubi(
@@ -1419,7 +1419,7 @@ impl FoksClient {
     ) -> Result<RotatedTeamPtks> {
         if recovery.expected_seqno != request.expected_seqno {
             return Err(Error::OperationBinding(
-                "CLKR recovery sequence does not match the request",
+                "team member-key refresh recovery sequence does not match the request",
             ));
         }
         let user = self.authenticate_yubi_and_pin(host, credential)?;
@@ -1520,7 +1520,7 @@ impl FoksClient {
     ) -> Result<RotatedTeamPtks> {
         if observed.verified.chain_seqno() < request.expected_seqno {
             return Err(Error::TransitionNotObserved(
-                "team chain has not reached the caller-durable CLKR transition",
+                "team chain has not reached the caller-durable team member-key refresh transition",
             ));
         }
         let mut changes = Vec::with_capacity(request.changes.len());
@@ -1536,9 +1536,12 @@ impl FoksClient {
             });
         }
         let mut hard_store = HardStateStore::open(&host.database_path)?;
-        let operation = hard_store
-            .team_mutation(expected_operation_id)?
-            .ok_or(Error::TeamRequest("CLKR transition is not recorded"))?;
+        let operation =
+            hard_store
+                .team_mutation(expected_operation_id)?
+                .ok_or(Error::TeamRequest(
+                    "team member-key refresh transition is not recorded",
+                ))?;
         if operation.kind != TeamMutationKind::PtkRotation
             || operation.host_id != host.host_id().as_bytes()
             || operation.actor_id != expected_actor.as_bytes()
@@ -1547,7 +1550,7 @@ impl FoksClient {
             || operation.operation_id != *expected_operation_id
         {
             return Err(Error::OperationBinding(
-                "CLKR journal does not match supplied identities",
+                "team member-key refresh journal does not match supplied identities",
             ));
         }
         let material_key = team_rekey_material_key(&operation.operation_id);
@@ -1559,7 +1562,7 @@ impl FoksClient {
                 != operation.request_hash
             {
                 return Err(Error::OperationBinding(
-                    "protected CLKR request changed before reconciliation",
+                    "protected team member-key refresh request changed before reconciliation",
                 ));
             }
             let protected = decode_protected_team_edit_request(&exact_request)?;
@@ -1574,7 +1577,7 @@ impl FoksClient {
                 )?;
                 remove_team_rekey_material(protected_store, &material_key)?;
                 return Err(Error::OperationBinding(
-                    "authenticated team transition differs from the exact recorded CLKR request",
+                    "authenticated team transition differs from the exact recorded team member-key refresh request",
                 ));
             }
         }
@@ -1582,7 +1585,7 @@ impl FoksClient {
             let change = observed.verified.group_change_at(request.expected_seqno)?;
             if change.shared_keys.len() != request.rotations.len() {
                 return Err(Error::OperationBinding(
-                    "observed CLKR PTK schedule differs from caller-durable seeds",
+                    "observed team member-key refresh PTK schedule differs from caller-durable seeds",
                 ));
             }
             let introduced = change
@@ -1595,7 +1598,7 @@ impl FoksClient {
                             .verify_key;
                     if public.role != rotation.role || public.verify_key != verify {
                         return Err(Error::OperationBinding(
-                            "caller-durable PTK does not match the observed CLKR transition",
+                            "caller-durable PTK does not match the observed team member-key refresh transition",
                         ));
                     }
                     let hepk =
@@ -1620,7 +1623,7 @@ impl FoksClient {
         let operation_id = refresh_operation_id(expected_actor, team, &binding)?;
         if operation_id != *expected_operation_id {
             return Err(Error::OperationBinding(
-                "CLKR journal identity differs from caller-durable intent",
+                "team member-key refresh journal identity differs from caller-durable intent",
             ));
         }
         let current_role = observed
@@ -1639,7 +1642,7 @@ impl FoksClient {
             })
         {
             return Err(Error::TeamBinding(
-                "CLKR observer is not a direct team administrator",
+                "team member-key refresh observer is not a direct team administrator",
             ));
         }
         if !request
@@ -1654,7 +1657,7 @@ impl FoksClient {
             })
         {
             return Err(Error::OperationBinding(
-                "caller-durable PTKs do not match authenticated CLKR state",
+                "caller-durable PTKs do not match authenticated team member-key refresh state",
             ));
         }
         if operation.state != TeamMutationState::Verified {
@@ -1671,7 +1674,7 @@ impl FoksClient {
         })
     }
 
-    /// Replays the exact canonical CLKR request durably recorded with its
+    /// Replays the exact canonical team member-key refresh request durably recorded with its
     /// public journal row. This closes the crash window after sequence
     /// reservation but before the first socket write without rebuilding boxes
     /// or signatures with different randomness.
@@ -1700,7 +1703,7 @@ impl FoksClient {
         )
     }
 
-    /// Hardware-backed exact replay of a recorded CLKR frame. The frame's
+    /// Hardware-backed exact replay of a recorded team member-key refresh frame. The frame's
     /// original signatures and boxes remain authoritative; the Yubi delegated
     /// subkey supplies only the authenticated transport used for replay.
     pub fn replay_recorded_team_rekey_yubi(
@@ -1757,7 +1760,7 @@ impl FoksClient {
         )
     }
 
-    /// Hardware-backed exact replay for a CLKR transition signed by a local
+    /// Hardware-backed exact replay for a team member-key refresh transition signed by a local
     /// member team's PTK. The retained frame supplies the team signature; the
     /// unlocked Yubi credential is used only for the authenticated transport.
     #[allow(clippy::too_many_arguments)]
@@ -1806,9 +1809,12 @@ impl FoksClient {
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<()> {
         let mut hard_store = HardStateStore::open(&host.database_path)?;
-        let operation = hard_store
-            .team_mutation(expected_operation_id)?
-            .ok_or(Error::TeamRequest("CLKR transition is not recorded"))?;
+        let operation =
+            hard_store
+                .team_mutation(expected_operation_id)?
+                .ok_or(Error::TeamRequest(
+                    "team member-key refresh transition is not recorded",
+                ))?;
         if operation.kind != TeamMutationKind::PtkRotation
             || operation.host_id != host.host_id().as_bytes()
             || operation.actor_id != actor.as_bytes()
@@ -1823,7 +1829,7 @@ impl FoksClient {
             )
         {
             return Err(Error::OperationBinding(
-                "recorded CLKR replay request is missing or changed",
+                "recorded team member-key refresh replay request is missing or changed",
             ));
         }
         let material_key = team_rekey_material_key(&operation.operation_id);
@@ -1832,7 +1838,7 @@ impl FoksClient {
             .map_err(protected_material_error)?;
         if prefixed_hash(TEAM_MUTATION_REQUEST_HASH_TYPE_ID, &request) != operation.request_hash {
             return Err(Error::OperationBinding(
-                "protected CLKR replay request changed",
+                "protected team member-key refresh replay request changed",
             ));
         }
         let decoded = decode_protected_team_edit_request(&request)?;
@@ -1840,7 +1846,7 @@ impl FoksClient {
             || decoded.link.decode_team_group_change()?.team != *team
         {
             return Err(Error::OperationBinding(
-                "recorded CLKR replay contains reusable authority or another team",
+                "recorded team member-key refresh replay contains reusable authority or another team",
             ));
         }
         let (_, latest) = self.advance_merkle_root(host)?;
@@ -1857,7 +1863,7 @@ impl FoksClient {
             || authenticated_team.verified.tree_root() != latest_root
         {
             return Err(Error::OperationBinding(
-                "CLKR replay team projection is not at the authenticated Merkle head",
+                "team member-key refresh replay team projection is not at the authenticated Merkle head",
             ));
         }
         for party in current_parties {
@@ -1870,7 +1876,7 @@ impl FoksClient {
                     && member.source_role == boxed.target.role
             }) {
                 return Err(Error::OperationBinding(
-                    "CLKR replay contains a recipient outside the current team roster",
+                    "team member-key refresh replay contains a recipient outside the current team roster",
                 ));
             }
             let party = current_parties
@@ -1886,7 +1892,7 @@ impl FoksClient {
                             || (boxed.target.host.is_none() && party.host() == host.host_id()))
                 })
                 .ok_or(Error::OperationBinding(
-                    "CLKR replay recipient is not authenticated",
+                    "team member-key refresh replay recipient is not authenticated",
                 ))?;
             if !party.matches_authoritative_root(host.host_id(), &latest_root)
                 || party.has_stale_shared_key(boxed.target.role)
@@ -1895,7 +1901,7 @@ impl FoksClient {
                     .is_none_or(|key| key.generation != boxed.target.generation)
             {
                 return Err(Error::OperationBinding(
-                    "CLKR replay recipient key is stale or not at the Merkle head",
+                    "team member-key refresh replay recipient key is stale or not at the Merkle head",
                 ));
             }
         }
@@ -1918,7 +1924,7 @@ impl FoksClient {
             None if actor.entity_type() == foks_proto::ENTITY_USER => None,
             _ => {
                 return Err(Error::TeamBinding(
-                    "nested CLKR replay lacks the actor team's current bearer authority",
+                    "nested team member-key refresh replay lacks the actor team's current bearer authority",
                 ))
             }
         };
@@ -1949,7 +1955,7 @@ impl FoksClient {
         }
     }
 
-    /// Releases an unsubmitted or already-terminal CLKR journal reservation.
+    /// Releases an unsubmitted or already-terminal team member-key refresh journal reservation.
     /// Active submission states require an authenticated conflict witness and
     /// are rejected only by the reconciliation path that verifies that
     /// witness; caller-supplied identifiers alone are never sufficient.
@@ -1963,9 +1969,12 @@ impl FoksClient {
         protected_store: &mut dyn ProtectedMutationStore,
     ) -> Result<()> {
         let mut hard_store = HardStateStore::open(&host.database_path)?;
-        let operation = hard_store
-            .team_mutation(expected_operation_id)?
-            .ok_or(Error::TeamRequest("CLKR transition is not recorded"))?;
+        let operation =
+            hard_store
+                .team_mutation(expected_operation_id)?
+                .ok_or(Error::TeamRequest(
+                    "team member-key refresh transition is not recorded",
+                ))?;
         if operation.kind != TeamMutationKind::PtkRotation
             || operation.host_id != host.host_id().as_bytes()
             || operation.actor_id != expected_actor.as_bytes()
@@ -1974,7 +1983,7 @@ impl FoksClient {
             || operation.operation_id != *expected_operation_id
         {
             return Err(Error::OperationBinding(
-                "recorded CLKR rejection does not match supplied identities",
+                "recorded team member-key refresh rejection does not match supplied identities",
             ));
         }
         if !matches!(
@@ -1984,7 +1993,7 @@ impl FoksClient {
                 | TeamMutationState::Superseded
         ) {
             return Err(Error::OperationBinding(
-                "active CLKR submission requires an authenticated conflict witness",
+                "active team member-key refresh submission requires an authenticated conflict witness",
             ));
         }
         if !matches!(
@@ -2003,7 +2012,7 @@ impl FoksClient {
         )
     }
 
-    /// Removes protected CLKR material only when no public journal row proves
+    /// Removes protected team member-key refresh material only when no public journal row proves
     /// that submission could have begun. Callers use this to replace a stale
     /// pre-journal plan after re-authenticating all roster parties.
     pub fn discard_unrecorded_team_rekey(
@@ -2025,7 +2034,7 @@ impl FoksClient {
         )
     }
 
-    /// Hardware-backed identity wrapper for discarding a protected-only CLKR
+    /// Hardware-backed identity wrapper for discarding a protected-only team member-key refresh
     /// plan. No hardware operation is needed because a missing journal proves
     /// submission never began; the Yubi credential contributes only its UID.
     pub fn discard_unrecorded_team_rekey_yubi(
@@ -2079,7 +2088,7 @@ impl FoksClient {
         if authenticated_team.verified.chain_seqno().checked_add(1) != Some(request.expected_seqno)
         {
             return Err(Error::OperationBinding(
-                "unrecorded CLKR is not adjacent to the authenticated team head",
+                "unrecorded team member-key refresh is not adjacent to the authenticated team head",
             ));
         }
         let binding = RefreshBinding {
@@ -2105,7 +2114,7 @@ impl FoksClient {
                         .verified
                         .shared_key(rotation.role)
                         .ok_or(Error::OperationBinding(
-                            "unrecorded CLKR role is absent from the team head",
+                            "unrecorded team member-key refresh role is absent from the team head",
                         ))?;
                     let public =
                         derive_shared_public(rotation.seed, foks_proto::ENTITY_PTK_VERIFY)?;
@@ -2125,7 +2134,7 @@ impl FoksClient {
         self.discard_unjournaled_team_rekey_material(host, &operation_id, protected_store)
     }
 
-    /// Removes one protected pre-journal CLKR frame only when no journal row
+    /// Removes one protected pre-journal team member-key refresh frame only when no journal row
     /// exists for that exact operation identity. A different operation at the
     /// same sequence must never be mistaken for this caller-durable plan.
     pub fn discard_unjournaled_team_rekey_material(
@@ -2139,14 +2148,14 @@ impl FoksClient {
             .is_some()
         {
             return Err(Error::OperationBinding(
-                "journaled CLKR material cannot be discarded as unrecorded",
+                "journaled team member-key refresh material cannot be discarded as unrecorded",
             ));
         }
         remove_team_rekey_material(protected_store, &team_rekey_material_key(operation_id))
     }
 
     /// Removes residual protected material after the public journal proves
-    /// that this exact CLKR transition was already authenticated. No current
+    /// that this exact team member-key refresh transition was already authenticated. No current
     /// roster authority is needed because this path cannot submit or accept
     /// another transition.
     #[allow(clippy::too_many_arguments)]
@@ -2162,7 +2171,7 @@ impl FoksClient {
         let operation = HardStateStore::open(&host.database_path)?
             .team_mutation(operation_id)?
             .ok_or(Error::TeamRequest(
-                "verified CLKR transition is not recorded",
+                "verified team member-key refresh transition is not recorded",
             ))?;
         if operation.kind != TeamMutationKind::PtkRotation
             || operation.host_id != host.host_id().as_bytes()
@@ -2173,7 +2182,7 @@ impl FoksClient {
             || operation.state != TeamMutationState::Verified
         {
             return Err(Error::OperationBinding(
-                "verified CLKR cleanup does not match supplied identities",
+                "verified team member-key refresh cleanup does not match supplied identities",
             ));
         }
         remove_team_rekey_material(
@@ -3082,14 +3091,16 @@ pub(super) fn decode_protected_team_edit_request(
     request: &[u8],
 ) -> Result<foks_proto::DecodedTeamEditArgument> {
     let mut framed = std::io::Cursor::new(request);
-    let call = foks_rpc::read_call(&mut framed, foks_rpc::DEFAULT_MAX_FRAME_LENGTH)
-        .map_err(|_| Error::OperationBinding("protected CLKR request is malformed"))?;
+    let call =
+        foks_rpc::read_call(&mut framed, foks_rpc::DEFAULT_MAX_FRAME_LENGTH).map_err(|_| {
+            Error::OperationBinding("protected team member-key refresh request is malformed")
+        })?;
     if usize::try_from(framed.position()).ok() != Some(request.len())
         || call.protocol_id() != foks_rpc::TEAM_ADMIN_PROTOCOL_ID
         || call.method_position() != foks_rpc::TEAM_EDIT_METHOD_POSITION
     {
         return Err(Error::OperationBinding(
-            "protected CLKR request targets another route",
+            "protected team member-key refresh request targets another route",
         ));
     }
     Ok(foks_proto::DecodedTeamEditArgument::decode(
@@ -3108,7 +3119,7 @@ fn frame_protected_team_edit_with_bearer(
         || !decoded.local_permissions_for.is_empty()
     {
         return Err(Error::OperationBinding(
-            "protected CLKR request contains reusable or non-CLKR authority",
+            "protected team member-key refresh request contains reusable or unrelated authority",
         ));
     }
     Ok(encode_remove_team_member_request(
@@ -3170,7 +3181,7 @@ fn validate_refresh_transition(
             })
     {
         return Err(Error::OperationBinding(
-            "observed team transition does not match the prepared CLKR batch",
+            "observed team transition does not match the prepared team member-key refresh batch",
         ));
     }
     Ok(())

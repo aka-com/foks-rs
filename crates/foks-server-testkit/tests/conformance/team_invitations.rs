@@ -748,7 +748,7 @@ pub(crate) fn team_remote_invitations() {
         .iter()
         .any(|m| m.party == joiner.credential.uid
             && m.scoped_host.as_ref() == Some(home.host().host_id())));
-    // A home PUK rotation can precede the destination's CLKR. Membership
+    // A home PUK rotation can precede the destination's team member-key refresh. Membership
     // remains readable through the authenticated historical recipient key.
     let user = home
         .client

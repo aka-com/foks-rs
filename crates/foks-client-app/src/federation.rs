@@ -257,7 +257,7 @@ struct FederationCascade {
     /// Hardware `(profile, alias)` whose unlocked responders have already run.
     yubi_refreshed: std::collections::BTreeSet<(String, String)>,
     /// How many times this cascade has run something on each profile that can
-    /// move a chain, rotate a key, or write a caller-durable CLKR journal.
+    /// move a chain, rotate a key, or write a caller-durable team member-key refresh journal.
     ///
     /// An authenticated graph is a read of one host at one instant. Reusing
     /// one in place of a fresh selection is sound exactly while this counter
@@ -445,7 +445,7 @@ fn federated_actor_in_graph<'a, 'device>(
     let selected_actor = if let Some(pending) = pending {
         if pending.transport_uid != credential.uid().as_bytes() {
             return Ok(Err(format!(
-                "{} is not the caller-durable CLKR transport",
+                "{} is not the caller-durable team member-key refresh transport",
                 hex(credential.uid().as_bytes())
             )));
         }
@@ -477,14 +477,14 @@ fn federated_actor_in_graph<'a, 'device>(
                 .max_by_key(|member| (member.role, member.source_role))
             else {
                 return Ok(Err(format!(
-                    "{} cannot recover the visible caller-durable CLKR actor",
+                    "{} cannot recover the visible caller-durable team member-key refresh actor",
                     hex(credential.uid().as_bytes())
                 )));
             };
             member.party.clone()
         } else {
             return Ok(Err(format!(
-                "{} cannot recover the caller-durable CLKR actor",
+                "{} cannot recover the caller-durable team member-key refresh actor",
                 hex(credential.uid().as_bytes())
             )));
         }
@@ -1460,7 +1460,7 @@ impl CheckedProfileSession<'_> {
 
     /// Renews one binding's remote bearer and projects the remote team, plus
     /// the child teams it recursively depends on, into a recipient the local
-    /// CLKR can rekey against.
+    /// team member-key refresh can rekey against.
     #[allow(clippy::too_many_arguments)]
     fn load_federated_team_recipient(
         &self,
@@ -1649,7 +1649,7 @@ impl CheckedProfileSession<'_> {
     /// Picks an administrator for one federated local team from the software
     /// accounts in the vault plus any hardware credential the caller has
     /// already unlocked. Hardware is preferred only through the same
-    /// caller-durable CLKR preference software uses; authority is always
+    /// caller-durable team member-key refresh preference software uses; authority is always
     /// re-derived from the authenticated membership graph.
     fn select_local_federated_admin<'a, 'device>(
         &self,
@@ -1777,7 +1777,7 @@ impl CheckedProfileSession<'_> {
     /// * A stale user shared key is exactly what the user responder repairs,
     ///   and the selection that produced `actor` authenticated the user a
     ///   moment ago, so the answer is read from that authentication.
-    /// * A caller-durable CLKR journal is work only the team responder
+    /// * A caller-durable team member-key refresh journal is work only the team responder
     ///   resumes. Nothing later in the refresh would surface it, so an
     ///   outstanding journal always runs the responders.
     ///
@@ -1941,7 +1941,7 @@ impl CheckedProfileSession<'_> {
     ///   known current, and every commit increments that counter before
     ///   control can return here, so a selection that follows a commit on the
     ///   same profile always reloads. This is what keeps the selection after
-    ///   the local CLKR commit a fresh cross-host read rather than a replay of
+    ///   the local team member-key refresh commit a fresh cross-host read rather than a replay of
     ///   the pre-commit graph.
     /// * Reuse for a *different* team must not change which credential acts.
     ///   The candidate walk tries software before already-unlocked hardware,
@@ -1982,7 +1982,7 @@ impl CheckedProfileSession<'_> {
     /// read before this point is reused for it again.
     ///
     /// Called immediately after every operation in this module that can commit
-    /// a chain link, rotate a key, or write a caller-durable CLKR journal.
+    /// a chain link, rotate a key, or write a caller-durable team member-key refresh journal.
     fn record_federation_commit(&self, cascade: &mut FederationCascade) {
         cascade.record_commit(&self.profile.name);
         count_federation_read(|counters| {
@@ -2123,7 +2123,7 @@ impl CheckedProfileSession<'_> {
         ))
     }
 
-    /// Runs the federated post-revocation CLKR responder for one local team.
+    /// Runs the federated post-revocation team member-key refresh responder for one local team.
     /// `unlocked` carries any hardware credentials the caller has already
     /// opened, for either side; an empty slice is the unattended software
     /// case and behaves exactly as before this abstraction existed.
@@ -2188,7 +2188,7 @@ impl CheckedProfileSession<'_> {
 
         // First run the local graph without remote projections. Its visible
         // reconciliation path uses only authenticated local evidence, so an
-        // unreachable remote profile cannot strand a committed CLKR intent.
+        // unreachable remote profile cannot strand a committed team member-key refresh intent.
         let local_actor =
             self.select_local_federated_admin(local_team_alias, unlocked, local_vault)?;
         // The selection already walked this credential's membership graph.
@@ -2252,12 +2252,12 @@ impl CheckedProfileSession<'_> {
             }
             if convergence == 1 {
                 return Err(Error::BackgroundRefresh(
-                    "federated recipient advanced during both immediate CLKR convergence attempts"
+                    "federated recipient advanced during both immediate team member-key refresh convergence attempts"
                         .to_owned(),
                 ));
             }
         }
-        unreachable!("bounded federated CLKR convergence loop always returns")
+        unreachable!("bounded federated team member-key refresh convergence loop always returns")
     }
 
     fn authenticated_member_edit_parties(
@@ -2531,7 +2531,7 @@ impl CheckedProfileSession<'_> {
     /// Runs each supplied hardware credential's own user, PPE, and local-team
     /// responders before any federation work begins.
     ///
-    /// A team's caller-durable CLKR names the exact device that must recover
+    /// A team's caller-durable team member-key refresh names the exact device that must recover
     /// it, and one device's sweep skips the teams another device owns (plus
     /// everything depending on them, see `exclude_team_ancestors`). Running
     /// the credentials round-robin until no further pending hardware journal
@@ -2585,7 +2585,7 @@ impl CheckedProfileSession<'_> {
         Ok(())
     }
 
-    /// How many caller-durable CLKR journals are still waiting on a hardware
+    /// How many caller-durable team member-key refresh journals are still waiting on a hardware
     /// device. A round of responders that does not reduce this has nothing
     /// further to unblock.
     fn pending_hardware_team_rekeys(&self, local_vault: &mut AccountVault<'_>) -> Result<usize> {
@@ -2605,7 +2605,7 @@ impl CheckedProfileSession<'_> {
 
     /// Explicit federated security responder for a caller that has already
     /// unlocked one or more YubiKeys. This is the hardware-backed equivalent
-    /// of the unattended post-revocation CLKR responder: it renews the remote
+    /// of the unattended post-revocation team member-key refresh responder: it renews the remote
     /// bearer, reproves the local capability, and converges the local team
     /// graph so a revoked or rotated member key stops appearing in future
     /// federated team material.
@@ -3137,7 +3137,7 @@ mod tests {
         );
     }
 
-    /// The re-read after the local CLKR commit is the whole cross-host
+    /// The re-read after the local team member-key refresh commit is the whole cross-host
     /// freshness guarantee: it is what notices a remote PTK that advanced
     /// inside the race window the protocol cannot close. It must therefore
     /// never be served from a graph read before that commit.
