@@ -8,7 +8,6 @@ use zbus::zvariant::Value;
 use super::Capability;
 
 const ACTION_ID: &str = "com.aka.foks.desktop.unlock";
-const POLICY_FILE: &str = "com.aka.foks.desktop.policy";
 const AUTHORITY: &str = "org.freedesktop.PolicyKit1";
 const AUTHORITY_PATH: &str = "/org/freedesktop/PolicyKit1/Authority";
 const AUTHORITY_INTERFACE: &str = "org.freedesktop.PolicyKit1.Authority";

@@ -12,7 +12,9 @@ use std::{
     io::{Read, Write},
     sync::Mutex,
 };
-use tauri::{Emitter, Manager, State};
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
+use tauri::{Manager, State};
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -552,6 +554,7 @@ pub struct Route {
     pub scope: ChatScope,
     pub channel: String,
     #[serde(skip)]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     generation: u64,
 }
 fn alert_text(count: u32, incomplete: bool) -> String {
@@ -563,6 +566,7 @@ fn alert_text(count: u32, incomplete: bool) -> String {
         format!("{count} additional chat messages.")
     }
 }
+#[cfg(target_os = "macos")]
 pub fn route_current(app: &tauri::AppHandle, token: &str) -> bool {
     let local = app.state::<LocalState>();
     let Ok(inner) = local.0.lock() else {
@@ -574,6 +578,7 @@ pub fn route_current(app: &tauri::AppHandle, token: &str) -> bool {
             && crate::applock::require_unlocked_generation(app, r.generation).is_ok()
     })
 }
+#[cfg(target_os = "macos")]
 pub fn activate(app: &tauri::AppHandle, token: &str) {
     let local = app.state::<LocalState>();
     if let Ok(mut inner) = local.0.lock() {
@@ -587,6 +592,7 @@ pub fn activate(app: &tauri::AppHandle, token: &str) {
     }
     let _ = app.emit_to(crate::MAIN, "foks://chat-notification", ());
 }
+#[cfg(target_os = "macos")]
 pub fn delivery_failed(app: &tauri::AppHandle) {
     let _ = app.emit_to(crate::MAIN, "foks://chat-notification-error", ());
 }
