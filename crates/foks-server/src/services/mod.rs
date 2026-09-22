@@ -1,13 +1,14 @@
 pub(crate) mod federation;
 pub(crate) mod generic;
 pub(crate) mod kv;
-pub(crate) mod peripheral;
+pub(crate) mod log_upload;
 pub(crate) mod realtime;
 pub(crate) mod registration;
 pub(crate) mod team_admin;
 pub(crate) mod team_invitations;
 pub(crate) mod team_loader;
 pub(crate) mod user;
+pub(crate) mod waitlist;
 
 const PROTOCOL_TIME_WINDOW_MILLISECONDS: u64 = 4 * 60 * 60 * 1_000;
 

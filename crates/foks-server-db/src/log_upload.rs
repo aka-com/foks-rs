@@ -31,20 +31,6 @@ pub struct LogSendBlockMutation<'a> {
 }
 
 impl Database {
-    pub fn join_waitlist(&mut self, id: &[u8; 13], email: &str, now: u64) -> Result<()> {
-        if id[0] != 1 || !valid_email(email) {
-            return Err(Error::Invalid("waitlist entry"));
-        }
-        self.connection
-            .execute(
-                "INSERT INTO waitlist_entries(waitlist_id, email, created_at)
-                 VALUES (?1, ?2, ?3)",
-                params![id, email, integer(now)?],
-            )
-            .map_err(|error| map_duplicate(error, "waitlist entry"))?;
-        Ok(())
-    }
-
     pub fn begin_log_send(&mut self, id: &[u8; 17], uid: Option<&[u8]>, now: u64) -> Result<()> {
         if id[0] != 48 || uid.is_some_and(|uid| uid.len() != 33) {
             return Err(Error::Invalid("log-send identity"));
@@ -222,16 +208,6 @@ fn validate_file(mutation: &LogSendFileMutation<'_>) -> Result<()> {
         return Err(Error::Invalid("log-send file metadata"));
     }
     Ok(())
-}
-
-fn valid_email(email: &str) -> bool {
-    email.len() <= 320
-        && email.len() >= 3
-        && !email.chars().any(char::is_whitespace)
-        && !email.chars().any(char::is_control)
-        && email
-            .split_once('@')
-            .is_some_and(|(local, domain)| !local.is_empty() && domain.contains('.'))
 }
 
 fn integer(value: u64) -> Result<i64> {

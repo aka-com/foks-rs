@@ -8,19 +8,9 @@ use rustls::pki_types::{CertificateDer, ServerName};
 use crate::support::Fixture;
 
 #[test]
-pub(crate) fn go_client_waitlist_and_log_send_work() {
-    let fixture = Fixture::start("go-client-peripheral");
+pub(crate) fn go_client_log_upload_works() {
+    let fixture = Fixture::start("go-client-log-upload");
     let mut tls = public_stream(&fixture);
-
-    tls.write_all(&foks_rpc::encode_join_waitlist_request_at(b"go-client@example.com", 0).unwrap())
-        .unwrap();
-    let response =
-        foks_rpc::read_response(&mut tls, foks_rpc::DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
-    let Value::Binary(waitlist_id) = decode(&response).unwrap() else {
-        panic!("waitlist response was not a binary identifier");
-    };
-    assert_eq!(waitlist_id.len(), 13);
-    assert_eq!(waitlist_id[0], 1);
 
     tls.write_all(&foks_rpc::encode_log_send_init_request_at(1).unwrap())
         .unwrap();

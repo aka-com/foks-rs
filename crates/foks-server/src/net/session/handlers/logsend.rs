@@ -16,7 +16,7 @@ pub(super) fn response(
     let sequence = call.call.sequence();
     match call.route.id {
         RouteId::LogSendLogSendInit => encode_success_response_at(
-            &crate::services::peripheral::log_send_init(
+            &crate::services::log_upload::log_send_init(
                 call.call.argument(),
                 principal.map(Principal::uid),
                 writer,
@@ -27,7 +27,7 @@ pub(super) fn response(
         )
         .map_err(|_| RpcStatus::Unsupported),
         RouteId::LogSendLogSendInitFile => {
-            crate::services::peripheral::log_send_init_file(
+            crate::services::log_upload::log_send_init_file(
                 call.call.argument(),
                 writer,
                 Arc::clone(&data.clock),
@@ -35,7 +35,7 @@ pub(super) fn response(
             encode_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
         }
         RouteId::LogSendLogSendUploadBlock => {
-            crate::services::peripheral::log_send_upload_block(
+            crate::services::log_upload::log_send_upload_block(
                 call.call.argument(),
                 writer,
                 Arc::clone(&data.clock),

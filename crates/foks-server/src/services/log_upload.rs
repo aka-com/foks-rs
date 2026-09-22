@@ -5,30 +5,8 @@ use foks_snowpack::Value;
 
 use crate::{Entropy, WriterHandle};
 
-const WAITLIST_ID_BYTES: usize = 13;
-const WAITLIST_ID_TYPE: u8 = 1;
 const LOG_SEND_ID_BYTES: usize = 17;
 const LOG_SEND_ID_TYPE: u8 = 48;
-
-pub(crate) fn join_waitlist(
-    argument: &[u8],
-    writer: &WriterHandle,
-    clock: Arc<dyn foks_server_db::Clock>,
-    entropy: &dyn Entropy,
-) -> Result<Vec<u8>, RpcStatus> {
-    let email = foks_rpc::arguments::decode_join_waitlist(argument).map_err(bad_arguments)?;
-    let email = String::from_utf8(email).map_err(bad_arguments)?;
-    let mut id = [0_u8; WAITLIST_ID_BYTES];
-    entropy.fill(&mut id).map_err(map_write_error)?;
-    id[0] = WAITLIST_ID_TYPE;
-    writer
-        .call_with_current_time(clock, move |database, now| {
-            database.join_waitlist(&id, &email, now)?;
-            Ok(())
-        })
-        .map_err(map_identifier_write_error)?;
-    encode_binary(&id)
-}
 
 pub(crate) fn log_send_init(
     argument: &[u8],

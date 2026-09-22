@@ -96,10 +96,14 @@ const COVERAGE: &[Coverage] = &[
         routes: &[("Reg", "getServerConfig"), ("User", "ping")],
     },
     Coverage {
-        name: "go_client_peripheral",
-        run: crate::peripheral::go_client_waitlist_and_log_send_work,
+        name: "go_client_waitlist",
+        run: crate::waitlist::go_client_waitlist_works,
+        routes: &[("Reg", "joinWaitList")],
+    },
+    Coverage {
+        name: "go_client_log_upload",
+        run: crate::log_upload::go_client_log_upload_works,
         routes: &[
-            ("Reg", "joinWaitList"),
             ("LogSend", "logSendInit"),
             ("LogSend", "logSendInitFile"),
             ("LogSend", "logSendUploadBlock"),

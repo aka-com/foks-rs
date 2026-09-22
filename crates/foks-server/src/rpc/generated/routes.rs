@@ -535,7 +535,7 @@ pub const ROUTES: &[RouteSpec] = &[
         statuses: &["ok", "bad_args", "rate_limited", "tx_retry"],
         max_request_bytes: 1024,
         supported: true,
-        coverage: &["go_client_peripheral"],
+        coverage: &["go_client_waitlist"],
     },
     RouteSpec {
         id: RouteId::RegGetServerConfig,
@@ -1003,7 +1003,7 @@ pub const ROUTES: &[RouteSpec] = &[
         statuses: &["ok", "bad_args", "rate_limited", "tx_retry"],
         max_request_bytes: 1024,
         supported: true,
-        coverage: &["go_client_peripheral"],
+        coverage: &["go_client_log_upload"],
     },
     RouteSpec {
         id: RouteId::LogSendLogSendInitFile,
@@ -1021,7 +1021,7 @@ pub const ROUTES: &[RouteSpec] = &[
         statuses: &["ok", "bad_args", "not_found", "duplicate", "rate_limited", "tx_retry"],
         max_request_bytes: 4096,
         supported: true,
-        coverage: &["go_client_peripheral"],
+        coverage: &["go_client_log_upload"],
     },
     RouteSpec {
         id: RouteId::LogSendLogSendUploadBlock,
@@ -1039,7 +1039,7 @@ pub const ROUTES: &[RouteSpec] = &[
         statuses: &["ok", "bad_args", "not_found", "duplicate", "rate_limited", "tx_retry"],
         max_request_bytes: 4198400,
         supported: true,
-        coverage: &["go_client_peripheral"],
+        coverage: &["go_client_log_upload"],
     },
     RouteSpec {
         id: RouteId::TeamLoaderGetTeamVOBearerTokenChallenge,

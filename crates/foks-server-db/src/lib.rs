@@ -17,11 +17,11 @@ mod host_rotation;
 mod identity;
 mod invites;
 mod kv;
+mod log_upload;
 mod maintenance;
 mod merkle;
 mod names;
 mod passphrases;
-mod peripheral;
 mod read;
 mod realtime;
 mod receipts;
@@ -39,6 +39,7 @@ pub use team_invitations::{
 mod team_names;
 mod transaction;
 mod user_mutation;
+mod waitlist;
 mod yubi;
 
 pub use capabilities::{
@@ -74,13 +75,13 @@ pub use kv::{
     KvRootMutation, KvVersionCheck, StoredKvDirectory, StoredKvDirent, StoredKvFile,
     StoredKvFileChunk, StoredKvNode, StoredKvRoot,
 };
-pub use maintenance::{CheckpointOutcome, CheckpointReport, MaintenanceReport, StorageReport};
-pub use merkle::SqliteNodeReader;
-pub use passphrases::{PassphraseMutation, PassphraseSnapshot};
-pub use peripheral::{
+pub use log_upload::{
     LogSendBlockMutation, LogSendFileMutation, MAXIMUM_LOG_SEND_BLOCKS,
     MAXIMUM_LOG_SEND_BLOCK_BYTES, MAXIMUM_LOG_SEND_FILES, MAXIMUM_LOG_SEND_FILE_BYTES,
 };
+pub use maintenance::{CheckpointOutcome, CheckpointReport, MaintenanceReport, StorageReport};
+pub use merkle::SqliteNodeReader;
+pub use passphrases::{PassphraseMutation, PassphraseSnapshot};
 pub use read::{
     identity_snapshot, root_snapshot, GenericChainLinkSnapshot, GenericChainSnapshot,
     IdentitySnapshot, LocalTeamListEntrySnapshot, PukMaterialSnapshot, RootSnapshot,

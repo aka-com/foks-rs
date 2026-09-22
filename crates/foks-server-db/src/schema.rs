@@ -24,7 +24,8 @@ const SCHEMA: &str = concat!(
     include_str!("schema/kv.sql"),
     include_str!("schema/realtime.sql"),
     include_str!("schema/realtime_invalidation.sql"),
-    include_str!("schema/peripheral.sql"),
+    include_str!("schema/waitlist.sql"),
+    include_str!("schema/log_upload.sql"),
     include_str!("schema/expiry_indexes.sql"),
 );
 

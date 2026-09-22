@@ -20,12 +20,12 @@ mod kv_large;
 mod kv_locks;
 #[path = "conformance/kv_small.rs"]
 mod kv_small;
+#[path = "conformance/log_upload.rs"]
+mod log_upload;
 #[path = "conformance/membership_increment.rs"]
 mod membership_increment;
 #[path = "conformance/passphrases.rs"]
 mod passphrases;
-#[path = "conformance/peripheral.rs"]
-mod peripheral;
 #[path = "conformance/probe_and_pin.rs"]
 mod probe_and_pin;
 #[path = "conformance/provisioning.rs"]
@@ -66,6 +66,9 @@ mod team_invitations;
 
 #[path = "conformance/web_admin.rs"]
 mod web_admin;
+
+#[path = "conformance/waitlist.rs"]
+mod waitlist;
 
 #[path = "conformance/realtime_reconciliation.rs"]
 mod realtime_reconciliation;

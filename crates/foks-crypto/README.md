@@ -8,7 +8,7 @@ v0.1.9 client:
 - Ed25519 verification using public keys embedded in EntityIDs; and
 - typed `Future(T)` blob signature verification;
 - device Ed25519, X25519, and ML-KEM-768 derivation from the master seed;
-- NaCl-compatible X25519 precomputation and hybrid SHA3 key swizzling; and
+- NaCl-compatible X25519 precomputation and hybrid SHA3 key derivation; and
 - XSalsa20-Poly1305 PUK/PTK unboxing with receiver, host, generation, role, and
   public-key binding checks;
 - exact account, device, PUK, and ad-hoc-team mutation construction;

@@ -24,16 +24,6 @@ pub struct LogSendUploadBlockArgument {
     pub block: Vec<u8>,
 }
 
-pub fn decode_join_waitlist(bytes: &[u8]) -> Result<Vec<u8>> {
-    let Value::Array(fields) = decode(bytes)? else {
-        return Err(shape("join-waitlist argument wrapper"));
-    };
-    let [Value::Text(email)] = fields.as_slice() else {
-        return Err(shape("join-waitlist argument"));
-    };
-    Ok(email.clone())
-}
-
 pub fn decode_log_send_init_file(bytes: &[u8]) -> Result<LogSendInitFileArgument> {
     let Value::Array(fields) = decode(bytes)? else {
         return Err(shape("log-send init-file argument wrapper"));
@@ -95,9 +85,6 @@ mod tests {
 
     #[test]
     fn decodes_exact_go_positional_arguments() {
-        let waitlist = encode(&Value::Array(vec![Value::Text(b"a@example.com".to_vec())])).unwrap();
-        assert_eq!(decode_join_waitlist(&waitlist).unwrap(), b"a@example.com");
-
         let init = encode(&Value::Array(vec![
             Value::Binary(vec![48; 17]),
             Value::Unsigned(7),
@@ -138,14 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_appended_fields_and_oversized_blocks() {
-        let appended = encode(&Value::Array(vec![
-            Value::Text(b"a@example.com".to_vec()),
-            Value::Null,
-        ]))
-        .unwrap();
-        assert!(decode_join_waitlist(&appended).is_err());
-
+    fn rejects_oversized_blocks() {
         let upload = encode(&Value::Array(vec![
             Value::Binary(vec![48; 17]),
             Value::Unsigned(7),
