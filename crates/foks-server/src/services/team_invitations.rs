@@ -352,9 +352,9 @@ impl InvitationService<'_> {
                 None,
             )
         };
-        let mut receipt = [0; 17];
-        self.entropy.fill(&mut receipt).map_err(internal)?;
-        receipt[0] = 57;
+        let mut rsvp = [0; 17];
+        self.entropy.fill(&mut rsvp).map_err(internal)?;
+        rsvp[0] = 57;
         let mut permission = [0; 17];
         self.entropy.fill(&mut permission).map_err(internal)?;
         permission[0] = 54;
@@ -368,7 +368,7 @@ impl InvitationService<'_> {
             source_admin,
             source_head,
             destination_head,
-            receipt,
+            rsvp,
             permission,
         };
         drop(snapshot);
@@ -405,7 +405,7 @@ impl InvitationService<'_> {
                 })
                 .map_err(write_error)?;
         }
-        foks_proto::TeamRsvp::new(receipt)
+        foks_proto::TeamRsvp::new(rsvp)
             .map_err(internal)?
             .encoded()
             .map_err(internal)
@@ -448,16 +448,16 @@ impl InvitationService<'_> {
             foks_proto::LINK_OUTER_TYPE_ID,
             &team.links.last().ok_or_else(denied)?.exact_link,
         );
-        let mut receipt = [0; 17];
-        self.entropy.fill(&mut receipt).map_err(internal)?;
-        receipt[0] = 56;
+        let mut rsvp = [0; 17];
+        self.entropy.fill(&mut rsvp).map_err(internal)?;
+        rsvp[0] = 56;
         let acceptance = foks_server_db::RemoteInvitationAcceptance {
             certificate_hash: invite.hash,
             team: p.team.team.as_bytes().to_vec(),
             generation: p.key.generation,
             exact_hepk: p.hepk.encoded().map_err(bad)?,
             exact_request: request.encoded().map_err(bad)?,
-            receipt,
+            rsvp,
             destination_head,
         };
         drop(snapshot);
@@ -467,7 +467,7 @@ impl InvitationService<'_> {
                 Ok(())
             })
             .map_err(write_error)?;
-        foks_proto::TeamRsvp::new(receipt)
+        foks_proto::TeamRsvp::new(rsvp)
             .map_err(internal)?
             .encoded()
             .map_err(internal)
@@ -476,9 +476,9 @@ impl InvitationService<'_> {
         principal.require_ordinary_device()?;
         let f = fields(bytes, 2)?;
         let token = crate::auth::team::admin_token_hash(&token(&f[0])?);
-        let receipt = foks_proto::TeamRsvp::decode(&encode(&f[1]).map_err(bad)?).map_err(bad)?;
-        if !receipt.is_remote() {
-            return Err(bad("remote receipt"));
+        let rsvp = foks_proto::TeamRsvp::decode(&encode(&f[1]).map_err(bad)?).map_err(bad)?;
+        if !rsvp.is_remote() {
+            return Err(bad("remote rsvp"));
         }
         let now = self.clock.now_micros().map_err(internal)?;
         let snapshot = self.reader.snapshot().map_err(internal)?;
@@ -498,7 +498,7 @@ impl InvitationService<'_> {
             .sso_require_access(principal.uid(), now / 1000)
             .map_err(|e| write_error(e.into()))?;
         snapshot
-            .remote_invitation_request(&authority.team_id, receipt.expose())
+            .remote_invitation_request(&authority.team_id, rsvp.expose())
             .map_err(internal)?
             .ok_or_else(|| RpcStatus::NotFound("remote join request".into()))
     }
@@ -543,7 +543,7 @@ impl InvitationService<'_> {
         rows.sort_by(|a, b| {
             b.time
                 .cmp(&a.time)
-                .then_with(|| a.receipt.expose().cmp(b.receipt.expose()))
+                .then_with(|| a.rsvp.expose().cmp(b.rsvp.expose()))
         });
         foks_proto::encode_team_inbox(&rows).map_err(internal)
     }
@@ -574,19 +574,19 @@ impl InvitationService<'_> {
         principal.require_ordinary_device()?;
         let f = fields(bytes, 2)?;
         let token = crate::auth::team::admin_token_hash(&token(&f[0])?);
-        let receipt = foks_proto::TeamRsvp::decode(&encode(&f[1]).map_err(bad)?).map_err(bad)?;
+        let rsvp = foks_proto::TeamRsvp::decode(&encode(&f[1]).map_err(bad)?).map_err(bad)?;
         let uid = principal.uid().to_vec();
         let credential = principal.device_id().to_vec();
         self.writer
             .call_with_current_time(Arc::clone(self.clock), move |db, time| {
-                if receipt.is_remote() {
+                if rsvp.is_remote() {
                     db.reject_remote_invitation(
                         InvitationActor {
                             uid: &uid,
                             credential: &credential,
                         },
                         &token,
-                        receipt.expose(),
+                        rsvp.expose(),
                         time,
                     )?;
                     return Ok(());
@@ -597,7 +597,7 @@ impl InvitationService<'_> {
                         credential: &credential,
                     },
                     &token,
-                    receipt.expose(),
+                    rsvp.expose(),
                     time,
                 )?;
                 Ok(())

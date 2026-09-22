@@ -5,7 +5,7 @@ impl ChatLimits {
     pub const CHANNELS: usize = 256;
     pub const PENDING_OPERATIONS: usize = 1000;
     pub const RETAINED_ANCHORS: usize = 10_000;
-    pub const RECEIPT_BYTES: usize = 256;
+    pub const CONFIRMATION_BYTES: usize = 256;
     pub const HISTORY_ROWS: usize = 1000;
     pub const INBOX_ROWS: usize = 1000;
     pub const INBOX_PREVIEWS: usize = 20;
@@ -39,7 +39,7 @@ mod tests {
         }
         assert!(crate::schema::INITIAL.contains(&format!(
             "length(receipt) BETWEEN 1 AND {}",
-            L::RECEIPT_BYTES
+            L::CONFIRMATION_BYTES
         )));
     }
 }

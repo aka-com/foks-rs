@@ -1226,7 +1226,7 @@ function RemoveServerSheet({
           history, cached data, and unfinished operations.
         </InsetRow>
         <InsetRow label="Warning">
-          Accounts without a paper key or another paired device cannot be
+          Accounts without a recovery phrase or another paired device cannot be
           accessed again.
         </InsetRow>
         <InsetRow label="Unaffected">

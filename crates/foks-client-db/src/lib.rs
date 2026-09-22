@@ -2512,7 +2512,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_capacity_and_cleanup_preserve_unknown_receipts() {
+    fn rename_capacity_and_cleanup_preserve_unknown_completion_records() {
         let (_directory, mut store) = store();
         let host = snapshot();
         store.accept_host_parts(host.parts()).unwrap();
@@ -2553,20 +2553,22 @@ mod tests {
         op.material_ref = vec![33];
         assert!(store.record_mutation(&op).is_err());
         assert!(store
-            .expired_username_change_receipts(&host.host_id, &op.scope_id, 1000)
+            .expired_username_change_completion_records(&host.host_id, &op.scope_id, 1000)
             .unwrap()
             .is_empty());
-        store.delete_username_change_receipt(&[1; 16]).unwrap();
+        store
+            .delete_username_change_completion_record(&[1; 16])
+            .unwrap();
         assert!(store.mutation(&[1; 16]).unwrap().is_some());
         store
             .advance_mutation(&[1; 16], MutationState::Rejected, 103)
             .unwrap();
-        let receipts = store
-            .expired_username_change_receipts(&host.host_id, &op.scope_id, 1000)
+        let completion_records = store
+            .expired_username_change_completion_records(&host.host_id, &op.scope_id, 1000)
             .unwrap();
-        assert_eq!(receipts.len(), 1);
+        assert_eq!(completion_records.len(), 1);
         store
-            .delete_username_change_receipt(&receipts[0].operation_id)
+            .delete_username_change_completion_record(&completion_records[0].operation_id)
             .unwrap();
         store.record_mutation(&op).unwrap();
         assert_eq!(
@@ -3709,7 +3711,7 @@ mod tests {
     }
 
     #[test]
-    fn merkle_collection_retains_embedded_user_and_team_history_and_import_receipts() {
+    fn merkle_collection_retains_embedded_user_and_team_history_and_import_completion_markers() {
         let (_dir, mut store) = gc_fixture();
         let user_bytes =
             include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/user-chain.snowp");

@@ -88,7 +88,7 @@ fn recovery_disjoint_branches_cover_all_states_without_double_counting_or_sortin
 }
 
 #[test]
-fn claimed_and_historical_names_and_consumed_view_retry_receipts_survive() {
+fn claimed_and_historical_names_and_consumed_view_retry_records_survive() {
     let mut f = Fixture::new();
     f.seed("names", 0, 1, NOW - 1);
     f.seed("team_names", 0, 1, NOW - 1);

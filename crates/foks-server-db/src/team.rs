@@ -1,6 +1,6 @@
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
-use crate::{error::sql_integer, receipts, Database, Error, Result};
+use crate::{error::sql_integer, idempotency, Database, Error, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TeamMutationFailurePoint {
@@ -8,7 +8,7 @@ pub enum TeamMutationFailurePoint {
     Projection,
     MerkleNodes,
     MerkleRoot,
-    Receipt,
+    IdempotencyRecord,
 }
 
 pub struct TeamHeader<'a> {
@@ -131,7 +131,7 @@ pub struct TeamMutation<'a> {
     pub request_hash: &'a [u8; 32],
     pub response: &'a [u8],
     pub now: u64,
-    pub receipt_expires_at: u64,
+    pub idempotency_expires_at: u64,
 }
 
 impl Database {
@@ -149,13 +149,13 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(receipt) = receipts::lookup(
+        if let Some(idempotency_record) = idempotency::lookup(
             &transaction,
             mutation.idempotency_key,
             mutation.request_hash,
             mutation.now,
         )? {
-            return Ok(receipt.response);
+            return Ok(idempotency_record.response);
         }
         let active_signer = transaction
             .query_row(
@@ -695,15 +695,15 @@ impl Database {
 
         publish_merkle(&transaction, mutation, failure)?;
         inject(failure, TeamMutationFailurePoint::MerkleRoot)?;
-        receipts::insert(
+        idempotency::insert(
             &transaction,
             mutation.idempotency_key,
             mutation.request_hash,
             &response,
             mutation.now,
-            mutation.receipt_expires_at,
+            mutation.idempotency_expires_at,
         )?;
-        inject(failure, TeamMutationFailurePoint::Receipt)?;
+        inject(failure, TeamMutationFailurePoint::IdempotencyRecord)?;
         transaction.commit()?;
         Ok(response)
     }
@@ -835,8 +835,8 @@ fn validate(database: &Database, mutation: &TeamMutation<'_>) -> Result<()> {
         })
         || mutation.merkle_commit.nodes.len() > database.config.maximum_merkle_nodes_per_commit
         || mutation.back_pointers.len() > database.config.maximum_back_pointers
-        || mutation.receipt_expires_at <= mutation.now
-        || mutation.response.len() > database.config.maximum_receipt_bytes
+        || mutation.idempotency_expires_at <= mutation.now
+        || mutation.response.len() > database.config.maximum_idempotency_response_bytes
     {
         return Err(Error::Invalid("team mutation"));
     }

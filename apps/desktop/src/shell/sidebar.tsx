@@ -230,7 +230,7 @@ export interface SidebarProps {
   attention?: number;
   /** The Teams tab's badge: pending membership requests this session knows about. */
   teamRequests?: { label: string; description: string } | null;
-  /** The Devices tab's dot: an open pairing offer, or an account with no paper key. */
+  /** The Devices tab's dot: an open pairing offer, or an account with no recovery phrase. */
   devicesAlert?: { description: string } | null;
   /**
    * The Settings tab's dot: a lapsed check-in or an unverified server. The

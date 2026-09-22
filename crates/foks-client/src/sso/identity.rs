@@ -15,7 +15,7 @@ impl FoksClient {
         host: &PinnedHost,
         uid: &EntityId,
         key: SsoSigningKey<'_>,
-        receipt_commitment: Option<[u8; 32]>,
+        authorization_binding_commitment: Option<[u8; 32]>,
     ) -> Result<IdentityStatus> {
         let capability = self.identity_call(
             host,
@@ -33,7 +33,7 @@ impl FoksClient {
             host: host.host_id().clone(),
             uid: uid.clone(),
             signer,
-            receipt_commitment,
+            authorization_binding_commitment,
         };
         let bytes = self.identity_call(
             host,
@@ -58,8 +58,8 @@ impl FoksClient {
         let status = IdentityStatus::decode(&bytes)?;
         if status.challenge != expected
             || status
-                .committed_receipt
-                .is_some_and(|r| Some(r) != receipt_commitment)
+                .committed_authorization_binding
+                .is_some_and(|r| Some(r) != authorization_binding_commitment)
         {
             return Err(Error::Sso("identity response does not match proof"));
         }
@@ -88,7 +88,7 @@ impl FoksClient {
             return Err(Error::Sso("outcome proof signer differs from flow"));
         }
         let status = self.identity_status(host, &uid, key, Some(commitment))?;
-        if status.committed_receipt == Some(commitment) {
+        if status.committed_authorization_binding == Some(commitment) {
             HardStateStore::open(&host.database_path)?.sso_transition(
                 &id,
                 flow.state,

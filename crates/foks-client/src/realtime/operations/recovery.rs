@@ -69,7 +69,7 @@ impl ChatSession<'_> {
                         self.confirm_send(
                             &op,
                             &arg.send,
-                            RtSendResult {
+                            ChatSendReceipt {
                                 sequence: m.sequence,
                                 insert_time: m.insert_time,
                             },

@@ -12,7 +12,7 @@
       "action": { "action": "submit-message", "submission": "efefefefefefefefefefefefefefefef", "channel": "abababababababababababababababab", "text": "message" },
       "reply": {
         "scope": { "store": { "profile": "local", "account_alias": "me", "team_alias": "team", "team_id": "03abababababababababababababababababababababababababababababababab" }, "host": "02abababababababababababababababababababababababababababababababab", "actor": "01abababababababababababababababababababababababababababababababab" },
-        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "abababababababababababababababab", "state": "confirmed", "rejection_code": null, "kind": "send-message", "receipt": { "kind": "message-sent", "sequence": "3" } } }
+        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "abababababababababababababababab", "state": "confirmed", "rejection_code": null, "kind": "send-message", "confirmation": { "kind": "message-sent", "sequence": "3" } } }
       }
     },
     {
@@ -21,7 +21,7 @@
       "action": { "action": "submit-message", "submission": "efefefefefefefefefefefefefefefef", "channel": "abababababababababababababababab", "text": "message" },
       "reply": {
         "scope": { "store": { "profile": "local", "account_alias": "me", "team_alias": "team", "team_id": "03abababababababababababababababababababababababababababababababab" }, "host": "02abababababababababababababababababababababababababababababababab", "actor": "01abababababababababababababababababababababababababababababababab" },
-        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "abababababababababababababababab", "state": "prepared", "rejection_code": null, "kind": "send-message", "receipt": null } }
+        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "abababababababababababababababab", "state": "prepared", "rejection_code": null, "kind": "send-message", "confirmation": null } }
       }
     },
     {
@@ -30,7 +30,7 @@
       "action": { "action": "submit-message", "submission": "efefefefefefefefefefefefefefefef", "channel": "abababababababababababababababab", "text": "message" },
       "reply": {
         "scope": { "store": { "profile": "local", "account_alias": "me", "team_alias": "team", "team_id": "03abababababababababababababababababababababababababababababababab" }, "host": "02abababababababababababababababababababababababababababababababab", "actor": "01abababababababababababababababababababababababababababababababab" },
-        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "abababababababababababababababab", "state": "uncertain", "rejection_code": null, "kind": "send-message", "receipt": null } }
+        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "abababababababababababababababab", "state": "uncertain", "rejection_code": null, "kind": "send-message", "confirmation": null } }
       }
     },
     {
@@ -39,7 +39,7 @@
       "action": { "action": "submit-message", "submission": "efefefefefefefefefefefefefefefef", "channel": "abababababababababababababababab", "text": "message" },
       "reply": {
         "scope": { "store": { "profile": "local", "account_alias": "me", "team_alias": "team", "team_id": "03abababababababababababababababababababababababababababababababab" }, "host": "02abababababababababababababababababababababababababababababababab", "actor": "01abababababababababababababababababababababababababababababababab" },
-        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "efefefefefefefefefefefefefefefef", "state": "prepared", "rejection_code": null, "kind": "send-message", "receipt": null } }
+        "result": { "kind": "operation", "operation": { "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "channel": "efefefefefefefefefefefefefefefef", "state": "prepared", "rejection_code": null, "kind": "send-message", "confirmation": null } }
       }
     },
     {
@@ -48,7 +48,7 @@
       "action": { "action": "submit-message", "submission": "efefefefefefefefefefefefefefefef", "channel": "abababababababababababababababab", "text": "message" },
       "reply": {
         "scope": { "store": { "profile": "local", "account_alias": "me", "team_alias": "team", "team_id": "03abababababababababababababababababababababababababababababababab" }, "host": "02abababababababababababababababababababababababababababababababab", "actor": "01abababababababababababababababababababababababababababababababab" },
-        "result": { "kind": "operation", "operation": { "id": "abababababababababababababababab", "channel": "abababababababababababababababab", "state": "prepared", "rejection_code": null, "kind": "create-channel", "receipt": null } }
+        "result": { "kind": "operation", "operation": { "id": "abababababababababababababababab", "channel": "abababababababababababababababab", "state": "prepared", "rejection_code": null, "kind": "create-channel", "confirmation": null } }
       }
     },
     {
@@ -884,7 +884,7 @@
             "state": "prepared",
             "rejection_code": null,
             "kind": "send-message",
-            "receipt": null
+            "confirmation": null
           }
         }
       }
@@ -915,7 +915,7 @@
             "state": "confirmed",
             "rejection_code": null,
             "kind": "send-message",
-            "receipt": {
+            "confirmation": {
               "kind": "message-sent",
               "sequence": "3"
             }
@@ -949,7 +949,7 @@
             "state": "rejected",
             "rejection_code": 12002,
             "kind": "send-message",
-            "receipt": null
+            "confirmation": null
           }
         }
       }
@@ -980,13 +980,13 @@
             "state": "rejected",
             "rejection_code": null,
             "kind": "send-message",
-            "receipt": null
+            "confirmation": null
           }
         }
       }
     },
     {
-      "name": "missing receipt",
+      "name": "missing confirmation",
       "valid": false,
       "action": {
         "action": "status",
@@ -1011,7 +1011,7 @@
             "state": "confirmed",
             "rejection_code": null,
             "kind": "send-message",
-            "receipt": {
+            "confirmation": {
               "kind": "message-sent",
               "sequence": null
             }
@@ -1020,7 +1020,7 @@
       }
     },
     {
-      "name": "prepared with receipt",
+      "name": "prepared with confirmation",
       "valid": false,
       "action": {
         "action": "status",
@@ -1045,7 +1045,7 @@
             "state": "prepared",
             "rejection_code": null,
             "kind": "send-message",
-            "receipt": {
+            "confirmation": {
               "kind": "message-sent",
               "sequence": "3"
             }
@@ -1879,7 +1879,7 @@
       }
     },
     {
-      "name": "send cannot carry channel receipt",
+      "name": "send cannot carry channel confirmation",
       "valid": false,
       "action": {
         "action": "status",
@@ -1904,7 +1904,7 @@
             "state": "confirmed",
             "rejection_code": null,
             "kind": "send-message",
-            "receipt": {
+            "confirmation": {
               "kind": "channel-created"
             }
           }
@@ -1912,7 +1912,7 @@
       }
     },
     {
-      "name": "channel cannot carry send receipt",
+      "name": "channel cannot carry send confirmation",
       "valid": false,
       "action": {
         "action": "status",
@@ -1937,7 +1937,7 @@
             "state": "confirmed",
             "rejection_code": null,
             "kind": "create-channel",
-            "receipt": {
+            "confirmation": {
               "kind": "message-sent",
               "sequence": "1"
             }
@@ -1946,7 +1946,7 @@
       }
     },
     {
-      "name": "confirmed requires receipt",
+      "name": "confirmed requires confirmation",
       "valid": false,
       "action": {
         "action": "status",
@@ -1971,7 +1971,7 @@
             "state": "confirmed",
             "rejection_code": null,
             "kind": "send-message",
-            "receipt": null
+            "confirmation": null
           }
         }
       }
@@ -2002,7 +2002,7 @@
             "state": "confirmed",
             "rejection_code": null,
             "kind": "rename-unknown",
-            "receipt": {
+            "confirmation": {
               "kind": "message-sent",
               "sequence": "1"
             }
@@ -2011,7 +2011,7 @@
       }
     },
     {
-      "name": "channel created receipt",
+      "name": "channel-created confirmation",
       "valid": true,
       "action": {
         "action": "status",
@@ -2036,7 +2036,7 @@
             "state": "confirmed",
             "rejection_code": null,
             "kind": "create-channel",
-            "receipt": {
+            "confirmation": {
               "kind": "channel-created"
             }
           }
@@ -2388,7 +2388,7 @@
       }
     },
     {
-      "name": "legacy import acknowledges durable receipt",
+      "name": "legacy import acknowledges durable completion marker",
       "valid": true,
       "action": {
         "action": "import-intent",

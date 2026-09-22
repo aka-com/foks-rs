@@ -26,7 +26,7 @@ fn account_secrets(seed: u8) -> SoftwareAccountSecrets {
 }
 
 #[test]
-fn disconnect_before_signup_commit_leaves_no_identity_or_receipt() {
+fn disconnect_before_signup_commit_leaves_no_identity_or_idempotency_record() {
     let environment = TestEnvironment::new().unwrap();
     let server = environment.start_server().unwrap();
     let client = TestClient::new(&environment, "before-commit-client").unwrap();
@@ -45,7 +45,7 @@ fn disconnect_before_signup_commit_leaves_no_identity_or_receipt() {
     let operation = only_pending_operation(&client, &probe.pinned);
     assert!(server.identity(&operation.subject_id).unwrap().is_none());
     assert!(server
-        .request_receipt(&[0x83; 17], &operation.request_hash)
+        .idempotency_record(&[0x83; 17], &operation.request_hash)
         .unwrap()
         .is_none());
     drop(protected);
@@ -84,8 +84,8 @@ fn signup_commit_with_lost_or_partial_response_reconciles_without_replay() {
         let operation = only_pending_operation(&client, &probe.pinned);
         assert!(server.identity(&operation.subject_id).unwrap().is_some());
         assert!(matches!(
-            server.request_receipt(&[seed.wrapping_add(2); 17], &operation.request_hash),
-            Ok(Some(_)) | Err(foks_server_db::Error::ReceiptConflict)
+            server.idempotency_record(&[seed.wrapping_add(2); 17], &operation.request_hash),
+            Ok(Some(_)) | Err(foks_server_db::Error::OperationConflict)
         ));
         assert_eq!(server.current_root().unwrap().unwrap().epoch, 2);
         drop(protected);

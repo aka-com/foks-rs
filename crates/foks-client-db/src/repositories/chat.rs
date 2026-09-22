@@ -61,7 +61,7 @@ pub struct ChatOperation {
     pub state: ChatOperationState,
     pub request_hash: [u8; 32],
     pub scan_cursor: u64,
-    pub receipt: Option<Vec<u8>>,
+    pub confirmation: Option<Vec<u8>>,
     pub rejection_code: Option<i64>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,7 +129,7 @@ impl HardStateStore {
         persist_protected_request: impl FnOnce() -> std::result::Result<(), E>,
     ) -> std::result::Result<(), E> {
         if op.state != ChatOperationState::Prepared
-            || op.receipt.is_some()
+            || op.confirmation.is_some()
             || op.rejection_code.is_some()
         {
             return Err(Error::ChatOperationState("new operation is not prepared").into());
@@ -230,7 +230,7 @@ impl HardStateStore {
                         },
                         request_hash: row.get(6)?,
                         scan_cursor: row.get::<_, i64>(7)? as u64,
-                        receipt: row.get(8)?,
+                        confirmation: row.get(8)?,
                         rejection_code: row.get(9)?,
                     })
                 },
@@ -334,13 +334,13 @@ impl HardStateStore {
         }
         Ok(())
     }
-    pub fn chat_confirm(&mut self, id: &[u8; 16], receipt: &[u8]) -> Result<()> {
+    pub fn chat_confirm(&mut self, id: &[u8; 16], confirmation: &[u8]) -> Result<()> {
         let count = self.connection.execute(
             "UPDATE chat_operations
              SET state = 2, receipt = ?2
              WHERE operation_id = ?1
                AND (state = 1 OR (state = 2 AND receipt = ?2))",
-            params![id.as_slice(), receipt],
+            params![id.as_slice(), confirmation],
         )?;
         if count != 1 {
             return Err(Error::ChatConflict("conflicting confirmation"));
@@ -524,7 +524,7 @@ mod tests {
             state: ChatOperationState::Prepared,
             request_hash: [8; 32],
             scan_cursor: 0,
-            receipt: None,
+            confirmation: None,
             rejection_code: None,
         }
     }
@@ -546,7 +546,7 @@ mod tests {
             .unwrap()
             .is_empty());
         db.chat_begin(&op.id).unwrap();
-        db.chat_confirm(&op.id, b"receipt").unwrap();
+        db.chat_confirm(&op.id, b"confirmation").unwrap();
         for id in 2..=ChatLimits::PENDING_OPERATIONS {
             let pending = prepared(id as u128);
             db.chat_record(&pending).unwrap();
@@ -709,7 +709,7 @@ mod tests {
             state: ChatOperationState::Prepared,
             request_hash: [8; 32],
             scan_cursor: 2,
-            receipt: None,
+            confirmation: None,
             rejection_code: None,
         };
         let submission = ChatSubmission {
@@ -764,8 +764,8 @@ mod tests {
         db.chat_progress(&op.id, 100).unwrap();
         db.chat_progress(&op.id, 50).unwrap();
         assert_eq!(db.chat_operation(&op.id).unwrap().unwrap().scan_cursor, 100);
-        db.chat_confirm(&op.id, b"receipt").unwrap();
-        db.chat_confirm(&op.id, b"receipt").unwrap();
+        db.chat_confirm(&op.id, b"confirmation").unwrap();
+        db.chat_confirm(&op.id, b"confirmation").unwrap();
         assert!(db.chat_confirm(&op.id, b"other").is_err());
         assert!(db.chat_progress(&op.id, 200).is_err());
         assert!(db

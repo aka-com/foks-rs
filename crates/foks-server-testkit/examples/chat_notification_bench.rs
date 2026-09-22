@@ -260,8 +260,8 @@ fn main() {
                 },
             }));
             match result {
-                Ok(RealtimeResponse::Sent(receipt)) => {
-                    previous.insert(channel_text.to_owned(), (id, receipt.sequence));
+                Ok(RealtimeResponse::Sent(send_receipt)) => {
+                    previous.insert(channel_text.to_owned(), (id, send_receipt.sequence));
                     emit(json!({"id":request["id"],"value":{"messageId":hex(&id.0)}}));
                 }
                 _ => emit(

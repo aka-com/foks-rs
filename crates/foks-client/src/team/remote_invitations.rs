@@ -91,18 +91,18 @@ impl FoksClient {
             &foks_rpc::encode_accept_invite_remote_request(&prepared.invite, &prepared.request)?,
             None,
         )?;
-        let receipt = TeamRsvp::decode(&reply)?;
-        if !receipt.is_remote() {
+        let rsvp = TeamRsvp::decode(&reply)?;
+        if !rsvp.is_remote() {
             return Err(Error::TeamBinding("remote RSVP kind"));
         }
-        Ok(receipt)
+        Ok(rsvp)
     }
     pub fn load_remote_invitation_request(
         &self,
         host: &PinnedHost,
         credential: FederationCredential<'_, '_>,
         team: &EntityId,
-        receipt: &TeamRsvp,
+        rsvp: &TeamRsvp,
     ) -> Result<RemoteJoinRequest> {
         let user = self.authenticate_credential_and_pin(host, credential)?;
         let loaded = self.load_and_pin_team_with_credential(
@@ -118,7 +118,7 @@ impl FoksClient {
         let bytes = self.call_with_material(
             host,
             &host.user,
-            &foks_rpc::encode_load_remote_join_request(&token, receipt)?,
+            &foks_rpc::encode_load_remote_join_request(&token, rsvp)?,
             seed,
             certs,
         )?;
@@ -205,7 +205,7 @@ impl FoksClient {
             crate::mutation::remove_terminal_request(protected, &op.material_ref)?;
             return Ok(super::InvitationProgress {
                 operation: op,
-                receipt: None,
+                rsvp: None,
                 invite: None,
             });
         }
@@ -223,11 +223,11 @@ impl FoksClient {
         let ack_key = crate::ProtectedRecordKey::InvitationAck(&id).encoded();
         match protected.get(&ack_key) {
             Ok(ack) => {
-                let receipt = TeamRsvp::decode(&ack)?;
+                let rsvp = TeamRsvp::decode(&ack)?;
                 MutationCoordinator::new(&home.database_path, protected).remote_verified(&id)?;
                 return Ok(super::InvitationProgress {
                     operation: self.invitation_operation(home, credential.uid(), id)?,
-                    receipt: Some(receipt),
+                    rsvp: Some(rsvp),
                     invite: None,
                 });
             }
@@ -278,7 +278,7 @@ impl FoksClient {
         if op.state == MutationState::Prepared && !attempt {
             return Ok(super::InvitationProgress {
                 operation: op,
-                receipt: None,
+                rsvp: None,
                 invite: None,
             });
         }
@@ -289,7 +289,7 @@ impl FoksClient {
             HardStateStore::open(&home.database_path)?.advance_invitation_delivery(&id, 1, 2)?;
             phase = 2;
         }
-        let mut receipt = None;
+        let mut rsvp = None;
         if phase == 2 && attempt {
             HardStateStore::open(&home.database_path)?.advance_invitation_delivery(&id, 2, 3)?;
             match self.submit_remote_invitation(destination, &p) {
@@ -299,7 +299,7 @@ impl FoksClient {
                         .map_err(|e| Error::ProtectedStore(e.to_string()))?;
                     MutationCoordinator::new(&home.database_path, protected)
                         .remote_verified(&id)?;
-                    receipt = Some(r);
+                    rsvp = Some(r);
                 }
                 Err(e) => {
                     MutationCoordinator::new(&home.database_path, protected)
@@ -309,13 +309,13 @@ impl FoksClient {
             }
         }
         op = self.invitation_operation(home, credential.uid(), id)?;
-        if receipt.is_none() && op.state == MutationState::Submitting {
+        if rsvp.is_none() && op.state == MutationState::Submitting {
             MutationCoordinator::new(&home.database_path, protected).submission_unknown(&id)?;
             op = self.invitation_operation(home, credential.uid(), id)?;
         }
         Ok(super::InvitationProgress {
             operation: op,
-            receipt,
+            rsvp,
             invite: None,
         })
     }

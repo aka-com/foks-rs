@@ -1,6 +1,6 @@
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
-use crate::{error::sql_integer, receipts, transaction::inject, Database, Error, Result};
+use crate::{error::sql_integer, idempotency, transaction::inject, Database, Error, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FailurePoint {
@@ -12,7 +12,7 @@ pub enum FailurePoint {
     Chain,
     MerkleNodes,
     MerkleRoot,
-    Receipt,
+    IdempotencyRecord,
 }
 
 pub struct IdentityMutation<'a> {
@@ -55,7 +55,7 @@ pub struct IdentityMutation<'a> {
     pub invite: crate::InviteConsumption<'a>,
     pub passphrase: Option<crate::PassphraseMutation<'a>>,
     pub now: u64,
-    pub receipt_expires_at: u64,
+    pub idempotency_expires_at: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,13 +95,13 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(receipt) = receipts::lookup(
+        if let Some(idempotency_record) = idempotency::lookup(
             &transaction,
             mutation.idempotency_key,
             mutation.request_hash,
             mutation.now,
         )? {
-            return Ok(CommitOutcome::Replayed(receipt.response));
+            return Ok(CommitOutcome::Replayed(idempotency_record.response));
         }
         crate::sso_access::require_signup(&transaction, binding)?;
         let consumed_invite = crate::invites::consume(&transaction, mutation.invite, mutation.now)?;
@@ -313,15 +313,15 @@ impl Database {
         )?;
         inject(failure, FailurePoint::MerkleRoot)?;
 
-        receipts::insert(
+        idempotency::insert(
             &transaction,
             mutation.idempotency_key,
             mutation.request_hash,
             mutation.response,
             mutation.now,
-            mutation.receipt_expires_at,
+            mutation.idempotency_expires_at,
         )?;
-        inject(failure, FailurePoint::Receipt)?;
+        inject(failure, FailurePoint::IdempotencyRecord)?;
         if let Some(binding) = binding {
             if binding.access.uid.as_slice() != mutation.uid
                 || binding.device.as_slice() != mutation.device_id
@@ -371,7 +371,7 @@ fn validate(database: &Database, mutation: &IdentityMutation<'_>) -> Result<()> 
         || mutation.normalized_name.is_empty()
         || mutation.username_utf8.is_empty()
         || mutation.normalized_name.len() > database.config.maximum_name_bytes
-        || mutation.response.len() > database.config.maximum_receipt_bytes
+        || mutation.response.len() > database.config.maximum_idempotency_response_bytes
         || blobs
             .iter()
             .any(|blob| blob.len() > database.config.maximum_blob_bytes)
@@ -380,7 +380,7 @@ fn validate(database: &Database, mutation: &IdentityMutation<'_>) -> Result<()> 
         || mutation.shared_generation == 0
         || mutation.reservation_sequence == 0
         || mutation.reservation_expires_at <= mutation.now
-        || mutation.receipt_expires_at <= mutation.now
+        || mutation.idempotency_expires_at <= mutation.now
         || mutation.merkle_commit.root == [0; 32]
         || !valid_yubi
     {

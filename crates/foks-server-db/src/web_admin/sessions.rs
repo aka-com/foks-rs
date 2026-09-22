@@ -74,7 +74,7 @@ impl Database {
                 .and_then(|v| authorize(&tx, &v, now))
                 .is_ok()
         }) {
-            return Err(Error::ReceiptConflict);
+            return Err(Error::OperationConflict);
         }
         cleanup(&tx, now)?;
         let(all,own):(i64,i64)=tx.query_row("SELECT count(*),coalesce(sum(t.uid=?1),0) FROM web_login_confirmations c JOIN web_login_tickets t
@@ -119,7 +119,7 @@ impl Database {
                 .and_then(|v| authorize(&tx, &v, now))
                 .is_ok()
         }) {
-            return Err(Error::ReceiptConflict);
+            return Err(Error::OperationConflict);
         }
         cleanup(&tx, now)?;
         capacity(&tx, "web_admin_sessions", &ctx.credential.uid, 5, 4096)?;
@@ -128,7 +128,7 @@ impl Database {
             [ticket],
         )? != 1
         {
-            return Err(Error::ReceiptExpired);
+            return Err(Error::OperationExpired);
         }
         tx.execute(
             "DELETE FROM web_login_confirmations WHERE ticket_hash=?1",

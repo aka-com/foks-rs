@@ -12,7 +12,7 @@ fn every_injected_stage_rolls_back_all_authoritative_state() {
         FailurePoint::Chain,
         FailurePoint::MerkleNodes,
         FailurePoint::MerkleRoot,
-        FailurePoint::Receipt,
+        FailurePoint::IdempotencyRecord,
     ] {
         let mut database = common::TestDatabase::new();
         database.reserve(1_000_000);

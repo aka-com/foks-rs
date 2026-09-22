@@ -1007,7 +1007,7 @@ pub(super) fn record_mutation_on(
 }
 
 impl HardStateStore {
-    /// Pending account work comes first; retain a bounded window of completed receipts.
+    /// Pending account work comes first; retain a bounded window of completed records.
     pub fn username_changes(
         &self,
         host: &[u8],
@@ -1043,7 +1043,7 @@ impl HardStateStore {
             })
             .collect()
     }
-    pub fn expired_username_change_receipts(
+    pub fn expired_username_change_completion_records(
         &self,
         host: &[u8],
         uid: &[u8],
@@ -1052,7 +1052,11 @@ impl HardStateStore {
         let mut stmt=self.connection.prepare("SELECT operation_id FROM mutation_operations WHERE operation_kind=9 AND host_id=?1 AND scope_id=?2 AND state IN (5,6) AND updated_at<?3 ORDER BY updated_at LIMIT 256")?;
         let ids = stmt
             .query_map(
-                params![host, uid, sqlite_integer("receipt cutoff", before)?],
+                params![
+                    host,
+                    uid,
+                    sqlite_integer("completion-record cutoff", before)?
+                ],
                 |r| r.get::<_, Vec<u8>>(0),
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1060,18 +1064,18 @@ impl HardStateStore {
             .map(|id| {
                 self.mutation(
                     &id.try_into()
-                        .map_err(|_| Error::InvalidMutationOperation("receipt ID"))?,
+                        .map_err(|_| Error::InvalidMutationOperation("completion-record ID"))?,
                 )?
-                .ok_or(Error::InvalidMutationOperation("missing receipt"))
+                .ok_or(Error::InvalidMutationOperation("missing completion record"))
             })
             .collect()
     }
     /// Called only after protected material is erased; never removes pending work.
-    pub fn delete_username_change_receipt(&mut self, id: &[u8; 16]) -> Result<()> {
+    pub fn delete_username_change_completion_record(&mut self, id: &[u8; 16]) -> Result<()> {
         self.connection.execute("DELETE FROM mutation_operations WHERE operation_id=?1 AND operation_kind=9 AND state IN (5,6)",[id.as_slice()])?;
         Ok(())
     }
-    pub fn expired_bot_enrollment_receipts(
+    pub fn expired_bot_enrollment_completion_records(
         &self,
         host: &[u8],
         uid: &[u8],
@@ -1080,7 +1084,11 @@ impl HardStateStore {
         let mut stmt=self.connection.prepare("SELECT operation_id FROM mutation_operations WHERE operation_kind=10 AND host_id=?1 AND scope_id=?2 AND state IN (5,6) AND updated_at<?3 ORDER BY updated_at LIMIT 256")?;
         let ids = stmt
             .query_map(
-                params![host, uid, sqlite_integer("receipt cutoff", before)?],
+                params![
+                    host,
+                    uid,
+                    sqlite_integer("completion-record cutoff", before)?
+                ],
                 |r| r.get::<_, Vec<u8>>(0),
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1088,18 +1096,18 @@ impl HardStateStore {
             .map(|id| {
                 self.mutation(
                     &id.try_into()
-                        .map_err(|_| Error::InvalidMutationOperation("receipt ID"))?,
+                        .map_err(|_| Error::InvalidMutationOperation("completion-record ID"))?,
                 )?
-                .ok_or(Error::InvalidMutationOperation("missing receipt"))
+                .ok_or(Error::InvalidMutationOperation("missing completion record"))
             })
             .collect()
     }
     /// Called only after protected material is erased; never removes pending work.
-    pub fn delete_bot_enrollment_receipt(&mut self, id: &[u8; 16]) -> Result<()> {
+    pub fn delete_bot_enrollment_completion_record(&mut self, id: &[u8; 16]) -> Result<()> {
         self.connection.execute("DELETE FROM mutation_operations WHERE operation_id=?1 AND operation_kind=10 AND state IN (5,6)",[id.as_slice()])?;
         Ok(())
     }
-    pub fn expired_invitation_receipts(
+    pub fn expired_invitation_completion_records(
         &self,
         host: &[u8],
         uid: &[u8],
@@ -1108,7 +1116,11 @@ impl HardStateStore {
         let mut stmt=self.connection.prepare("SELECT operation_id FROM mutation_operations WHERE operation_kind=11 AND host_id=?1 AND scope_id=?2 AND state IN (5,6) AND updated_at<?3 ORDER BY updated_at LIMIT 256")?;
         let ids = stmt
             .query_map(
-                params![host, uid, sqlite_integer("receipt cutoff", before)?],
+                params![
+                    host,
+                    uid,
+                    sqlite_integer("completion-record cutoff", before)?
+                ],
                 |r| r.get::<_, Vec<u8>>(0),
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1116,14 +1128,14 @@ impl HardStateStore {
             .map(|id| {
                 self.mutation(
                     &id.try_into()
-                        .map_err(|_| Error::InvalidMutationOperation("receipt ID"))?,
+                        .map_err(|_| Error::InvalidMutationOperation("completion-record ID"))?,
                 )?
-                .ok_or(Error::InvalidMutationOperation("missing receipt"))
+                .ok_or(Error::InvalidMutationOperation("missing completion record"))
             })
             .collect()
     }
     /// Called only after protected material is erased; never removes pending work.
-    pub fn delete_invitation_receipt(&mut self, id: &[u8; 16]) -> Result<()> {
+    pub fn delete_invitation_completion_record(&mut self, id: &[u8; 16]) -> Result<()> {
         self.connection.execute("DELETE FROM mutation_operations WHERE operation_id=?1 AND operation_kind=11 AND state IN (5,6)",[id.as_slice()])?;
         Ok(())
     }

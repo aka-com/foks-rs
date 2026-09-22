@@ -143,7 +143,7 @@ pub fn open_remote_join_request(
 mod tests {
     use super::*;
     #[test]
-    fn official_remote_box_and_inbox_keep_visibility_and_receipt_kinds() {
+    fn official_remote_box_and_inbox_keep_visibility_and_rsvp_kinds() {
         let root = "../foks-snowpack/tests/fixtures/foks-v0.1.9/invitations";
         let read = |name: &str| std::fs::read(format!("{root}/{name}")).unwrap();
         let cert = TeamCertificate::decode(&read("initial.cert")).unwrap();
@@ -156,7 +156,7 @@ mod tests {
         assert_eq!(payload.encoded().unwrap(), read("remote.payload"));
         let rows = foks_proto::decode_team_inbox(&read("local.inbox")).unwrap();
         assert_eq!(rows.len(), 1);
-        assert!(!rows[0].receipt.is_remote());
+        assert!(!rows[0].rsvp.is_remote());
         assert_eq!(
             foks_proto::encode_team_inbox(&rows).unwrap(),
             read("local.inbox")

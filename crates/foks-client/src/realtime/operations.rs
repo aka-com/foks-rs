@@ -6,10 +6,10 @@ use foks_client_db::{
     ChatOperation, ChatOperationKind as Kind, ChatOperationState as State, ChatSubmission,
 };
 use foks_proto::{
-    RealtimeWire, Role, RtAppId, RtBox, RtChannelId, RtChannelMetadata, RtChannelTier,
-    RtCreateChannelArgument, RtKeyType, RtMessage, RtMessageBox, RtMessageId, RtMessageMetadata,
-    RtMessageType, RtMessageWrapper, RtPartyId, RtRecentsArgument, RtRolePair, RtSend,
-    RtSendArgument, RtSendResult, RtTeamId, RtText, RT_MAX_BODY_BYTES,
+    ChatSendReceipt, RealtimeWire, Role, RtAppId, RtBox, RtChannelId, RtChannelMetadata,
+    RtChannelTier, RtCreateChannelArgument, RtKeyType, RtMessage, RtMessageBox, RtMessageId,
+    RtMessageMetadata, RtMessageType, RtMessageWrapper, RtPartyId, RtRecentsArgument, RtRolePair,
+    RtSend, RtSendArgument, RtTeamId, RtText, RT_MAX_BODY_BYTES,
 };
 use foks_rpc::{RealtimeRequest, RealtimeResponse};
 use zeroize::Zeroizing;

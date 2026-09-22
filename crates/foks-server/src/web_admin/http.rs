@@ -167,12 +167,12 @@ fn failure(status: StatusCode) -> Response<Body> {
 }
 fn error(error: Error) -> Response<Body> {
     let status = match error {
-        Error::Database(foks_server_db::Error::ReceiptExpired) => StatusCode::UNAUTHORIZED,
+        Error::Database(foks_server_db::Error::OperationExpired) => StatusCode::UNAUTHORIZED,
         Error::Database(
             foks_server_db::Error::AuthorizationChanged | foks_server_db::Error::WebWrongUser,
         ) => StatusCode::FORBIDDEN,
         Error::Database(
-            foks_server_db::Error::ReceiptConflict | foks_server_db::Error::Duplicate(_),
+            foks_server_db::Error::OperationConflict | foks_server_db::Error::Duplicate(_),
         ) => StatusCode::CONFLICT,
         Error::Database(foks_server_db::Error::Capacity(_))
         | Error::WriterQueue

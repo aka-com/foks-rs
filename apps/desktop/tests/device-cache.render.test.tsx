@@ -74,7 +74,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
   ui.render(createElement(App, { bridge }));
   // The shell preloads every eligible account before visiting Devices.
   await ui.waitFor(() => {
-    const keys = deviceAlertRegistry(bridge).getSnapshot().paperKeys;
+    const keys = deviceAlertRegistry(bridge).getSnapshot().recoveryPhrases;
     assert.equal(keys.get('acct:work'), false);
     assert.equal(keys.get('acct:personal'), true);
   });

@@ -5,7 +5,7 @@ use foks_proto::{
 };
 use rusqlite::{params, Connection, OptionalExtension as _, TransactionBehavior};
 
-pub(crate) const RECEIPT_LIFETIME_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+pub(crate) const IDEMPOTENCY_RECORD_LIFETIME_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 impl Database {
     pub fn sso_issue_identity_challenge(
         &mut self,
@@ -92,9 +92,15 @@ impl Database {
             (Some(_), None, true) => SsoAccountState::LockedOut,
             _ => SsoAccountState::NotEligible,
         };
-        let committed_receipt = match claim.receipt_commitment {
+        let committed_authorization_binding = match claim.authorization_binding_commitment {
             Some(commitment)
-                if receipt_exists(&tx, host, claim.uid.as_bytes(), &commitment, now_ms)? =>
+                if authorization_binding_exists(
+                    &tx,
+                    host,
+                    claim.uid.as_bytes(),
+                    &commitment,
+                    now_ms,
+                )? =>
             {
                 Some(commitment)
             }
@@ -114,7 +120,7 @@ impl Database {
             authorization_generation: a.as_ref().map_or(0, |a| a.authorization_generation),
             access_available: crate::sso_policy::decision(&tx, claim.uid.as_bytes(), now_ms)?
                 .permits_native(),
-            committed_receipt,
+            committed_authorization_binding,
         };
         tx.commit()?;
         Ok(status)
@@ -136,7 +142,7 @@ pub(crate) fn require_owner(
     }
     Ok(())
 }
-pub(crate) fn receipt_exists(
+pub(crate) fn authorization_binding_exists(
     c: &Connection,
     host: &[u8; 33],
     uid: &[u8],
@@ -145,7 +151,7 @@ pub(crate) fn receipt_exists(
 ) -> Result<bool> {
     Ok(c.query_row("SELECT 1 FROM sso_binding_receipts WHERE host=?1 AND uid=?2 AND commitment=?3 AND expires_at_ms>?4",params![host,uid,commitment,sql_integer(now_ms)?], |_|Ok(())).optional()?.is_some())
 }
-pub(crate) fn reserve_receipt(
+pub(crate) fn reserve_authorization_binding(
     c: &Connection,
     b: &crate::SsoAccountBinding,
     now_ms: u64,
@@ -158,7 +164,7 @@ pub(crate) fn reserve_receipt(
         |r| r.get(0),
     )?;
     if count >= 4096 {
-        return Err(Error::Capacity("SSO binding receipts"));
+        return Err(Error::Capacity("SSO authorization bindings"));
     }
     c.execute(
         "INSERT INTO sso_binding_receipts VALUES(?1,?2,?3,?4,?5,?6,?7)",
@@ -171,7 +177,7 @@ pub(crate) fn reserve_receipt(
             sql_integer(a.authorization_generation)?,
             sql_integer(
                 now_ms
-                    .checked_add(RECEIPT_LIFETIME_MS)
+                    .checked_add(IDEMPOTENCY_RECORD_LIFETIME_MS)
                     .ok_or(Error::IntegerRange)?
             )?
         ],

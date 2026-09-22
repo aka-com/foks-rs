@@ -2,7 +2,7 @@ import type { Bridge } from './contract';
 import {
   decodeAccountDevices,
   decodeBackupEnrollments,
-  decodeBackupPhrase,
+  decodeRecoveryPhrase,
   decodeBackupRevocation,
   decodeDeviceProvision,
   decodeDeviceRemoval,
@@ -122,7 +122,7 @@ export const enrollmentCommands: Pick<
     checked(
       'prepare_owner_backup',
       { profile, accountAlias, backupAlias },
-      decodeBackupPhrase,
+      decodeRecoveryPhrase,
     ),
   commitOwnerBackup: (profile, accountAlias, backupAlias, phrase) =>
     checkedMutation(

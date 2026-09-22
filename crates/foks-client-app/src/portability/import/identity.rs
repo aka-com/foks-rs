@@ -2,7 +2,8 @@ use super::*;
 use serde::{Deserialize, Serialize};
 pub(super) const MARKER: &str = ".state-import-v1";
 pub(crate) const INTENT: &str = "state-import-v1";
-pub(crate) const RECEIPT: &str = "state-import-receipt-v1";
+// Persisted before the terminology cleanup; changing this key would lose crash recovery state.
+pub(crate) const IMPORT_COMPLETION_MARKER: &str = "state-import-receipt-v1";
 pub(super) const CLAIM_PREFIX: &str = "pending-import-claim.";
 pub(super) const MAX_METADATA: u64 = 32 * 1024;
 const IDENTITY_MAC_DOMAIN: u64 = 0x7b93_b685_8164_13ca;
@@ -93,6 +94,7 @@ pub(super) struct Intent {
     pub content_digest: [u8; 32],
     pub claims_digest: [u8; 32],
 }
+pub(super) type ImportCompletionMarker = Intent;
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Locator {
@@ -124,6 +126,11 @@ pub(super) fn native_intent(native: &NativeManifestStore, key: &str) -> Result<O
         })
         .transpose()
 }
+pub(super) fn native_completion_marker(
+    native: &NativeManifestStore,
+) -> Result<Option<ImportCompletionMarker>> {
+    native_intent(native, IMPORT_COMPLETION_MARKER)
+}
 pub(super) fn claims_digest(records: &BTreeMap<String, Vec<u8>>) -> Result<[u8; 32]> {
     Ok(Sha256::digest(serde_json::to_vec(records)?).into())
 }
@@ -132,7 +139,10 @@ pub(super) fn content_digest(snapshot: &StateSnapshot) -> Result<[u8; 32]> {
     hash.update(b"foks-import-content-v1");
     hash.update(serde_json::to_vec(&snapshot.artifacts)?);
     for (key, value) in &snapshot.native.records {
-        if matches!(key.as_str(), crate::STATE_ROOT_RECORD | INTENT | RECEIPT) {
+        if matches!(
+            key.as_str(),
+            crate::STATE_ROOT_RECORD | INTENT | IMPORT_COMPLETION_MARKER
+        ) {
             continue;
         }
         hash.update((key.len() as u64).to_be_bytes());

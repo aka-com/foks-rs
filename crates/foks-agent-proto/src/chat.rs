@@ -361,7 +361,7 @@ pub struct ChatOperation {
     pub channel: String,
     pub kind: ChatOperationKind,
     pub state: ChatState,
-    pub receipt: Option<ChatReceipt>,
+    pub confirmation: Option<ChatOperationConfirmation>,
     pub rejection_code: Option<i64>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -372,7 +372,7 @@ pub enum ChatOperationKind {
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum ChatReceipt {
+pub enum ChatOperationConfirmation {
     ChannelCreated,
     MessageSent { sequence: String },
 }

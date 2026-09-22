@@ -224,7 +224,7 @@ pub(super) async fn renew(
 }
 
 /// The compatibility renewal with the steps it took: reading the profile's
-/// lease snapshot, fetching the signed canary, and applying it.
+/// lease snapshot, fetching the signed compatibility artifact, and applying it.
 async fn renew_observed(
     state_dir: &Path,
     profile: &str,
@@ -253,7 +253,8 @@ async fn renew_one(
     steps: &mut Steps,
 ) -> ResponseResult {
     let started = Instant::now();
-    let capacity = FETCH_CAPACITY.get_or_init(|| Arc::new(Semaphore::new(MAXIMUM_CANARY_FETCHES)));
+    let capacity = FETCH_CAPACITY
+        .get_or_init(|| Arc::new(Semaphore::new(MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES)));
     let Ok(Ok(worker)) = tokio::time::timeout(timeout, capacity.clone().acquire_owned()).await
     else {
         steps.step("lease");
@@ -306,7 +307,7 @@ async fn renew_one(
     };
     let fetched = tokio::time::timeout(
         timeout.saturating_sub(started.elapsed()),
-        fetch_canary(client, snapshot.url()),
+        fetch_compatibility_artifact(client, snapshot.url()),
     )
     .await;
     steps.step("fetch");
@@ -328,17 +329,17 @@ async fn renew_one(
             )
         }
     };
-    let signed = match serde_json::from_slice::<foks_compat_artifact::SignedCanaryArtifact>(&bytes)
-    {
-        Ok(signed) => signed,
-        Err(_) => {
-            return failure(
-                profile,
-                ErrorCode::CompatibilityRejected,
-                "compatibility artifact is invalid",
-            )
-        }
-    };
+    let signed =
+        match serde_json::from_slice::<foks_compat_artifact::SignedCompatibilityArtifact>(&bytes) {
+            Ok(signed) => signed,
+            Err(_) => {
+                return failure(
+                    profile,
+                    ErrorCode::CompatibilityRejected,
+                    "compatibility artifact is invalid",
+                )
+            }
+        };
     let now = match now_microseconds() {
         Ok(now) => now / 1_000_000,
         Err(error) => return scoped_error(profile, error.as_ref()),
@@ -845,7 +846,7 @@ mod tests {
                     label: None,
                     probe: "foks.app".into(),
                     protocol: ProtocolPolicy::CurrentProbeOnly {
-                        canary_public_key:
+                        compatibility_artifact_public_key:
                             "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
                                 .into(),
                         lease_url: "https://updates.example.test/lease.json".into(),
@@ -962,7 +963,7 @@ mod tests {
             },
         ));
         let mut first = Vec::new();
-        for _ in 0..MAXIMUM_CANARY_FETCHES {
+        for _ in 0..MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES {
             first.push(
                 tokio::time::timeout(Duration::from_secs(5), observed.recv())
                     .await
@@ -999,14 +1000,17 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(peak.load(Ordering::SeqCst), MAXIMUM_CANARY_FETCHES);
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES
+        );
     }
 
     #[tokio::test]
     async fn cancelling_the_hosted_pipeline_retains_active_common_worker_permits() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().to_owned();
-        let workers = Arc::new(Semaphore::new(MAXIMUM_CANARY_FETCHES));
+        let workers = Arc::new(Semaphore::new(MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES));
         let release = Arc::new(Semaphore::new(0));
         let cancellation = CancellationToken::new();
         let (started, mut observed) = tokio::sync::mpsc::unbounded_channel();
@@ -1035,7 +1039,7 @@ mod tests {
                 }
             },
         ));
-        for _ in 0..MAXIMUM_CANARY_FETCHES {
+        for _ in 0..MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES {
             tokio::time::timeout(Duration::from_secs(5), observed.recv())
                 .await
                 .unwrap()
@@ -1048,14 +1052,17 @@ mod tests {
             .unwrap();
         assert_eq!(workers.available_permits(), 0);
         assert!(observed.try_recv().is_err());
-        release.add_permits(MAXIMUM_CANARY_FETCHES);
-        for _ in 0..MAXIMUM_CANARY_FETCHES {
+        release.add_permits(MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES);
+        for _ in 0..MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES {
             tokio::time::timeout(Duration::from_secs(5), completed.recv())
                 .await
                 .unwrap()
                 .unwrap();
         }
-        assert_eq!(workers.available_permits(), MAXIMUM_CANARY_FETCHES);
+        assert_eq!(
+            workers.available_permits(),
+            MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES
+        );
     }
 
     #[cfg(unix)]
@@ -1195,7 +1202,7 @@ mod tests {
             0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03,
             0x1c, 0xae, 0x7f, 0x60,
         ];
-        let mut artifact = foks_compat_artifact::CanaryArtifact {
+        let mut artifact = foks_compat_artifact::CompatibilityArtifact {
             schema_version: foks_compat_artifact::SCHEMA_VERSION,
             generation: 1,
             target: "foks.app".into(),
@@ -1210,14 +1217,15 @@ mod tests {
             drift_reason: String::new(),
         };
         let signed =
-            foks_compat_artifact::SignedCanaryArtifact::sign(artifact.clone(), &seed).unwrap();
+            foks_compat_artifact::SignedCompatibilityArtifact::sign(artifact.clone(), &seed)
+                .unwrap();
         registry
             .add(Profile {
                 name: "saved".into(),
                 label: None,
                 probe: "foks.app".into(),
                 protocol: ProtocolPolicy::CurrentProbeOnly {
-                    canary_public_key:
+                    compatibility_artifact_public_key:
                         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a".into(),
                     lease_url: "https://updates.example.test/lease.json".into(),
                     last_artifact: None,
@@ -1257,8 +1265,8 @@ mod tests {
         // A different artifact is never short-circuited.
         artifact.generation = 2;
         artifact.run_id = "reconcile-2".into();
-        let next =
-            foks_compat_artifact::SignedCanaryArtifact::sign(artifact.clone(), &seed).unwrap();
+        let next = foks_compat_artifact::SignedCompatibilityArtifact::sign(artifact.clone(), &seed)
+            .unwrap();
         assert!(!registry
             .hosted_lease_renewal("saved")
             .unwrap()
@@ -1272,7 +1280,8 @@ mod tests {
         artifact.outcome = foks_compat_artifact::Outcome::Drift;
         artifact.capabilities.clear();
         artifact.drift_reason = "protocol drift".into();
-        let drift = foks_compat_artifact::SignedCanaryArtifact::sign(artifact, &seed).unwrap();
+        let drift =
+            foks_compat_artifact::SignedCompatibilityArtifact::sign(artifact, &seed).unwrap();
         registry
             .hosted_lease_renewal("saved")
             .unwrap()
@@ -1291,7 +1300,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut registry = ProfileRegistry::open(directory.path()).unwrap();
         let seed = [7; 32];
-        let mut artifact = foks_compat_artifact::CanaryArtifact {
+        let mut artifact = foks_compat_artifact::CompatibilityArtifact {
             schema_version: foks_compat_artifact::SCHEMA_VERSION,
             generation: 1,
             target: "foks.app".into(),
@@ -1306,13 +1315,14 @@ mod tests {
             drift_reason: String::new(),
         };
         let signed =
-            foks_compat_artifact::SignedCanaryArtifact::sign(artifact.clone(), &seed).unwrap();
+            foks_compat_artifact::SignedCompatibilityArtifact::sign(artifact.clone(), &seed)
+                .unwrap();
         let profile = Profile {
             name: "saved".into(),
             label: None,
             probe: "foks.app".into(),
             protocol: ProtocolPolicy::CurrentProbeOnly {
-                canary_public_key:
+                compatibility_artifact_public_key:
                     "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a".into(),
                 lease_url: "https://updates.example.test/lease.json".into(),
                 last_artifact: None,
@@ -1332,7 +1342,8 @@ mod tests {
             0x1c, 0xae, 0x7f, 0x60,
         ];
         let signed =
-            foks_compat_artifact::SignedCanaryArtifact::sign(artifact.clone(), &seed).unwrap();
+            foks_compat_artifact::SignedCompatibilityArtifact::sign(artifact.clone(), &seed)
+                .unwrap();
         let obsolete = registry.hosted_lease_renewal("saved").unwrap().unwrap();
         registry.remove("saved").unwrap();
         registry.add(profile).unwrap();
@@ -1368,7 +1379,8 @@ mod tests {
         artifact.outcome = foks_compat_artifact::Outcome::Drift;
         artifact.capabilities.clear();
         artifact.drift_reason = "protocol drift".into();
-        let drift = foks_compat_artifact::SignedCanaryArtifact::sign(artifact, &seed).unwrap();
+        let drift =
+            foks_compat_artifact::SignedCompatibilityArtifact::sign(artifact, &seed).unwrap();
         let (_, status) = registry
             .hosted_lease_renewal("saved")
             .unwrap()

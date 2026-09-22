@@ -1587,7 +1587,7 @@ test('uncertain send retains body in thread and merges once after delivery check
           lost = true;
           throw {
             code: 'ambiguous',
-            message: 'Receipt lost',
+            message: 'Confirmation lost',
             fatal: false,
             retryable: false,
             ambiguous: true,

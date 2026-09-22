@@ -241,7 +241,7 @@ first and then independent KV namespaces; identity/name publication and the
 global Merkle log still require one leader or a consensus protocol.
 
 The in-process maintenance loop runs once per minute through the ordinary writer.
-It removes expired user/team reservations, receipts, recovery challenges, and
+It removes expired user/team reservations, idempotency records, recovery challenges, and
 team-view and TeamAdmin capabilities, then requests a PASSIVE WAL checkpoint.
 Manual online maintenance uses the same path. PASSIVE does not invoke SQLite's
 busy handler to wait for readers or writers, but its I/O still runs on the sole

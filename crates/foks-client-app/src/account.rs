@@ -770,14 +770,14 @@ impl CheckedProfileSession<'_> {
         })
     }
 
-    /// Generates an ephemeral backup phrase after validating its intended
+    /// Generates an ephemeral recovery phrase after validating its intended
     /// account and alias. This does not write local state or contact FOKS.
     pub fn prepare_owner_backup(
         &self,
         account_alias: &str,
         backup_alias: &str,
         vault: &mut AccountVault<'_>,
-    ) -> Result<BackupPhrase> {
+    ) -> Result<RecoveryPhrase> {
         self.profile.require(Capability::Recovery)?;
         validate_name(backup_alias)?;
         if vault
@@ -2287,7 +2287,7 @@ mod tests {
                 let before = initial_devices.len();
                 let discarded =
                     session.prepare_owner_backup("personal", "discarded", &mut vault)?;
-                assert_eq!(format!("{discarded:?}"), "BackupPhrase([REDACTED])");
+                assert_eq!(format!("{discarded:?}"), "RecoveryPhrase([REDACTED])");
                 assert!(vault.backup("discarded")?.is_none());
                 drop(discarded);
                 assert_eq!(session.list_devices("personal", &mut vault)?.len(), before);

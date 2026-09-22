@@ -21,7 +21,7 @@ pub enum Outcome {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct CanaryArtifact {
+pub struct CompatibilityArtifact {
     pub schema_version: u32,
     /// Strictly increasing publication generation for this signing key.
     pub generation: u64,
@@ -39,29 +39,29 @@ pub struct CanaryArtifact {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SignedCanaryArtifact {
-    pub artifact: CanaryArtifact,
+pub struct SignedCompatibilityArtifact {
+    pub artifact: CompatibilityArtifact,
     pub key_id: String,
     pub signature: String,
 }
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("invalid canary artifact: {0}")]
+    #[error("invalid compatibility artifact: {0}")]
     Invalid(&'static str),
     #[error("invalid hexadecimal value")]
     Hex,
     #[error("invalid Ed25519 key or signature")]
     Signature,
-    #[error("canary artifact signature did not verify")]
+    #[error("compatibility artifact signature did not verify")]
     Verification,
-    #[error("canary artifact JSON failed: {0}")]
+    #[error("compatibility artifact JSON failed: {0}")]
     Json(#[from] serde_json::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-impl CanaryArtifact {
+impl CompatibilityArtifact {
     pub fn validate(&self) -> Result<()> {
         if self.schema_version != SCHEMA_VERSION
             || self.generation == 0
@@ -110,8 +110,8 @@ impl CanaryArtifact {
     }
 }
 
-impl SignedCanaryArtifact {
-    pub fn sign(artifact: CanaryArtifact, signing_key: &[u8; 32]) -> Result<Self> {
+impl SignedCompatibilityArtifact {
+    pub fn sign(artifact: CompatibilityArtifact, signing_key: &[u8; 32]) -> Result<Self> {
         artifact.validate()?;
         let signing_key = SigningKey::from_bytes(signing_key);
         let signature = signing_key.sign(&signing_bytes(&artifact)?);
@@ -146,7 +146,7 @@ pub fn decode_public_key(input: &str) -> Result<[u8; 32]> {
         .map_err(|_| Error::Signature)
 }
 
-fn signing_bytes(artifact: &CanaryArtifact) -> Result<Vec<u8>> {
+fn signing_bytes(artifact: &CompatibilityArtifact) -> Result<Vec<u8>> {
     let json = serde_json::to_vec(artifact)?;
     let mut bytes = Vec::with_capacity(SIGNATURE_DOMAIN.len() + json.len());
     bytes.extend_from_slice(SIGNATURE_DOMAIN);
@@ -186,8 +186,8 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    fn artifact(outcome: Outcome) -> CanaryArtifact {
-        CanaryArtifact {
+    fn artifact(outcome: Outcome) -> CompatibilityArtifact {
+        CompatibilityArtifact {
             schema_version: SCHEMA_VERSION,
             generation: 42,
             target: "foks.pub:443".to_owned(),
@@ -214,7 +214,8 @@ mod tests {
     #[test]
     fn signature_binds_generation_capabilities_and_outcome() {
         let key = [7; 32];
-        let signed = SignedCanaryArtifact::sign(artifact(Outcome::Compatible), &key).unwrap();
+        let signed =
+            SignedCompatibilityArtifact::sign(artifact(Outcome::Compatible), &key).unwrap();
         signed
             .verify(SigningKey::from_bytes(&key).verifying_key().as_bytes())
             .unwrap();

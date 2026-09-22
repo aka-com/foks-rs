@@ -43,7 +43,7 @@ export function mockChat(snapshot?: AgentSnapshot) {
     }
   >();
   const intents = new Map<string, { submission: string; text: string }>();
-  const receipts = new Set<string>();
+  const completionMarkers = new Set<string>();
   let counter = 10;
   const chat = async (
     storeId: string,
@@ -113,7 +113,7 @@ export function mockChat(snapshot?: AgentSnapshot) {
       team.messages.set(op.channel, rows);
       team.reads.set(op.channel, BigInt(sequence));
       bump(op.channel);
-      op.receipt = { kind: 'message-sent', sequence };
+      op.confirmation = { kind: 'message-sent', sequence };
       op.state = 'confirmed';
     };
     let result: ChatResult;
@@ -140,7 +140,7 @@ export function mockChat(snapshot?: AgentSnapshot) {
         action.action === 'import-intent'
       ) {
         if (!(
-          action.action === 'import-intent' && receipts.has(action.source)
+          action.action === 'import-intent' && completionMarkers.has(action.source)
         )) {
           if (
             saved &&
@@ -156,7 +156,7 @@ export function mockChat(snapshot?: AgentSnapshot) {
             submission: action.submission,
             text: action.text,
           });
-          if (action.action === 'import-intent') receipts.add(action.source);
+          if (action.action === 'import-intent') completionMarkers.add(action.source);
         }
       } else if (action.action === 'clear-intent') {
         if (saved && saved.submission !== action.submission)
@@ -355,7 +355,7 @@ export function mockChat(snapshot?: AgentSnapshot) {
             ? 'create-channel'
             : 'send-message',
         state: 'prepared',
-        receipt: null,
+        confirmation: null,
         rejection_code: null,
       };
       team.operations.set(op.id, op);
@@ -400,13 +400,13 @@ export function mockChat(snapshot?: AgentSnapshot) {
           ?.find((m) => m.id === op.id);
         if (message) {
           op.state = 'confirmed';
-          op.receipt = { kind: 'message-sent', sequence: message.sequence };
+          op.confirmation = { kind: 'message-sent', sequence: message.sequence };
         } else if (
           op.kind === 'create-channel' &&
           team.channels.some((c) => c.id === op.channel)
         ) {
           op.state = 'confirmed';
-          op.receipt = { kind: 'channel-created' };
+          op.confirmation = { kind: 'channel-created' };
         }
       } else if (action.action === 'attempt' && op.state === 'prepared') {
         const input = [...team.submissions.values()].find(
@@ -414,7 +414,7 @@ export function mockChat(snapshot?: AgentSnapshot) {
         )!.input;
         const submitted = JSON.parse(input) as ChatAction;
         if (submitted.action === 'prepare-channel') {
-          op.receipt = { kind: 'channel-created' };
+          op.confirmation = { kind: 'channel-created' };
           team.channels.push({
             id: op.channel,
             name: submitted.name,

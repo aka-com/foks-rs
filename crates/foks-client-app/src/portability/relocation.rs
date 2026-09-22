@@ -16,7 +16,8 @@ use std::{
 };
 
 pub(crate) const INTENT: &str = "state-relocation-v1";
-pub(super) const RECEIPT: &str = "state-relocation-receipt-v1";
+// Persisted before the terminology cleanup; changing this key would lose crash recovery state.
+pub(super) const RELOCATION_COMPLETION_MARKER: &str = "state-relocation-receipt-v1";
 const MARKER: &str = ".state-relocation-v1";
 const MAX_RECORD: u64 = 32 * 1024;
 
@@ -101,7 +102,10 @@ fn content_digest(snapshot: &StateSnapshot) -> Result<[u8; 32]> {
     hash.update(b"foks-relocation-content-v1");
     hash.update(serde_json::to_vec(&snapshot.artifacts)?);
     for (key, value) in &snapshot.native.records {
-        if matches!(key.as_str(), crate::STATE_ROOT_RECORD | INTENT | RECEIPT) {
+        if matches!(
+            key.as_str(),
+            crate::STATE_ROOT_RECORD | INTENT | RELOCATION_COMPLETION_MARKER
+        ) {
             continue;
         }
         hash.update((key.len() as u64).to_be_bytes());
@@ -147,12 +151,12 @@ pub(super) fn inventory_keys(
     root: &Path,
 ) -> Result<Vec<String>> {
     let mut keys = Vec::new();
-    if let Some(receipt) = intent_in(manifest, RECEIPT)? {
-        receipt.validate(guard.namespace_id()?)?;
-        if receipt.phase != Phase::Verified {
+    if let Some(completion_marker) = intent_in(manifest, RELOCATION_COMPLETION_MARKER)? {
+        completion_marker.validate(guard.namespace_id()?)?;
+        if completion_marker.phase != Phase::Verified {
             return Err(Error::StateRecoveryRequired);
         }
-        keys.push(RECEIPT.into());
+        keys.push(RELOCATION_COMPLETION_MARKER.into());
     }
     if let Some(intent) = intent_in(manifest, INTENT)? {
         intent.validate(guard.namespace_id()?)?;
@@ -316,7 +320,7 @@ fn recover(
         let m =
             NativeManifestStore::decode(&native.get(crate::checkpoint::NATIVE_MANIFEST_RECORD)?)?;
         intent_in(&m, INTENT)?
-            .or(intent_in(&m, RECEIPT)?)
+            .or(intent_in(&m, RELOCATION_COMPLETION_MARKER)?)
             .ok_or(Error::StateRecoveryRequired)?
     };
     discovered.validate(&id)?;
@@ -334,7 +338,7 @@ fn recover(
         let active = intent_in(m, INTENT)?;
         let complete = active.is_none();
         let intent = active
-            .or(intent_in(m, RECEIPT)?)
+            .or(intent_in(m, RELOCATION_COMPLETION_MARKER)?)
             .ok_or(Error::StateRecoveryRequired)?;
         if intent.identity != discovered.identity {
             return Err(Error::StateRecoveryRequired);
@@ -505,16 +509,16 @@ fn finish(
     File::open(&intent.identity.destination)?.sync_all()?;
     hook("after-marker-remove-sync")?;
     hook("after-marker-remove")?;
-    hook("before-native-receipt")?;
+    hook("before-native-completion-marker")?;
     guard.with_native_manifest(|m| {
         if intent_in(m, INTENT)?.as_ref() != Some(&intent) {
             return Err(Error::StateRecoveryRequired);
         }
-        m.put(RECEIPT, &serde_json::to_vec(&intent)?)?;
+        m.put(RELOCATION_COMPLETION_MARKER, &serde_json::to_vec(&intent)?)?;
         m.remove(INTENT)?;
         Ok(())
     })?;
-    hook("after-native-receipt")?;
+    hook("after-native-completion-marker")?;
     hook("before-root-selection")?;
     super::selection::relocated(guard, &intent.identity.source, &intent.identity.destination)?;
     hook("after-root-selection")?;
@@ -648,7 +652,7 @@ pub fn relocation_status(path: impl AsRef<Path>) -> Result<Option<RelocationStat
     guard.with_native_manifest(|m| {
         let active = intent_in(m, INTENT)?;
         let required = active.is_some() || hint.is_some();
-        let Some(intent) = active.or(intent_in(m, RECEIPT)?) else {
+        let Some(intent) = active.or(intent_in(m, RELOCATION_COMPLETION_MARKER)?) else {
             return if required {
                 Err(Error::StateRecoveryRequired)
             } else {

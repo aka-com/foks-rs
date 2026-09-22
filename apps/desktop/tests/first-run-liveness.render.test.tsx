@@ -528,7 +528,7 @@ test('local-server retry probes again despite a stale failed connectivity snapsh
   );
 });
 
-test('a native receipt confirms a lost reply without replaying account creation', async () => {
+test('a native operation record confirms a lost reply without replaying account creation', async () => {
   const h = await harness();
   let mutations = 0;
   let attemptId: string | undefined;
@@ -821,7 +821,7 @@ for (const method of ['recovery', 'sso'] as const) {
       ui.fireEvent.change(rendered.view.getByLabelText('Your name'), {
         target: { value: 'personal' },
       });
-      ui.fireEvent.change(rendered.view.getByLabelText('Backup phrase'), {
+      ui.fireEvent.change(rendered.view.getByLabelText('Recovery phrase'), {
         target: { value: 'secret recovery phrase' },
       });
       ui.fireEvent.click(
@@ -1140,7 +1140,7 @@ test('keeps the missing-server warning separate from the go-back action', async 
   );
 });
 
-test('an unreadable receipt still probes pending operations and reports the receipt failure', async () => {
+test('an unreadable operation record still probes pending operations and reports the operation-record failure', async () => {
   const h = await harness();
   const absent = {
     ...h.complete,
@@ -1184,7 +1184,7 @@ test('an unreadable receipt still probes pending operations and reports the rece
   );
 });
 
-test('allows continuing with an existing account when a receipt cannot be read', async () => {
+test('allows continuing with an existing account when an operation record cannot be read', async () => {
   const h = await harness();
   let mutations = 0;
   const rendered = h.render(
@@ -1198,7 +1198,7 @@ test('allows continuing with an existing account when a receipt cannot be read',
         firstRunOperationStatus: async () => {
           throw {
             code: 'io',
-            message: 'The setup receipt could not be read.',
+            message: 'The setup operation record could not be read.',
             ambiguous: false,
             retryable: true,
             fatal: false,

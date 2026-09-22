@@ -52,7 +52,7 @@ impl Drop for PermissionToken {
     }
 }
 
-/// The remote-join receipt carried beside an opaque member-view token.
+/// The remote-join RSVP carried beside an opaque member-view token.
 ///
 /// The SQLite slice does not yet implement the upstream join-request inbox,
 /// but it preserves this exact v0.1.9 field so stored tokens remain wire

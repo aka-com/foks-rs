@@ -143,7 +143,7 @@ export interface ChatOperation {
   channel: string;
   kind: 'create-channel' | 'send-message';
   state: 'prepared' | 'uncertain' | 'confirmed' | 'rejected' | 'cancelled';
-  receipt:
+  confirmation:
     | { kind: 'channel-created' }
     | { kind: 'message-sent'; sequence: string }
     | null;
@@ -279,7 +279,7 @@ function operation(value: unknown): ChatOperation {
     'channel',
     'kind',
     'state',
-    'receipt',
+    'confirmation',
     'rejection_code',
   ]);
   const state = text(v.state);
@@ -297,7 +297,7 @@ function operation(value: unknown): ChatOperation {
         ? v.kind
         : fail(),
     state: state as ChatOperation['state'],
-    receipt: operationReceipt(v.receipt),
+    confirmation: operationConfirmation(v.confirmation),
     rejection_code:
       v.rejection_code === null
         ? null
@@ -308,15 +308,15 @@ function operation(value: unknown): ChatOperation {
   };
   if (
     (state === 'rejected') !== (op.rejection_code !== null) ||
-    (state === 'confirmed') !== (op.receipt !== null) ||
-    (op.receipt !== null &&
+    (state === 'confirmed') !== (op.confirmation !== null) ||
+    (op.confirmation !== null &&
       (op.kind === 'create-channel') !==
-        (op.receipt.kind === 'channel-created'))
+        (op.confirmation.kind === 'channel-created'))
   )
     return fail();
   return op;
 }
-function operationReceipt(value: unknown): ChatOperation['receipt'] {
+function operationConfirmation(value: unknown): ChatOperation['confirmation'] {
   if (value === null) return null;
   if (typeof value !== 'object' || !value) return fail();
   const kind = (value as Record<string, unknown>).kind;

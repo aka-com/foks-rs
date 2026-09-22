@@ -31,7 +31,7 @@ transport before the TCP buffering fix; those smoke results are not acceptance.
 
 Foreground mutations use prepare/attempt/finalize through production scheduling.
 The generator uses a verified team key, authenticated Basic `Send`, encrypted
-synthetic text, and confirmed per-channel predecessor receipts. Its connection
+synthetic text, and confirmed per-channel predecessor confirmations. Its connection
 opens lazily after fixture setup. One channel is reserved for foreground writes;
 incoming traffic rotates through the remaining channels (or channel 1 for backlog).
 The receiver uses production `ChatInboxService`, `NotificationConsumer`, scheduling,
@@ -103,7 +103,7 @@ baseline or its `--compare` mode.
   through completion. `execution` separates native execution by request class;
   `queueWait` measures explicit admission wait. `scheduler` includes all observed
   serialized outcomes, separately for foreground/background in the current scheduler.
-- `confirmedSends` counts measured incoming sends with an actual server receipt,
+- `confirmedSends` counts measured incoming sends with a server ChatSendReceipt,
   including late completions. `discoveredCandidates` matches verified candidates
   against those IDs by the drain deadline. `undiscoveredSends` stays in the result;
   candidate-delay percentiles describe discovered messages only. Disabled arms are

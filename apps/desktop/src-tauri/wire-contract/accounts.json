@@ -5,7 +5,7 @@
     "alias": "personal",
     "username": "vitalik"
   },
-  "backupPhrase": {
+  "recoveryPhrase": {
     "backupAlias": "paper",
     "phrase": "abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon"
   },

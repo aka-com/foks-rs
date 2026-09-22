@@ -35,7 +35,7 @@ fn size(table: &str, synthetic: bool) -> usize {
         "sso_sessions" => 1000,
         "log_sends" => 128,
         "team_view_tokens" | "team_view_challenges" | "team_admin_tokens" => 16_384,
-        // Names and receipts have no matching global admission cap; 4096 is a
+        // Names and idempotency records have no matching global admission cap; 4096 is a
         // representative comparison size, not a claim about their limits.
         _ => 4096,
     }

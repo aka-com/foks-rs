@@ -882,7 +882,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
     [
       'Use the FOKS CLI to link this as a new devicePair the desktop app with foks --simple-ui key assist in Terminal.',
       'Import this device’s FOKS CLI credentialsCopy your device credentials from the FOKS CLI. This may require a Keychain prompt.',
-      'Recover with backup phraseEnter your backup phrase to restore full access on this device.',
+      'Recover with recovery phraseEnter your recovery phrase to restore full access on this device.',
     ],
   );
   const pairMethod = ui.within(methods).getByRole('radio', {
@@ -912,7 +912,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
     '3Account and device',
   );
   assert.ok(view.getByLabelText('Your name'));
-  assert.equal(view.queryByLabelText('Backup phrase'), null);
+  assert.equal(view.queryByLabelText('Recovery phrase'), null);
   assert.ok(
     view.getByText(
       'Both apps will share the same device credentials. Revoking the device in either client will disable both.',
@@ -921,14 +921,14 @@ test('first-run account navigation, server edits, and connection errors stay sco
   ui.fireEvent.click(view.getByRole('button', { name: 'Import credentials' }));
   await view.findByText('Copy failed');
   ui.fireEvent.click(
-    view.getByRole('radio', { name: /Recover with backup phrase/ }),
+    view.getByRole('radio', { name: /Recover with recovery phrase/ }),
   );
   assert.equal(view.queryByText('Copy failed'), null);
   assert.equal(
     view.queryByRole('button', { name: 'Import credentials' }),
     null,
   );
-  ui.fireEvent.change(view.getByLabelText('Backup phrase'), {
+  ui.fireEvent.change(view.getByLabelText('Recovery phrase'), {
     target: { value: 'one two three' },
   });
   ui.fireEvent.click(view.getByRole('button', { name: 'Recover' }));
@@ -1116,14 +1116,14 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
       }),
     ),
   );
-  await rendered.findByText('Recover with backup phrase');
+  await rendered.findByText('Recover with recovery phrase');
   await rendered.findByText('Import this device’s FOKS CLI credentials');
   rendered.getByText('Use the FOKS CLI to link this as a new device');
   assert.equal(scans, 1);
   // The account rows follow the method choice.
   assert.equal(rendered.queryByLabelText('Your name'), null);
   ui.fireEvent.click(
-    rendered.getByRole('radio', { name: /Recover with backup phrase/ }),
+    rendered.getByRole('radio', { name: /Recover with recovery phrase/ }),
   );
   assert.equal(
     (rendered.getByLabelText('Your name') as HTMLInputElement).value,

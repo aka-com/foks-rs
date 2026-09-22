@@ -10,7 +10,7 @@ export interface RetainedSetup {
   readonly checkpoint: FirstRunCheckpoint;
 }
 
-/** Nonsecret references to native receipts/agent operations, not execution authority. */
+/** Nonsecret references to native operation records and agent operations, not execution authority. */
 export function retainedSetups(): RetainedSetup[] {
   const raw = window.localStorage.getItem(KEY);
   if (!raw) return [];

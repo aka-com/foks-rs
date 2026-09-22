@@ -54,8 +54,8 @@ pub struct IdentityClaim {
     pub host: EntityId,
     pub uid: EntityId,
     pub signer: EntityId,
-    /// None requests account status; Some requests an exact committed binding receipt.
-    pub receipt_commitment: Option<[u8; 32]>,
+    /// None requests account status; Some requests an exact committed authorization binding.
+    pub authorization_binding_commitment: Option<[u8; 32]>,
 }
 impl IdentityClaim {
     pub fn encoded(&self) -> Result<Vec<u8>> {
@@ -64,9 +64,9 @@ impl IdentityClaim {
             Value::Binary(self.host.as_bytes().to_vec()),
             Value::Binary(self.uid.as_bytes().to_vec()),
             Value::Binary(self.signer.as_bytes().to_vec()),
-            Value::Unsigned(u64::from(self.receipt_commitment.is_some())),
+            Value::Unsigned(u64::from(self.authorization_binding_commitment.is_some())),
             Value::Binary(
-                self.receipt_commitment
+                self.authorization_binding_commitment
                     .map_or_else(Vec::new, |v| v.to_vec()),
             ),
         ]))
@@ -78,16 +78,16 @@ impl IdentityClaim {
         if unsigned(&f[0])? != 1 {
             return Err(Error::Invalid("identity extension version"));
         }
-        let receipt_commitment = match unsigned(&f[4])? {
+        let authorization_binding_commitment = match unsigned(&f[4])? {
             0 if binary(&f[5])?.is_empty() => None,
-            1 => Some(fixed_blob(&f[5], "receipt commitment")?),
+            1 => Some(fixed_blob(&f[5], "authorization binding commitment")?),
             _ => return Err(Error::Invalid("identity action")),
         };
         Ok(Self {
             host: entity(&f[1])?.require_type(ENTITY_HOST)?,
             uid: entity(&f[2])?.require_type(ENTITY_USER)?,
             signer: entity(&f[3])?,
-            receipt_commitment,
+            authorization_binding_commitment,
         })
     }
 }
@@ -156,7 +156,7 @@ pub struct IdentityStatus {
     pub authorization_generation: u64,
     pub access_available: bool,
     /// A retained exact commitment proves success; absence means evidence unavailable.
-    pub committed_receipt: Option<[u8; 32]>,
+    pub committed_authorization_binding: Option<[u8; 32]>,
 }
 impl IdentityStatus {
     pub fn encoded(&self) -> Result<Vec<u8>> {
@@ -171,7 +171,10 @@ impl IdentityStatus {
             Value::Unsigned(self.authorization_epoch),
             Value::Unsigned(self.authorization_generation),
             Value::Bool(self.access_available),
-            Value::Binary(self.committed_receipt.map_or_else(Vec::new, |v| v.to_vec())),
+            Value::Binary(
+                self.committed_authorization_binding
+                    .map_or_else(Vec::new, |v| v.to_vec()),
+            ),
         ]))
         .map_err(Into::into)
     }
@@ -199,16 +202,16 @@ impl IdentityStatus {
             authorization_epoch: unsigned(&f[7])?,
             authorization_generation: unsigned(&f[8])?,
             access_available: crate::boolean(&f[9])?,
-            committed_receipt: if binary(&f[10])?.is_empty() {
+            committed_authorization_binding: if binary(&f[10])?.is_empty() {
                 None
             } else {
-                Some(fixed_blob(&f[10], "receipt commitment")?)
+                Some(fixed_blob(&f[10], "authorization binding commitment")?)
             },
         })
     }
 }
 
-/// Safe local UI projection, independent of the proof nonce and receipt commitment.
+/// Safe local UI projection, independent of the proof nonce and authorization binding commitment.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SsoAccountStatusView {

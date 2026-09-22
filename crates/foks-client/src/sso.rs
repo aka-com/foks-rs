@@ -204,7 +204,7 @@ impl FoksClient {
         ) {
             erase_flow_payload(store, &id)?;
         }
-        // Expired uncertain login attempts retain an honest receipt, not reusable tokens.
+        // Expired uncertain login attempts retain an honest authorization binding, not reusable tokens.
         // Signup's final mutation owns its separate recovery payload.
         if flow.expires_at_ms <= crate::now_milliseconds()?
             && flow.final_operation.is_none()

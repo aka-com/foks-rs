@@ -348,7 +348,7 @@ export class ChannelCreationController {
     // Only a settled attempt retires the submission: until then it is what a
     // recovery re-issues.
     if (operation.state === 'confirmed') {
-      if (operation.receipt?.kind !== 'channel-created') throw integrity();
+      if (operation.confirmation?.kind !== 'channel-created') throw integrity();
       record.state = 'confirmed';
       record.error = '';
       record.submission = undefined;

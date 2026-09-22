@@ -275,7 +275,7 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
     false,
     false,
     { label: '2', description: '2 requests to join a team' },
-    { description: 'An account has no paper key' },
+    { description: 'An account has no recovery phrase' },
     { description: 'foks.partner.dev: not verified' },
   );
   const [, , teamsTab, devicesTab, settingsTab] = tabs();
@@ -293,7 +293,7 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
   assert.ok(devicesDot.classList.contains('warn'));
   assert.equal(
     devicesDot.getAttribute('aria-label'),
-    'An account has no paper key',
+    'An account has no recovery phrase',
   );
   const settingsDot = settingsTab.querySelector('.rail-tail.dot');
   assert.ok(settingsDot, 'Settings carries its dot');
@@ -312,7 +312,7 @@ test('renders a Teams count, Devices and Settings dots, and no empty indicators'
     true,
     false,
     { label: '2', description: '2 requests to join a team' },
-    { description: 'An account has no paper key' },
+    { description: 'An account has no recovery phrase' },
     { description: 'foks.partner.dev: not verified' },
   );
   assert.ok(document.querySelector('.side.rail.is-narrow .rail-tail.count'));

@@ -21,11 +21,11 @@ import type { FoksIconName } from '../icons';
 export interface DeviceLists {
   /** Per account: the devices this account is authenticated on. */
   devices: AccountDevice[];
-  /** Per account: the paper-key enrollments this Mac holds for it. */
+  /** Per account: the recovery-phrase enrollments this Mac holds for it. */
   backups: BackupEnrollment[];
   /**
-   * Indicates that `backups` is empty because paper-key data was unavailable,
-   * rather than because the account has no paper keys.
+   * Indicates that `backups` is empty because recovery-phrase data was unavailable,
+   * rather than because the account has no recovery phrases.
    */
   backupsUnavailable?: true;
   /** Per profile: the card enrollments on that server, on any account. */
@@ -50,7 +50,7 @@ export const NO_DEVICES: DeviceLists = {
  * an "enrollment".
  */
 export type DeviceKind =
-  'Computer' | 'Paper key' | 'Key on a card' | 'Enrollment';
+  'Computer' | 'Recovery phrase' | 'Key on a card' | 'Enrollment';
 
 /** Which list a row came from, and the record it stands for. */
 export type DeviceSource =
@@ -119,7 +119,7 @@ function backupEntry(backup: BackupEnrollment): DeviceEntry {
   return {
     address: backup.backupId,
     name: backup.backupAlias,
-    kind: 'Paper key',
+    kind: 'Recovery phrase',
     keyId: backup.backupId,
     keyLabel: 'Backup id',
     icon: 'file',

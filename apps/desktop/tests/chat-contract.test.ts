@@ -46,7 +46,7 @@ test('submit operation replies bind the message kind and channel strictly', () =
     channel,
     kind: 'send-message',
     state: 'confirmed',
-    receipt: { kind: 'message-sent', sequence: '2' },
+    confirmation: { kind: 'message-sent', sequence: '2' },
     rejection_code: null,
   };
   const reply = {
@@ -60,7 +60,7 @@ test('submit operation replies bind the message kind and channel strictly', () =
   assert.deepEqual(decodeChatReply(reply, storeId, action), reply);
   for (const changed of [
     { channel: 'ef'.repeat(16) },
-    { kind: 'create-channel', receipt: { kind: 'channel-created' } },
+    { kind: 'create-channel', confirmation: { kind: 'channel-created' } },
   ])
     assert.throws(() =>
       decodeChatReply(

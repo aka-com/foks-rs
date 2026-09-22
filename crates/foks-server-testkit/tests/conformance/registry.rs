@@ -30,7 +30,7 @@ const COVERAGE: &[Coverage] = &[
     },
     Coverage {
         name: "oidc_identity",
-        run: crate::sso::migration_two_accounts_owner_proofs_late_link_and_erased_token_receipt,
+        run: crate::sso::migration_two_accounts_owner_proofs_late_link_and_erased_token_authorization_binding,
         routes: &[
             ("Identity", "fennecCapabilities"),
             ("Identity", "fennecChallenge"),

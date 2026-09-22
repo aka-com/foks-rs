@@ -48,17 +48,17 @@ without blind replay, and registers a federation reconciliation job. `team
 list-remote` reports the protected bindings; `jobs run-due` also handles their
 renewal. No command reads an AKA path or puts a bearer token in SQLite.
 
-Current hosted profiles require an Ed25519 canary public key and the stable
+Current hosted profiles require an Ed25519 compatibility artifact public key and the stable
 HTTPS URL polled by the agent:
 
 ```text
 foks-rs --state-dir /private/client profile add hosted foks.app:4430 \
   --generation current-probe-only \
-  --canary-public-key <64-lowercase-hex-characters> \
-  --canary-url https://github.com/OWNER/REPOSITORY/releases/download/foks-hosted-compat-current/foks-hosted-capabilities.json
+  --compatibility-artifact-public-key <64-lowercase-hex-characters> \
+  --compatibility-artifact-url https://github.com/OWNER/REPOSITORY/releases/download/foks-hosted-compat-current/foks-hosted-capabilities.json
 ```
 
-`profile apply-canary` remains available for an audited manual refresh. Both
+`profile apply-compatibility-artifact` remains available for an audited manual refresh. Both
 paths verify and persist the complete signed, expiring artifact. Grants require
 the exact embedded protocol-metadata digest and a monotonic generation; drift,
 metadata mismatch, and unknown capability artifacts revoke every non-probe

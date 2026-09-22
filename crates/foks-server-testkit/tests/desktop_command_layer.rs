@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use foks_agent_client::AgentClient;
 use foks_agent_proto::{Operation, ProfileProtocol, ProfileTrust, ResponseResult};
 use foks_client_app::{Capability, ProfileRegistry, ProtocolPolicy};
-use foks_compat_artifact::{CanaryArtifact, Outcome, SignedCanaryArtifact};
+use foks_compat_artifact::{CompatibilityArtifact, Outcome, SignedCompatibilityArtifact};
 use foks_desktop::{
     CatalogFailureScope, CatalogLoadToken, CatalogSnapshot, CatalogStoreReadState, CatalogStoreRef,
     KvItemValue,
@@ -20,8 +20,9 @@ use foks_server_testkit::TestEnvironment;
 
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
-const CANARY_PUBLIC_KEY: &str = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
-const CANARY_SIGNING_SEED: [u8; 32] = [
+const COMPATIBILITY_ARTIFACT_PUBLIC_KEY: &str =
+    "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+const COMPATIBILITY_ARTIFACT_SIGNING_SEED: [u8; 32] = [
     0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
     0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
 ];
@@ -280,7 +281,7 @@ fn process_reentry_and_real_kv_conflict_against_testkit() {
         .as_str()
         .expect("backup prepare returns a phrase");
     assert_eq!(phrase.split_whitespace().count(), 17);
-    let phrase_file = environment.root().join("owner-backup-phrase");
+    let phrase_file = environment.root().join("owner-recovery-phrase");
     private_file(&phrase_file, phrase.as_bytes());
     drop(prepared);
 
@@ -507,8 +508,9 @@ fn process_reentry_and_real_kv_conflict_against_testkit() {
             name: "lapsed".to_owned(),
             probe: probe.clone(),
             protocol: ProfileProtocol::CurrentProbeOnly {
-                canary_public_key: CANARY_PUBLIC_KEY.to_owned(),
-                lease_url: "https://updates.example.test/foks/canary.json".to_owned(),
+                compatibility_artifact_public_key: COMPATIBILITY_ARTIFACT_PUBLIC_KEY.to_owned(),
+                lease_url: "https://updates.example.test/foks/compatibility-artifact.json"
+                    .to_owned(),
             },
             trust: ProfileTrust::CertificateDer {
                 path: certificate.to_string_lossy().into_owned(),
@@ -518,8 +520,8 @@ fn process_reentry_and_real_kv_conflict_against_testkit() {
     assert!(matches!(added.result, ResponseResult::Success { .. }));
     let generated_at = unix_seconds();
     let expires_at = generated_at + 2;
-    let signed = SignedCanaryArtifact::sign(
-        CanaryArtifact {
+    let signed = SignedCompatibilityArtifact::sign(
+        CompatibilityArtifact {
             schema_version: foks_compat_artifact::SCHEMA_VERSION,
             generation: 1,
             target: probe.clone(),
@@ -533,12 +535,12 @@ fn process_reentry_and_real_kv_conflict_against_testkit() {
             capabilities: BTreeSet::from(["kv".to_owned()]),
             drift_reason: String::new(),
         },
-        &CANARY_SIGNING_SEED,
+        &COMPATIBILITY_ARTIFACT_SIGNING_SEED,
     )
     .unwrap();
     let mut registry = ProfileRegistry::open(&state).unwrap();
     let validated = registry
-        .apply_canary("lapsed", &signed, generated_at)
+        .apply_compatibility_artifact("lapsed", &signed, generated_at)
         .unwrap();
     assert!(matches!(
         &validated.protocol,
@@ -1028,8 +1030,8 @@ fn exercise_chat_submit(
 ) {
     use foks_agent_proto::{
         chat::{
-            ChatAction as A, ChatContent, ChatOperationKind, ChatReceipt, ChatResult as R,
-            ChatState,
+            ChatAction as A, ChatContent, ChatOperationConfirmation, ChatOperationKind,
+            ChatResult as R, ChatState,
         },
         SecretString,
     };
@@ -1080,8 +1082,8 @@ fn exercise_chat_submit(
         .find(|message| matches!(&message.content, ChatContent::Text { text } if text.expose() == fresh_text))
         .unwrap();
     assert_eq!(
-        fresh.receipt,
-        Some(ChatReceipt::MessageSent {
+        fresh.confirmation,
+        Some(ChatOperationConfirmation::MessageSent {
             sequence: fresh_message.sequence.clone(),
         })
     );
@@ -1101,7 +1103,7 @@ fn exercise_chat_submit(
     let prepared_text = "prepared submission requires explicit attempt";
     let prepared = operation(chat(prepare(&prepared_id, prepared_text)));
     assert_eq!(prepared.state, ChatState::Prepared);
-    assert_eq!(prepared.receipt, None);
+    assert_eq!(prepared.confirmation, None);
     assert_ne!(prepared.id, fresh.id);
     restart_agent();
     assert_eq!(operation(chat(fresh_action)), fresh);
@@ -1245,8 +1247,8 @@ fn exercise_chat_submit(
         .collect::<Vec<_>>();
     assert_eq!(lost_messages.len(), 1);
     assert_eq!(
-        recovered.receipt,
-        Some(ChatReceipt::MessageSent {
+        recovered.confirmation,
+        Some(ChatOperationConfirmation::MessageSent {
             sequence: lost_messages[0].sequence.clone(),
         })
     );
@@ -1312,7 +1314,7 @@ fn exercise_chat(
         },
     )
     else {
-        panic!("expected create receipt")
+        panic!("expected confirmed create operation")
     };
     assert_eq!(confirmed.state, ChatState::Confirmed);
     let R::Channels { channels, .. } = chat(&owner, A::Channels) else {
@@ -1415,19 +1417,24 @@ fn exercise_chat(
         );
         let other = if index == 0 { &guest } else { &owner };
         assert!(foks_desktop::chat_request(&client, other.clone(), body_action.clone()).is_err());
-        let R::Operation { operation: receipt } = chat(
+        let R::Operation {
+            operation: confirmed,
+        } = chat(
             actor,
             A::Attempt {
                 operation: prepared.id.clone(),
             },
-        ) else {
-            panic!("expected receipt")
+        )
+        else {
+            panic!("expected confirmed operation")
         };
         assert_eq!(
-            receipt.receipt,
-            Some(foks_agent_proto::chat::ChatReceipt::MessageSent {
-                sequence: (index + 1).to_string()
-            })
+            confirmed.confirmation,
+            Some(
+                foks_agent_proto::chat::ChatOperationConfirmation::MessageSent {
+                    sequence: (index + 1).to_string()
+                }
+            )
         );
         assert!(matches!(
             chat(actor, body_action),
@@ -1436,16 +1443,16 @@ fn exercise_chat(
         let R::Operation { operation: replay } = chat(actor, action) else {
             panic!("expected replay")
         };
-        assert_eq!(replay, receipt);
+        assert_eq!(replay, confirmed);
         let retry = foks_desktop::chat_request(
             &AgentClient::new(socket),
             actor.clone(),
             A::Attempt {
-                operation: receipt.id.clone(),
+                operation: confirmed.id.clone(),
             },
         )
         .unwrap();
-        assert!(matches!(retry.result, R::Operation { operation } if operation == receipt));
+        assert!(matches!(retry.result, R::Operation { operation } if operation == confirmed));
     }
     for actor in [&owner, &guest] {
         let R::History { messages, .. } = chat(
@@ -1486,7 +1493,7 @@ fn exercise_chat(
         },
     )
     else {
-        panic!("expected read receipt")
+        panic!("expected read confirmation")
     };
     assert_eq!(read_channel, channel);
     assert_eq!(sequence, "2");
@@ -1538,7 +1545,7 @@ fn exercise_chat(
             operation: prepared.id,
         },
     ) else {
-        panic!("expected poll-wake receipt")
+        panic!("expected poll-wake confirmation")
     };
     let R::Poll {
         bumped,

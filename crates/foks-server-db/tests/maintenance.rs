@@ -106,7 +106,7 @@ fn maintenance_reclaims_only_expired_or_abandoned_state() {
     assert_eq!(report.locks, 0);
     assert_eq!(report.uploads, 2);
     assert_eq!(report.log_sends, 1);
-    assert_eq!(report.receipts, 0);
+    assert_eq!(report.idempotency_records, 0);
     assert_eq!(report.challenges, 0);
     assert_eq!(report.team_reservations, 0);
     assert_eq!(report.team_view_challenges, 0);

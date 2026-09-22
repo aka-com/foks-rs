@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn invitation_boundary_rejects_capabilities_and_nested_overflow() {
         assert!(decode(serde_json::json!({"permission":[1,2,3]})).is_err());
-        assert!(decode(serde_json::json!({"rows":[{"receipt":[1,2,3]}]})).is_err());
+        assert!(decode(serde_json::json!({"rows":[{"rsvp":[1,2,3]}]})).is_err());
         assert!(decode(serde_json::json!({"rows":[{"rows":[]}]})).is_ok());
         assert!(decode(serde_json::json!({"rows":[{"rows":[{"state":"pending"}]}]})).is_err());
         assert!(decode(

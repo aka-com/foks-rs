@@ -1,6 +1,6 @@
 //! Agent-owned pending submissions. Callers hold a state-use lease and, for
 //! profile access, a checked session before taking the root-wide ledger lock.
-//! One encrypted envelope atomically publishes an import and its receipt.
+//! One encrypted envelope atomically publishes an import and its completion marker.
 use crate::{Error, LocalChatIntent, Result};
 use foks_keystore::{EncryptedFileSecretStore, SecretStore};
 use fs2::FileExt as _;
@@ -13,7 +13,7 @@ pub(crate) const DIRECTORY: &str = "chat-intents";
 pub(crate) const LOCK: &str = ".chat-intents.lock";
 const MAX_PENDING: usize = 128;
 const MAX_TEXT: usize = 8 * 1024 * 1024;
-const MAX_RECEIPTS: usize = 4096;
+const MAX_COMPLETION_MARKERS: usize = 4096;
 const MAX_ENVELOPE: u64 = 16 * 1024 * 1024 + 128;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -59,7 +59,7 @@ struct Pending {
     intent: LocalChatIntent,
 }
 // Base64 bounds JSON expansion even for control characters: all 128 maximum
-// desktop messages (8 MiB) plus receipts fit the encrypted store's 16 MiB cap.
+// desktop messages (8 MiB) plus completion_markers fit the encrypted store's 16 MiB cap.
 mod stored_intent {
     use super::*;
     use base64::Engine as _;
@@ -106,7 +106,7 @@ mod stored_intent {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Receipt {
+struct ImportCompletionMarker {
     source: String,
     binding: PendingChatBinding,
     commitment: String,
@@ -116,14 +116,15 @@ struct Receipt {
 struct Envelope {
     version: u32,
     pending: Vec<Pending>,
-    receipts: Vec<Receipt>,
+    #[serde(alias = "receipts")]
+    completion_markers: Vec<ImportCompletionMarker>,
 }
 impl Default for Envelope {
     fn default() -> Self {
         Self {
             version: 1,
             pending: Vec::new(),
-            receipts: Vec::new(),
+            completion_markers: Vec::new(),
         }
     }
 }
@@ -131,7 +132,7 @@ impl Envelope {
     fn validate(&self) -> Result<()> {
         if self.version != 1
             || self.pending.len() > MAX_PENDING
-            || self.receipts.len() > MAX_RECEIPTS
+            || self.completion_markers.len() > MAX_COMPLETION_MARKERS
         {
             return Err(invalid());
         }
@@ -147,7 +148,7 @@ impl Envelope {
             }
         }
         let mut sources = BTreeSet::new();
-        for r in &self.receipts {
+        for r in &self.completion_markers {
             r.binding.validate()?;
             if r.source.len() != 64
                 || !hex(&r.source)
@@ -366,27 +367,34 @@ impl PendingChatStore {
         use sha2::{Digest as _, Sha256};
         let input = Zeroizing::new(serde_json::to_vec(&(source, binding, intent))?);
         let commitment = crate::hex(&Sha256::digest(&input));
-        if let Some(receipt) = self.envelope.receipts.iter().find(|r| r.source == source) {
-            if &receipt.binding != binding || receipt.commitment != commitment {
+        if let Some(completion_marker) = self
+            .envelope
+            .completion_markers
+            .iter()
+            .find(|marker| marker.source == source)
+        {
+            if &completion_marker.binding != binding || completion_marker.commitment != commitment {
                 return Err(invalid());
             }
             // A prior rename may have succeeded before directory sync failed.
             // Republish durably before permitting deletion of the only source.
             return self.persist();
         }
-        if self.envelope.receipts.len() >= MAX_RECEIPTS {
+        if self.envelope.completion_markers.len() >= MAX_COMPLETION_MARKERS {
             return Err(Error::InvalidConfig(
-                "saved message migration receipt capacity reached; legacy messages remain intact",
+                "saved message migration completion marker capacity reached; legacy messages remain intact",
             ));
         }
         self.insert(profile, binding, intent)?;
-        self.envelope.receipts.push(Receipt {
-            source: source.into(),
-            binding: binding.clone(),
-            commitment,
-        });
-        // Receipt and pending body become visible together. Clearing the body
-        // never clears the receipt, even after profile removal or archive import.
+        self.envelope
+            .completion_markers
+            .push(ImportCompletionMarker {
+                source: source.into(),
+                binding: binding.clone(),
+                commitment,
+            });
+        // The completion marker and pending body become visible together. Clearing the body
+        // never clears the marker, even after profile removal or archive import.
         self.persist()
     }
     pub(crate) fn profile_summary(
@@ -432,7 +440,7 @@ impl PendingChatStore {
     }
 }
 /// Maintenance already owns the exclusive state lease; never acquire a second
-/// credential/state lease here. Receipts remain portable after bodies are cleared.
+/// credential/state lease here. Completion markers remain portable after bodies are cleared.
 pub(crate) fn inspect(root: &Path, master: &[u8; 32]) -> Result<Vec<String>> {
     let directory = root.join(DIRECTORY);
     inspect_directory(&directory)?;
@@ -499,7 +507,7 @@ mod tests {
             .any(|w| w == intent().text.as_bytes()));
     }
     #[test]
-    fn migration_receipt_survives_consumption_profile_removal_and_rekey() {
+    fn migration_completion_marker_survives_consumption_profile_removal_and_rekey() {
         let temporary = tempfile::tempdir().unwrap();
         let root = crate::prepare_private_directory(&temporary.path().join("state")).unwrap();
         let key = [42; 32];

@@ -31,13 +31,13 @@ impl FoksClient {
             .authenticate_credential_and_pin(host, credential)?
             .verified;
         let mut store = HardStateStore::open(&host.database_path)?;
-        for receipt in store.expired_username_change_receipts(
+        for completion_record in store.expired_username_change_completion_records(
             host.host_id().as_bytes(),
             credential.uid().as_bytes(),
             now_microseconds()?.saturating_sub(30 * 24 * 60 * 60 * 1_000_000),
         )? {
-            crate::mutation::remove_terminal_request(protected, &receipt.material_ref)?;
-            store.delete_username_change_receipt(&receipt.operation_id)?;
+            crate::mutation::remove_terminal_request(protected, &completion_record.material_ref)?;
+            store.delete_username_change_completion_record(&completion_record.operation_id)?;
         }
         if user.username_utf8() == username.as_bytes() {
             return Err(Error::AccountRequest("username is unchanged"));

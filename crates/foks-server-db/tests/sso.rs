@@ -338,7 +338,7 @@ fn first_link_is_create_only_atomic_and_available_after_enforcement() {
     );
 }
 #[test]
-fn revoked_or_nonowner_first_link_does_not_consume_flow_or_receipt_capacity() {
+fn revoked_or_nonowner_first_link_does_not_consume_flow_or_authorization_binding_capacity() {
     let mut fixture = common::TestDatabase::new();
     fixture.reserve(1_000_000);
     fixture.commit(None).unwrap();
@@ -379,7 +379,7 @@ fn revoked_or_nonowner_first_link_does_not_consume_flow_or_receipt_capacity() {
     }
 }
 #[test]
-fn receipt_capacity_is_committed_only_and_exact_repeat_succeeds_when_full() {
+fn authorization_binding_capacity_is_committed_only_and_exact_repeat_succeeds_when_full() {
     let mut fixture = common::TestDatabase::new();
     fixture.reserve(1_000_000);
     fixture.commit(None).unwrap();
@@ -458,7 +458,7 @@ fn identity_proof_is_one_use_host_bound_and_survives_provider_blocking() {
         host: foks_proto::EntityId::from_bytes(vec![2; 33]).unwrap(),
         uid: foks_proto::EntityId::from_bytes(vec![1; 33]).unwrap(),
         signer,
-        receipt_commitment: None,
+        authorization_binding_commitment: None,
     };
     let ch = db
         .sso_issue_identity_challenge(&claim, [1; 32], [1; 32], 100)
@@ -466,7 +466,7 @@ fn identity_proof_is_one_use_host_bound_and_survives_provider_blocking() {
     let proof = foks_crypto::sign_identity_proof(&seed, ch).unwrap();
     assert!(db.sso_prove_identity(&[3; 33], &proof, 101).is_err());
     let mut tampered = proof.clone();
-    tampered.challenge.claim.receipt_commitment = Some([1; 32]);
+    tampered.challenge.claim.authorization_binding_commitment = Some([1; 32]);
     assert!(db.sso_prove_identity(&[2; 33], &tampered, 101).is_err());
     db.sso_disable_policy().unwrap();
     let status = db.sso_prove_identity(&[2; 33], &proof, 101).unwrap();
@@ -492,7 +492,7 @@ fn identity_challenge_quota_depends_on_source_not_claimed_account() {
         host: foks_proto::EntityId::from_bytes(vec![2; 33]).unwrap(),
         uid: foks_proto::EntityId::from_bytes(vec![1; 33]).unwrap(),
         signer: foks_proto::EntityId::from_bytes(vec![4; 33]).unwrap(),
-        receipt_commitment: None,
+        authorization_binding_commitment: None,
     };
     for n in 1..=8 {
         let mut uid = vec![n; 33];

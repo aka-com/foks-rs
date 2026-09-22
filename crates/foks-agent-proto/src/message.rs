@@ -484,7 +484,7 @@ pub enum CredentialBackend {
 pub enum ProfileProtocol {
     V019,
     CurrentProbeOnly {
-        canary_public_key: String,
+        compatibility_artifact_public_key: String,
         lease_url: String,
     },
 }

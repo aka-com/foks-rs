@@ -39,7 +39,7 @@ import type {
 import type {
   AccountDevice,
   BackupEnrollment,
-  BackupPhraseResponse,
+  RecoveryPhraseResponse,
   BackupRevocation,
   DeviceProvision,
   FirstRunAccountRequest,
@@ -275,7 +275,7 @@ export interface Bridge {
     profile: string,
     accountAlias: string,
     backupAlias: string,
-  ): Promise<BackupPhraseResponse>;
+  ): Promise<RecoveryPhraseResponse>;
   commitOwnerBackup(
     profile: string,
     accountAlias: string,

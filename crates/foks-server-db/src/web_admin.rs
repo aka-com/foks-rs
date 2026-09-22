@@ -198,12 +198,12 @@ fn load(c: &Connection, hash: &[u8; 32], session: bool) -> Result<WebSessionAuth
         })
     })
     .optional()?
-    .ok_or(Error::ReceiptExpired)
+    .ok_or(Error::OperationExpired)
 }
 fn authorize(c: &Connection, a: &WebSessionAuthorization, now: AdminMoment) -> Result<WebContext> {
     if !a.usable || a.epoch != now.epoch || a.expires <= now.utc_us || a.deadline <= now.elapsed_us
     {
-        return Err(Error::ReceiptExpired);
+        return Err(Error::OperationExpired);
     }
     let (host_name, username, authorization_binding) = credential(c, &a.credential, now)?;
     if authorization_binding != a.authorization_binding {
@@ -306,7 +306,7 @@ fn confirmation(
         |r| Ok((r.get(0)?, r.get(1)?)),
     )
     .optional()?
-    .ok_or(Error::ReceiptExpired)
+    .ok_or(Error::OperationExpired)
 }
 
 mod cleanup;

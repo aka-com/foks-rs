@@ -33,13 +33,13 @@ pub(super) fn dispatch(service: &WebAdminService, input: Input) -> Result<Respon
         let pending = input
             .pending
             .as_ref()
-            .ok_or(Error::Database(foks_server_db::Error::ReceiptExpired))?;
+            .ok_or(Error::Database(foks_server_db::Error::OperationExpired))?;
         let binding = hash(PENDING_DOMAIN, &**pending);
         if !input.post {
             if let Some(existing) = &input.session {
                 let h = hash(SESSION_DOMAIN, &**existing);
                 if service.read(|db, now| db.web_context(&h, now)).is_ok() {
-                    return Err(Error::Database(foks_server_db::Error::ReceiptConflict));
+                    return Err(Error::Database(foks_server_db::Error::OperationConflict));
                 }
             }
             let ctx = service.read(|db, now| db.web_confirmation(&binding, now))?;
@@ -85,7 +85,7 @@ pub(super) fn dispatch(service: &WebAdminService, input: Input) -> Result<Respon
                     })?;
                 }
                 Err(Error::Database(
-                    foks_server_db::Error::ReceiptExpired
+                    foks_server_db::Error::OperationExpired
                     | foks_server_db::Error::AuthorizationChanged,
                 )) => {}
                 Err(e) => return Err(e),
@@ -98,7 +98,7 @@ pub(super) fn dispatch(service: &WebAdminService, input: Input) -> Result<Respon
     let raw = input
         .session
         .as_ref()
-        .ok_or(Error::Database(foks_server_db::Error::ReceiptExpired))?;
+        .ok_or(Error::Database(foks_server_db::Error::OperationExpired))?;
     let session_hash = hash(SESSION_DOMAIN, &**raw);
     let csrf = Zeroizing::new(hex(&hash(SESSION_CSRF_DOMAIN, &**raw)));
     if !input.post {

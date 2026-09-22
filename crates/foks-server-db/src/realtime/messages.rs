@@ -1,4 +1,4 @@
-//! Immutable message append, exact receipts and bounded history queries.
+//! Immutable message append, exact send confirmations, and bounded history queries.
 use super::*;
 
 impl Database {
@@ -7,7 +7,7 @@ impl Database {
         actor: &RealtimeActor,
         arg: &RtSendArgument,
         now: u64,
-    ) -> Result<RealtimeCommit<RtSendResult>> {
+    ) -> Result<RealtimeCommit<ChatSendReceipt>> {
         proto(arg.validate())?;
         let send = &arg.send;
         let RtMessageWrapper::Encrypted(boxed) = &send.wrapper else {
@@ -51,10 +51,10 @@ impl Database {
         let existing=tx.query_row("SELECT channel_id,sender,envelope,sequence,insert_time FROM rt_messages WHERE message_id=?1",params![send.metadata.id.0.as_slice()],|r|Ok((r.get::<_,Vec<u8>>(0)?,r.get::<_,Vec<u8>>(1)?,r.get::<_,Vec<u8>>(2)?,r.get::<_,i64>(3)?,r.get::<_,i64>(4)?))).optional()?;
         if let Some((channel, sender, old, sequence, insert_time)) = existing {
             if channel != id || sender != actor.uid || old != envelope {
-                return Err(Error::ReceiptConflict);
+                return Err(Error::OperationConflict);
             }
             return Ok(RealtimeCommit {
-                value: RtSendResult {
+                value: ChatSendReceipt {
                     sequence: crate::error::unsigned(sequence)?,
                     insert_time: crate::error::unsigned(insert_time)?,
                 },
@@ -121,7 +121,7 @@ impl Database {
         let wake = stamp(&tx, actor, &md, sequence)?;
         tx.commit()?;
         Ok(RealtimeCommit {
-            value: RtSendResult {
+            value: ChatSendReceipt {
                 sequence,
                 insert_time,
             },

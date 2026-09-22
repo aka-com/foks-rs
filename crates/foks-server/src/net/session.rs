@@ -192,7 +192,7 @@ impl ServerData {
         principal: &Principal,
         decoded: crate::identity::mutation::Argument,
     ) -> std::result::Result<(), RpcStatus> {
-        const RECEIPT_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
+        const IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
         let reader = self.read_database()?;
         let exact_link = decoded.link().encoded().map_err(bad_arguments)?;
         let submitted_change = decoded
@@ -204,15 +204,15 @@ impl ServerData {
             foks_crypto::prefixed_hash_signable(foks_proto::LINK_OUTER_TYPE_ID, &exact_link)
                 .map_err(bad_arguments)?;
         let request_hash = foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, argument);
-        let receipt_now = self
+        let idempotency_now = self
             .clock
             .now_micros()
             .map_err(|_| RpcStatus::TransactionRetry)?;
-        match reader.request_receipt(&idempotency_key, &request_hash, receipt_now) {
-            Ok(Some(receipt)) if receipt.response.is_empty() => return Ok(()),
+        match reader.idempotency_record(&idempotency_key, &request_hash, idempotency_now) {
+            Ok(Some(idempotency_record)) if idempotency_record.response.is_empty() => return Ok(()),
             Ok(Some(_)) => return Err(RpcStatus::TransactionRetry),
             Ok(None) => {}
-            Err(foks_server_db::Error::ReceiptConflict) => {
+            Err(foks_server_db::Error::OperationConflict) => {
                 return Err(bad_arguments("user mutation retry binding failed"));
             }
             Err(_) => return Err(RpcStatus::TransactionRetry),
@@ -230,9 +230,11 @@ impl ServerData {
         let signer = identity.device_id.clone();
         let result = writer.call(move |database| {
             let now = clock.now_micros()?;
-            let receipt_expires_at = now
-                .checked_add(RECEIPT_LIFETIME_MICROSECONDS)
-                .ok_or(crate::Error::Signup("user mutation receipt expiry"))?;
+            let idempotency_expires_at = now
+                .checked_add(IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS)
+                .ok_or(crate::Error::Signup(
+                    "user mutation idempotency_record expiry",
+                ))?;
             let authority = database
                 .user_authority(&uid)?
                 .ok_or(crate::Error::Signup("user mutation authority missing"))?;
@@ -493,7 +495,7 @@ impl ServerData {
                 request_hash: &request_hash,
                 response: &[],
                 now,
-                receipt_expires_at,
+                idempotency_expires_at,
             })?;
             Ok(())
         });
@@ -511,7 +513,7 @@ impl ServerData {
             Err(crate::Error::Database(foks_server_db::Error::QuotaExceeded)) => {
                 Err(RpcStatus::QuotaExceeded)
             }
-            Err(crate::Error::Database(foks_server_db::Error::ReceiptConflict)) => {
+            Err(crate::Error::Database(foks_server_db::Error::OperationConflict)) => {
                 Err(bad_arguments("user mutation retry binding failed"))
             }
             Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
@@ -576,7 +578,7 @@ impl ServerData {
     }
 
     fn signup(&self, argument: &[u8]) -> std::result::Result<(), RpcStatus> {
-        const RECEIPT_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
+        const IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
         const SIGNUP_REQUEST_HASH_TYPE_ID: u64 = 0x8f4b_8ab7_464f_4b53;
 
         let request = DecodedSignupArgument::decode(argument).map_err(bad_arguments)?;
@@ -595,15 +597,15 @@ impl ServerData {
         let idempotency_key = request.self_token;
         let request_hash = foks_crypto::prefixed_hash(SIGNUP_REQUEST_HASH_TYPE_ID, argument);
         let reader = self.read_database()?;
-        let receipt_now = self
+        let idempotency_now = self
             .clock
             .now_micros()
             .map_err(|_| RpcStatus::TransactionRetry)?;
-        match reader.request_receipt(&idempotency_key, &request_hash, receipt_now) {
-            Ok(Some(receipt)) if receipt.response.is_empty() => return Ok(()),
+        match reader.idempotency_record(&idempotency_key, &request_hash, idempotency_now) {
+            Ok(Some(idempotency_record)) if idempotency_record.response.is_empty() => return Ok(()),
             Ok(Some(_)) => return Err(RpcStatus::TransactionRetry),
             Ok(None) => {}
-            Err(foks_server_db::Error::ReceiptConflict) => {
+            Err(foks_server_db::Error::OperationConflict) => {
                 return Err(bad_arguments("signup retry binding failed"));
             }
             Err(_) => return Err(RpcStatus::TransactionRetry),
@@ -656,9 +658,9 @@ impl ServerData {
             .ok_or_else(|| bad_arguments("reservation expiry overflows server clock units"))?;
         let result = writer.call(move |database| {
             let now = clock.now_micros()?;
-            let receipt_expires_at = now
-                .checked_add(RECEIPT_LIFETIME_MICROSECONDS)
-                .ok_or(crate::Error::Signup("receipt expiry overflow"))?;
+            let idempotency_expires_at = now
+                .checked_add(IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS)
+                .ok_or(crate::Error::Signup("idempotency_record expiry overflow"))?;
             let authoritative = database
                 .current_root()?
                 .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
@@ -771,7 +773,7 @@ impl ServerData {
                     .as_ref()
                     .map(|passphrase| passphrase.as_database(now)),
                 now,
-                receipt_expires_at,
+                idempotency_expires_at,
             };
             database.commit_identity_with_sso(&mutation, sso_binding.as_ref())?;
             Ok(())
@@ -793,7 +795,7 @@ impl ServerData {
                 Err(RpcStatus::BadInvite)
             }
             Err(crate::Error::Database(
-                foks_server_db::Error::Reservation | foks_server_db::Error::ReceiptConflict,
+                foks_server_db::Error::Reservation | foks_server_db::Error::OperationConflict,
             )) => Err(bad_arguments("signup reservation or retry binding failed")),
             Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
             Err(error) => Err(crate::error::mutation_failure_status(&error)

@@ -28,7 +28,7 @@ const op: ChatOperation = {
   channel: 'b'.repeat(32),
   kind: 'send-message',
   state: 'prepared',
-  receipt: null,
+  confirmation: null,
   rejection_code: null,
 };
 const history: ChatResult = {
@@ -87,7 +87,7 @@ test('pending omission preserves unknown send but does not recheck terminal stat
       operation: {
         ...op,
         state: 'confirmed',
-        receipt: { kind: 'message-sent', sequence: '1' },
+        confirmation: { kind: 'message-sent', sequence: '1' },
       },
     },
   );

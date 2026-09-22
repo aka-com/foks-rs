@@ -469,7 +469,7 @@ export class ChatSendService {
         operation: m.operation
           ? {
               ...m.operation,
-              receipt: m.operation.receipt ? { ...m.operation.receipt } : null,
+              confirmation: m.operation.confirmation ? { ...m.operation.confirmation } : null,
             }
           : undefined,
       }));

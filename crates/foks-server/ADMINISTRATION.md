@@ -110,7 +110,7 @@ invalidates pending native login tickets.
 Operators create generated single-use signup invites, shown exactly once. A retry
 of the same form returns the committed invite ID without regenerating or storing
 its plaintext code. Lost secret responses require disabling that invite and creating
-another. Form admission lasts at most 60 seconds; committed receipts remain until
+another. Form admission lasts at most 60 seconds; committed redemption records remain until
 session expiry. Lists and disable support standard and multiuse invites; creating
 an operator-chosen multiuse code remains an offline command. These are host signup
 invites, separate from team invitations.
@@ -126,7 +126,7 @@ Requests have independent limits: 32 connections, 16 application jobs, 8 KiB URI
 16 KiB headers/body, 32 fields, 100 rows per page and 128 KiB output. Ticket,
 confirmation and session caps are respectively 3/6/5 per account and
 1,024/2,048/4,096 globally. Invite forms permit eight pending per session and 8,192
-retained total, including consumed receipts. Capacity rejects new work without
+retained total, including consumed redemption records. Capacity rejects new work without
 silently evicting live credentials. Cookies and secrets are absent from metrics.
 
 Maintenance deletes at most 128 rows per ephemeral family per pass, preserving

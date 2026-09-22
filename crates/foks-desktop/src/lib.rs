@@ -2248,7 +2248,7 @@ impl DesktopModel {
         phrase: SecretString,
     ) -> Result<Operation, &'static str> {
         let (profile, account_alias) = self.selected_account_context()?;
-        validate_backup_phrase(&phrase)?;
+        validate_recovery_phrase(&phrase)?;
         Ok(Operation::CommitOwnerBackup {
             profile,
             account_alias,
@@ -2270,7 +2270,7 @@ impl DesktopModel {
             .ok_or("select a profile first")?;
         let target_alias = required_text(target_alias, "enter the recovered account alias")?;
         let device_name = required_text(device_name, "enter the recovery device name")?;
-        validate_backup_phrase(&phrase)?;
+        validate_recovery_phrase(&phrase)?;
         if serial == 0 {
             return Err("device serial must be positive");
         }
@@ -2289,7 +2289,7 @@ impl DesktopModel {
         phrase: SecretString,
         device_name: &str,
     ) -> Result<Operation, &'static str> {
-        validate_backup_phrase(&phrase)?;
+        validate_recovery_phrase(&phrase)?;
         Ok(Operation::ResumeOwnerRecovery {
             profile: self
                 .selected_profile
@@ -2832,9 +2832,9 @@ fn validate_team_party_input(
     Ok(())
 }
 
-fn validate_backup_phrase(phrase: &SecretString) -> Result<(), &'static str> {
+fn validate_recovery_phrase(phrase: &SecretString) -> Result<(), &'static str> {
     if phrase.expose().split_whitespace().count() != 17 {
-        return Err("backup phrase must contain exactly 17 words");
+        return Err("recovery phrase must contain exactly 17 words");
     }
     Ok(())
 }
@@ -4821,7 +4821,7 @@ mod tests {
                 "Recovery laptop",
                 3,
             ),
-            Err("backup phrase must contain exactly 17 words")
+            Err("recovery phrase must contain exactly 17 words")
         );
     }
 

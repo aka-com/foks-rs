@@ -17,7 +17,7 @@ test('fresh submit sends once and legacy prepare recovers the same operation', a
   assert.equal(sent.result.kind, 'operation');
   if (sent.result.kind !== 'operation') throw new Error('operation expected');
   assert.equal(sent.result.operation.state, 'confirmed');
-  assert.equal(sent.result.operation.receipt?.kind, 'message-sent');
+  assert.equal(sent.result.operation.confirmation?.kind, 'message-sent');
   assert.deepEqual(await chat('team', input), sent);
   assert.deepEqual(
     await chat('team', { ...input, action: 'prepare-message' }),
@@ -56,7 +56,7 @@ for (const state of [
     if (pending.result.kind !== 'pending') throw new Error('pending expected');
     const operation = pending.result.operations[0];
     operation.state = state;
-    operation.receipt =
+    operation.confirmation =
       state === 'confirmed' ? { kind: 'message-sent', sequence: '2' } : null;
     operation.rejection_code = state === 'rejected' ? 1 : null;
     const before: ChatOperation = structuredClone(operation);

@@ -1017,7 +1017,7 @@ impl CheckedProfileSession<'_> {
             return Ok(());
         }
         // Default registration is opportunistic. Probe-only profiles and
-        // expired capability canaries must not abort an unrelated scheduler
+        // expired compatibility artifacts must not abort an unrelated scheduler
         // batch (or the signup finalization path that calls this helper).
         match self.profile.require(Capability::UserSync) {
             Ok(()) => {}
@@ -4239,10 +4239,11 @@ mod tests {
                 label: None,
                 probe: "foks.app".to_owned(),
                 protocol: crate::ProtocolPolicy::CurrentProbeOnly {
-                    canary_public_key:
+                    compatibility_artifact_public_key:
                         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
                             .to_owned(),
-                    lease_url: "https://updates.example.test/foks/canary.json".to_owned(),
+                    lease_url: "https://updates.example.test/foks/compatibility-artifact.json"
+                        .to_owned(),
                     last_artifact: None,
                 },
                 trust: crate::TrustRoot::WebPki,

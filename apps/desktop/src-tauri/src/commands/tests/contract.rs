@@ -5,7 +5,7 @@ use crate::agent::{
 use crate::applock::LockStateDto;
 use crate::commands::accounts::{
     backup_enrollment_dtos, device_dtos, device_removal_response, AccountDto, BackupEnrollmentDto,
-    BackupPhraseDto, DeviceDto, DeviceRemovalDto, PassphraseReportDto,
+    DeviceDto, DeviceRemovalDto, PassphraseReportDto, RecoveryPhraseDto,
 };
 use crate::commands::application::{AgentStatusDto, AppInfo};
 use crate::commands::enrollment::{
@@ -793,7 +793,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         serde_json::to_value(pending).unwrap(),
         fixture["pendingOperation"]
     );
-    let backup = BackupPhraseDto {
+    let backup = RecoveryPhraseDto {
         backup_alias: "paper".to_owned(),
         phrase: Zeroizing::new(
             "abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon"
@@ -802,7 +802,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
     };
     assert_eq!(
         serde_json::to_value(backup).unwrap(),
-        fixture["backupPhrase"]
+        fixture["recoveryPhrase"]
     );
     let discovery = GroupDiscoveryDto {
         account_alias: "personal".to_owned(),

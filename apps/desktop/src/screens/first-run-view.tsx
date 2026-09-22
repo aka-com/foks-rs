@@ -325,7 +325,7 @@ export function FirstRunAppSidebar({
       devicesAlert={
         devicesAlert ??
         (checkpoint.protectSkipped
-          ? { description: 'An account has no paper key' }
+          ? { description: 'An account has no recovery phrase' }
           : null)
       }
       nativeChrome={native}

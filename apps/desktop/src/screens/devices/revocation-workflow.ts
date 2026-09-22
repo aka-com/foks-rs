@@ -29,7 +29,7 @@ export async function revokeSecurityKey(
   return result;
 }
 
-export async function revokePaperKey(
+export async function revokeRecoveryPhrase(
   bridge: Bridge,
   access: Access,
   store: AccountStore,

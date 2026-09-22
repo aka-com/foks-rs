@@ -60,7 +60,7 @@ pub(super) fn response(
 fn status(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::Database(foks_server_db::Error::WebWrongUser) => RpcStatus::WrongUser,
-        crate::Error::Database(foks_server_db::Error::ReceiptExpired) => RpcStatus::Expired,
+        crate::Error::Database(foks_server_db::Error::OperationExpired) => RpcStatus::Expired,
         crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
             RpcStatus::PermissionDenied("administration access denied".into())
         }

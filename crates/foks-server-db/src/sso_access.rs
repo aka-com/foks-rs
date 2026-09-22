@@ -188,7 +188,8 @@ pub(crate) fn bind(
         crate::sso_identity::require_owner(c, &a.uid, &b.device, Some(seq))?;
     }
     // Exact repeats are evidence only, and do not issue a new authorization generation.
-    if crate::sso_identity::receipt_exists(c, &a.host, &a.uid, &b.commitment, now_ms)? {
+    if crate::sso_identity::authorization_binding_exists(c, &a.host, &a.uid, &b.commitment, now_ms)?
+    {
         return Ok(());
     }
     crate::sso::policy_epoch_matches(c, &a.host, &a.config_hash, a.authorization_epoch)?;
@@ -239,7 +240,7 @@ pub(crate) fn bind(
     if linked_uid.is_some_and(|uid| uid.as_slice() != a.uid) {
         return Err(Error::Duplicate("SSO provider identity"));
     }
-    crate::sso_identity::reserve_receipt(c, b, now_ms)?;
+    crate::sso_identity::reserve_authorization_binding(c, b, now_ms)?;
     if b.purpose == SsoPurpose::Reauthenticate {
         let old = old.as_ref().ok_or(Error::AuthorizationChanged)?;
         let changed=c.execute("UPDATE sso_access SET config_hash=?3,revision=?4,state=0,expires_at_ms=?5,ciphertext=?6,authorization_epoch=?7,authorization_generation=?8,interrupted=0 WHERE host=?1 AND uid=?2 AND revision=?9 AND issuer=?10 AND subject=?11",params![a.host,a.uid,a.config_hash,sql_integer(a.revision)?,sql_integer(a.expires_at_ms)?,a.ciphertext,sql_integer(a.authorization_epoch)?,sql_integer(a.authorization_generation)?,sql_integer(old.revision)?,a.issuer,a.subject])?;

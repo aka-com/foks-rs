@@ -145,7 +145,6 @@ test('checkpoint encoding excludes sensitive draft fields', () => {
     invite: 'INVITE-SENTINEL',
     passphrase: 'PASSPHRASE-SENTINEL',
     recoveryPhrase: 'RECOVERY-SENTINEL',
-    backupPhrase: 'BACKUP-SENTINEL',
   };
   const encoded = encodeFirstRunCheckpoint(state);
   assert.doesNotMatch(

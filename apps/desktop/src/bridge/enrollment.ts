@@ -68,7 +68,7 @@ export interface FirstRunPassphraseRequest {
   confirmation: string;
 }
 
-export interface BackupPhraseResponse {
+export interface RecoveryPhraseResponse {
   backupAlias: string;
   /** Ephemeral recovery phrase; should not be cached or persisted. */
   phrase: string;
@@ -177,7 +177,7 @@ export interface FirstRunFixturePath {
 export interface FirstRunFixture {
   invited: FirstRunFixturePath;
   own: FirstRunFixturePath;
-  backupPhrase: string;
+  recoveryPhrase: string;
 }
 
 const PENDING_KINDS: readonly PendingOperationKind[] = [
@@ -210,7 +210,7 @@ function decodePendingOperation(value: unknown, at: string): PendingOperation {
 export const decodePendingOperations = (value: unknown): PendingOperation[] =>
   array(value, 'list_pending_operations response', decodePendingOperation);
 
-export function decodeBackupPhrase(value: unknown): BackupPhraseResponse {
+export function decodeRecoveryPhrase(value: unknown): RecoveryPhraseResponse {
   const item = record(value, 'prepare_owner_backup response');
   return {
     backupAlias: string(item.backupAlias, 'prepare_owner_backup.backupAlias'),

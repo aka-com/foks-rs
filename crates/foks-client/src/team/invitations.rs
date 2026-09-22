@@ -373,11 +373,11 @@ impl FoksClient {
             seed,
             certs,
         )?;
-        let receipt = foks_proto::TeamRsvp::decode(&response)?;
-        if receipt.is_remote() {
-            return Err(Error::TeamBinding("local receipt kind"));
+        let rsvp = foks_proto::TeamRsvp::decode(&response)?;
+        if rsvp.is_remote() {
+            return Err(Error::TeamBinding("local rsvp kind"));
         }
-        Ok(receipt)
+        Ok(rsvp)
     }
     pub fn post_invitation_team_removal(
         &self,
@@ -450,7 +450,7 @@ impl FoksClient {
         host: &PinnedHost,
         credential: FederationCredential<'_, '_>,
         team: &EntityId,
-        receipt: &foks_proto::TeamRsvp,
+        rsvp: &foks_proto::TeamRsvp,
     ) -> Result<()> {
         let user = self.authenticate_credential_and_pin(host, credential)?;
         let loaded = self.load_and_pin_team_with_credential(
@@ -466,7 +466,7 @@ impl FoksClient {
         self.call_void_with_material(
             host,
             &host.user,
-            &foks_rpc::encode_reject_join_request(&token, receipt)?,
+            &foks_rpc::encode_reject_join_request(&token, rsvp)?,
             seed,
             certs,
         )

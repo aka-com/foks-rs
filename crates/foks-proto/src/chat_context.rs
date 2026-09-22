@@ -1,5 +1,5 @@
 //! Authenticated context for extended channel format 2, independent of Basic.
-//! Receipt positions are allocated by the server and never inserted into this
+//! Sequence positions are allocated by the server and never inserted into this
 //! client-authenticated context after encryption.
 use crate::{
     array, expect_unsigned, fixed_blob, unsigned, Error, RealtimeWire, Result, Role,
@@ -39,7 +39,7 @@ macro_rules! counter {
         #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
         pub struct $name(u64);
         impl $name {
-            /// Zero is a cursor/baseline, never an inserted event or receipt.
+            /// Zero is a cursor/baseline, never an inserted event or confirmation.
             pub fn new(value: u64) -> Result<Self> {
                 if value > i64::MAX as u64 {
                     return Err(Error::IntegerRange(stringify!($name)));

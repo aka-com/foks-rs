@@ -87,11 +87,11 @@ fn local(owner: &mut Actor, joiner: &Actor, team: &EntityId) {
         .client
         .prepare_local_invitation_acceptance(&joiner.host, j, &cert.invite)
         .unwrap();
-    let receipt = joiner
+    let rsvp = joiner
         .client
         .submit_local_invitation_acceptance(&joiner.host, j, &prepared)
         .unwrap();
-    assert!(!receipt.is_remote());
+    assert!(!rsvp.is_remote());
     assert!(joiner
         .client
         .submit_local_invitation_acceptance(&joiner.host, j, &prepared)
@@ -178,7 +178,7 @@ fn remote(home: &mut Actor, dest: &mut Actor, team: &EntityId, source: Option<&E
         .unwrap()
         .operation;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let receipt = loop {
+    let rsvp = loop {
         let progress = home
             .client
             .remote_invitation_progress(
@@ -190,8 +190,8 @@ fn remote(home: &mut Actor, dest: &mut Actor, team: &EntityId, source: Option<&E
                 &mut home.protected,
             )
             .unwrap();
-        if let Some(receipt) = progress.receipt {
-            break receipt;
+        if let Some(rsvp) = progress.rsvp {
+            break rsvp;
         }
         assert!(
             std::time::Instant::now() < deadline,
@@ -203,7 +203,7 @@ fn remote(home: &mut Actor, dest: &mut Actor, team: &EntityId, source: Option<&E
         .client
         .team_invitation_inbox(&dest.host, d, team, None)
         .unwrap();
-    let row = rows.iter().find(|r| r.receipt == receipt).unwrap();
+    let row = rows.iter().find(|r| r.rsvp == rsvp).unwrap();
     let RawInboxRequest::Remote(request) = &row.request else {
         panic!("remote request")
     };
@@ -243,7 +243,7 @@ fn remote(home: &mut Actor, dest: &mut Actor, team: &EntityId, source: Option<&E
                 team,
                 &expanded.verified,
                 Some(&payload.permission),
-                &receipt,
+                &rsvp,
                 &plan,
                 &removal,
                 &mut dest.protected,
@@ -276,7 +276,7 @@ fn remote(home: &mut Actor, dest: &mut Actor, team: &EntityId, source: Option<&E
                 d,
                 team,
                 &expanded,
-                &receipt,
+                &rsvp,
                 &plan,
                 &removal,
                 &mut dest.protected,

@@ -1,6 +1,6 @@
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
-use crate::{error::sql_integer, receipts, Database, Error, Result};
+use crate::{error::sql_integer, idempotency, Database, Error, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UserMutationFailurePoint {
@@ -9,7 +9,7 @@ pub enum UserMutationFailurePoint {
     Passphrase,
     MerkleNodes,
     MerkleRoot,
-    Receipt,
+    IdempotencyRecord,
 }
 
 pub struct AddedCredential<'a> {
@@ -93,7 +93,7 @@ pub struct UserMutation<'a> {
     pub request_hash: &'a [u8; 32],
     pub response: &'a [u8],
     pub now: u64,
-    pub receipt_expires_at: u64,
+    pub idempotency_expires_at: u64,
 }
 
 impl Database {
@@ -111,13 +111,13 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(receipt) = receipts::lookup(
+        if let Some(idempotency_record) = idempotency::lookup(
             &transaction,
             mutation.idempotency_key,
             mutation.request_hash,
             mutation.now,
         )? {
-            return Ok(receipt.response);
+            return Ok(idempotency_record.response);
         }
         let current: Option<(i64, Vec<u8>, i64, Vec<u8>)> = transaction
             .query_row(
@@ -387,15 +387,15 @@ impl Database {
             params![sql_integer(mutation.root_epoch)?, mutation.root_hash],
         )?;
         inject(failure, UserMutationFailurePoint::MerkleRoot)?;
-        receipts::insert(
+        idempotency::insert(
             &transaction,
             mutation.idempotency_key,
             mutation.request_hash,
             mutation.response,
             mutation.now,
-            mutation.receipt_expires_at,
+            mutation.idempotency_expires_at,
         )?;
-        inject(failure, UserMutationFailurePoint::Receipt)?;
+        inject(failure, UserMutationFailurePoint::IdempotencyRecord)?;
         transaction.commit()?;
         Ok(mutation.response.to_vec())
     }
@@ -414,8 +414,8 @@ fn validate(database: &Database, mutation: &UserMutation<'_>) -> Result<()> {
         || mutation.shared_keys.len() > 16
         || mutation.merkle_commit.nodes.len() > database.config.maximum_merkle_nodes_per_commit
         || mutation.back_pointers.len() > database.config.maximum_back_pointers
-        || mutation.response.len() > database.config.maximum_receipt_bytes
-        || mutation.receipt_expires_at <= mutation.now
+        || mutation.response.len() > database.config.maximum_idempotency_response_bytes
+        || mutation.idempotency_expires_at <= mutation.now
         || mutation.cited_root_epoch == 0
         || mutation.cited_root_epoch > mutation.expected_root_epoch
     {

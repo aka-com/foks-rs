@@ -29,7 +29,7 @@ Required resolution:
 - Define per-account/team/channel retained byte and message limits, plus an
   operator-wide chat budget that cannot consume the database reserve needed by
   account, team, invitation and KV writes.
-- Enforce admission and existing-receipt recovery in the same writer transaction.
+- Enforce admission and existing-idempotency-record recovery in the same writer transaction.
 - Choose explicit retention, archival and deletion behavior before presenting a
   quota as a complete lifecycle.
 - Add usage metrics, capacity diagnostics and tests showing one team cannot starve

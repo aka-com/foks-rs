@@ -1,5 +1,5 @@
-//! Nonsecret receipts for a specific desktop account operation. A missing
-//! receipt is never evidence that an agent or remote mutation did not apply.
+//! Nonsecret operation records for a specific desktop account operation. A missing
+//! operation record is never evidence that an agent or remote mutation did not apply.
 
 use super::validation::{
     invalid_request, require_main_window, valid_go_candidate_id, valid_local_name,
@@ -54,7 +54,7 @@ pub struct AttemptStatus {
     pub outcome: Outcome,
 }
 
-// Secret request fields are never serialized into a receipt or Debug output.
+// Secret request fields are never serialized into an operation record or Debug output.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountRequest {
@@ -76,7 +76,7 @@ pub struct AccountRequest {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Receipt {
+struct AccountOperationRecord {
     version: u8,
     state_id: String,
     attempt: AccountAttempt,
@@ -109,7 +109,7 @@ fn io_error(error: impl std::fmt::Display) -> AgentError {
     ))
 }
 
-fn read_receipt(
+fn read_operation_record(
     directory: &Path,
     state_id: &str,
     attempt: &AccountAttempt,
@@ -122,16 +122,20 @@ fn read_receipt(
     };
     let mut data = Vec::new();
     file.take(16_384).read_to_end(&mut data).map_err(io_error)?;
-    let receipt: Receipt = serde_json::from_slice(&data).map_err(io_error)?;
-    if receipt.version != 2 || receipt.state_id != state_id || &receipt.attempt != attempt {
+    let operation_record: AccountOperationRecord =
+        serde_json::from_slice(&data).map_err(io_error)?;
+    if operation_record.version != 2
+        || operation_record.state_id != state_id
+        || &operation_record.attempt != attempt
+    {
         return Err(invalid_request(
             "This setup attempt does not match the current account or workspace.",
         ));
     }
-    Ok(receipt.outcome)
+    Ok(operation_record.outcome)
 }
 
-fn write_receipt(
+fn write_operation_record(
     directory: &Path,
     state_id: &str,
     attempt: &AccountAttempt,
@@ -140,7 +144,7 @@ fn write_receipt(
     let mut temporary = tempfile::NamedTempFile::new_in(directory).map_err(io_error)?;
     serde_json::to_writer(
         &mut temporary,
-        &Receipt {
+        &AccountOperationRecord {
             version: 2,
             state_id: state_id.to_owned(),
             attempt: attempt.clone(),
@@ -168,7 +172,8 @@ fn client_state_identity(state: &AppState) -> Result<String, AgentError> {
     foks_client_app::portability::state_identity(root).map_err(io_error)
 }
 
-fn receipt_directory(app: &tauri::AppHandle) -> Result<PathBuf, AgentError> {
+fn operation_record_directory(app: &tauri::AppHandle) -> Result<PathBuf, AgentError> {
+    // Keep the existing directory name so upgrades retain setup outcomes.
     Ok(app
         .path()
         .app_data_dir()
@@ -186,7 +191,7 @@ pub async fn first_run_operation_status(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     validate(&attempt)?;
-    let directory = receipt_directory(&app)?;
+    let directory = operation_record_directory(&app)?;
     let state_id = client_state_identity(&state)?;
     let outcome = match OpenOptions::new()
         .read(true)
@@ -194,7 +199,7 @@ pub async fn first_run_operation_status(
         .open(directory.join(format!("{}.lock", attempt.id)))
     {
         Ok(lock) => match lock.try_lock_exclusive() {
-            Ok(()) => read_receipt(&directory, &state_id, &attempt)?,
+            Ok(()) => read_operation_record(&directory, &state_id, &attempt)?,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Outcome::Running,
             Err(error) => return Err(io_error(error)),
         },
@@ -221,7 +226,7 @@ pub async fn run_first_run_account_operation(
             "The account request does not match its saved setup attempt.",
         ));
     }
-    let directory = receipt_directory(&app)?;
+    let directory = operation_record_directory(&app)?;
     fs::create_dir_all(&directory).map_err(io_error)?;
     let attempt = request.attempt.clone();
     let state_id = client_state_identity(&state)?;
@@ -240,7 +245,7 @@ pub async fn run_first_run_account_operation(
         )
     })?;
     let exists = directory.join(format!("{}.json", attempt.id)).exists();
-    let previous = read_receipt(&directory, &state_id, &attempt)?;
+    let previous = read_operation_record(&directory, &state_id, &attempt)?;
     if previous == Outcome::Complete {
         return Ok(MutationDto { applied: true });
     }
@@ -265,7 +270,7 @@ pub async fn run_first_run_account_operation(
             "The server identity does not match this account setup.",
         ));
     }
-    write_receipt(&directory, &state_id, &attempt, Outcome::Unknown)?;
+    write_operation_record(&directory, &state_id, &attempt, Outcome::Unknown)?;
     let profile = attempt.profile.clone();
     let alias = attempt.alias.clone();
     let result = match (attempt.kind, request.resume) {
@@ -370,7 +375,7 @@ pub async fn run_first_run_account_operation(
         }
         Err(_) => Outcome::Unknown,
     };
-    if let Err(error) = write_receipt(&directory, &state_id, &attempt, outcome) {
+    if let Err(error) = write_operation_record(&directory, &state_id, &attempt, outcome) {
         let mut error = error;
         error.ambiguous = true;
         error.code = "ambiguous".to_owned();
@@ -394,34 +399,34 @@ mod tests {
         }
     }
     #[test]
-    fn receipts_are_durable_and_bound_to_attempt_host_alias_and_client_state() {
+    fn operation_records_are_durable_and_bound_to_attempt_host_alias_and_client_state() {
         let dir = tempfile::tempdir().unwrap();
         let state_id = "aabbccdd";
         let a = attempt();
         assert_eq!(
-            read_receipt(dir.path(), state_id, &a).unwrap(),
+            read_operation_record(dir.path(), state_id, &a).unwrap(),
             Outcome::Unknown
         );
-        write_receipt(dir.path(), state_id, &a, Outcome::Unknown).unwrap();
-        write_receipt(dir.path(), state_id, &a, Outcome::Complete).unwrap();
+        write_operation_record(dir.path(), state_id, &a, Outcome::Unknown).unwrap();
+        write_operation_record(dir.path(), state_id, &a, Outcome::Complete).unwrap();
         assert_eq!(
-            read_receipt(dir.path(), state_id, &a).unwrap(),
+            read_operation_record(dir.path(), state_id, &a).unwrap(),
             Outcome::Complete
         );
-        assert!(read_receipt(dir.path(), "eeff0011", &a).is_err());
+        assert!(read_operation_record(dir.path(), "eeff0011", &a).is_err());
         let mut wrong = a.clone();
         wrong.alias = "other".into();
-        assert!(read_receipt(dir.path(), state_id, &wrong).is_err());
+        assert!(read_operation_record(dir.path(), state_id, &wrong).is_err());
         let mut wrong = a;
         wrong.host_id = format!("02{}", "2".repeat(64));
-        assert!(read_receipt(dir.path(), state_id, &wrong).is_err());
+        assert!(read_operation_record(dir.path(), state_id, &wrong).is_err());
     }
     #[test]
-    fn receipts_are_independent_of_the_state_root_path() {
+    fn operation_records_are_independent_of_the_state_root_path() {
         let dir = tempfile::tempdir().unwrap();
         let state_id = "aabbccdd";
         let a = attempt();
-        write_receipt(dir.path(), state_id, &a, Outcome::Complete).unwrap();
+        write_operation_record(dir.path(), state_id, &a, Outcome::Complete).unwrap();
         let stored: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.path().join(format!("{}.json", a.id))).unwrap())
                 .unwrap();
@@ -429,12 +434,12 @@ mod tests {
         assert_eq!(stored["state_id"], state_id);
         assert!(stored.get("socket").is_none());
         assert_eq!(
-            read_receipt(dir.path(), state_id, &a).unwrap(),
+            read_operation_record(dir.path(), state_id, &a).unwrap(),
             Outcome::Complete
         );
     }
     #[test]
-    fn version_one_receipts_are_rejected() {
+    fn version_one_operation_records_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let a = attempt();
         let legacy = serde_json::json!({
@@ -455,16 +460,16 @@ mod tests {
             serde_json::to_vec(&legacy).unwrap(),
         )
         .unwrap();
-        assert!(read_receipt(dir.path(), "aabbccdd", &a).is_err());
+        assert!(read_operation_record(dir.path(), "aabbccdd", &a).is_err());
     }
     #[test]
-    fn receipt_names_cannot_escape_the_directory() {
+    fn operation_record_names_cannot_escape_the_directory() {
         let mut a = attempt();
         a.id = "../outside".into();
         assert!(validate(&a).is_err());
     }
     #[test]
-    fn receipt_lock_excludes_duplicate_dispatch_and_releases_on_drop() {
+    fn operation_record_lock_excludes_duplicate_dispatch_and_releases_on_drop() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("attempt.lock");
         let first = OpenOptions::new()
@@ -484,10 +489,10 @@ mod tests {
         second.try_lock_exclusive().unwrap();
     }
     #[test]
-    fn corrupt_receipt_does_not_authorize_retry() {
+    fn corrupt_operation_record_does_not_authorize_retry() {
         let dir = tempfile::tempdir().unwrap();
         let a = attempt();
         fs::write(dir.path().join(format!("{}.json", a.id)), b"{partial").unwrap();
-        assert!(read_receipt(dir.path(), "aabbccdd", &a).is_err());
+        assert!(read_operation_record(dir.path(), "aabbccdd", &a).is_err());
     }
 }

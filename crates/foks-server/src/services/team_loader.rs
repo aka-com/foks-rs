@@ -695,7 +695,7 @@ fn map_write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
-        crate::Error::Database(foks_server_db::Error::ReceiptConflict) => {
+        crate::Error::Database(foks_server_db::Error::OperationConflict) => {
             bad_arguments("conflicting team-view activation replay")
         }
         _ => RpcStatus::TransactionRetry,

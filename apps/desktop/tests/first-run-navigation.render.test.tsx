@@ -235,7 +235,7 @@ test('the account pages are numbered sections and a lone sign-in method is prese
     ['true'],
   );
   const form = r.view
-    .getByLabelText('Backup phrase')
+    .getByLabelText('Recovery phrase')
     .closest<HTMLElement>('.inset');
   assert.ok(form);
   assert.ok(ui.within(form).getByLabelText('Your name'));
@@ -254,7 +254,7 @@ test('the account pages are numbered sections and a lone sign-in method is prese
     r.view.queryByRole('radiogroup', { name: 'Sign-in method' }),
     null,
   );
-  assert.equal(r.view.queryByLabelText('Backup phrase'), null);
+  assert.equal(r.view.queryByLabelText('Recovery phrase'), null);
   assert.ok(r.view.getByRole('button', { name: 'Create my account' }));
   ui.cleanup();
   // The managed-local page has no setup-method group, so the sign-in method
@@ -273,7 +273,7 @@ test('the account pages are numbered sections and a lone sign-in method is prese
     ['1', 'Sign in method'],
     ['2', 'Account and device'],
   ]);
-  assert.ok(local.view.getByLabelText('Backup phrase'));
+  assert.ok(local.view.getByLabelText('Recovery phrase'));
   assert.ok(local.view.getByRole('button', { name: 'Recover' }));
 });
 test('local recover/create choices cannot create a Back cycle', async () => {

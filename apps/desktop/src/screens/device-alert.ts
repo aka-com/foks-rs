@@ -1,7 +1,7 @@
 /**
  * What this session has learned about each account's keys.
  *
- * The shell maintains paper-key facts from its shared device metadata queries.
+ * The shell maintains recovery-phrase facts from its shared device metadata queries.
  * Pairing offers remain explicit: the agent does not publish their creation
  * or expiry, so only the Pair sheet reports offers it starts or resumes.
  */
@@ -11,12 +11,12 @@ import type { AgentSnapshot, StoreRef } from '../model';
 import { accountStores } from '../model';
 
 export interface DeviceAlertSnapshot {
-  paperKeys: ReadonlyMap<StoreRef, boolean>;
+  recoveryPhrases: ReadonlyMap<StoreRef, boolean>;
   offers: ReadonlySet<StoreRef>;
 }
 
 const EMPTY: DeviceAlertSnapshot = {
-  paperKeys: new Map(),
+  recoveryPhrases: new Map(),
   offers: new Set(),
 };
 
@@ -33,20 +33,20 @@ export class DeviceAlertRegistry {
     };
   };
 
-  /** Records whether an account has a paper key, as the keys list answers it. */
-  reportPaperKey(store: StoreRef, hasPaperKey: boolean): void {
-    if (this.snapshot.paperKeys.get(store) === hasPaperKey) return;
-    const paperKeys = new Map(this.snapshot.paperKeys);
-    paperKeys.set(store, hasPaperKey);
-    this.snapshot = { ...this.snapshot, paperKeys };
+  /** Records whether an account has a recovery phrase, as the keys list answers it. */
+  reportRecoveryPhrase(store: StoreRef, hasRecoveryPhrase: boolean): void {
+    if (this.snapshot.recoveryPhrases.get(store) === hasRecoveryPhrase) return;
+    const recoveryPhrases = new Map(this.snapshot.recoveryPhrases);
+    recoveryPhrases.set(store, hasRecoveryPhrase);
+    this.snapshot = { ...this.snapshot, recoveryPhrases };
     this.publish();
   }
 
-  forgetPaperKey(store: StoreRef): void {
-    if (!this.snapshot.paperKeys.has(store)) return;
-    const paperKeys = new Map(this.snapshot.paperKeys);
-    paperKeys.delete(store);
-    this.snapshot = { ...this.snapshot, paperKeys };
+  forgetRecoveryPhrase(store: StoreRef): void {
+    if (!this.snapshot.recoveryPhrases.has(store)) return;
+    const recoveryPhrases = new Map(this.snapshot.recoveryPhrases);
+    recoveryPhrases.delete(store);
+    this.snapshot = { ...this.snapshot, recoveryPhrases };
     this.publish();
   }
 
@@ -79,7 +79,7 @@ export function deviceAlertRegistry(bridge: Bridge): DeviceAlertRegistry {
 
 /**
  * The Devices tab's rail dot: on while any account this Mac holds has an open
- * pairing offer or is known to have no paper key. An account whose keys have
+ * pairing offer or is known to have no recovery phrase. An account whose keys have
  * not been loaded this session says nothing either way, the same way a team
  * never visited says nothing about its requests.
  */
@@ -91,14 +91,14 @@ export function devicesAlertSummary(
   let missingKey = false;
   for (const store of accountStores(snapshot)) {
     if (state.offers.has(store.id)) offer = true;
-    if (state.paperKeys.get(store.id) === false) missingKey = true;
+    if (state.recoveryPhrases.get(store.id) === false) missingKey = true;
   }
   if (!offer && !missingKey) return null;
   const description =
     offer && missingKey
-      ? 'A pairing offer is open, and an account has no paper key'
+      ? 'A pairing offer is open, and an account has no recovery phrase'
       : offer
         ? 'A pairing offer is open'
-        : 'An account has no paper key';
+        : 'An account has no recovery phrase';
   return { description };
 }

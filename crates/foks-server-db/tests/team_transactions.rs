@@ -45,7 +45,7 @@ fn every_team_publication_boundary_is_atomic() {
         TeamMutationFailurePoint::Projection,
         TeamMutationFailurePoint::MerkleNodes,
         TeamMutationFailurePoint::MerkleRoot,
-        TeamMutationFailurePoint::Receipt,
+        TeamMutationFailurePoint::IdempotencyRecord,
     ] {
         let mut fixture = common::TestDatabase::new();
         fixture.reserve(1_000_000);
@@ -208,7 +208,7 @@ fn every_team_publication_boundary_is_atomic() {
             request_hash: &[0x7a; 32],
             response: b"",
             now: 1_000_001,
-            receipt_expires_at: 2_000_001,
+            idempotency_expires_at: 2_000_001,
         };
         // An admission cannot claim a pre-existing invitation grant that is
         // absent at the atomic publication boundary, even if it also asks to
@@ -357,7 +357,7 @@ fn every_team_publication_boundary_is_atomic() {
                 2_000_000,
                 1_000_004,
             ),
-            Err(foks_server_db::Error::ReceiptConflict)
+            Err(foks_server_db::Error::OperationConflict)
         ));
         assert!(reader
             .resolve_team_view_token(&[0x82; 32], 1_000_005)
@@ -508,7 +508,7 @@ fn every_team_publication_boundary_is_atomic() {
                 1_000_010,
                 &team,
             )),
-            Err(foks_server_db::Error::ReceiptConflict)
+            Err(foks_server_db::Error::OperationConflict)
         ));
         assert!(reader
             .resolve_team_admin_token(&[0x90; 32], 1_000_011)

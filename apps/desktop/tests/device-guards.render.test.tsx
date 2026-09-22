@@ -141,9 +141,9 @@ async function harness() {
   };
 }
 
-/* ---------------------------------------------------------- paper key -- */
+/* ---------------------------------------------------------- recovery phrase -- */
 
-test('paper key modal allows navigation when no phrase is displayed', async () => {
+test('recovery phrase modal allows navigation when no phrase is displayed', async () => {
   const h = await harness();
   const { store } = h.mount(
     createElement(h.sheets.PhraseSheet, {
@@ -158,7 +158,7 @@ test('paper key modal allows navigation when no phrase is displayed', async () =
   assert.equal(h.verdict(store), null);
 });
 
-test('revealed paper key blocks navigation and displays guidance message', async () => {
+test('revealed recovery phrase blocks navigation and displays guidance message', async () => {
   const h = await harness();
   const closed: boolean[] = [];
   const { store, refusals } = h.mount(
@@ -174,12 +174,12 @@ test('revealed paper key blocks navigation and displays guidance message', async
   );
   assert.deepEqual(h.verdict(store), {
     verdict: 'refuse',
-    reason: 'Save or dismiss the paper key first.',
+    reason: 'Save or dismiss the recovery phrase first.',
   });
   await h.leave(store);
   // A refusal moves nothing, raises no question, and leaves the sheet open.
   assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
-  assert.deepEqual(refusals, ['Save or dismiss the paper key first.']);
+  assert.deepEqual(refusals, ['Save or dismiss the recovery phrase first.']);
   assert.deepEqual(closed, []);
 });
 

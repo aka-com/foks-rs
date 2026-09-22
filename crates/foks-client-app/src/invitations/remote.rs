@@ -109,7 +109,12 @@ impl CheckedProfileSession<'_> {
                 source_role,
                 ..
             } => {
-                self.cleanup_invitation_receipts(&home, credential.uid(), &mut protected, vault)?;
+                self.cleanup_invitation_completion_records(
+                    &home,
+                    credential.uid(),
+                    &mut protected,
+                    vault,
+                )?;
                 let source = vault.team(&source_team_alias)?;
                 if source.account_alias != alias || !source.active {
                     return Err(Error::InvalidAccount("source team account binding"));
@@ -135,7 +140,12 @@ impl CheckedProfileSession<'_> {
                 Ok(report)
             }
             InvitationAction::AcceptRemote { invite, .. } => {
-                self.cleanup_invitation_receipts(&home, credential.uid(), &mut protected, vault)?;
+                self.cleanup_invitation_completion_records(
+                    &home,
+                    credential.uid(),
+                    &mut protected,
+                    vault,
+                )?;
                 let p = self.client.prepare_remote_user_invitation(
                     &home,
                     &remote,

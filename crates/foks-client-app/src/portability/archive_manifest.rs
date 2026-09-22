@@ -30,8 +30,12 @@ impl ArchiveManifest {
     pub fn from_snapshot(snapshot: &StateSnapshot) -> Result<Self> {
         snapshot.require_exportable()?;
         let mut native = NativeManifestStore::decode(&snapshot.native.encode()?)?;
-        native.records.remove(super::relocation::RECEIPT);
-        native.records.remove(super::import::RECEIPT);
+        native
+            .records
+            .remove(super::relocation::RELOCATION_COMPLETION_MARKER);
+        native
+            .records
+            .remove(super::import::IMPORT_COMPLETION_MARKER);
         let profiles = snapshot
             .profiles
             .iter()
@@ -96,8 +100,12 @@ impl ArchiveManifest {
                 .is_none_or(|k| k.len() != 32)
             || native.records.contains_key(super::relocation::INTENT)
             || native.records.contains_key(super::import::INTENT)
-            || native.records.contains_key(super::import::RECEIPT)
-            || native.records.contains_key(super::relocation::RECEIPT)
+            || native
+                .records
+                .contains_key(super::import::IMPORT_COMPLETION_MARKER)
+            || native
+                .records
+                .contains_key(super::relocation::RELOCATION_COMPLETION_MARKER)
             || native
                 .records
                 .keys()
@@ -285,10 +293,10 @@ mod tests {
         assert!(crate::account::validate_archive_vault_key("pending.account").is_err());
     }
     #[test]
-    fn source_projection_cannot_carry_an_active_intent_or_completion_receipt() {
+    fn source_projection_cannot_carry_an_active_intent_or_completion_marker() {
         for key in [
             super::super::relocation::INTENT,
-            super::super::relocation::RECEIPT,
+            super::super::relocation::RELOCATION_COMPLETION_MARKER,
         ] {
             let mut m = manifest();
             m.native.records.insert(key.into(), vec![]);

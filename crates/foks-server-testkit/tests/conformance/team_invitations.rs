@@ -341,11 +341,11 @@ pub(crate) fn team_local_invitations() {
         .foks()
         .prepare_local_invitation_acceptance(f.host(), joiner_cred, &invitation.invite)
         .unwrap();
-    let receipt = jc
+    let rsvp = jc
         .foks()
         .submit_local_invitation_acceptance(f.host(), joiner_cred, &prepared)
         .unwrap();
-    assert!(!receipt.is_remote());
+    assert!(!rsvp.is_remote());
     assert!(matches!(
         jc.foks()
             .submit_local_invitation_acceptance(f.host(), joiner_cred, &prepared),
@@ -373,7 +373,7 @@ pub(crate) fn team_local_invitations() {
         .team_invitation_inbox(f.host(), owner_cred, &created.team, None)
         .unwrap();
     assert_eq!(inbox.len(), 1);
-    assert_eq!(inbox[0].receipt, receipt);
+    assert_eq!(inbox[0].rsvp, rsvp);
     assert!(jc
         .foks()
         .team_invitation_inbox(f.host(), joiner_cred, &created.team, None)
@@ -387,11 +387,11 @@ pub(crate) fn team_local_invitations() {
     // Rejection is repeatable and a later fresh request may rejoin.
     f.client
         .foks()
-        .reject_team_invitation(f.host(), owner_cred, &created.team, &receipt)
+        .reject_team_invitation(f.host(), owner_cred, &created.team, &rsvp)
         .unwrap();
     f.client
         .foks()
-        .reject_team_invitation(f.host(), owner_cred, &created.team, &receipt)
+        .reject_team_invitation(f.host(), owner_cred, &created.team, &rsvp)
         .unwrap();
     assert!(f
         .client
@@ -403,11 +403,11 @@ pub(crate) fn team_local_invitations() {
         .foks()
         .prepare_local_invitation_acceptance(f.host(), joiner_cred, &invitation.invite)
         .unwrap();
-    let receipt2 = jc
+    let rsvp2 = jc
         .foks()
         .submit_local_invitation_acceptance(f.host(), joiner_cred, &again)
         .unwrap();
-    assert_ne!(receipt, receipt2);
+    assert_ne!(rsvp, rsvp2);
     let inbox = f
         .client
         .foks()
@@ -442,7 +442,7 @@ pub(crate) fn team_local_invitations() {
     assert!(matches!(
         f.client
             .foks()
-            .reject_team_invitation(f.host(), owner_cred, &created.team, &receipt2),
+            .reject_team_invitation(f.host(), owner_cred, &created.team, &rsvp2),
         Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
             code: 7002,
             ..
@@ -551,11 +551,11 @@ pub(crate) fn team_remote_invitations() {
         progress.operation.state,
         foks_client_db::MutationState::RemoteVerified
     );
-    let receipt = progress.receipt.unwrap();
+    let rsvp = progress.rsvp.unwrap();
     let request = destination
         .client
         .foks()
-        .load_remote_invitation_request(destination.host(), admin, &team, &receipt)
+        .load_remote_invitation_request(destination.host(), admin, &team, &rsvp)
         .unwrap();
     let payload = destination
         .client
@@ -574,7 +574,7 @@ pub(crate) fn team_remote_invitations() {
         .submit_remote_invitation(destination.host(), &duplicate)
         .unwrap();
     assert_ne!(
-        second, receipt,
+        second, rsvp,
         "Go returns fresh RSVP even for exact ciphertext"
     );
     assert_eq!(
@@ -589,12 +589,12 @@ pub(crate) fn team_remote_invitations() {
     destination
         .client
         .foks()
-        .reject_team_invitation(destination.host(), admin, &team, &receipt)
+        .reject_team_invitation(destination.host(), admin, &team, &rsvp)
         .unwrap();
     assert!(destination
         .client
         .foks()
-        .load_remote_invitation_request(destination.host(), admin, &team, &receipt)
+        .load_remote_invitation_request(destination.host(), admin, &team, &rsvp)
         .is_err());
     destination
         .client
@@ -718,7 +718,7 @@ pub(crate) fn team_remote_invitations() {
             admin,
             &team,
             &expanded,
-            &row.receipt,
+            &row.rsvp,
             &plan,
             &removal,
             &mut destination_protected,
@@ -734,7 +734,7 @@ pub(crate) fn team_remote_invitations() {
     assert!(destination
         .client
         .foks()
-        .reject_team_invitation(destination.host(), admin, &team, &row.receipt)
+        .reject_team_invitation(destination.host(), admin, &team, &row.rsvp)
         .is_err());
     let membership = home
         .client
@@ -934,7 +934,7 @@ fn team_joiners_keep_source_role_and_admin_signer_separate() {
                 &destination.team,
                 verified.verified(),
                 None,
-                delivered.receipt.as_ref().unwrap(),
+                delivered.rsvp.as_ref().unwrap(),
                 &plan,
                 &removal,
                 &mut protected,
@@ -1110,7 +1110,7 @@ fn remote_team_invitation_posts_home_intent_and_loads_destination_keys() {
             &destination.team,
             &remote.verified,
             Some(&payload.permission),
-            &row.receipt,
+            &row.rsvp,
             &plan,
             &removal,
             &mut dp,
@@ -1327,12 +1327,12 @@ fn invitation_inbox_ties_are_bounded_and_do_not_skip_filtered_prefixes() {
     for n in 0..1001_u32 {
         let mut local = [57_u8; 17];
         local[1..5].copy_from_slice(&n.to_be_bytes());
-        let mut remote_receipt = local;
-        remote_receipt[0] = 56;
+        let mut remote_rsvp = local;
+        remote_rsvp[0] = 56;
         let mut joiner = [1_u8; 33];
         joiner[1..5].copy_from_slice(&n.to_be_bytes());
         tx.execute("INSERT INTO team_local_join_requests(receipt,team_id,joiner_id,source_role_type,source_visibility,state,permission,created_ms) VALUES(?1,?2,?3,3,0,0,?4,1000)",rusqlite::params![local.as_slice(),team.as_bytes(),joiner.as_slice(),[55_u8;17].as_slice()]).unwrap();
-        tx.execute("INSERT INTO team_remote_join_requests(receipt,team_id,certificate_hash,exact_request,state,created_ms) VALUES(?1,?2,?3,?4,0,1000)",rusqlite::params![remote_receipt.as_slice(),team.as_bytes(),cert.invite.hash.as_slice(),remote.as_slice()]).unwrap();
+        tx.execute("INSERT INTO team_remote_join_requests(receipt,team_id,certificate_hash,exact_request,state,created_ms) VALUES(?1,?2,?3,?4,0,1000)",rusqlite::params![remote_rsvp.as_slice(),team.as_bytes(),cert.invite.hash.as_slice(),remote.as_slice()]).unwrap();
     }
     tx.commit().unwrap();
     let read = |limit, start, end| {
@@ -1353,7 +1353,7 @@ fn invitation_inbox_ties_are_bounded_and_do_not_skip_filtered_prefixes() {
     assert_eq!(read(10_000, 1000, 1000).len(), 2000); // remains incomplete; never subtract a millisecond.
     let identities = page
         .iter()
-        .map(|r| r.receipt.expose().to_vec())
+        .map(|r| r.rsvp.expose().to_vec())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(identities.len(), 6);
     // A newer insert between inclusive reads cannot make the older tie group
@@ -1369,7 +1369,7 @@ fn invitation_inbox_ties_are_bounded_and_do_not_skip_filtered_prefixes() {
         .iter()
         .all(|r| matches!(r.state, foks_proto::JoinRequestState::Pending)));
     // Existing rows remain readable at capacity, but another public guest
-    // admission is rejected without creating a receipt or evicting a request.
+    // admission is rejected without creating a rsvp or evicting a request.
     let home = Fixture::start("invitation-quota-home");
     let applicant = home
         .client

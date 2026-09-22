@@ -178,7 +178,7 @@ fn operator_grant_and_credential_are_reloaded_inside_mutations() {
     );
 }
 #[test]
-fn invite_receipt_survives_form_deadline_and_configuration_cas_ignores_redemption() {
+fn invite_redemption_record_survives_form_deadline_and_configuration_cas_ignores_redemption() {
     let mut f = fixture();
     session(&mut f, true);
     f.database

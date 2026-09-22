@@ -16,10 +16,10 @@ fn lost_response_replays_exact_bytes_without_repeating_mutation() {
     );
     assert!(matches!(
         common::commit_with_request(&mut database.database, None, [0x98; 32]),
-        Err(Error::ReceiptConflict)
+        Err(Error::OperationConflict)
     ));
     assert!(matches!(
         common::commit_with_request_at(&mut database.database, None, [0x99; 32], 2_000_000,),
-        Err(Error::ReceiptExpired)
+        Err(Error::OperationExpired)
     ));
 }

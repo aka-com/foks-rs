@@ -1,6 +1,6 @@
 use crate::commands::accounts::{
-    account_sync_response, backup_commit_response, backup_phrase_response,
-    backup_revocation_response, passphrase_response,
+    account_sync_response, backup_commit_response, backup_revocation_response, passphrase_response,
+    recovery_phrase_response,
 };
 use crate::commands::enrollment::{
     device_provision_response, execute_initialization_recovery, go_profile_discovery_response,
@@ -375,7 +375,7 @@ fn discovery_bindings_stay_absent_rather_than_empty_across_the_boundary() {
 
 #[test]
 fn every_first_run_mutation_success_is_shape_and_request_bound() {
-    assert!(backup_phrase_response(
+    assert!(recovery_phrase_response(
         serde_json::json!({
             "backup_alias":"paper",
             "phrase":"abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon"
@@ -389,7 +389,9 @@ fn every_first_run_mutation_success_is_shape_and_request_bound() {
         serde_json::json!({"backup_alias":"paper","phrase":"abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon 0 abandon","invented":true}),
     ] {
         assert_eq!(
-            backup_phrase_response(malformed, "paper").unwrap_err().code,
+            recovery_phrase_response(malformed, "paper")
+                .unwrap_err()
+                .code,
             "invalid-response"
         );
     }

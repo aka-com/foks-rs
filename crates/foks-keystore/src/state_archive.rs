@@ -23,7 +23,7 @@ const TRAILER_INDEX: u32 = u32::MAX - 1;
 const TRAILER_BYTES: usize = 52;
 const KDF_DOMAIN: &[u8] = b"foks-state-transfer-key-v1\0";
 
-/// A generated random key, never a password or account backup phrase.
+/// A generated random key, never a password or account recovery phrase.
 pub struct StateTransferKey(Zeroizing<[u8; 32]>);
 impl std::fmt::Debug for StateTransferKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

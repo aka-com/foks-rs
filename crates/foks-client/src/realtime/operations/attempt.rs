@@ -1,4 +1,4 @@
-//! Attempt prepared work once and verify exact receipts.
+//! Attempt prepared work once and verify exact server confirmations.
 use super::*;
 
 impl ChatSession<'_> {
@@ -89,8 +89,8 @@ impl ChatSession<'_> {
             }
         };
         match (&request, response) {
-            (RealtimeRequest::Send(arg), RealtimeResponse::Sent(receipt)) => {
-                self.confirm_send(op, &arg.send, receipt)?
+            (RealtimeRequest::Send(arg), RealtimeResponse::Sent(send_receipt)) => {
+                self.confirm_send(op, &arg.send, send_receipt)?
             }
             (RealtimeRequest::CreateChannel(_), RealtimeResponse::Void) => {
                 self.hard()?.chat_confirm(id, &op.scope.channel)?
@@ -104,21 +104,23 @@ impl ChatSession<'_> {
         &self,
         op: &ChatOperation,
         send: &RtSend,
-        receipt: RtSendResult,
+        send_receipt: ChatSendReceipt,
     ) -> Result<()> {
-        if receipt.sequence <= send.metadata.previous_sequence || receipt.sequence > i64::MAX as u64
+        if send_receipt.sequence <= send.metadata.previous_sequence
+            || send_receipt.sequence > i64::MAX as u64
         {
-            return Err(Error::ChatIntegrity("invalid message receipt"));
+            return Err(Error::ChatIntegrity("invalid chat send receipt"));
         }
         let m = RtMessage {
             metadata: send.metadata.clone(),
             wrapper: send.wrapper.clone(),
-            sequence: receipt.sequence,
-            insert_time: receipt.insert_time,
+            sequence: send_receipt.sequence,
+            insert_time: send_receipt.insert_time,
             sender: Some(RtPartyId::new(self.credential.uid.clone())?),
         };
         self.hard()?.chat_accept(&op.scope, &[anchor(&m)?])?;
-        self.hard()?.chat_confirm(&op.id, &receipt.encoded()?)?;
+        self.hard()?
+            .chat_confirm(&op.id, &send_receipt.encoded()?)?;
         Ok(())
     }
 }

@@ -112,7 +112,7 @@ impl PendingBot {
     }
 }
 impl CheckedProfileSession<'_> {
-    fn clean_bot_receipts(
+    fn clean_bot_completion_records(
         &self,
         uid: &[u8],
         vault: &mut AccountVault<'_>,
@@ -122,7 +122,11 @@ impl CheckedProfileSession<'_> {
         let host = self.pinned_host()?;
         let mut store = HardStateStore::open(&self.paths.hard_database)?;
         let mut protected = self.mutation_store(master)?;
-        for op in store.expired_bot_enrollment_receipts(host.host_id().as_bytes(), uid, before)? {
+        for op in store.expired_bot_enrollment_completion_records(
+            host.host_id().as_bytes(),
+            uid,
+            before,
+        )? {
             let key = enrollment_key(&op.operation_id);
             match vault.store.get(&key) {
                 Ok(raw) => {
@@ -153,7 +157,7 @@ impl CheckedProfileSession<'_> {
                 }
                 Err(e) => return Err(e.into()),
             }
-            store.delete_bot_enrollment_receipt(&op.operation_id)?;
+            store.delete_bot_enrollment_completion_record(&op.operation_id)?;
         }
         let mut removed = 0;
         for key in vault
@@ -210,7 +214,7 @@ impl CheckedProfileSession<'_> {
                 c.device_id()?.as_bytes().to_vec(),
             ))
         })?;
-        self.clean_bot_receipts(
+        self.clean_bot_completion_records(
             &uid,
             vault,
             master,
@@ -223,7 +227,9 @@ impl CheckedProfileSession<'_> {
             .filter(|k| k.starts_with("bot-enrollment."))
             .collect::<Vec<_>>();
         if keys.len() >= 4096 {
-            return Err(Error::InvalidAccount("bot enrollment receipt capacity"));
+            return Err(Error::InvalidAccount(
+                "bot enrollment completion-record capacity",
+            ));
         }
         let mut pending = 0;
         for key in keys {

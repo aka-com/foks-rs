@@ -712,7 +712,8 @@ fn bot_enrollment_after_lost_reply_stays_bound_across_sso_reauthentication() {
 }
 
 #[test]
-pub(crate) fn migration_two_accounts_owner_proofs_late_link_and_erased_token_receipt() {
+pub(crate) fn migration_two_accounts_owner_proofs_late_link_and_erased_token_authorization_binding()
+{
     use foks_proto::{SsoAccountState as A, SsoPurpose as P};
     use foks_server_db::{SsoPolicyTransition as T, SsoRolloutMode as M};
     use foks_yubi::{MockYubiProvider, Pin, PivPolicy, SlotId, YubiProvider as _};
@@ -948,7 +949,7 @@ pub(crate) fn migration_two_accounts_owner_proofs_late_link_and_erased_token_rec
             Some(commitment),
         )
         .unwrap();
-    assert_eq!(status.committed_receipt, Some(commitment));
+    assert_eq!(status.committed_authorization_binding, Some(commitment));
     assert!(!status.access_available);
     assert_ne!(status.provider_blocked_reason, 0);
     assert_eq!(

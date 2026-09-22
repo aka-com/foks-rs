@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 /// Best-effort, nonblocking wake hints after durable commit. Implementations
 /// must not panic or perform blocking delivery. Inbox versions remain the source
-/// of truth: missed/coalesced hints must never affect receipts or recovery.
+/// of truth: missed/coalesced hints must never affect send confirmations or recovery.
 pub(crate) trait RealtimeNotifier: Send + Sync {
     fn notify(&self, targets: &[RealtimeWakeTarget]);
 }
@@ -155,14 +155,16 @@ impl RealtimeService {
                 Ok(Response::Void)
             }
             RealtimeRequest::Send(arg) => {
-                let receipt = after_commit(
+                let send_receipt = after_commit(
                     writer.call_with_current_time(Arc::clone(clock), move |db, now| {
                         Ok(db.rt_send(&actor, &arg, now)?)
                     }),
                     self.notifier.as_ref(),
                 )?;
                 Ok(Response::Data(
-                    receipt.encoded().map_err(|_| RpcStatus::TransactionRetry)?,
+                    send_receipt
+                        .encoded()
+                        .map_err(|_| RpcStatus::TransactionRetry)?,
                 ))
             }
             RealtimeRequest::ReadThrough(arg) => {
@@ -279,7 +281,7 @@ fn db_error(error: DbError) -> RpcStatus {
         }
         DbError::Duplicate("realtime channel") => RpcStatus::RtChannelExists,
         DbError::NotFound(_) => RpcStatus::RtNotFound("realtime object not found".into()),
-        DbError::ReceiptConflict => {
+        DbError::OperationConflict => {
             RpcStatus::RtRace("message ID conflicts with an existing message".into())
         }
         DbError::Invalid(_) | DbError::IntegerRange => {

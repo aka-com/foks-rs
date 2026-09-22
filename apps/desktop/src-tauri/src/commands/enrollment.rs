@@ -13,7 +13,6 @@ use crate::commands::servers::{
     check_existing_or_add_profile, require_transport_profile, valid_probe_target, CheckedProfileDto,
 };
 use crate::commands::types::MutationDto;
-use crate::commands::validation::{backup_phrase, valid_device_name, valid_username};
 use crate::commands::validation::{
     bounded_field, bounded_local_name, confirmed_passphrase, deserialize_secret, invalid_request,
     invalid_response, optional_bounded_field, optional_confirmed_passphrase, pairing_phrase,
@@ -22,6 +21,7 @@ use crate::commands::validation::{
     valid_typed_entity_id_hex, BACKUP_ID_PREFIX, DEVICE_ID_PREFIX, HOST_ID_PREFIX,
     MAXIMUM_FIRST_RUN_ROWS, MAXIMUM_INVITE_BYTES, MAXIMUM_RECOVERY_PHRASE_BYTES, USER_ID_PREFIX,
 };
+use crate::commands::validation::{recovery_phrase, valid_device_name, valid_username};
 use foks_agent_proto::{
     CredentialBackend, Operation, PendingOperationKind, PendingOperationSummary, SecretString,
 };
@@ -703,7 +703,7 @@ pub async fn recover_owner_account(
     let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
     let expected_alias = target_alias.clone();
     let device_name = valid_device_name(&device_name)?;
-    let phrase = backup_phrase(phrase)?;
+    let phrase = recovery_phrase(phrase)?;
     let serial = positive_recovery_serial()?;
     let operation = Operation::RecoverOwnerAccount {
         profile: profile.clone(),
@@ -736,7 +736,7 @@ pub async fn resume_owner_recovery(
     let target_alias = bounded_local_name(&target_alias, "Choose a valid pending recovery alias.")?;
     let expected_alias = target_alias.clone();
     let device_name = valid_device_name(&device_name)?;
-    let phrase = backup_phrase(phrase)?;
+    let phrase = recovery_phrase(phrase)?;
     let operation = Operation::ResumeOwnerRecovery {
         profile: profile.clone(),
         target_alias: target_alias.clone(),

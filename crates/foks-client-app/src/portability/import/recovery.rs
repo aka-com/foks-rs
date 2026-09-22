@@ -85,7 +85,7 @@ fn pending_projection(
             .ok_or(Error::StateRecoveryRequired)?;
         if matches!(
             key,
-            crate::MASTER_KEY_RECORD | crate::STATE_ROOT_RECORD | INTENT | RECEIPT
+            crate::MASTER_KEY_RECORD | crate::STATE_ROOT_RECORD | INTENT | IMPORT_COMPLETION_MARKER
         ) {
             return Err(Error::StateRecoveryRequired);
         }
@@ -178,14 +178,14 @@ pub(super) fn finish(
     hook("before-import-marker-remove-sync")?;
     File::open(&identity.destination)?.sync_all()?;
     hook("after-import-marker-remove-sync")?;
-    hook("before-import-native-receipt")?;
+    hook("before-import-native-completion-marker")?;
     guard.with_native_manifest(|native| {
         validate_native(native, &intent)?;
-        native.put(RECEIPT, &serde_json::to_vec(&intent)?)?;
+        native.put(IMPORT_COMPLETION_MARKER, &serde_json::to_vec(&intent)?)?;
         native.remove(INTENT)?;
         Ok(())
     })?;
-    hook("after-import-native-receipt")?;
+    hook("after-import-native-completion-marker")?;
     finalize_selection_and_locator(guard, &intent, hook)?;
     Ok(StateImportReport {
         destination: identity.destination,
@@ -371,7 +371,7 @@ fn discover(destination: &Path) -> Result<(Intent, bool)> {
     let active = native_intent(&native, INTENT)?;
     let completed = active.is_none();
     let intent = active
-        .or(native_intent(&native, RECEIPT)?)
+        .or(native_completion_marker(&native)?)
         .ok_or(Error::StateRecoveryRequired)?;
     if intent.marker.identity.state_id != id
         || intent.marker.identity.destination != destination
@@ -393,7 +393,7 @@ fn recover(destination: &Path, hook: &mut Hook<'_>) -> Result<StateImportReport>
     let native = read_native(&guard)?.ok_or(Error::StateRecoveryRequired)?;
     if completed {
         if native_intent(&native, INTENT)?.is_some()
-            || native_intent(&native, RECEIPT)?.as_ref() != Some(&intent)
+            || native_completion_marker(&native)?.as_ref() != Some(&intent)
             || intent.marker.phase != Phase::Verified
         {
             return Err(Error::StateRecoveryRequired);
@@ -468,7 +468,7 @@ pub fn import_status(destination: impl AsRef<Path>) -> Result<Option<StateImport
     };
     let active = native_intent(&native, INTENT)?;
     let pending = active.is_some() || locator.is_some();
-    let Some(intent) = active.or(native_intent(&native, RECEIPT)?) else {
+    let Some(intent) = active.or(native_completion_marker(&native)?) else {
         return if pending {
             Err(Error::StateRecoveryRequired)
         } else {

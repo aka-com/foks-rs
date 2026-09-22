@@ -36,16 +36,16 @@ struct AccountResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BackupPhraseDto {
+pub struct RecoveryPhraseDto {
     pub backup_alias: String,
     #[serde(serialize_with = "serialize_secret")]
     pub phrase: Zeroizing<String>,
 }
 
-impl std::fmt::Debug for BackupPhraseDto {
+impl std::fmt::Debug for RecoveryPhraseDto {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("BackupPhraseDto")
+            .debug_struct("RecoveryPhraseDto")
             .field("backup_alias", &self.backup_alias)
             .field("phrase", &"[REDACTED]")
             .finish()
@@ -54,7 +54,7 @@ impl std::fmt::Debug for BackupPhraseDto {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BackupPhraseResponse {
+struct RecoveryPhraseResponse {
     backup_alias: String,
     #[serde(deserialize_with = "deserialize_secret")]
     phrase: Zeroizing<String>,
@@ -104,11 +104,11 @@ struct BackupRevocationResponse {
     removed_local_enrollment: bool,
 }
 
-pub(super) fn backup_phrase_response(
+pub(super) fn recovery_phrase_response(
     value: serde_json::Value,
     expected_backup: &str,
-) -> Result<BackupPhraseDto, AgentError> {
-    let response: BackupPhraseResponse =
+) -> Result<RecoveryPhraseDto, AgentError> {
+    let response: RecoveryPhraseResponse =
         serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
     if response.backup_alias != expected_backup
         || response.phrase.is_empty()
@@ -120,7 +120,7 @@ pub(super) fn backup_phrase_response(
             "The agent returned an invalid recovery phrase.",
         ));
     }
-    Ok(BackupPhraseDto {
+    Ok(RecoveryPhraseDto {
         backup_alias: response.backup_alias,
         phrase: response.phrase,
     })
@@ -671,7 +671,7 @@ pub async fn prepare_owner_backup(
     profile: String,
     account_alias: String,
     backup_alias: String,
-) -> Result<BackupPhraseDto, AgentError> {
+) -> Result<RecoveryPhraseDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     let state = state.for_profile(&profile)?;
@@ -686,7 +686,7 @@ pub async fn prepare_owner_backup(
         backup_alias,
     };
     let value = read_profile_operation_value(&state, profile, operation).await?;
-    backup_phrase_response(value, &expected)
+    recovery_phrase_response(value, &expected)
 }
 
 #[tauri::command]
@@ -711,7 +711,7 @@ pub async fn commit_owner_backup(
     let phrase = bounded_secret(
         phrase,
         MAXIMUM_RECOVERY_PHRASE_BYTES,
-        "Backup phrase must be a single line of at most 4,096 bytes.",
+        "Recovery phrase must be a single line of at most 4,096 bytes.",
     )?;
     let operation = Operation::CommitOwnerBackup {
         profile: profile.clone(),

@@ -33,7 +33,7 @@ impl Database {
     }
 
     // No remote extended creation route is enabled until its durable command
-    // and receipt contracts are implemented. Kept private to the RT subsystem.
+    // and send-confirmation contracts are implemented. Kept private to the RT subsystem.
     pub(super) fn rt_create_channel_with_format(
         &mut self,
         actor: &RealtimeActor,

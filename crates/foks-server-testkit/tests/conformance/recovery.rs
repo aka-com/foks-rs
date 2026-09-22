@@ -42,7 +42,7 @@ pub(crate) fn recovery_success() {
 
     // Recovery normally begins on a fresh installation. Give it an
     // independent durable trust store so the test also proves reconstruction
-    // from the host pin and backup phrase alone.
+    // from the host pin and recovery phrase alone.
     let recovery_client = TestClient::new(&fixture.environment, "recovery-fresh-client").unwrap();
     let recovery_probe = recovery_client.probe_and_pin().unwrap();
     let located = recovery_client

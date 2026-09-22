@@ -35,9 +35,9 @@ pub enum Error {
     #[error("opposing invitation decision already committed")]
     InvitationDecisionConflict,
     #[error("idempotency identity was reused with different request bytes")]
-    ReceiptConflict,
-    #[error("idempotency receipt expired")]
-    ReceiptExpired,
+    OperationConflict,
+    #[error("idempotency record expired")]
+    OperationExpired,
     #[error("expected Merkle head does not match the authoritative head")]
     StaleRoot,
     #[error("realtime version changed")]

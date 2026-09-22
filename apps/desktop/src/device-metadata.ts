@@ -84,7 +84,7 @@ export class DeviceMetadata {
     for (const [query, entry] of this.entries) {
       if (desired.has(query)) continue;
       entry.release();
-      if (entry.store) this.alerts.forgetPaperKey(entry.store);
+      if (entry.store) this.alerts.forgetRecoveryPhrase(entry.store);
       this.entries.delete(query);
     }
     for (const [query, scope] of desired) {
@@ -192,7 +192,7 @@ export class DeviceMetadata {
     this.active = false;
     for (const entry of this.entries.values()) {
       entry.release();
-      if (entry.store) this.alerts.forgetPaperKey(entry.store);
+      if (entry.store) this.alerts.forgetRecoveryPhrase(entry.store);
     }
     this.entries.clear();
     this.snapshot = undefined;
@@ -227,11 +227,11 @@ export class DeviceMetadata {
             )
               ready++;
             if (state?.data && !state.error && !state.data.backupsUnavailable)
-              this.alerts.reportPaperKey(
+              this.alerts.reportRecoveryPhrase(
                 store.id,
                 state.data.backups.length > 0,
               );
-            else this.alerts.forgetPaperKey(store.id);
+            else this.alerts.forgetRecoveryPhrase(store.id);
           }
           const states = entries.map((entry) => entry.query.getSnapshot());
           const error = states.find(

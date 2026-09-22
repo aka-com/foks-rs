@@ -101,7 +101,7 @@ async function harness() {
   ): FirstRunCheckpoint => ({
     ...state.initialFirstRun('own', step),
     // Not the managed local server: that path's recovery step offers the
-    // backup phrase alone, and the passphrase this test types is on the step
+    // recovery phrase alone, and the passphrase this test types is on the step
     // an account on a configured server reaches.
     managedLocal: false,
     serverAddress: 'localhost:4430',

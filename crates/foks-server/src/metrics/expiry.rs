@@ -12,7 +12,7 @@ pub enum ExpiryKind {
     TeamAdminTokens,
     SsoSessions,
     LogSends,
-    RequestReceipts,
+    RequestIdempotencyRecords,
 }
 
 impl ExpiryKind {
@@ -25,7 +25,7 @@ impl ExpiryKind {
         Self::TeamAdminTokens,
         Self::SsoSessions,
         Self::LogSends,
-        Self::RequestReceipts,
+        Self::RequestIdempotencyRecords,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -38,7 +38,7 @@ impl ExpiryKind {
             Self::TeamAdminTokens => "team_admin_tokens",
             Self::SsoSessions => "sso_sessions",
             Self::LogSends => "log_sends",
-            Self::RequestReceipts => "request_receipts",
+            Self::RequestIdempotencyRecords => "request_receipts",
         }
     }
 
@@ -52,7 +52,7 @@ impl ExpiryKind {
             Self::TeamAdminTokens => report.team_admin_tokens,
             Self::SsoSessions => report.sso_sessions,
             Self::LogSends => report.log_sends,
-            Self::RequestReceipts => report.receipts,
+            Self::RequestIdempotencyRecords => report.idempotency_records,
         }
     }
 }
@@ -111,7 +111,7 @@ mod tests {
             team_admin_tokens: 6,
             sso_sessions: 7,
             log_sends: 8,
-            receipts: 9,
+            idempotency_records: 9,
             ..Default::default()
         });
         assert_eq!(

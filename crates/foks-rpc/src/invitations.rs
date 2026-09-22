@@ -76,21 +76,21 @@ pub fn encode_load_team_inbox_request(
         ],
     )
 }
-pub fn encode_load_remote_join_request(tok: &[u8; 16], receipt: &TeamRsvp) -> Result<Vec<u8>> {
-    if !receipt.is_remote() {
-        return Err(foks_proto::Error::IntegerRange("remote receipt required").into());
+pub fn encode_load_remote_join_request(tok: &[u8; 16], rsvp: &TeamRsvp) -> Result<Vec<u8>> {
+    if !rsvp.is_remote() {
+        return Err(foks_proto::Error::IntegerRange("remote rsvp required").into());
     }
     call(
         TEAM_ADMIN_PROTOCOL_ID,
         8,
-        vec![token(tok), decode(&receipt.encoded()?)?],
+        vec![token(tok), decode(&rsvp.encoded()?)?],
     )
 }
-pub fn encode_reject_join_request(tok: &[u8; 16], receipt: &TeamRsvp) -> Result<Vec<u8>> {
+pub fn encode_reject_join_request(tok: &[u8; 16], rsvp: &TeamRsvp) -> Result<Vec<u8>> {
     call(
         TEAM_ADMIN_PROTOCOL_ID,
         13,
-        vec![token(tok), decode(&receipt.encoded()?)?],
+        vec![token(tok), decode(&rsvp.encoded()?)?],
     )
 }
 pub fn encode_grant_local_user_view_request(

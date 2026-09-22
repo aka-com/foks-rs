@@ -93,7 +93,7 @@ struct ScopedPartyAddition<'a> {
     permission: Option<&'a PermissionToken>,
     destination_role: Role,
     removal_key: &'a SecretSeed,
-    receipt: Option<&'a foks_proto::TeamRsvp>,
+    rsvp: Option<&'a foks_proto::TeamRsvp>,
     plan: Option<&'a LocalTeamMemberAdditionPlan>,
 }
 
@@ -321,13 +321,13 @@ impl FoksClient {
         destination: &EntityId,
         source: &VerifiedTeamState,
         permission: Option<&PermissionToken>,
-        receipt: &foks_proto::TeamRsvp,
+        rsvp: &foks_proto::TeamRsvp,
         plan: &LocalTeamMemberAdditionPlan,
         removal: &SecretSeed,
         protected: &mut dyn ProtectedMutationStore,
     ) -> Result<AddedLocalTeamMember> {
-        if receipt.is_remote() != (source.host() != host.host_id()) {
-            return Err(Error::TeamBinding("invited team receipt host"));
+        if rsvp.is_remote() != (source.host() != host.host_id()) {
+            return Err(Error::TeamBinding("invited team rsvp host"));
         }
         let actor = self.authenticate_credential_and_pin(host, credential)?;
         let owner = current_owner_puk(&actor)?;
@@ -351,7 +351,7 @@ impl FoksClient {
                 permission,
                 destination_role: plan.destination_role,
                 removal_key: removal,
-                receipt: receipt.is_remote().then_some(receipt),
+                rsvp: rsvp.is_remote().then_some(rsvp),
                 plan: Some(plan),
             },
             None,
@@ -433,12 +433,12 @@ impl FoksClient {
         credential: crate::FederationCredential<'_, '_>,
         team: &EntityId,
         remote: &crate::ExpandedRemoteInvitation,
-        receipt: &foks_proto::TeamRsvp,
+        rsvp: &foks_proto::TeamRsvp,
         plan: &LocalTeamMemberAdditionPlan,
         removal: &SecretSeed,
         protected: &mut dyn ProtectedMutationStore,
     ) -> Result<AddedLocalTeamMember> {
-        if !receipt.is_remote()
+        if !rsvp.is_remote()
             || remote.payload.joiner.party != *remote.user.verified.uid()
             || remote.payload.joiner.host != *remote.user.verified.host()
         {
@@ -464,7 +464,7 @@ impl FoksClient {
                 permission: Some(&remote.payload.permission),
                 destination_role: plan.destination_role,
                 removal_key: removal,
-                receipt: Some(receipt),
+                rsvp: Some(rsvp),
                 plan: Some(plan),
             },
             None,
@@ -714,7 +714,7 @@ impl FoksClient {
                 permission: Some(&request.remote_team.permission),
                 destination_role: request.destination_role,
                 removal_key: request.removal_key,
-                receipt: None,
+                rsvp: None,
                 plan: None,
             },
             saga_id,
@@ -907,14 +907,14 @@ impl FoksClient {
                         ptk_role: member_floor_private.role,
                     },
                     join_request: RemoteTeamRsvp::new(
-                        request.receipt.map_or(join_request, |r| *r.expose()),
+                        request.rsvp.map_or(join_request, |r| *r.expose()),
                     )?,
                 };
                 vec![remote_token]
             } else {
                 Vec::new()
             };
-        let encode_admission = if scoped_host.is_none() && request.receipt.is_some() {
+        let encode_admission = if scoped_host.is_none() && request.rsvp.is_some() {
             foks_rpc::encode_local_invitation_admission_request
         } else {
             encode_add_team_member_request
@@ -926,7 +926,7 @@ impl FoksClient {
             removal_keys: &[removal_box],
             hepks: std::slice::from_ref(&target.hepk),
             remote_member_view_tokens: &remote_tokens,
-            local_permissions_for: if scoped_host.is_none() && request.receipt.is_none() {
+            local_permissions_for: if scoped_host.is_none() && request.rsvp.is_none() {
                 std::slice::from_ref(remote_id)
             } else {
                 &[]

@@ -27,7 +27,7 @@ user-chain response disclosed the commitment opening. Team demotion and removal
 select the exact authenticated local-user roster row by party ID; username
 is used only when adding a new member.
 Recovery phrases and hardware PINs use redacted, zeroizing request fields; the
-newly generated backup phrase is the sole secret response and is returned once
+newly generated recovery phrase is the sole secret response and is returned once
 so the frontend can place it in offline storage.
 
 Before credentials exist, the resident agent admits only `AgentStatus` and

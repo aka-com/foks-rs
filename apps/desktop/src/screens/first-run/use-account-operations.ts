@@ -267,9 +267,9 @@ export function useAccountOperations({
     setOperationResumable(false);
     setOperationRunning(false);
     setExistingAccountAdoptable(false);
-    let receiptError: string | null = null;
-    const withReceipt = (text: string): string =>
-      receiptError ? `${text} (Details: ${receiptError})` : text;
+    let statusError: string | null = null;
+    const withStatusError = (text: string): string =>
+      statusError ? `${text} (Details: ${statusError})` : text;
     try {
       if (intent.kind !== 'sso' && bridge.firstRunOperationStatus) {
         let outcome: 'complete' | 'rejected' | 'unknown' | 'running' =
@@ -291,7 +291,7 @@ export function useAccountOperations({
             onAgentReadinessFailure?.(typed);
             return;
           }
-          receiptError = typed.message;
+          statusError = typed.message;
         }
         if (
           !mounted.current ||
@@ -350,7 +350,7 @@ export function useAccountOperations({
       const problem = provisionedIdentityProblem(refreshed, probe);
       if (problem && problem !== 'account-missing') {
         setOperationProblem(problem);
-        setOperationStatus(withReceipt(identityProblemText[problem]));
+        setOperationStatus(withStatusError(identityProblemText[problem]));
         return;
       }
       if (intent.kind === 'sso' && intent.ssoOperationId) {
@@ -409,7 +409,7 @@ export function useAccountOperations({
       setOperationResumable(resumable);
       setExistingAccountAdoptable(adoptable);
       setOperationStatus(
-        withReceipt(
+        withStatusError(
           resumable
             ? 'Account setup was interrupted. Resume it to continue.'
             : adoptable

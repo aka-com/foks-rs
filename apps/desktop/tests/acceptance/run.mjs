@@ -187,7 +187,7 @@ async function visit(context, url, shot) {
     await page
       .waitForSelector('.sheet .word', { timeout: 5000 })
       .catch(() =>
-        problems.push('the one-time backup phrase was not prepared'),
+        problems.push('the one-time recovery phrase was not prepared'),
       );
   }
   const width = await page.evaluate(
@@ -669,7 +669,7 @@ async function firstRunWalk(context, origin) {
     await page.locator('.sheet .word').first().waitFor();
     await page.reload({ waitUntil: 'load' });
     if (await page.locator('.sheet').count())
-      failures.push('a prepared backup phrase survived reload');
+      failures.push('a prepared recovery phrase survived reload');
     await page
       .getByRole('button', {
         name: 'Generate a recovery phrase',
@@ -703,7 +703,7 @@ async function firstRunWalk(context, origin) {
     await page.locator('.notice', { hasText: 'Joined Engineering' }).waitFor();
     // The mock bridge starts with fixture inventory on reload; the checkpoint
     // survives, but the group created during this run does not. The app must
-    // retain the receipt and report that missing vault rather than invent it:
+    // retain the operation record and report that missing vault rather than invent it:
     // reconciliation drops back to the waiting pane, named for the team it
     // still remembers rather than a generic message.
     await reloadAt('Team vault unavailable');
@@ -712,11 +712,7 @@ async function firstRunWalk(context, origin) {
     const checkpoint = await page.evaluate(
       "window.localStorage.getItem('foks.first-run.v2') ?? ''",
     );
-    if (
-      /orbit|"invite"|"passphrase"|"recoveryPhrase"|"backupPhrase"/.test(
-        checkpoint,
-      )
-    ) {
+    if (/orbit|"invite"|"passphrase"|"recoveryPhrase"/.test(checkpoint)) {
       failures.push('the first-run checkpoint retained secret form material');
     }
   } catch (error) {
@@ -785,7 +781,7 @@ async function adeWalk(context, origin) {
     const tokens = await page.locator('.sheet .word').count();
     if (tokens !== 17) failures.push(`Ade saw ${tokens} backup tokens, not 17`);
     if (await page.getByRole('button', { name: /copy/i }).count())
-      failures.push('backup phrase offered a copy button');
+      failures.push('recovery phrase offered a copy button');
 
     await page.goto(`${origin}/?state=settings-enrol`, { waitUntil: 'load' });
     await page

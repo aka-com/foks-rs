@@ -3,7 +3,7 @@ use foks_agent_proto::{account::RenameAction, Operation, ResponseResult, SecretS
 use std::path::{Path, PathBuf};
 #[derive(clap::Subcommand)]
 pub enum RenameCommand {
-    /// Recover pending handles and inspect recent receipts.
+    /// Recover pending handles and inspect recent completion records.
     List(Scope),
     /// Prepare an immutable rename; returns the operation handle for confirmation.
     Prepare {

@@ -10,7 +10,7 @@ import {
   decodeMutation,
   decodeCheckedProfile,
   decodePendingOperations,
-  decodeBackupPhrase,
+  decodeRecoveryPhrase,
   decodeGroupDiscovery,
   decodeServerStatus,
   decodeProfileReconciliation,
@@ -445,7 +445,7 @@ test('decoders successfully parse the full wire contract golden fixture', async 
     decodePendingOperations([fixture.pendingOperation])[0]?.kind,
     'account-recovery',
   );
-  assert.equal(decodeBackupPhrase(fixture.backupPhrase).backupAlias, 'paper');
+  assert.equal(decodeRecoveryPhrase(fixture.recoveryPhrase).backupAlias, 'paper');
   assert.equal(
     decodeGroupDiscovery(fixture.groupDiscovery).groups[0]?.name,
     'Engineering',

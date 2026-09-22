@@ -25,7 +25,7 @@ enum VaultFamily {
     FederationExpulsion,
     BotEnrollment,
     InvitationInbox,
-    InvitationReceipt,
+    InvitationCompletionRecord,
     WebAdmin,
 }
 fn parse_key(key: &str) -> Result<(VaultFamily, &str)> {
@@ -51,7 +51,7 @@ fn parse_key(key: &str) -> Result<(VaultFamily, &str)> {
         "federation-expulsion" => VaultFamily::FederationExpulsion,
         "bot-enrollment" => VaultFamily::BotEnrollment,
         "invitation-inbox" => VaultFamily::InvitationInbox,
-        "invitation-receipt" => VaultFamily::InvitationReceipt,
+        "invitation-receipt" => VaultFamily::InvitationCompletionRecord,
         "web-admin" => VaultFamily::WebAdmin,
         _ => {
             return Err(Error::InvalidAccount(
@@ -154,7 +154,7 @@ impl AccountVault<'_> {
             VaultFamily::BotEnrollment => {
                 crate::bot_token::validate_inventory_record(self, alias, hard, host)?
             }
-            VaultFamily::InvitationInbox | VaultFamily::InvitationReceipt => {
+            VaultFamily::InvitationInbox | VaultFamily::InvitationCompletionRecord => {
                 crate::invitations::validate_inventory_record(
                     self,
                     if matches!(family, VaultFamily::InvitationInbox) {

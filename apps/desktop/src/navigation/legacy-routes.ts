@@ -40,7 +40,7 @@ export const ACCOUNT_SECTION: Location = {
 
 /**
  * The tab a `section=` value written before the rail belongs to now. Recovery
- * devices, the backup phrase and security keys are Devices; Groups is Teams.
+ * devices, the recovery phrase and security keys are Devices; Groups is Teams.
  * `account` is a current section and needs no entry here.
  */
 export const RETIRED_SETTINGS_SECTIONS: Readonly<

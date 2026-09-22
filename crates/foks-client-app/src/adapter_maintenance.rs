@@ -305,7 +305,7 @@ mod tests {
                 probe: "unreachable.invalid:443".into(),
                 trust: TrustRoot::WebPki,
                 protocol: ProtocolPolicy::CurrentProbeOnly {
-                    canary_public_key: "00".repeat(32),
+                    compatibility_artifact_public_key: "00".repeat(32),
                     lease_url: "https://unreachable.invalid/lease".into(),
                     last_artifact: None,
                 },

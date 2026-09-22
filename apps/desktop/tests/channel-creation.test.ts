@@ -26,13 +26,13 @@ const prepared: ChatOperation = {
   channel: 'channel',
   kind: 'create-channel',
   state: 'prepared',
-  receipt: null,
+  confirmation: null,
   rejection_code: null,
 };
 const confirmed: ChatOperation = {
   ...prepared,
   state: 'confirmed',
-  receipt: { kind: 'channel-created' },
+  confirmation: { kind: 'channel-created' },
 };
 const input = { name: 'design', description: 'design discussion', admin: true };
 const reply = (operation: ChatOperation): ChatReply => ({
@@ -561,7 +561,7 @@ test('successful history is bounded and acknowledged terminal records are remove
     return reply({
       ...current,
       state: 'confirmed',
-      receipt: { kind: 'channel-created' },
+      confirmation: { kind: 'channel-created' },
     });
   });
   for (let index = 0; index < CHANNEL_CREATION_COMPLETION_LIMIT + 8; index++) {

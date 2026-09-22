@@ -193,7 +193,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         epoch: 4821,
       },
     },
-    backupPhrase:
+    recoveryPhrase:
       'orbit velvet lantern cactus mirror harbor pistol thumb copper fossil meadow rotate silent wagon bright ladder ivory',
   };
   let appLocked = false;
@@ -1115,11 +1115,11 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     setFirstRunPassphrase: async () => ({ applied: true }),
     prepareOwnerBackup: async (_profile, _accountAlias, backupAlias) => ({
       backupAlias,
-      phrase: firstRunFixture.backupPhrase,
+      phrase: firstRunFixture.recoveryPhrase,
     }),
     commitOwnerBackup: async (_profile, _accountAlias, backupAlias, phrase) => {
-      if (backupAlias !== 'paper' || phrase !== firstRunFixture.backupPhrase) {
-        throw failure('invalid-request', 'The backup phrase does not match.');
+      if (backupAlias !== 'paper' || phrase !== firstRunFixture.recoveryPhrase) {
+        throw failure('invalid-request', 'The recovery phrase does not match.');
       }
       return { applied: true };
     },

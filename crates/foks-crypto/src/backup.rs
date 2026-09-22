@@ -15,7 +15,7 @@ use crate::{
 };
 
 pub const BACKUP_SEED_BYTES: usize = 26;
-pub const BACKUP_PHRASE_TOKENS: usize = 17;
+pub const RECOVERY_PHRASE_TOKENS: usize = 17;
 const BACKUP_WORDS: usize = 9;
 const BACKUP_NUMBERS: usize = 8;
 const WORD_BITS: usize = 11;
@@ -24,18 +24,18 @@ const NUMBER_LIMIT: u16 = 1 << NUMBER_BITS;
 const BACKUP_TOP_MASK: u8 = 0x07;
 
 #[derive(Debug, Error)]
-pub enum BackupPhraseError {
-    #[error("backup phrase has {found} tokens, expected {BACKUP_PHRASE_TOKENS}")]
+pub enum RecoveryPhraseError {
+    #[error("recovery phrase has {found} tokens, expected {RECOVERY_PHRASE_TOKENS}")]
     TokenCount { found: usize },
-    #[error("backup phrase word {index} is not in the BIP-39 English dictionary")]
+    #[error("recovery phrase word {index} is not in the BIP-39 English dictionary")]
     Word { index: usize },
-    #[error("backup phrase number {index} is not an integer")]
+    #[error("recovery phrase number {index} is not an integer")]
     Number { index: usize },
-    #[error("backup phrase number {index} is outside 0..{NUMBER_LIMIT}")]
+    #[error("recovery phrase number {index} is outside 0..{NUMBER_LIMIT}")]
     NumberRange { index: usize },
     #[error("backup seed has nonzero unused high bits")]
     HighBits,
-    #[error("backup phrase arithmetic overflowed its fixed-width seed")]
+    #[error("recovery phrase arithmetic overflowed its fixed-width seed")]
     Overflow,
     #[error("operating-system randomness is unavailable")]
     Entropy,
@@ -43,7 +43,7 @@ pub enum BackupPhraseError {
     Crypto(#[from] crate::Error),
 }
 
-pub type BackupResult<T, E = BackupPhraseError> = std::result::Result<T, E>;
+pub type BackupResult<T, E = RecoveryPhraseError> = std::result::Result<T, E>;
 
 /// The exact 203-bit FOKS backup seed, held in zeroizing storage.
 pub struct BackupKey(Zeroizing<[u8; BACKUP_SEED_BYTES]>);
@@ -55,15 +55,15 @@ impl std::fmt::Debug for BackupKey {
 }
 
 /// A sensitive 17-token HESP representation. Debug output is always redacted.
-pub struct BackupPhrase(Zeroizing<Vec<String>>);
+pub struct RecoveryPhrase(Zeroizing<Vec<String>>);
 
-impl std::fmt::Debug for BackupPhrase {
+impl std::fmt::Debug for RecoveryPhrase {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("BackupPhrase([REDACTED])")
+        formatter.write_str("RecoveryPhrase([REDACTED])")
     }
 }
 
-impl BackupPhrase {
+impl RecoveryPhrase {
     /// Exposes the secret phrase tokens to the caller.
     pub fn expose_tokens(&self) -> &[String] {
         self.0.as_slice()
@@ -78,7 +78,7 @@ impl BackupKey {
     /// Generates a uniformly random FOKS v0.1.9 backup key.
     pub fn generate() -> BackupResult<Self> {
         let mut seed = Zeroizing::new([0_u8; BACKUP_SEED_BYTES]);
-        getrandom::fill(&mut *seed).map_err(|_| BackupPhraseError::Entropy)?;
+        getrandom::fill(&mut *seed).map_err(|_| RecoveryPhraseError::Entropy)?;
         seed[0] &= BACKUP_TOP_MASK;
         Self::from_zeroizing_seed(seed)
     }
@@ -90,7 +90,7 @@ impl BackupKey {
 
     fn from_zeroizing_seed(seed: Zeroizing<[u8; BACKUP_SEED_BYTES]>) -> BackupResult<Self> {
         if seed[0] & !BACKUP_TOP_MASK != 0 {
-            return Err(BackupPhraseError::HighBits);
+            return Err(RecoveryPhraseError::HighBits);
         }
         Ok(Self(seed))
     }
@@ -101,8 +101,8 @@ impl BackupKey {
     /// mutable phrase input in zeroizing storage and clear it after parsing.
     pub fn from_phrase(phrase: &str) -> BackupResult<Self> {
         let tokens = phrase.split_whitespace().collect::<Vec<_>>();
-        if tokens.len() != BACKUP_PHRASE_TOKENS {
-            return Err(BackupPhraseError::TokenCount {
+        if tokens.len() != RECOVERY_PHRASE_TOKENS {
+            return Err(RecoveryPhraseError::TokenCount {
                 found: tokens.len(),
             });
         }
@@ -112,16 +112,16 @@ impl BackupKey {
         for (index, token) in tokens.iter().step_by(2).enumerate() {
             words[index] = dictionary
                 .binary_search(token)
-                .map_err(|_| BackupPhraseError::Word { index })?
+                .map_err(|_| RecoveryPhraseError::Word { index })?
                 .try_into()
                 .expect("the BIP-39 dictionary has 2048 entries");
         }
         for (index, token) in tokens.iter().skip(1).step_by(2).enumerate() {
             let value = token
                 .parse::<i64>()
-                .map_err(|_| BackupPhraseError::Number { index })?;
+                .map_err(|_| RecoveryPhraseError::Number { index })?;
             if !(0..i64::from(NUMBER_LIMIT)).contains(&value) {
-                return Err(BackupPhraseError::NumberRange { index });
+                return Err(RecoveryPhraseError::NumberRange { index });
             }
             numbers[index] = value as u16;
         }
@@ -141,10 +141,10 @@ impl BackupKey {
         Self::from_phrase(&phrase)
     }
 
-    pub fn phrase(&self) -> BackupPhrase {
+    pub fn phrase(&self) -> RecoveryPhrase {
         let dictionary = Language::English.word_list();
         let mut remaining = Zeroizing::new(*self.0);
-        let mut tokens = Zeroizing::new(Vec::with_capacity(BACKUP_PHRASE_TOKENS));
+        let mut tokens = Zeroizing::new(Vec::with_capacity(RECOVERY_PHRASE_TOKENS));
         for index in 0..BACKUP_WORDS {
             let word = take_low_bits(&mut remaining, WORD_BITS);
             tokens.push(dictionary[usize::from(word)].to_owned());
@@ -154,7 +154,7 @@ impl BackupKey {
             }
         }
         debug_assert!(remaining.iter().all(|byte| *byte == 0));
-        BackupPhrase(tokens)
+        RecoveryPhrase(tokens)
     }
 
     /// The first word/number pair is the public device name used by FOKS.
@@ -295,7 +295,7 @@ fn push_bits(bytes: &mut [u8; BACKUP_SEED_BYTES], value: u16, count: usize) -> B
             carry = next;
         }
         if carry != 0 {
-            return Err(BackupPhraseError::Overflow);
+            return Err(RecoveryPhraseError::Overflow);
         }
     }
     let tail = bytes.len() - 2;
@@ -363,7 +363,7 @@ mod tests {
             .join(" ");
         assert!(matches!(
             BackupKey::from_phrase(&too_short),
-            Err(BackupPhraseError::TokenCount { found: 16 })
+            Err(RecoveryPhraseError::TokenCount { found: 16 })
         ));
         assert_eq!(
             BackupKey::from_phrase(&phrase.replacen(" 0 ", " 00 ", 1))
@@ -373,7 +373,7 @@ mod tests {
         );
         assert!(matches!(
             BackupKey::from_seed([0xff; BACKUP_SEED_BYTES]),
-            Err(BackupPhraseError::HighBits)
+            Err(RecoveryPhraseError::HighBits)
         ));
 
         let tokens = phrase.split_whitespace().collect::<Vec<_>>();
@@ -381,21 +381,21 @@ mod tests {
         invalid_word[0] = "not-a-bip39-word";
         assert!(matches!(
             BackupKey::from_phrase(&invalid_word.join(" ")),
-            Err(BackupPhraseError::Word { index: 0 })
+            Err(RecoveryPhraseError::Word { index: 0 })
         ));
 
         let mut invalid_number = tokens.clone();
         invalid_number[1] = "NaN";
         assert!(matches!(
             BackupKey::from_phrase(&invalid_number.join(" ")),
-            Err(BackupPhraseError::Number { index: 0 })
+            Err(RecoveryPhraseError::Number { index: 0 })
         ));
 
         let mut out_of_range = tokens;
         out_of_range[1] = "8192";
         assert!(matches!(
             BackupKey::from_phrase(&out_of_range.join(" ")),
-            Err(BackupPhraseError::NumberRange { index: 0 })
+            Err(RecoveryPhraseError::NumberRange { index: 0 })
         ));
     }
 
@@ -403,7 +403,7 @@ mod tests {
     fn debug_is_redacted() {
         let key = BackupKey::from_seed([0; BACKUP_SEED_BYTES]).unwrap();
         assert_eq!(format!("{key:?}"), "BackupKey([REDACTED])");
-        assert_eq!(format!("{:?}", key.phrase()), "BackupPhrase([REDACTED])");
+        assert_eq!(format!("{:?}", key.phrase()), "RecoveryPhrase([REDACTED])");
     }
 
     #[test]

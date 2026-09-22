@@ -436,7 +436,7 @@ export function VaultShell({
   // The rail's Teams badge reads the shared request-count rows, one per
   // named team this account can manage, loaded on unlock and kept by the
   // repository the shell provides to its pages, so the Teams list and a
-  // team's page read the same rows. Devices' dot reads the paper-key facts
+  // team's page read the same rows. Devices' dot reads the recovery-phrase facts
   // maintained by the shell's shared metadata subscriptions. See
   // `device-alert.ts`.
   const teamRequestCounts = useTeamRequestCounts(

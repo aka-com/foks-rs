@@ -12,13 +12,13 @@ pub enum InvitationIntent {
     LocalAcceptance(LocalInviteAcceptance),
     Rejection {
         team: EntityId,
-        receipt: TeamRsvp,
+        rsvp: TeamRsvp,
     },
 }
 pub struct InvitationProgress {
     pub operation: MutationOperation,
     /// Delivery acknowledgment only; never proof of membership.
-    pub receipt: Option<TeamRsvp>,
+    pub rsvp: Option<TeamRsvp>,
     pub invite: Option<String>,
 }
 impl InvitationIntent {
@@ -43,11 +43,11 @@ impl InvitationIntent {
                 ],
             ),
             Self::LocalAcceptance(a) => (1, vec![Value::Binary(a.encoded()?)]),
-            Self::Rejection { team, receipt } => (
+            Self::Rejection { team, rsvp } => (
                 2,
                 vec![
                     Value::Binary(team.as_bytes().to_vec()),
-                    Value::Binary(receipt.encoded()?),
+                    Value::Binary(rsvp.encoded()?),
                 ],
             ),
         };
@@ -92,7 +92,7 @@ impl InvitationIntent {
             )?)?)),
             (2, 2) => Ok(Self::Rejection {
                 team: EntityId::from_bytes(bin(0)?.to_vec())?,
-                receipt: TeamRsvp::decode(bin(1)?)?,
+                rsvp: TeamRsvp::decode(bin(1)?)?,
             }),
             _ => Err(Error::OperationBinding("invitation fields")),
         }
@@ -155,7 +155,7 @@ impl FoksClient {
         )?;
         Ok(InvitationProgress {
             operation,
-            receipt: None,
+            rsvp: None,
             invite: None,
         })
     }
@@ -206,7 +206,7 @@ impl FoksClient {
             crate::mutation::remove_terminal_request(protected, &op.material_ref)?;
             return Ok(InvitationProgress {
                 operation: op,
-                receipt: None,
+                rsvp: None,
                 invite: None,
             });
         }
@@ -219,8 +219,8 @@ impl FoksClient {
             ));
         }
         // A durable acknowledgment survives a crash before RemoteVerified.
-        let receipt_key = crate::ProtectedRecordKey::InvitationAck(&id).encoded();
-        let ack = match protected.get(&receipt_key) {
+        let rsvp_key = crate::ProtectedRecordKey::InvitationAck(&id).encoded();
+        let ack = match protected.get(&rsvp_key) {
             Ok(bytes) => Some(bytes),
             Err(ProtectedStoreError::Missing) => None,
             Err(e) => return Err(Error::ProtectedStore(e.to_string())),
@@ -229,10 +229,10 @@ impl FoksClient {
             InvitationIntent::Certificate { prepared, .. } => Some(prepared.invite.export()?),
             _ => None,
         };
-        let mut receipt = None;
+        let mut rsvp = None;
         if let Some(ack) = ack {
             if !ack.is_empty() {
-                receipt = Some(TeamRsvp::decode(&ack)?);
+                rsvp = Some(TeamRsvp::decode(&ack)?);
             }
             MutationCoordinator::new(&host.database_path, protected).remote_verified(&id)?;
         } else if op.state == MutationState::Prepared && attempt {
@@ -252,8 +252,8 @@ impl FoksClient {
                 InvitationIntent::LocalAcceptance(a) => self
                     .submit_local_invitation_acceptance(host, credential, a)
                     .map(Some),
-                InvitationIntent::Rejection { team, receipt } => self
-                    .reject_team_invitation(host, credential, team, receipt)
+                InvitationIntent::Rejection { team, rsvp } => self
+                    .reject_team_invitation(host, credential, team, rsvp)
                     .map(|_| None),
             };
             match sent {
@@ -264,11 +264,11 @@ impl FoksClient {
                         .transpose()?
                         .unwrap_or_default();
                     protected
-                        .put_if_absent(&receipt_key, &ack)
+                        .put_if_absent(&rsvp_key, &ack)
                         .map_err(|e| Error::ProtectedStore(e.to_string()))?;
                     MutationCoordinator::new(&host.database_path, protected)
                         .remote_verified(&id)?;
-                    receipt = r;
+                    rsvp = r;
                 }
                 Err(e) => {
                     MutationCoordinator::new(&host.database_path, protected)
@@ -295,7 +295,7 @@ impl FoksClient {
         op = self.invitation_operation(host, credential.uid(), id)?;
         Ok(InvitationProgress {
             operation: op,
-            receipt,
+            rsvp,
             invite,
         })
     }

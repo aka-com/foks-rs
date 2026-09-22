@@ -175,7 +175,7 @@ impl HardStateStore {
                 live.insert((host.clone(), link.root.epoch));
             }
         }
-        // Import receipts lack host IDs. Preserve their epochs on every host
+        // Import completion markers lack host IDs. Preserve their epochs on every host
         // where present (active import verification already deferred above).
         for epoch in tx.prepare("SELECT verified_merkle_epoch FROM import_accounts WHERE verified_merkle_epoch IS NOT NULL")?
             .query_map([], |r| r.get::<_, i64>(0))? {

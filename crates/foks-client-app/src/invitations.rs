@@ -238,14 +238,20 @@ impl CheckedProfileSession<'_> {
             None => FederationCredential::Yubi(yubi.as_ref().unwrap()),
         };
         let mut protected = self.mutation_store(master)?;
-        let receipt_key = |id: &[u8; 16]| format!("invitation-receipt.{}", hex(id));
+        // The stored prefix is retained so existing completion records remain readable.
+        let completion_record_key = |id: &[u8; 16]| format!("invitation-receipt.{}", hex(id));
         if matches!(
             &action,
             InvitationAction::Create { .. }
                 | InvitationAction::Accept { .. }
                 | InvitationAction::Reject { .. }
         ) {
-            self.cleanup_invitation_receipts(&host, credential.uid(), &mut protected, vault)?;
+            self.cleanup_invitation_completion_records(
+                &host,
+                credential.uid(),
+                &mut protected,
+                vault,
+            )?;
         }
         let prepare =
             |intent, protected: &mut EncryptedFileMutationStore| -> Result<serde_json::Value> {
@@ -271,7 +277,12 @@ impl CheckedProfileSession<'_> {
                 source_team_alias,
                 source_role,
             } => {
-                self.cleanup_invitation_receipts(&host, credential.uid(), &mut protected, vault)?;
+                self.cleanup_invitation_completion_records(
+                    &host,
+                    credential.uid(),
+                    &mut protected,
+                    vault,
+                )?;
                 let source = vault.team(&source_team_alias)?;
                 if source.account_alias != alias || !source.active {
                     return Err(Error::InvalidAccount("source team account binding"));
@@ -354,7 +365,7 @@ impl CheckedProfileSession<'_> {
                 }
                 MutationCoordinator::new(&self.paths.hard_database, &mut protected)
                     .rejected(&id)?;
-                vault.store.remove(&receipt_key(&id))?;
+                vault.store.remove(&completion_record_key(&id))?;
                 Ok(serde_json::json!({"operation_id":operation_id,"state":"cancelled"}))
             }
             InvitationAction::InboxCount { team_alias } => {
@@ -419,7 +430,7 @@ impl CheckedProfileSession<'_> {
                                 )
                             }),
                     };
-                    let mut report = serde_json::json!({"request_id":id,"time":row.time,"remote":row.receipt.is_remote()});
+                    let mut report = serde_json::json!({"request_id":id,"time":row.time,"remote":row.rsvp.is_remote()});
                     match expanded {
                         Ok((party, name, kind)) => {
                             report["joiner_id"] = hex(party.as_bytes()).into();
@@ -478,7 +489,7 @@ impl CheckedProfileSession<'_> {
                 prepare(
                     InvitationIntent::Rejection {
                         team,
-                        receipt: row.receipt,
+                        rsvp: row.rsvp,
                     },
                     &mut protected,
                 )
@@ -488,7 +499,7 @@ impl CheckedProfileSession<'_> {
             )),
         }
     }
-    fn cleanup_invitation_receipts(
+    fn cleanup_invitation_completion_records(
         &self,
         host: &foks_client::PinnedHost,
         uid: &EntityId,
@@ -496,7 +507,7 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
     ) -> Result<()> {
         let mut db = HardStateStore::open(&self.paths.hard_database)?;
-        for old in db.expired_invitation_receipts(
+        for old in db.expired_invitation_completion_records(
             host.host_id().as_bytes(),
             uid.as_bytes(),
             now_microseconds()?.saturating_sub(30 * 24 * 60 * 60 * 1_000_000),
@@ -513,7 +524,7 @@ impl CheckedProfileSession<'_> {
             vault
                 .store
                 .remove(&format!("invitation-receipt.{}", hex(&old.operation_id)))?;
-            db.delete_invitation_receipt(&old.operation_id)?;
+            db.delete_invitation_completion_record(&old.operation_id)?;
         }
         Ok(())
     }
@@ -530,10 +541,10 @@ impl CheckedProfileSession<'_> {
                 &serde_json::to_vec(&serde_json::json!({"invite":invite}))?,
             )?;
         }
-        if let Some(receipt) = progress.receipt {
+        if let Some(rsvp) = progress.rsvp {
             vault.store.put(
                 &format!("invitation-receipt.{}", hex(&id)),
-                &serde_json::to_vec(&serde_json::json!({"receipt":receipt.encoded()?}))?,
+                &serde_json::to_vec(&serde_json::json!({"rsvp":rsvp.encoded()?}))?,
             )?;
         }
         let mut result = operation_report(&progress.operation);
@@ -557,7 +568,11 @@ impl CheckedProfileSession<'_> {
                 if let Some(invite) = stored.get("invite") {
                     result["invite"] = invite.clone();
                 }
-                if stored.get("receipt").is_some() {
+                if stored
+                    .get("rsvp")
+                    .or_else(|| stored.get("receipt"))
+                    .is_some()
+                {
                     result["delivery_acknowledged"] = true.into();
                 }
             }
@@ -632,13 +647,13 @@ impl CheckedProfileSession<'_> {
             )
         };
         let mut rows = page(100)?;
-        if rows.iter().filter(|r| r.receipt.is_remote()).count() >= 100
-            || rows.iter().filter(|r| !r.receipt.is_remote()).count() >= 100
+        if rows.iter().filter(|r| r.rsvp.is_remote()).count() >= 100
+            || rows.iter().filter(|r| !r.rsvp.is_remote()).count() >= 100
         {
             rows = page(1000)?;
         }
-        let possibly_truncated = rows.iter().filter(|r| r.receipt.is_remote()).count() >= 1000
-            || rows.iter().filter(|r| !r.receipt.is_remote()).count() >= 1000;
+        let possibly_truncated = rows.iter().filter(|r| r.rsvp.is_remote()).count() >= 1000
+            || rows.iter().filter(|r| !r.rsvp.is_remote()).count() >= 1000;
         Ok((rows, possibly_truncated))
     }
 
@@ -685,7 +700,7 @@ impl CheckedProfileSession<'_> {
         };
         fresh
             .into_iter()
-            .find(|r| r.receipt == row.receipt)
+            .find(|r| r.rsvp == row.rsvp)
             .ok_or(Error::InvalidAccount(
                 "request is no longer in the pending inbox; refresh it",
             ))
@@ -735,37 +750,42 @@ pub(crate) fn validate_inventory_record(
     }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Receipt {
+    struct InvitationCompletionRecord {
         invite: Option<String>,
-        receipt: Option<Vec<u8>>,
+        #[serde(alias = "receipt")]
+        rsvp: Option<Vec<u8>>,
     }
-    impl Drop for Receipt {
+    impl Drop for InvitationCompletionRecord {
         fn drop(&mut self) {
             if let Some(v) = &mut self.invite {
                 v.zeroize();
             }
-            if let Some(v) = &mut self.receipt {
+            if let Some(v) = &mut self.rsvp {
                 v.zeroize();
             }
         }
     }
     let id = handle(suffix)?;
-    let receipt: Receipt = serde_json::from_slice(&bytes)?;
-    match (&receipt.invite, &receipt.receipt) {
+    let completion_record: InvitationCompletionRecord = serde_json::from_slice(&bytes)?;
+    match (&completion_record.invite, &completion_record.rsvp) {
         (Some(invite), None) => {
             TeamInvite::import(invite)?;
         }
-        (None, Some(receipt)) => {
-            foks_proto::TeamRsvp::decode(receipt)?;
+        (None, Some(rsvp)) => {
+            foks_proto::TeamRsvp::decode(rsvp)?;
         }
-        _ => return Err(Error::InvalidAccount("invalid invitation receipt record")),
+        _ => {
+            return Err(Error::InvalidAccount(
+                "invalid invitation completion record",
+            ))
+        }
     }
     let op = hard.mutation(&id)?.ok_or(Error::InvalidAccount(
-        "invitation receipt has no journal owner",
+        "invitation completion record has no journal owner",
     ))?;
     if op.kind != MutationKind::Invitation {
         return Err(Error::InvalidAccount(
-            "invitation receipt has wrong journal owner",
+            "invitation completion record has wrong journal owner",
         ));
     }
     Ok(op.state.is_terminal())

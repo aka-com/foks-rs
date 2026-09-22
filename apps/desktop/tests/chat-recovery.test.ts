@@ -16,7 +16,7 @@ const operation = (id: string): TrackedOperation => ({
   channel: 'b'.repeat(32),
   kind: 'send-message',
   state: 'prepared',
-  receipt: null,
+  confirmation: null,
   rejection_code: null,
   statusUnknown: true,
 });

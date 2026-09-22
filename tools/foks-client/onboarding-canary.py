@@ -90,11 +90,11 @@ class Canary:
                 phrase.unlink()
         if self.run("peer", "account", "sync", "canary", "--account-alias", "peer")["username"] != owner["username"]:
             raise RuntimeError("paired account identity")
-        backup_phrase = self.root / "backup-phrase"
+        recovery_phrase = self.root / "recovery-phrase"
         backup = self.run("owner", "recovery", "enroll", "canary", "--account-alias", "owner", "backup",
-                          "--output", backup_phrase)
+                          "--output", recovery_phrase)
         recovered = self.run("recovered", "recovery", "recover", "canary", "--target-account-alias", "recovered",
-                             "--phrase-file", backup_phrase, "--device-name", "canary recovered device")
+                             "--phrase-file", recovery_phrase, "--device-name", "canary recovered device")
         if self.run("recovered", "account", "sync", "canary", "--account-alias", "recovered")["username"] != owner["username"]:
             raise RuntimeError("recovered account identity")
         self.run("owner", "recovery", "revoke", "canary", "--account-alias", "owner", "backup", backup["backup_id_hex"])

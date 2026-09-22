@@ -34,7 +34,7 @@ statement!(
     "SELECT rowid FROM team_names WHERE team_id IS NULL AND expires_at <= ?1 LIMIT 128"
 );
 statement!(
-    RECEIPTS,
+    IDEMPOTENCY_RECORDS,
     "request_receipts",
     "SELECT rowid FROM request_receipts WHERE expires_at <= ?1 LIMIT 128"
 );
@@ -79,7 +79,7 @@ pub(crate) const ALL: [ExpiryStatement; 9] = [
     SSO_SESSIONS,
     RESERVATIONS,
     TEAM_RESERVATIONS,
-    RECEIPTS,
+    IDEMPOTENCY_RECORDS,
     CHALLENGES,
     TEAM_VIEW_TOKENS,
     TEAM_VIEW_CHALLENGES,

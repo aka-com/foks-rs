@@ -383,8 +383,10 @@ function FirstRunSession({
   const [goStart, setGoStart] = useState<'existing' | 'new'>('existing');
   const [goScanError, setGoScanError] = useState<string | null>(null);
   const [goScanAttempt, setGoScanAttempt] = useState(0);
-  const [backupPhrase, setBackupPhrase] = useState<string | null>(null);
-  const [backupPhraseConcealed, setBackupPhraseConcealed] = useState(false);
+  const [generatedRecoveryPhrase, setGeneratedRecoveryPhrase] = useState<
+    string | null
+  >(null);
+  const [recoveryPhraseConcealed, setRecoveryPhraseConcealed] = useState(false);
   const [phraseWritten, setPhraseWritten] = useState(false);
   // Pending path selection before confirmation.
   const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
@@ -758,7 +760,7 @@ function FirstRunSession({
 
   const go = useCallback(
     (next: FirstRunStateName): void => {
-      if (next === 'phrase') setBackupPhraseConcealed(false);
+      if (next === 'phrase') setRecoveryPhraseConcealed(false);
       setMessage(null);
       setDuplicateAlias(null);
       setConnectionErrors({ copy: null, recover: null, pair: null });
@@ -769,12 +771,12 @@ function FirstRunSession({
         setPassphrase('');
         setConfirmation('');
         backupPreparation.current = null;
-        setBackupPhrase(null);
+        setGeneratedRecoveryPhrase(null);
         setPhraseWritten(false);
       } else if (state === 'phrase' && next !== 'phrase') {
         if (!checkpoint.backupCommitted) {
           backupPreparation.current = null;
-          setBackupPhrase(null);
+          setGeneratedRecoveryPhrase(null);
         }
         setPhraseWritten(false);
       }
@@ -899,7 +901,7 @@ function FirstRunSession({
     confirmation ||
     recoveryPhrase ||
     pairingPhrase ||
-    backupPhrase,
+    generatedRecoveryPhrase,
   );
 
   const clearSecrets = useCallback((): void => {
@@ -911,8 +913,8 @@ function FirstRunSession({
     setRecoveryPhrase('');
     setPairingPhrase('');
     backupPreparation.current = null;
-    setBackupPhrase(null);
-    setBackupPhraseConcealed(false);
+    setGeneratedRecoveryPhrase(null);
+    setRecoveryPhraseConcealed(false);
     setPhraseWritten(false);
     secretsHeld.current = false;
   }, []);
@@ -981,7 +983,7 @@ function FirstRunSession({
   }, [clearSecrets, concealSignal, go, state]);
 
   useConcealOnInactive(
-    () => setBackupPhraseConcealed(true),
+    () => setRecoveryPhraseConcealed(true),
     state === 'phrase',
   );
 
@@ -1037,7 +1039,7 @@ function FirstRunSession({
     if (
       !agentReady ||
       state !== 'phrase' ||
-      backupPhrase ||
+      generatedRecoveryPhrase ||
       !profile ||
       !accountAlias
     )
@@ -1054,7 +1056,7 @@ function FirstRunSession({
     void attempt.then(
       (result) => {
         if (phraseOwner.current === owner) {
-          setBackupPhrase(result.phrase);
+          setGeneratedRecoveryPhrase(result.phrase);
           setPhraseOperation(null);
         }
       },
@@ -1073,7 +1075,7 @@ function FirstRunSession({
   }, [
     accountAlias,
     agentReady,
-    backupPhrase,
+    generatedRecoveryPhrase,
     bridge,
     fail,
     go,
@@ -1317,12 +1319,12 @@ function FirstRunSession({
         });
         next = transitionFirstRun(next, { type: 'passphrase-set' });
       }
-      if (!next.backupCommitted && backupPhrase && phraseWritten) {
+      if (!next.backupCommitted && generatedRecoveryPhrase && phraseWritten) {
         await bridge.commitOwnerBackup(
           profile.profile,
           accountAlias,
           'paper',
-          backupPhrase,
+          generatedRecoveryPhrase,
         );
         next = transitionFirstRun(next, { type: 'backup-committed' });
       }
@@ -1343,7 +1345,7 @@ function FirstRunSession({
 
   const commitBackup = async (): Promise<void> => {
     if (!agentReady) return;
-    if (!profile || !backupPhrase || !phraseWritten) return;
+    if (!profile || !generatedRecoveryPhrase || !phraseWritten) return;
     if (checkpoint.backupCommitted) {
       setPhraseWritten(false);
       send({ type: 'navigate', state: 'protect' });
@@ -1355,7 +1357,7 @@ function FirstRunSession({
         profile.profile,
         accountAlias,
         'paper',
-        backupPhrase,
+        generatedRecoveryPhrase,
       );
       setPhraseWritten(false);
       send({ type: 'backup-committed' });
@@ -1422,7 +1424,7 @@ function FirstRunSession({
     </p>
   ) : null;
   /* Sign-in authentication methods: CLI pairing and credential import when an
-     eligible FOKS CLI profile is detected, followed by backup phrase recovery.
+     eligible FOKS CLI profile is detected, followed by recovery phrase recovery.
      When only one method is available, it is selected automatically. */
   const signinMethods: SigninMethod[] = [
     ...(goCandidate?.pairable ? (['pair'] as const) : []),
@@ -1516,8 +1518,8 @@ function FirstRunSession({
             />
           ) : null}
           <RadioCard
-            title="Recover with backup phrase"
-            detail="Enter your backup phrase to restore full access on this device."
+            title="Recover with recovery phrase"
+            detail="Enter your recovery phrase to restore full access on this device."
             selected={signinMethod === 'recover'}
             onSelect={() => setChosenSigninMethod('recover')}
           />
@@ -1552,7 +1554,7 @@ function FirstRunSession({
               <InsetRow label="Phrase">
                 <input
                   type="password"
-                  aria-label="Backup phrase"
+                  aria-label="Recovery phrase"
                   value={recoveryPhrase}
                   onChange={(event) => setRecoveryPhrase(event.target.value)}
                 />
@@ -1643,7 +1645,7 @@ function FirstRunSession({
         {operationResumable && intent?.kind === 'recovery' ? (
           <div className="local-field-card">
             <label className="local-field-row">
-              <span>Backup phrase</span>
+              <span>Recovery phrase</span>
               <input
                 type="password"
                 value={recoveryPhrase}
@@ -2304,7 +2306,7 @@ function FirstRunSession({
           {signingIn ? (
             <>
               Your account already exists on {profile?.canonicalName}. Recover
-              it with your backup phrase
+              it with your recovery phrase
               {goCandidate ? ' or connect using the official FOKS CLI' : ''}.
             </>
           ) : (
@@ -2521,7 +2523,7 @@ function FirstRunSession({
         <h1>Add this device to your account</h1>
         <p className="lead">
           Your account already exists on {profile?.canonicalName}. Recover it
-          with your backup phrase
+          with your recovery phrase
           {goCandidate ? ' or connect using the official FOKS CLI' : ''}.
         </p>
         {signinSections(1)}
@@ -2533,9 +2535,9 @@ function FirstRunSession({
         state={state}
         checkpoint={checkpoint}
         busy={busy}
-        backupPhrase={backupPhrase}
-        phraseConcealed={backupPhraseConcealed}
-        revealPhrase={() => setBackupPhraseConcealed(false)}
+        recoveryPhrase={generatedRecoveryPhrase}
+        phraseConcealed={recoveryPhraseConcealed}
+        revealPhrase={() => setRecoveryPhraseConcealed(false)}
         phraseWritten={phraseWritten}
         setPhraseWritten={setPhraseWritten}
         go={go}
@@ -2810,7 +2812,7 @@ function FirstRunSession({
             <span className="hint">
               {recoverySet
                 ? [
-                    checkpoint.backupCommitted ? 'Backup phrase saved' : null,
+                    checkpoint.backupCommitted ? 'Recovery phrase saved' : null,
                     checkpoint.passphraseSet ? 'Passphrase set' : null,
                   ]
                     .filter(Boolean)

@@ -37,7 +37,9 @@ fn is_import(root: &Path) -> Result<bool> {
     guard.with_native_manifest(|native| {
         Ok(native.records.contains_key(import::INTENT)
             || (!native.records.contains_key(relocation::INTENT)
-                && native.records.contains_key(import::RECEIPT)))
+                && native
+                    .records
+                    .contains_key(import::IMPORT_COMPLETION_MARKER)))
     })
 }
 pub fn maintenance_status(root: impl AsRef<Path>) -> Result<Option<MaintenanceStatus>> {

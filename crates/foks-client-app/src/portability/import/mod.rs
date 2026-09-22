@@ -22,7 +22,7 @@ use zeroize::Zeroizing;
 mod identity;
 mod staging;
 use identity::*;
-pub(crate) use identity::{INTENT, RECEIPT};
+pub(crate) use identity::{IMPORT_COMPLETION_MARKER, INTENT};
 type Hook<'a> = dyn FnMut(&'static str) -> Result<()> + 'a;
 
 mod recovery;
@@ -275,13 +275,13 @@ pub(super) fn inventory_keys(
     root: &Path,
 ) -> Result<Vec<String>> {
     let mut keys = Vec::new();
-    if let Some(receipt) = native_intent(native, RECEIPT)? {
-        if receipt.marker.phase != Phase::Verified
-            || receipt.marker.identity.state_id != guard.namespace_id()?
+    if let Some(completion_marker) = native_completion_marker(native)? {
+        if completion_marker.marker.phase != Phase::Verified
+            || completion_marker.marker.identity.state_id != guard.namespace_id()?
         {
             return Err(Error::StateRecoveryRequired);
         }
-        keys.push(RECEIPT.into());
+        keys.push(IMPORT_COMPLETION_MARKER.into());
     }
     if let Some(intent) = native_intent(native, INTENT)? {
         if guard.import_nonce != Some(intent.marker.identity.nonce)

@@ -145,7 +145,7 @@ fn commit_with_request_at_invite_and_passphrase(
         invite,
         passphrase,
         now,
-        receipt_expires_at: now + 1_000_000,
+        idempotency_expires_at: now + 1_000_000,
     };
     match failure {
         Some(point) => database.commit_identity_with_failure(&mutation, Some(point)),

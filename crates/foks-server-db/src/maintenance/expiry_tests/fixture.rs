@@ -174,7 +174,7 @@ pub fn counts(report: MaintenanceReport) -> [(&'static str, u64); 9] {
         ("sso_sessions", report.sso_sessions),
         ("names", report.reservations),
         ("team_names", report.team_reservations),
-        ("request_receipts", report.receipts),
+        ("request_receipts", report.idempotency_records),
         ("recovery_challenges", report.challenges),
         ("team_view_tokens", report.team_view_tokens),
         ("team_view_challenges", report.team_view_challenges),

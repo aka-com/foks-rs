@@ -10,7 +10,7 @@ import { readRecoveryFor } from '../query-read-recovery';
 /**
  * The metadata query kinds whose key names the profile immediately after the
  * kind, so one `invalidate([kind, profile])` reaches every row of that kind
- * for that profile: account devices and paper keys, security-key
+ * for that profile: account devices and recovery phrases, security-key
  * enrollments, pending operations, and the two invitation counts.
  */
 const PROFILE_METADATA_KINDS = [

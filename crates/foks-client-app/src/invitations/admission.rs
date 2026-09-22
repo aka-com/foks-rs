@@ -116,7 +116,7 @@ impl CheckedProfileSession<'_> {
         }
         if stored.invitation_members.len() >= 1000 {
             return Err(Error::InvalidAccount(
-                "invitation member receipt capacity reached",
+                "invitation member rsvp capacity reached",
             ));
         }
         // One authenticated destination serves the inbox re-read, the joiner
@@ -263,7 +263,7 @@ impl CheckedProfileSession<'_> {
                 credential,
                 &team,
                 u,
-                &row.receipt,
+                &row.rsvp,
                 &plan,
                 &removal,
                 &mut protected,
@@ -274,7 +274,7 @@ impl CheckedProfileSession<'_> {
                 &team,
                 t.verified(),
                 None,
-                &row.receipt,
+                &row.rsvp,
                 &plan,
                 &removal,
                 &mut protected,
@@ -285,7 +285,7 @@ impl CheckedProfileSession<'_> {
                 &team,
                 &t.verified,
                 Some(t.view_permission()),
-                &row.receipt,
+                &row.rsvp,
                 &plan,
                 &removal,
                 &mut protected,

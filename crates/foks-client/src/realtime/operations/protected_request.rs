@@ -3,7 +3,7 @@ use super::*;
 
 impl ChatSession<'_> {
     /// Recover only retained send request, after fresh channel read authorization.
-    /// This never attempts delivery, changes a receipt or retains terminal request.
+    /// This never attempts delivery, changes a confirmation, or retains a terminal request.
     pub fn recover_operation_text(
         &mut self,
         rpc: &mut impl ChatTransport,
@@ -86,7 +86,7 @@ impl ChatSession<'_> {
             state: State::Prepared,
             request_hash: foks_crypto::prefixed_hash(REQUEST_HASH_DOMAIN, &bytes),
             scan_cursor: lower,
-            receipt: None,
+            confirmation: None,
             rejection_code: None,
         };
         self.hard()?
@@ -237,7 +237,7 @@ mod tests {
             state: State::Prepared,
             request_hash: [8; 32],
             scan_cursor: 0,
-            receipt: None,
+            confirmation: None,
             rejection_code: None,
         }
     }

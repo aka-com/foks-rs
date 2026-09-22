@@ -115,7 +115,7 @@ enum ProfileCommand {
         confirm_delete: bool,
     },
     /// Applies a signed compatibility lease or drift revocation artifact.
-    ApplyCanary {
+    ApplyCompatibilityArtifact {
         name: String,
         #[arg(long)]
         artifact: PathBuf,
@@ -130,12 +130,12 @@ struct ProfileAdd {
     generation: ProfileGeneration,
     #[arg(long)]
     ca_der: Option<PathBuf>,
-    /// Ed25519 public key (hex) authorized to sign hosted canary leases.
+    /// Ed25519 public key (hex) authorized to sign hosted compatibility artifacts.
     #[arg(long)]
-    canary_public_key: Option<String>,
-    /// Stable HTTPS URL serving the latest signed hosted canary lease.
+    compatibility_artifact_public_key: Option<String>,
+    /// Stable HTTPS URL serving the latest signed hosted compatibility artifact.
     #[arg(long)]
-    canary_url: Option<String>,
+    compatibility_artifact_url: Option<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -743,7 +743,9 @@ fn initialize(
 fn profile_from_arguments(arguments: ProfileAdd) -> Result<Profile, Box<dyn std::error::Error>> {
     let protocol = match arguments.generation {
         ProfileGeneration::V019 => {
-            if arguments.canary_public_key.is_some() || arguments.canary_url.is_some() {
+            if arguments.compatibility_artifact_public_key.is_some()
+                || arguments.compatibility_artifact_url.is_some()
+            {
                 return Err(
                     "v0.1.9 profiles do not support compatibility-lease configuration".into(),
                 );
@@ -751,12 +753,12 @@ fn profile_from_arguments(arguments: ProfileAdd) -> Result<Profile, Box<dyn std:
             ProtocolPolicy::V019
         }
         ProfileGeneration::CurrentProbeOnly => ProtocolPolicy::CurrentProbeOnly {
-            canary_public_key: arguments
-                .canary_public_key
-                .ok_or("current profiles require --canary-public-key")?,
+            compatibility_artifact_public_key: arguments
+                .compatibility_artifact_public_key
+                .ok_or("current profiles require --compatibility-artifact-public-key")?,
             lease_url: arguments
-                .canary_url
-                .ok_or("current profiles require --canary-url")?,
+                .compatibility_artifact_url
+                .ok_or("current profiles require --compatibility-artifact-url")?,
             last_artifact: None,
         },
     };
@@ -860,12 +862,16 @@ fn profile_command(
                 "external checkpoint and hard-state database deleted; probe the profile again before use",
             )
         }
-        ProfileCommand::ApplyCanary { name, artifact } => {
+        ProfileCommand::ApplyCompatibilityArtifact { name, artifact } => {
             let bytes = read_bounded_private_file(&artifact, 1024 * 1024)?;
-            let signed: foks_compat_artifact::SignedCanaryArtifact =
+            let signed: foks_compat_artifact::SignedCompatibilityArtifact =
                 serde_json::from_slice(&bytes)?;
-            let profile = registry.apply_canary(&name, &signed, now_seconds()?)?;
-            output(json, &profile, "authenticated canary lease applied")
+            let profile = registry.apply_compatibility_artifact(&name, &signed, now_seconds()?)?;
+            output(
+                json,
+                &profile,
+                "authenticated compatibility artifact applied",
+            )
         }
     }
 }
@@ -2435,8 +2441,8 @@ mod tests {
                 target: "localhost:4430".to_owned(),
                 generation: ProfileGeneration::V019,
                 ca_der: Some(state.join("local-ca.der")),
-                canary_public_key: None,
-                canary_url: None,
+                compatibility_artifact_public_key: None,
+                compatibility_artifact_url: None,
             }),
         )
         .unwrap();
@@ -2451,8 +2457,8 @@ mod tests {
                 target: "localhost:4430".to_owned(),
                 generation: ProfileGeneration::V019,
                 ca_der: Some(state.join("local-ca.der")),
-                canary_public_key: None,
-                canary_url: None,
+                compatibility_artifact_public_key: None,
+                compatibility_artifact_url: None,
             }),
         )
         .unwrap();
@@ -2468,8 +2474,8 @@ mod tests {
                     target: target.to_owned(),
                     generation: ProfileGeneration::V019,
                     ca_der: Some(ca_der),
-                    canary_public_key: None,
-                    canary_url: None,
+                    compatibility_artifact_public_key: None,
+                    compatibility_artifact_url: None,
                 }),
             )
             .unwrap_err();
@@ -2485,8 +2491,10 @@ mod tests {
                 target: "localhost:4430".to_owned(),
                 generation: ProfileGeneration::CurrentProbeOnly,
                 ca_der: Some(state.join("local-ca.der")),
-                canary_public_key: Some("00".to_owned()),
-                canary_url: Some("https://localhost/canary".to_owned()),
+                compatibility_artifact_public_key: Some("00".to_owned()),
+                compatibility_artifact_url: Some(
+                    "https://localhost/compatibility-artifact".to_owned(),
+                ),
             }),
         )
         .unwrap_err();

@@ -26,8 +26,8 @@ const PROFILE_PUBLICATION_BINDING_TYPE_ID: u64 = 0x9171_dbed_137a_c227;
 pub const PROFILE_LABEL_MAX_BYTES: usize = 64;
 
 /// How long before a validated compatibility lease expires a periodic poll
-/// starts refetching it. Canary artifacts are capped at a seven-day lifetime
-/// (`foks_compat_artifact::CanaryArtifact::validate`), so six hours is a small
+/// starts refetching it. Compatibility artifacts are capped at a seven-day lifetime
+/// (`foks_compat_artifact::CompatibilityArtifact::validate`), so six hours is a small
 /// fraction of a full-length lease while still leaving many polling intervals
 /// of retry budget before the stored lease lapses. Shorter leases use half
 /// their own lifetime instead, so the margin never exceeds the lease.
@@ -100,7 +100,7 @@ pub enum Capability {
 
 impl Capability {
     pub fn as_str(self) -> &'static str {
-        capability_canary_name(self)
+        capability_artifact_name(self)
     }
 }
 
@@ -111,15 +111,15 @@ pub enum ProtocolPolicy {
     V019,
     /// Current mainline or hosted service, public probing only.
     CurrentProbeOnly {
-        canary_public_key: String,
+        compatibility_artifact_public_key: String,
         lease_url: String,
-        last_artifact: Option<Box<SignedCanaryArtifact>>,
+        last_artifact: Option<Box<SignedCompatibilityArtifact>>,
     },
     /// Current service after an external authenticated compatibility run.
     CurrentValidated {
-        canary_public_key: String,
+        compatibility_artifact_public_key: String,
         lease_url: String,
-        artifact: Box<SignedCanaryArtifact>,
+        artifact: Box<SignedCompatibilityArtifact>,
     },
 }
 
@@ -186,7 +186,7 @@ impl ProtocolPolicy {
                 last_artifact: Some(artifact),
                 ..
             } => CompatibilityStatus::Incompatible {
-                reason: if artifact.artifact.outcome == CanaryOutcome::Drift {
+                reason: if artifact.artifact.outcome == CompatibilityOutcome::Drift {
                     CompatibilityFailure::Drift
                 } else if artifact.artifact.protocol_metadata_sha256
                     != PINNED_PROTOCOL_METADATA_SHA256
@@ -203,14 +203,14 @@ impl ProtocolPolicy {
                     .artifact
                     .capabilities
                     .iter()
-                    .filter_map(|name| capability_from_canary(name).ok())
+                    .filter_map(|name| capability_from_artifact(name).ok())
                     .collect(),
             },
         }
     }
 
     /// Whether a periodic compatibility poll should fetch this profile's
-    /// signed canary at `now`.
+    /// signed compatibility artifact at `now`.
     ///
     /// A validated lease is refetched only once its remaining lifetime falls
     /// inside [`COMPATIBILITY_RENEWAL_MARGIN_SECONDS`], or inside half the
@@ -244,15 +244,17 @@ impl ProtocolPolicy {
             .is_none()
     }
 
-    fn canary_public_key(&self) -> Option<&str> {
+    fn compatibility_artifact_public_key(&self) -> Option<&str> {
         match self {
             Self::V019 => None,
             Self::CurrentProbeOnly {
-                canary_public_key, ..
+                compatibility_artifact_public_key,
+                ..
             }
             | Self::CurrentValidated {
-                canary_public_key, ..
-            } => Some(canary_public_key),
+                compatibility_artifact_public_key,
+                ..
+            } => Some(compatibility_artifact_public_key),
         }
     }
 
@@ -265,7 +267,7 @@ impl ProtocolPolicy {
         }
     }
 
-    fn last_artifact(&self) -> Option<&SignedCanaryArtifact> {
+    fn last_artifact(&self) -> Option<&SignedCompatibilityArtifact> {
         match self {
             Self::V019 => None,
             Self::CurrentProbeOnly { last_artifact, .. } => last_artifact.as_deref(),
@@ -302,31 +304,30 @@ impl Profile {
             ));
         }
         ProbeTarget::parse(&self.probe)?;
-        if let Some(key) = self.protocol.canary_public_key() {
-            let decoded = foks_compat_artifact::decode_public_key(key)
-                .map_err(|_| Error::InvalidProfile("canary public key is invalid"))?;
-            validate_lease_url(
-                self.protocol
-                    .lease_url()
-                    .ok_or(Error::InvalidProfile("canary lease URL is missing"))?,
-            )?;
+        if let Some(key) = self.protocol.compatibility_artifact_public_key() {
+            let decoded = foks_compat_artifact::decode_public_key(key).map_err(|_| {
+                Error::InvalidProfile("compatibility artifact public key is invalid")
+            })?;
+            validate_lease_url(self.protocol.lease_url().ok_or(Error::InvalidProfile(
+                "compatibility artifact URL is missing",
+            ))?)?;
             if let Some(artifact) = self.protocol.last_artifact() {
-                verify_canary_for_target(artifact, &decoded, &self.probe)?;
+                verify_compatibility_artifact_for_target(artifact, &decoded, &self.probe)?;
             }
             match &self.protocol {
                 ProtocolPolicy::CurrentValidated { artifact, .. }
-                    if !canary_grants_this_client(artifact) =>
+                    if !artifact_grants_this_client(artifact) =>
                 {
                     return Err(Error::InvalidProfile(
-                        "persisted canary lease is not a compatible grant for this target",
+                        "persisted compatibility artifact is not a compatible grant for this target",
                     ));
                 }
                 ProtocolPolicy::CurrentProbeOnly {
                     last_artifact: Some(artifact),
                     ..
-                } if canary_grants_this_client(artifact) => {
+                } if artifact_grants_this_client(artifact) => {
                     return Err(Error::InvalidProfile(
-                        "compatible canary is persisted as probe-only",
+                        "compatible artifact is persisted as probe-only",
                     ));
                 }
                 _ => {}
@@ -356,54 +357,64 @@ impl Profile {
         }
     }
 
-    pub fn apply_canary(&self, signed: &SignedCanaryArtifact, now: u64) -> Result<Self> {
+    pub fn apply_compatibility_artifact(
+        &self,
+        signed: &SignedCompatibilityArtifact,
+        now: u64,
+    ) -> Result<Self> {
         self.validate()?;
-        let public_key = self
-            .protocol
-            .canary_public_key()
-            .ok_or(Error::InvalidProfile(
-                "v0.1.9 profiles do not accept canaries",
-            ))?;
+        let public_key =
+            self.protocol
+                .compatibility_artifact_public_key()
+                .ok_or(Error::InvalidProfile(
+                    "v0.1.9 profiles do not accept compatibility artifacts",
+                ))?;
         let decoded_key = foks_compat_artifact::decode_public_key(public_key)
-            .map_err(|_| Error::InvalidProfile("canary public key is invalid"))?;
+            .map_err(|_| Error::InvalidProfile("compatibility artifact public key is invalid"))?;
         signed
             .verify(&decoded_key)
-            .map_err(|_| Error::InvalidProfile("canary signature is invalid"))?;
+            .map_err(|_| Error::InvalidProfile("compatibility artifact signature is invalid"))?;
         if signed.artifact.target != self.probe
             || signed.artifact.generated_at > now.saturating_add(300)
             || signed.artifact.expires_at <= now
         {
             return Err(Error::InvalidProfile(
-                "canary target or validity interval is invalid",
+                "compatibility artifact target or validity interval is invalid",
             ));
         }
         if let Some(previous) = self.protocol.last_artifact() {
             if signed.artifact.generation < previous.artifact.generation {
-                return Err(Error::InvalidProfile("canary generation rolled back"));
+                return Err(Error::InvalidProfile(
+                    "compatibility artifact generation rolled back",
+                ));
             }
             if signed.artifact.generation == previous.artifact.generation {
                 return if signed == previous {
                     Ok(self.clone())
                 } else {
-                    Err(Error::InvalidProfile("canary generation was reused"))
+                    Err(Error::InvalidProfile(
+                        "compatibility artifact generation was reused",
+                    ))
                 };
             }
         }
-        let canary_public_key = public_key.to_owned();
+        let compatibility_artifact_public_key = public_key.to_owned();
         let lease_url = self
             .protocol
             .lease_url()
-            .ok_or(Error::InvalidProfile("canary lease URL is missing"))?
+            .ok_or(Error::InvalidProfile(
+                "compatibility artifact URL is missing",
+            ))?
             .to_owned();
-        let protocol = if canary_grants_this_client(signed) {
+        let protocol = if artifact_grants_this_client(signed) {
             ProtocolPolicy::CurrentValidated {
-                canary_public_key,
+                compatibility_artifact_public_key,
                 lease_url,
                 artifact: Box::new(signed.clone()),
             }
         } else {
             ProtocolPolicy::CurrentProbeOnly {
-                canary_public_key,
+                compatibility_artifact_public_key,
                 lease_url,
                 last_artifact: Some(Box::new(signed.clone())),
             }
@@ -421,38 +432,40 @@ impl Profile {
     }
 }
 
-fn verify_canary_for_target(
-    signed: &SignedCanaryArtifact,
+fn verify_compatibility_artifact_for_target(
+    signed: &SignedCompatibilityArtifact,
     public_key: &[u8; 32],
     target: &str,
 ) -> Result<()> {
     signed
         .verify(public_key)
-        .map_err(|_| Error::InvalidProfile("canary signature is invalid"))?;
+        .map_err(|_| Error::InvalidProfile("compatibility artifact signature is invalid"))?;
     if signed.artifact.target != target {
         return Err(Error::InvalidProfile(
-            "persisted canary lease targets a different service",
+            "persisted compatibility artifact targets a different service",
         ));
     }
     Ok(())
 }
 
-fn canary_grants_this_client(signed: &SignedCanaryArtifact) -> bool {
-    signed.artifact.outcome == CanaryOutcome::Compatible
+fn artifact_grants_this_client(signed: &SignedCompatibilityArtifact) -> bool {
+    signed.artifact.outcome == CompatibilityOutcome::Compatible
         && signed.artifact.protocol_metadata_sha256 == PINNED_PROTOCOL_METADATA_SHA256
         && signed
             .artifact
             .capabilities
             .iter()
-            .all(|capability| capability_from_canary(capability).is_ok())
+            .all(|capability| capability_from_artifact(capability).is_ok())
 }
 
 fn validate_lease_url(value: &str) -> Result<()> {
     if value.is_empty() || value.len() > 2048 {
-        return Err(Error::InvalidProfile("canary lease URL is invalid"));
+        return Err(Error::InvalidProfile(
+            "compatibility artifact URL is invalid",
+        ));
     }
-    let parsed =
-        url::Url::parse(value).map_err(|_| Error::InvalidProfile("canary lease URL is invalid"))?;
+    let parsed = url::Url::parse(value)
+        .map_err(|_| Error::InvalidProfile("compatibility artifact URL is invalid"))?;
     if parsed.scheme() != "https"
         || parsed.cannot_be_a_base()
         || parsed.host_str().is_none()
@@ -462,13 +475,13 @@ fn validate_lease_url(value: &str) -> Result<()> {
         || parsed.fragment().is_some()
     {
         return Err(Error::InvalidProfile(
-            "canary lease URL must be an HTTPS URL without credentials, query, or fragment",
+            "compatibility artifact URL must be an HTTPS URL without credentials, query, or fragment",
         ));
     }
     Ok(())
 }
 
-fn capability_from_canary(value: &str) -> Result<Capability> {
+fn capability_from_artifact(value: &str) -> Result<Capability> {
     match value {
         "signup" => Ok(Capability::Signup),
         "user-sync" => Ok(Capability::UserSync),
@@ -479,11 +492,13 @@ fn capability_from_canary(value: &str) -> Result<Capability> {
         "teams" => Ok(Capability::Teams),
         "chat" => Ok(Capability::Chat),
         "federation" => Ok(Capability::Federation),
-        _ => Err(Error::InvalidProfile("canary grants an unknown capability")),
+        _ => Err(Error::InvalidProfile(
+            "compatibility artifact grants an unknown capability",
+        )),
     }
 }
 
-fn capability_canary_name(capability: Capability) -> &'static str {
+fn capability_artifact_name(capability: Capability) -> &'static str {
     match capability {
         Capability::Probe => "probe",
         Capability::Signup => "signup",
@@ -538,13 +553,13 @@ impl HostedLeaseRenewal {
     /// caller may report "unchanged" directly instead of taking a
     /// profile-scoped admission to re-derive that answer.
     ///
-    /// The expiry is part of the test because `Profile::apply_canary`
+    /// The expiry is part of the test because `Profile::apply_compatibility_artifact`
     /// rejects an artifact that has already lapsed, even one it stores
     /// itself; short-circuiting such an artifact would turn that rejection
     /// into a success.
     pub fn matches_stored_validated_artifact(
         &self,
-        signed: &SignedCanaryArtifact,
+        signed: &SignedCompatibilityArtifact,
         now: u64,
     ) -> bool {
         matches!(
@@ -556,7 +571,7 @@ impl HostedLeaseRenewal {
 
     pub fn apply(
         self,
-        signed: &SignedCanaryArtifact,
+        signed: &SignedCompatibilityArtifact,
         now: u64,
     ) -> Result<(bool, CompatibilityStatus)> {
         self.lease.validate()?;
@@ -582,7 +597,7 @@ impl HostedLeaseRenewal {
         if profiles.get(&self.profile.name) != Some(&self.profile) {
             return Err(Error::ProfileRegistryChanged);
         }
-        let updated = self.profile.apply_canary(signed, now)?;
+        let updated = self.profile.apply_compatibility_artifact(signed, now)?;
         let changed = updated != self.profile;
         let status = updated.protocol.compatibility_status();
         if changed {
@@ -1019,14 +1034,14 @@ impl ProfileRegistry {
         }))
     }
 
-    pub fn apply_canary(
+    pub fn apply_compatibility_artifact(
         &mut self,
         name: &str,
-        signed: &SignedCanaryArtifact,
+        signed: &SignedCompatibilityArtifact,
         now: u64,
     ) -> Result<Profile> {
         let current = self.profile(name)?.clone();
-        let updated = current.apply_canary(signed, now)?;
+        let updated = current.apply_compatibility_artifact(signed, now)?;
         if updated != current {
             self.replace(updated.clone())?;
         }
@@ -2194,14 +2209,14 @@ mod tests {
             assert_eq!(serde_json::to_value(capability).unwrap(), *name);
             assert_eq!(capability.as_str(), name.as_str().unwrap());
             assert_eq!(
-                capability_from_canary(name.as_str().unwrap()).unwrap(),
+                capability_from_artifact(name.as_str().unwrap()).unwrap(),
                 capability
             );
         }
         assert_eq!(grant_index(Capability::Probe), None);
-        assert!(capability_from_canary("probe").is_err());
+        assert!(capability_from_artifact("probe").is_err());
         for name in ["invented", "", " KV "] {
-            assert!(capability_from_canary(name).is_err());
+            assert!(capability_from_artifact(name).is_err());
         }
         for case in fixture["compatibilityCases"].as_array().unwrap() {
             if case.get("decoded").is_none() {
@@ -2211,7 +2226,7 @@ mod tests {
             let now = case["nowSeconds"].as_u64().unwrap();
             let granted = case["granted"].as_array().unwrap();
             for name in names {
-                let capability = capability_from_canary(name.as_str().unwrap()).unwrap();
+                let capability = capability_from_artifact(name.as_str().unwrap()).unwrap();
                 assert_eq!(
                     status.denial_at(capability, now).is_none(),
                     granted.contains(name),
@@ -2625,9 +2640,9 @@ mod tests {
     ) -> Profile {
         let mut profile = local_profile(environment, name, probe);
         profile.protocol = ProtocolPolicy::CurrentProbeOnly {
-            canary_public_key: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
-                .to_owned(),
-            lease_url: "https://updates.example.test/foks/canary.json".to_owned(),
+            compatibility_artifact_public_key:
+                "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a".to_owned(),
+            lease_url: "https://updates.example.test/foks/compatibility-artifact.json".to_owned(),
             last_artifact: None,
         };
         profile
@@ -2795,9 +2810,9 @@ mod tests {
 
     #[test]
     fn lease_renewal_polls_only_within_the_expiry_margin() {
-        fn signed(generated_at: u64, expires_at: u64) -> Box<SignedCanaryArtifact> {
-            Box::new(SignedCanaryArtifact {
-                artifact: foks_compat_artifact::CanaryArtifact {
+        fn signed(generated_at: u64, expires_at: u64) -> Box<SignedCompatibilityArtifact> {
+            Box::new(SignedCompatibilityArtifact {
+                artifact: foks_compat_artifact::CompatibilityArtifact {
                     schema_version: foks_compat_artifact::SCHEMA_VERSION,
                     generation: 1,
                     target: "foks.example.test".to_owned(),
@@ -2807,7 +2822,7 @@ mod tests {
                     protocol_metadata_sha256: PINNED_PROTOCOL_METADATA_SHA256.to_owned(),
                     mutation_digest: "11".repeat(32),
                     read_digest: "11".repeat(32),
-                    outcome: CanaryOutcome::Compatible,
+                    outcome: CompatibilityOutcome::Compatible,
                     capabilities: ["kv".to_owned()].into_iter().collect(),
                     drift_reason: String::new(),
                 },
@@ -2817,7 +2832,7 @@ mod tests {
         }
         fn validated(generated_at: u64, expires_at: u64) -> ProtocolPolicy {
             ProtocolPolicy::CurrentValidated {
-                canary_public_key: "unused-by-selection".to_owned(),
+                compatibility_artifact_public_key: "unused-by-selection".to_owned(),
                 lease_url: "https://updates.example.test/lease".to_owned(),
                 artifact: signed(generated_at, expires_at),
             }
@@ -2830,7 +2845,7 @@ mod tests {
         // artifact does not grant this client, both keep polling.
         for last_artifact in [None, Some(signed(0, 7 * 24 * 60 * 60))] {
             assert!(ProtocolPolicy::CurrentProbeOnly {
-                canary_public_key: "unused-by-selection".to_owned(),
+                compatibility_artifact_public_key: "unused-by-selection".to_owned(),
                 lease_url: "https://updates.example.test/lease".to_owned(),
                 last_artifact,
             }
@@ -2869,7 +2884,7 @@ mod tests {
             name: "current".to_owned(),
             label: None,
             protocol: ProtocolPolicy::CurrentProbeOnly {
-                canary_public_key: "unused-by-status".to_owned(),
+                compatibility_artifact_public_key: "unused-by-status".to_owned(),
                 lease_url: "https://updates.example.test/lease".to_owned(),
                 last_artifact: None,
             },
@@ -3284,8 +3299,8 @@ mod tests {
             0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03,
             0x1c, 0xae, 0x7f, 0x60,
         ];
-        let lease = SignedCanaryArtifact::sign(
-            foks_compat_artifact::CanaryArtifact {
+        let lease = SignedCompatibilityArtifact::sign(
+            foks_compat_artifact::CompatibilityArtifact {
                 schema_version: foks_compat_artifact::SCHEMA_VERSION,
                 generation: 1,
                 target: lease_profile.probe.clone(),
@@ -3295,7 +3310,7 @@ mod tests {
                 protocol_metadata_sha256: PINNED_PROTOCOL_METADATA_SHA256.to_owned(),
                 mutation_digest: "22".repeat(32),
                 read_digest: "33".repeat(32),
-                outcome: CanaryOutcome::Drift,
+                outcome: CompatibilityOutcome::Drift,
                 capabilities: BTreeSet::new(),
                 drift_reason: "deterministic test drift".to_owned(),
             },
@@ -3303,7 +3318,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            registry.apply_canary("lease-race", &lease, 101),
+            registry.apply_compatibility_artifact("lease-race", &lease, 101),
             Err(Error::InvalidConfig(
                 "profile publication checkpoint is still pending"
             ))

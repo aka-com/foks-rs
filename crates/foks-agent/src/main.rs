@@ -66,8 +66,8 @@ const CANCELLATION_GRACE: Duration = Duration::from_secs(1);
 /// and the wait for a worker end this much earlier; a budget too short to
 /// spare it keeps a quarter for the work.
 const ADMISSION_REPLY_MARGIN: Duration = Duration::from_secs(2);
-const MAXIMUM_CANARY_BYTES: usize = 64 * 1024;
-const MAXIMUM_CANARY_FETCHES: usize = 4;
+const MAXIMUM_COMPATIBILITY_ARTIFACT_BYTES: usize = 64 * 1024;
+const MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES: usize = 4;
 const MAXIMUM_CONCURRENT_READS: usize = 4;
 const MAXIMUM_CONCURRENT_CHAT_POLLS: usize = 32;
 const CHAT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -913,7 +913,7 @@ where
             pending.abort_all();
             return timers::Outcome::Interrupted;
         }
-        while pending.len() < MAXIMUM_CANARY_FETCHES {
+        while pending.len() < MAXIMUM_COMPATIBILITY_ARTIFACT_FETCHES {
             let Some(profile) = profiles.next() else {
                 break;
             };
@@ -953,7 +953,10 @@ impl std::fmt::Display for LeaseFetchError {
 
 impl std::error::Error for LeaseFetchError {}
 
-async fn fetch_canary(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, LeaseFetchError> {
+async fn fetch_compatibility_artifact(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Vec<u8>, LeaseFetchError> {
     let mut response = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -965,7 +968,7 @@ async fn fetch_canary(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, Le
     }
     if response
         .content_length()
-        .is_some_and(|length| length > MAXIMUM_CANARY_BYTES as u64)
+        .is_some_and(|length| length > MAXIMUM_COMPATIBILITY_ARTIFACT_BYTES as u64)
     {
         return Err(LeaseFetchError::TooLarge);
     }
@@ -973,23 +976,26 @@ async fn fetch_canary(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, Le
         response
             .content_length()
             .unwrap_or(0)
-            .min(MAXIMUM_CANARY_BYTES as u64) as usize,
+            .min(MAXIMUM_COMPATIBILITY_ARTIFACT_BYTES as u64) as usize,
     );
     while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|_| LeaseFetchError::Transport)?
     {
-        append_canary_chunk(&mut bytes, &chunk)?;
+        append_compatibility_artifact_chunk(&mut bytes, &chunk)?;
     }
     Ok(bytes)
 }
 
-fn append_canary_chunk(bytes: &mut Vec<u8>, chunk: &[u8]) -> Result<(), LeaseFetchError> {
+fn append_compatibility_artifact_chunk(
+    bytes: &mut Vec<u8>,
+    chunk: &[u8],
+) -> Result<(), LeaseFetchError> {
     if bytes
         .len()
         .checked_add(chunk.len())
-        .is_none_or(|length| length > MAXIMUM_CANARY_BYTES)
+        .is_none_or(|length| length > MAXIMUM_COMPATIBILITY_ARTIFACT_BYTES)
     {
         return Err(LeaseFetchError::TooLarge);
     }
@@ -1003,13 +1009,14 @@ fn apply_hosted_lease(
     profile: &str,
     bytes: &[u8],
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    if bytes.len() > MAXIMUM_CANARY_BYTES {
+    if bytes.len() > MAXIMUM_COMPATIBILITY_ARTIFACT_BYTES {
         return Err("compatibility lease exceeds 64 KiB".into());
     }
-    let signed: foks_compat_artifact::SignedCanaryArtifact = serde_json::from_slice(bytes)?;
+    let signed: foks_compat_artifact::SignedCompatibilityArtifact = serde_json::from_slice(bytes)?;
     let mut registry = ProfileRegistry::open(state_dir)?;
     let previous = registry.profile(profile)?.clone();
-    let current = registry.apply_canary(profile, &signed, now_microseconds()? / 1_000_000)?;
+    let current =
+        registry.apply_compatibility_artifact(profile, &signed, now_microseconds()? / 1_000_000)?;
     Ok(current != previous)
 }
 
@@ -2183,7 +2190,7 @@ fn client_error_response(
                     ErrorCode::InvalidRequest,
                     "Enter a valid device-pairing phrase.".to_owned(),
                 ),
-                C::Backup(reason) => (ErrorCode::InvalidRequest, backup_phrase_sentence(reason)),
+                C::Backup(reason) => (ErrorCode::InvalidRequest, recovery_phrase_sentence(reason)),
                 C::AccountRequest(reason) if *reason == "username is not valid after normalization" => (
                     ErrorCode::InvalidRequest,
                     "Usernames use 3 to 25 letters, numbers, and single underscores.".to_owned(),
@@ -2232,22 +2239,22 @@ fn client_error_response(
     ))
 }
 
-fn backup_phrase_sentence(error: &foks_crypto::BackupPhraseError) -> String {
-    use foks_crypto::BackupPhraseError as E;
+fn recovery_phrase_sentence(error: &foks_crypto::RecoveryPhraseError) -> String {
+    use foks_crypto::RecoveryPhraseError as E;
     match error {
         E::TokenCount { found } => format!(
-            "A paper key has {} words and numbers; this one has {found}.",
-            foks_crypto::BACKUP_PHRASE_TOKENS
+            "A recovery phrase has {} words and numbers; this one has {found}.",
+            foks_crypto::RECOVERY_PHRASE_TOKENS
         ),
         E::Word { index } => format!(
-            "Word {} of the paper key is not a recognized word. Check its spelling.",
+            "Word {} of the recovery phrase is not a recognized word. Check its spelling.",
             index + 1
         ),
         E::Number { index } | E::NumberRange { index } => format!(
-            "Number {} of the paper key should be a whole number from 0 to 8191.",
+            "Number {} of the recovery phrase should be a whole number from 0 to 8191.",
             index + 1
         ),
-        _ => "That paper key is not valid.".to_owned(),
+        _ => "That recovery phrase is not valid.".to_owned(),
     }
 }
 
@@ -3449,10 +3456,10 @@ fn dispatch_result_inner(
             let protocol = match protocol {
                 ProfileProtocol::V019 => ProtocolPolicy::V019,
                 ProfileProtocol::CurrentProbeOnly {
-                    canary_public_key,
+                    compatibility_artifact_public_key,
                     lease_url,
                 } => ProtocolPolicy::CurrentProbeOnly {
-                    canary_public_key,
+                    compatibility_artifact_public_key,
                     lease_url,
                     last_artifact: None,
                 },
@@ -3482,10 +3489,10 @@ fn dispatch_result_inner(
             let protocol = match protocol {
                 ProfileProtocol::V019 => ProtocolPolicy::V019,
                 ProfileProtocol::CurrentProbeOnly {
-                    canary_public_key,
+                    compatibility_artifact_public_key,
                     lease_url,
                 } => ProtocolPolicy::CurrentProbeOnly {
-                    canary_public_key,
+                    compatibility_artifact_public_key,
                     lease_url,
                     last_artifact: None,
                 },
@@ -3527,10 +3534,10 @@ fn dispatch_result_inner(
             let protocol = match protocol {
                 ProfileProtocol::V019 => ProtocolPolicy::V019,
                 ProfileProtocol::CurrentProbeOnly {
-                    canary_public_key,
+                    compatibility_artifact_public_key,
                     lease_url,
                 } => ProtocolPolicy::CurrentProbeOnly {
-                    canary_public_key,
+                    compatibility_artifact_public_key,
                     lease_url,
                     last_artifact: None,
                 },
@@ -7726,11 +7733,11 @@ mod tests {
 
     #[test]
     fn compatibility_response_limit_is_enforced_incrementally() {
-        let mut bytes = vec![0; MAXIMUM_CANARY_BYTES - 1];
-        append_canary_chunk(&mut bytes, &[1]).unwrap();
-        assert_eq!(bytes.len(), MAXIMUM_CANARY_BYTES);
+        let mut bytes = vec![0; MAXIMUM_COMPATIBILITY_ARTIFACT_BYTES - 1];
+        append_compatibility_artifact_chunk(&mut bytes, &[1]).unwrap();
+        assert_eq!(bytes.len(), MAXIMUM_COMPATIBILITY_ARTIFACT_BYTES);
         assert!(matches!(
-            append_canary_chunk(&mut bytes, &[2]),
+            append_compatibility_artifact_chunk(&mut bytes, &[2]),
             Err(LeaseFetchError::TooLarge)
         ));
     }
@@ -7763,7 +7770,7 @@ mod tests {
                 label: None,
                 probe: "foks.app".to_owned(),
                 protocol: foks_client_app::ProtocolPolicy::CurrentProbeOnly {
-                    canary_public_key:
+                    compatibility_artifact_public_key:
                         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
                             .to_owned(),
                     lease_url: "https://updates.example.test/lease.json".to_owned(),
@@ -7774,7 +7781,7 @@ mod tests {
             .unwrap();
         drop(registry);
         let now = now_microseconds().unwrap() / 1_000_000;
-        let mut artifact = foks_compat_artifact::CanaryArtifact {
+        let mut artifact = foks_compat_artifact::CompatibilityArtifact {
             schema_version: foks_compat_artifact::SCHEMA_VERSION,
             generation: 1,
             target: "foks.app".to_owned(),
@@ -7789,7 +7796,8 @@ mod tests {
             drift_reason: String::new(),
         };
         let compatible =
-            foks_compat_artifact::SignedCanaryArtifact::sign(artifact.clone(), &seed).unwrap();
+            foks_compat_artifact::SignedCompatibilityArtifact::sign(artifact.clone(), &seed)
+                .unwrap();
         let bytes = serde_json::to_vec(&compatible).unwrap();
         let active_mutation = profile_work::coordinator()
             .try_acquire(directory.path(), profile_work::Scope::profile("hosted"))
@@ -7817,7 +7825,8 @@ mod tests {
         artifact.outcome = foks_compat_artifact::Outcome::Drift;
         artifact.capabilities.clear();
         artifact.drift_reason = "read-back mismatch".to_owned();
-        let drift = foks_compat_artifact::SignedCanaryArtifact::sign(artifact, &seed).unwrap();
+        let drift =
+            foks_compat_artifact::SignedCompatibilityArtifact::sign(artifact, &seed).unwrap();
         assert!(apply_hosted_lease(
             directory.path(),
             "hosted",

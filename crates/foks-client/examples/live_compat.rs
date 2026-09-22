@@ -108,11 +108,11 @@ fn verify_realtime(
     let confirmed_message =
         chat.attempt_operation(&mut realtime, protected, &prepared_message.id)?;
     let sequence = confirmed_message
-        .receipt
+        .confirmation
         .as_deref()
-        .map(foks_proto::RtSendResult::decode)
+        .map(foks_proto::ChatSendReceipt::decode)
         .transpose()?
-        .ok_or("Go realtime send returned no durable receipt")?
+        .ok_or("Go realtime send returned no ChatSendReceipt")?
         .sequence;
     let history = chat.read_recent(&mut realtime, channel, 10)?;
     if !matches!(history.messages.as_slice(), [message] if message.message.sequence == sequence && matches!(&message.content, ChatContent::Text(body) if body.as_str() == text))

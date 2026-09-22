@@ -45,7 +45,7 @@ interface AccountKeys {
   devices: AccountDevice[];
   backups: BackupEnrollment[];
   /**
-   * Paper-key availability became unknown because the agent or account state
+   * Recovery-phrase availability became unknown because the agent or account state
    * changed after device data loaded. An empty list does not indicate confirmed
    * absence when this flag is set.
    */
@@ -95,7 +95,7 @@ export class DeviceCache {
   }
 
   /**
-   * An account's devices and paper keys. Kept on the default freshness
+   * An account's devices and recovery phrases. Kept on the default freshness
    * window: the lists are the account's own sigchain, which another of this
    * user's devices can provision from or revoke on, so they move without a
    * local mutation to invalidate them.
@@ -114,7 +114,7 @@ export class DeviceCache {
             });
           const devices = await this.bridge.listAccountDevices(store);
           // Agent or account state may change after the initial availability check.
-          // Return the loaded device data and mark paper keys unavailable instead of
+          // Return the loaded device data and mark recovery phrases unavailable instead of
           // failing the entire device query.
           if (
             this.snapshot &&
@@ -255,7 +255,7 @@ export function useDeviceMetadata({
     lists,
     loading: available && !complete && !failed,
     failed,
-    /** Whether paper-key data could not be queried for the current account state. */
+    /** Whether recovery-phrase data could not be queried for the current account state. */
     backupsUnknown: accountState.data?.backupsUnavailable === true,
     freshness: metadataFreshness([accountState, enrollmentState]),
     retry,

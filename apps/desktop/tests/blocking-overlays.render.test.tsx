@@ -798,11 +798,11 @@ test('a conceal does not reopen the sheet a scene opened with the page', async (
       return () => listeners.delete(listener);
     },
   };
-  // `?state=settings-phrase` opens Devices with the one-time paper-key sheet.
+  // `?state=settings-phrase` opens Devices with the one-time recovery-phrase sheet.
   window.history.replaceState(null, '', '/?state=settings-phrase');
   const rendered = ui.render(createElement(App, { bridge }));
   await ui.waitFor(() => {
-    assert.match(document.body.textContent ?? '', /Save paper key/);
+    assert.match(document.body.textContent ?? '', /Save recovery phrase/);
   });
 
   // The conceal remounts the tabs to take the phrase off the screen. The scene
@@ -820,7 +820,7 @@ test('a conceal does not reopen the sheet a scene opened with the page', async (
     await Promise.resolve();
   });
   await ui.waitFor(() => {
-    assert.doesNotMatch(document.body.textContent ?? '', /Save paper key/);
+    assert.doesNotMatch(document.body.textContent ?? '', /Save recovery phrase/);
   });
   // The page itself is back, so the phrase is gone rather than the whole tab.
   assert.match(document.body.textContent ?? '', /paper-backup/);

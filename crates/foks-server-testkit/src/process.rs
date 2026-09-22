@@ -157,16 +157,16 @@ impl InProcessServer {
         self.environment.read_database()
     }
 
-    pub fn request_receipt(
+    pub fn idempotency_record(
         &self,
         idempotency_key: &[u8],
         request_hash: &[u8; 32],
-    ) -> foks_server_db::Result<Option<foks_server_db::Receipt>> {
+    ) -> foks_server_db::Result<Option<foks_server_db::IdempotencyRecord>> {
         foks_server_db::ReadDatabase::open(
             self.environment.inner.paths.database(),
             foks_server_db::Config::default(),
         )?
-        .request_receipt(
+        .idempotency_record(
             idempotency_key,
             request_hash,
             self.environment.inner.clock.now(),

@@ -31,7 +31,7 @@ fn every_user_mutation_publication_boundary_is_atomic() {
         UserMutationFailurePoint::Passphrase,
         UserMutationFailurePoint::MerkleNodes,
         UserMutationFailurePoint::MerkleRoot,
-        UserMutationFailurePoint::Receipt,
+        UserMutationFailurePoint::IdempotencyRecord,
     ] {
         let mut fixture = common::TestDatabase::new();
         fixture.reserve(1_000_000);
@@ -131,7 +131,7 @@ fn every_user_mutation_publication_boundary_is_atomic() {
             request_hash: &[0x67; 32],
             response: b"",
             now: 1_000_001,
-            receipt_expires_at: 2_000_001,
+            idempotency_expires_at: 2_000_001,
         };
         assert!(fixture
             .database
@@ -332,7 +332,7 @@ fn revocation_rejects_generic_links_signed_after_its_cited_root() {
         request_hash: &[0x96; 32],
         response: b"",
         now: 1_000_002,
-        receipt_expires_at: 2_000_002,
+        idempotency_expires_at: 2_000_002,
     });
     assert!(matches!(result, Err(foks_server_db::Error::StaleRoot)));
     assert_eq!(

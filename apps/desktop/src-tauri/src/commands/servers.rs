@@ -462,14 +462,14 @@ pub(super) struct ProfileSummary {
 pub(super) enum ProfileProtocolSummary {
     V019,
     CurrentProbeOnly {
-        canary_public_key: String,
+        compatibility_artifact_public_key: String,
         lease_url: String,
-        last_artifact: Option<Box<foks_compat_artifact::SignedCanaryArtifact>>,
+        last_artifact: Option<Box<foks_compat_artifact::SignedCompatibilityArtifact>>,
     },
     CurrentValidated {
-        canary_public_key: String,
+        compatibility_artifact_public_key: String,
         lease_url: String,
-        artifact: Box<foks_compat_artifact::SignedCanaryArtifact>,
+        artifact: Box<foks_compat_artifact::SignedCompatibilityArtifact>,
     },
 }
 
@@ -684,27 +684,27 @@ fn valid_profile_summary(profile: &ProfileSummary) -> bool {
         && match &profile.protocol {
             ProfileProtocolSummary::V019 => true,
             ProfileProtocolSummary::CurrentProbeOnly {
-                canary_public_key,
+                compatibility_artifact_public_key,
                 lease_url,
                 last_artifact,
             } => {
                 valid_current_profile_policy(
-                    canary_public_key,
+                    compatibility_artifact_public_key,
                     lease_url,
                     last_artifact.as_deref(),
                     &profile.probe,
                 ) && last_artifact
                     .as_deref()
-                    .is_none_or(|artifact| !canary_grants_desktop(artifact))
+                    .is_none_or(|artifact| !artifact_grants_desktop(artifact))
             }
             ProfileProtocolSummary::CurrentValidated {
-                canary_public_key,
+                compatibility_artifact_public_key,
                 lease_url,
                 artifact,
             } => {
-                canary_grants_desktop(artifact)
+                artifact_grants_desktop(artifact)
                     && valid_current_profile_policy(
-                        canary_public_key,
+                        compatibility_artifact_public_key,
                         lease_url,
                         Some(artifact),
                         &profile.probe,
@@ -713,7 +713,7 @@ fn valid_profile_summary(profile: &ProfileSummary) -> bool {
         }
 }
 
-fn canary_grants_desktop(artifact: &foks_compat_artifact::SignedCanaryArtifact) -> bool {
+fn artifact_grants_desktop(artifact: &foks_compat_artifact::SignedCompatibilityArtifact) -> bool {
     artifact.artifact.outcome == foks_compat_artifact::Outcome::Compatible
         && artifact.artifact.protocol_metadata_sha256 == PINNED_PROTOCOL_METADATA_SHA256
         && artifact
@@ -726,7 +726,7 @@ fn canary_grants_desktop(artifact: &foks_compat_artifact::SignedCanaryArtifact) 
 fn valid_current_profile_policy(
     public_key: &str,
     lease_url: &str,
-    artifact: Option<&foks_compat_artifact::SignedCanaryArtifact>,
+    artifact: Option<&foks_compat_artifact::SignedCompatibilityArtifact>,
     probe: &str,
 ) -> bool {
     let Ok(public_key) = foks_compat_artifact::decode_public_key(public_key) else {

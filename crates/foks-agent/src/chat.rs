@@ -1,7 +1,7 @@
 //! Foreground chat dispatch. All operations run inside one checked profile session.
 use foks_agent_proto::{chat::*, SecretString, TeamStoreRef};
 use foks_client_app::{AccountVault, CheckedProfileSession, ClientCredentials};
-use foks_proto::{RealtimeWire, RtChannelId, RtChannelTier, RtSendResult};
+use foks_proto::{ChatSendReceipt, RealtimeWire, RtChannelId, RtChannelTier};
 use std::path::Path;
 use zeroize::Zeroizing;
 
@@ -184,9 +184,9 @@ pub(super) fn poll(
 fn operation(op: foks_client_db::ChatOperation) -> Result<ChatOperation> {
     use foks_client_db::{ChatOperationKind as K, ChatOperationState as S};
     let sequence = if op.kind == K::Send {
-        op.receipt
+        op.confirmation
             .as_deref()
-            .map(RtSendResult::decode)
+            .map(ChatSendReceipt::decode)
             .transpose()?
             .map(|r| r.sequence.to_string())
     } else {
@@ -206,12 +206,12 @@ fn operation(op: foks_client_db::ChatOperation) -> Result<ChatOperation> {
             S::Rejected => ChatState::Rejected,
             S::Cancelled => ChatState::Cancelled,
         },
-        receipt: if op.state == S::Confirmed {
+        confirmation: if op.state == S::Confirmed {
             Some(match op.kind {
-                K::Create => ChatReceipt::ChannelCreated,
-                K::Send => ChatReceipt::MessageSent {
+                K::Create => ChatOperationConfirmation::ChannelCreated,
+                K::Send => ChatOperationConfirmation::MessageSent {
                     sequence: sequence.ok_or(foks_client::Error::ChatIntegrity(
-                        "confirmed send has no receipt",
+                        "confirmed send has no confirmation",
                     ))?,
                 },
             })

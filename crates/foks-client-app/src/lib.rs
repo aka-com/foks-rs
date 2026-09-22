@@ -46,9 +46,9 @@ use foks_client::{
 };
 use foks_client_db::ScheduledJobKind;
 use foks_client_db::{HardStateStore, KvDirectoryProjection, MutationKind, MutationState};
-use foks_compat_artifact::{Outcome as CanaryOutcome, SignedCanaryArtifact};
+use foks_compat_artifact::{Outcome as CompatibilityOutcome, SignedCompatibilityArtifact};
 use foks_crypto::{derive_device_public, derive_shared_verify_key, prefixed_hash, BackupKey};
-pub use foks_crypto::{BackupPhrase, Passphrase};
+pub use foks_crypto::{Passphrase, RecoveryPhrase};
 use foks_keystore::SecretStore;
 use foks_proto::{
     EntityId, InviteCode, KvNodeId, KvNodeType, Role, SecretSeed, ENTITY_PUK_VERIFY, ENTITY_USER,
@@ -133,8 +133,8 @@ pub enum Error {
     Crypto(#[from] foks_crypto::Error),
     #[error("FOKS hardware key operation failed: {0}")]
     Yubi(#[from] foks_yubi::Error),
-    #[error("FOKS backup phrase failed: {0}")]
-    Backup(#[from] foks_crypto::BackupPhraseError),
+    #[error("FOKS recovery phrase failed: {0}")]
+    Backup(#[from] foks_crypto::RecoveryPhraseError),
     #[error("FOKS KEX phrase failed: {0}")]
     KexPhrase(#[from] foks_crypto::KexPhraseError),
     #[error("FOKS application I/O failed: {0}")]
@@ -604,12 +604,13 @@ mod tests {
     use foks_keystore::MemorySecretStore;
     use std::collections::BTreeSet;
 
-    const CANARY_KEY: &str = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+    const COMPATIBILITY_ARTIFACT_KEY: &str =
+        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
 
     fn probe_only() -> ProtocolPolicy {
         ProtocolPolicy::CurrentProbeOnly {
-            canary_public_key: CANARY_KEY.to_owned(),
-            lease_url: "https://updates.example.test/foks/canary.json".to_owned(),
+            compatibility_artifact_public_key: COMPATIBILITY_ARTIFACT_KEY.to_owned(),
+            lease_url: "https://updates.example.test/foks/compatibility-artifact.json".to_owned(),
             last_artifact: None,
         }
     }
@@ -1514,13 +1515,13 @@ mod tests {
     }
 
     #[test]
-    fn signed_canaries_grant_temporarily_and_drift_revokes_everything() {
+    fn signed_compatibility_artifacts_grant_temporarily_and_drift_revokes_everything() {
         let seed = [
             0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec,
             0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03,
             0x1c, 0xae, 0x7f, 0x60,
         ];
-        let mut artifact = foks_compat_artifact::CanaryArtifact {
+        let mut artifact = foks_compat_artifact::CompatibilityArtifact {
             schema_version: foks_compat_artifact::SCHEMA_VERSION,
             generation: 1,
             target: "foks.app".to_owned(),
@@ -1530,7 +1531,7 @@ mod tests {
             protocol_metadata_sha256: PINNED_PROTOCOL_METADATA_SHA256.to_owned(),
             mutation_digest: "22".repeat(32),
             read_digest: "33".repeat(32),
-            outcome: CanaryOutcome::Compatible,
+            outcome: CompatibilityOutcome::Compatible,
             capabilities: BTreeSet::from([
                 "kv".to_owned(),
                 "passphrases".to_owned(),
@@ -1540,19 +1541,24 @@ mod tests {
             drift_reason: String::new(),
         };
         let initial = profile("hosted", probe_only());
-        let signed = SignedCanaryArtifact::sign(artifact.clone(), &seed).unwrap();
-        let granted = initial.apply_canary(&signed, 101).unwrap();
+        let signed = SignedCompatibilityArtifact::sign(artifact.clone(), &seed).unwrap();
+        let granted = initial.apply_compatibility_artifact(&signed, 101).unwrap();
         let temporary = tempfile::tempdir().unwrap();
         let mut registry = ProfileRegistry::open(temporary.path()).unwrap();
         registry.add(initial.clone()).unwrap();
         assert_eq!(
-            registry.apply_canary("hosted", &signed, 101).unwrap(),
+            registry
+                .apply_compatibility_artifact("hosted", &signed, 101)
+                .unwrap(),
             granted
         );
         drop(registry);
         let mut registry = ProfileRegistry::open(temporary.path()).unwrap();
         assert_eq!(registry.profile("hosted").unwrap(), &granted);
-        assert_eq!(granted.apply_canary(&signed, 101).unwrap(), granted);
+        assert_eq!(
+            granted.apply_compatibility_artifact(&signed, 101).unwrap(),
+            granted
+        );
         let grants = granted.protocol.compatibility_status();
         assert_eq!(grants.denial_at(Capability::Kv, 199), None);
         assert_eq!(
@@ -1578,8 +1584,10 @@ mod tests {
         assert!(granted.require_at(Capability::Chat, 199).is_err());
         let mut chat_artifact = artifact.clone();
         chat_artifact.capabilities.insert("chat".to_owned());
-        let signed_chat = SignedCanaryArtifact::sign(chat_artifact, &seed).unwrap();
-        let chat = initial.apply_canary(&signed_chat, 101).unwrap();
+        let signed_chat = SignedCompatibilityArtifact::sign(chat_artifact, &seed).unwrap();
+        let chat = initial
+            .apply_compatibility_artifact(&signed_chat, 101)
+            .unwrap();
         assert!(chat.require_at(Capability::Chat, 199).is_ok());
         assert!(chat.require_at(Capability::Chat, 200).is_err());
 
@@ -1589,15 +1597,17 @@ mod tests {
         }
         assert!(matches!(
             tampered.validate(),
-            Err(Error::InvalidProfile("canary signature is invalid"))
+            Err(Error::InvalidProfile(
+                "compatibility artifact signature is invalid"
+            ))
         ));
 
-        artifact.outcome = CanaryOutcome::Drift;
+        artifact.outcome = CompatibilityOutcome::Drift;
         artifact.generation = 2;
         artifact.capabilities.clear();
         artifact.drift_reason = "read-back mismatch".to_owned();
-        let drift = SignedCanaryArtifact::sign(artifact, &seed).unwrap();
-        let revoked = granted.apply_canary(&drift, 102).unwrap();
+        let drift = SignedCompatibilityArtifact::sign(artifact, &seed).unwrap();
+        let revoked = granted.apply_compatibility_artifact(&drift, 102).unwrap();
         assert_eq!(
             revoked.protocol.compatibility_status(),
             CompatibilityStatus::Incompatible {
@@ -1606,10 +1616,14 @@ mod tests {
             }
         );
         assert_eq!(
-            registry.apply_canary("hosted", &drift, 102).unwrap(),
+            registry
+                .apply_compatibility_artifact("hosted", &drift, 102)
+                .unwrap(),
             revoked
         );
-        assert!(registry.apply_canary("hosted", &signed, 102).is_err());
+        assert!(registry
+            .apply_compatibility_artifact("hosted", &signed, 102)
+            .is_err());
         drop(registry);
         let registry = ProfileRegistry::open(temporary.path()).unwrap();
         assert_eq!(registry.profile("hosted").unwrap(), &revoked);
@@ -1622,18 +1636,22 @@ mod tests {
             ProtocolPolicy::CurrentProbeOnly { .. }
         ));
         assert!(matches!(
-            revoked.apply_canary(&signed, 102),
-            Err(Error::InvalidProfile("canary generation rolled back"))
+            revoked.apply_compatibility_artifact(&signed, 102),
+            Err(Error::InvalidProfile(
+                "compatibility artifact generation rolled back"
+            ))
         ));
 
         artifact = drift.artifact.clone();
         artifact.generation = 3;
-        artifact.outcome = CanaryOutcome::Compatible;
+        artifact.outcome = CompatibilityOutcome::Compatible;
         artifact.capabilities = BTreeSet::from(["kv".to_owned()]);
         artifact.drift_reason.clear();
         artifact.protocol_metadata_sha256 = "44".repeat(32);
-        let mismatched = SignedCanaryArtifact::sign(artifact, &seed).unwrap();
-        let still_revoked = revoked.apply_canary(&mismatched, 103).unwrap();
+        let mismatched = SignedCompatibilityArtifact::sign(artifact, &seed).unwrap();
+        let still_revoked = revoked
+            .apply_compatibility_artifact(&mismatched, 103)
+            .unwrap();
         assert_eq!(
             still_revoked.protocol.compatibility_status(),
             CompatibilityStatus::Incompatible {
@@ -1652,7 +1670,7 @@ mod tests {
     }
 
     #[test]
-    fn pinned_canary_digest_matches_the_embedded_v019_metadata() {
+    fn pinned_protocol_metadata_digest_matches_the_embedded_v019_metadata() {
         use sha2::{Digest as _, Sha256};
 
         let digest = Sha256::digest(include_bytes!(

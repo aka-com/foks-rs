@@ -315,11 +315,11 @@ pub(crate) fn issue(
 }
 
 pub(crate) fn set_regime_cas(c: &Connection, regime: InviteRegime, expected: u64) -> Result<()> {
-    if c.execute("UPDATE signup_policy SET invite_regime=?1,revision=revision+1 WHERE singleton=1 AND revision=?2",params![regime as u8,sql_integer(expected)?])? !=1 { return Err(Error::ReceiptConflict); }
+    if c.execute("UPDATE signup_policy SET invite_regime=?1,revision=revision+1 WHERE singleton=1 AND revision=?2",params![regime as u8,sql_integer(expected)?])? !=1 { return Err(Error::OperationConflict); }
     Ok(())
 }
 pub(crate) fn disable_id_cas(c: &Connection, id: &[u8; 16], expected: u64, now: u64) -> Result<()> {
-    if c.execute("UPDATE signup_invites SET state=2,disabled_at=?3,configuration_revision=configuration_revision+1 WHERE invite_id=?1 AND state=1 AND configuration_revision=?2",params![id,sql_integer(expected)?,sql_integer(now)?])? !=1 {return Err(Error::ReceiptConflict);}
+    if c.execute("UPDATE signup_invites SET state=2,disabled_at=?3,configuration_revision=configuration_revision+1 WHERE invite_id=?1 AND state=1 AND configuration_revision=?2",params![id,sql_integer(expected)?,sql_integer(now)?])? !=1 {return Err(Error::OperationConflict);}
     Ok(())
 }
 pub(crate) fn page(c: &Connection, after: &[u8], limit: usize) -> Result<Vec<InviteSnapshot>> {

@@ -436,7 +436,7 @@ impl FoksClient {
             }
             op = HardStateStore::open(&host.database_path)?
                 .mutation(&id)?
-                .ok_or(Error::OperationBinding("missing bot receipt"))?;
+                .ok_or(Error::OperationBinding("missing bot completion record"))?;
         }
         if matches!(
             op.state,
@@ -480,7 +480,7 @@ impl FoksClient {
             }
             op = HardStateStore::open(&host.database_path)?
                 .mutation(&id)?
-                .ok_or(Error::OperationBinding("missing bot receipt"))?;
+                .ok_or(Error::OperationBinding("missing bot completion record"))?;
         }
         Ok(op)
     }

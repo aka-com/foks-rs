@@ -967,7 +967,7 @@ function ResetMacSheet({
     >
       <p>
         Deletes this Mac's account keys. Your data stays on the server, but
-        without another device or a paper key you cannot get back into the
+        without another device or a recovery phrase you cannot get back into the
         account. The passphrase alone is not enough.
       </p>
       <Inset>

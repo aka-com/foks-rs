@@ -34,7 +34,7 @@ elif 'probe' in a: print(json.dumps({'host_id_hex': '02' + 'ab' * 32}))
 elif 'put' in a: shutil.copy(a[a.index('--input') + 1], root / 'object')
 elif 'get' in a: shutil.copy(root / 'object', a[a.index('--output') + 1])
 elif 'remove' in a: (root / 'object').unlink()
-elif 'apply-canary' in a: shutil.copy(a[a.index('--artifact') + 1], root / 'applied')
+elif 'apply-compatibility-artifact' in a: shutil.copy(a[a.index('--artifact') + 1], root / 'applied')
 ''')
             signer = binaries / "foks-compat-artifact"
             signer.write_text('''#!/usr/bin/env python3

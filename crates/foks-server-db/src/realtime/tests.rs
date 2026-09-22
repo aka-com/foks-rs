@@ -280,21 +280,21 @@ fn exact_replay_conflict_order_history_and_restart() {
         2
     );
     let first = f.send(2);
-    let receipt = f.db.rt_send(&f.owner, &first, 1_001_000).unwrap();
-    assert_eq!(receipt.value.sequence, 1);
+    let send_receipt = f.db.rt_send(&f.owner, &first, 1_001_000).unwrap();
+    assert_eq!(send_receipt.value.sequence, 1);
     let replay = f.db.rt_send(&f.owner, &first, 1_100_000).unwrap();
-    assert_eq!(receipt.value, replay.value);
+    assert_eq!(send_receipt.value, replay.value);
     assert!(replay.wake.is_empty());
     assert_eq!(f.count("rt_messages"), 1);
     assert!(matches!(
         f.db.rt_send(&f.member, &first, 1_200_000),
-        Err(Error::ReceiptConflict)
+        Err(Error::OperationConflict)
     ));
     let mut changed = first.clone();
     changed.send.metadata.send_time += 1;
     assert!(matches!(
         f.db.rt_send(&f.owner, &changed, 1_200_000),
-        Err(Error::ReceiptConflict)
+        Err(Error::OperationConflict)
     ));
     let mut second = f.send(3);
     second.send.expected_previous_sequence = 2;
@@ -365,7 +365,7 @@ fn exact_replay_conflict_order_history_and_restart() {
     f.db = Database::open_existing(path, Config::default()).unwrap();
     assert_eq!(
         f.db.rt_send(&f.owner, &first, 1_400_000).unwrap().value,
-        receipt.value
+        send_receipt.value
     );
     let read: i64 =
         f.db.connection
@@ -511,7 +511,7 @@ fn tier_visibility_cas_identity_collisions_and_limits() {
         .is_err());
 }
 #[test]
-fn fanout_failure_rolls_back_message_sequence_and_receipt() {
+fn fanout_failure_rolls_back_message_sequence_and_send_receipt() {
     let mut f = Fixture::new();
     f.db.rt_create_channel(&f.owner, &f.create, 100).unwrap();
     f.db.connection
@@ -718,7 +718,7 @@ fn maximum_channel_metadata_can_accept_a_message_and_replay_ignores_precondition
     );
     f.db.rt_create_channel(&f.owner, &create, 1000).unwrap();
     let mut send = f.send(2);
-    let receipt = f.db.rt_send(&f.owner, &send, 2000).unwrap().value;
+    let send_receipt = f.db.rt_send(&f.owner, &send, 2000).unwrap().value;
     let stored: Vec<u8> =
         f.db.connection
             .query_row(
@@ -730,9 +730,15 @@ fn maximum_channel_metadata_can_accept_a_message_and_replay_ignores_precondition
     assert_eq!(stored, create.metadata.encoded().unwrap());
     let projected = channel(&f.db.connection, &create.metadata.id.0).unwrap();
     assert_eq!(projected.mtime, 2);
-    assert_eq!(projected.last_message.unwrap().sequence, receipt.sequence);
+    assert_eq!(
+        projected.last_message.unwrap().sequence,
+        send_receipt.sequence
+    );
     send.send.expected_previous_sequence = u64::MAX;
-    assert_eq!(f.db.rt_send(&f.owner, &send, 3000).unwrap().value, receipt);
+    assert_eq!(
+        f.db.rt_send(&f.owner, &send, 3000).unwrap().value,
+        send_receipt
+    );
     let mut too_large = create;
     too_large.metadata.id.0 = [3; 16];
     too_large.metadata.name.boxed.ciphertext.push(4);

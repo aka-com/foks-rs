@@ -45,7 +45,7 @@
     ],
     "accounts": [
       "account",
-      "backupPhrase",
+      "recoveryPhrase",
       "device",
       "deviceRemoval",
       "backupEnrollment",
@@ -106,7 +106,7 @@
     "PendingOperation": ["pendingOperation"],
     "PairingOffer": ["pairingOffer"],
     "DeviceProvision": ["deviceProvision"],
-    "BackupPhraseResponse": ["backupPhrase"],
+    "RecoveryPhraseResponse": ["recoveryPhrase"],
     "AccountDevice": ["device"],
     "DeviceRemovalDto": ["deviceRemoval"],
     "BackupEnrollment": ["backupEnrollment"],

@@ -174,7 +174,7 @@ test('an ungranted device capability does not invent a missing backup key', asyn
   )) as typeof import('../src/screens/device-alert');
   assert.equal(reads, 0);
   assert.equal(
-    deviceAlertRegistry(observed).getSnapshot().paperKeys.has('acct:personal'),
+    deviceAlertRegistry(observed).getSnapshot().recoveryPhrases.has('acct:personal'),
     false,
   );
   assert.equal(
@@ -200,7 +200,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
     'Web admin panel',
     'Sign in via SSO',
     'Import from FOKS CLI',
-    'Connect an existing account with a paper key',
+    'Connect an existing account with a recovery phrase',
     'Create an account on a hardware key…',
   ])
     assert.equal(
@@ -242,7 +242,7 @@ test('the account panel keeps every workflow row from the accounts pane', async 
       'Web admin panel',
       'Sign in via SSO',
       'Import from FOKS CLI',
-      'Connect an existing account with a paper key',
+      'Connect an existing account with a recovery phrase',
       'Create an account on a hardware key…',
     ],
   );
@@ -254,7 +254,7 @@ test('account recovery and hardware-key creation open after the existing actions
   await ui.act(async () => {
     ui.fireEvent.click(
       rendered.getByRole('button', {
-        name: 'Connect an existing account with a paper key',
+        name: 'Connect an existing account with a recovery phrase',
       }),
     );
   });
@@ -316,7 +316,7 @@ test('the profile’s Teams and Devices facts summarize the account and link to 
 
   // The Keys section is gone from this page.
   assert.equal(rendered.queryByText('MacBook Pro · Computer'), null);
-  assert.equal(rendered.queryByText('paper-backup · Paper key'), null);
+  assert.equal(rendered.queryByText('paper-backup · Recovery phrase'), null);
 });
 
 test('a team whose roster could not be read remains in the Teams count', async () => {

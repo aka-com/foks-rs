@@ -331,7 +331,7 @@ impl RemoteJoinPayload {
         ])))?)
     }
 }
-/// Stable opaque receipt; its kind is distinct from operation identity.
+/// Stable opaque rsvp; its kind is distinct from operation identity.
 #[derive(Clone, Eq, PartialEq)]
 pub struct TeamRsvp([u8; 17]);
 impl TeamRsvp {
@@ -409,7 +409,7 @@ pub enum RawInboxRequest {
 pub struct RawInboxRow {
     pub time: u64,
     pub state: JoinRequestState,
-    pub receipt: TeamRsvp,
+    pub rsvp: TeamRsvp,
     pub request: RawInboxRequest,
 }
 impl RawInboxRow {
@@ -424,7 +424,7 @@ impl RawInboxRow {
         };
         let row = array(&f[2], 2)?;
         let tag = unsigned(&row[0])?;
-        let (receipt, request) = match tag {
+        let (rsvp, request) = match tag {
             1 => {
                 let x = array(variant(&row[1], "1")?, 4)?;
                 let r = TeamRsvp::decode(&encode(&x[0])?)?;
@@ -460,12 +460,12 @@ impl RawInboxRow {
         Ok(Self {
             time: unsigned(&f[0])?,
             state,
-            receipt,
+            rsvp,
             request,
         })
     }
     fn to_value(&self) -> Result<Value> {
-        let receipt = decode(&self.receipt.encoded()?)?;
+        let rsvp = decode(&self.rsvp.encoded()?)?;
         let (tag, body) = match &self.request {
             RawInboxRequest::Local {
                 joiner,
@@ -474,13 +474,13 @@ impl RawInboxRow {
             } => (
                 1,
                 Value::Array(vec![
-                    receipt,
+                    rsvp,
                     Value::Binary(joiner.as_bytes().to_vec()),
                     source_role.to_value(),
                     permission.to_value(),
                 ]),
             ),
-            RawInboxRequest::Remote(r) => (2, Value::Array(vec![receipt, decode(&r.encoded()?)?])),
+            RawInboxRequest::Remote(r) => (2, Value::Array(vec![rsvp, decode(&r.encoded()?)?])),
         };
         Ok(Value::Array(vec![
             Value::Unsigned(self.time),

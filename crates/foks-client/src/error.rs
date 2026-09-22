@@ -66,7 +66,7 @@ pub enum Error {
     #[error("FOKS device cryptography failed: {0}")]
     Crypto(#[from] foks_crypto::Error),
     #[error("invalid FOKS backup key: {0}")]
-    Backup(#[from] foks_crypto::BackupPhraseError),
+    Backup(#[from] foks_crypto::RecoveryPhraseError),
     #[error("invalid FOKS KEX phrase: {0}")]
     KexPhrase(#[from] foks_crypto::KexPhraseError),
     #[error("FOKS KEX failed: {0}")]

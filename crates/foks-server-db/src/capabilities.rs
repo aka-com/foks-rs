@@ -96,7 +96,7 @@ impl Database {
                 stored.expires_at = Some(stored_expiry);
                 return Ok(Some(stored));
             }
-            return Err(Error::ReceiptConflict);
+            return Err(Error::OperationConflict);
         }
         if expires_at <= now {
             return Ok(None);
@@ -312,7 +312,7 @@ impl Database {
             if stored.as_slice() == activation.activation_hash {
                 return Ok(Some(authority));
             }
-            return Err(Error::ReceiptConflict);
+            return Err(Error::OperationConflict);
         }
         let updated = transaction.execute(
             "UPDATE team_admin_tokens SET activation_hash = ?2

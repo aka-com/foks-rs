@@ -902,7 +902,7 @@ function operations(
     channel,
     kind: 'send-message',
     state,
-    receipt:
+    confirmation:
       state === 'confirmed'
         ? { kind: 'message-sent', sequence: String(index + 1) }
         : null,

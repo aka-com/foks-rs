@@ -49,7 +49,7 @@ if [ "$target" != "$capability_target" ]; then
 fi
 if [ -n "${FOKS_CANARY_EXPECTED_TARGET:-}" ] \
     && [ "$target" != "$FOKS_CANARY_EXPECTED_TARGET" ]; then
-    echo "stored canary target does not match the configured expectation" >&2
+    echo "stored compatibility artifact target does not match the configured expectation" >&2
     exit 1
 fi
 
@@ -142,7 +142,7 @@ fi
 
 # Applying drift replaces any prior lease with probe-only policy. Successful
 # leases are short-lived, so a stopped scheduler also revokes automatically.
-"$client" --state-dir "$FOKS_CANARY_STATE_DIR" profile apply-canary \
+"$client" --state-dir "$FOKS_CANARY_STATE_DIR" profile apply-compatibility-artifact \
     "$FOKS_CAPABILITY_PROFILE" --artifact "$candidate"
 
 # The stable output becomes visible only after both signing and local

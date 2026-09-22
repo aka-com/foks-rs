@@ -14,6 +14,7 @@ mod federation;
 mod generic;
 mod host;
 mod host_rotation;
+mod idempotency;
 mod identity;
 mod invites;
 mod kv;
@@ -24,7 +25,6 @@ mod names;
 mod passphrases;
 mod read;
 mod realtime;
-mod receipts;
 mod recovery;
 mod schema;
 mod sso;
@@ -66,6 +66,7 @@ pub use host_rotation::{
     HostKeyGeneration, HostKeyGenerationState, HostRotationOperation, HostRotationPhase,
     HostRotationPublication,
 };
+pub use idempotency::IdempotencyRecord;
 pub use identity::{CommitOutcome, FailurePoint, IdentityMutation};
 pub use invites::{
     InviteConsumption, InviteKind, InvitePolicy, InviteRegime, InviteSnapshot, IssuedInvite,
@@ -92,7 +93,6 @@ pub use realtime::{
     RealtimeActor, RealtimeCommit, RealtimeInboxState, RealtimeLimits, RealtimeReconcileOutcome,
     RealtimeReconcileReport, RealtimeReconcileState, RealtimeWakeTarget,
 };
-pub use receipts::Receipt;
 pub use recovery::RecoveryCredentialSnapshot;
 pub use schema::{APPLICATION_ID, SCHEMA_VERSION};
 pub use sso::{SsoSession, SsoSessionState};

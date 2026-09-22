@@ -425,8 +425,8 @@ pub(crate) fn realtime_text() {
             expected_previous_sequence: 0,
         },
     });
-    let receipt = writer.call(&first).unwrap();
-    assert_eq!(writer.call(&first).unwrap(), receipt);
+    let send_receipt = writer.call(&first).unwrap();
+    assert_eq!(writer.call(&first).unwrap(), send_receipt);
     let recent = Request::Recents(RtRecentsArgument {
         channel: md.id,
         stop_at: 0,
@@ -623,10 +623,10 @@ pub(crate) fn realtime_text() {
             expected_previous_sequence: 1,
         },
     });
-    let Response::Sent(second_receipt) = reader.call(&second).unwrap() else {
+    let Response::Sent(second_send_receipt) = reader.call(&second).unwrap() else {
         panic!()
     };
-    assert_eq!(second_receipt.sequence, 2);
+    assert_eq!(second_send_receipt.sequence, 2);
     let history = Request::GetThread(RtGetThreadArgument {
         query: RtThreadQuery {
             channel: md.id,
@@ -881,8 +881,8 @@ pub(crate) fn realtime_text() {
             .len(),
         2
     );
-    assert_eq!(writer.call(&first).unwrap(), receipt);
-    // Restart with exact ciphertext and receipts intact. A new connection must
+    assert_eq!(writer.call(&first).unwrap(), send_receipt);
+    // Restart with exact ciphertext and ChatSendReceipts intact. A new connection must
     // select the host again; no in-memory chat state is required for recovery.
     drop(writer);
     drop(reader);
@@ -895,7 +895,7 @@ pub(crate) fn realtime_text() {
         .foks()
         .realtime_connection(&fixture.probe.pinned, &owner.credential)
         .unwrap();
-    assert_eq!(writer.call(&first).unwrap(), receipt);
+    assert_eq!(writer.call(&first).unwrap(), send_receipt);
     let Response::Messages(messages) = writer.call(&recent).unwrap() else {
         panic!()
     };
@@ -1227,8 +1227,8 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
     offline
         .finalize_operation(&mut protected, &pending.id)
         .unwrap();
-    let receipt = RtSendResult::decode(second.receipt.as_ref().unwrap()).unwrap();
-    assert_eq!(receipt.sequence, 102);
+    let send_receipt = ChatSendReceipt::decode(second.confirmation.as_ref().unwrap()).unwrap();
+    assert_eq!(send_receipt.sequence, 102);
     let channel = rpc.channel;
     let history = chat.read_thread(&mut rpc, channel, 102, 100).unwrap();
     assert!(

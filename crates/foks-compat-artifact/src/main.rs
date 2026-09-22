@@ -8,7 +8,9 @@ use std::path::PathBuf;
 
 use clap::Parser as _;
 use ed25519_dalek::SigningKey;
-use foks_compat_artifact::{CanaryArtifact, Outcome, SignedCanaryArtifact, SCHEMA_VERSION};
+use foks_compat_artifact::{
+    CompatibilityArtifact, Outcome, SignedCompatibilityArtifact, SCHEMA_VERSION,
+};
 use zeroize::{Zeroize as _, Zeroizing};
 
 const MAXIMUM_ARTIFACT_BYTES: u64 = 1024 * 1024;
@@ -103,7 +105,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
             let mut seed = Zeroizing::new([0u8; 32]);
             seed.copy_from_slice(&key);
             key.zeroize();
-            let artifact = CanaryArtifact {
+            let artifact = CompatibilityArtifact {
                 schema_version: SCHEMA_VERSION,
                 generation: arguments.generation,
                 target: arguments.target,
@@ -120,11 +122,11 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 capabilities: arguments.capability.into_iter().collect::<BTreeSet<_>>(),
                 drift_reason: arguments.drift_reason,
             };
-            let signed = SignedCanaryArtifact::sign(artifact, &seed)?;
+            let signed = SignedCompatibilityArtifact::sign(artifact, &seed)?;
             write_new(&arguments.output, &serde_json::to_vec_pretty(&signed)?)?;
         }
         Command::Verify(arguments) => {
-            let signed: SignedCanaryArtifact =
+            let signed: SignedCompatibilityArtifact =
                 serde_json::from_slice(&read_bounded_artifact(&arguments.artifact)?)?;
             signed.verify(&foks_compat_artifact::decode_public_key(
                 &arguments.public_key_hex,
@@ -144,7 +146,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
                 .as_deref()
                 .map(read_bounded_artifact)
                 .transpose()?
-                .map(|bytes| serde_json::from_slice::<SignedCanaryArtifact>(&bytes))
+                .map(|bytes| serde_json::from_slice::<SignedCompatibilityArtifact>(&bytes))
                 .transpose()?;
             println!(
                 "{}",
@@ -162,7 +164,7 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn allocate_generation(
-    previous: Option<&SignedCanaryArtifact>,
+    previous: Option<&SignedCompatibilityArtifact>,
     signing_seed: &[u8; 32],
     target: &str,
     run_number: u64,
@@ -191,7 +193,7 @@ fn allocate_generation(
         .ok_or("workflow generation allocation overflowed")?;
     current
         .checked_add(allocation)
-        .ok_or_else(|| "canary generation overflowed".into())
+        .ok_or_else(|| "compatibility artifact generation overflowed".into())
 }
 
 fn read_bounded_artifact(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -263,9 +265,9 @@ mod tests {
 
     use super::*;
 
-    fn previous(signing_seed: &[u8; 32], generation: u64) -> SignedCanaryArtifact {
-        SignedCanaryArtifact::sign(
-            CanaryArtifact {
+    fn previous(signing_seed: &[u8; 32], generation: u64) -> SignedCompatibilityArtifact {
+        SignedCompatibilityArtifact::sign(
+            CompatibilityArtifact {
                 schema_version: SCHEMA_VERSION,
                 generation,
                 target: "foks.pub:443".to_owned(),

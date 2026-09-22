@@ -276,9 +276,9 @@ pub(super) fn valid_device_name(value: &str) -> Result<String, AgentError> {
     Ok(value)
 }
 
-/// A paper key phrase, parsed before it leaves the app so a typo is named by
+/// A recovery phrase, parsed before it leaves the app so a typo is named by
 /// position rather than reported as a failed recovery.
-pub(super) fn backup_phrase(value: String) -> Result<SecretString, AgentError> {
+pub(super) fn recovery_phrase(value: String) -> Result<SecretString, AgentError> {
     let value = Zeroizing::new(value);
     if value.is_empty()
         || value.len() > MAXIMUM_RECOVERY_PHRASE_BYTES
@@ -289,21 +289,21 @@ pub(super) fn backup_phrase(value: String) -> Result<SecretString, AgentError> {
         ));
     }
     if let Err(error) = foks_crypto::BackupKey::from_phrase(&value) {
-        use foks_crypto::BackupPhraseError as E;
+        use foks_crypto::RecoveryPhraseError as E;
         return Err(invalid_request(match error {
             E::TokenCount { found } => format!(
-                "A paper key has {} words and numbers; this one has {found}.",
-                foks_crypto::BACKUP_PHRASE_TOKENS
+                "A recovery phrase has {} words and numbers; this one has {found}.",
+                foks_crypto::RECOVERY_PHRASE_TOKENS
             ),
             E::Word { index } => format!(
-                "Word {} of the paper key is not a recognized word. Check its spelling.",
+                "Word {} of the recovery phrase is not a recognized word. Check its spelling.",
                 index + 1
             ),
             E::Number { index } | E::NumberRange { index } => format!(
-                "Number {} of the paper key should be a whole number from 0 to 8191.",
+                "Number {} of the recovery phrase should be a whole number from 0 to 8191.",
                 index + 1
             ),
-            _ => "That paper key is not valid.".to_owned(),
+            _ => "That recovery phrase is not valid.".to_owned(),
         }));
     }
     Ok(SecretString::new(value.as_str()))

@@ -153,7 +153,7 @@ fn hardware_owner_enrolls_and_revokes_a_bot_with_no_unattended_prompt() {
 }
 
 #[test]
-fn software_revoke_lost_reply_verifies_ppe_and_keeps_original_receipt() {
+fn software_revoke_lost_reply_verifies_ppe_and_keeps_original_completion_record() {
     let f = Fixture::start();
     f.run(|s, v, k| {
         s.create_account(
@@ -198,7 +198,7 @@ fn entity_handle(text: &str) -> [u8; 16] {
     std::array::from_fn(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap())
 }
 #[test]
-fn receipt_cleanup_retains_pending_and_unexported_tokens() {
+fn completion_record_cleanup_retains_pending_and_unexported_tokens() {
     let f = Fixture::start();
     f.run(|s, v, k| s.create_account("work", "botcleanup", "laptop", "", "", None, v, k));
     let p = f.run(|s, v, k| s.prepare_bot_account("work", Role::OWNER, None, v, k));
@@ -210,7 +210,7 @@ fn receipt_cleanup_retains_pending_and_unexported_tokens() {
         }
         f.run(|s, v, k| {
             let uid = v.account("work")?.credential.uid;
-            s.clean_bot_receipts(uid.as_bytes(), v, k, u64::MAX / 2)?;
+            s.clean_bot_completion_records(uid.as_bytes(), v, k, u64::MAX / 2)?;
             assert_eq!(s.bot_account_enrollments("work", v)?.len(), 1);
             Ok(())
         });
@@ -220,7 +220,7 @@ fn receipt_cleanup_retains_pending_and_unexported_tokens() {
     });
     f.run(|s, v, k| {
         let uid = v.account("work")?.credential.uid;
-        s.clean_bot_receipts(uid.as_bytes(), v, k, u64::MAX / 2)?;
+        s.clean_bot_completion_records(uid.as_bytes(), v, k, u64::MAX / 2)?;
         assert!(s.bot_account_enrollments("work", v)?.is_empty());
         assert!(HardStateStore::open(&s.paths.hard_database)?
             .mutation(&id(&p))?

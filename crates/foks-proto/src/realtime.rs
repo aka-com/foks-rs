@@ -537,10 +537,13 @@ rt_struct!(RtSend {
     expected_previous_sequence: u64
 });
 
-rt_struct!(RtSendResult {
+rt_struct!(ChatSendReceipt {
     sequence: u64,
     insert_time: u64
 });
+
+/// Legacy protocol name retained for source compatibility with v0.1.9 tooling.
+pub type RtSendResult = ChatSendReceipt;
 
 rt_struct!(RtThreadRange {
     start: u64,

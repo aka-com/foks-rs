@@ -20,8 +20,8 @@ import { useTabSheetState } from '../navigation-guard';
  * chooser, and it is the only add control left on the page: a security key's
  * card operations live on that key's own page instead of behind a menu here.
  *
- * FOKS calls a recovery phrase a backup phrase; this page calls the object a
- * paper key and keeps the enrollment name the agent stores.
+ * FOKS calls a recovery phrase a recovery phrase; this page calls the object a
+ * recovery phrase and keeps the enrollment name the agent stores.
  */
 
 import {
@@ -401,7 +401,7 @@ export function DevicesScreen({
           ...(cardKeys
             ? [plural(cardKeys, 'key on a card', 'keys on cards')]
             : []),
-          plural(backups.length, 'paper key'),
+          plural(backups.length, 'recovery phrase'),
           // `list_yubi_accounts` answers with enrollments, not with keys: one
           // count per object, under the name that object carries everywhere.
           plural(yubi.length, 'enrollment'),
@@ -414,7 +414,7 @@ export function DevicesScreen({
     setPendingYubi(action);
     setSheet('yubi');
   };
-  // Every key on the account, sorted by type: computers, then paper keys,
+  // Every key on the account, sorted by type: computers, then recovery phrases,
   // then security key enrollments — the one list the page now shows.
   const entries = deviceEntries(lists);
   /** The row's trailing chip or button, ahead of the "Open" button every row
@@ -701,7 +701,7 @@ export function DevicesScreen({
                       {...access.props('backup-create', target)}
                       onClick={() => setSheet('phrase')}
                     >
-                      Create a paper key…
+                      Create a recovery phrase…
                     </Button>
                   }
                 >
@@ -718,13 +718,13 @@ export function DevicesScreen({
               >
                 {/* Every key on the account is one list, sorted by type:
                     computers (and any device key on a card among them), then
-                    paper keys, then security key enrollments — the order
+                    recovery phrases, then security key enrollments — the order
                     `deviceEntries` already reads the three lists in. */}
                 <SectionLabel id="devices-all-label">Devices</SectionLabel>
                 <Inset className={`settings-inset middle wide${staleClass}`}>
                   {loading ? (
                     <InsetRow label="Devices">
-                      Loading devices, paper keys and security keys…
+                      Loading devices, recovery phrases and security keys…
                     </InsetRow>
                   ) : entries.length ? (
                     entries.map((entry) => (
@@ -766,7 +766,7 @@ export function DevicesScreen({
                         ? 'Not listed while access is stopped'
                         : failed
                           ? 'Devices and keys could not be read. Refresh to try again.'
-                          : 'No devices, paper keys or security keys on this account.'}
+                          : 'No devices, recovery phrases or security keys on this account.'}
                     </InsetRow>
                   )}
                 </Inset>
@@ -811,12 +811,12 @@ export function DevicesScreen({
           accountAlias={selected.account}
           seedPhrase={
             enteredScene === 'settings-phrase'
-              ? bridge.firstRunFixture?.backupPhrase
+              ? bridge.firstRunFixture?.recoveryPhrase
               : undefined
           }
           onClose={() => setSheet(null)}
           onDone={async () => {
-            await applied('Paper key created.');
+            await applied('Recovery phrase created.');
           }}
           onError={(error) => void onMutationError(error)}
         />
@@ -910,7 +910,7 @@ export function DevicesScreen({
             const alias = revoking.backupAlias;
             setRevoking(null);
             if (location.device) backToList();
-            await applied(`Revoked paper key ${alias}`);
+            await applied(`Revoked recovery phrase ${alias}`);
           }}
           onError={(error) => void onMutationError(error)}
         />
@@ -1021,9 +1021,9 @@ function DeviceDetail({
                 {stopped.stopped
                   ? stopped.reason
                   : loading
-                    ? 'Loading devices, paper keys, and security keys…'
+                    ? 'Loading devices, recovery phrases, and security keys…'
                     : failed
-                      ? 'Whether this key is still on this account is unknown until its devices, paper keys and security keys are read again.'
+                      ? 'Whether this key is still on this account is unknown until its devices, recovery phrases and security keys are read again.'
                       : 'This key is no longer associated with this account on this device.'}
               </p>
             </Notice>
@@ -1220,7 +1220,7 @@ function DeviceDetail({
               ) : source.kind === 'backup' ? (
                 <InsetRow
                   className="dangerrow"
-                  label="Revoke this paper key"
+                  label="Revoke this recovery phrase"
                   action={
                     <Button
                       size="sm"

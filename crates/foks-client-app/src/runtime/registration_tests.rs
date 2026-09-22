@@ -228,7 +228,7 @@ fn teams_capability_is_rechecked_and_newly_available_defaults_are_repaired() {
         0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae,
         0x7f, 0x60,
     ];
-    let artifact = foks_compat_artifact::CanaryArtifact {
+    let artifact = foks_compat_artifact::CompatibilityArtifact {
         schema_version: foks_compat_artifact::SCHEMA_VERSION,
         generation: 1,
         target: "foks.app".into(),
@@ -238,16 +238,16 @@ fn teams_capability_is_rechecked_and_newly_available_defaults_are_repaired() {
         protocol_metadata_sha256: crate::PINNED_PROTOCOL_METADATA_SHA256.into(),
         mutation_digest: "22".repeat(32),
         read_digest: "33".repeat(32),
-        outcome: crate::CanaryOutcome::Compatible,
+        outcome: crate::CompatibilityOutcome::Compatible,
         capabilities: std::collections::BTreeSet::from(["user-sync".into()]),
         drift_reason: String::new(),
     };
     f.session.profile.protocol = crate::ProtocolPolicy::CurrentValidated {
-        canary_public_key: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
-            .into(),
-        lease_url: "https://updates.example.test/foks/canary.json".into(),
+        compatibility_artifact_public_key:
+            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a".into(),
+        lease_url: "https://updates.example.test/foks/compatibility-artifact.json".into(),
         artifact: Box::new(
-            foks_compat_artifact::SignedCanaryArtifact::sign(artifact, &seed).unwrap(),
+            foks_compat_artifact::SignedCompatibilityArtifact::sign(artifact, &seed).unwrap(),
         ),
     };
     let user = credential(1).uid;

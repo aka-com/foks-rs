@@ -401,7 +401,7 @@ bits from the 203-bit encoding after enrollment. New keys should be made with
 Loading consumes it and retains only a derived zeroizing credential in a
 non-serializable value; successful recovery returns a normal caller-durable
 software credential. Backup keys are not written to SQLite. Losing both every
-permanent device and every enrolled backup phrase remains unrecoverable.
+permanent device and every enrolled recovery phrase remains unrecoverable.
 
 The bounded federation slice treats Beacon answers as untrusted routing,
 authenticates and pins the requested remote HostID directly, issues exact
@@ -425,7 +425,7 @@ The separate invitation workflow implements the Go-compatible consent model for
 local and remote user or team applicants. Invitation certificates, requests,
 administrator decisions, scoped view grants, admission mutations, and removal
 proofs are independently authenticated. Durable application records distinguish
-submission from outcome; pending-inbox absence is not a rejection receipt, and
+submission from outcome; pending-inbox absence is not a rejection confirmation, and
 an unknown delivery outcome is never automatically replayed. Remote identities
 and key material remain bound to their host and source role throughout approval
 and recovery.

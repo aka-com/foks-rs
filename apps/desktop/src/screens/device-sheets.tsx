@@ -22,7 +22,7 @@ import type { WorkflowOperation } from '../model/workflow-availability';
 /**
  * The sheets that act on one account's devices, keys and passphrase.
  *
- * They are shared: Devices opens the pairing, paper-key, YubiKey and removal
+ * They are shared: Devices opens the pairing, recovery-phrase, YubiKey and removal
  * sheets, and Settings › Account opens the passphrase and card-credential
  * ones. Each is
  * the sheet that pane opened before the three tabs were split apart, with the
@@ -34,7 +34,7 @@ import type { ReactNode } from 'react';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 import {
   removeDevice,
-  revokePaperKey,
+  revokeRecoveryPhrase,
   revokeSecurityKey,
 } from './devices/revocation-workflow';
 import { useSheetGuard } from '../navigation-guard';
@@ -192,7 +192,7 @@ export function AddDeviceSheet({
         />
         <RadioCard
           icon="file"
-          title="Create a new recovery paper key"
+          title="Create a new recovery recovery phrase"
           detail="Add a phrase you can recover this account with."
           selected={choice === 'phrase'}
           onSelect={() => setChoice('phrase')}
@@ -287,14 +287,14 @@ export function PhraseSheet({
   // Navigation requires saving or explicitly dismissing the displayed key.
   useSheetGuard(
     phrase
-      ? { verdict: 'refuse', reason: 'Save or dismiss the paper key first.' }
+      ? { verdict: 'refuse', reason: 'Save or dismiss the recovery phrase first.' }
       : busy
-        ? { verdict: 'refuse', reason: 'Wait for the paper key to finish.' }
+        ? { verdict: 'refuse', reason: 'Wait for the recovery phrase to finish.' }
         : null,
   );
   return (
     <DeviceSheetFrame
-      title={phrase ? 'Save paper key' : 'Create paper key'}
+      title={phrase ? 'Save recovery phrase' : 'Create recovery phrase'}
       onClose={discard}
       dismissible={!busy}
       footer={
@@ -329,7 +329,7 @@ export function PhraseSheet({
                     .finally(controller.settled(() => setBusy(false)));
                 }}
               >
-                Save paper key
+                Save recovery phrase
               </Button>
             </>
           ) : (
@@ -388,7 +388,7 @@ export function PhraseSheet({
         </>
       ) : (
         <Inset>
-          <Field label="Paper key name" value={alias} onChange={setAlias} />
+          <Field label="Recovery phrase name" value={alias} onChange={setAlias} />
         </Inset>
       )}
     </DeviceSheetFrame>
@@ -724,8 +724,8 @@ export function RecoverSheet({
       : phrase
         ? {
             verdict: 'prompt',
-            title: 'Discard paper key phrase?',
-            body: 'The paper key phrase typed here has not been submitted.',
+            title: 'Discard recovery phrase?',
+            body: 'The recovery phrase typed here has not been submitted.',
             confirm: 'Discard',
             onConfirm: () => {
               setPhrase('');
@@ -776,11 +776,11 @@ export function RecoverSheet({
         </>
       }
     >
-      <p>Enter a paper key phrase for this account to add this device to it.</p>
+      <p>Enter a recovery phrase for this account to add this device to it.</p>
       <Inset>
         <Field label="Local alias" value={target} onChange={setTarget} />
         <Field label="Device name" value={device} onChange={setDevice} />
-        <InsetRow label="Paper key phrase">
+        <InsetRow label="Recovery phrase">
           <textarea
             value={phrase}
             onChange={(event) => setPhrase(event.target.value)}
@@ -1435,7 +1435,7 @@ export function RevokeBackupSheet({
   );
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
-  // Revoking a paper key rotates every account key it could read.
+  // Revoking a recovery phrase rotates every account key it could read.
   useSheetGuard(
     busy
       ? { verdict: 'refuse', reason: 'Wait for the revocation to finish.' }
@@ -1467,20 +1467,20 @@ export function RevokeBackupSheet({
               void controller
                 .run(
                   () =>
-                    revokePaperKey(bridge, access, store, backup, confirmation),
+                    revokeRecoveryPhrase(bridge, access, store, backup, confirmation),
                   onDone,
                   onError,
                 )
                 .finally(controller.settled(() => setBusy(false)));
             }}
           >
-            Revoke paper key
+            Revoke recovery phrase
           </Button>
         </>
       }
     >
       <p>
-        This paper key can no longer recover the account, and the account keys
+        This recovery phrase can no longer recover the account, and the account keys
         are rotated. Type its name to confirm.
       </p>
       <Inset>

@@ -1,11 +1,11 @@
 //! Typed v0.1.9 realtime calls. All payloads use the Header/Data RPC envelope.
 use crate::{encode_call, Result, REAL_TIME_PROTOCOL_ID};
 use foks_proto::{
-    RealtimeWire, RtChannelSet, RtChatCapabilities, RtChatCapabilitiesArgument,
+    ChatSendReceipt, RealtimeWire, RtChannelSet, RtChatCapabilities, RtChatCapabilitiesArgument,
     RtCreateChannelArgument, RtGetChangedThreadsArgument, RtGetInboxVersionArgument,
     RtGetThreadArgument, RtInboxDelta, RtInboxPollResult, RtListChannelsArgument, RtMessageList,
     RtPollInboxArgument, RtReadThroughArgument, RtRecentsArgument, RtSelectVhostArgument,
-    RtSendArgument, RtSendResult, RtThreadPage,
+    RtSendArgument, RtThreadPage,
 };
 
 pub use foks_proto::RT_MAX_REQUEST_BYTES;
@@ -30,7 +30,7 @@ pub enum RealtimeResponse {
     ChatCapabilities(RtChatCapabilities),
     Void,
     Channels(RtChannelSet),
-    Sent(RtSendResult),
+    Sent(ChatSendReceipt),
     Thread(RtThreadPage),
     InboxVersion(u64),
     InboxDelta(RtInboxDelta),
@@ -148,7 +148,7 @@ impl RealtimeRequest {
                 RealtimeResponse::Void
             }
             Self::ListChannels(_) => RealtimeResponse::Channels(RtChannelSet::decode(bytes)?),
-            Self::Send(_) => RealtimeResponse::Sent(RtSendResult::decode(bytes)?),
+            Self::Send(_) => RealtimeResponse::Sent(ChatSendReceipt::decode(bytes)?),
             Self::GetThread(_) => RealtimeResponse::Thread(RtThreadPage::decode(bytes)?),
             Self::GetInboxVersion(_) => RealtimeResponse::InboxVersion(u64::decode(bytes)?),
             Self::GetChangedThreads(_) => {

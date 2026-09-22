@@ -18,7 +18,7 @@ pub struct MaintenanceReport {
     pub team_view_tokens: u64,
     pub team_admin_tokens: u64,
     pub reservations: u64,
-    pub receipts: u64,
+    pub idempotency_records: u64,
     pub locks: u64,
     pub uploads: u64,
     pub upload_candidates_examined: u64,
@@ -103,7 +103,8 @@ impl Database {
         let reservations = transaction.execute(expiry::RESERVATIONS.delete, [sql_integer(now)?])?;
         let team_reservations =
             transaction.execute(expiry::TEAM_RESERVATIONS.delete, [sql_integer(now)?])?;
-        let receipts = transaction.execute(expiry::RECEIPTS.delete, [sql_integer(now)?])?;
+        let idempotency_records =
+            transaction.execute(expiry::IDEMPOTENCY_RECORDS.delete, [sql_integer(now)?])?;
         let challenges = transaction.execute(expiry::CHALLENGES.delete, [sql_integer(now)?])?;
         let team_view_tokens =
             transaction.execute(expiry::TEAM_VIEW_TOKENS.delete, [sql_integer(now)?])?;
@@ -134,7 +135,8 @@ impl Database {
             team_view_tokens: u64::try_from(team_view_tokens).map_err(|_| Error::IntegerRange)?,
             team_admin_tokens: u64::try_from(team_admin_tokens).map_err(|_| Error::IntegerRange)?,
             reservations: u64::try_from(reservations).map_err(|_| Error::IntegerRange)?,
-            receipts: u64::try_from(receipts).map_err(|_| Error::IntegerRange)?,
+            idempotency_records: u64::try_from(idempotency_records)
+                .map_err(|_| Error::IntegerRange)?,
             locks: u64::try_from(locks).map_err(|_| Error::IntegerRange)?,
             uploads: uploads.uploads,
             upload_candidates_examined: uploads.examined,

@@ -345,7 +345,7 @@ test('the sections that became tabs keep their deep links', () => {
     decodeLocation('?state=settings&section=account&store=acct:work'),
     { kind: 'settings', section: 'account', store: 'acct:work' },
   );
-  // `section=phrase` is the backup phrase, which the Devices tab's recovery
+  // `section=phrase` is the recovery phrase, which the Devices tab's recovery
   // pane opens; `?state=devices` reads it under its own name as well.
   assert.deepEqual(decodeLocation('?state=devices&section=phrase'), {
     kind: 'devices',
@@ -356,7 +356,7 @@ test('the sections that became tabs keep their deep links', () => {
     { kind: 'devices', section: 'macs', store: 'acct:work' },
   );
   // One key's own page is an address of its own: the key id for a Mac or a
-  // paper key, and `yubi:<alias>` for an enrollment the agent names by alias.
+  // recovery phrase, and `yubi:<alias>` for an enrollment the agent names by alias.
   assert.deepEqual(
     decodeLocation('?state=devices&store=acct:personal&device=04a779c40674'),
     { kind: 'devices', store: 'acct:personal', device: '04a779c40674' },

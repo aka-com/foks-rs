@@ -1,5 +1,5 @@
 /**
- * The Devices tab: Macs, paper keys and security keys in one list on one
+ * The Devices tab: Macs, recovery phrases and security keys in one list on one
  * page, the chooser that adds one, the recovery operations grouped on a
  * security key's own page, and the scenes that still open a sheet on
  * arrival.
@@ -51,7 +51,7 @@ interface DevicesOptions {
   scene?: string;
   /** A `section=` address written before the page was one. */
   section?: 'macs' | 'keys';
-  /** One key's own page: the id of a Mac or paper key, or `yubi:<alias>`. */
+  /** One key's own page: the id of a Mac or recovery phrase, or `yubi:<alias>`. */
   device?: string;
   onNavigate?: (location: Location) => void;
   /** Wraps the mock bridge, for a test that watches one command. */
@@ -133,7 +133,7 @@ async function renderDevices(
   return Object.assign(rendered, { showAccount });
 }
 
-test('one page lists every device, paper key and security key together', async () => {
+test('one page lists every device, recovery phrase and security key together', async () => {
   const rendered = await renderDevices(await fixture(), {
     store: 'acct:personal',
   });
@@ -143,7 +143,7 @@ test('one page lists every device, paper key and security key together', async (
   const list = rendered.getByRole('region', { name: 'Devices' });
   assert.ok(list);
   assert.equal(rendered.queryByText('Computers and security keys'), null);
-  assert.equal(rendered.queryByText('Paper keys'), null);
+  assert.equal(rendered.queryByText('Recovery phrases'), null);
   assert.equal(rendered.queryByText('Security keys'), null);
   assert.equal(
     rendered.queryByRole('group', { name: 'Accounts on this device' }),
@@ -171,10 +171,10 @@ test('one page lists every device, paper key and security key together', async (
   assert.equal(rendered.getAllByText('Computer').length, 2);
   assert.equal(document.querySelector('.devrow .kid'), null);
   assert.ok(rendered.getByText('paper-backup'));
-  assert.ok(rendered.getByText('Paper key'));
+  assert.ok(rendered.getByText('Recovery phrase'));
   assert.ok(rendered.getByText('primary key'));
   // The list is sorted by type: computers (and any key on a card among
-  // them), then paper keys, then security key enrollments.
+  // them), then recovery phrases, then security key enrollments.
   const names = rendered
     .getAllByRole('button', { name: /^Open / })
     .map((button) => button.getAttribute('aria-label'));
@@ -187,10 +187,10 @@ test('one page lists every device, paper key and security key together', async (
   ]);
   // There is no sub-navigation left on this page.
   assert.equal(rendered.queryByText('Recovery devices'), null);
-  // Neither the section-level "Add a paper key…" button nor the "More…" menu
+  // Neither the section-level "Add a recovery phrase…" button nor the "More…" menu
   // survive: "Add a device" is the only add control left.
   assert.equal(
-    rendered.queryByRole('button', { name: 'Add a paper key…' }),
+    rendered.queryByRole('button', { name: 'Add a recovery phrase…' }),
     null,
   );
   assert.equal(rendered.queryByRole('button', { name: 'More…' }), null);
@@ -214,7 +214,7 @@ test('one page lists every device, paper key and security key together', async (
   // Account creation and recovery live with the other account workflows.
   assert.equal(
     rendered.queryByRole('button', {
-      name: 'Connect an existing account with a paper key',
+      name: 'Connect an existing account with a recovery phrase',
     }),
     null,
   );
@@ -266,7 +266,7 @@ test('the chooser offers each way to add, and leads into pairing', async () => {
     [
       'Pair another device',
       'Pair this device with another account',
-      'Create a new recovery paper key',
+      'Create a new recovery recovery phrase',
       'Connect a hardware key',
     ],
   );
@@ -403,7 +403,7 @@ test('a stopped account lists nothing and says why every action is off', async (
   assert.match(add.getAttribute('title') ?? '', /check-in.*expired/i);
   assert.equal(
     rendered.queryByRole('button', {
-      name: 'Connect an existing account with a paper key',
+      name: 'Connect an existing account with a recovery phrase',
     }),
     null,
   );
@@ -492,7 +492,7 @@ test('the hardware-key scene still opens its sheet on Devices', async () => {
   });
 });
 
-test('the paper-key scene opens the one-time reveal', async () => {
+test('the recovery-phrase scene opens the one-time reveal', async () => {
   // `?state=settings-phrase` and `?state=settings&section=phrase` both land on
   // Devices, and the scene still opens the one-time sheet.
   const rendered = await renderDevices(await fixture(), {
@@ -504,7 +504,7 @@ test('the paper-key scene opens the one-time reveal', async () => {
   const dialog = await ui.waitFor(() => rendered.getByRole('dialog'));
   assert.equal(
     ui.within(dialog).getByRole('heading', { level: 2 }).textContent,
-    'Save paper key',
+    'Save recovery phrase',
   );
   // The `section=` anchor must not pull focus out of the open sheet.
   await ui.waitFor(() => {
@@ -515,8 +515,8 @@ test('the paper-key scene opens the one-time reveal', async () => {
   });
 });
 
-/** Render the paper-key scene, watching what it commits. */
-async function paperKey(): Promise<{
+/** Render the recovery-phrase scene, watching what it commits. */
+async function recoveryPhrase(): Promise<{
   rendered: Awaited<ReturnType<typeof renderDevices>>;
   dialog: HTMLElement;
   committed: string[];
@@ -542,8 +542,8 @@ async function paperKey(): Promise<{
   return { rendered, dialog, committed };
 }
 
-test('Cancel discards a revealed paper key rather than committing it', async () => {
-  const { rendered, dialog, committed } = await paperKey();
+test('Cancel discards a revealed recovery phrase rather than committing it', async () => {
+  const { rendered, dialog, committed } = await recoveryPhrase();
 
   await ui.act(async () => {
     ui.fireEvent.click(
@@ -558,8 +558,8 @@ test('Cancel discards a revealed paper key rather than committing it', async () 
   assert.deepEqual(committed, []);
 });
 
-test('Esc leaves the revealed paper key the same way Cancel does', async () => {
-  const { rendered, dialog, committed } = await paperKey();
+test('Esc leaves the revealed recovery phrase the same way Cancel does', async () => {
+  const { rendered, dialog, committed } = await recoveryPhrase();
 
   // Escape discards a revealed phrase, matching Cancel.
   await ui.act(async () => {
@@ -571,17 +571,17 @@ test('Esc leaves the revealed paper key the same way Cancel does', async () => {
   assert.deepEqual(committed, []);
 });
 
-test('the chooser leads into the paper-key and provisioning sheets too', async () => {
+test('the chooser leads into the recovery-phrase and provisioning sheets too', async () => {
   const rendered = await renderDevices(await fixture(), {
     store: 'acct:personal',
   });
 
-  const paper = await choose(rendered, 'Create a new recovery paper key');
+  const paper = await choose(rendered, 'Create a new recovery recovery phrase');
   assert.equal(
     ui.within(paper).getByRole('heading', { level: 2 }).textContent,
-    'Create paper key',
+    'Create recovery phrase',
   );
-  assert.ok(ui.within(paper).getByLabelText('Paper key name'));
+  assert.ok(ui.within(paper).getByLabelText('Recovery phrase name'));
   await ui.act(async () => {
     ui.fireEvent.click(
       ui.within(paper).getByRole('button', { name: 'Cancel' }),
@@ -634,7 +634,7 @@ test('a revoke acts on the key whose row was pressed', async () => {
   };
   const rendered = await renderDevices(twoKeys, { store: 'acct:personal' });
 
-  // The list also carries the paper key's own Revoke…, so the row is found
+  // The list also carries the recovery phrase's own Revoke…, so the row is found
   // by name rather than by counting every Revoke… button on the page.
   const row = rendered.getByText('travel key').closest('.fr');
   assert.ok(row instanceof HTMLElement);
@@ -916,14 +916,14 @@ test('the local device detail page disables device removal', async () => {
   );
 });
 
-test('a paper key and an enrollment each carry their own page', async () => {
+test('a recovery phrase and an enrollment each carry their own page', async () => {
   const snapshot = await fixture();
   const backupId = `10${'4'.repeat(64)}`;
   const paper = await renderDevices(snapshot, {
     store: 'acct:personal',
     device: backupId,
   });
-  assert.ok(paper.getByText('Paper key'));
+  assert.ok(paper.getByText('Recovery phrase'));
   assert.ok(paper.getByText(backupId));
   await ui.act(async () => {
     ui.fireEvent.click(paper.getByRole('button', { name: 'Revoke…' }));
@@ -1135,12 +1135,12 @@ test('switching accounts drops the last account’s lists and closes an open she
   assert.equal(rendered.queryByText('Travel Mac'), null);
   assert.equal(rendered.queryByText('paper-backup'), null);
   // The work account's own device and key are listed in their place; it
-  // holds no paper key, so none is silently carried over from personal.
+  // holds no recovery phrase, so none is silently carried over from personal.
   assert.ok(await rendered.findByText('work key'));
 });
 
-test('a revealed paper key stays open when the app loses focus', async () => {
-  const { rendered, dialog, committed } = await paperKey();
+test('a revealed recovery phrase stays open when the app loses focus', async () => {
+  const { rendered, dialog, committed } = await recoveryPhrase();
   const words = dialog.querySelector('.words')?.textContent;
   ui.fireEvent(window, new Event('blur'));
   assert.equal(rendered.getByRole('dialog'), dialog);
@@ -1252,7 +1252,7 @@ test('Devices reads only the current account and follows sidebar account changes
       listYubiCards: async () => [],
     }),
   });
-  // One computer, no paper keys and no enrollments: the list holds exactly
+  // One computer, no recovery phrases and no enrollments: the list holds exactly
   // the one row, with no empty-category filler for the two empty lists.
   assert.ok(await rendered.findByText('Personal Mac'));
   assert.equal(rendered.queryByText('Work Mac'), null);
@@ -1260,12 +1260,12 @@ test('Devices reads only the current account and follows sidebar account changes
     rendered.queryByRole('group', { name: 'Accounts on this device' }),
     null,
   );
-  // Exactly one row: no empty-category filler for the paper keys and
+  // Exactly one row: no empty-category filler for the recovery phrases and
   // enrollments that came back empty.
   assert.equal(rendered.getAllByRole('button', { name: /^Open / }).length, 1);
   assert.equal(
     rendered.queryByRole('button', {
-      name: 'Connect an existing account with a paper key',
+      name: 'Connect an existing account with a recovery phrase',
     }),
     null,
   );
@@ -1313,7 +1313,7 @@ test('device removal refreshes native device records before submitting the write
   assert.deepEqual(calls, ['read', 'remove', 'read']);
 });
 
-test('an account with no paper key gets its own band without publishing shell alerts', async () => {
+test('an account with no recovery phrase gets its own band without publishing shell alerts', async () => {
   const { deviceAlertRegistry } = (await vite.ssrLoadModule(
     '/src/screens/device-alert.ts',
   )) as typeof import('../src/screens/device-alert');
@@ -1333,19 +1333,19 @@ test('an account with no paper key gets its own band without publishing shell al
   assert.equal(
     deviceAlertRegistry(bridgeRef.current)
       .getSnapshot()
-      .paperKeys.get('acct:work'),
+      .recoveryPhrases.get('acct:work'),
     undefined,
   );
   await ui.act(async () => {
     ui.fireEvent.click(
-      page.getByRole('button', { name: 'Create a paper key…' }),
+      page.getByRole('button', { name: 'Create a recovery phrase…' }),
     );
   });
   assert.ok(document.querySelector('.sheet'));
-  assert.ok(page.getByRole('heading', { name: 'Create paper key' }));
+  assert.ok(page.getByRole('heading', { name: 'Create recovery phrase' }));
 });
 
-test('an account with a paper key draws no band without publishing shell alerts', async () => {
+test('an account with a recovery phrase draws no band without publishing shell alerts', async () => {
   const { deviceAlertRegistry } = (await vite.ssrLoadModule(
     '/src/screens/device-alert.ts',
   )) as typeof import('../src/screens/device-alert');
@@ -1363,7 +1363,7 @@ test('an account with a paper key draws no band without publishing shell alerts'
   assert.equal(
     deviceAlertRegistry(bridgeRef.current)
       .getSnapshot()
-      .paperKeys.get('acct:personal'),
+      .recoveryPhrases.get('acct:personal'),
     undefined,
   );
   assert.equal(page.queryByText('No recovery key'), null);

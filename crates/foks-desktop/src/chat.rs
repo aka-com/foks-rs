@@ -44,14 +44,15 @@ fn valid_preview(preview: &ChatPreview) -> bool {
 fn valid_operation(op: &ChatOperation) -> bool {
     valid_chat_id(&op.id)
         && valid_chat_id(&op.channel)
-        && match (&op.kind, &op.receipt) {
+        && match (&op.kind, &op.confirmation) {
             (_, None) => op.state != ChatState::Confirmed,
-            (ChatOperationKind::CreateChannel, Some(ChatReceipt::ChannelCreated)) => {
+            (ChatOperationKind::CreateChannel, Some(ChatOperationConfirmation::ChannelCreated)) => {
                 op.state == ChatState::Confirmed
             }
-            (ChatOperationKind::SendMessage, Some(ChatReceipt::MessageSent { sequence })) => {
-                op.state == ChatState::Confirmed && chat_sequence(sequence).is_some_and(|n| n > 0)
-            }
+            (
+                ChatOperationKind::SendMessage,
+                Some(ChatOperationConfirmation::MessageSent { sequence }),
+            ) => op.state == ChatState::Confirmed && chat_sequence(sequence).is_some_and(|n| n > 0),
             _ => false,
         }
         && (op.state == ChatState::Rejected) == op.rejection_code.is_some()
@@ -389,7 +390,7 @@ mod tests {
             channel: "cd".repeat(16),
             kind: ChatOperationKind::SendMessage,
             state: ChatState::Cancelled,
-            receipt: None,
+            confirmation: None,
             rejection_code: None,
         };
         let mut reply = ChatReply {
@@ -465,7 +466,7 @@ mod tests {
             channel: "ab".repeat(16),
             kind: ChatOperationKind::SendMessage,
             state: ChatState::Prepared,
-            receipt: None,
+            confirmation: None,
             rejection_code: None,
         };
         let mut reply = ChatReply {
@@ -515,7 +516,7 @@ mod tests {
         reply.result = ChatResult::Operation {
             operation: ChatOperation {
                 state: ChatState::Confirmed,
-                receipt: Some(ChatReceipt::MessageSent {
+                confirmation: Some(ChatOperationConfirmation::MessageSent {
                     sequence: "1".into(),
                 }),
                 ..op

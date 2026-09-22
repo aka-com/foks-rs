@@ -1021,7 +1021,7 @@ function AccountActions({
         {...access.props('account-recover', { profile: store.server })}
         onClick={() => onSheet('recover')}
       >
-        Connect an existing account with a paper key
+        Connect an existing account with a recovery phrase
       </Button>
       <Button
         variant="plain"

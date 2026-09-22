@@ -24,7 +24,7 @@ Merkle heads are stored as flat trusted-local checkpoints. Schema 38 upgrades
 to 39 atomically using an iterative legacy reader and signed-head verification;
 all historical roots survive migration. Reference-aware collection retains
 heads, external checkpoint pins, and roots needed by every stored user/team
-proof segment, signed link, generic chain and import receipt. Callers must hold
+proof segment, signed link, generic chain and import completion marker. Callers must hold
 exclusive profile access and account for private resumable material; unfinished
 SQLite workflows defer collection. See [the design and reviews](../../docs/merkle-checkpoints.md).
 

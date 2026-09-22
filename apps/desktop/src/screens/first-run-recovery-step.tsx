@@ -14,7 +14,7 @@ interface Props {
   checkpoint: FirstRunCheckpoint;
   busy: boolean;
   mutationBusy: boolean;
-  backupPhrase: string | null;
+  recoveryPhrase: string | null;
   phraseConcealed: boolean;
   revealPhrase: () => void;
   phraseWritten: boolean;
@@ -34,7 +34,7 @@ export function RecoveryStep({
   state,
   checkpoint,
   busy,
-  backupPhrase,
+  recoveryPhrase,
   phraseConcealed,
   revealPhrase,
   phraseWritten,
@@ -73,7 +73,7 @@ export function RecoveryStep({
               variant="primary"
               disabled={
                 busy ||
-                (state === 'phrase' && (!backupPhrase || !phraseWritten))
+                (state === 'phrase' && (!recoveryPhrase || !phraseWritten))
               }
               onClick={() => void finishLocalProtection()}
             >
@@ -84,12 +84,12 @@ export function RecoveryStep({
       >
         <h1>Set up account recovery</h1>
         <p className="lead">
-          Set up a backup phrase now so you can recover your account if this
+          Set up a recovery phrase now so you can recover your account if this
           device is lost.
         </p>
         <div className="local-recovery-card">
           <div className="local-recovery-head">
-            <h2>Backup phrase</h2>
+            <h2>Recovery phrase</h2>
             <Chip>Recommended</Chip>
           </div>
           <p>
@@ -99,7 +99,7 @@ export function RecoveryStep({
           {state === 'phrase' ? (
             <>
               <RecoveryPhrase
-                phrase={backupPhrase}
+                phrase={recoveryPhrase}
                 concealed={phraseConcealed}
                 onReveal={revealPhrase}
               />
@@ -171,7 +171,7 @@ export function RecoveryStep({
               is lost.
             </p>
             <Button
-              disabled={busy || (checkpoint.backupCommitted && !backupPhrase)}
+              disabled={busy || (checkpoint.backupCommitted && !recoveryPhrase)}
               onClick={() => go('phrase')}
             >
               Generate a recovery phrase
@@ -219,7 +219,7 @@ export function RecoveryStep({
                 </Button>
                 <Button
                   variant="primary"
-                  disabled={!backupPhrase || !phraseWritten || busy}
+                  disabled={!recoveryPhrase || !phraseWritten || busy}
                   onClick={() => void commitBackup()}
                 >
                   {busy ? 'Saving...' : 'Done'}
@@ -234,7 +234,7 @@ export function RecoveryStep({
                 manager.
               </p>
               <RecoveryPhrase
-                phrase={backupPhrase}
+                phrase={recoveryPhrase}
                 concealed={phraseConcealed}
                 onReveal={revealPhrase}
               />

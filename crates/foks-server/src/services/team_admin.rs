@@ -11,7 +11,7 @@ use crate::keys::{HostKeyProvider, KeyPurpose};
 use crate::{Entropy, WriterHandle};
 
 const RESERVATION_LIFETIME_MICROSECONDS: u64 = 10 * 60 * 1_000_000;
-const RECEIPT_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
+const IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
 const ADMIN_TOKEN_LIFETIME_MICROSECONDS: u64 = 6 * 60 * 60 * 1_000_000;
 
 pub(crate) fn config(
@@ -358,12 +358,12 @@ pub(crate) fn create(
             .map_err(bad_arguments)?;
     const REQUEST_TYPE_ID: u64 = 0x6d10_7e4d_464f_4b53;
     let request_hash = foks_crypto::prefixed_hash(REQUEST_TYPE_ID, argument);
-    let receipt_now = clock.now_micros().map_err(internal)?;
-    match reader.request_receipt(&idempotency_key, &request_hash, receipt_now) {
-        Ok(Some(receipt)) if receipt.response.is_empty() => return Ok(()),
+    let idempotency_now = clock.now_micros().map_err(internal)?;
+    match reader.idempotency_record(&idempotency_key, &request_hash, idempotency_now) {
+        Ok(Some(idempotency_record)) if idempotency_record.response.is_empty() => return Ok(()),
         Ok(Some(_)) => return Err(RpcStatus::TransactionRetry),
         Ok(None) => {}
-        Err(foks_server_db::Error::ReceiptConflict) => {
+        Err(foks_server_db::Error::OperationConflict) => {
             return Err(bad_arguments("team creation retry binding failed"));
         }
         Err(_) => return Err(RpcStatus::TransactionRetry),
@@ -377,9 +377,11 @@ pub(crate) fn create(
     writer
         .call(move |database| {
             let now = clock.now_micros()?;
-            let receipt_expires_at = now
-                .checked_add(RECEIPT_LIFETIME_MICROSECONDS)
-                .ok_or(crate::Error::Signup("team receipt expiry overflow"))?;
+            let idempotency_expires_at = now
+                .checked_add(IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS)
+                .ok_or(crate::Error::Signup(
+                    "team idempotency_record expiry overflow",
+                ))?;
             let owner = database
                 .active_credential_owner(&uid, &credential)?
                 .ok_or(crate::Error::Signup("inactive team creator"))?;
@@ -630,7 +632,7 @@ pub(crate) fn create(
                 request_hash: &request_hash,
                 response: &[],
                 now,
-                receipt_expires_at,
+                idempotency_expires_at,
             })?;
             Ok(())
         })
@@ -656,13 +658,13 @@ pub(crate) fn edit(
             .map_err(bad_arguments)?;
     const REQUEST_TYPE_ID: u64 = 0x6d10_7e4e_464f_4b53;
     let request_hash =
-        team_edit_receipt_hash_without_bearer(argument, REQUEST_TYPE_ID).map_err(bad_arguments)?;
+        team_edit_request_hash_without_bearer(argument, REQUEST_TYPE_ID).map_err(bad_arguments)?;
     let response = foks_proto::TeamEditResult {
         local_invitees: Vec::new(),
     }
     .encoded()
     .map_err(internal)?;
-    let receipt_now = clock.now_micros().map_err(internal)?;
+    let idempotency_now = clock.now_micros().map_err(internal)?;
     {
         let change = decoded
             .link
@@ -675,7 +677,7 @@ pub(crate) fn edit(
                 let authority = reader
                     .resolve_team_admin_token(
                         &crate::auth::team::admin_token_hash(token),
-                        receipt_now,
+                        idempotency_now,
                     )
                     .map_err(internal)?
                     .ok_or_else(|| {
@@ -703,10 +705,10 @@ pub(crate) fn edit(
             None => {}
         }
     }
-    match reader.request_receipt(&idempotency_key, &request_hash, receipt_now) {
-        Ok(Some(receipt)) => return Ok(receipt.response),
+    match reader.idempotency_record(&idempotency_key, &request_hash, idempotency_now) {
+        Ok(Some(idempotency_record)) => return Ok(idempotency_record.response),
         Ok(None) => {}
-        Err(foks_server_db::Error::ReceiptConflict) => {
+        Err(foks_server_db::Error::OperationConflict) => {
             return Err(bad_arguments("team edit retry binding failed"));
         }
         Err(_) => return Err(RpcStatus::TransactionRetry),
@@ -720,9 +722,11 @@ pub(crate) fn edit(
     writer
         .call(move |database| {
             let now = clock.now_micros()?;
-            let receipt_expires_at = now
-                .checked_add(RECEIPT_LIFETIME_MICROSECONDS)
-                .ok_or(crate::Error::Signup("team edit receipt expiry overflow"))?;
+            let idempotency_expires_at = now
+                .checked_add(IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS)
+                .ok_or(crate::Error::Signup(
+                    "team edit idempotency_record expiry overflow",
+                ))?;
             let owner = database
                 .active_credential_owner(&uid, &credential)?
                 .ok_or(crate::Error::Signup("inactive team editor"))?;
@@ -1027,7 +1031,7 @@ pub(crate) fn edit(
                     request_hash: &request_hash,
                     response: &response,
                     now,
-                    receipt_expires_at,
+                    idempotency_expires_at,
                 })?,
             )
         })
@@ -1329,7 +1333,7 @@ fn map_edit_error(error: crate::Error) -> RpcStatus {
             RpcStatus::TeamRace("team head or Merkle root changed".to_owned())
         }
         crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
-        crate::Error::Database(foks_server_db::Error::ReceiptConflict) => {
+        crate::Error::Database(foks_server_db::Error::OperationConflict) => {
             bad_arguments("team edit retry binding failed")
         }
         crate::Error::Signup("team member PUK is not current") => {
@@ -1376,7 +1380,7 @@ fn map_create_error(error: crate::Error) -> RpcStatus {
             RpcStatus::RevokeRace("team creation chain or Merkle root changed".to_owned())
         }
         crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
-        crate::Error::Database(foks_server_db::Error::ReceiptConflict) => {
+        crate::Error::Database(foks_server_db::Error::OperationConflict) => {
             bad_arguments("team creation retry binding failed")
         }
         other => RpcStatus::TeamError(format!("team creation validation failed: {other}")),
@@ -1460,7 +1464,7 @@ fn validate_team_edit_bearer(
     Ok(())
 }
 
-fn team_edit_receipt_hash_without_bearer(
+fn team_edit_request_hash_without_bearer(
     argument: &[u8],
     request_type_id: u64,
 ) -> std::result::Result<[u8; 32], &'static str> {

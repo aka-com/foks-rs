@@ -132,7 +132,7 @@ test('retiring a session clears metadata and late replies cannot refill it', asy
   assert.ok(cache.peek('p', 'a'), 'effect replay can reuse an emptied cache');
 });
 
-test('state changes after the device read return devices and mark paper keys unavailable', async () => {
+test('state changes after the device read return devices and mark recovery phrases unavailable', async () => {
   const f = fixture();
   const cache = new DeviceCache(f.bridge, f.clock);
   // The initial device query is allowed, but subsequent enrollment queries
