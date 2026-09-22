@@ -427,7 +427,14 @@ proofs to list. Under them the rows are:
 username with Change…, the local alias, the passphrase with a
 link to
 Settings › Preferences, followed by Bot accounts, Web admin panel, Sign in
-via SSO, and Import from FOKS CLI, each opening its corresponding panel. If
+via SSO, and Import from FOKS CLI, each opening its corresponding panel. Sign
+in via SSO is a two-step sheet: the account and whether its keys are on a
+security key, then the browser sign-in, with one primary action per step
+(open the browser, check the sign-in, finish). Check linkage reads the
+account's linkage and, where the account is not yet linked, the primary
+becomes Link existing account. First run's Sign up with your organization
+shares the flow and the browser step; it opens on where to keep the keys
+(this computer or a security key) and ends with Finish sign-up. If
 account access is suspended, username changes are disabled with an explanatory
 reason while the remaining recovery actions stay available. An account's mark is the
 initial of the username, over a color derived from it, on the account band

@@ -278,7 +278,7 @@ test('account linkage status chooses explicit first-link action and preserves lo
   );
 });
 
-test('SSO login hides the PIN behind Hardware key and clears it when disabled', async () => {
+test('SSO login hides the PIN behind the security key choice and clears it when disabled', async () => {
   const { SsoPanel } = (await vite.ssrLoadModule(
     '/src/components/sso-panel.tsx',
   )) as typeof import('../src/components/sso-panel');
@@ -297,9 +297,9 @@ test('SSO login hides the PIN behind Hardware key and clears it when disabled', 
       }),
     ),
   );
-  const pinLabel = 'Security key PIN (enrolled keys only)';
+  const pinLabel = 'Security key PIN';
   assert.equal(ui.screen.queryByLabelText(pinLabel), null);
-  const toggle = ui.screen.getByRole('checkbox', { name: 'Hardware key' });
+  const toggle = ui.screen.getByRole('checkbox', { name: 'Security key' });
   ui.fireEvent.click(toggle);
   ui.fireEvent.change(ui.screen.getByLabelText(pinLabel), {
     target: { value: '123456' },
@@ -308,4 +308,58 @@ test('SSO login hides the PIN behind Hardware key and clears it when disabled', 
   assert.equal(ui.screen.queryByLabelText(pinLabel), null);
   ui.fireEvent.click(toggle);
   assert.equal(ui.screen.getByLabelText<HTMLInputElement>(pinLabel).value, '');
+});
+
+test('the sign-in sheet runs in two steps with one primary action each', async () => {
+  const { SsoPanel } = (await vite.ssrLoadModule(
+    '/src/components/sso-panel.tsx',
+  )) as typeof import('../src/components/sso-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const bridge = {
+    ...mockBridge(),
+    sso: async (
+      _p: string,
+      _a: string,
+      action: import('../src/sso-contract').SsoAction,
+    ) =>
+      ({
+        ...progress,
+        state: action.action === 'poll' ? 'ready' : 'waiting',
+        browserAvailable: true,
+      }) as SsoProgress,
+    openSsoBrowser: async () => ({ ok: true as const }),
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(SsoPanel, {
+        bridge,
+        profile: 'host',
+        account: 'work',
+        login: true,
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
+  );
+  const primaries = () =>
+    [...document.querySelectorAll('.sheet .ft .btn.primary')].map(
+      (button) => button.textContent,
+    );
+  assert.ok(r.getByText('Step 1 of 2'));
+  assert.deepEqual(primaries(), ['Sign in']);
+  ui.fireEvent.click(r.getByText('Sign in'));
+  await ui.waitFor(() => assert.ok(r.getByText('Step 2 of 2')));
+  // Opening the browser is primary before launch; checking status is primary
+  // afterward.
+  assert.ok(r.getByRole('heading', { name: 'Finish in your browser' }));
+  assert.deepEqual(primaries(), ['Open sign-in browser']);
+  ui.fireEvent.click(r.getByText('Open sign-in browser'));
+  await ui.waitFor(() => assert.deepEqual(primaries(), ['Check sign-in']));
+  ui.fireEvent.click(r.getByText('Check sign-in'));
+  await ui.waitFor(() =>
+    assert.ok(r.getByRole('heading', { name: 'Browser sign-in verified' })),
+  );
+  assert.deepEqual(primaries(), ['Finish sign-in']);
 });

@@ -1122,6 +1122,13 @@
   margin: 2px 0;
 }
 
+/* Do not apply the full-width text-input rule to row checkboxes. */
+.inset .fr .a input[type='checkbox'] {
+  display: inline-block;
+  width: auto;
+  margin: 0;
+}
+
 /* Account settings panels */
 .pcard .inset.form,
 .panel-body .inset.form {
