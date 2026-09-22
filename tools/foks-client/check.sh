@@ -27,8 +27,12 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 package_args=()
+parallel_test_args=()
 for package in "${packages[@]}"; do
   package_args+=("-p" "$package")
+  if [[ "$package" != foks-client-app ]]; then
+    parallel_test_args+=("-p" "$package")
+  fi
 done
 
 repository_root=$(git rev-parse --show-toplevel)
@@ -64,5 +68,7 @@ done <"$boundary_paths"
 
 cargo fmt "${package_args[@]}" -- --check
 cargo build --offline --locked -p foks-agent
-cargo test --offline "${package_args[@]}" -- --test-threads=1
-cargo clippy --offline "${package_args[@]}" --all-targets -- -D warnings
+cargo test --offline --locked "${parallel_test_args[@]}"
+# Native credential state in the application tests must be accessed serially.
+cargo test --offline --locked -p foks-client-app -- --test-threads=1
+cargo clippy --offline --locked "${package_args[@]}" --all-targets -- -D warnings

@@ -24,11 +24,14 @@ jobs:
           persist-credentials: false
       - name: Install repository Rust toolchain
         run: rustup show active-toolchain
+      - name: Install Linux client dependencies
+        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
       - name: Build and stage the client and signer
         run: |
           set -euo pipefail
           python3 tools/foks-client/test_hosted_canary.py
           cargo test --locked -p foks-client-app --test kex_lifecycle
+          cargo build --locked -p foks-agent
           cargo test --locked -p foks-cli --test onboarding_canary
           cargo build --locked --release -p foks-cli -p foks-compat-artifact
           root="$RUNNER_TEMP/foks-canary-tools"

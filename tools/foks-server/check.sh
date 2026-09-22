@@ -1,5 +1,5 @@
-#!/bin/sh
-set -eu
+#!/usr/bin/env bash
+set -euo pipefail
 
 repository_root=$(git rev-parse --show-toplevel)
 cd "$repository_root"
@@ -9,20 +9,25 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 1
 fi
 
+packages=(
+    foks-go-interop
+    foks-merkle-store
+    foks-protocol-metadata
+    foks-server-db
+    foks-server
+    foks-server-testkit
+    foks-yubi
+)
+package_args=()
+for package in "${packages[@]}"; do
+    package_args+=("-p" "$package")
+done
+
 metadata=$(mktemp)
-package_names=$(mktemp)
 boundary_paths=$(mktemp)
-trap 'rm -f "$metadata" "$package_names" "$boundary_paths"' EXIT HUP INT TERM
+trap 'rm -f "$metadata" "$boundary_paths"' EXIT HUP INT TERM
 
 cargo metadata --offline --locked --no-deps --format-version 1 >"$metadata"
-
-jq -r '.packages[].name | select(startswith("foks-"))' "$metadata" \
-    | sort -u >"$package_names"
-
-if [ ! -s "$package_names" ]; then
-    echo "no FOKS workspace packages found" >&2
-    exit 1
-fi
 
 # The standalone boundary is a property of the Cargo graph, not of a branch's
 # changed files. This repository builds two products out of one workspace, so
@@ -65,20 +70,7 @@ while IFS="$tab" read -r package relation path; do
     esac
 done <"$boundary_paths"
 
-# MCP process tests use the packaged sibling agent executable.
-cargo build --offline --locked -p foks-agent
-
-# The desktop package's Tauri build validates its configured sidecar path even
-# for checks and tests. Reuse the debug agent above instead of building the
-# release binary used for bundles.
-host_target=$(rustc -vV | sed -n 's/^host: //p')
-if [ -z "$host_target" ]; then
-    echo "could not determine the Rust host target" >&2
-    exit 1
-fi
-mkdir -p apps/desktop/src-tauri/binaries
-cp target/debug/foks-agent "apps/desktop/src-tauri/binaries/foks-agent-$host_target"
-
+# Keep the production dependency guard repository-wide as well.
 while IFS= read -r package; do
     if [ "$package" != "foks-server-testkit" ] \
         && cargo tree --offline --locked --edges normal --prefix none -p "$package" \
@@ -86,16 +78,8 @@ while IFS= read -r package; do
         echo "$package has a production dependency on foks-server-testkit" >&2
         exit 1
     fi
-done <"$package_names"
+done < <(jq -r '.packages[].name | select(startswith("foks-"))' "$metadata")
 
-while IFS= read -r package; do
-    cargo fmt --check --package "$package"
-done <"$package_names"
-
-while IFS= read -r package; do
-    cargo clippy --offline --locked --package "$package" --all-targets -- -D warnings
-done <"$package_names"
-
-while IFS= read -r package; do
-    cargo test --offline --locked --package "$package"
-done <"$package_names"
+cargo fmt "${package_args[@]}" -- --check
+cargo clippy --offline --locked "${package_args[@]}" --all-targets -- -D warnings
+cargo test --offline --locked "${package_args[@]}"

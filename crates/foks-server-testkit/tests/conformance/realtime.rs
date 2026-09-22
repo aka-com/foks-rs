@@ -1523,6 +1523,7 @@ pub(crate) fn client_chat_multi_team_refresh_budget() {
         for (chat, connection) in &mut sessions {
             // A different team's setup/refresh can exceed the server idle limit.
             // Measure each refresh over a fresh transport, as the product does.
+            fixture.client.foks().clear_connection_pool().unwrap();
             *connection = chat.connection().unwrap();
             let mut counted = Count {
                 connection,

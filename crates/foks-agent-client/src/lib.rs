@@ -823,7 +823,11 @@ mod chat_cancellation_tests {
                 stream.read_exact(&mut body).unwrap();
                 stream.write_all(&[0, 0]).unwrap();
                 ready.send(()).unwrap();
-                assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
+                match stream.read(&mut [0; 1]) {
+                    Ok(0) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+                    result => panic!("client did not close the partial reply: {result:?}"),
+                }
             });
             let cancel = Arc::new(AtomicBool::new(false));
             let cancelled = cancel.clone();
