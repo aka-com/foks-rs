@@ -229,7 +229,7 @@ test('the backend source reads the agent status before the backend log', async (
     },
     appInfo: async () => {
       calls.push('info');
-      return { version: '0.3.0', agentSocket: '/tmp/agent.sock' };
+      return { version: '0.4.0', agentSocket: '/tmp/agent.sock' };
     },
   } as unknown as BackendTimingBridge;
   const source = backendTimingSource(bridge, () => 1_700_000_000_000);
@@ -241,7 +241,7 @@ test('the backend source reads the agent status before the backend log', async (
     at: 1_700_000_000_000,
     layer: 'backend',
     name: 'agent.process',
-    attrs: { pid: 4_212, owned: true, version: '0.3.0', up_min: 1 },
+    attrs: { pid: 4_212, owned: true, version: '0.4.0', up_min: 1 },
   });
   // A status read that fails cannot fail the copy.
   const failing = {

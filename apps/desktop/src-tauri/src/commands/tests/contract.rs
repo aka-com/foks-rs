@@ -519,7 +519,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         fixture["configuredServer"]
     );
     let app_info = AppInfo {
-        version: "0.3.0".to_owned(),
+        version: "0.4.0".to_owned(),
         agent_socket: "/private/foks/agent.sock".to_owned(),
         managed_profile: Some("local".to_owned()),
         computer_name: Some("Example Mac".to_owned()),

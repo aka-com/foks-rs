@@ -176,7 +176,7 @@ test('account name defaults to the macOS short account name', async () => {
       bridge: {
         ...h.bridge,
         appInfo: async () => ({
-          version: '0.3.0',
+          version: '0.4.0',
           agentSocket: '/private/foks/agent.sock',
           userName: 'example',
         }),

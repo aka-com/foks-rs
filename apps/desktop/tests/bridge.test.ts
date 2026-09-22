@@ -451,7 +451,7 @@ test('decoders successfully parse the full wire contract golden fixture', async 
     'Engineering',
   );
   assert.deepEqual(decodeAppInfo(fixture.appInfo), {
-    version: '0.3.0',
+    version: '0.4.0',
     agentSocket: '/private/foks/agent.sock',
     managedProfile: 'local',
     computerName: 'Example Mac',

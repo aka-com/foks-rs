@@ -69,7 +69,7 @@ test('first-run resume reports an unreachable managed local server', async () =>
   const bridge: Bridge = {
     ...base,
     appInfo: async () => ({
-      version: '0.3.0',
+      version: '0.4.0',
       agentSocket: '/private/foks/agent.sock',
       managedProfile: 'personal',
     }),

@@ -1733,7 +1733,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "foks-agent"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "foks-agent-proto",
@@ -1765,7 +1765,7 @@ dependencies = [
 
 [[package]]
 name = "foks-agent-client"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "foks-agent-proto",
  "rustix",
@@ -1777,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "foks-agent-proto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "foks-proto",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "foks-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "foks-agent-client",
@@ -1811,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "foks-client"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chacha20poly1305",
  "foks-client-db",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "foks-client-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "foks-agent-proto",
@@ -1874,7 +1874,7 @@ dependencies = [
 
 [[package]]
 name = "foks-client-db"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "foks-crypto",
  "foks-proto",
@@ -1889,7 +1889,7 @@ dependencies = [
 
 [[package]]
 name = "foks-compat-artifact"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "ed25519-dalek",
@@ -1904,7 +1904,7 @@ dependencies = [
 
 [[package]]
 name = "foks-crypto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -1929,7 +1929,7 @@ dependencies = [
 
 [[package]]
 name = "foks-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "foks-agent-client",
@@ -1944,7 +1944,7 @@ dependencies = [
 
 [[package]]
 name = "foks-desktop-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "block2",
  "foks-agent-client",
@@ -1984,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "foks-go-interop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "crypto_secretbox",
@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "foks-keystore"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chacha20poly1305",
  "getrandom 0.4.3",
@@ -2016,7 +2016,7 @@ dependencies = [
 
 [[package]]
 name = "foks-mcp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "foks-agent-client",
@@ -2037,7 +2037,7 @@ dependencies = [
 
 [[package]]
 name = "foks-merkle-store"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "foks-crypto",
  "foks-proto",
@@ -2047,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "foks-oidc"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2063,7 +2063,7 @@ dependencies = [
 
 [[package]]
 name = "foks-proto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "foks-snowpack",
  "serde",
@@ -2073,7 +2073,7 @@ dependencies = [
 
 [[package]]
 name = "foks-protocol-metadata"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2085,7 +2085,7 @@ dependencies = [
 
 [[package]]
 name = "foks-rpc"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "foks-crypto",
  "foks-proto",
@@ -2096,7 +2096,7 @@ dependencies = [
 
 [[package]]
 name = "foks-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
@@ -2137,7 +2137,7 @@ dependencies = [
 
 [[package]]
 name = "foks-server-db"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "foks-crypto",
  "foks-merkle-store",
@@ -2151,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "foks-server-testkit"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "foks-agent-client",
@@ -2192,7 +2192,7 @@ dependencies = [
 
 [[package]]
 name = "foks-snowpack"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "quickcheck",
  "serde",
@@ -2203,7 +2203,7 @@ dependencies = [
 
 [[package]]
 name = "foks-verify"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ed25519-dalek",
  "foks-crypto",
@@ -2217,7 +2217,7 @@ dependencies = [
 
 [[package]]
 name = "foks-yubi"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "foks-crypto",
  "foks-proto",

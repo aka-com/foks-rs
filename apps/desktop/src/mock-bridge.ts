@@ -488,7 +488,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     handleExitAction: async () => {},
     agentStatus: () => Promise.resolve({ ...snapshot.agent }),
     appInfo: async () => ({
-      version: '0.3.0',
+      version: '0.4.0',
       agentSocket: '/private/foks/agent.sock',
     }),
     listCatalog: () => {
