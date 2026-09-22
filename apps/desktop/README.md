@@ -55,16 +55,18 @@ once: with a "No admission record" chip where no record on this Mac matches it,
 and an "Ambiguous admission" chip where several do, in which case those records
 are not listed again beside it. Add someone on `<server>`… and Send setup instructions…
 follow the people and machine rows and go with them when the roster could not
-be read; Add a group… follows the admitted ones. The member addition dialog
-provides two modes: person mode and federated team mode. Person mode preselects
-the server, displays role selection cards (disabling unauthorized roles with
-tooltips), and validates that the username exists before sending. Federated
-team mode lists remote groups already available on this device because
-`add_federated_team_member` accepts a store rather than a name and host. Switching modes
-resets mode-specific role, visibility, and validation state. If an entered
-username already exists in the team roster, client-side validation rejects it
-locally. Server-side validation errors returned by the agent are displayed
-inline beneath the input field and cleared when the field value changes.
+be read; Add a group… follows the admitted ones. Each membership action is
+its own sheet: Add FOKS user, Add FOKS team, Lower role, Remove and Create a
+team share their chrome and controls but nothing else. Add FOKS user states the
+server (it is the team's), offers role cards that keep an unauthorized role in
+place with the reason, and refuses a username the roster already holds before
+sending; the agent's own refusal is stated under the field and cleared when it
+changes. Add FOKS team lists remote groups already available on this device
+because `add_federated_team_member` accepts a store rather than a name and
+host. Lower role states the member and their present role as a fact row and
+offers only the roles below it; raising a role is remove and add again, which
+the sheet says. Create a team opens on the kind, named team or ad-hoc share,
+then the name and the server and account; nothing is behind a disclosure.
 Settings states the group's
 name with "Team names cannot be changed after creation." and the static Invite only policy.
 A group with incomplete setup displays no tabs. The application navigates to the new

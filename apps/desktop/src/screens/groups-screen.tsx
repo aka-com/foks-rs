@@ -1,21 +1,28 @@
 import { federatedTeamMembers, memberCountOf } from './team-members';
 import { useGroupOperationController } from './groups/operation-controller';
+import { AddPersonSheet } from './groups/add-person-sheet';
+import { AddTeamSheet } from './groups/add-team-sheet';
+import { CreateTeamSheet } from './groups/create-team-sheet';
+import { LowerRoleSheet } from './groups/lower-role-sheet';
+import { RemoveMemberSheet } from './groups/remove-member-sheet';
+import {
+  canTarget,
+  demotionFor,
+  fmtRole,
+  partySubtitle,
+  RoleChip,
+  roleText,
+} from './groups/sheet-support';
+import type { GroupSheetBaseProps } from './groups/sheet-support';
 import {
   attemptMutation,
   reportMutationOutcome,
 } from '../commands/command-policy';
-import { synchronizeApplied } from '../operation-outcome';
-import {
-  requireWorkflow,
-  workflowAvailability,
-  workflowMessage,
-} from '../model/workflow-availability';
 import { useTabSheetState } from '../navigation-guard';
 import { InvitationRecovery } from '../components/invitation-recovery';
 import { InviteNewUserSheet } from '../components/invite-new-user-sheet';
 import { InvitationActivitySheet } from '../components/invitation-activity-sheet';
 import { MembershipRequests } from '../components/membership-requests';
-import { isNestingRefusal } from '../invitation-writes';
 import { useTeamRequestCounts } from '../operation-queries';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -23,15 +30,12 @@ import {
   Band,
   Button,
   Chip,
-  Field,
   Icon,
   Inset,
   InsetRow,
   MenuButton,
   MenuItem,
   Notice,
-  RadioCard,
-  RadioGroup,
   SectionLabel,
   SheetDialog,
   tabId,
@@ -39,7 +43,6 @@ import {
   Tabs,
 } from '../components';
 import {
-  actionableGroupMember,
   catalog,
   storeOperationAvailability,
   groupDetailFailure,
@@ -50,7 +53,6 @@ import {
   partyName,
   plural,
   readersOf,
-  roleChipLabel,
   roleRank,
   serverDisplayLabel,
   serverDisplayLabelForStore as displayServerName,
@@ -68,13 +70,10 @@ import type {
   Item,
   Party,
   Store,
-  StoreRef,
   TeamStore,
   AgentSnapshot,
 } from '../model';
-import { normalizeCommandError } from '../bridge';
 import type { Bridge } from '../bridge';
-import type { RoleDto } from '../bridge';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { listChannels } from '../chat/presentation';
 import { GROUP_SETTINGS_TABS } from '../location';
@@ -100,30 +99,7 @@ export type GroupSheetKind =
   'add' | 'demote' | 'remove' | 'add-team' | 'create';
 type Sheet = GroupSheetKind | null;
 
-const VIS_MIN = -32768;
-const VIS_MAX = 32767;
-/**
- * Example text for the group name placeholder. Keep the input value empty
- * until the user types so the example is neither submitted nor treated as
- * an unsaved change by the navigation guard.
- */
-const SUGGESTED_GROUP = 'Platform';
-
-/**
- * The name a group is created under, or null when FOKS would refuse it.
- * Mirrors `server_team_name` in foks-client-app: runs of whitespace become one
- * underscore, and the result must normalize (lowercased, dots and dashes as
- * underscores) to 3 to 25 letters, digits and single underscores.
- */
-export function serverTeamName(name: string): string | null {
-  const folded = name.trim().split(/\s+/).filter(Boolean).join('_');
-  const normalized = folded.toLowerCase().replace(/[.-]/g, '_');
-  return /^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(normalized) &&
-    normalized.length >= 3 &&
-    normalized.length <= 25
-    ? folded
-    : null;
-}
+export { serverTeamName } from './groups/sheet-support';
 /** The base the group page's tab and panel ids are derived from. */
 const GROUP_TABS = 'group-sections';
 /** Why the join policy cannot be changed. */
@@ -141,68 +117,6 @@ function readsOf(snapshot: AgentSnapshot, party: Party): Item[] {
     readersOf(snapshot, item)?.some(
       (candidate) => candidate.party_id_hex === party.party_id_hex,
     ),
-  );
-}
-
-function canTarget(snapshot: AgentSnapshot, party: Party): boolean {
-  if (!actionableGroupMember(snapshot, party)) return false;
-  const parties = partiesOf(snapshot, party.store);
-  const mine = parties.find((candidate) => candidate.label === 'you');
-  if (!mine) return false;
-  const myRank = roleRank(mine.destination_role);
-  const targetRank = roleRank(party.destination_role);
-  if (myRank < 2) return false;
-  if (targetRank >= 3 && myRank < 3) return false;
-  return true;
-}
-
-function demotionFor(party: Party): RoleDto | null {
-  const role = parseRole(party.destination_role);
-  if (!role) return null;
-  if (role.kind === 'owner' || role.kind === 'admin')
-    return { role: 'Member', visibility: 0 };
-  const visibility = role.visibility ?? 0;
-  return visibility > VIS_MIN
-    ? { role: 'Member', visibility: visibility - 1 }
-    : null;
-}
-
-function roleText(party: Party): string {
-  return fmtRole(party.destination_role);
-}
-
-/** One notation for a role everywhere on this page: "Owner", "Member · sees level 0". */
-function fmtRole(role: Item['read']): string {
-  const parsed = parseRole(role);
-  return parsed
-    ? roleChipLabel(parsed)
-    : typeof role === 'string'
-      ? role
-      : role.role;
-}
-
-/**
- * A role as a row reads it: one chip, with the visibility band inside it when
- * the role is a Member, and no second line.
- */
-function RoleChip({
-  role,
-}: {
-  role: Item['read'] | RoleDto | null | undefined;
-}): ReactNode {
-  const parsed = role ? parseRole(role) : null;
-  return (
-    <span className="rolecell">
-      <Chip>
-        {parsed
-          ? roleChipLabel(parsed)
-          : role
-            ? typeof role === 'string'
-              ? role
-              : role.role
-            : '—'}
-      </Chip>
-    </span>
   );
 }
 
@@ -238,16 +152,6 @@ function useCopyText(
       onError(error);
     }
   };
-}
-
-/**
- * What a member row's second line says: the kind of party, and nothing else.
- * Only people and machines are drawn with `PartyRow`; a party that stands for
- * another team is drawn with `FederationEntryRow` or `TeamPartyRow` instead,
- * in the same Members list, each with its own "team on …" caption.
- */
-function partySubtitle(party: Party): string {
-  return isMachine(party) ? 'machine' : 'person';
 }
 
 /** Why a member cannot be changed from here, for a disabled menu item. */
@@ -1201,769 +1105,30 @@ export function AbandonGroupSheet({
   );
 }
 
+/** Selects the sheet component for a team-management action. */
 export function GroupSheet({
-  snapshot,
-  bridge,
-  store,
   sheet,
   target,
-  onClose,
   onInvite,
-  onApplied,
-  onMutationError,
-}: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
-  store: Store;
+  ...base
+}: GroupSheetBaseProps & {
   sheet: Exclude<Sheet, null>;
   target: Party | null;
-  onClose: () => void;
   /** Starts the invitation flow for someone without a FOKS account. */
   onInvite?: () => void;
-  onApplied: (
-    message: string,
-    options?: {
-      created?: { accountStoreId: StoreRef; teamAlias: string };
-      /**
-       * The one profile the read back after this write needs, or absent when
-       * the whole catalog must be read — a federated membership binds a team
-       * on another server, so both profiles move.
-       */
-      profile?: string;
-    },
-  ) => Promise<void>;
-  onMutationError: MutationFailureHandler;
 }): ReactNode {
-  const [username, setUsername] = useTabSheetState('group.username', '');
-  const [visibility, setVisibility] = useTabSheetState('group.visibility', 0);
-  const callerParty = partiesOf(snapshot, store.id).find(
-    (candidate) => candidate.label === 'you',
-  );
-  const callerRank = callerParty ? roleRank(callerParty.destination_role) : 0;
-  const [role, setRole] = useTabSheetState<RoleDto>('group.role', {
-    role: 'Member',
-    visibility: 0,
-  });
-  const [busy, setBusy] = useState(false);
-  const [name, setName] = useTabSheetState('group.name', '');
-  const [createKind, setCreateKind] = useTabSheetState<'named' | 'adhoc'>(
-    'group.createKind',
-    'named',
-  );
-  const creationAccounts = snapshot.stores.filter(
-    (candidate): candidate is AccountStore =>
-      candidate.kind === 'account' &&
-      storeOperationAvailability(snapshot, candidate, 'teams').available,
-  );
-  // Creating acts as the account the page acts as: the sheet's own store when
-  // that store is an account that can create, else this Mac's first such one.
-  const [accountStoreId, setAccountStoreId] = useTabSheetState(
-    'group.accountStoreId',
-    () =>
-      creationAccounts.find((candidate) => candidate.id === store.id)?.id ??
-      creationAccounts[0]?.id ??
-      '',
-  );
-  const remotes = snapshot.stores.filter(
-    (candidate): candidate is Extract<Store, { kind: 'team' }> =>
-      candidate.kind === 'team' &&
-      candidate.active &&
-      candidate.team_kind === 'named' &&
-      storeOperationAvailability(snapshot, candidate, 'federation').available &&
-      candidate.server !== store.server,
-  );
-  const [remoteStoreId, setRemoteStoreId] = useTabSheetState(
-    'group.remoteStoreId',
-    remotes[0]?.id ?? '',
-  );
-  const creationAccount = creationAccounts.find(
-    (candidate) => candidate.id === accountStoreId,
-  );
-  const serverName = displayServerName(snapshot, store);
-  const teamAlias = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-  // Previews the normalized group name using the client's whitespace rules,
-  // ensuring the dialog rejects invalid names before submitting to the agent.
-  const reservedName = serverTeamName(name);
-  const remote =
-    remotes.find((candidate) => candidate.id === remoteStoreId) ?? remotes[0];
-  const federationTarget = {
-    profile: store.server,
-    account: store.account,
-    remoteProfile: remote?.server,
-  };
-  const federatedMemberReason =
-    sheet === 'add-team'
-      ? ((store.kind === 'team'
-          ? manageReason(snapshot, store, 'federation')
-          : 'Select a named team.') ??
-        workflowMessage(
-          workflowAvailability(snapshot, 'federate', federationTarget),
-        ))
-      : undefined;
-  // Adding a federated team needs the federation list, and a read that failed as a whole
-  // is recorded under the roster, so the federated-team sheet consults both.
-  const requiredFailure =
-    sheet === 'add-team'
-      ? (groupDetailFailure(snapshot, store.id, 'federation') ??
-        groupDetailFailure(snapshot, store.id, 'roster'))
-      : ['add', 'demote', 'remove'].includes(sheet)
-        ? groupDetailFailure(snapshot, store.id, 'roster')
-        : undefined;
-  const title =
-    sheet === 'add'
-      ? `Add FOKS user to ${store.name}`
-      : sheet === 'add-team'
-        ? `Add FOKS team to ${store.name}`
-        : sheet === 'demote'
-          ? `Lower ${target ? `${partyName(target)}’s` : 'their'} role`
-          : sheet === 'remove'
-            ? `Remove ${target ? partyName(target) : 'them'} from ${store.name}?`
-            : 'Create a team';
-  const [demotion, setDemotion] = useState<RoleDto | null>(() =>
-    target ? demotionFor(target) : null,
-  );
-  const currentRole = target ? parseRole(target.destination_role) : null;
-  const maxMemberVisibility =
-    currentRole?.kind === 'member' ? (currentRole.visibility ?? 0) - 1 : 0;
-  useEffect(() => {
-    if (sheet === 'demote') setDemotion(target ? demotionFor(target) : null);
-  }, [sheet, target]);
-  // A username the roster already holds is a local fact, so the sheet refuses
-  // it before sending a request the agent would refuse. Everything else a
-  // username can be wrong about — unknown, ambiguous — only the server knows,
-  // so that refusal is the agent's own sentence, read back here.
-  const existing = partiesOf(snapshot, store.id).find(
-    (party) =>
-      party.party_kind === 'user' &&
-      (party.username ?? '').toLowerCase() === username.trim().toLowerCase(),
-  );
-  const [refused, setRefused] = useState('');
-  const [rangeRefusal, setRangeRefusal] = useState('');
-  const toasts = useToast();
-  const changeRange = async (raise: boolean): Promise<void> => {
-    if (store.kind !== 'team' || busy) return;
-    setBusy(true);
-    try {
-      await bridge.invitation(
-        store.server,
-        store.account,
-        { action: 'range', team_alias: store.alias, raise },
-        null,
-      );
-      setRangeRefusal('');
-      toasts.show(
-        raise
-          ? `${store.name}’s range raised.`
-          : `${store.name}’s range lowered.`,
-      );
-    } catch (error) {
-      await onMutationError(error);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const addRefusal = username.trim()
-    ? existing
-      ? `${partyName(existing)} is already a member of ${store.name}. Change their role from the Members list instead.`
-      : refused
-    : '';
-  // Once a membership change or a group creation has been sent, the agent
-  // holds it. Interrupted operations appear as pending and can resume from this
-  // page. Typed input that has not been submitted requires confirmation before
-  // dismissal.
-  useSheetGuard(
-    busy
-      ? null
-      : sheet === 'add' && username.trim()
-        ? {
-            verdict: 'prompt',
-            title: 'Discard this member?',
-            body: `${username.trim()} has not been added to ${store.name}.`,
-            confirm: 'Discard',
-            onConfirm: () => {
-              setUsername('');
-              onClose();
-            },
-          }
-        : sheet === 'create' && name.trim()
-          ? {
-              verdict: 'prompt',
-              title: 'Discard this team?',
-              body: `${name.trim()} has not been created.`,
-              confirm: 'Discard',
-              onConfirm: () => {
-                setName('');
-                onClose();
-              },
-            }
-          : null,
-    !busy && (sheet === 'add' || sheet === 'create'),
-  );
-  const apply = async (): Promise<void> => {
-    if (busy || requiredFailure) return;
-    if (sheet === 'add' && existing) return;
-    setBusy(true);
-    setRefused('');
-    setRangeRefusal('');
-    const complete = async (options?: {
-      created?: { accountStoreId: StoreRef; teamAlias: string };
-      profile?: string;
-    }): Promise<void> => {
-      const result = await synchronizeApplied(() =>
-        onApplied(`${title} completed`, options),
-      );
-      if (result.synchronization === 'pending')
-        toasts.show(`${title} completed. Refresh pending.`);
-      onClose();
-    };
-    try {
-      if (sheet === 'add') {
-        // Every branch below moves a roster, so the profile that holds it is
-        // marked before the write: the read back must read the roster again
-        // even where the agent's catalog still reports the chain sequence the
-        // write has just moved. Marked before rather than after, because an
-        // ambiguous refusal can leave the write applied.
-        markProfileRostersStale(store.server);
-        await bridge.addGroupMember({
-          storeId: store.id,
-          username: username.trim(),
-          destination: role.role === 'Member' ? { ...role, visibility } : role,
-        });
-      } else if (
-        sheet === 'demote' &&
-        target &&
-        canTarget(snapshot, target) &&
-        demotion
-      ) {
-        markProfileRostersStale(store.server);
-        await bridge.demoteGroupMember({
-          storeId: store.id,
-          username: target.username!,
-          destination: demotion,
-        });
-      } else if (sheet === 'remove' && target && canTarget(snapshot, target)) {
-        markProfileRostersStale(store.server);
-        await bridge.removeGroupMember({
-          storeId: store.id,
-          username: target.username!,
-        });
-      } else if (sheet === 'add-team' && remote) {
-        if (federatedMemberReason) throw new Error(federatedMemberReason);
-        requireWorkflow(snapshot, 'federate', federationTarget);
-        // Both teams in a federated membership move: the local team and the remote
-        // team, which lives on another server.
-        markProfileRostersStale(store.server);
-        markProfileRostersStale(remote.server);
-        await bridge.addFederatedTeamMember({
-          storeId: store.id,
-          remoteStoreId: remote.id,
-          visibility,
-        });
-      } else if (sheet === 'create') {
-        // Re-resolved from the availability-filtered list at the moment of
-        // the write, not from the render that drew the button: the server
-        // can lapse while the sheet is open.
-        const account = creationAccounts.find(
-          (candidate) => candidate.id === accountStoreId,
-        );
-        if (!account)
-          throw new Error('No account store is available for team creation.');
-        markProfileRostersStale(account.server);
-        await bridge.createGroup({
-          accountStoreId: account.id,
-          teamAlias,
-          name: createKind === 'named' ? name : '',
-          kind: createKind,
-        });
-        await complete({
-          created: { accountStoreId: account.id, teamAlias },
-          profile: account.server,
-        });
-        return;
-      } else return;
-      // A federated membership's other team is a team on another server, so its read
-      // back stays the whole catalog; every other branch changes only the
-      // profile this team is on.
-      await complete(
-        sheet === 'add-team' ? undefined : { profile: store.server },
-      );
-    } catch (error) {
-      // The sheet stays open on a refusal and states it where the field is,
-      // in the agent's own words, while the shell reconciles as it always has.
-      // The sheet is then the refusal's one surface: the shell does not toast
-      // the same sentence beside it.
-      if (sheet === 'add') {
-        setRefused(normalizeCommandError(error).message);
-        await onMutationError(error, { report: false });
-      } else if (sheet === 'add-team' && isNestingRefusal(error)) {
-        setRangeRefusal(normalizeCommandError(error).message);
-        await onMutationError(error, { report: false });
-      } else await onMutationError(error);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <SheetDialog
-      danger={sheet === 'remove'}
-      onClose={onClose}
-      dismissible={!busy}
-      glyph={
-        sheet === 'create' || store.kind !== 'team' ? (
-          // The group does not exist yet, so it has no mark: a group's color
-          // and initial are earned at creation, not previewed over an account.
-          <span className="kico md neutral">
-            <Icon name="users" />
-          </span>
-        ) : (
-          <GroupMark store={store} />
-        )
-      }
-      title={title}
-      footer={
-        <>
-          <Button disabled={busy} onClick={onClose}>
-            Cancel
-          </Button>
-          {sheet === 'remove' ? (
-            <Button
-              variant="primary"
-              danger
-              disabled={
-                busy ||
-                Boolean(requiredFailure) ||
-                !target ||
-                !canTarget(snapshot, target)
-              }
-              onClick={() => void apply()}
-            >
-              Remove and rekey
-            </Button>
-          ) : (
-            <Button
-              variant="primary"
-              title={federatedMemberReason}
-              disabled={
-                busy ||
-                Boolean(requiredFailure) ||
-                (sheet === 'add' && (!username.trim() || Boolean(existing))) ||
-                (sheet === 'demote' &&
-                  (!target || !canTarget(snapshot, target) || !demotion)) ||
-                (sheet === 'add-team' &&
-                  (!remote || Boolean(federatedMemberReason))) ||
-                (sheet === 'create' &&
-                  (!teamAlias ||
-                    !creationAccount ||
-                    (createKind === 'named' && !reservedName)))
-              }
-              onClick={() => void apply()}
-            >
-              {sheet === 'add'
-                ? `Add ${username.trim() || 'someone'}`
-                : sheet === 'demote'
-                  ? 'Change role'
-                  : sheet === 'add-team'
-                    ? `Add ${remote?.alias ?? 'team'}`
-                    : 'Create team'}
-            </Button>
-          )}
-        </>
-      }
-    >
-      <>
-        {requiredFailure ? (
-          <Notice
-            severity="warn"
-            title={`${requiredFailure.source === 'roster' ? 'Roster' : 'Federation'} unavailable`}
-          >
-            <p>
-              {requiredFailure.message} Close this sheet and refresh before
-              making changes.
-            </p>
-          </Notice>
-        ) : null}
-        {sheet === 'add' ? (
-          <>
-            <p>
-              Add someone who already has an account on {serverName}. They get
-              access as soon as this finishes.
-            </p>
-            <Inset>
-              <Field
-                label="Username"
-                value={username}
-                // The agent's refusal was of the username that was sent, so a
-                // different one is not refused yet: the sentence goes with it.
-                onChange={(next) => {
-                  setUsername(next);
-                  setRefused('');
-                }}
-              />
-              {/* The server is fixed by the team, not chosen here, so the
-                  value reads as stated rather than as an editable field. */}
-              <InsetRow label="Server" action={<Chip>This team’s server</Chip>}>
-                <span className="dim">{serverName}</span>
-              </InsetRow>
-            </Inset>
-            {addRefusal ? (
-              <p role="alert" className="action-error">
-                {addRefusal}
-              </p>
-            ) : null}
-            <SectionLabel>Role in {store.name}</SectionLabel>
-            <Inset>
-              <RadioGroup label={`Role in ${store.name}`}>
-                {(['Owner', 'Admin', 'Member'] as const).map((next) => {
-                  // An Admin cannot make an Owner. The card keeps its place
-                  // and says why rather than vanishing from the list.
-                  const refusal =
-                    next === 'Owner' && callerRank < 3
-                      ? 'Only an Owner can add another Owner.'
-                      : '';
-                  return (
-                    <RadioCard
-                      key={next}
-                      selected={role.role === next}
-                      off={Boolean(refusal)}
-                      onSelect={() =>
-                        setRole(
-                          next === 'Member'
-                            ? { role: next, visibility }
-                            : { role: next },
-                        )
-                      }
-                      title={next}
-                      detail={
-                        refusal ||
-                        (next === 'Member'
-                          ? 'Can only read items.'
-                          : next === 'Admin'
-                            ? 'Manage vault items and team members, excluding other admins and owners.'
-                            : 'Manage vault items, members, permissions, or delete the team.')
-                      }
-                    />
-                  );
-                })}
-              </RadioGroup>
-            </Inset>
-            {role.role === 'Member' ? (
-              <Inset className="visibility-inset">
-                <InsetRow
-                  label="Visibility"
-                  action={
-                    // The band the steppers change reads between them, so the
-                    // value is never separated from the controls that set it.
-                    <>
-                      <Button
-                        size="sm"
-                        aria-label="Lower the visibility band"
-                        disabled={visibility <= VIS_MIN}
-                        onClick={() => setVisibility((value) => value - 1)}
-                      >
-                        −
-                      </Button>
-                      <span className="vis-value">Visibility {visibility}</span>
-                      <Button
-                        size="sm"
-                        aria-label="Raise the visibility band"
-                        disabled={visibility >= VIS_MAX}
-                        onClick={() => setVisibility((value) => value + 1)}
-                      >
-                        +
-                      </Button>
-                    </>
-                  }
-                />
-              </Inset>
-            ) : null}
-          </>
-        ) : null}
-        {sheet === 'add' && onInvite ? (
-          <p className="fn">
-            No account yet?{' '}
-            <button type="button" className="lnk" onClick={onInvite}>
-              Invite them to {serverName} instead…
-            </button>
-          </p>
-        ) : null}
-        {sheet === 'demote' ? (
-          <>
-            <p>
-              To grant a higher role, remove the member and add them again with
-              the updated role.
-            </p>
-            <Inset>
-              <RadioGroup label="New role">
-                {currentRole?.kind === 'owner' ? (
-                  <RadioCard
-                    selected={demotion?.role === 'Admin'}
-                    onSelect={() => setDemotion({ role: 'Admin' })}
-                    title="Admin"
-                    detail="Full access to team items and permission to manage members."
-                  />
-                ) : null}
-                <RadioCard
-                  selected={demotion?.role === 'Member'}
-                  disabled={maxMemberVisibility < VIS_MIN}
-                  onSelect={() =>
-                    setDemotion({
-                      role: 'Member',
-                      visibility: maxMemberVisibility,
-                    })
-                  }
-                  title={
-                    currentRole?.kind === 'member'
-                      ? `Member (${maxMemberVisibility})`
-                      : 'Member'
-                  }
-                  detail={
-                    currentRole?.kind === 'member'
-                      ? `Same role, lower level; ${maxMemberVisibility} at most.`
-                      : 'Cannot manage members; can only access items allowed by their member role.'
-                  }
-                />
-                <RadioCard
-                  off
-                  selected={false}
-                  title={
-                    <>
-                      {target ? roleText(target) : 'Current role'}{' '}
-                      <Chip>current</Chip>
-                    </>
-                  }
-                  detail="Current active role."
-                />
-              </RadioGroup>
-            </Inset>
-            {demotion?.role === 'Member' ? (
-              <div className="vis">
-                <Button
-                  size="sm"
-                  disabled={demotion.visibility <= VIS_MIN}
-                  onClick={() =>
-                    setDemotion({
-                      role: 'Member',
-                      visibility: demotion.visibility - 1,
-                    })
-                  }
-                >
-                  −
-                </Button>
-                <span>Visibility {demotion.visibility}</span>
-                <Button
-                  size="sm"
-                  disabled={demotion.visibility >= maxMemberVisibility}
-                  onClick={() =>
-                    setDemotion({
-                      role: 'Member',
-                      visibility: demotion.visibility + 1,
-                    })
-                  }
-                >
-                  +
-                </Button>
-              </div>
-            ) : null}
-          </>
-        ) : null}
-        {sheet === 'remove' ? (
-          <>
-            <p>
-              Removing blocks future reads and rekeys the team. This user may
-              retain a local copy of their current records.
-            </p>
-            {target ? (
-              <Inset>
-                <InsetRow action={<RoleChip role={target.destination_role} />}>
-                  <span className="t">
-                    <b>{partyName(target)}</b>
-                    <small>{partySubtitle(target)}</small>
-                  </span>
-                </InsetRow>
-              </Inset>
-            ) : null}
-            {target && !canTarget(snapshot, target) ? (
-              <Notice title={`${partyName(target)} cannot be removed here`}>
-                {/* The body is a paragraph in every other notice, and it says
-                    the reason rather than repeating the title. */}
-                <p>This member is managed by another server or account.</p>
-              </Notice>
-            ) : null}
-          </>
-        ) : null}
-        {sheet === 'add-team' ? (
-          <>
-            <p>
-              Every member of the team you pick will be able to act as a Member
-              in {store.name}. Only teams you administer on another server are
-              listed.
-            </p>
-            {rangeRefusal ? (
-              <Notice
-                severity="crit"
-                title="Nesting order"
-                actions={
-                  <>
-                    <Button
-                      disabled={busy}
-                      onClick={() => void changeRange(false)}
-                    >
-                      Lower {store.name}’s range
-                    </Button>
-                    <Button
-                      disabled={busy}
-                      onClick={() => void changeRange(true)}
-                    >
-                      Raise {store.name}’s range
-                    </Button>
-                  </>
-                }
-              >
-                <p>
-                  {remote?.alias ?? 'The team'} cannot join {store.name} because
-                  of where the two teams sit in the hierarchy. A team must sit
-                  below the team it joins. {rangeRefusal}
-                </p>
-              </Notice>
-            ) : null}
-            <SectionLabel>Team</SectionLabel>
-            <Inset>
-              {remotes.length ? (
-                <RadioGroup label="Team">
-                  {remotes.map((group) => {
-                    const host = serverOf(snapshot, group.id);
-                    return (
-                      <RadioCard
-                        key={group.id}
-                        selected={remote?.id === group.id}
-                        onSelect={() => setRemoteStoreId(group.id)}
-                        title={group.alias}
-                        detail={`on ${host ? serverDisplayLabel(host) : group.server}`}
-                      />
-                    );
-                  })}
-                </RadioGroup>
-              ) : (
-                <InsetRow label="Team">
-                  <span className="dim">
-                    No eligible teams. You are not an Admin or Owner of any team
-                    on a server other than {serverName}.
-                  </span>
-                </InsetRow>
-              )}
-            </Inset>
-            <SectionLabel>Role</SectionLabel>
-            <Inset>
-              <InsetRow label="Role">
-                <Chip>Member</Chip>
-              </InsetRow>
-              <InsetRow
-                label="Visibility"
-                action={
-                  // The band the steppers change reads between them, so the
-                  // value is never separated from the controls that set it.
-                  <>
-                    <Button
-                      size="sm"
-                      aria-label="Lower the visibility band"
-                      disabled={visibility <= VIS_MIN}
-                      onClick={() => setVisibility((value) => value - 1)}
-                    >
-                      −
-                    </Button>
-                    <span className="vis-value">Visibility {visibility}</span>
-                    <Button
-                      size="sm"
-                      aria-label="Raise the visibility band"
-                      disabled={visibility >= VIS_MAX}
-                      onClick={() => setVisibility((value) => value + 1)}
-                    >
-                      +
-                    </Button>
-                  </>
-                }
-              />
-            </Inset>
-          </>
-        ) : null}
-        {sheet === 'create' ? (
-          <>
-            <Inset>
-              <Field
-                label="Name"
-                value={name}
-                placeholder={SUGGESTED_GROUP}
-                onChange={setName}
-              />
-            </Inset>
-            <p className="fn">
-              {createKind === 'named' ? (
-                reservedName ? (
-                  <>
-                    Named <code>{reservedName}</code> on the server and stored
-                    as <code>{teamAlias}</code>. Neither can be changed once
-                    created.
-                  </>
-                ) : (
-                  'Use 3 to 25 letters, numbers, spaces, dots, dashes, or underscores.'
-                )
-              ) : (
-                <>
-                  Stored as <code>{teamAlias || '…'}</code>. Cannot be changed
-                  once created.
-                </>
-              )}
-            </p>
-            <SectionLabel>Server and account</SectionLabel>
-            <Inset>
-              {creationAccounts.length ? (
-                <RadioGroup label="Server and account">
-                  {creationAccounts.map((account) => (
-                    <RadioCard
-                      key={account.id}
-                      selected={account.id === accountStoreId}
-                      onSelect={() => setAccountStoreId(account.id)}
-                      title={displayServerName(snapshot, account)}
-                      detail={`as ${snapshot.accounts.find((candidate) => candidate.store === account.id || (candidate.alias === account.account && candidate.server === account.server))?.username ?? account.account} · ${account.account} account`}
-                    />
-                  ))}
-                </RadioGroup>
-              ) : (
-                <InsetRow label="Account">
-                  <span className="dim">No account can create a team.</span>
-                </InsetRow>
-              )}
-            </Inset>
-            <details className="dd">
-              <summary>Advanced</summary>
-              <SectionLabel>Kind</SectionLabel>
-              <Inset>
-                <RadioGroup label="Kind">
-                  {(['named', 'adhoc'] as const).map((kind) => (
-                    <RadioCard
-                      key={kind}
-                      selected={kind === createKind}
-                      onSelect={() => setCreateKind(kind)}
-                      title={kind === 'named' ? 'Named' : 'Ad-hoc'}
-                      detail={
-                        kind === 'named'
-                          ? 'Has an alias on the server; people can be added and removed over time.'
-                          : 'Fixed membership, chosen now, no alias. For a one-off share.'
-                      }
-                    />
-                  ))}
-                </RadioGroup>
-              </Inset>
-            </details>
-          </>
-        ) : null}
-      </>
-    </SheetDialog>
-  );
+  switch (sheet) {
+    case 'add':
+      return <AddPersonSheet {...base} onInvite={onInvite} />;
+    case 'add-team':
+      return <AddTeamSheet {...base} />;
+    case 'demote':
+      return <LowerRoleSheet {...base} target={target} />;
+    case 'remove':
+      return <RemoveMemberSheet {...base} target={target} />;
+    case 'create':
+      return <CreateTeamSheet {...base} />;
+  }
 }
 
 export function GroupSettingsScreen({
