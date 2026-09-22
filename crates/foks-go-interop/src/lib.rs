@@ -17,6 +17,7 @@ const MAXIMUM_SECRET_STORE_BYTES: u64 = 16 * 1024 * 1024;
 const MAXIMUM_CANDIDATES: usize = 256;
 const MAXIMUM_TEXT_BYTES: usize = 4096;
 const SECRET_STORE_NAME: &str = "foks-secrets";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const SECRET_KEY_BUNDLE_TYPE_ID: u64 = 0x8456_933b_bb8a_54ae;
 
 #[derive(Debug, thiserror::Error)]
@@ -90,6 +91,7 @@ pub struct Installation {
 }
 
 #[derive(Clone)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct MacosKeychainBundle {
     account: String,
     service: String,
@@ -98,6 +100,7 @@ struct MacosKeychainBundle {
 }
 
 #[derive(Clone)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 enum StoredBundle {
     Plaintext,
     Passphrase,
@@ -124,6 +127,7 @@ pub struct ResolvedCandidate {
     host_id: [u8; 33],
     user_id: [u8; 33],
     device_id: Vec<u8>,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     bundle: StoredBundle,
 }
 
@@ -140,6 +144,7 @@ impl ResolvedCandidate {
         &self.device_id
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn macos_keychain_bundle(&self) -> Option<(&str, &str, &[u8; 16], &[u8])> {
         match &self.bundle {
             StoredBundle::MacosKeychain(bundle) => Some((
@@ -152,6 +157,7 @@ impl ResolvedCandidate {
         }
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn decrypt_device_seed_with_keychain_data(
         &self,
         keychain_data: &[u8],
@@ -559,6 +565,7 @@ fn decode_secret_box(value: &Value) -> Result<([u8; 16], Vec<u8>)> {
     Ok((nonce, ciphertext))
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn zeroize_value(value: &mut Value) {
     match value {
         Value::Binary(bytes) | Value::Text(bytes) => bytes.zeroize(),
