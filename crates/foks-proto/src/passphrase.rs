@@ -425,7 +425,7 @@ pub struct SkmwkList {
 impl std::fmt::Debug for SkmwkList {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("SkwmkList")
+            .debug_struct("SkmwkList")
             .field("uid", &self.uid)
             .field("host", &self.host)
             .field("keys", &"[REDACTED]")
@@ -638,5 +638,18 @@ mod tests {
             },
         };
         assert!(boxed.encoded().is_err());
+    }
+
+    #[test]
+    fn skmwk_list_debug_uses_the_type_name_and_redacts_keys() {
+        let list = SkmwkList {
+            uid: EntityId::from_bytes([ENTITY_USER; 33].to_vec()).unwrap(),
+            host: EntityId::from_bytes([ENTITY_HOST; 33].to_vec()).unwrap(),
+            keys: vec![[7; 32]],
+        };
+        let debug = format!("{list:?}");
+        assert!(debug.starts_with("SkmwkList"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("7, 7"));
     }
 }
