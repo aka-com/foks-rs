@@ -2398,13 +2398,10 @@ fn unrefreshed_store_error(catalog: &CatalogSnapshot, id: &str) -> Option<AgentE
     // Every read of a profile records its inventory, complete or not. A
     // catalog with no record for the profile says nothing about a read, so
     // it is not the unrefreshed case.
-    let Some(inventory) = catalog
+    let inventory = catalog
         .inventory
         .iter()
-        .find(|entry| entry.profile == profile)
-    else {
-        return None;
-    };
+        .find(|entry| entry.profile == profile)?;
     let complete = if kind == "account" {
         inventory.accounts_complete
     } else {

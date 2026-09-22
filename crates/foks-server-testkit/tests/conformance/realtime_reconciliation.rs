@@ -236,8 +236,10 @@ fn timed_out_client_disconnect_releases_poll_capacity() {
     let waiting = std::thread::spawn(move || connection.call(&poll(0, 5000)));
     wait(|| f.server.metrics().active_realtime_polls == 1);
     assert!(waiting.join().unwrap().is_err());
-    wait(|| f.server.metrics().active_realtime_polls == 0);
-    assert_eq!(f.server.metrics().realtime.cancelled_polls - before, 1);
+    wait(|| {
+        let metrics = f.server.metrics();
+        metrics.active_realtime_polls == 0 && metrics.realtime.cancelled_polls - before == 1
+    });
     let mut another = f
         .client
         .foks()

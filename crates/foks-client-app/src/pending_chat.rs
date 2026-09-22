@@ -475,9 +475,10 @@ mod tests {
     }
     #[test]
     fn main_key_reopen_alias_independence_and_conflicting_saves() {
-        let root = tempfile::tempdir().unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = crate::prepare_private_directory(&temporary.path().join("state")).unwrap();
         let key = [42; 32];
-        let mut store = PendingChatStore::open(root.path(), &key).unwrap();
+        let mut store = PendingChatStore::open(&root, &key).unwrap();
         store.save("profile", &binding(), &intent()).unwrap();
         store.save("renamed-route", &binding(), &intent()).unwrap();
         let mut other = intent();
@@ -485,40 +486,42 @@ mod tests {
         assert!(store.save("profile", &binding(), &other).is_err());
         assert!(store.clear(&binding(), &"56".repeat(16)).is_err());
         drop(store);
-        assert!(!root.path().join("client-state.toml").exists());
-        assert!(PendingChatStore::open(root.path(), &[43; 32]).is_err());
-        let store = PendingChatStore::open(root.path(), &key).unwrap();
+        assert!(!root.join("client-state.toml").exists());
+        assert!(PendingChatStore::open(&root, &[43; 32]).is_err());
+        let store = PendingChatStore::open(&root, &key).unwrap();
         assert!(store
             .load(&binding())
             .unwrap()
             .is_some_and(|i| i == intent()));
-        let bytes = std::fs::read(root.path().join(DIRECTORY).join("state.fks")).unwrap();
+        let bytes = std::fs::read(root.join(DIRECTORY).join("state.fks")).unwrap();
         assert!(!bytes
             .windows(intent().text.len())
             .any(|w| w == intent().text.as_bytes()));
     }
     #[test]
     fn migration_receipt_survives_consumption_profile_removal_and_rekey() {
-        let root = tempfile::tempdir().unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = crate::prepare_private_directory(&temporary.path().join("state")).unwrap();
         let key = [42; 32];
         let new_key = [43; 32];
         let source = "ab".repeat(32);
-        let mut store = PendingChatStore::open(root.path(), &key).unwrap();
+        let mut store = PendingChatStore::open(&root, &key).unwrap();
         store
             .import("profile", &binding(), &intent(), &source)
             .unwrap();
         store.clear(&binding(), &intent().submission).unwrap();
         store.forget_profile("profile").unwrap();
         drop(store);
-        let target = tempfile::tempdir().unwrap();
+        let target_temporary = tempfile::tempdir().unwrap();
+        let target = target_temporary.path().join("state");
         rekey(
-            &root.path().join(DIRECTORY),
-            &target.path().join(DIRECTORY),
+            &root.join(DIRECTORY),
+            &target.join(DIRECTORY),
             &key,
             &new_key,
         )
         .unwrap();
-        let mut store = PendingChatStore::open(target.path(), &new_key).unwrap();
+        let mut store = PendingChatStore::open(&target, &new_key).unwrap();
         store
             .import("new-route", &binding(), &intent(), &source)
             .unwrap();
@@ -536,9 +539,10 @@ mod tests {
     }
     #[test]
     fn every_legacy_desktop_slot_fits_even_with_control_characters() {
-        let root = tempfile::tempdir().unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = crate::prepare_private_directory(&temporary.path().join("state")).unwrap();
         let key = [42; 32];
-        let mut store = PendingChatStore::open(root.path(), &key).unwrap();
+        let mut store = PendingChatStore::open(&root, &key).unwrap();
         // Construct one maximum envelope, avoiding repeated publication of it.
         for n in 1..=MAX_PENDING {
             let mut bound = binding();
@@ -552,13 +556,13 @@ mod tests {
         store.persist().unwrap();
         assert!(store.insert("profile", &binding(), &intent()).is_err());
         assert!(
-            std::fs::metadata(root.path().join(DIRECTORY).join("state.fks"))
+            std::fs::metadata(root.join(DIRECTORY).join("state.fks"))
                 .unwrap()
                 .len()
                 < MAX_ENVELOPE
         );
         drop(store);
-        let store = PendingChatStore::open(root.path(), &key).unwrap();
+        let store = PendingChatStore::open(&root, &key).unwrap();
         assert_eq!(store.envelope.pending.len(), MAX_PENDING);
     }
 }

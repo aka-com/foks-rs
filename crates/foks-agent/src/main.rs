@@ -9132,8 +9132,7 @@ mod tests {
                 CancellationToken::new(),
                 true,
             )
-            .err()
-            .expect("no profile is configured, so nothing here can succeed")
+            .expect_err("no profile is configured, so nothing here can succeed")
             .to_string()
         };
         let chunk = |length: u32| Operation::ReadKvChunk {

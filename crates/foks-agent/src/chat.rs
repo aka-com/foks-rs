@@ -43,9 +43,9 @@ fn bounded_chars(text: &str, maximum: usize) -> String {
 fn channel(value: foks_client::ChatChannel) -> ChatChannel {
     ChatChannel {
         id: hex(&value.metadata.id.0),
-        name: SecretString::new(&bounded_chars(value.name.0.as_str(), CHAT_NAME_MAX_CHARS)),
+        name: SecretString::new(bounded_chars(value.name.0.as_str(), CHAT_NAME_MAX_CHARS)),
         description: value.description.map(|description| {
-            SecretString::new(&bounded_chars(
+            SecretString::new(bounded_chars(
                 description.0.as_str(),
                 CHAT_DESCRIPTION_MAX_CHARS,
             ))
@@ -443,6 +443,9 @@ pub(super) fn dispatch(
     )
 }
 
+// The final parameter is an injectable page bound used only by the pagination
+// tests; the preceding arguments deliberately mirror `dispatch`.
+#[allow(clippy::too_many_arguments)]
 fn dispatch_with_page_rows(
     state_dir: &Path,
     credentials: &ClientCredentials,

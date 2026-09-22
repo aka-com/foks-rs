@@ -113,7 +113,7 @@ pub(crate) fn kv_large_success() {
         .iter()
         .find(|entry| entry.name == b"large.bin")
         .unwrap();
-    assert!(entry.large_file_size.is_none());
+    assert_eq!(entry.large_file_size, Some(content.len() as u64));
     drop(session);
     let tree = fixture
         .client
@@ -191,10 +191,14 @@ fn large_file_cutoff_and_chunk_boundaries_stream_exactly() {
             .unwrap();
     }
     let metadata = session.sync().unwrap();
-    assert!(metadata[0]
-        .entries
-        .iter()
-        .all(|entry| entry.large_file_size.is_none()));
+    for (name, size, _) in cases {
+        let entry = metadata[0]
+            .entries
+            .iter()
+            .find(|entry| entry.name == name.as_bytes())
+            .unwrap();
+        assert_eq!(entry.large_file_size, Some(size as u64));
+    }
     drop(session);
     let tree = fixture
         .client
@@ -327,7 +331,10 @@ fn interrupted_upload_is_hidden_across_restart_and_a_fresh_retry_succeeds() {
         .unwrap();
     let metadata = retry.sync().unwrap();
     assert_eq!(metadata[0].entries.len(), 1);
-    assert!(metadata[0].entries[0].large_file_size.is_none());
+    assert_eq!(
+        metadata[0].entries[0].large_file_size,
+        Some(retry_size as u64)
+    );
     drop(retry);
     let tree = reconstructed
         .foks()
