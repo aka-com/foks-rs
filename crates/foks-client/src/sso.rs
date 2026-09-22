@@ -431,7 +431,8 @@ impl FoksClient {
             // Existing Go reauthentication keeps its original wire path. First linkage
             // requires the foks-rs extension and cannot fall back to implicit linking.
             Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
-                code: 211 | 1020, ..
+                code: 210 | 211 | 1020,
+                ..
             })) if flow.purpose == foks_proto::SsoPurpose::Reauthenticate => {}
             Err(error) => return Err(error),
         }
