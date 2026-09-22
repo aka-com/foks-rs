@@ -25,7 +25,7 @@ func TestGoSDKAgainstRustMCP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	connect := func(set string) *mcp.ClientSession {
-		command := exec.Command(cli, "--state-dir", state, "mcp", set, "--profile", "local", "--account", "owner")
+		command := exec.Command(cli, "--state-dir", state, "mcp", set, "--profile", "local", "--account-alias", "owner")
 		command.Stderr = os.Stderr
 		client := mcp.NewClient(&mcp.Implementation{Name: "go-mcp-oracle", Version: "v0.1.9"}, nil)
 		session, err := client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)
