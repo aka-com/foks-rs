@@ -257,7 +257,8 @@ test('the explicit check reads the signed status fresh and states what it read',
     {
       ...snapshot,
       servers: snapshot.servers.map((server) =>
-        server.id === 'acme' && server.compatibility.status === 'required'
+        server.profileName === 'acme' &&
+        server.compatibility.status === 'required'
           ? {
               ...server,
               compatibility: {
@@ -829,7 +830,9 @@ test('server removal deletes its local credentials after exact-name confirmation
   assert.equal(remove.hasAttribute('disabled'), true);
   await ui.act(async () => {
     ui.fireEvent.change(
-      ui.within(dialog).getByPlaceholderText('Type "personal" to confirm'),
+      ui
+        .within(dialog)
+        .getByPlaceholderText('Type server profile name to confirm'),
       { target: { value: 'personal' } },
     );
   });
@@ -843,7 +846,9 @@ test('server removal deletes its local credentials after exact-name confirmation
 
 test('server removal remains available after an identity mismatch', async () => {
   const snapshot = structuredClone(await fixture());
-  const server = snapshot.servers.find((entry) => entry.id === 'personal');
+  const server = snapshot.servers.find(
+    (entry) => entry.profileName === 'personal',
+  );
   assert.ok(server);
   server.trust = {
     status: 'blocked',
@@ -961,7 +966,7 @@ test('duplicate server labels retain addresses without profile-name suffixes', a
   const duplicated = {
     ...snapshot,
     servers: snapshot.servers.map((server, index) =>
-      index < 2 ? { ...server, label: 'Shared' } : server,
+      index < 2 ? { ...server, displayLabel: 'Shared' } : server,
     ),
   };
   const rendered = await renderSettings(duplicated, {

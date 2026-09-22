@@ -17,7 +17,7 @@ import { GoProfileChooser } from './go-profile-chooser';
 interface Props {
   bridge: Bridge;
   onClose: () => void;
-  existingProfile?: Pick<Server, 'id' | 'host_id'>;
+  existingProfile?: Pick<Server, 'profileName' | 'host_id'>;
   onAdded?: (profile: string) => Promise<void>;
   onConnected: (profile: string, alias: string) => Promise<void>;
   onError: (error: unknown) => void;
@@ -96,7 +96,9 @@ export function GoProfileConnectSheet({
   }, [bridge, onError]);
   const choose = (candidate: GoProfileCandidate): void => {
     setSelected(candidate);
-    setChecked(existingProfile ? { profile: existingProfile.id } : null);
+    setChecked(
+      existingProfile ? { profile: existingProfile.profileName } : null,
+    );
     setMethod('pair');
     setPhrase('');
     setServer(candidate.serverHint ?? '');

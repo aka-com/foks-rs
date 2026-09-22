@@ -35,8 +35,8 @@ import {
   profileInventoryComplete,
   readersOf,
   roleRank,
-  serverDisplayName,
-  serverName,
+  serverDisplayLabel,
+  serverDisplayLabelForStore,
   safestRemovalTarget,
   storeReadable,
   storeAvailability,
@@ -61,14 +61,20 @@ function readerCount(snapshot: AgentSnapshot, key: string): number {
   return readers.length;
 }
 
-test('server display names prefer labels and fall back to profile names', () => {
+test('server display labels prefer labels and fall back to endpoints', () => {
   assert.equal(
-    serverDisplayName({ name: 'setup-foks-app-4430', label: 'FOKS' }),
+    serverDisplayLabel({
+      configuredEndpoint: 'setup.foks.app:4430',
+      displayLabel: 'FOKS',
+    }),
     'FOKS',
   );
   assert.equal(
-    serverDisplayName({ name: 'setup-foks-app-4430', label: null }),
-    'setup-foks-app-4430',
+    serverDisplayLabel({
+      configuredEndpoint: 'setup.foks.app:4430',
+      displayLabel: null,
+    }),
+    'setup.foks.app:4430',
   );
 });
 
@@ -76,16 +82,16 @@ test('duplicate server labels include the profile name in store contexts', () =>
   const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server, index) =>
-      index < 2 ? { ...server, label: 'Shared' } : server,
+      index < 2 ? { ...server, displayLabel: 'Shared' } : server,
     ),
   };
   assert.equal(
-    serverName(snapshot, { server: 'personal' }),
-    'Shared · foks.example.net',
+    serverDisplayLabelForStore(snapshot, { server: 'personal' }),
+    'Shared · personal',
   );
   assert.equal(
-    serverName(snapshot, { server: 'acme' }),
-    'Shared · foks.acme-corp.com',
+    serverDisplayLabelForStore(snapshot, { server: 'acme' }),
+    'Shared · acme',
   );
 });
 /* ------------------------------------------------------------------ roles -- */
@@ -430,7 +436,7 @@ test('store marks fall back to the hashed color once the palette is spent', () =
 /* ------------------------------------------------------------------ lease -- */
 
 test('fixture initializes with fresh lease state', () => {
-  const acme = FIXTURE.servers.find((server) => server.id === 'acme');
+  const acme = FIXTURE.servers.find((server) => server.profileName === 'acme');
   assert.equal(acme?.compatibility.status, 'required');
   assert.equal(acme?.trust.status, 'verified');
   assert.equal(leaseLapsed(FIXTURE, 'team:eng'), false);
@@ -511,7 +517,7 @@ test('storeHeadingDescription joins a lapsed lease or unverified server with its
   const unverified = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'acme'
+      server.profileName === 'acme'
         ? { ...server, trust: { status: 'unprobed' as const } }
         : server,
     ),
@@ -551,7 +557,7 @@ test('write eligibility uses the same availability clock as dispatch', () => {
     ...FIXTURE,
     observedExpiredLeases: [],
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'acme'
+      server.profileName === 'acme'
         ? {
             ...server,
             compatibility: {
@@ -803,7 +809,7 @@ test('a never-probed server is a stopped store, not a normal one', () => {
   const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === store.server
+      server.profileName === store.server
         ? { ...server, trust: { status: 'unprobed' as const } }
         : server,
     ),
@@ -943,11 +949,15 @@ test('every fixture federated membership names a profile, not an address', () =>
   // Verify that remote_profile references a known server profile ID rather than an address.
   for (const entry of FIXTURE.federation) {
     assert.ok(
-      FIXTURE.servers.some((server) => server.id === entry.remote_profile),
+      FIXTURE.servers.some(
+        (server) => server.profileName === entry.remote_profile,
+      ),
       `${entry.remote_profile} is a profile in the fixture`,
     );
     assert.ok(
-      !FIXTURE.servers.some((server) => server.name === entry.remote_profile),
+      !FIXTURE.servers.some(
+        (server) => server.configuredEndpoint === entry.remote_profile,
+      ),
       `${entry.remote_profile} is not a server address`,
     );
   }

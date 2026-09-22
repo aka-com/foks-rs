@@ -401,9 +401,7 @@ test('cancelling the file picker leaves the document draft open', async () => {
   );
 
   await ui.waitFor(() =>
-    assert.ok(
-      rendered.getByRole('button', { name: 'Choose file and create' }),
-    ),
+    assert.ok(rendered.getByRole('button', { name: 'Choose file and create' })),
   );
   assert.equal(uploads, 0);
   assert.ok(rendered.getByRole('dialog', { name: 'New document' }));
@@ -434,9 +432,7 @@ test('discarding a selected-file draft releases its native authorization', async
 
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Cancel' }));
   assert.deepEqual(released, []);
-  ui.fireEvent.click(
-    await rendered.findByRole('button', { name: 'Discard' }),
-  );
+  ui.fireEvent.click(await rendered.findByRole('button', { name: 'Discard' }));
   await ui.waitFor(() => assert.deepEqual(released, [picked]));
 });
 

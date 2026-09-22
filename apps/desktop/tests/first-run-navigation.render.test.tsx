@@ -83,7 +83,7 @@ async function harness() {
   const complete = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'personal'
+      server.profileName === 'personal'
         ? { ...server, host_id: profile.hostId }
         : server,
     ),

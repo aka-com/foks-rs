@@ -18,23 +18,29 @@ test('concurrent profile publication merges only its own scope into the newest b
   const earlier = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === a.id ? { ...server, label: 'A refreshed' } : server,
+      server.profileName === a.profileName
+        ? { ...server, displayLabel: 'A refreshed' }
+        : server,
     ),
   };
   const later = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === b.id ? { ...server, label: 'B refreshed' } : server,
+      server.profileName === b.profileName
+        ? { ...server, displayLabel: 'B refreshed' }
+        : server,
     ),
   };
-  const result = mergeProfileSnapshot(later, earlier, a.id);
+  const result = mergeProfileSnapshot(later, earlier, a.profileName);
   assert.equal(result.servers.length, FIXTURE.servers.length);
   assert.equal(
-    result.servers.find((server) => server.id === a.id)?.label,
+    result.servers.find((server) => server.profileName === a.profileName)
+      ?.displayLabel,
     'A refreshed',
   );
   assert.equal(
-    result.servers.find((server) => server.id === b.id)?.label,
+    result.servers.find((server) => server.profileName === b.profileName)
+      ?.displayLabel,
     'B refreshed',
   );
   assert.equal(result.stores.length, FIXTURE.stores.length);
@@ -66,10 +72,15 @@ test('a whole-read failure preserves successful partial observations and prior s
       10,
     ),
   };
-  const failedProfile = failCatalogRefresh(base, [failed.id], scoped, 20);
+  const failedProfile = failCatalogRefresh(
+    base,
+    [failed.profileName],
+    scoped,
+    20,
+  );
   const started = markCatalogRefresh(failedProfile, undefined, 30);
   assert.strictEqual(
-    started.catalogFreshness?.profiles[failed.id].error,
+    started.catalogFreshness?.profiles[failed.profileName].error,
     scoped,
   );
   const pending = projectCatalogFreshness(
@@ -79,14 +90,14 @@ test('a whole-read failure preserves successful partial observations and prior s
     true,
     30,
   );
-  assert.strictEqual(pending.profiles[failed.id].error, scoped);
+  assert.strictEqual(pending.profiles[failed.profileName].error, scoped);
   const partial = {
     ...started,
     catalogFreshness: {
       ...started.catalogFreshness,
       profiles: {
         ...started.catalogFreshness.profiles,
-        [healthy.id]: {
+        [healthy.profileName]: {
           refreshing: false,
           lastAttemptAt: 30,
           lastSuccessAt: 30,
@@ -98,11 +109,11 @@ test('a whole-read failure preserves successful partial observations and prior s
   assert.strictEqual(terminal.catalogFreshness?.attempt?.error, root);
   assert.equal(terminal.catalogFreshness?.attempt?.lastSuccessAt, 10);
   assert.strictEqual(
-    terminal.catalogFreshness?.profiles[healthy.id],
-    partial.catalogFreshness.profiles[healthy.id],
+    terminal.catalogFreshness?.profiles[healthy.profileName],
+    partial.catalogFreshness.profiles[healthy.profileName],
   );
   assert.strictEqual(
-    terminal.catalogFreshness?.profiles[failed.id].error,
+    terminal.catalogFreshness?.profiles[failed.profileName].error,
     scoped,
   );
   assert.ok(
@@ -113,13 +124,18 @@ test('a whole-read failure preserves successful partial observations and prior s
   assert.strictEqual(terminal.notifications, base.notifications);
   assert.strictEqual(terminal.storeInventory, base.storeInventory);
   assert.strictEqual(terminal.items, base.items);
-  const scopedSuccess = mergeProfileSnapshot(terminal, base, healthy.id);
+  const scopedSuccess = mergeProfileSnapshot(
+    terminal,
+    base,
+    healthy.profileName,
+  );
   assert.strictEqual(
     scopedSuccess.catalogFreshness?.attempt,
     terminal.catalogFreshness?.attempt,
   );
   assert.strictEqual(
-    markCatalogRefresh(terminal, [healthy.id], 32).catalogFreshness?.attempt,
+    markCatalogRefresh(terminal, [healthy.profileName], 32).catalogFreshness
+      ?.attempt,
     terminal.catalogFreshness?.attempt,
   );
 });
@@ -246,7 +262,9 @@ test('only the profiles whose stores or accounts changed are named', () => {
   const relabelled = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === a ? { ...server, label: 'Renamed' } : server,
+      server.profileName === a
+        ? { ...server, displayLabel: 'Renamed' }
+        : server,
     ),
   };
   assert.deepEqual(

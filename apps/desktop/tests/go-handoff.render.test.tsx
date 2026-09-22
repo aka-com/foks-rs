@@ -708,10 +708,9 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
     servers: [
       ...FIXTURE.servers,
       {
-        id: profile,
-        name: 'foks.app',
-        label: null,
-        configuredProbe: 'foks.app',
+        profileName: profile,
+        displayLabel: null,
+        configuredEndpoint: 'foks.app',
         host_id: hostId,
         chain: 1,
         epoch: 1,
@@ -1195,8 +1194,8 @@ test('identity loading waits out a native mutation instead of failing setup', as
     servers: [
       {
         ...FIXTURE.servers[0],
-        id: profile.profile,
-        name: profile.canonicalName,
+        profileName: profile.profile,
+        configuredEndpoint: profile.canonicalName,
         host_id: profile.hostId,
         accounts: ['cli-owner'],
       },
@@ -1328,9 +1327,8 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
       ...FIXTURE.servers,
       {
         ...FIXTURE.servers[0],
-        id: 'cli-local',
-        name: 'CLI server',
-        label: null,
+        profileName: 'cli-local',
+        displayLabel: 'CLI server',
         host_id: candidate.hostId,
         accounts: [],
       },
@@ -1477,7 +1475,7 @@ test('CLI pairing resumes without entering a new device name', async () => {
       portalRoot: document.getElementById('overlays')!,
       children: createElement(GoProfileConnectSheet, {
         bridge,
-        existingProfile: { id: 'local', host_id: candidate.hostId },
+        existingProfile: { profileName: 'local', host_id: candidate.hostId },
         onClose: () => {},
         onConnected: async () => {},
         onError: () => {},

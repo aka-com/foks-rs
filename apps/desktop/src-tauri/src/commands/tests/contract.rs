@@ -473,7 +473,7 @@ fn shared_compatibility_contract_validates_grants_and_preserves_service_support(
     }
     for field in fixture["serverStatusRequiredFields"].as_array().unwrap() {
         let key = match field.as_str().unwrap() {
-            "configuredProbe" => "configured_probe",
+            "configuredEndpoint" => "configured_probe",
             "chatSupported" => "chat_supported",
             key => key,
         };
@@ -509,10 +509,9 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         fixture["profileReconciliation"]
     );
     let configured_server = ServerDto {
-        id: "work".to_owned(),
-        name: "work".to_owned(),
-        label: Some("Work".to_owned()),
-        configured_probe: "foks.example".to_owned(),
+        profile_name: "work".to_owned(),
+        display_label: Some("Work".to_owned()),
+        configured_endpoint: "foks.example".to_owned(),
         accounts: vec!["personal".to_owned()],
     };
     assert_eq!(
@@ -823,7 +822,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
     );
     let status = ServerStatusSnapshotDto {
         profile: "work".to_owned(),
-        configured_probe: "foks.example".to_owned(),
+        configured_endpoint: "foks.example".to_owned(),
         host: Some(StoredHostDto {
             lookup_name: "foks.example".to_owned(),
             canonical_name: "foks.example".to_owned(),

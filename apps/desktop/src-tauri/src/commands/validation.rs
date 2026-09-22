@@ -310,11 +310,11 @@ pub(super) fn backup_phrase(value: String) -> Result<SecretString, AgentError> {
 }
 
 pub(super) fn exact_profile_confirmation(
-    profile: &str,
-    confirmation: &str,
+    profile_name: &str,
+    confirmed_profile_name: &str,
     action: &str,
 ) -> Result<(), AgentError> {
-    if confirmation == profile {
+    if confirmed_profile_name == profile_name {
         Ok(())
     } else {
         Err(invalid_request(format!(

@@ -36,7 +36,7 @@ import {
   readersOf,
   serverBlocked,
   serverLeaseUnavailable,
-  serverName,
+  serverDisplayLabelForStore,
   storeDescription,
   storeNavigationOrder,
   storeAvailability,
@@ -281,7 +281,7 @@ function storeOption(snapshot: AgentSnapshot, store: Store): CardOption {
     detail:
       store.kind === 'account'
         ? `Personal vault · ${description}`
-        : `Team vault · ${description} · ${serverName(snapshot, store)}`,
+        : `Team vault · ${description} · ${serverDisplayLabelForStore(snapshot, store)}`,
     off: !canCreateInStore(snapshot, store.id),
   };
 }

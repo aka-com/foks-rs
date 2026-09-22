@@ -9,8 +9,8 @@ import {
   groupDetailFailure,
   partiesOf,
   roleRank,
-  serverDisplayName,
-  serverName,
+  serverDisplayLabel,
+  serverDisplayLabelForStore,
   storeOperationAvailability,
 } from '../model';
 import type {
@@ -56,7 +56,7 @@ export function discoveryContext(
   if (account.alias !== store.account || account.server !== store.server)
     return null;
   const server = snapshot.servers.find(
-    (candidate) => candidate.id === store.server,
+    (candidate) => candidate.profileName === store.server,
   );
   if (!server) return null;
   return {
@@ -69,10 +69,10 @@ export function discoveryContext(
 
 /** One accessible name per button, since several read "Check for teams". */
 export const checkLabel = (context: DiscoveryContext): string =>
-  `Check for teams accessible to ${context.account.username} on ${serverDisplayName(context.server)}`;
+  `Check for teams accessible to ${context.account.username} on ${serverDisplayLabel(context.server)}`;
 
 export const unavailableTitle = (context: DiscoveryContext): string =>
-  `Restore access to ${serverDisplayName(context.server)} before checking for teams.`;
+  `Restore access to ${serverDisplayLabel(context.server)} before checking for teams.`;
 
 /**
  * Why an invitation cannot be written: the message names the server the
@@ -101,7 +101,7 @@ export function manageReason(
       source === 'roster' ? 'teams' : 'federation',
     ).available
   )
-    return `Restore access to ${serverName(snapshot, store)} first.`;
+    return `Restore access to ${serverDisplayLabelForStore(snapshot, store)} first.`;
   if (groupDetailFailure(snapshot, store.id, source))
     return source === 'roster'
       ? 'The roster could not be read. Refresh before making changes.'

@@ -284,7 +284,9 @@ export function projectCatalogFreshness(
       const inventory = snapshot.profileInventory.find(
         (state) => state.profile === profile,
       );
-      const server = snapshot.servers.find((server) => server.id === profile);
+      const server = snapshot.servers.find(
+        (server) => server.profileName === profile,
+      );
       const failure = response.failures.find(
         (failure) => failure.profile === profile,
       );
@@ -332,7 +334,9 @@ export function mergeProfileSnapshot(
   const inScope = (entry: { store: string }) => scopedIds.has(entry.store);
   projected = {
     ...projected,
-    servers: projected.servers.filter((server) => server.id === profile),
+    servers: projected.servers.filter(
+      (server) => server.profileName === profile,
+    ),
     accounts: projected.accounts.filter(
       (account) => account.server === profile,
     ),
@@ -378,7 +382,7 @@ export function mergeProfileSnapshot(
     ...base,
     agent: projected.agent,
     servers: [
-      ...base.servers.filter((entry) => entry.id !== profile),
+      ...base.servers.filter((entry) => entry.profileName !== profile),
       ...projected.servers,
     ],
     accounts: [

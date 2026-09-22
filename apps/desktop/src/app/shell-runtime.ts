@@ -32,7 +32,9 @@ import type { MaintenanceOwnership } from './maintenance-ownership';
  */
 function principalIdentity(snapshot: AgentSnapshot): string {
   return JSON.stringify([
-    snapshot.servers.map((server) => [server.id, server.host_id]).sort(),
+    snapshot.servers
+      .map((server) => [server.profileName, server.host_id])
+      .sort(),
     snapshot.accounts
       .map((account) => [account.store, account.server, account.username])
       .sort(),

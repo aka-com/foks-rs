@@ -115,7 +115,7 @@ async function metadataOf(
       profiles.map(async (profile) => ({
         profile,
         label: null,
-        configuredProbe: profile,
+        configuredEndpoint: profile,
         status: await bridge.describeServerStatus(profile),
         error: null,
       })),

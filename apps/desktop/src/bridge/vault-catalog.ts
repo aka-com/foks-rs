@@ -60,7 +60,7 @@ export interface CatalogDto {
     profiles: {
       profile: string;
       label: string | null;
-      configuredProbe: string;
+      configuredEndpoint: string;
       status: ServerStatusSnapshot | null;
       error: CommandError | null;
     }[];
@@ -282,9 +282,9 @@ export function decodeCatalog(value: unknown): CatalogDto {
                 return {
                   profile: id,
                   label: nullableString(profile.label, `${at}.label`),
-                  configuredProbe: string(
-                    profile.configuredProbe,
-                    `${at}.configuredProbe`,
+                  configuredEndpoint: string(
+                    profile.configuredEndpoint,
+                    `${at}.configuredEndpoint`,
                   ),
                   status,
                   error:

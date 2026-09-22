@@ -27,7 +27,9 @@ test('invitation is the only bridge method that queues itself', () => {
     .filter((path) => !/profile-work\.ts$|index\.ts$|snapshot/.test(path))
     .flatMap((path) => {
       const text = readFileSync(path, 'utf8');
-      const matches = text.match(/(\w+):\s*\([^)]*\)\s*=>\s*enqueueProfileWork\(/g);
+      const matches = text.match(
+        /(\w+):\s*\([^)]*\)\s*=>\s*enqueueProfileWork\(/g,
+      );
       return (matches ?? []).map((match) => match.split(':')[0]);
     });
   assert.deepEqual(owners, ['invitation']);
@@ -36,7 +38,8 @@ test('invitation is the only bridge method that queues itself', () => {
 test('no caller queues a bridge method that queues itself', () => {
   const offenders = files(source).flatMap((path) => {
     const text = readFileSync(path, 'utf8');
-    const pattern = /(enqueue|schedule)ProfileWork\([\s\S]{0,400}?\.invitation\(/g;
+    const pattern =
+      /(enqueue|schedule)ProfileWork\([\s\S]{0,400}?\.invitation\(/g;
     return text.match(pattern) ? [path.slice(source.length + 1)] : [];
   });
   assert.deepEqual(offenders, []);

@@ -141,7 +141,7 @@ test('completed startup catalog yields to a later shell refresh', async () => {
         full.profiles.map(async (profile) => ({
           profile,
           label: null,
-          configuredProbe: profile,
+          configuredEndpoint: profile,
           status: await base.describeServerStatus(profile),
           error: null,
         })),

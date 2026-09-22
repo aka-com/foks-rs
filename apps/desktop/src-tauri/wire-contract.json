@@ -1215,24 +1215,23 @@
     "epoch": 12
   },
   "configuredServer": {
-    "id": "work",
-    "name": "work",
-    "label": "Work",
-    "configured_probe": "foks.example",
+    "profile_name": "work",
+    "display_label": "Work",
+    "configured_endpoint": "foks.example",
     "accounts": [
       "personal"
     ]
   },
   "serverStatusRequiredFields": [
     "profile",
-    "configuredProbe",
+    "configuredEndpoint",
     "host",
     "compatibility",
     "chatSupported"
   ],
   "serverStatus": {
     "profile": "work",
-    "configuredProbe": "foks.example",
+    "configuredEndpoint": "foks.example",
     "host": {
       "lookupName": "foks.example",
       "canonicalName": "foks.example",
@@ -1264,7 +1263,7 @@
     "identity": {
       "status": "connected",
       "hostId": "020202020202020202020202020202020202020202020202020202020202020202",
-      "configuredProbe": "foks.example:4430"
+      "configuredEndpoint": "foks.example:4430"
     },
     "compatibility": {
       "status": "renewed"

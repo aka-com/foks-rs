@@ -75,7 +75,7 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
   const agentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'acme'
+      server.profileName === 'acme'
         ? {
             ...server,
             compatibility: {
@@ -153,7 +153,7 @@ test('expiry on one profile preserves a healthy neighboring editor draft', async
   const agentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'acme'
+      server.profileName === 'acme'
         ? {
             ...server,
             compatibility: {
@@ -209,7 +209,7 @@ test('foreground retries authenticated reconciliation after an expiry refresh fa
   const agentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'acme'
+      server.profileName === 'acme'
         ? {
             ...server,
             compatibility: {
@@ -303,7 +303,7 @@ test('expiry during native maintenance waits for lifecycle restoration to refres
   const agentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'acme'
+      server.profileName === 'acme'
         ? {
             ...server,
             compatibility: {
@@ -385,7 +385,7 @@ test('a forced expiry refresh waits for the in-flight foreground load', async ()
   const agentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'acme'
+      server.profileName === 'acme'
         ? {
             ...server,
             compatibility: {

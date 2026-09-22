@@ -310,10 +310,10 @@ test('recovery keeps the shell blocked through partial catalog publication', asy
           ),
           profiles: await Promise.all(
             (await base.listServers()).map(async (server) => ({
-              profile: server.id,
-              label: server.label,
-              configuredProbe: server.configuredProbe,
-              status: await base.describeServerStatus(server.id),
+              profile: server.profileName,
+              label: server.displayLabel,
+              configuredEndpoint: server.configuredEndpoint,
+              status: await base.describeServerStatus(server.profileName),
               error: null,
             })),
           ),

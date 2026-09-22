@@ -17,7 +17,7 @@ function withGrants(
   return {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === team.server
+      server.profileName === team.server
         ? {
             ...server,
             compatibility: { status: 'required', expiresAt: 200, capabilities },
@@ -73,7 +73,7 @@ test('team vaults require both teams and KV, personal vaults only KV', () => {
 test('incompatible artifacts never grant access even with a future expiry', () => {
   const snapshot = withGrants(['chat', 'kv']);
   snapshot.servers = snapshot.servers.map((server) =>
-    server.id === team.server
+    server.profileName === team.server
       ? {
           ...server,
           compatibility: {
@@ -112,7 +112,7 @@ test('a scoped KV restriction does not become a chat restriction or a trust fail
     fatal: false,
   };
   snapshot.servers = snapshot.servers.map((server) =>
-    server.id === team.server
+    server.profileName === team.server
       ? {
           ...server,
           restrictions: [
@@ -131,7 +131,9 @@ test('unknown and unsupported chat service facts are distinct from permission', 
     const snapshot = {
       ...granted,
       servers: granted.servers.map((server) =>
-        server.id === team.server ? { ...server, services: { chat } } : server,
+        server.profileName === team.server
+          ? { ...server, services: { chat } }
+          : server,
       ),
     };
     assert.deepEqual(storeOperationAvailability(snapshot, team, 'chat', now), {
@@ -181,7 +183,7 @@ test('an explicit store schema restriction outranks an unknown server observatio
     fatal: true,
   };
   snapshot.servers = snapshot.servers.map((server) =>
-    server.id === team.server
+    server.profileName === team.server
       ? {
           ...server,
           trust: { status: 'unknown' },
@@ -214,7 +216,7 @@ test('schema, import, and trust restrictions remain common prerequisites', () =>
   ] as const) {
     const snapshot = withGrants(['chat', 'device-administration']);
     snapshot.servers = snapshot.servers.map((server) =>
-      server.id === team.server
+      server.profileName === team.server
         ? { ...server, restrictions: [{ kind, error }] }
         : server,
     );

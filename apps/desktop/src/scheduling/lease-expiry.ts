@@ -32,23 +32,23 @@ export function reconcileObservedLeaseExpiries(
   const next: ObservedLeaseExpiry[] = [];
   for (const server of servers) {
     const expiry = server.compatibility;
-    const observed = old.get(server.id);
+    const observed = old.get(server.profileName);
     if (expiry.status === 'not-required') continue;
     if (expiry.status !== 'required') {
       if (observed !== undefined)
-        next.push({ profile: server.id, expiresAt: observed });
+        next.push({ profile: server.profileName, expiresAt: observed });
       continue;
     }
     if (expiry.expiresAt <= nowSeconds) {
       next.push({
-        profile: server.id,
+        profile: server.profileName,
         expiresAt: Math.max(observed ?? expiry.expiresAt, expiry.expiresAt),
       });
       continue;
     }
     // Only a newer authenticated lease can clear an observed expiry.
     if (observed !== undefined && expiry.expiresAt <= observed)
-      next.push({ profile: server.id, expiresAt: observed });
+      next.push({ profile: server.profileName, expiresAt: observed });
   }
   return next.sort((left, right) => left.profile.localeCompare(right.profile));
 }
@@ -140,7 +140,7 @@ export class LeaseExpiryCoordinator {
         return compatibility.status === 'required' &&
           !next.some(
             (entry) =>
-              entry.profile === server.id &&
+              entry.profile === server.profileName &&
               entry.expiresAt >= compatibility.expiresAt,
           )
           ? [compatibility.expiresAt]

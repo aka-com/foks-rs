@@ -38,7 +38,10 @@ async function setup(label: string | null) {
   )) as typeof import('../kit/overlay-primitives');
   const snapshot = {
     ...FIXTURE,
-    servers: FIXTURE.servers.map((server) => ({ ...server, label })),
+    servers: FIXTURE.servers.map((server) => ({
+      ...server,
+      displayLabel: label,
+    })),
   };
   const bridge = mockBridge(snapshot);
   const wrap = (children: ReactNode) =>
@@ -62,7 +65,7 @@ for (const label of ['Local server alias', null]) {
     const { crumbTrail } = (await vite.ssrLoadModule(
       '/src/shell/topbar.tsx',
     )) as typeof import('../src/shell/topbar');
-    const profile = h.snapshot.servers[0].id;
+    const profile = h.snapshot.servers[0].profileName;
     const props = {
       snapshot: h.snapshot,
       bridge: h.bridge,

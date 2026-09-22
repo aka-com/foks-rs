@@ -7,8 +7,8 @@
  */
 
 import { storeOperationAvailability, storeDescription } from './lease';
-import { serverName } from './server-name';
-export { serverName } from './server-name';
+import { serverDisplayLabelForStore } from './server-name';
+export { serverDisplayLabelForStore } from './server-name';
 import type { AccountStore, AgentSnapshot } from './types';
 import type { StoreOperation } from './lease';
 
@@ -35,7 +35,7 @@ export function accountSubtitle(
   snapshot: AgentSnapshot,
   store: AccountStore,
 ): string {
-  return `${usernameOf(snapshot, store) ?? store.account} on ${serverName(
+  return `${usernameOf(snapshot, store) ?? store.account} on ${serverDisplayLabelForStore(
     snapshot,
     store,
   )}`;

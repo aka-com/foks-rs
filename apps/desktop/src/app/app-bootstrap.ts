@@ -248,7 +248,7 @@ export function useAppBootstrap(
               appInfo.managedProfile &&
               snapshot.servers.some(
                 (server) =>
-                  server.id === appInfo.managedProfile &&
+                  server.profileName === appInfo.managedProfile &&
                   serverAvailability(snapshot, server).available,
               )
                 ? appInfo.managedProfile

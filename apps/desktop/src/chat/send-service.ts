@@ -349,8 +349,8 @@ export class ChatSendService {
           entry?.scope && team.scope && !sameScope(entry.scope, team.scope);
         const rejected =
           entry?.state === 'blocked' ||
-          this.snapshot.servers.find((s) => s.id === team.profile)?.trust
-            .status === 'blocked';
+          this.snapshot.servers.find((s) => s.profileName === team.profile)
+            ?.trust.status === 'blocked';
         if (removed || replaced || rejected) {
           team.epoch++;
           team.client.dispose();

@@ -14,8 +14,8 @@ import {
   storeOf,
 } from './readers';
 import { admits } from './roles';
-import { serverName } from './server-name';
-import { serverDisplayName, PROTOCOL_CAPABILITIES } from './types';
+import { serverDisplayLabelForStore } from './server-name';
+import { serverDisplayLabel, PROTOCOL_CAPABILITIES } from './types';
 import type {
   AccountStore,
   CompatibilityLease,
@@ -103,7 +103,7 @@ export function serverOf(
   ref: StoreRef,
 ): Server | undefined {
   const store = storeOf(snapshot, ref);
-  return store && snapshot.servers.find((s) => s.id === store.server);
+  return store && snapshot.servers.find((s) => s.profileName === store.server);
 }
 
 /** Derives server access from independent facts at the supplied clock instant. */
@@ -205,7 +205,8 @@ function serverOperationalAvailability(
       now >= lease.expiresAt ||
       observedExpiredLeases.some(
         (entry) =>
-          entry.profile === server.id && entry.expiresAt >= lease.expiresAt,
+          entry.profile === server.profileName &&
+          entry.expiresAt >= lease.expiresAt,
       )
     )
       return { available: false, reason: 'check-in-expired' };
@@ -267,7 +268,7 @@ export function storeOperationAvailability(
   if (snapshot.agent.state !== 'ready' || options.agentReady === false)
     return { available: false, reason: 'agent-unavailable' };
   const server = snapshot.servers.find(
-    (candidate) => candidate.id === store.server,
+    (candidate) => candidate.profileName === store.server,
   );
   if (!server) return { available: false, reason: 'vault-unavailable' };
   const inventory = snapshot.storeInventory.find(
@@ -456,7 +457,7 @@ export function teamCaption(
       ? []
       : [store.team_kind === 'named' ? 'Named team' : 'Ad-hoc share'];
   if (options.server !== false) {
-    parts.push(serverName(snapshot, store));
+    parts.push(serverDisplayLabelForStore(snapshot, store));
   }
   if (
     options.shared ??
@@ -500,7 +501,7 @@ export function storeDescription(
   if (state === 'vault-unavailable') return 'Vault unavailable';
   if (state === 'agent-unavailable') return 'Service unavailable';
   if (store.kind === 'account') {
-    return serverName(snapshot, store);
+    return serverDisplayLabelForStore(snapshot, store);
   }
   if (groupDetailFailure(snapshot, store.id, 'roster'))
     return 'Roster unavailable';
@@ -527,7 +528,9 @@ export function storeHeadingDescription(
 ): string {
   const foreign =
     Boolean(activeAccount) && store.server !== activeAccount!.server;
-  const server = foreign ? serverName(snapshot, store) : undefined;
+  const server = foreign
+    ? serverDisplayLabelForStore(snapshot, store)
+    : undefined;
   if (storeDescriptionState(snapshot, store) !== 'normal') {
     if (!server) return '';
     return `${storeDescription(snapshot, store)} · ${server}`;
@@ -691,7 +694,7 @@ export function notesNow(snapshot: AgentSnapshot): Notification[] {
   return snapshot.notifications.filter((note) => {
     if (note.id !== 'lease-acme') return true;
     const server = snapshot.servers.find(
-      (entry) => entry.id === LEASED_SERVER_ID,
+      (entry) => entry.profileName === LEASED_SERVER_ID,
     );
     if (!server) return false;
     const availability = serverAvailability(snapshot, server);
@@ -732,7 +735,7 @@ export function settingsAlertSummary(
     !availability.available && availability.reason === 'check-in-expired'
       ? 'check-in expired'
       : 'not verified';
-  return { description: `${serverDisplayName(server)}: ${reason}` };
+  return { description: `${serverDisplayLabel(server)}: ${reason}` };
 }
 
 /**
@@ -762,7 +765,7 @@ export function applyLease(
     ...snapshot,
     observedExpiredLeases,
     servers: snapshot.servers.map((server) =>
-      server.id !== serverId
+      server.profileName !== serverId
         ? server
         : {
             ...server,

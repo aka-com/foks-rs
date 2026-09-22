@@ -35,7 +35,7 @@ import type { NavigationGuard } from '../location';
 import { useNavigationGuard, useTabSheetState } from '../navigation-guard';
 import type { ChatScope } from '../chat-contract';
 import { sameScope } from '../chat/client';
-import { chatAvailable, serverDisplayName, storeDescription } from '../model';
+import { chatAvailable, serverDisplayLabel, storeDescription } from '../model';
 import type {
   AgentSnapshot,
   AvailabilityOptions,
@@ -273,10 +273,10 @@ export function NewChatSheet({
           ).length
         : null;
       const serverEntry = snapshot.servers.find(
-        (candidate) => candidate.id === store.server,
+        (candidate) => candidate.profileName === store.server,
       );
       const server = serverEntry
-        ? serverDisplayName(serverEntry)
+        ? serverDisplayLabel(serverEntry)
         : store.server;
       return {
         store,

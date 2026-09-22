@@ -28,9 +28,9 @@ export function ProfileKeys({
   } | null>(null);
   const access = useWorkflowAccess(snapshot);
   const available = access.availability('yubi-list', {
-    profile: server.id,
+    profile: server.profileName,
   }).available;
-  const query = available ? deviceCache.enrollments(server.id) : null;
+  const query = available ? deviceCache.enrollments(server.profileName) : null;
   const state = useMetadataQuery(query, { onError });
   const entries = state.data ?? [];
   const failed =
@@ -65,12 +65,12 @@ export function ProfileKeys({
                   entry.state === 'pending' ? (
                     <Button
                       {...access.props('yubi-resume', {
-                        profile: server.id,
+                        profile: server.profileName,
                         account: entry.alias,
                       })}
                       onClick={() =>
                         setAction({
-                          profile: server.id,
+                          profile: server.profileName,
                           alias: entry.alias,
                           kind: 'resume-enrollment',
                         })
@@ -82,12 +82,12 @@ export function ProfileKeys({
                     <>
                       <Button
                         {...access.props('yubi-pin', {
-                          profile: server.id,
+                          profile: server.profileName,
                           account: entry.alias,
                         })}
                         onClick={() =>
                           setAction({
-                            profile: server.id,
+                            profile: server.profileName,
                             alias: entry.alias,
                             kind: 'change-pin',
                           })
@@ -97,12 +97,12 @@ export function ProfileKeys({
                       </Button>
                       <Button
                         {...access.props('yubi-pin', {
-                          profile: server.id,
+                          profile: server.profileName,
                           account: entry.alias,
                         })}
                         onClick={() =>
                           setAction({
-                            profile: server.id,
+                            profile: server.profileName,
                             alias: entry.alias,
                             kind: 'unblock',
                           })
@@ -112,12 +112,12 @@ export function ProfileKeys({
                       </Button>
                       <Button
                         {...access.props('yubi-pin', {
-                          profile: server.id,
+                          profile: server.profileName,
                           account: entry.alias,
                         })}
                         onClick={() =>
                           setAction({
-                            profile: server.id,
+                            profile: server.profileName,
                             alias: entry.alias,
                             kind: 'change-puk',
                           })
@@ -141,18 +141,21 @@ export function ProfileKeys({
             query ? () => void query.load().catch(() => undefined) : undefined
           }
         />
-        {action && available && action.profile === server.id && (
+        {action && available && action.profile === server.profileName && (
           <YubiActionSheet
             bridge={bridge}
-            profile={server.id}
+            profile={server.profileName}
             alias={action.alias}
             action={action.kind}
             onClose={() => setAction(null)}
             onError={onError}
             onDone={async () => {
               setAction(null);
-              deviceCache.invalidateEnrollments(server.id);
-              deviceCache.repository.invalidate(['account-devices', server.id]);
+              deviceCache.invalidateEnrollments(server.profileName);
+              deviceCache.repository.invalidate([
+                'account-devices',
+                server.profileName,
+              ]);
               // Read errors are reported by the subscription after the action has
               // already succeeded, and never turn it into a failed write.
               await query?.load().catch(() => undefined);

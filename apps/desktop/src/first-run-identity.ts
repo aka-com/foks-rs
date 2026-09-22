@@ -33,7 +33,7 @@ export function provisionedIdentityProblem(
   if (snapshot.profileInventoryStatus !== 'complete')
     return 'inventory-unavailable';
   const servers = snapshot.servers.filter(
-    (server) => server.id === profile.profile,
+    (server) => server.profileName === profile.profile,
   );
   if (servers.length === 0) return 'profile-missing';
   if (servers.length !== 1) return 'duplicate-records';
@@ -63,7 +63,7 @@ export function resolveProvisionedIdentity(
   if (!pending || !profile) return checkpoint;
   if (provisionedIdentityProblem(snapshot, checkpoint)) return checkpoint;
   const servers = snapshot.servers.filter(
-    (server) => server.id === profile.profile,
+    (server) => server.profileName === profile.profile,
   );
   if (servers.length !== 1 || servers[0]?.host_id !== profile.hostId)
     return checkpoint;

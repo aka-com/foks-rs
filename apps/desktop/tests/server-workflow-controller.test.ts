@@ -23,13 +23,12 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const server = (id = 'p'): Server =>
+const server = (profileName = 'p'): Server =>
   decodeServers([
     {
-      id,
-      name: id,
-      label: null,
-      configured_probe: `${id}.example`,
+      profile_name: profileName,
+      display_label: null,
+      configured_endpoint: `${profileName}.example`,
       accounts: [],
     },
   ])[0];
@@ -54,7 +53,7 @@ const report = (profile = 'p'): CheckedServer => ({
 
 const status = (profile = 'p'): ServerStatusSnapshot => ({
   profile,
-  configuredProbe: `${profile}.example`,
+  configuredEndpoint: `${profile}.example`,
   host: null,
   leaseRequired: false,
   leaseExpiresAt: null,
@@ -182,7 +181,7 @@ for (const binding of ['profile', 'address', 'host'] as const) {
     replace({
       snapshot: snapshot({
         ...server(),
-        ...(binding === 'address' ? { configuredProbe: 'new.example' } : {}),
+        ...(binding === 'address' ? { configuredEndpoint: 'new.example' } : {}),
         ...(binding === 'host' ? { host_id: 'new-host' } : {}),
       }),
       profile: binding === 'profile' ? 'q' : 'p',

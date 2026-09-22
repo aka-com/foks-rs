@@ -45,7 +45,7 @@ export function demoAvailabilityFacts(
     return {
       ...agentSnapshot,
       servers: agentSnapshot.servers.map((server) =>
-        server.id === 'personal'
+        server.profileName === 'personal'
           ? { ...server, trust: { status: 'blocked' as const, error } }
           : server,
       ),

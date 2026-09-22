@@ -22,7 +22,7 @@ function snapshotWithServer(change: Partial<Server>): AgentSnapshot {
   return {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === store.server ? { ...server, ...change } : server,
+      server.profileName === store.server ? { ...server, ...change } : server,
     ),
   };
 }

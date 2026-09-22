@@ -11,7 +11,7 @@ import {
   plural,
   roleName,
   roleRank,
-  serverName,
+  serverDisplayLabelForStore,
   shortId,
   storeDescription,
   storeOperationAvailability,
@@ -150,7 +150,7 @@ export function TeamInfoPanel({
         </div>
         <dl>
           <dt>Server</dt>
-          <dd>{serverName(snapshot, store)}</dd>
+          <dd>{serverDisplayLabelForStore(snapshot, store)}</dd>
           <dt>Your account</dt>
           <dd>
             {account?.username ?? store.account}

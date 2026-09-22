@@ -204,10 +204,10 @@ export class DeviceMetadata {
     this.statuses = snapshot
       ? snapshot.servers.map((server) => {
           const accounts = accountStores(snapshot).filter(
-            (store) => store.server === server.id,
+            (store) => store.server === server.profileName,
           );
           const entries = [...this.entries.values()].filter(
-            (entry) => entry.profile === server.id,
+            (entry) => entry.profile === server.profileName,
           );
           let ready = 0;
           let unavailable = 0;
@@ -217,7 +217,7 @@ export class DeviceMetadata {
           for (const store of accounts) {
             const entry = entries.find((entry) => entry.store === store.id);
             const state = entry
-              ? this.cache.account(server.id, store.id).getSnapshot()
+              ? this.cache.account(server.profileName, store.id).getSnapshot()
               : undefined;
             if (!entry || state?.data?.backupsUnavailable) unavailable++;
             if (
@@ -239,7 +239,7 @@ export class DeviceMetadata {
           )?.error;
           const times = states.map((state) => state.lastSuccessAt);
           return {
-            profile: server.id,
+            profile: server.profileName,
             total: accounts.length,
             ready,
             unavailable,

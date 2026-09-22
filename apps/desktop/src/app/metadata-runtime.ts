@@ -57,11 +57,13 @@ export function useMetadataRuntime({
       alias,
       server,
     ]),
-    servers: shown.servers.map(({ id, host_id, configuredProbe }) => [
-      id,
-      host_id,
-      configuredProbe,
-    ]),
+    servers: shown.servers.map(
+      ({ profileName, host_id, configuredEndpoint }) => [
+        profileName,
+        host_id,
+        configuredEndpoint,
+      ],
+    ),
     access: shown.stores
       .filter((store) => store.kind === 'account')
       .map((store) => [store.id, accountStopped(shown, store).stopped]),

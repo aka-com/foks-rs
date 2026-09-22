@@ -27,7 +27,7 @@ import { useSheetGuard } from '../navigation-guard';
 import {
   plural,
   serverAvailability,
-  serverLocalAlias,
+  serverDisplayLabelOrLoading,
   shortId,
   storeAttentionState,
   storeDescription,
@@ -99,7 +99,7 @@ function serverFor(
   profile: string | undefined,
 ): Server | undefined {
   return profile
-    ? agentSnapshot.servers.find((server) => server.id === profile)
+    ? agentSnapshot.servers.find((server) => server.profileName === profile)
     : undefined;
 }
 
@@ -264,13 +264,15 @@ export function ServersSection({
   );
 
   const currentHost = selected
-    ? (checked.get(selected.id) ?? pinnedHost(selected))
+    ? (checked.get(selected.profileName) ?? pinnedHost(selected))
     : null;
   const selectedState = selected
     ? resolveServerUiState(agentSnapshot, selected)
     : null;
   const selectedAccount = selected
-    ? agentSnapshot.accounts.find((item) => item.server === selected.id)
+    ? agentSnapshot.accounts.find(
+        (item) => item.server === selected.profileName,
+      )
     : undefined;
 
   // Keyboard shortcut: ⌘R / Ctrl+R triggers a check on the selected server.
@@ -327,7 +329,7 @@ export function ServersSection({
           setSheet(null);
           onNavigate(servers(undefined, store));
           await onRefresh(
-            `Removed ${serverLocalAlias(selected)} and its credentials`,
+            `Removed ${serverDisplayLabelOrLoading(selected)} and its credentials`,
           );
         }}
         onError={(error) => void onMutationError(error)}
@@ -339,9 +341,9 @@ export function ServersSection({
       <ServerBody
         snapshot={agentSnapshot}
         server={selected}
-        status={statuses.get(selected.id)}
+        status={statuses.get(selected.profileName)}
         host={currentHost}
-        checked={checked.get(selected.id)}
+        checked={checked.get(selected.profileName)}
         busy={busy}
         onCheck={() => void check(selected)}
         onRemove={() => setSheet('remove')}
@@ -357,7 +359,7 @@ export function ServersSection({
         }
       />
       <ProfileKeys
-        key={selected.id}
+        key={selected.profileName}
         snapshot={agentSnapshot}
         server={selected}
         bridge={bridge}
@@ -380,12 +382,12 @@ export function ServersSection({
       <>
         <PageHeader
           ruled
-          title={serverLocalAlias(selected)}
+          title={serverDisplayLabelOrLoading(selected)}
           mark={<ServerMark state={selectedState} />}
           sub={
             selectedAccount && !isLocked(selectedState)
               ? `Signed in as ${selectedAccount.username}`
-              : selected.configuredProbe
+              : selected.configuredEndpoint
           }
           action={
             <>
@@ -544,7 +546,7 @@ function ServerRow({
           <Button
             size="sm"
             className="account-fact-link"
-            onClick={() => onOpen(server.id)}
+            onClick={() => onOpen(server.profileName)}
           >
             Manage ›
           </Button>
@@ -554,10 +556,10 @@ function ServerRow({
       <ServerMark state={state} />
       <span className="t">
         <b>
-          <span>{serverLocalAlias(server)}</span>
+          <span>{serverDisplayLabelOrLoading(server)}</span>
         </b>
-        {server.configuredProbe !== serverLocalAlias(server) && (
-          <small>{server.configuredProbe}</small>
+        {server.configuredEndpoint !== serverDisplayLabelOrLoading(server) && (
+          <small>{server.configuredEndpoint}</small>
         )}
         {state === 'checked' ? null : (
           <small>
@@ -588,7 +590,7 @@ function ServerList({
   const rows = agentSnapshot.servers.map((server) => ({
     server,
     state: resolveServerUiState(agentSnapshot, server),
-    expiry: leaseExpiry(server, statuses.get(server.id)),
+    expiry: leaseExpiry(server, statuses.get(server.profileName)),
   }));
   // Servers requiring user attention stay first, but all configured servers
   // share one group on the Account page.
@@ -610,7 +612,7 @@ function ServerList({
       <Inset className="settings-inset middle">
         {ordered.map(({ server, state, expiry }) => (
           <ServerRow
-            key={server.id}
+            key={server.profileName}
             server={server}
             state={state}
             expiry={expiry}
@@ -776,14 +778,14 @@ function ServerBody({
   const blocked = state === 'blocked';
   const expiry = leaseExpiry(server, status);
   const account = agentSnapshot.accounts.find(
-    (item) => item.server === server.id,
+    (item) => item.server === server.profileName,
   );
   // Teams that need attention — setup incomplete, and the like — list after
   // the ones in a normal state, so the working teams read first.
   const groups = agentSnapshot.stores
     .filter(
       (store): store is TeamStore =>
-        store.kind === 'team' && store.server === server.id,
+        store.kind === 'team' && store.server === server.profileName,
     )
     .sort(
       (a, b) =>
@@ -924,9 +926,9 @@ function ServerBody({
       <SectionLabel>Identity and trust</SectionLabel>
       {hasHost && host ? (
         <Inset className="settings-inset middle">
-          <InsetRow label="Internal ID">{server.id}</InsetRow>
+          <InsetRow label="Internal ID">{server.profileName}</InsetRow>
           <InsetRow label="Address">
-            {status?.configuredProbe ?? server.configuredProbe}
+            {status?.configuredEndpoint ?? server.configuredEndpoint}
           </InsetRow>
           <InsetRow
             label="Host ID"
@@ -954,9 +956,9 @@ function ServerBody({
         </Inset>
       ) : (
         <Inset className="settings-inset middle">
-          <InsetRow label="Internal ID">{server.id}</InsetRow>
+          <InsetRow label="Internal ID">{server.profileName}</InsetRow>
           <InsetRow label="Address">
-            {status?.configuredProbe ?? server.configuredProbe}
+            {status?.configuredEndpoint ?? server.configuredEndpoint}
           </InsetRow>
           <InsetRow label="Host ID">
             <span className="stopped">
@@ -1105,7 +1107,7 @@ function RenameServerSheet({
   onRenamed: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
-  const [name, setName] = useState(server.label ?? server.name);
+  const [name, setName] = useState(server.displayLabel ?? server.profileName);
   const [busy, setBusy] = useState(false);
   const trimmed = name.trim();
   const valid =
@@ -1127,13 +1129,15 @@ function RenameServerSheet({
             disabled={!valid || busy}
             onClick={() => {
               const label =
-                trimmed === '' || trimmed === server.name ? null : trimmed;
+                trimmed === '' || trimmed === server.profileName
+                  ? null
+                  : trimmed;
               setBusy(true);
               void bridge
-                .setServerLabel(server.id, label)
+                .setServerLabel(server.profileName, label)
                 .then((response) => {
                   if (
-                    response.profile !== server.id ||
+                    response.profile !== server.profileName ||
                     response.label !== label
                   )
                     throw new Error(
@@ -1170,7 +1174,7 @@ function RemoveServerSheet({
   onRemoved: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
-  const [confirmation, setConfirmation] = useState('');
+  const [confirmedProfileName, setConfirmedProfileName] = useState('');
   const [busy, setBusy] = useState(false);
   // Removing a server deletes what this device holds for it.
   useSheetGuard(
@@ -1180,7 +1184,7 @@ function RemoveServerSheet({
   );
   return (
     <SheetFrame
-      title={`Remove ${serverLocalAlias(server)} and its credentials?`}
+      title={`Remove ${serverDisplayLabelOrLoading(server)} and its credentials?`}
       onClose={onClose}
       danger
       footer={
@@ -1188,13 +1192,16 @@ function RemoveServerSheet({
           <Button onClick={onClose}>Cancel</Button>
           <Button
             variant="danger"
-            disabled={confirmation !== server.id || busy}
+            disabled={confirmedProfileName !== server.profileName || busy}
             onClick={() => {
               setBusy(true);
               void bridge
-                .removeServerAndCredentials(server.id, confirmation)
+                .removeServerAndCredentials(
+                  server.profileName,
+                  confirmedProfileName,
+                )
                 .then((removed) => {
-                  if (removed.profile !== server.id)
+                  if (removed.profile !== server.profileName)
                     throw new Error(
                       'remove_server_and_credentials returned a different profile.',
                     );
@@ -1210,7 +1217,8 @@ function RemoveServerSheet({
       }
     >
       <p>
-        Your data on the server is not deleted. Type the server name to confirm.
+        Your data on the server is not deleted. Type the server profile name to
+        confirm.
       </p>
       <Inset>
         <InsetRow label="Removed">
@@ -1228,9 +1236,9 @@ function RemoveServerSheet({
       <Inset className="confirm-inset">
         <InsetRow label="Confirm">
           <input
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            placeholder={`Type "${server.id}" to confirm`}
+            value={confirmedProfileName}
+            onChange={(event) => setConfirmedProfileName(event.target.value)}
+            placeholder="Type server profile name to confirm"
           />
         </InsetRow>
       </Inset>

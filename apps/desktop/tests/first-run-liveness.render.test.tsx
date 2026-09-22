@@ -71,7 +71,7 @@ async function harness() {
   const complete = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'personal'
+      server.profileName === 'personal'
         ? { ...server, host_id: profile.hostId }
         : server,
     ),
@@ -496,7 +496,7 @@ test('local-server retry probes again despite a stale failed connectivity snapsh
         if (probes === 1) throw failure;
         return {
           profile: 'personal',
-          configuredProbe: 'localhost:4430',
+          configuredEndpoint: 'localhost:4430',
           host: h.checkpoint.profile!,
           leaseRequired: false,
           leaseExpiresAt: null,
@@ -1104,7 +1104,7 @@ test('keeps the missing-server warning separate from the go-back action', async 
   const h = await harness();
   const missingProfile = {
     ...h.complete,
-    servers: h.complete.servers.filter((row) => row.id !== 'personal'),
+    servers: h.complete.servers.filter((row) => row.profileName !== 'personal'),
   };
   const rendered = h.render(
     pendingOperation(h.checkpoint, 'copy', 'copy-missing-server'),
@@ -1292,7 +1292,7 @@ test('shows a missing-server warning with the different-account action for ackno
   const h = await harness();
   const missingProfile = {
     ...h.complete,
-    servers: h.complete.servers.filter((row) => row.id !== 'personal'),
+    servers: h.complete.servers.filter((row) => row.profileName !== 'personal'),
   };
   const pending = h.transitionFirstRun(
     { ...h.checkpoint, account: undefined, state: 'account' },

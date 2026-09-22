@@ -36,8 +36,8 @@ test.before(async () => {
 
 test('refresh rows use compact state labels', () => {
   const base = {
-    id: null,
-    name: 'Catalog',
+    profileName: null,
+    displayLabel: 'Catalog',
     lastSuccessAt: undefined,
     canReconnect: false,
     reconnectDisabled: true,
@@ -209,7 +209,7 @@ function service(snapshot: typeof FIXTURE) {
 }
 
 test('the refresh summary does not call a failed observation a successful refresh', () => {
-  const profile = FIXTURE.servers[0].id;
+  const profile = FIXTURE.servers[0].profileName;
   const snapshot = {
     ...FIXTURE,
     catalogFreshness: {
@@ -227,7 +227,7 @@ test('the refresh summary does not call a failed observation a successful refres
   const reconciliation = service(snapshot);
   const summary = summarizeSync(snapshot, reconciliation);
   assert.equal(summary.failed, true);
-  const row = summary.servers.find((server) => server.id === profile);
+  const row = summary.servers.find((server) => server.profileName === profile);
   assert.equal(row?.state, 'failed');
   assert.match(row?.message ?? '', /^Server unavailable\. Showing data from /);
   assert.match(row?.message ?? '', /Retrying automatically\.$/);
@@ -243,7 +243,7 @@ test('the refresh summary does not call a failed observation a successful refres
 });
 
 test('independent refresh failures are displayed on separate lines', () => {
-  const profile = FIXTURE.servers[0].id;
+  const profile = FIXTURE.servers[0].profileName;
   const snapshot = {
     ...FIXTURE,
     catalogFreshness: {
@@ -264,7 +264,7 @@ test('independent refresh failures are displayed on separate lines', () => {
   };
   const reconciliation = service(snapshot);
   const message = summarizeSync(snapshot, reconciliation).servers.find(
-    (server) => server.id === profile,
+    (server) => server.profileName === profile,
   )?.message;
   assert.deepEqual(message?.split('\n'), [
     'Could not reach the server. Check the address and port, and that the server is running.',
@@ -296,8 +296,8 @@ test('whole-catalog failures have one root observation without marking healthy s
   const summary = summarizeSync(snapshot, reconciliation);
   const failed = summary.servers.filter((row) => row.state === 'failed');
   assert.equal(failed.length, 1);
-  assert.equal(failed[0].id, null);
-  assert.equal(failed[0].name, 'Catalog');
+  assert.equal(failed[0].profileName, null);
+  assert.equal(failed[0].displayLabel, 'Catalog');
   assert.match(failed[0].message, /Use Refresh to retry/);
   assert.doesNotMatch(
     failed[0].message,
@@ -305,10 +305,10 @@ test('whole-catalog failures have one root observation without marking healthy s
   );
   assert.deepEqual(
     summary.servers
-      .filter((row) => row.id !== null)
-      .map((row) => [row.id, row.state]),
+      .filter((row) => row.profileName !== null)
+      .map((row) => [row.profileName, row.state]),
     summarizeSync(previous, reconciliation).servers.map((row) => [
-      row.id,
+      row.profileName,
       row.state,
     ]),
   );
@@ -327,7 +327,7 @@ test('a cancelled catalog refresh uses concise recovery copy', () => {
   );
   const reconciliation = service(snapshot);
   const catalog = summarizeSync(snapshot, reconciliation).servers.find(
-    (row) => row.id === null,
+    (row) => row.profileName === null,
   );
   assert.equal(
     catalog?.message,
@@ -355,7 +355,7 @@ test('a root refresh remains observable before any server inventory is available
 });
 
 test('refresh status uses the scheduler paused state', () => {
-  const profile = FIXTURE.servers[0].id;
+  const profile = FIXTURE.servers[0].profileName;
   const fatal = {
     code: 'response-binding',
     message: 'The agent’s reply did not match the request',
@@ -417,7 +417,9 @@ test('refresh status uses the scheduler paused state', () => {
       },
     ]),
   );
-  const row = catalogParked.servers.find((server) => server.id === profile);
+  const row = catalogParked.servers.find(
+    (server) => server.profileName === profile,
+  );
   assert.match(row?.message ?? '', /Automatic refresh is paused/);
   assert.doesNotMatch(row?.message ?? '', /Retrying automatically/);
   // The metadata job's failure was as fatal, but the scheduler keeps retrying
@@ -438,14 +440,16 @@ test('refresh status uses the scheduler paused state', () => {
       },
     ]),
   );
-  const local = metadataRetrying.servers.find((server) => server.id === null);
-  assert.equal(local?.name, 'This Mac');
+  const local = metadataRetrying.servers.find(
+    (server) => server.profileName === null,
+  );
+  assert.equal(local?.displayLabel, 'This Mac');
   assert.match(local?.message ?? '', /Retrying automatically/);
   assert.doesNotMatch(local?.message ?? '', /paused/);
 });
 
 test('observations that share one root cause on one server collapse to one row and one sentence', () => {
-  const profile = FIXTURE.servers[0].id;
+  const profile = FIXTURE.servers[0].profileName;
   const snapshot = {
     ...FIXTURE,
     catalogFreshness: {
@@ -481,7 +485,9 @@ test('observations that share one root cause on one server collapse to one row a
     },
   } as unknown as DesktopReconciliation;
   const summary = summarizeSync(snapshot, fake);
-  const rows = summary.servers.filter((server) => server.id === profile);
+  const rows = summary.servers.filter(
+    (server) => server.profileName === profile,
+  );
   assert.equal(rows.length, 1);
   assert.equal(
     (rows[0].message.match(/Keystore record is missing/g) ?? []).length,
@@ -494,8 +500,8 @@ test('observations that share one root cause on one server collapse to one row a
   assert.equal(rows[0].state, 'failed');
   assert.equal(summary.failed, true);
   // The registry job belongs to no server, so it is its own row.
-  const local = summary.servers.find((server) => server.id === null);
-  assert.equal(local?.name, 'This Mac');
+  const local = summary.servers.find((server) => server.profileName === null);
+  assert.equal(local?.displayLabel, 'This Mac');
   assert.match(local?.message ?? '', /^Keystore record is missing\. Retrying/);
   // Every failed observation still has a diagnostic line of its own.
   assert.equal(
@@ -507,7 +513,7 @@ test('observations that share one root cause on one server collapse to one row a
 });
 
 test('each row lists its jobs: when they ran, when they run next, and what failed', () => {
-  const profile = FIXTURE.servers[0].id;
+  const profile = FIXTURE.servers[0].profileName;
   const scheduler = (
     observations: {
       key: string;
@@ -574,7 +580,7 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
       },
     ]),
   );
-  const row = summary.servers.find((server) => server.id === profile);
+  const row = summary.servers.find((server) => server.profileName === profile);
   // Jobs use a fixed display order regardless of scheduler order.
   assert.deepEqual(
     row?.jobs.map((job) => [job.label, job.state]),
@@ -591,7 +597,7 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
   );
   assert.equal(row?.jobs[0].lastMilliseconds, 1_200);
   assert.equal(row?.jobs[1].detail, 'Running now.');
-  const local = summary.servers.find((server) => server.id === null);
+  const local = summary.servers.find((server) => server.profileName === null);
   assert.deepEqual(
     local?.jobs.map((job) => [job.label, job.state]),
     [['Account metadata', 'failed']],
@@ -625,13 +631,14 @@ test('each row lists its jobs: when they ran, when they run next, and what faile
     ]),
   );
   assert.equal(
-    parked.servers.find((server) => server.id === profile)?.jobs[0].detail,
+    parked.servers.find((server) => server.profileName === profile)?.jobs[0]
+      .detail,
     `The reply did not match. Last succeeded ${new Date(10_000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Paused until Refresh.`,
   );
 });
 
 test('Chat follows Devices in each server refresh group', () => {
-  const profile = FIXTURE.servers[0].id;
+  const profile = FIXTURE.servers[0].profileName;
   const reconciliation = service(FIXTURE);
   const summary = summarizeSync(FIXTURE, reconciliation, new Map(), [
     {
@@ -645,7 +652,7 @@ test('Chat follows Devices in each server refresh group', () => {
     },
   ]);
   const kinds = summary.servers
-    .find((server) => server.id === profile)
+    .find((server) => server.profileName === profile)
     ?.jobs.map((job) => job.kind);
   assert.ok(kinds);
   assert.equal(kinds.indexOf('chat'), kinds.indexOf('devices') + 1);
@@ -668,7 +675,7 @@ test('copied diagnostics keep the status lines first and append the timing log',
     catalogFreshness: {
       stores: {},
       profiles: {
-        [FIXTURE.servers[0].id]: {
+        [FIXTURE.servers[0].profileName]: {
           refreshing: false,
           lastAttemptAt: 20,
           lastSuccessAt: 10,
@@ -682,7 +689,7 @@ test('copied diagnostics keep the status lines first and append the timing log',
   diagnosticLog.clear();
   diagnosticLog.record({
     name: 'job.catalog',
-    scope: FIXTURE.servers[0].id,
+    scope: FIXTURE.servers[0].profileName,
     phase: 'success',
     ms: 42,
     outcome: 'ok',
@@ -789,7 +796,7 @@ test('stale catalog flags cannot keep the spinner alive after real work settles'
 
 test('healthy local work is named and an active retry remains busy despite its previous error', () => {
   const reconciliation = service(FIXTURE);
-  const profile = FIXTURE.servers[0].id;
+  const profile = FIXTURE.servers[0].profileName;
   reconciliation.scheduler.observations = () => [
     {
       key: 'metadata',
@@ -812,7 +819,8 @@ test('healthy local work is named and an active retry remains busy despite its p
     ['Refreshing account metadata'],
   );
   assert.equal(
-    summary.servers.find((server) => server.id === profile)?.jobs[0].state,
+    summary.servers.find((server) => server.profileName === profile)?.jobs[0]
+      .state,
     'refreshing',
   );
   reconciliation.dispose();

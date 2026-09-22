@@ -16,10 +16,10 @@ import {
 function snapshot(capabilities: readonly ProtocolCapability[]): AgentSnapshot {
   return {
     ...FIXTURE,
-    servers: ['one', 'two'].map((id) => ({
+    servers: ['one', 'two'].map((profileName) => ({
       ...FIXTURE.servers[0],
-      id,
-      name: id,
+      profileName,
+      configuredEndpoint: profileName,
       trust: { status: 'verified' },
       compatibility: { status: 'required', expiresAt: 200, capabilities },
       passiveStatus: { status: 'available', source: 'signed-server-status' },

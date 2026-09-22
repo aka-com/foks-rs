@@ -9,7 +9,12 @@ import { localAliasOf } from '../model';
  */
 
 import type { ReactNode } from 'react';
-import { accountStopped, hue, serverName, usernameOf } from '../model';
+import {
+  accountStopped,
+  hue,
+  serverDisplayLabelForStore,
+  usernameOf,
+} from '../model';
 import type { AccountStore, AgentSnapshot } from '../model';
 
 /**
@@ -95,7 +100,8 @@ export function AccountSwitcher({
             <span className="t">
               <b>{name}</b>
               <small>
-                {localAliasOf(snapshot, store)} · {serverName(snapshot, store)}
+                {localAliasOf(snapshot, store)} ·{' '}
+                {serverDisplayLabelForStore(snapshot, store)}
               </small>
               {/* The reason is on the row, not only in its tooltip: a title
                   is not read by a pointer that never rests on the button. */}

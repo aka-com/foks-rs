@@ -120,7 +120,8 @@ export function useTeamDiscovery({
       !bridge.firstRunFixture &&
       refreshed.servers.filter(
         (server) =>
-          server.id === profile.profile && server.host_id === profile.hostId,
+          server.profileName === profile.profile &&
+          server.host_id === profile.hostId,
       ).length !== 1
     ) {
       setOutcome('unavailable');

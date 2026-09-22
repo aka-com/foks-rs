@@ -58,7 +58,9 @@ async function setup(
       (s) => s.kind !== 'team' || s.id === 'team:eng',
     ),
     servers: FIXTURE.servers.map((s) =>
-      s.id === 'acme' ? { ...s, services: { ...s.services, chat: true } } : s,
+      s.profileName === 'acme'
+        ? { ...s, services: { ...s.services, chat: true } }
+        : s,
     ),
   };
   const baseBridge = mockBridge(enabledSnapshot);
@@ -1925,7 +1927,7 @@ test('the provider stops periodic team synchronization while the window is hidde
       (store) => store.kind !== 'team' || store.id === 'team:eng',
     ),
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'acme'
+      server.profileName === 'acme'
         ? {
             ...server,
             compatibility: { status: 'not-required' as const },

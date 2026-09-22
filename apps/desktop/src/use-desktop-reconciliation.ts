@@ -86,7 +86,7 @@ export function useDesktopReconciliation(
     const catalogJobRuns = (profile: string, key: string): boolean => {
       const server = live.current
         .current()
-        .servers.find((candidate) => candidate.id === profile);
+        .servers.find((candidate) => candidate.profileName === profile);
       return (
         service.scheduler.snapshot(key) !== undefined &&
         server?.trust.status !== 'blocked' &&
@@ -114,13 +114,15 @@ export function useDesktopReconciliation(
       pendingObservations.delete(name);
       const { before, observed, observedAt } = pending;
       const latest = live.current.current();
-      const after = latest.servers.find((server) => server.id === name);
+      const after = latest.servers.find(
+        (server) => server.profileName === name,
+      );
       // Discard an observation if the server configuration changed after it was
       // collected, then schedule another connectivity check using the current
       // configuration.
       if (
         !after ||
-        before.configuredProbe !== after.configuredProbe ||
+        before.configuredEndpoint !== after.configuredEndpoint ||
         (before.host_id && after.host_id && before.host_id !== after.host_id) ||
         (before.host_id &&
           after.host_id === null &&
@@ -147,7 +149,7 @@ export function useDesktopReconciliation(
         {
           ...latest,
           servers: latest.servers.map((server) =>
-            server.id === name ? { ...server, connectivity } : server,
+            server.profileName === name ? { ...server, connectivity } : server,
           ),
         },
         false,
@@ -260,7 +262,7 @@ export function useDesktopReconciliation(
                 const current = live.current;
                 const before = current
                   .current()
-                  .servers.find((server) => server.id === name);
+                  .servers.find((server) => server.profileName === name);
                 if (!before || !current.bridge.reconcileServer) return;
                 current.retireBoot?.();
                 try {

@@ -30,8 +30,8 @@ import {
   partiesOf,
   plural,
   roleName,
-  serverDisplayName,
-  serverName as displayServerName,
+  serverDisplayLabel,
+  serverDisplayLabelForStore as displayServerName,
   storeAttentionState,
   storeDescription,
   storeDescriptionState,
@@ -128,13 +128,13 @@ function FindGroups({
                   key={server}
                   role="group"
                   aria-label={
-                    context ? serverDisplayName(context.server) : server
+                    context ? serverDisplayLabel(context.server) : server
                   }
                 >
                   <div className="find-groups-server">
                     <Icon name="server" />
                     <span>
-                      {context ? serverDisplayName(context.server) : server}
+                      {context ? serverDisplayLabel(context.server) : server}
                     </span>
                   </div>
                   {members.map((store) => {
@@ -391,8 +391,14 @@ export function TeamsScreen({
   const discover = async (context: DiscoveryContext): Promise<void> => {
     setDiscovering(context.store.id);
     try {
-      const result = await enqueueProfileWork(bridge, context.server.id, () =>
-        bridge.discoverGroups(context.server.id, context.account.alias),
+      const result = await enqueueProfileWork(
+        bridge,
+        context.server.profileName,
+        () =>
+          bridge.discoverGroups(
+            context.server.profileName,
+            context.account.alias,
+          ),
       );
       if (result.accountAlias !== context.account.alias)
         throw new Error(

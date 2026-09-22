@@ -401,7 +401,7 @@ fn reconciliation_observations_are_independent_and_strictly_scoped() {
         serde_json::to_value(reconcile_server_response(value.clone(), "work").unwrap()).unwrap();
     assert_eq!(result["identity"]["status"], "connected");
     assert_eq!(result["identity"]["hostId"], host_id);
-    assert_eq!(result["identity"]["configuredProbe"], "foks.app:4430");
+    assert_eq!(result["identity"]["configuredEndpoint"], "foks.app:4430");
     assert_eq!(
         result["compatibility"]["error"]["code"],
         "server-unavailable"
@@ -449,7 +449,7 @@ fn reconciliation_requires_exact_canonical_host_and_endpoint_bindings() {
         let dto = serde_json::to_value(reconcile_server_response(value, "work").unwrap()).unwrap();
         assert_eq!(
             dto["identity"],
-            serde_json::json!({"status":"connected","hostId":host_id,"configuredProbe":probe})
+            serde_json::json!({"status":"connected","hostId":host_id,"configuredEndpoint":probe})
         );
     }
     for identity in [
@@ -459,7 +459,7 @@ fn reconciliation_requires_exact_canonical_host_and_endpoint_bindings() {
         serde_json::json!({"status":"connected","host_id":format!("03{}", "ab".repeat(32)),"configured_probe":"foks.app:4430"}),
         serde_json::json!({"status":"connected","host_id":"02ab","configured_probe":"foks.app:4430"}),
         serde_json::json!({"status":"connected","host_id":host_id,"configured_probe":"foks.app:4430","acceptance":"inserted"}),
-        serde_json::json!({"status":"connected","hostId":host_id,"configuredProbe":"foks.app:4430"}),
+        serde_json::json!({"status":"connected","hostId":host_id,"configuredEndpoint":"foks.app:4430"}),
     ] {
         assert_eq!(
             reconcile_server_response(observation(identity), "work")

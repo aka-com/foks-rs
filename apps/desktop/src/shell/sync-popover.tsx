@@ -24,7 +24,7 @@ import {
 import type { ReactNode, RefObject } from 'react';
 import { Popover } from '/kit/overlay-primitives';
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
-import { chatAvailable, serverDisplayName } from '../model';
+import { chatAvailable, serverDisplayLabel } from '../model';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import {
   useShellDeviceMetadata,
@@ -67,9 +67,9 @@ export interface SyncJobSummary {
 }
 
 export interface SyncServerSummary {
-  /** The server id, or `null` for the observations that belong to this Mac. */
-  id: string | null;
-  name: string;
+  /** The profile name, or `null` for observations that belong to this Mac. */
+  profileName: string | null;
+  displayLabel: string;
   state: SyncState;
   /** One sentence: what failed, what is shown instead, what happens next. */
   message: string;
@@ -294,16 +294,16 @@ export function summarizeSync(
   if (catalogAttempt)
     diagnostics.push(`Catalog refresh: ${freshnessLine(catalogAttempt)}`);
   const servers: SyncServerSummary[] = snapshot.servers.map((server) => {
-    const name = serverDisplayName(server);
-    const entry = snapshot.catalogFreshness?.profiles[server.id];
+    const name = serverDisplayLabel(server);
+    const entry = snapshot.catalogFreshness?.profiles[server.profileName];
     const attempt = service.scheduler.snapshot(
-      profileRefreshKey(snapshot, server.id),
+      profileRefreshKey(snapshot, server.profileName),
     );
     const connectivity = service.scheduler.snapshot(
-      profileConnectivityKey(snapshot, server.id),
+      profileConnectivityKey(snapshot, server.profileName),
     );
     const own = observations.filter(
-      (observation) => observation.scope === server.id,
+      (observation) => observation.scope === server.profileName,
     );
     const messages: string[] = [];
     // Use scheduler state to report whether automatic retry is paused. Fatal
@@ -328,7 +328,9 @@ export function summarizeSync(
       );
     }
     const jobs = jobSummaries(own);
-    const device = devices?.find((status) => status.profile === server.id);
+    const device = devices?.find(
+      (status) => status.profile === server.profileName,
+    );
     if (device) {
       const state: SyncState = device.refreshing
         ? 'refreshing'
@@ -360,7 +362,8 @@ export function summarizeSync(
     }
     if (inbox) {
       const teams = snapshot.stores.filter(
-        (store) => store.server === server.id && chatAvailable(snapshot, store),
+        (store) =>
+          store.server === server.profileName && chatAvailable(snapshot, store),
       );
       let loading = false;
       let unavailable = false;
@@ -424,10 +427,10 @@ export function summarizeSync(
     const canReconnect =
       service.supportsConnectivity &&
       (server.host_id !== null ||
-        snapshot.stores.some((store) => store.server === server.id));
+        snapshot.stores.some((store) => store.server === server.profileName));
     return {
-      id: server.id,
-      name,
+      profileName: server.profileName,
+      displayLabel: name,
       state,
       message: failed
         ? failureSentence(messages, entry?.lastSuccessAt, paused)
@@ -473,8 +476,8 @@ export function summarizeSync(
       catalogAttempt?.error !== undefined &&
       normalizeCommandError(catalogAttempt.error).code === 'cancelled';
     servers.push({
-      id: null,
-      name: local.length ? 'This Mac' : 'Catalog',
+      profileName: null,
+      displayLabel: local.length ? 'This Mac' : 'Catalog',
       state: 'failed',
       message: catalogAttempt?.error
         ? catalogCancelled
@@ -505,11 +508,11 @@ export function summarizeSync(
   for (const observation of observations) {
     if (!observation.snapshot.refreshing) continue;
     const represented = servers.find(
-      (server) => server.id === observation.scope,
+      (server) => server.profileName === observation.scope,
     );
     if (represented) {
       diagnostics.push(
-        `Active: ${observationLabel(observation.kind)} on ${represented.name}`,
+        `Active: ${observationLabel(observation.kind)} on ${represented.displayLabel}`,
       );
       continue;
     }
@@ -676,7 +679,7 @@ function ServerBody({
       {server.jobs.length ? (
         <table
           className="sync-jobs sync-job-table"
-          aria-label={`${server.name} jobs`}
+          aria-label={`${server.profileName} jobs`}
         >
           <tbody>
             {server.jobs.map((job) => (
@@ -696,7 +699,7 @@ function ServerBody({
           </tbody>
         </table>
       ) : null}
-      {server.state === 'failed' && server.id ? (
+      {server.state === 'failed' && server.profileName ? (
         <div className="sync-actions">
           {devices &&
           server.jobs.some(
@@ -704,8 +707,8 @@ function ServerBody({
           ) ? (
             <Button
               size="sm"
-              onClick={() => devices.retry(server.id!)}
-              aria-label={`Retry devices on ${server.name}`}
+              onClick={() => devices.retry(server.profileName!)}
+              aria-label={`Retry devices on ${server.profileName}`}
             >
               Retry devices
             </Button>
@@ -714,8 +717,8 @@ function ServerBody({
             <Button
               size="sm"
               disabled={server.reconnectDisabled || server.reconnecting}
-              aria-label={`Reconnect ${server.name}`}
-              onClick={() => service.reconnect(server.id!)}
+              aria-label={`Reconnect ${server.profileName}`}
+              onClick={() => service.reconnect(server.profileName!)}
             >
               {server.reconnecting ? 'Reconnecting' : 'Reconnect'}
             </Button>
@@ -727,7 +730,7 @@ function ServerBody({
               className="lnk"
               onClick={() => {
                 onClose();
-                onOpenServers(server.id!);
+                onOpenServers(server.profileName!);
               }}
             >
               Open server settings
@@ -774,7 +777,7 @@ function ServerRow({
         onClick={onToggle}
       >
         <span className={`sync-dot ${server.state}`} aria-hidden="true" />
-        <b>{server.name}</b>
+        <b>{server.displayLabel}</b>
         <span className={`sync-status ${server.state}`}>{status}</span>
         <Icon name="chevronDown" className="sync-chev" />
       </button>
@@ -909,7 +912,7 @@ export function SyncPopover({
           // heading above its always-visible details.
           <div className="sync-row open">
             <div className="sync-head">
-              <b>{single.name}</b>
+              <b>{single.displayLabel}</b>
             </div>
             <div className="sync-body">
               <ServerBody server={single} {...body} />
@@ -917,7 +920,7 @@ export function SyncPopover({
           </div>
         ) : summary.servers.length ? (
           summary.servers.map((server) => {
-            const key = server.id ?? 'local';
+            const key = server.profileName ?? 'local';
             const open =
               openOverrides[key] ??
               (server.state === 'failed' ||

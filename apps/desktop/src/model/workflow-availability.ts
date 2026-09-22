@@ -114,7 +114,9 @@ export function workflowAvailability(
       return { available: false, reason: 'unknown' };
     target = { ...target, profile: store.server, account: store.account };
   }
-  const server = snapshot.servers.find((entry) => entry.id === target.profile);
+  const server = snapshot.servers.find(
+    (entry) => entry.profileName === target.profile,
+  );
   if (!server) return { available: false, reason: 'unknown' };
   if (
     operation === 'local-alias' &&
@@ -162,7 +164,7 @@ export function workflowAvailability(
   if (operation === 'federate') {
     if (!target.remoteProfile) return { available: false, reason: 'unknown' };
     const remoteServer = snapshot.servers.find(
-      (entry) => entry.id === target.remoteProfile,
+      (entry) => entry.profileName === target.remoteProfile,
     );
     if (!remoteServer) return { available: false, reason: 'unknown' };
     const access = serverFactAvailability(

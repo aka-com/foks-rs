@@ -57,10 +57,10 @@ export const serverCommands: Pick<
       { profile, label },
       decodeServerLabelResponse,
     ),
-  removeServerAndCredentials: (profile, confirmation) =>
+  removeServerAndCredentials: (profileName, confirmedProfileName) =>
     checkedMutation(
       'remove_server_and_credentials',
-      { profile, confirmation },
+      { profileName, confirmedProfileName },
       decodeRemovedServer,
     ),
 };

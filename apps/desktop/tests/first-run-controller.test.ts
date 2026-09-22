@@ -65,7 +65,7 @@ test('unrelated unavailable profiles cannot prevent account reconciliation', () 
       },
     ],
     servers: FIXTURE.servers.map((s) =>
-      s.id === 'personal' ? { ...s, host_id: profile.hostId } : s,
+      s.profileName === 'personal' ? { ...s, host_id: profile.hostId } : s,
     ),
     accounts: [],
   };

@@ -219,9 +219,9 @@ async function fixture() {
             {
               profile,
               label: null,
-              configuredProbe: initial.servers.find(
-                (server) => server.id === profile,
-              )!.configuredProbe,
+              configuredEndpoint: initial.servers.find(
+                (server) => server.profileName === profile,
+              )!.configuredEndpoint,
               status: await mock.describeServerStatus(profile),
               error: null,
             },
@@ -271,7 +271,7 @@ test('periodic native profile reads catch remote edits and deletes without manua
     target.version + 1,
   );
   assert.equal(
-    new Set(accepted.servers.map((server) => server.id)).size,
+    new Set(accepted.servers.map((server) => server.profileName)).size,
     accepted.servers.length,
   );
   data.setRemote({
@@ -392,7 +392,7 @@ test('connectivity recovery refreshes signed facts without replaying setup or bl
     probes = 0,
     accepted = data.initial;
   data.initial.servers = data.initial.servers.map((server) =>
-    server.id === affected
+    server.profileName === affected
       ? {
           ...server,
           compatibility: {
@@ -417,7 +417,7 @@ test('connectivity recovery refreshes signed facts without replaying setup or bl
         identity: {
           status: 'connected',
           hostId: status.host.hostId,
-          configuredProbe: status.configuredProbe,
+          configuredEndpoint: status.configuredEndpoint,
         },
         compatibility: {
           status: profile === affected ? 'renewed' : 'not-required',
@@ -465,7 +465,9 @@ test('connectivity recovery refreshes signed facts without replaying setup or bl
   // one-second floor between attempts.
   await clock.advance(1_000);
   assert.ok(renewed && probes > 0);
-  const server = accepted.servers.find((server) => server.id === affected)!;
+  const server = accepted.servers.find(
+    (server) => server.profileName === affected,
+  )!;
   assert.equal(server.connectivity.status, 'observed');
   assert.equal(
     serverAvailability(accepted, server, { nowSeconds: 2 }).available,
@@ -484,7 +486,7 @@ test('catalog refresh failures do not fail connectivity reconciliation', async (
   // observation goes through the catalog job rather than being published
   // against facts that already say what it says.
   data.initial.servers = data.initial.servers.map((server) =>
-    server.id === affected
+    server.profileName === affected
       ? {
           ...server,
           compatibility: {
@@ -501,7 +503,7 @@ test('catalog refresh failures do not fail connectivity reconciliation', async (
       // The catalog read for this profile fails, so its facts stay as they
       // were; the observation has to name the host those facts hold.
       const server = data.initial.servers.find(
-        (server) => server.id === profile,
+        (server) => server.profileName === profile,
       );
       const status = await data.bridge.describeServerStatus(profile);
       assert.ok(status.host);
@@ -510,7 +512,7 @@ test('catalog refresh failures do not fail connectivity reconciliation', async (
         identity: {
           status: 'connected',
           hostId: server?.host_id ?? status.host.hostId,
-          configuredProbe: status.configuredProbe,
+          configuredEndpoint: status.configuredEndpoint,
         },
         compatibility: {
           status: profile === affected ? 'renewed' : 'not-required',
@@ -565,7 +567,9 @@ test('catalog refresh failures do not fail connectivity reconciliation', async (
     'Catalog read failed.',
   );
   // The observation was published once the catalog read had settled.
-  const server = accepted.servers.find((server) => server.id === affected)!;
+  const server = accepted.servers.find(
+    (server) => server.profileName === affected,
+  )!;
   assert.equal(server.connectivity.status, 'observed');
 });
 
@@ -629,7 +633,7 @@ function unchangedConnectivity(
       // A projected server carries the host its own facts name, which is what
       // an observation of a server that has not moved reports.
       const server = data.initial.servers.find(
-        (candidate) => candidate.id === profile,
+        (candidate) => candidate.profileName === profile,
       );
       return {
         profile,
@@ -651,10 +655,10 @@ function unchangedConnectivity(
                   changed && move === 'host'
                     ? '02ff'
                     : (server?.host_id ?? status.host.hostId),
-                configuredProbe:
+                configuredEndpoint:
                   changed && move === 'probe'
                     ? 'moved.example.net'
-                    : status.configuredProbe,
+                    : status.configuredEndpoint,
               },
         compatibility: {
           status: changed && move === 'lease' ? 'renewed' : 'not-required',
@@ -691,8 +695,8 @@ test('unchanged connectivity data is published without refreshing the catalog', 
   assert.equal(rosters, 0);
   for (const profile of data.initial.catalogProfiles)
     assert.equal(
-      accepted.servers.find((server) => server.id === profile)?.connectivity
-        .status,
+      accepted.servers.find((server) => server.profileName === profile)
+        ?.connectivity.status,
       'observed',
     );
 });
@@ -704,7 +708,7 @@ for (const move of ['host', 'probe', 'identity', 'lease'] as const) {
     const moved = data.initial.catalogProfiles[0];
     if (move === 'lease')
       data.initial.servers = data.initial.servers.map((server) =>
-        server.id === moved
+        server.profileName === moved
           ? {
               ...server,
               compatibility: {

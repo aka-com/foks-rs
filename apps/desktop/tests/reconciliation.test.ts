@@ -289,7 +289,7 @@ test('desktop scheduling discovers a bound account every five minutes and after 
       restrictions: [],
     })),
     profileInventory: FIXTURE.servers.map((server) => ({
-      profile: server.id,
+      profile: server.profileName,
       accounts: 'complete',
       teams: 'complete',
     })),
@@ -353,7 +353,7 @@ test('desktop scheduling discovers an account that is bound to no team', async (
       restrictions: [],
     })),
     profileInventory: FIXTURE.servers.map((server) => ({
-      profile: server.id,
+      profile: server.profileName,
       accounts: 'complete',
       teams: 'complete',
     })),
@@ -638,7 +638,7 @@ test('a focus or recovery wake leaves a catalog job alone that a read covered wi
       restrictions: [],
     })),
     profileInventory: FIXTURE.servers.map((server) => ({
-      profile: server.id,
+      profile: server.profileName,
       accounts: 'complete',
       teams: 'complete',
     })),

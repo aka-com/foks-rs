@@ -88,18 +88,19 @@ export function SetupSidebar({
 }): ReactNode {
   // Restart returns to `who`. While already there it would only reopen the
   // same first step, so omit the action until setup has moved beyond it.
-  const restart = onRestart && checkpoint.state !== 'who' ? (
-    <button
-      type="button"
-      className="nav"
-      disabled={blocked || restartDisabled}
-      title={restartReason}
-      onClick={onRestart}
-    >
-      <Icon name="flag" />
-      <span className="t">Restart setup</span>
-    </button>
-  ) : null;
+  const restart =
+    onRestart && checkpoint.state !== 'who' ? (
+      <button
+        type="button"
+        className="nav"
+        disabled={blocked || restartDisabled}
+        title={restartReason}
+        onClick={onRestart}
+      >
+        <Icon name="flag" />
+        <span className="t">Restart setup</span>
+      </button>
+    ) : null;
   if (checkpoint.managedLocal) {
     const current = localStepOf(checkpoint.state);
     const labels = ['Local server', 'Create account', 'Account recovery'];
@@ -404,9 +405,7 @@ export function AddedDetails({
           <b>Version</b>
           <span>{item.version}</span>
           <b>Size</b>
-          <span>
-            {fmtSize(item.size)}
-          </span>
+          <span>{fmtSize(item.size)}</span>
           <b>Read permission</b>
           <Chip>{roleText(item.read)}</Chip>
           <b>Write permission</b>

@@ -329,7 +329,7 @@ export function DetailsPanel({
   const editGeneration = useRef(accessGeneration);
   const selectedStore = item ? storeOf(snapshot, item.store) : undefined;
   const selectedServer = snapshot.servers.find(
-    (server) => server.id === selectedStore?.server,
+    (server) => server.profileName === selectedStore?.server,
   );
   const selectedAccount = snapshot.accounts.find(
     (account) =>
@@ -341,7 +341,7 @@ export function DetailsPanel({
     item?.path,
     item?.kind,
     selectedServer?.host_id,
-    selectedServer?.configuredProbe,
+    selectedServer?.configuredEndpoint,
     selectedAccount?.username,
   ]);
   // Epoch of the retained draft already restored, preventing duplicate restores on refresh.

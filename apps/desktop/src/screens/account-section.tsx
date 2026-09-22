@@ -56,8 +56,8 @@ import {
   accountStores,
   notesNow,
   plural,
-  serverDisplayName,
-  serverName,
+  serverDisplayLabel,
+  serverDisplayLabelForStore,
   storeDescription,
   storeNavigationOrder,
   usernameOf,
@@ -134,7 +134,9 @@ function serverNamedByReason(
   for (const reason of reasons) {
     if (!id.startsWith(`${reason}-`)) continue;
     const profile = id.slice(reason.length + 1);
-    const server = snapshot.servers.find((entry) => entry.id === profile);
+    const server = snapshot.servers.find(
+      (entry) => entry.profileName === profile,
+    );
     if (server) return server;
   }
   return undefined;
@@ -183,17 +185,17 @@ function destinationOf(
   const namedServer =
     (note.id.startsWith('lease-')
       ? snapshot.servers.find(
-          (entry) => entry.id === note.id.slice('lease-'.length),
+          (entry) => entry.profileName === note.id.slice('lease-'.length),
         )
       : undefined) ?? serverNamedByReason(snapshot, note.id);
   if (namedServer)
     return {
       label: 'Open server',
-      where: `Settings › Account › ${serverDisplayName(namedServer)}`,
+      where: `Settings › Account › ${serverDisplayLabel(namedServer)}`,
       location: {
         kind: 'settings',
         section: 'account',
-        profile: namedServer.id,
+        profile: namedServer.profileName,
       },
     };
   const namedGroup = groupNamedByFailure(snapshot, note.id);
@@ -459,7 +461,7 @@ export function AccountSection({
         mark: (
           <AccountMark name={headerUsername ?? selected.account} size="round" />
         ),
-        sub: <span>{serverName(snapshot, selected)}</span>,
+        sub: <span>{serverDisplayLabelForStore(snapshot, selected)}</span>,
         state: stopped.stopped ? (
           <Chip tone="warn">{storeDescription(snapshot, selected)}</Chip>
         ) : undefined,
@@ -482,7 +484,7 @@ export function AccountSection({
           (server) =>
             server.accounts.length === 0 &&
             snapshot.profileInventory.find(
-              (inventory) => inventory.profile === server.id,
+              (inventory) => inventory.profile === server.profileName,
             )?.accounts === 'complete',
         )
       : [];
@@ -490,7 +492,7 @@ export function AccountSection({
     <>
       {notices}
       {unpairedServers.map((server) => (
-        <Inset key={server.id}>
+        <Inset key={server.profileName}>
           {/* The server's name is the value, not the label: the label column
               is a fixed 88px and a hostname overran it. */}
           <InsetRow
@@ -506,7 +508,7 @@ export function AccountSection({
               </Button>
             }
           >
-            {serverDisplayName(server)}{' '}
+            {serverDisplayLabel(server)}{' '}
             <span className="dim">Connected, not paired</span>
           </InsetRow>
         </Inset>
@@ -795,7 +797,9 @@ function AccountPanel({
   };
   const deviceCount = deviceEntries(lists).length;
   const teams = teamsOnAccount(snapshot, store);
-  const server = snapshot.servers.find((entry) => entry.id === store.server);
+  const server = snapshot.servers.find(
+    (entry) => entry.profileName === store.server,
+  );
   // The account this page is about is named by the page's own header, so the
   // body opens on the facts rather than stating the identity a second time.
   return (
@@ -902,7 +906,7 @@ function AccountPanel({
               share one element because this inset stacks its value's children,
               and the state belongs on the name's own line. */}
           <span>
-            {serverName(snapshot, store)}
+            {serverDisplayLabelForStore(snapshot, store)}
             {stopped.stopped ? (
               <>
                 {' '}
@@ -1055,7 +1059,8 @@ export function UnavailableAccount({
           </Button>
           {stores.map((store) => (
             <Button key={store.id} onClick={() => onSelect(store)}>
-              {localAliasOf(snapshot, store)} · {serverName(snapshot, store)}
+              {localAliasOf(snapshot, store)} ·{' '}
+              {serverDisplayLabelForStore(snapshot, store)}
             </Button>
           ))}
         </>

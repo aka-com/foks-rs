@@ -33,7 +33,7 @@ import {
   parseRole,
   prefixOf,
   roleName,
-  serverName,
+  serverDisplayLabelForStore,
   storeDescription,
   storeNavigationOrder,
   storeOf,
@@ -151,7 +151,7 @@ function itemEntries(snapshot: AgentSnapshot): SearchEntry[] {
       detail: [KINDS[kind].label, folder, store.name]
         .filter(Boolean)
         .join(' · '),
-      where: serverName(snapshot, store),
+      where: serverDisplayLabelForStore(snapshot, store),
       terms: [nameOf(item.path), item.path],
       glyph: { kind: 'item', itemKind: kind },
       target: { kind: 'item', store: item.store, path: item.path },
@@ -167,7 +167,7 @@ function storeEntries(snapshot: AgentSnapshot): SearchEntry[] {
     group: GROUP_LABELS.stores,
     name: store.name,
     detail: `${storeWord(store)} · ${storeDescription(snapshot, store)}`,
-    where: serverName(snapshot, store),
+    where: serverDisplayLabelForStore(snapshot, store),
     terms: [store.name, storeAlias(store)],
     glyph: { kind: 'store' as const, store },
     target: { kind: 'store' as const, ref: store.id },
@@ -216,7 +216,7 @@ function peopleEntries(snapshot: AgentSnapshot): SearchEntry[] {
       group: GROUP_LABELS.people,
       name: person.username,
       detail: `${person.groups.join(', ')} · ${person.role}`,
-      where: serverName(snapshot, person.store),
+      where: serverDisplayLabelForStore(snapshot, person.store),
       terms: [person.username],
       glyph: { kind: 'person' as const, username: person.username },
       target: {
@@ -243,7 +243,7 @@ function channelEntries(
       group: GROUP_LABELS.channels,
       name: `${alias}#${channel.name}`,
       detail: `Channel · ${store.name}`,
-      where: serverName(snapshot, store),
+      where: serverDisplayLabelForStore(snapshot, store),
       // `#deploys` first, so typing the hash reaches the channel and typing
       // the group name reaches every channel in it.
       terms: [`#${channel.name}`, channel.name, store.name],

@@ -20,7 +20,7 @@ function fixture(): AgentSnapshot {
       restrictions: [],
     })),
     profileInventory: FIXTURE.servers.map((server) => ({
-      profile: server.id,
+      profile: server.profileName,
       accounts: 'complete',
       teams: 'complete',
     })),

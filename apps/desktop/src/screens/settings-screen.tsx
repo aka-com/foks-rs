@@ -49,7 +49,12 @@ import type { Location, NavigateOptions, SettingsSection } from '../location';
 import { useSheetGuard } from '../navigation-guard';
 import { useMetadataQuery, useMetadataRepository } from '../query-hooks';
 import { appInfoQuery } from '../resources/application';
-import { accountStores, plural, serverDisplayName, usernameOf } from '../model';
+import {
+  accountStores,
+  plural,
+  serverDisplayLabel,
+  usernameOf,
+} from '../model';
 import type { AgentSnapshot, Server } from '../model';
 import { PageHeader } from '../shell/page-header';
 import {
@@ -116,7 +121,7 @@ export function SettingsScreen({
     labelledBy: tabId(SETTINGS_TABS, 'account'),
   };
   const selectedServer = location.profile
-    ? snapshot.servers.find((server) => server.id === location.profile)
+    ? snapshot.servers.find((server) => server.profileName === location.profile)
     : undefined;
   const serversSection = (
     <ServersSection
@@ -181,7 +186,7 @@ export function SettingsScreen({
           <ServersSection
             snapshot={snapshot}
             bridge={bridge}
-            profile={selectedServer.id}
+            profile={selectedServer.profileName}
             store={location.store}
             scene={enteredScene}
             panel={serverPanel}
@@ -796,10 +801,10 @@ function ResetMacSheet({
 
   const preview = useCallback(
     async (server: Server): Promise<ResetPreview> => {
-      const preview = await enqueueProfileWork(bridge, server.id, () =>
-        bridge.describeReset(server.id),
+      const preview = await enqueueProfileWork(bridge, server.profileName, () =>
+        bridge.describeReset(server.profileName),
       );
-      if (preview.profile !== server.id)
+      if (preview.profile !== server.profileName)
         throw new Error('describe_reset returned a different profile.');
       return preview;
     },
@@ -814,9 +819,9 @@ function ResetMacSheet({
       const failed = new Map<string, string>();
       for (const server of servers) {
         try {
-          found.set(server.id, await preview(server));
+          found.set(server.profileName, await preview(server));
         } catch (error) {
-          failed.set(server.id, normalizeCommandError(error).message);
+          failed.set(server.profileName, normalizeCommandError(error).message);
         }
       }
       setPreviews(found);
@@ -828,24 +833,29 @@ function ResetMacSheet({
   // One server's preview again, leaving the others' answers and typed names
   // where they are.
   const retry = (server: Server): void => {
-    setRetrying((current) => new Set(current).add(server.id));
+    setRetrying((current) => new Set(current).add(server.profileName));
     void (async () => {
       try {
         const answer = await preview(server);
-        setPreviews((current) => new Map(current).set(server.id, answer));
+        setPreviews((current) =>
+          new Map(current).set(server.profileName, answer),
+        );
         setFailures((current) => {
           const next = new Map(current);
-          next.delete(server.id);
+          next.delete(server.profileName);
           return next;
         });
       } catch (error) {
         setFailures((current) =>
-          new Map(current).set(server.id, normalizeCommandError(error).message),
+          new Map(current).set(
+            server.profileName,
+            normalizeCommandError(error).message,
+          ),
         );
       } finally {
         setRetrying((current) => {
           const next = new Set(current);
-          next.delete(server.id);
+          next.delete(server.profileName);
           return next;
         });
       }
@@ -863,20 +873,24 @@ function ResetMacSheet({
 
   // The servers whose preview answered are the run; a server whose preview
   // did not is left out and said so, not a reason to hold the rest.
-  const included = servers.filter((server) => previews.has(server.id));
-  const excluded = servers.filter((server) => !previews.has(server.id));
+  const included = servers.filter((server) => previews.has(server.profileName));
+  const excluded = servers.filter(
+    (server) => !previews.has(server.profileName),
+  );
   const ready =
     !loading &&
     retrying.size === 0 &&
     included.length > 0 &&
-    included.every((server) => typed[server.id] === server.id);
+    included.every(
+      (server) => typed[server.profileName] === server.profileName,
+    );
   const stores = accountStores(snapshot);
 
   // Each server may configure a different reset preview token TTL. Display the
   // expiration notice only after all server previews have responded, without
   // assuming a fallback duration.
   const lifetimes = included.map(
-    (server) => previews.get(server.id)?.expiresInSeconds,
+    (server) => previews.get(server.profileName)?.expiresInSeconds,
   );
   const answered =
     !loading &&
@@ -891,7 +905,7 @@ function ResetMacSheet({
       : `Confirmations expire per server: ${included
           .map(
             (server) =>
-              `${serverDisplayName(server)} (${previews.get(server.id)?.expiresInSeconds} seconds)`,
+              `${serverDisplayLabel(server)} (${previews.get(server.profileName)?.expiresInSeconds} seconds)`,
           )
           .join(', ')}.`;
 
@@ -924,11 +938,11 @@ function ResetMacSheet({
                 let done = 0;
                 try {
                   for (const server of included) {
-                    const preview = previews.get(server.id);
+                    const preview = previews.get(server.profileName);
                     if (!preview) continue;
                     await bridge.resetServer(
-                      server.id,
-                      server.id,
+                      server.profileName,
+                      server.profileName,
                       preview.token,
                     );
                     done += 1;
@@ -973,12 +987,12 @@ function ResetMacSheet({
         </InsetRow>
       </Inset>
       {servers.map((server) => {
-        const preview = previews.get(server.id);
-        const failure = failures.get(server.id);
+        const preview = previews.get(server.profileName);
+        const failure = failures.get(server.profileName);
         return (
-          <div key={server.id}>
+          <div key={server.profileName}>
             <SectionLabel>
-              {serverDisplayName(server)} · {server.id}
+              {serverDisplayLabel(server)} · {server.profileName}
             </SectionLabel>
             <Inset>
               {failure ? (
@@ -987,8 +1001,8 @@ function ResetMacSheet({
                   action={
                     <Button
                       size="sm"
-                      disabled={busy || retrying.has(server.id)}
-                      busy={retrying.has(server.id)}
+                      disabled={busy || retrying.has(server.profileName)}
+                      busy={retrying.has(server.profileName)}
                       onClick={() => retry(server)}
                     >
                       Retry preview
@@ -1035,15 +1049,15 @@ function ResetMacSheet({
               )}
               <InsetRow label="Confirm">
                 <input
-                  value={typed[server.id] ?? ''}
+                  value={typed[server.profileName] ?? ''}
                   disabled={!preview}
                   onChange={(event) =>
                     setTyped((current) => ({
                       ...current,
-                      [server.id]: event.target.value,
+                      [server.profileName]: event.target.value,
                     }))
                   }
-                  placeholder={`Type "${server.id}" to confirm`}
+                  placeholder="Type server profile name to confirm"
                 />
               </InsetRow>
             </Inset>

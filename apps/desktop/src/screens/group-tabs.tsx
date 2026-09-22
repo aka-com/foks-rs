@@ -22,8 +22,8 @@ import {
   chatAvailable,
   plural,
   storeOperationAvailability,
-  serverDisplayName,
-  serverName as displayServerName,
+  serverDisplayLabel,
+  serverDisplayLabelForStore as displayServerName,
   serverOf,
   shortId,
   storeDescriptionState,
@@ -64,7 +64,7 @@ function noChannelsReason(
   const server = serverOf(snapshot, store.id);
   if (!server) return 'This team’s server is not configured on this device.';
   if (server.services.chat === false)
-    return `Chat is not enabled on ${serverDisplayName(server)}.`;
+    return `Chat is not enabled on ${serverDisplayLabel(server)}.`;
   return undefined;
 }
 
@@ -345,7 +345,7 @@ export function IncompleteGroupPage({
   onNavigate: (location: Location) => void;
 }): ReactNode {
   const server = serverOf(snapshot, store.id);
-  const serverName = server ? serverDisplayName(server) : store.server;
+  const serverName = server ? serverDisplayLabel(server) : store.server;
   const account = snapshot.accounts.find(
     (candidate) =>
       candidate.alias === store.account && candidate.server === store.server,

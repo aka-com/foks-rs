@@ -132,12 +132,7 @@ export const vaultCommands: Pick<
       nullableString(value, 'pick_import_file response'),
     ),
   releaseImportFile: (sourcePath) =>
-    checked(
-      'release_import_file',
-      { sourcePath },
-      decodeCommandAck,
-      false,
-    ),
+    checked('release_import_file', { sourcePath }, decodeCommandAck, false),
   replaceDroppedFile: ({ storeId, path, version, sourcePath }) =>
     checkedMutation(
       'replace_dropped_file',

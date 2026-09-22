@@ -226,7 +226,9 @@ test('the join sheet names a configured profile rather than asking for one', asy
       return { team_id: '3'.repeat(66), host_id: 'a'.repeat(66) };
     },
   };
-  const other = FIXTURE.servers.find((server) => server.name !== 'local');
+  const other = FIXTURE.servers.find(
+    (server) => server.profileName !== 'local',
+  );
   assert.ok(other);
   const r = ui.render(
     await overlay(
@@ -251,12 +253,12 @@ test('the join sheet names a configured profile rather than asking for one', asy
     ![...picker.options].some((option) => option.value === 'local'),
     'the home profile is offered as a remote one',
   );
-  ui.fireEvent.change(picker, { target: { value: other.name } });
+  ui.fireEvent.change(picker, { target: { value: other.profileName } });
   ui.fireEvent.click(r.getByText('Continue'));
   await ui.waitFor(() => assert.equal(seen.length, 1));
   assert.deepEqual(seen[0], {
     action: 'preview-remote',
-    remote_profile: other.name,
+    remote_profile: other.profileName,
     invite: 'Invite123',
   });
 });

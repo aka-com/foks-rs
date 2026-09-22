@@ -212,7 +212,7 @@ test('access expiring between render and click disables Show and explains the re
     ...p.props.snapshot,
     observedExpiredLeases: [],
     servers: p.props.snapshot.servers.map((server) =>
-      server.id === store.server
+      server.profileName === store.server
         ? {
             ...server,
             compatibility: {
@@ -460,7 +460,7 @@ test('an access generation quarantines old read flights across expiry and renewa
   p.props.snapshot = {
     ...p.props.snapshot,
     servers: p.props.snapshot.servers.map((server) =>
-      server.id === store.server
+      server.profileName === store.server
         ? {
             ...server,
             compatibility: {
@@ -488,7 +488,7 @@ test('an access generation quarantines old read flights across expiry and renewa
   p.props.snapshot = {
     ...p.props.snapshot,
     servers: p.props.snapshot.servers.map((server) =>
-      server.id === store.server
+      server.profileName === store.server
         ? {
             ...server,
             compatibility: {

@@ -98,7 +98,7 @@ test('startup checks saved profiles but ordinary catalog reads do not need a pre
   await f.clock.advance(30_000);
   assert.ok(f.catalogs() > 0);
   assert.equal(probes, initial);
-  f.service.reconnect(FIXTURE.servers[0].id);
+  f.service.reconnect(FIXTURE.servers[0].profileName);
   await f.clock.advance(0);
   assert.equal(probes, initial + 1);
   f.service.dispose();
@@ -120,7 +120,7 @@ test('the result of a first observation does not run the observation again', asy
     ...ready(),
     servers: ready().servers.map((server) => ({
       ...server,
-      host_id: `${server.id}-bound`,
+      host_id: `${server.profileName}-bound`,
       trust: { status: 'verified' as const },
     })),
   });
@@ -143,8 +143,8 @@ test('a reconfigured probe endpoint is observed without waiting for the interval
   f.setSnapshot({
     ...ready(),
     servers: ready().servers.map((server) =>
-      server.id === reconfigured
-        ? { ...server, configuredProbe: 'foks.example.org' }
+      server.profileName === reconfigured
+        ? { ...server, configuredEndpoint: 'foks.example.org' }
         : server,
     ),
   });
@@ -155,7 +155,7 @@ test('a reconfigured probe endpoint is observed without waiting for the interval
 });
 
 test('a failing profile backs off independently; focus storms do not bypass backoff', async () => {
-  const failed = FIXTURE.servers[0].id;
+  const failed = FIXTURE.servers[0].profileName;
   const calls = new Map<string, number>();
   const f = setup(async (profile) => {
     calls.set(profile, (calls.get(profile) ?? 0) + 1);
@@ -166,7 +166,7 @@ test('a failing profile backs off independently; focus storms do not bypass back
   for (let i = 0; i < 20; i++) f.service.wake('foreground');
   await f.clock.advance(3_000);
   assert.equal(calls.get(failed), 3);
-  assert.equal(calls.get(FIXTURE.servers[1].id), 1);
+  assert.equal(calls.get(FIXTURE.servers[1].profileName), 1);
   f.service.wake('network');
   await f.clock.advance(0);
   assert.equal(calls.get(failed), 4);

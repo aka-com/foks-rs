@@ -45,7 +45,7 @@ export function useAccessRuntime({
     const changed: string[] = [];
     for (const server of latest.servers) {
       const inventory = latest.profileInventory.find(
-        (entry) => entry.profile === server.id,
+        (entry) => entry.profile === server.profileName,
       );
       if (
         server.passiveStatus.status !== 'available' ||
@@ -54,17 +54,20 @@ export function useAccessRuntime({
         continue;
       const identity = JSON.stringify([
         server.host_id,
-        server.configuredProbe,
+        server.configuredEndpoint,
         latest.accounts
-          .filter((account) => account.server === server.id)
+          .filter((account) => account.server === server.profileName)
           .map((account) => [account.store, account.alias, account.username])
           .sort(),
       ]);
-      if (next.has(server.id) && next.get(server.id) !== identity) {
-        lifetime.retire('access-change', server.id);
-        changed.push(server.id);
+      if (
+        next.has(server.profileName) &&
+        next.get(server.profileName) !== identity
+      ) {
+        lifetime.retire('access-change', server.profileName);
+        changed.push(server.profileName);
       }
-      next.set(server.id, identity);
+      next.set(server.profileName, identity);
     }
     if (latest.profileInventoryStatus === 'complete') {
       lifetime.retainProfiles(latest.catalogProfiles);

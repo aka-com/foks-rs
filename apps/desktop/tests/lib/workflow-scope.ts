@@ -16,10 +16,10 @@ export async function workflowScope(
   )) as typeof import('../../src/fixture');
   const ready: AgentSnapshot = snapshot ?? {
     ...FIXTURE,
-    servers: ['personal', 'acme', 'local', 'host'].map((id) => ({
+    servers: ['personal', 'acme', 'local', 'host'].map((profileName) => ({
       ...FIXTURE.servers[0],
-      id,
-      name: id,
+      profileName,
+      configuredEndpoint: profileName,
       trust: { status: 'verified' },
       compatibility: { status: 'not-required' },
       passiveStatus: { status: 'available', source: 'signed-server-status' },

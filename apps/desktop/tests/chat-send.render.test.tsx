@@ -45,7 +45,7 @@ async function setup(override?: (base: Bridge) => Bridge) {
   const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((s) =>
-      s.id === 'acme'
+      s.profileName === 'acme'
         ? {
             ...s,
             compatibility: { status: 'not-required' as const },

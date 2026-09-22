@@ -32,14 +32,20 @@ async function harness() {
   const base = mockBridge(FIXTURE);
   const source = await base.listCatalog();
   const store = FIXTURE.stores.find((entry) => entry.id === 'acct:personal')!;
-  const server = FIXTURE.servers.find((entry) => entry.id === store.server)!;
+  const server = FIXTURE.servers.find(
+    (entry) => entry.profileName === store.server,
+  )!;
   const catalog = {
     ...source,
-    profiles: [server.id],
+    profiles: [server.profileName],
     stores: [store],
     knownStores: [store],
     inventory: [
-      { profile: server.id, accountsComplete: true, teamsComplete: true },
+      {
+        profile: server.profileName,
+        accountsComplete: true,
+        teamsComplete: true,
+      },
     ],
     items: [],
     failures: [],
@@ -52,10 +58,9 @@ async function harness() {
     listServers: async () =>
       decodeServers([
         {
-          id: server.id,
-          name: server.name,
-          label: server.label,
-          configured_probe: server.configuredProbe,
+          profile_name: server.profileName,
+          display_label: server.displayLabel,
+          configured_endpoint: server.configuredEndpoint,
           accounts: server.accounts,
         },
       ]),
@@ -81,7 +86,7 @@ test('startup discovery skips profiles without the teams capability', async () =
     ],
     stores: [store],
     accounts: FIXTURE.accounts.filter((entry) => entry.store === store.id),
-    catalogProfiles: [server.id],
+    catalogProfiles: [server.profileName],
   };
   let calls = 0;
   assert.equal(
@@ -130,7 +135,10 @@ test('catalog trust blocking remains authoritative when listServers contains onl
   const snapshot = await loadSnapshot(
     {
       ...bridge,
-      listCatalog: async () => ({ ...catalog, blockedProfiles: [server.id] }),
+      listCatalog: async () => ({
+        ...catalog,
+        blockedProfiles: [server.profileName],
+      }),
       describeServerStatus: async () => {
         statusCalls++;
         throw failure;
@@ -232,7 +240,7 @@ test('compatibility restrictions retain their scope without changing server trus
         failures: [
           {
             scope: 'profile',
-            profile: server.id,
+            profile: server.profileName,
             source: 'KV catalog',
             error: denied,
           },
@@ -274,10 +282,9 @@ test('shared wire contract separates metadata, service support, and compatibilit
   const [metadata] = decodeServers([fixture.configuredServer]);
   assert.ok(metadata);
   assert.deepEqual(metadata, {
-    id: 'work',
-    name: 'work',
-    label: 'Work',
-    configuredProbe: 'foks.example',
+    profileName: 'work',
+    displayLabel: 'Work',
+    configuredEndpoint: 'foks.example',
     accounts: ['personal'],
     host_id: null,
     chain: null,
@@ -406,7 +413,7 @@ test('compatibility decoding preserves rejected outcomes and validates grant set
     () =>
       decodeServerStatus({
         profile: 'p',
-        configuredProbe: 'p',
+        configuredEndpoint: 'p',
         host: null,
         chatSupported: true,
         compatibility: { status: 'not-required' },

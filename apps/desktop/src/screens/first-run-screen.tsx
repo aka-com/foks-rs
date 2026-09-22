@@ -1797,7 +1797,9 @@ function FirstRunSession({
           <dl className="local-server-facts">
             <dt>Address</dt>
             <dd>
-              <code>{managedStatus?.configuredProbe ?? 'localhost:4430'}</code>
+              <code>
+                {managedStatus?.configuredEndpoint ?? 'localhost:4430'}
+              </code>
             </dd>
             <dt>Trust</dt>
             <dd>App-managed certificate</dd>

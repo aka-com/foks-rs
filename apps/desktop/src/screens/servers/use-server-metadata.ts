@@ -18,7 +18,7 @@ function byProfile<T>(
   return new Map(
     snapshot.servers.flatMap((server) => {
       const row = rows?.get(serverBinding(server));
-      return row ? [[server.id, row] as const] : [];
+      return row ? [[server.profileName, row] as const] : [];
     }),
   );
 }
@@ -129,7 +129,9 @@ export function useServerMetadata({
   }, [controller]);
 
   const seededCheck = useRef(false);
-  const selected = snapshot.servers.find((server) => server.id === profile);
+  const selected = snapshot.servers.find(
+    (server) => server.profileName === profile,
+  );
   useEffect(() => {
     if (
       !bridge.fixtureSnapshot ||
@@ -151,7 +153,7 @@ export function useServerMetadata({
       snapshot.servers.flatMap((server) => {
         const report = current?.statuses.get(serverBinding(server));
         return report?.server === server
-          ? [[server.id, report.status] as const]
+          ? [[server.profileName, report.status] as const]
           : [];
       }),
     ),

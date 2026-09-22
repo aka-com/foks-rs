@@ -2,7 +2,7 @@ import type { CommandError } from './bridge';
 import type { Server } from './model';
 
 export type ProfileIdentityResult =
-  | { status: 'connected'; hostId: string; configuredProbe: string }
+  | { status: 'connected'; hostId: string; configuredEndpoint: string }
   | { status: 'failed'; error: CommandError };
 export type ProfileCompatibilityResult =
   | { status: 'not-required' | 'renewed' | 'unchanged' }
@@ -17,7 +17,7 @@ export type ProfileConnectivity =
   | {
       status: 'observed';
       profile: string;
-      configuredProbe: string;
+      configuredEndpoint: string;
       hostId: string | null;
       observedAt: number;
       identity: ProfileIdentityResult;
@@ -66,11 +66,11 @@ export function observeProfileConnection(
 ): ProfileConnectivity {
   const identity = report.identity;
   if (
-    server.id !== report.profile ||
+    server.profileName !== report.profile ||
     (identity.status === 'connected' &&
-      (!canonicalProbeEndpoint(server.configuredProbe) ||
-        canonicalProbeEndpoint(server.configuredProbe) !==
-          canonicalProbeEndpoint(identity.configuredProbe) ||
+      (!canonicalProbeEndpoint(server.configuredEndpoint) ||
+        canonicalProbeEndpoint(server.configuredEndpoint) !==
+          canonicalProbeEndpoint(identity.configuredEndpoint) ||
         (server.host_id !== null && server.host_id !== identity.hostId) ||
         server.trust.status === 'unprobed'))
   )
@@ -85,8 +85,8 @@ export function observeProfileConnection(
     );
   return {
     status: 'observed',
-    profile: server.id,
-    configuredProbe: server.configuredProbe,
+    profile: server.profileName,
+    configuredEndpoint: server.configuredEndpoint,
     hostId: identity.status === 'connected' ? identity.hostId : server.host_id,
     observedAt,
     identity: structuredClone(report.identity),
@@ -104,7 +104,7 @@ export function connectionFactsUnchanged(
 ): boolean {
   const { identity, compatibility } = report;
   if (
-    server.id !== report.profile ||
+    server.profileName !== report.profile ||
     identity.status !== 'connected' ||
     // Only a verified server has a stored host identity that can be compared with
     // the observation.
@@ -113,8 +113,8 @@ export function connectionFactsUnchanged(
     server.host_id !== identity.hostId
   )
     return false;
-  const probe = canonicalProbeEndpoint(server.configuredProbe);
-  if (!probe || probe !== canonicalProbeEndpoint(identity.configuredProbe))
+  const probe = canonicalProbeEndpoint(server.configuredEndpoint);
+  if (!probe || probe !== canonicalProbeEndpoint(identity.configuredEndpoint))
     return false;
   return compatibility.status === 'not-required'
     ? server.compatibility.status === 'not-required'
@@ -126,8 +126,8 @@ export function retainProfileConnection(
   observation: ProfileConnectivity | undefined,
 ): ProfileConnectivity {
   return observation?.status === 'observed' &&
-    observation.profile === server.id &&
-    observation.configuredProbe === server.configuredProbe &&
+    observation.profile === server.profileName &&
+    observation.configuredEndpoint === server.configuredEndpoint &&
     (observation.hostId === server.host_id ||
       (server.host_id === null && server.trust.status === 'unknown'))
     ? observation

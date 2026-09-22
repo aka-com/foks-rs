@@ -50,8 +50,8 @@ import {
   readersOf,
   roleChipLabel,
   roleRank,
-  serverDisplayName,
-  serverName as displayServerName,
+  serverDisplayLabel,
+  serverDisplayLabelForStore as displayServerName,
   serverOf,
   shortId,
   storeDescriptionState,
@@ -510,10 +510,10 @@ function FederationEntryRow({
   manageable: boolean;
 }): ReactNode {
   const remoteServer = snapshot.servers.find(
-    (server) => server.id === entry.remote_profile,
+    (server) => server.profileName === entry.remote_profile,
   );
   const remoteName = remoteServer
-    ? serverDisplayName(remoteServer)
+    ? serverDisplayLabel(remoteServer)
     : entry.remote_profile;
   const memberReason =
     'Every member of a federated team holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
@@ -961,7 +961,7 @@ function SettingsTab({
             </Button>
           }
         >
-          {server ? serverDisplayName(server) : store.server}
+          {server ? serverDisplayLabel(server) : store.server}
         </InsetRow>
         <InsetRow label="Your account">
           {account?.username ?? store.account} · {mine ? roleText(mine) : '—'}
@@ -1062,7 +1062,7 @@ function SettingsTab({
           <span className="t">
             <b>
               Reset this device’s state for{' '}
-              {server ? serverDisplayName(server) : store.server}
+              {server ? serverDisplayLabel(server) : store.server}
             </b>
             <small>
               Removes locally stored keys and server data from this device.
@@ -1783,7 +1783,7 @@ export function GroupSheet({
                         selected={remote?.id === group.id}
                         onSelect={() => setRemoteStoreId(group.id)}
                         title={group.alias}
-                        detail={`on ${host ? serverDisplayName(host) : group.server}`}
+                        detail={`on ${host ? serverDisplayLabel(host) : group.server}`}
                       />
                     );
                   })}

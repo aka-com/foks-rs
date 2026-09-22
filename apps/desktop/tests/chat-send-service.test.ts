@@ -74,7 +74,7 @@ async function setup(
   const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((s) =>
-      s.id === 'acme'
+      s.profileName === 'acme'
         ? {
             ...s,
             compatibility: { status: 'not-required' as const },

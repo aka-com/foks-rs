@@ -1,6 +1,6 @@
 import {
   PROTOCOL_CAPABILITIES,
-  serverDisplayName,
+  serverDisplayLabel,
   serverFactAvailability,
 } from '../model';
 import type {
@@ -74,10 +74,10 @@ export function notificationsOf(
     return copy
       ? [
           {
-            id: `${availability.available ? 'available' : availability.reason}-${server.id}`,
-            profile: server.id,
+            id: `${availability.available ? 'available' : availability.reason}-${server.profileName}`,
+            profile: server.profileName,
             severity: 'crit' as const,
-            title: `${serverDisplayName(server)} is locked`,
+            title: `${serverDisplayLabel(server)} is locked`,
             ...copy,
           },
         ]

@@ -151,7 +151,7 @@ test('chat-only compatibility keeps Channels usable without a KV inventory or te
   const snapshot: AgentSnapshot = {
     ...base,
     servers: base.servers.map((server) =>
-      server.id === 'personal'
+      server.profileName === 'personal'
         ? {
             ...server,
             compatibility: {
@@ -216,7 +216,7 @@ test('the Channels tab reads the clock afresh, so a lapse closes it', async () =
   const snapshot: AgentSnapshot = {
     ...base,
     servers: base.servers.map((server) =>
-      server.id === 'personal'
+      server.profileName === 'personal'
         ? {
             ...server,
             compatibility: {

@@ -309,8 +309,8 @@ export interface Bridge {
     label: string | null,
   ): Promise<ServerLabelResponse>;
   removeServerAndCredentials(
-    profile: string,
-    confirmation: string,
+    profileName: string,
+    confirmedProfileName: string,
   ): Promise<{ profile: string; removed: true }>;
   listAccountDevices(accountStoreId: StoreRef): Promise<AccountDevice[]>;
   removeAccountDevice(
@@ -378,8 +378,8 @@ export interface Bridge {
   accountPassphraseStatus(accountStoreId: StoreRef): Promise<PassphraseStatus>;
   describeReset(profile: string): Promise<ResetPreview>;
   resetServer(
-    profile: string,
-    confirmation: string,
+    profileName: string,
+    confirmedProfileName: string,
     token: string,
   ): Promise<MutationResponse>;
   listYubiCards(profile: string): Promise<{ serial: number }[]>;

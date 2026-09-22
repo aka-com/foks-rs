@@ -394,12 +394,12 @@ export class ChatInboxService {
     this.accessGenerations = accessGenerations;
     const binding = (store: TeamStore): string => {
       const server = agentSnapshot.servers.find(
-        (entry) => entry.id === store.server,
+        (entry) => entry.profileName === store.server,
       );
       return JSON.stringify([
         identity(store),
         server?.host_id,
-        server?.configuredProbe,
+        server?.configuredEndpoint,
         accessGenerations.get(store.server) ?? 0,
       ]);
     };
@@ -446,7 +446,7 @@ export class ChatInboxService {
       }
       if (!account.teams.has(store.id)) {
         const server = agentSnapshot.servers.find(
-          (entry) => entry.id === store.server,
+          (entry) => entry.profileName === store.server,
         );
         account.teams.set(store.id, {
           generation: 0,
@@ -478,7 +478,7 @@ export class ChatInboxService {
       } else {
         const team = account.teams.get(store.id);
         const server = agentSnapshot.servers.find(
-          (entry) => entry.id === store.server,
+          (entry) => entry.profileName === store.server,
         );
         if (team) {
           team.store = store;

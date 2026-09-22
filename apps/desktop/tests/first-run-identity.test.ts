@@ -34,7 +34,9 @@ const pending = transitionFirstRun(
 const snapshot = {
   ...FIXTURE,
   servers: FIXTURE.servers.map((server) =>
-    server.id === 'personal' ? { ...server, host_id: profile.hostId } : server,
+    server.profileName === 'personal'
+      ? { ...server, host_id: profile.hostId }
+      : server,
   ),
 };
 

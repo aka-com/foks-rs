@@ -99,7 +99,7 @@ async function setup(hooks: Hooks = {}) {
   const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'acme'
+      server.profileName === 'acme'
         ? {
             ...server,
             compatibility: { status: 'not-required' as const },

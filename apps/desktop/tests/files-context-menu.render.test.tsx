@@ -221,7 +221,7 @@ test('read actions recheck a lease that expires while the menu is open', async (
   let now = Date.now() / 1000;
   const mounted = await mount(() => now);
   const lease = mounted.snapshot.servers.find(
-    (server) => server.id === 'acme',
+    (server) => server.profileName === 'acme',
   )!.compatibility;
   assert.equal(lease.status, 'required');
   if (lease.status !== 'required') return;

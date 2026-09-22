@@ -16,7 +16,7 @@ import type { ChatAction, ChatReply } from '../chat-contract';
 import {
   chatAvailable,
   partiesOf,
-  serverName,
+  serverDisplayLabelForStore,
   storeOperationAvailability,
   storeDescription,
   storeDescriptionState,
@@ -271,7 +271,7 @@ export function ChatScreen({
         <h2>{store.name} chat is locked</h2>
         <p role="alert">
           {storeDescription(agentSnapshot, store, describeOptions)} on{' '}
-          {serverName(agentSnapshot, store)}.{' '}
+          {serverDisplayLabelForStore(agentSnapshot, store)}.{' '}
           {lapsed
             ? 'Every store on that server is unavailable until the server is checked again. Messages already on this device are kept.'
             : 'Messages already on this device are kept.'}

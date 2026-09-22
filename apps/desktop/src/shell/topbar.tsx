@@ -22,7 +22,7 @@ import {
   initials,
   hue as accountHue,
   usernameOf,
-  serverLocalAlias,
+  serverDisplayLabelOrLoading,
   storeHues,
   storeNavigationOrder,
   storeOf,
@@ -123,8 +123,10 @@ export function crumbTrail(
       trail.push(SETTINGS_SECTION_LABEL[section]);
       if (section === 'account' && location.profile)
         trail.push(
-          serverLocalAlias(
-            snapshot?.servers.find((entry) => entry.id === location.profile),
+          serverDisplayLabelOrLoading(
+            snapshot?.servers.find(
+              (entry) => entry.profileName === location.profile,
+            ),
           ),
         );
       break;

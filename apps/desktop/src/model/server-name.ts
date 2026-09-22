@@ -1,18 +1,20 @@
 import type { AccountStore, AgentSnapshot } from './types';
-import { serverDisplayName } from './types';
+import { serverDisplayLabel } from './types';
 
-/** Human-readable server name, with profile disambiguation for duplicate labels. */
-export function serverName(
+/** Human-readable server label, with profile disambiguation for duplicates. */
+export function serverDisplayLabelForStore(
   snapshot: AgentSnapshot,
   store: Pick<AccountStore, 'server'>,
 ): string {
-  const server = snapshot.servers.find((entry) => entry.id === store.server);
+  const server = snapshot.servers.find(
+    (entry) => entry.profileName === store.server,
+  );
   if (!server) return store.server;
-  const displayName = serverDisplayName(server);
+  const displayName = serverDisplayLabel(server);
   const duplicate = snapshot.servers.some(
     (candidate) =>
-      candidate.id !== server.id &&
-      serverDisplayName(candidate) === displayName,
+      candidate.profileName !== server.profileName &&
+      serverDisplayLabel(candidate) === displayName,
   );
-  return duplicate ? `${displayName} · ${server.name}` : displayName;
+  return duplicate ? `${displayName} · ${server.profileName}` : displayName;
 }

@@ -16,7 +16,7 @@ const SERVER = { ...FIXTURE.servers[0], host_id: `02${'11'.repeat(32)}` };
 const CONNECTED = {
   status: 'connected' as const,
   hostId: SERVER.host_id,
-  configuredProbe: `${SERVER.configuredProbe}:4430`,
+  configuredEndpoint: `${SERVER.configuredEndpoint}:4430`,
 };
 
 const failure = (code: string) => ({
@@ -25,18 +25,18 @@ const failure = (code: string) => ({
   retryable: true,
   ambiguous: false,
   fatal: false,
-  details: { profile: SERVER.id },
+  details: { profile: SERVER.profileName },
 });
 
 test('identity reachability and compatibility renewal remain independent observations', () => {
   const server = SERVER;
   const report = decodeProfileReconciliation(
     {
-      profile: server.id,
+      profile: server.profileName,
       identity: CONNECTED,
       compatibility: { status: 'failed', error: failure('capability-denied') },
     },
-    server.id,
+    server.profileName,
   );
   const observation = observeProfileConnection(server, report, 100);
   assert.equal(observation.status, 'observed');
@@ -52,7 +52,7 @@ test('reachability observations never grant permission or turn endpoint outages 
   const connectivity = observeProfileConnection(
     original,
     {
-      profile: original.id,
+      profile: original.profileName,
       identity: CONNECTED,
       compatibility: { status: 'renewed' },
     },
@@ -100,7 +100,7 @@ test('reachability observations never grant permission or turn endpoint outages 
   const network = observeProfileConnection(
     original,
     {
-      profile: original.id,
+      profile: original.profileName,
       identity: { status: 'failed', error: failure('server-unavailable') },
       compatibility: { status: 'not-required' },
     },
@@ -121,7 +121,7 @@ test('reachability observations never grant permission or turn endpoint outages 
   const missing = observeProfileConnection(
     original,
     {
-      profile: original.id,
+      profile: original.profileName,
       identity: { status: 'failed', error: failure('saved-trust-missing') },
       compatibility: { status: 'not-required' },
     },
@@ -162,11 +162,11 @@ test('only security failures restrict identity; transport failure is not a trust
   ]) {
     const report = decodeProfileReconciliation(
       {
-        profile: server.id,
+        profile: server.profileName,
         identity: { status: 'failed', error: failure(code) },
         compatibility: { status: 'not-required' },
       },
-      server.id,
+      server.profileName,
     );
     const observation = observeProfileConnection(server, report, 100);
     assert.equal(
@@ -183,13 +183,13 @@ test('verified identity results bind canonical endpoints and cannot cross pin ch
   assert.equal(canonicalProbeEndpoint('https://foks.app'), null);
   assert.equal(canonicalProbeEndpoint('foks.app:0'), null);
   const report = {
-    profile: SERVER.id,
+    profile: SERVER.profileName,
     identity: CONNECTED,
     compatibility: { status: 'not-required' as const },
   };
   for (const changed of [
     { ...SERVER, host_id: 'different' },
-    { ...SERVER, configuredProbe: 'other.example' },
+    { ...SERVER, configuredEndpoint: 'other.example' },
   ])
     assert.throws(() => observeProfileConnection(changed, report, 10), {
       code: 'catalog-read-retired',
@@ -197,7 +197,7 @@ test('verified identity results bind canonical endpoints and cannot cross pin ch
   assert.throws(() =>
     decodeProfileReconciliation(
       { ...report, identity: { status: 'connected' } },
-      SERVER.id,
+      SERVER.profileName,
     ),
   );
 });
@@ -207,7 +207,7 @@ test('old reachability is discarded after profile address or pinned identity cha
   const observation = observeProfileConnection(
     server,
     {
-      profile: server.id,
+      profile: server.profileName,
       identity: CONNECTED,
       compatibility: { status: 'not-required' },
     },
@@ -215,8 +215,8 @@ test('old reachability is discarded after profile address or pinned identity cha
   );
   assert.equal(retainProfileConnection(server, observation), observation);
   for (const changed of [
-    { ...server, id: 'other' },
-    { ...server, configuredProbe: 'other.example' },
+    { ...server, profileName: 'other' },
+    { ...server, configuredEndpoint: 'other.example' },
     { ...server, host_id: 'different-host' },
   ])
     assert.deepEqual(retainProfileConnection(changed, observation), {
@@ -230,7 +230,7 @@ test('only an observation that restates every recorded fact counts as unchanged'
     compatibility: { status: 'not-required' } as const,
   };
   const report = {
-    profile: server.id,
+    profile: server.profileName,
     identity: CONNECTED,
     compatibility: { status: 'not-required' } as const,
   };
@@ -239,7 +239,7 @@ test('only an observation that restates every recorded fact counts as unchanged'
   assert.equal(
     connectionFactsUnchanged(server, {
       ...report,
-      identity: { ...CONNECTED, configuredProbe: SERVER.configuredProbe },
+      identity: { ...CONNECTED, configuredEndpoint: SERVER.configuredEndpoint },
     }),
     true,
   );
@@ -255,7 +255,7 @@ test('only an observation that restates every recorded fact counts as unchanged'
     },
     {
       ...report,
-      identity: { ...CONNECTED, configuredProbe: 'moved.example.net' },
+      identity: { ...CONNECTED, configuredEndpoint: 'moved.example.net' },
     },
     { ...report, compatibility: { status: 'renewed' as const } },
     // A lease the agent did not renew says nothing about a server that

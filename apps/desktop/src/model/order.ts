@@ -27,7 +27,7 @@ function interruptedLast<T extends Store>(stores: readonly T[]): T[] {
  */
 export function storeDisplayOrder(snapshot: AgentSnapshot): Store[] {
   const servers = new Map(
-    snapshot.servers.map((server, index) => [server.id, index]),
+    snapshot.servers.map((server, index) => [server.profileName, index]),
   );
   const source = new Map(
     snapshot.stores.map((store, index) => [store.id, index]),

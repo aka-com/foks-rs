@@ -5,7 +5,7 @@ import {
   projectCatalogFreshness,
   sameStoreIdentity,
 } from '../catalog-state';
-import { itemKey, serverDisplayName, serverFactAvailability } from '../model';
+import { itemKey, serverDisplayLabel, serverFactAvailability } from '../model';
 import { consumeProfileRosterStaleness } from '../roster-staleness';
 import type {
   AgentSnapshot,
@@ -270,13 +270,16 @@ async function projectCatalogCounted(
         const metadata = response.localMetadata?.profiles.find(
           (entry) => entry.profile === profile,
         );
-        const previous = base?.servers.find((entry) => entry.id === profile);
+        const previous = base?.servers.find(
+          (entry) => entry.profileName === profile,
+        );
         return {
-          id: profile,
-          name: profile,
-          label: metadata?.label ?? previous?.label ?? null,
-          configuredProbe:
-            metadata?.configuredProbe ?? previous?.configuredProbe ?? profile,
+          profileName: profile,
+          displayLabel: metadata?.label ?? previous?.displayLabel ?? null,
+          configuredEndpoint:
+            metadata?.configuredEndpoint ??
+            previous?.configuredEndpoint ??
+            profile,
           host_id: null,
           chain: null,
           epoch: null,
@@ -300,7 +303,8 @@ async function projectCatalogCounted(
         };
       })
     : (await bridge.listServers(response.generation)).filter(
-        (server) => profileScope === undefined || server.id === profileScope,
+        (server) =>
+          profileScope === undefined || server.profileName === profileScope,
       );
   counts.servers = listedServers.length;
   const statusResults =
@@ -310,13 +314,13 @@ async function projectCatalogCounted(
             .filter(
               (server) =>
                 server.trust.status !== 'blocked' &&
-                !blockedProfiles.has(server.id),
+                !blockedProfiles.has(server.profileName),
             )
             .map(async (server) => {
               const statusActivity = activity?.child('Loading server status');
               try {
                 const cached = response.localMetadata?.profiles.find(
-                  (entry) => entry.profile === server.id,
+                  (entry) => entry.profile === server.profileName,
                 );
                 if (embeddedMetadata && (cached?.error || !cached?.status))
                   throw (
@@ -327,13 +331,13 @@ async function projectCatalogCounted(
                   );
                 const status = embeddedMetadata
                   ? cached!.status!
-                  : await sharedServerStatus(bridge, server.id);
-                if (status.profile !== server.id) {
+                  : await sharedServerStatus(bridge, server.profileName);
+                if (status.profile !== server.profileName) {
                   throw new Error(
                     'describe_server_status returned a different profile.',
                   );
                 }
-                return { profile: server.id, status };
+                return { profile: server.profileName, status };
               } catch (error) {
                 const typed = normalizeCommandError(error);
                 if (
@@ -345,7 +349,7 @@ async function projectCatalogCounted(
                   throw typed;
                 }
                 return {
-                  profile: server.id,
+                  profile: server.profileName,
                   error: typed,
                 };
               } finally {
@@ -372,7 +376,8 @@ async function projectCatalogCounted(
   const servers = listedServers.map((server) => {
     if (!bridge.native && !partial) return server;
     const scopedFailures = response.failures.filter(
-      (failure) => failure.scope === 'profile' && failure.profile === server.id,
+      (failure) =>
+        failure.scope === 'profile' && failure.profile === server.profileName,
     );
     const restrictions: ServerRestriction[] = scopedFailures.flatMap(
       (failure) => {
@@ -380,25 +385,30 @@ async function projectCatalogCounted(
         return restriction ? [restriction] : [];
       },
     );
-    const status = statuses.get(server.id);
-    const statusError = statusFailures.get(server.id);
+    const status = statuses.get(server.profileName);
+    const statusError = statusFailures.get(server.profileName);
     const statusRestriction = statusError && restrictionFromError(statusError);
-    const previous = base?.servers.find((entry) => entry.id === server.id);
+    const previous = base?.servers.find(
+      (entry) => entry.profileName === server.profileName,
+    );
     const pendingSameIdentity =
       partial &&
       statusError?.code === 'catalog-loading' &&
-      previous?.configuredProbe === server.configuredProbe;
+      previous?.configuredEndpoint === server.configuredEndpoint;
     const allRestrictions = [
       ...(pendingSameIdentity ||
       (partial &&
-        !catalogItemsComplete(response, server.id, partial) &&
-        previous?.configuredProbe === server.configuredProbe)
+        !catalogItemsComplete(response, server.profileName, partial) &&
+        previous?.configuredEndpoint === server.configuredEndpoint)
         ? (previous?.restrictions ?? [])
         : []),
       ...restrictions,
       ...(statusRestriction ? [statusRestriction] : []),
     ];
-    if (server.trust.status === 'blocked' || blockedProfiles.has(server.id)) {
+    if (
+      server.trust.status === 'blocked' ||
+      blockedProfiles.has(server.profileName)
+    ) {
       const trustFailure = scopedFailures.find((failure) =>
         [
           'rollback-detected',
@@ -433,7 +443,7 @@ async function projectCatalogCounted(
     )
       return {
         ...previous,
-        label: server.label,
+        displayLabel: server.displayLabel,
         restrictions: allRestrictions,
       };
     if (!status || statusError)
@@ -465,7 +475,7 @@ async function projectCatalogCounted(
       };
     return {
       ...server,
-      configuredProbe: status.configuredProbe,
+      configuredEndpoint: status.configuredEndpoint,
       host_id: status.host?.hostId ?? null,
       chain: status.host?.chain ?? null,
       epoch: status.host?.epoch ?? null,
@@ -483,14 +493,16 @@ async function projectCatalogCounted(
   });
   const observedExpiredLeases = (base?.observedExpiredLeases ?? []).filter(
     (entry) => {
-      const server = servers.find((server) => server.id === entry.profile);
+      const server = servers.find(
+        (server) => server.profileName === entry.profile,
+      );
       const previous = base?.servers.find(
-        (server) => server.id === entry.profile,
+        (server) => server.profileName === entry.profile,
       );
       return (
         server &&
         previous &&
-        server.configuredProbe === previous.configuredProbe &&
+        server.configuredEndpoint === previous.configuredEndpoint &&
         (!server.host_id ||
           !previous.host_id ||
           server.host_id === previous.host_id)
@@ -504,11 +516,12 @@ async function projectCatalogCounted(
       lease.expiresAt <= nowSeconds &&
       !observedExpiredLeases.some(
         (entry) =>
-          entry.profile === server.id && entry.expiresAt === lease.expiresAt,
+          entry.profile === server.profileName &&
+          entry.expiresAt === lease.expiresAt,
       )
     )
       observedExpiredLeases.push({
-        profile: server.id,
+        profile: server.profileName,
         expiresAt: lease.expiresAt,
       });
   }
@@ -516,16 +529,18 @@ async function projectCatalogCounted(
     stores
       .filter((store) => {
         const previous = base?.stores.find((entry) => entry.id === store.id);
-        const server = servers.find((entry) => entry.id === store.server);
+        const server = servers.find(
+          (entry) => entry.profileName === store.server,
+        );
         const previousServer = base?.servers.find(
-          (entry) => entry.id === store.server,
+          (entry) => entry.profileName === store.server,
         );
         return (
           previous &&
           sameStoreIdentity(previous, store) &&
           server &&
           previousServer &&
-          server.configuredProbe === previousServer.configuredProbe &&
+          server.configuredEndpoint === previousServer.configuredEndpoint &&
           (!server.host_id ||
             !previousServer.host_id ||
             server.host_id === previousServer.host_id)
@@ -560,7 +575,7 @@ async function projectCatalogCounted(
           !serverFactAvailability(server, observedExpiredLeases, { nowSeconds })
             .available,
       )
-      .map((server) => server.id),
+      .map((server) => server.profileName),
   );
   // Inactive teams cannot query members or federation until setup is complete;
   // skip those reads.
@@ -573,7 +588,7 @@ async function projectCatalogCounted(
       !unavailableServers.has(store.server) &&
       servers.some(
         (server) =>
-          server.id === store.server &&
+          server.profileName === store.server &&
           serverFactAvailability(
             server,
             observedExpiredLeases,
@@ -766,14 +781,16 @@ async function projectCatalogCounted(
   if (!partial && accounts.length !== availableAccountStoreIds.size) {
     throw new Error('list_accounts omitted an available account store.');
   }
-  const serverIds = new Set(servers.map((server) => server.id));
+  const serverIds = new Set(servers.map((server) => server.profileName));
   if (stores.some((store) => !serverIds.has(store.server))) {
     throw new Error('list_servers omitted a server used by the catalog.');
   }
   const federation = rosters.flatMap((roster) => roster.federation);
   const displayServerById = (profile: string): string => {
-    const server = servers.find((candidate) => candidate.id === profile);
-    return server ? serverDisplayName(server) : profile;
+    const server = servers.find(
+      (candidate) => candidate.profileName === profile,
+    );
+    return server ? serverDisplayLabel(server) : profile;
   };
   const parties: Party[] = rosters
     .flatMap((roster) => roster.parties)
@@ -860,7 +877,7 @@ async function projectCatalogCounted(
         !unavailableServers.has(store.server) &&
         servers.some(
           (server) =>
-            server.id === store.server &&
+            server.profileName === store.server &&
             serverFactAvailability(
               server,
               observedExpiredLeases,
@@ -904,8 +921,9 @@ async function projectCatalogCounted(
       ...server,
       connectivity: retainProfileConnection(
         server,
-        base?.servers.find((previous) => previous.id === server.id)
-          ?.connectivity,
+        base?.servers.find(
+          (previous) => previous.profileName === server.profileName,
+        )?.connectivity,
       ),
     })),
     observedExpiredLeases,

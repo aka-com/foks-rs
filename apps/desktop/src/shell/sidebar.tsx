@@ -20,7 +20,7 @@ import { useSidebarResize } from './use-sidebar-resize';
 import {
   chatAvailable,
   localAliasOf,
-  serverLocalAlias,
+  serverDisplayLabelOrLoading,
   storeAvailability,
   storeDescription,
   storeDescriptionState,
@@ -311,16 +311,18 @@ export function AccountHeader({
     store.account;
   const username = active ? usernameOf(active) : 'No account';
   const activeServer = active
-    ? snapshot.servers.find((candidate) => candidate.id === active.server)
+    ? snapshot.servers.find(
+        (candidate) => candidate.profileName === active.server,
+      )
     : undefined;
   const server = active
-    ? serverLocalAlias(activeServer)
+    ? serverDisplayLabelOrLoading(activeServer)
     : 'None on this device';
   // The foot names the host the account lives on. The reader's own label for
   // that server is the accessible name and the tooltip, where a second line
   // costs nothing; the row itself has one line for it and a hostname is what
   // distinguishes two accounts of the same name.
-  const host = active ? (activeServer?.name ?? server) : server;
+  const host = active ? (activeServer?.configuredEndpoint ?? server) : server;
   // Preserve account-scoped locations when selecting an account; otherwise,
   // open the account's own page, Settings › Account.
   const selectAccount = (store: AccountStore): void => {
@@ -432,9 +434,9 @@ export function AccountHeader({
                             {usernameOf(store)}
                             <small>
                               {localAliasOf(snapshot, store)} ·{' '}
-                              {serverLocalAlias(
+                              {serverDisplayLabelOrLoading(
                                 snapshot.servers.find(
-                                  (entry) => entry.id === serverId,
+                                  (entry) => entry.profileName === serverId,
                                 ),
                               )}
                             </small>

@@ -251,7 +251,7 @@ export function useServerWorkflow({
     }
     setManagedStatusError(null);
     const server = environment.current.snapshot.servers.find(
-      (row) => row.id === managedProfile,
+      (row) => row.profileName === managedProfile,
     );
     if (server?.trust.status === 'blocked' || server?.restrictions.length) {
       setManagedStatusError(
@@ -274,7 +274,7 @@ export function useServerWorkflow({
         if (!status || !isCurrent()) return;
         if (
           status.profile !== managedProfile ||
-          status.configuredProbe !== 'localhost:4430' ||
+          status.configuredEndpoint !== 'localhost:4430' ||
           status.leaseRequired ||
           !status.host
         ) {
@@ -287,7 +287,7 @@ export function useServerWorkflow({
           const refreshed = await environment.current.onRefreshSnapshot(true);
           if (!isCurrent()) return;
           const current = refreshed.servers.filter(
-            (row) => row.id === managedProfile,
+            (row) => row.profileName === managedProfile,
           );
           if (
             current.length !== 1 ||
@@ -354,7 +354,7 @@ export function useServerWorkflow({
     )
       return;
     const current = snapshot.servers.filter(
-      (server) => server.id === managedReport.profile,
+      (server) => server.profileName === managedReport.profile,
     );
     if (
       current.length !== 1 ||
@@ -369,7 +369,7 @@ export function useServerWorkflow({
     }
     send({
       type: 'managed-profile-selected',
-      address: managedStatus.configuredProbe,
+      address: managedStatus.configuredEndpoint,
       profile: managedReport,
       returning,
     });

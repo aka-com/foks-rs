@@ -263,10 +263,10 @@ export const enrollmentCommands: Pick<
     ),
   describeReset: (profile) =>
     checked('describe_reset', { profile }, decodeResetPreview),
-  resetServer: (profile, confirmation, token) =>
+  resetServer: (profileName, confirmedProfileName, token) =>
     checkedMutation(
       'reset_server',
-      { profile, confirmation, token },
+      { profileName, confirmedProfileName, token },
       decodeMutation,
     ),
 };

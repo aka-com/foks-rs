@@ -131,10 +131,9 @@ function listedServer(
     fatal: false,
   };
   return {
-    id,
-    name: id,
-    label: null,
-    configuredProbe: id,
+    profileName: id,
+    displayLabel: null,
+    configuredEndpoint: id,
     host_id: null,
     chain: null,
     epoch: null,
@@ -357,10 +356,9 @@ test('decoders validate server status, member rosters, and federation entries', 
   );
   const servers = decodeServers([
     {
-      id: 'foks.example.net',
-      name: 'foks.example.net',
-      label: null,
-      configured_probe: 'foks.example.net',
+      profile_name: 'foks.example.net',
+      display_label: null,
+      configured_endpoint: 'foks.example.net',
       accounts: ['satoshi'],
     },
   ]);
@@ -630,7 +628,7 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
     () =>
       decodeServerStatus({
         profile: 'p',
-        configuredProbe: 'x',
+        configuredEndpoint: 'x',
         host: {
           lookupName: 'x',
           canonicalName: 'x',
@@ -649,7 +647,7 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
     () =>
       decodeServerStatus({
         profile: 'p',
-        configuredProbe: 'x',
+        configuredEndpoint: 'x',
         host: null,
         chatSupported: null,
       }),
@@ -659,7 +657,7 @@ test('decoders reject invalid server status, malformed reset tokens, and invalid
     () =>
       decodeServerStatus({
         profile: 'p',
-        configuredProbe: 'x',
+        configuredEndpoint: 'x',
         host: null,
         chatSupported: null,
         compatibility: { status: 'not-required', expires_at: 100 },
@@ -1426,7 +1424,7 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
     ],
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
-      configuredProbe: 'foks.example.net',
+      configuredEndpoint: 'foks.example.net',
       host: checkedHost,
       leaseRequired: true,
       leaseExpiresAt: 2_000_000_000,
@@ -1485,7 +1483,7 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
       ...bridge,
       describeServerStatus: async () => ({
         profile: 'foks.example.net',
-        configuredProbe: 'foks.example.net',
+        configuredEndpoint: 'foks.example.net',
         host: null,
         leaseRequired: false,
         leaseExpiresAt: null,
@@ -1557,7 +1555,7 @@ test('loadSnapshot keeps known stores visible while revoking access to unavailab
     ],
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
-      configuredProbe: 'foks.example.net',
+      configuredEndpoint: 'foks.example.net',
       host: checkedHost,
       leaseRequired: true,
       leaseExpiresAt: 2_000_000_000,
@@ -1606,7 +1604,7 @@ test('creates a notification when a server cannot be described instead of omitti
     // Verify that an unprobed server with null host raises a never-probed notification.
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
-      configuredProbe: 'foks.example.net',
+      configuredEndpoint: 'foks.example.net',
       host: null,
       leaseRequired: false,
       leaseExpiresAt: null,
@@ -1750,7 +1748,7 @@ test('loadSnapshot does not fetch members for an inactive team', async () => {
     ],
     describeServerStatus: async () => ({
       profile: 'foks.example.net',
-      configuredProbe: 'foks.example.net',
+      configuredEndpoint: 'foks.example.net',
       host: checkedHost,
       leaseRequired: true,
       leaseExpiresAt: 2_000_000_000,
@@ -1840,14 +1838,14 @@ test('loadSnapshot evaluates store access based on server lease validity and pro
     listServers: async () =>
       profiles.map((profile) => ({
         ...listedServer(profile, 'never-probed', [profile]),
-        name: `${profile}.example`,
+        configuredEndpoint: `${profile}.example`,
       })),
     describeServerStatus: async (profile) => {
       if (profile === 'failed')
         throw new Error('failed to retrieve server status');
       return {
         profile,
-        configuredProbe: `${profile}.example`,
+        configuredEndpoint: `${profile}.example`,
         host: checkedHost,
         leaseRequired: profile !== 'v019',
         leaseExpiresAt:
@@ -1894,14 +1892,14 @@ test('loadSnapshot evaluates store access based on server lease validity and pro
   assert.equal(
     serverAvailability(
       snapshot,
-      snapshot.servers.find((server) => server.id === 'fresh')!,
+      snapshot.servers.find((server) => server.profileName === 'fresh')!,
       { nowSeconds: 100 },
     ).available,
     true,
   );
   const expired = serverAvailability(
     snapshot,
-    snapshot.servers.find((server) => server.id === 'expired')!,
+    snapshot.servers.find((server) => server.profileName === 'expired')!,
     { nowSeconds: 100 },
   );
   assert.equal(
@@ -1909,18 +1907,18 @@ test('loadSnapshot evaluates store access based on server lease validity and pro
     'check-in-expired',
   );
   assert.equal(
-    snapshot.servers.find((server) => server.id === 'missing')?.compatibility
-      .status,
+    snapshot.servers.find((server) => server.profileName === 'missing')
+      ?.compatibility.status,
     'required-unavailable',
   );
   assert.equal(
-    snapshot.servers.find((server) => server.id === 'v019')?.compatibility
-      .status,
+    snapshot.servers.find((server) => server.profileName === 'v019')
+      ?.compatibility.status,
     'not-required',
   );
   assert.equal(
-    snapshot.servers.find((server) => server.id === 'failed')?.passiveStatus
-      .status,
+    snapshot.servers.find((server) => server.profileName === 'failed')
+      ?.passiveStatus.status,
     'failed',
   );
   assert.deepEqual(snapshot.observedExpiredLeases, [
@@ -2018,7 +2016,7 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
   const base = mockBridge({
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'acme'
+      server.profileName === 'acme'
         ? {
             ...server,
             compatibility: {
@@ -2064,7 +2062,7 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
     ],
     listServers: async () =>
       FIXTURE.servers.map((server) =>
-        server.id === 'acme'
+        server.profileName === 'acme'
           ? { ...server, lease: null, state: 'lease-lapsed' as const }
           : { ...server, lease: null },
       ),
@@ -2109,7 +2107,7 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
     ],
     describeServerStatus: async (profile: string) => ({
       profile,
-      configuredProbe: profile,
+      configuredEndpoint: profile,
       host:
         profile === 'partner'
           ? null
@@ -2836,10 +2834,13 @@ test('mock server labels change only the selected profile and reject unknown ids
     changed: true,
   });
   const after = await bridge.listServers();
-  assert.equal(after.find((server) => server.id === 'personal')?.label, null);
+  assert.equal(
+    after.find((server) => server.profileName === 'personal')?.displayLabel,
+    null,
+  );
   assert.deepEqual(
-    after.filter((server) => server.id !== 'personal'),
-    before.filter((server) => server.id !== 'personal'),
+    after.filter((server) => server.profileName !== 'personal'),
+    before.filter((server) => server.profileName !== 'personal'),
   );
   await assert.rejects(() => bridge.setServerLabel('missing', 'Unknown'));
 });
@@ -2946,8 +2947,8 @@ test('scoped catalog refresh preserves other profiles and root inventory authori
     previous.profileInventoryStatus,
   );
   assert.deepEqual(
-    snapshot.servers.filter((server) => server.id !== profile),
-    previous.servers.filter((server) => server.id !== profile),
+    snapshot.servers.filter((server) => server.profileName !== profile),
+    previous.servers.filter((server) => server.profileName !== profile),
   );
   assert.deepEqual(
     snapshot.accounts.filter((account) => account.server !== profile),
@@ -2973,10 +2974,12 @@ test('scoped catalog refresh preserves other profiles and root inventory authori
     false,
   );
   assert.equal(snapshot.catalogFreshness?.profiles[profile].lastSuccessAt, 2);
-  const other = previous.servers.find((server) => server.id !== profile)!;
+  const other = previous.servers.find(
+    (server) => server.profileName !== profile,
+  )!;
   assert.deepEqual(
-    snapshot.catalogFreshness?.profiles[other.id],
-    previous.catalogFreshness?.profiles[other.id],
+    snapshot.catalogFreshness?.profiles[other.profileName],
+    previous.catalogFreshness?.profiles[other.profileName],
   );
 });
 
@@ -2995,7 +2998,7 @@ test('scoped native projection uses embedded metadata without querying root list
       {
         profile,
         label: null,
-        configuredProbe: profile,
+        configuredEndpoint: profile,
         status: await bridge.describeServerStatus(profile),
         error: null,
       },
@@ -3014,7 +3017,8 @@ test('scoped native projection uses embedded metadata without querying root list
   };
   const snapshot = await loadProfileSnapshot(scoped, profile, previous, 2);
   assert.equal(
-    snapshot.servers.find((server) => server.id === profile)!.trust.status,
+    snapshot.servers.find((server) => server.profileName === profile)!.trust
+      .status,
     'verified',
   );
   await assert.rejects(
@@ -3048,14 +3052,14 @@ test('a whole-catalog response with embedded metadata queries no root lists', as
   const bridge = mockBridge(FIXTURE);
   const response = await bridge.listCatalog();
   const accounts = await bridge.listAccounts();
-  const unreachable = FIXTURE.servers[FIXTURE.servers.length - 1].id;
+  const unreachable = FIXTURE.servers[FIXTURE.servers.length - 1].profileName;
   const localMetadata = {
     accounts,
     profiles: await Promise.all(
       response.profiles.map(async (profile) => ({
         profile,
         label: null,
-        configuredProbe: profile,
+        configuredEndpoint: profile,
         // The read of the last profile failed, so it carries no status. It is
         // still a configured server and must still be listed.
         status:
@@ -3079,7 +3083,7 @@ test('a whole-catalog response with embedded metadata queries no root lists', as
   };
   const snapshot = await loadSnapshot(native, FIXTURE, 1);
   assert.deepEqual(
-    snapshot.servers.map((server) => server.id),
+    snapshot.servers.map((server) => server.profileName),
     response.profiles,
   );
   assert.deepEqual(
@@ -3087,8 +3091,8 @@ test('a whole-catalog response with embedded metadata queries no root lists', as
     accounts.map((account) => account.store),
   );
   assert.equal(
-    snapshot.servers.find((server) => server.id === unreachable)!.passiveStatus
-      .status,
+    snapshot.servers.find((server) => server.profileName === unreachable)!
+      .passiveStatus.status,
     'failed',
   );
   // Without the metadata the same response still falls back to the per-server
@@ -3121,14 +3125,14 @@ test('a whole-catalog response with embedded metadata queries no root lists', as
   assert.equal(listedAccounts, 1);
   assert.equal(describedStatus, response.profiles.length);
   assert.deepEqual(
-    fallback.servers.map((server) => server.id),
-    snapshot.servers.map((server) => server.id),
+    fallback.servers.map((server) => server.profileName),
+    snapshot.servers.map((server) => server.profileName),
   );
 });
 
 test('retired scoped work cannot publish its result', async () => {
   const bridge = mockBridge(FIXTURE);
-  const profile = FIXTURE.servers[0].id;
+  const profile = FIXTURE.servers[0].profileName;
   let current = true;
   await assert.rejects(
     loadProfileSnapshot(

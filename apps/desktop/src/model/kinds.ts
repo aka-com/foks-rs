@@ -99,7 +99,5 @@ export function nameOf(path: string): string {
 export function prefixOf(path: string): string {
   // Return an empty prefix for paths without directory separators.
   const cut = path.lastIndexOf('/');
-  return cut <= 0
-    ? ''
-    : displayPath(path.slice(1, cut));
+  return cut <= 0 ? '' : displayPath(path.slice(1, cut));
 }

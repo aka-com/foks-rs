@@ -341,7 +341,7 @@ test('partial projection publishes healthy items without any unfinished metadata
         {
           profile,
           label: null,
-          configuredProbe: profile,
+          configuredEndpoint: profile,
           status: await base.describeServerStatus(profile),
           error: null,
         },
@@ -397,7 +397,8 @@ test('partial projection publishes healthy items without any unfinished metadata
   );
   assert.deepEqual(snapshot.parties, []);
   assert.equal(
-    snapshot.servers.find((server) => server.id === 'unfinished')?.trust.status,
+    snapshot.servers.find((server) => server.profileName === 'unfinished')
+      ?.trust.status,
     'unknown',
   );
   assert.equal(
@@ -405,8 +406,8 @@ test('partial projection publishes healthy items without any unfinished metadata
     false,
   );
   assert.equal(
-    snapshot.servers.find((server) => server.id === 'unfinished')?.passiveStatus
-      .status,
+    snapshot.servers.find((server) => server.profileName === 'unfinished')
+      ?.passiveStatus.status,
     'loading',
   );
   current = false;
@@ -464,7 +465,9 @@ async function pendingCatalog() {
   const bridge = mockBridge(FIXTURE);
   const previous = await loadSnapshot(bridge, FIXTURE, 1);
   const store = previous.stores.find((store) => store.id === 'acct:personal')!;
-  const server = previous.servers.find((server) => server.id === store.server)!;
+  const server = previous.servers.find(
+    (server) => server.profileName === store.server,
+  )!;
   const catalog = await bridge.listCatalog();
   const response: CatalogDto = {
     ...catalog,
@@ -474,9 +477,9 @@ async function pendingCatalog() {
       accounts: [],
       profiles: catalog.profiles.map((profile) => ({
         profile,
-        configuredProbe: previous.servers.find(
-          (server) => server.id === profile,
-        )!.configuredProbe,
+        configuredEndpoint: previous.servers.find(
+          (server) => server.profileName === profile,
+        )!.configuredEndpoint,
         label: null,
         status: null,
         error: null,
@@ -498,11 +501,13 @@ test('pending refresh retains accepted facts and metadata without completing fre
   const { previous, response, store, server } = await pendingCatalog();
   const first = await observePartial(response);
   assert.equal(
-    first.servers.find((entry) => entry.id === server.id)!.trust.status,
+    first.servers.find((entry) => entry.profileName === server.profileName)!
+      .trust.status,
     'unknown',
   );
   assert.equal(
-    first.servers.find((entry) => entry.id === server.id)!.passiveStatus.status,
+    first.servers.find((entry) => entry.profileName === server.profileName)!
+      .passiveStatus.status,
     'loading',
   );
   assert.equal(
@@ -510,7 +515,7 @@ test('pending refresh retains accepted facts and metadata without completing fre
     'loading',
   );
   assert.equal(
-    first.catalogFreshness?.profiles[server.id].lastSuccessAt,
+    first.catalogFreshness?.profiles[server.profileName].lastSuccessAt,
     undefined,
   );
   const refreshed = await observePartial(response, previous);
@@ -520,12 +525,12 @@ test('pending refresh retains accepted facts and metadata without completing fre
   );
   assert.ok(refreshed.items.some((item) => item.store === store.id));
   assert.equal(
-    refreshed.catalogFreshness?.profiles[server.id].lastSuccessAt,
+    refreshed.catalogFreshness?.profiles[server.profileName].lastSuccessAt,
     1,
   );
   assert.equal(refreshed.catalogFreshness?.stores[store.id].lastSuccessAt, 1);
   assert.equal(
-    refreshed.catalogFreshness?.profiles[server.id].refreshing,
+    refreshed.catalogFreshness?.profiles[server.profileName].refreshing,
     true,
   );
 });
@@ -554,7 +559,7 @@ test('pending KV denial does not disable independently accepted chat facts', asy
   const { previous, response, store, server } = await pendingCatalog();
   response.failures.push({
     scope: 'store',
-    profile: server.id,
+    profile: server.profileName,
     store: store.id,
     error: {
       ...timeoutFailure,
@@ -563,7 +568,9 @@ test('pending KV denial does not disable independently accepted chat facts', asy
     },
   });
   const snapshot = await observePartial(response, previous);
-  const accepted = snapshot.servers.find((entry) => entry.id === server.id)!;
+  const accepted = snapshot.servers.find(
+    (entry) => entry.profileName === server.profileName,
+  )!;
   assert.equal(
     storeAvailability(snapshot, store, { nowSeconds: 2 }).available,
     false,
@@ -581,7 +588,7 @@ test('changed configured identity cannot retain previous accepted facts', async 
   const { previous, response, store } = await pendingCatalog();
   response.localMetadata!.profiles.find(
     (entry) => entry.profile === store.server,
-  )!.configuredProbe = 'different.example';
+  )!.configuredEndpoint = 'different.example';
   const snapshot = await observePartial(response, previous);
   assert.equal(
     storeAvailability(snapshot, store, { nowSeconds: 2 }).available,
@@ -602,7 +609,7 @@ test('retained lease facts cannot reopen after observed expiry and clock rollbac
   const leased: AgentSnapshot = {
     ...previous,
     servers: previous.servers.map((entry) =>
-      entry.id === server.id
+      entry.profileName === server.profileName
         ? {
             ...entry,
             compatibility: {
@@ -624,12 +631,26 @@ test('retained lease facts cannot reopen after observed expiry and clock rollbac
 
 test('refresh failures retain last success without changing authorization facts', async () => {
   const { previous, store, server } = await pendingCatalog();
-  const started = markCatalogRefresh(previous, [server.id], 2);
-  const failed = failCatalogRefresh(started, [server.id], timeoutFailure, 3);
-  assert.equal(failed.catalogFreshness?.profiles[server.id].lastSuccessAt, 1);
+  const started = markCatalogRefresh(previous, [server.profileName], 2);
+  const failed = failCatalogRefresh(
+    started,
+    [server.profileName],
+    timeoutFailure,
+    3,
+  );
+  assert.equal(
+    failed.catalogFreshness?.profiles[server.profileName].lastSuccessAt,
+    1,
+  );
   assert.equal(failed.catalogFreshness?.stores[store.id].lastSuccessAt, 1);
-  assert.equal(failed.catalogFreshness?.profiles[server.id].lastAttemptAt, 3);
-  assert.equal(failed.catalogFreshness?.profiles[server.id].refreshing, false);
+  assert.equal(
+    failed.catalogFreshness?.profiles[server.profileName].lastAttemptAt,
+    3,
+  );
+  assert.equal(
+    failed.catalogFreshness?.profiles[server.profileName].refreshing,
+    false,
+  );
   assert.strictEqual(failed.servers, previous.servers);
 });
 

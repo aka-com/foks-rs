@@ -23,7 +23,7 @@ function chatSnapshot(stores: TeamStore[]): AgentSnapshot {
     servers: [
       {
         ...template,
-        id: 'p',
+        profileName: 'p',
         services: { chat: true },
         compatibility: { status: 'not-required' },
       },
@@ -284,7 +284,7 @@ for (const change of [
         const snapshot = structuredClone(f.snapshot);
         if (change === 'host') snapshot.servers[0].host_id = 'other-host';
         if (change === 'probe')
-          snapshot.servers[0].configuredProbe = 'other-probe';
+          snapshot.servers[0].configuredEndpoint = 'other-probe';
         if (change === 'removed') snapshot.stores = [];
         f.service.updateStores(
           snapshot,

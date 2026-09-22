@@ -41,8 +41,8 @@ function leased(id: string, expiresAt: number): Server {
   assert.ok(base);
   return {
     ...base,
-    id,
-    name: `${id}.example.test`,
+    profileName: id,
+    displayLabel: `${id}.example.test`,
     compatibility: {
       status: 'required',
       expiresAt,

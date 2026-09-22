@@ -24,7 +24,7 @@ import {
   partiesOf,
   roleRank,
   plural,
-  serverDisplayName,
+  serverDisplayLabel,
   teamCaption,
   storeDescription,
   storeNavigationOrder,
@@ -53,7 +53,7 @@ function serverFor(
   snapshot: AgentSnapshot,
   store: TeamStore,
 ): Server | undefined {
-  return snapshot.servers.find((server) => server.id === store.server);
+  return snapshot.servers.find((server) => server.profileName === store.server);
 }
 
 /**
@@ -84,7 +84,7 @@ export function noChatReason(
   if (!server) return 'Server unavailable';
   if (server.services.chat === null)
     return 'Chat support has not been determined';
-  return `Chat is not enabled on ${serverDisplayName(server)}`;
+  return `Chat is not enabled on ${serverDisplayLabel(server)}`;
 }
 
 /** Named teams with no chat at all, listed under "Chat unavailable" with the reason. */

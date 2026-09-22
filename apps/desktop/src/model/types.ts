@@ -217,12 +217,11 @@ export type ServerRestriction =
 /** Independent facts about one configured server. */
 export interface Server {
   /** Durable local profile identity; never a display label or network address. */
-  id: string;
-  /** The immutable profile name; currently identical to `id`. */
-  name: string;
-  label: string | null;
+  profileName: string;
+  /** Editable local presentation label. */
+  displayLabel: string | null;
   /** Configured network probe/address, separate from profile identity and label. */
-  configuredProbe: string;
+  configuredEndpoint: string;
   host_id: string | null;
   chain: number | null;
   epoch: number | null;
@@ -235,17 +234,17 @@ export interface Server {
   restrictions: readonly ServerRestriction[];
 }
 
-/** The local display label, falling back to the durable profile name. */
-export function serverDisplayName(
-  server: Pick<Server, 'name' | 'label'>,
+/** The local display label, falling back to the configured endpoint. */
+export function serverDisplayLabel(
+  server: Pick<Server, 'configuredEndpoint' | 'displayLabel'>,
 ): string {
-  return server.label ?? server.name;
+  return server.displayLabel ?? server.configuredEndpoint;
 }
 
-export function serverLocalAlias(
-  server: Pick<Server, 'label'> | undefined,
+export function serverDisplayLabelOrLoading(
+  server: Pick<Server, 'displayLabel'> | undefined,
 ): string {
-  return server?.label?.trim() || 'Loading...';
+  return server?.displayLabel?.trim() || 'Loading...';
 }
 
 export interface Account {

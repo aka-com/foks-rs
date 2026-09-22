@@ -138,7 +138,7 @@ test('an ungranted device capability does not invent a missing backup key', asyn
   const snapshot: AgentSnapshot = {
     ...base,
     servers: base.servers.map((server) =>
-      server.id === 'personal'
+      server.profileName === 'personal'
         ? {
             ...server,
             compatibility: {
@@ -771,7 +771,7 @@ test('a trust block stops remote workflows while local recovery controls remain 
   const blocked: AgentSnapshot = {
     ...snapshot,
     servers: snapshot.servers.map((server) =>
-      server.id === 'personal'
+      server.profileName === 'personal'
         ? {
             ...server,
             trust: {

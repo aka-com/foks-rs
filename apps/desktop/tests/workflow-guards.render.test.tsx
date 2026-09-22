@@ -285,7 +285,7 @@ test('an active server check blocks navigation', async () => {
   const unprobed: AgentSnapshot = {
     ...h.fixture,
     servers: h.fixture.servers.map((server) =>
-      server.id === 'personal'
+      server.profileName === 'personal'
         ? { ...server, trust: { status: 'unprobed' as const } }
         : server,
     ),

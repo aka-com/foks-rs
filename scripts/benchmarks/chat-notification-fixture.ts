@@ -24,10 +24,9 @@ export function notificationBenchmarkSnapshot(
     ],
     servers: [
       {
-        id: profile,
-        name: 'Isolated benchmark',
-        label: null,
-        configuredProbe: 'isolated-benchmark',
+        profileName: profile,
+        displayLabel: 'Isolated benchmark',
+        configuredEndpoint: 'isolated-benchmark',
         host_id: scope.host,
         chain: null,
         epoch: null,

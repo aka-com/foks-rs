@@ -6,7 +6,11 @@ import { serverAvailability } from '../../model';
 import type { AgentSnapshot, Server } from '../../model';
 
 export const serverBinding = (server: Server): string =>
-  JSON.stringify([server.id, server.configuredProbe, server.host_id]);
+  JSON.stringify([
+    server.profileName,
+    server.configuredEndpoint,
+    server.host_id,
+  ]);
 
 export function canReadServer(server: Server): boolean {
   return (
@@ -35,13 +39,15 @@ export async function readCurrentServerStatus(
   server: Server,
   isCurrent: () => boolean,
 ): Promise<ServerStatusSnapshot | undefined> {
-  const admitted = await enqueueProfileWork(bridge, server.id, async () =>
-    isCurrent(),
+  const admitted = await enqueueProfileWork(
+    bridge,
+    server.profileName,
+    async () => isCurrent(),
   );
   if (!admitted || !isCurrent()) return;
-  const status = await sharedServerStatus(bridge, server.id);
+  const status = await sharedServerStatus(bridge, server.profileName);
   if (!isCurrent()) return;
-  if (status.profile !== server.id)
+  if (status.profile !== server.profileName)
     throw new Error('describe_server_status returned a different profile.');
   return status;
 }
@@ -92,13 +98,13 @@ export class ServerCheckController {
       !canCheckServer(context.snapshot, server)
     )
       return;
-    const ticket = this.lifetime.capture(server.id);
+    const ticket = this.lifetime.capture(server.profileName);
     const binding = serverBinding(server);
     const attempt = {};
     const isCurrent = (): boolean => {
       const next = this.context();
       const selected = next.snapshot.servers.find(
-        (row) => row.id === server.id,
+        (row) => row.profileName === server.profileName,
       );
       return (
         this.live &&
@@ -115,20 +121,20 @@ export class ServerCheckController {
       const outcome = await attemptMutation(
         { kind: 'mutation' },
         () =>
-          enqueueProfileWork(this.bridge, server.id, async () => {
+          enqueueProfileWork(this.bridge, server.profileName, async () => {
             if (!isCurrent()) return undefined;
             const latest = this.context().snapshot;
             const currentServer = latest.servers.find(
-              (row) => row.id === server.id,
+              (row) => row.profileName === server.profileName,
             );
             if (!currentServer || !canCheckServer(latest, currentServer))
               return;
             seeded?.();
-            return this.bridge.checkServer(server.id);
+            return this.bridge.checkServer(server.profileName);
           }),
         async (report) => {
           if (!report || !isCurrent()) return;
-          if (report.profile !== server.id)
+          if (report.profile !== server.profileName)
             throw new Error('check_server returned a different profile.');
           this.observer.checked(binding, report);
           if (!seeded)

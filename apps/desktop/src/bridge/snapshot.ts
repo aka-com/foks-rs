@@ -57,7 +57,7 @@ export async function discoverUnboundTeams(
     )
       continue;
     const server = snapshot.servers.find(
-      (entry) => entry.id === account.server,
+      (entry) => entry.profileName === account.server,
     );
     if (
       !server ||

@@ -41,7 +41,7 @@ async function unclaimedSnapshot(): Promise<AgentSnapshot> {
   return {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
-      server.id === 'personal'
+      server.profileName === 'personal'
         ? { ...server, trust: { status: 'unprobed' as const } }
         : server,
     ),

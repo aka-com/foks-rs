@@ -37,7 +37,7 @@ export interface StoredHost {
 
 export interface ServerStatusSnapshot {
   profile: string;
-  configuredProbe: string;
+  configuredEndpoint: string;
   host: StoredHost | null;
   /** Whether this server requires a compatibility session lease. */
   leaseRequired: boolean;
@@ -72,15 +72,22 @@ function decodeServer(value: unknown, at: string): Server {
   if (
     Object.keys(item).some(
       (key) =>
-        !['id', 'name', 'label', 'configured_probe', 'accounts'].includes(key),
+        ![
+          'profile_name',
+          'display_label',
+          'configured_endpoint',
+          'accounts',
+        ].includes(key),
     )
   )
     throw new Error(`${at} contains unexpected server metadata fields`);
   return {
-    id: string(item.id, `${at}.id`),
-    name: string(item.name, `${at}.name`),
-    label: nullableString(item.label, at + '.label'),
-    configuredProbe: string(item.configured_probe, at + '.configured_probe'),
+    profileName: string(item.profile_name, `${at}.profile_name`),
+    displayLabel: nullableString(item.display_label, at + '.display_label'),
+    configuredEndpoint: string(
+      item.configured_endpoint,
+      at + '.configured_endpoint',
+    ),
     host_id: null,
     chain: null,
     epoch: null,
@@ -249,7 +256,7 @@ export function decodeProfileReconciliation(
     item.identity,
     expectedProfile,
     ['connected'] as const,
-    ['hostId', 'configuredProbe'],
+    ['hostId', 'configuredEndpoint'],
   );
   const identity: ProfileReconciliation['identity'] =
     observed.status === 'failed'
@@ -261,13 +268,13 @@ export function decodeProfileReconciliation(
             '02',
             'connectivity identity.hostId',
           );
-          const configuredProbe = string(
-            value.configuredProbe,
-            'connectivity identity.configuredProbe',
+          const configuredEndpoint = string(
+            value.configuredEndpoint,
+            'connectivity identity.configuredEndpoint',
           );
-          if (!canonicalProbeEndpoint(configuredProbe))
+          if (!canonicalProbeEndpoint(configuredEndpoint))
             throw new Error('Invalid verified probe endpoint.');
-          return { status: 'connected' as const, hostId, configuredProbe };
+          return { status: 'connected' as const, hostId, configuredEndpoint };
         })();
   return {
     profile: expectedProfile,
@@ -285,9 +292,9 @@ export function decodeServerStatus(value: unknown): ServerStatusSnapshot {
   const compatibility = decodeCompatibility(item.compatibility);
   const status = {
     profile: string(item.profile, 'describe_server_status.profile'),
-    configuredProbe: string(
-      item.configuredProbe,
-      'describe_server_status.configuredProbe',
+    configuredEndpoint: string(
+      item.configuredEndpoint,
+      'describe_server_status.configuredEndpoint',
     ),
     host: nullable(item.host, 'describe_server_status.host', decodeStoredHost),
     compatibility,

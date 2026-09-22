@@ -20,7 +20,7 @@ import {
   SectionLabel,
 } from './index';
 import type { PanelPresentation } from './index';
-import { serverDisplayName } from '../model';
+import { serverDisplayLabel } from '../model';
 import type { Server } from '../model';
 import { INVITATION_ACTIVITY } from '../invitation-activity';
 import { pendingOperationKey } from '../operation-queries';
@@ -29,7 +29,7 @@ export { INVITATION_ACTIVITY };
 /** The part of a configured profile the join sheet's server picker needs. */
 export type JoinServer = Pick<
   Server,
-  'name' | 'label' | 'configuredProbe' | 'host_id'
+  'profileName' | 'displayLabel' | 'configuredEndpoint' | 'host_id'
 >;
 
 export function InvitationPanel({
@@ -332,7 +332,7 @@ export function InvitationPanel({
   // already known: the sheet picks from it rather than asking for the name
   // from memory, where a typo only fails later, against the host.
   const remoteChoices = (servers ?? []).filter(
-    (server) => server.name !== profile,
+    (server) => server.profileName !== profile,
   );
   const serverRow = servers ? (
     <InsetRow label="Where is the team located?">
@@ -343,8 +343,8 @@ export function InvitationPanel({
       >
         <option value="">This account's server</option>
         {remoteChoices.map((server) => (
-          <option key={server.name} value={server.name}>
-            {serverDisplayName(server)} ({server.configuredProbe})
+          <option key={server.profileName} value={server.profileName}>
+            {serverDisplayLabel(server)} ({server.configuredEndpoint})
           </option>
         ))}
       </select>
@@ -815,12 +815,12 @@ export function InvitationPanel({
               <p>
                 Verified host{' '}
                 <code>
-                  {host?.configuredProbe ?? preview.host_id ?? 'unreported'}
+                  {host?.configuredEndpoint ?? preview.host_id ?? 'unreported'}
                 </code>
               </p>
               {host ? (
                 <p>
-                  Server profile <code>{serverDisplayName(host)}</code>
+                  Server profile <code>{serverDisplayLabel(host)}</code>
                 </p>
               ) : null}
             </div>

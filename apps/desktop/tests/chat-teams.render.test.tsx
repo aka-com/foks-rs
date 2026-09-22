@@ -78,7 +78,7 @@ async function snapshotWithChat(servers: string[]): Promise<AgentSnapshot> {
       ...server,
       services: {
         ...server.services,
-        chat: servers.includes(server.id),
+        chat: servers.includes(server.profileName),
       },
     })),
   };

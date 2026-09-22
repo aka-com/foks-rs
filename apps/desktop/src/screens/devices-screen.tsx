@@ -60,7 +60,7 @@ import {
   accountStores,
   accountSubtitle,
   plural,
-  serverName,
+  serverDisplayLabelForStore,
   usernameOf,
 } from '../model';
 import type { Location, NavigateOptions } from '../location';
@@ -1050,7 +1050,7 @@ function DeviceDetail({
         // says so rather than naming an account the agent did not answer for.
         subtitle={
           entry.scope === 'profile'
-            ? `${kindLabel(entry.kind)} · on ${serverName(snapshot, store)}`
+            ? `${kindLabel(entry.kind)} · on ${serverDisplayLabelForStore(snapshot, store)}`
             : `${kindLabel(entry.kind)} · ${accountSubtitle(snapshot, store)}`
         }
         // The chip states what this key is, so it reads beside the name
@@ -1083,7 +1083,7 @@ function DeviceDetail({
             >
               {entry.scope === 'profile' ? (
                 <InsetRow label="Server">
-                  <b>{serverName(snapshot, store)}</b>
+                  <b>{serverDisplayLabelForStore(snapshot, store)}</b>
                   <small>This enrollment applies across the server.</small>
                 </InsetRow>
               ) : (
@@ -1091,7 +1091,9 @@ function DeviceDetail({
                   <span className="namechip">
                     <b>{username}</b> <Chip>{store.account}</Chip>
                   </span>
-                  <small>on {serverName(snapshot, store)}</small>
+                  <small>
+                    on {serverDisplayLabelForStore(snapshot, store)}
+                  </small>
                 </InsetRow>
               )}
               {entry.role ? (

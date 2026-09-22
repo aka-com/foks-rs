@@ -348,7 +348,7 @@ pub(super) fn server_status_response(
         .transpose()?;
     Ok(ServerStatusSnapshotDto {
         profile: report.profile,
-        configured_probe: report.configured_probe,
+        configured_endpoint: report.configured_probe,
         host,
         compatibility,
         chat_supported: report.chat_supported,
@@ -482,10 +482,9 @@ pub(super) enum ProfileTrustSummary {
 
 #[derive(Debug, Serialize)]
 pub struct ServerDto {
-    pub id: String,
-    pub name: String,
-    pub label: Option<String>,
-    pub configured_probe: String,
+    pub profile_name: String,
+    pub display_label: Option<String>,
+    pub configured_endpoint: String,
     pub accounts: Vec<String>,
 }
 
@@ -511,7 +510,7 @@ pub struct StoredHostDto {
 #[serde(rename_all = "camelCase")]
 pub struct ServerStatusSnapshotDto {
     pub profile: String,
-    pub configured_probe: String,
+    pub configured_endpoint: String,
     pub host: Option<StoredHostDto>,
     pub compatibility: foks_agent_proto::CompatibilityStatus,
     pub chat_supported: Option<bool>,
@@ -1013,15 +1012,15 @@ pub async fn remove_server_and_credentials(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     state: State<'_, AppState>,
-    profile: String,
-    confirmation: String,
+    profile_name: String,
+    confirmed_profile_name: String,
 ) -> Result<RemovedServerDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     super::chat_migration::require_recovered(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    exact_profile_confirmation(&profile, &confirmation, "remove")?;
+    let profile = bounded_local_name(&profile_name, "Provide a valid server profile name.")?;
+    exact_profile_confirmation(&profile, &confirmed_profile_name, "remove")?;
     let expected = profile.clone();
     let value = apply_profile_operation_value(
         &state,
@@ -1158,16 +1157,16 @@ pub async fn reset_server(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     state: State<'_, AppState>,
-    profile: String,
-    confirmation: String,
+    profile_name: String,
+    confirmed_profile_name: String,
     token: String,
 ) -> Result<MutationDto, AgentError> {
     require_main_window(&webview)?;
     crate::applock::require_unlocked(&app)?;
     super::chat_migration::require_recovered(&app)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    exact_profile_confirmation(&profile, &confirmation, "reset")?;
+    let profile = bounded_local_name(&profile_name, "Provide a valid server profile name.")?;
+    exact_profile_confirmation(&profile, &confirmed_profile_name, "reset")?;
     let token = bounded_secret(
         token,
         1024,
@@ -1232,10 +1231,9 @@ pub async fn list_servers(
                     })
                     .unwrap_or_default();
                 ServerDto {
-                    id: profile.name.clone(),
-                    name: profile.name,
-                    label: profile.label,
-                    configured_probe: profile.probe,
+                    profile_name: profile.name,
+                    display_label: profile.label,
+                    configured_endpoint: profile.probe,
                     accounts,
                 }
             })
@@ -1258,8 +1256,8 @@ pub enum IdentityObservationDto {
     Connected {
         #[serde(rename = "hostId")]
         host_id: String,
-        #[serde(rename = "configuredProbe")]
-        configured_probe: String,
+        #[serde(rename = "configuredEndpoint")]
+        configured_endpoint: String,
     },
     Failed {
         error: AgentError,
@@ -1357,7 +1355,7 @@ pub(super) fn reconcile_server_response(
             }
             IdentityObservationDto::Connected {
                 host_id: connected.host_id,
-                configured_probe: connected.configured_probe,
+                configured_endpoint: connected.configured_probe,
             }
         }
         Err(error) => IdentityObservationDto::Failed { error },

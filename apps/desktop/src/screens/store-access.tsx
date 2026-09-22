@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import { Band, Button, Notice } from '../components';
 import {
-  serverName as displayServerName,
+  serverDisplayLabelForStore as displayServerName,
   canChangeItem,
   storeAvailability,
   storeOf,
@@ -238,7 +238,7 @@ export function StoreAccessTakeover({
         {copy.actionLabel ?? 'Finish setup'}
       </Button>
     ) : (
-      <Button onClick={() => onOpenServer(server?.id ?? store.server)}>
+      <Button onClick={() => onOpenServer(server?.profileName ?? store.server)}>
         {copy.action === 'open-server' ? 'View server' : 'Server settings'}
       </Button>
     );

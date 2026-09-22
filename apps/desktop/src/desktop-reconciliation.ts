@@ -28,12 +28,14 @@ export const profileRefreshKey = (
   snapshot: AgentSnapshot,
   profile: string,
 ): string => {
-  const server = snapshot.servers.find((candidate) => candidate.id === profile);
+  const server = snapshot.servers.find(
+    (candidate) => candidate.profileName === profile,
+  );
   return JSON.stringify([
     'catalog',
     profile,
     server?.host_id,
-    server?.configuredProbe,
+    server?.configuredEndpoint,
   ]);
 };
 
@@ -49,8 +51,10 @@ export const profileConnectivityKey = (
   snapshot: AgentSnapshot,
   profile: string,
 ): string => {
-  const server = snapshot.servers.find((candidate) => candidate.id === profile);
-  return JSON.stringify(['connectivity', profile, server?.configuredProbe]);
+  const server = snapshot.servers.find(
+    (candidate) => candidate.profileName === profile,
+  );
+  return JSON.stringify(['connectivity', profile, server?.configuredEndpoint]);
 };
 
 export class DesktopReconciliation {
@@ -71,7 +75,7 @@ export class DesktopReconciliation {
     const profiles =
       snapshot.profileInventoryStatus === 'complete'
         ? snapshot.catalogProfiles
-        : snapshot.servers.map((server) => server.id);
+        : snapshot.servers.map((server) => server.profileName);
     const jobs: ReconciliationJob[] = profiles.map((profile) => ({
       key: profileRefreshKey(snapshot, profile),
       scope: profile,
@@ -80,7 +84,7 @@ export class DesktopReconciliation {
       eligible: () => {
         const server = this.reads
           .snapshot()
-          .servers.find((candidate) => candidate.id === profile);
+          .servers.find((candidate) => candidate.profileName === profile);
         return (
           server?.trust.status !== 'blocked' &&
           !server?.restrictions.some(
@@ -103,7 +107,7 @@ export class DesktopReconciliation {
           eligible: () => {
             const current = this.reads.snapshot();
             const server = current.servers.find(
-              (candidate) => candidate.id === profile,
+              (candidate) => candidate.profileName === profile,
             );
             return (
               server !== undefined &&
@@ -124,7 +128,7 @@ export class DesktopReconciliation {
     }
     for (const account of snapshot.accounts) {
       const server = snapshot.servers.find(
-        (candidate) => candidate.id === account.server,
+        (candidate) => candidate.profileName === account.server,
       );
       jobs.push({
         key: JSON.stringify([
@@ -133,7 +137,7 @@ export class DesktopReconciliation {
           account.store,
           account.alias,
           server?.host_id,
-          server?.configuredProbe,
+          server?.configuredEndpoint,
         ]),
         scope: account.server,
         kind: 'discovery',
@@ -208,7 +212,10 @@ export class DesktopReconciliation {
       this.scheduler.requestAll(trigger, ['discovery']);
     if (this.reads.connectivity) {
       for (const server of this.reads.snapshot().servers) {
-        const key = profileConnectivityKey(this.reads.snapshot(), server.id);
+        const key = profileConnectivityKey(
+          this.reads.snapshot(),
+          server.profileName,
+        );
         if (
           trigger !== 'foreground' ||
           !this.recent(this.scheduler.snapshot(key))
@@ -277,7 +284,7 @@ export class DesktopReconciliation {
     else {
       for (const server of this.reads.snapshot().servers)
         this.scheduler.request(
-          profileRefreshKey(this.reads.snapshot(), server.id),
+          profileRefreshKey(this.reads.snapshot(), server.profileName),
           'mutation',
           true,
         );

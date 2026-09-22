@@ -18,7 +18,7 @@ export function authoritativeSetupFacts(
   );
   const server = checkpoint.profile
     ? snapshot.servers.find(
-        (candidate) => candidate.id === checkpoint.profile?.profile,
+        (candidate) => candidate.profileName === checkpoint.profile?.profile,
       )
     : undefined;
   const profile = checkpoint.profile
