@@ -123,7 +123,7 @@ test('the invitation activity band stays quiet about a read the profile could no
   assert.equal(errors.length, 1);
 });
 
-test('the join sheet confirms the resolved team before it prepares a request', async () => {
+test('the join sheet confirms the resolved team, then prepares and sends in one press', async () => {
   const { InvitationPanel } = (await vite.ssrLoadModule(
     '/src/components/invitation-panel.tsx',
   )) as typeof import('../src/components/invitation-panel');
@@ -166,33 +166,39 @@ test('the join sheet confirms the resolved team before it prepares a request', a
   // Step one commits to nothing: the request cannot be reached, and the step
   // cannot be left, until an invitation is typed.
   assert.equal(r.queryByText('Request membership'), null);
-  assert.equal(r.getByText('Step 1 of 2').textContent, 'Step 1 of 2');
+  assert.ok(r.getByText('Step 1 of 3'));
   assert.equal((r.getByText('Continue') as HTMLButtonElement).disabled, true);
   ui.fireEvent.change(r.getByLabelText('Invitation'), {
     target: { value: 'Invite123' },
   });
   assert.equal((r.getByText('Continue') as HTMLButtonElement).disabled, false);
   ui.fireEvent.click(r.getByText('Continue'));
-  // The resolved team names itself on step two, and only there is the
-  // request reachable.
-  await ui.waitFor(() => assert.ok(r.getByText('Step 2 of 2')));
+  // Step two displays the resolved team and defaults the requester to the
+  // current account.
+  await ui.waitFor(() => assert.ok(r.getByText('Step 2 of 3')));
   assert.ok(r.getByText('project'));
   assert.ok(r.getByText('a'.repeat(66)));
+  assert.equal(
+    r.getByRole('radio', { name: /Myself/ }).getAttribute('aria-checked'),
+    'true',
+  );
+  assert.equal(r.queryByLabelText('Team to add'), null);
   assert.equal(
     (r.getByText('Request membership') as HTMLButtonElement).disabled,
     false,
   );
   // Back returns to the invitation without sending anything.
   ui.fireEvent.click(r.getByText('Back'));
-  assert.ok(r.getByText('Step 1 of 2'));
+  assert.ok(r.getByText('Step 1 of 3'));
   assert.deepEqual(actions, ['preview']);
   ui.fireEvent.click(r.getByText('Continue'));
   await ui.waitFor(() => assert.ok(r.getByText('Request membership')));
+  // One action prepares and submits the request. Step three displays the
+  // submission-unknown response used by this test.
   ui.fireEvent.click(r.getByText('Request membership'));
-  await ui.waitFor(() => assert.ok(r.getByText('Submit')));
-  assert.deepEqual(actions, ['preview', 'preview', 'accept']);
-  ui.fireEvent.click(r.getByText('Submit'));
-  await ui.waitFor(() => assert.ok(r.queryByText('Submit') === null));
+  await ui.waitFor(() => assert.ok(r.getByText('Step 3 of 3')));
+  assert.deepEqual(actions, ['preview', 'preview', 'accept', 'attempt']);
+  assert.ok(r.getByText(/server response was not received/));
   ui.fireEvent.click(r.getByText('Check status'));
   await ui.waitFor(() =>
     assert.deepEqual(actions, [
@@ -203,6 +209,72 @@ test('the join sheet confirms the resolved team before it prepares a request', a
       'status',
     ]),
   );
+});
+test('a team the account administers is picked from a list and sent by its alias', async () => {
+  const { InvitationPanel } = (await vite.ssrLoadModule(
+    '/src/components/invitation-panel.tsx',
+  )) as typeof import('../src/components/invitation-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const seen: InvitationAction[] = [];
+  const bridge = {
+    ...mockBridge(),
+    invitation: async (
+      _p: string,
+      _a: string,
+      a: InvitationAction,
+    ): Promise<InvitationReply> => {
+      seen.push(a);
+      if (a.action === 'preview')
+        return { team_id: '3'.repeat(66), host_id: 'a'.repeat(66) };
+      return { operation_id: '1'.repeat(32), state: 'complete' };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(InvitationPanel, {
+        bridge,
+        profile: 'local',
+        account: 'work',
+        teams: [
+          { id: 'team:infra', alias: 'infra', name: 'Infrastructure' },
+          { id: 'team:platform', alias: 'platform', name: 'Platform' },
+        ],
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
+  );
+  ui.fireEvent.change(r.getByLabelText('Invitation'), {
+    target: { value: 'Invite123' },
+  });
+  ui.fireEvent.click(r.getByText('Continue'));
+  await ui.waitFor(() => assert.ok(r.getByText('Step 2 of 3')));
+  ui.fireEvent.click(r.getByRole('radio', { name: /A team I administer/ }));
+  // Selecting team-based membership requires a specific team.
+  assert.equal(
+    (r.getByText('Request membership') as HTMLButtonElement).disabled,
+    true,
+  );
+  const picker = r.getByLabelText('Team to add') as HTMLSelectElement;
+  assert.deepEqual(
+    [...picker.options].map((option) => option.textContent),
+    ['Choose a team', 'Infrastructure', 'Platform'],
+  );
+  ui.fireEvent.change(picker, { target: { value: 'platform' } });
+  ui.fireEvent.change(r.getByLabelText('Your role in it'), {
+    target: { value: 'owner' },
+  });
+  ui.fireEvent.click(r.getByText('Request membership'));
+  await ui.waitFor(() => assert.ok(r.getByText('Step 3 of 3')));
+  assert.deepEqual(seen.at(-1), {
+    action: 'accept-team',
+    invite: 'Invite123',
+    source_team_alias: 'platform',
+    source_role: 'owner',
+  });
+  assert.ok(r.getByText('Platform (owner)'));
 });
 test('the join sheet names a configured profile rather than asking for one', async () => {
   const { InvitationPanel } = (await vite.ssrLoadModule(
@@ -419,7 +491,7 @@ test('a resumed hardware-key request can receive its PIN on step one', async () 
       }),
     ),
   );
-  ui.fireEvent.click(r.getByText('Resume a request'));
+  ui.fireEvent.click(r.getByText('Resume a pending request'));
   await ui.waitFor(() => assert.ok(r.getByText('Submit')));
   ui.fireEvent.click(r.getByText('Submit'));
   await ui.waitFor(() => assert.equal(received.length, 1));
@@ -723,3 +795,110 @@ test('a failed invitation submission retries the original operation', async () =
     ],
   );
 });
+
+test('delivered requests remain reachable pending membership approval', async () => {
+  const { InvitationPanel } = (await vite.ssrLoadModule(
+    '/src/components/invitation-panel.tsx',
+  )) as typeof import('../src/components/invitation-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const bridge = {
+    ...mockBridge(),
+    invitation: async () => [
+      {
+        operation_id: '1'.repeat(32),
+        team_id: '3'.repeat(66),
+        state: 'complete',
+        delivery_acknowledged: true,
+      },
+    ],
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(InvitationPanel, {
+        bridge,
+        profile: 'local',
+        account: 'ada',
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
+  );
+  ui.fireEvent.click(r.getByText('Resume a pending request'));
+  await ui.waitFor(() => assert.ok(r.queryByText('Check status')));
+});
+
+for (const remoteRequest of [false, true]) {
+  for (const state of ['prepared', 'submission-unknown']) {
+    test(`${remoteRequest ? 'remote' : 'local'} saved ${state} request keeps its destination across retries and status replies`, async () => {
+      const { InvitationPanel } = (await vite.ssrLoadModule(
+        '/src/components/invitation-panel.tsx',
+      )) as typeof import('../src/components/invitation-panel');
+      const { mockBridge } = (await vite.ssrLoadModule(
+        '/src/mock-bridge.ts',
+      )) as typeof import('../src/mock-bridge');
+      const actions: InvitationAction[] = [];
+      const row = {
+        operation_id: '1'.repeat(32),
+        team_id: '3'.repeat(66),
+        state,
+        remote: remoteRequest,
+        ...(remoteRequest ? { remote_profile: 'destination' } : {}),
+      };
+      const bridge = {
+        ...mockBridge(),
+        invitation: async (
+          _p: string,
+          _a: string,
+          action: InvitationAction,
+        ) => {
+          actions.push(action);
+          // Native progress replies need not repeat destination metadata.
+          return action.action === 'list'
+            ? [row]
+            : { operation_id: row.operation_id, state: 'submission-unknown' };
+        },
+      };
+      const r = ui.render(
+        await overlay(
+          createElement(InvitationPanel, {
+            bridge,
+            profile: 'local',
+            account: 'ada',
+            presentation,
+            onComplete: () => {},
+          }),
+        ),
+      );
+      ui.fireEvent.change(
+        r.getByPlaceholderText('For teams on another server'),
+        { target: { value: 'unrelated-server' } },
+      );
+      ui.fireEvent.click(r.getByText('Resume a pending request'));
+      await ui.waitFor(() =>
+        assert.ok(
+          r.queryByText(state === 'prepared' ? 'Submit' : 'Check status'),
+        ),
+      );
+      await ui.act(async () => {
+        ui.fireEvent.click(
+          r.getByText(state === 'prepared' ? 'Submit' : 'Check status'),
+        );
+      });
+      await ui.act(async () => {
+        ui.fireEvent.click(r.getByText('Check status'));
+      });
+      const operation = remoteRequest
+        ? { operation_id: row.operation_id, remote_profile: 'destination' }
+        : { operation_id: row.operation_id };
+      assert.deepEqual(actions.slice(1), [
+        {
+          action: `${state === 'prepared' ? 'attempt' : 'status'}${remoteRequest ? '-remote' : ''}`,
+          ...operation,
+        },
+        { action: remoteRequest ? 'status-remote' : 'status', ...operation },
+      ]);
+    });
+  }
+}

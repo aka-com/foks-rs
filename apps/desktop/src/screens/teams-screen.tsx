@@ -55,6 +55,7 @@ import { GroupMark } from './group-mark';
 import {
   discoveryContext,
   manageReason,
+  rosterManageable,
   unavailableTitle,
 } from './group-model';
 import type { DiscoveryContext } from './group-model';
@@ -851,6 +852,14 @@ export function TeamsScreen({
           profile={joining.server}
           account={joining.account}
           servers={snapshot.servers}
+          // A team may join when it is on the account's server and the account
+          // can manage its roster.
+          teams={teams.filter(
+            (team) =>
+              team.server === joining.server &&
+              team.account === joining.account &&
+              rosterManageable(snapshot, team),
+          )}
           presentation={{
             title: 'Join a team',
             onClose: () => setJoining(null),

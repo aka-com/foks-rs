@@ -142,7 +142,6 @@ async function harness() {
 async function invitationPanel(
   h: Awaited<ReturnType<typeof harness>>,
   bridge: Bridge,
-  teamAlias?: string,
 ) {
   const { InvitationPanel } = (await vite.ssrLoadModule(
     '/src/components/invitation-panel.tsx',
@@ -152,7 +151,7 @@ async function invitationPanel(
       bridge,
       profile: 'personal',
       account: 'personal',
-      ...(teamAlias ? { teamAlias } : {}),
+      presentation: { title: 'Join a team', onClose: () => {} },
       onComplete: () => {},
     }),
     true,

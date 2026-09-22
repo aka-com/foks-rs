@@ -75,7 +75,13 @@ displays a “Finish setup” action above the locally available group details a
 uses the same status text as the store access view. Group
 creation, discovery and invitations live on the Teams page
 itself; joining is the sheet the Teams header opens, and the Members tab no
-longer repeats it inline. A group that needs attention says so on its own row,
+longer repeats it inline. Joining runs in three steps: the invitation and the
+server it is for, the resolved team with who is asking (the account, or a
+named team it administers, picked from a list), then the sent request with
+its state. Request membership prepares and submits in one press; a request
+that stays prepared, or whose submission went unanswered, is finished from
+the sheet's Resume a pending request list. A security key PIN is asked for
+only when the agent requires one. A group that needs attention says so on its own row,
 not a second time under it. Member changes are restricted to unique, locally
 manageable usernames.
 An inactive or ambiguous federation admission has no extra payload. Active ad-hoc
