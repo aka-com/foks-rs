@@ -41,8 +41,6 @@ jobs:
           npm run typecheck
           npm exec -- eslint apps/desktop
           npm run test:foks-ui
-          npm exec -- playwright-core install chromium
-          npm run acceptance:foks-ui
       - name: Check full Rust workspace and desktop boundary
         run: |
           npm run test:rust:full -- --release

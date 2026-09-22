@@ -691,7 +691,7 @@ test('group creation scenes default to engineering vault context', () => {
 });
 
 test("the mock's own state names still deep-link", () => {
-  // Stable deep links used by the Playwright walk keep working.
+  // Stable design-state deep links keep working.
   assert.deepEqual(decodeLocation('?state=all'), { kind: 'all' });
   assert.deepEqual(decodeLocation('?state=personal'), {
     kind: 'store',

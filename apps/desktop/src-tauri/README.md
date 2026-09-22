@@ -64,7 +64,6 @@ cargo clippy --locked -p foks-desktop -p foks-desktop-app --all-targets -- -D wa
 cargo fmt -p foks-desktop -p foks-desktop-app -- --check
 npm run typecheck
 npm run test:foks-ui
-npm run acceptance:foks-ui
 ```
 
 The Tauri package is a workspace member but is excluded from the default

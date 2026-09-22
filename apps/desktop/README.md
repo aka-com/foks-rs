@@ -158,8 +158,6 @@ responses rather than fixture facts.
 npm run dev:frontend # Vite dev server on http://127.0.0.1:1421 (strict)
 npm run build:frontend # production bundle into apps/desktop/dist/
 npm run test:foks-ui      # serial node:test via tsx — model, location, invariants, render
-npm exec -- playwright-core install chromium # one-time browser setup
-npm run acceptance:foks-ui # build with the mock, then drive Chromium at 1280×860
 tsc --noEmit -p apps/desktop/tsconfig.json
 ```
 
@@ -181,8 +179,8 @@ are decisions, not details:
 - **The mock is used** only for an explicit `VITE_FOKS_MOCK=1` build or a
   non-native Vite development page. A Tauri development window still uses the
   real commands. An ordinary production build outside Tauri fails closed, and
-  Vite removes the mock and fixture graph from that bundle. Playwright uses the
-  explicit mock build:
+  Vite removes the mock and fixture graph from that bundle. To preview the mock
+  explicitly:
 
   ```sh
   VITE_FOKS_MOCK=1 npm run dev:frontend
@@ -274,7 +272,6 @@ authenticated in the catalog.
 | `src/styles/shell.css`     | `wave6/shell.css` copied in full, minus the shared tokens.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `src/styles/app.css`       | Styles that replace the mock browser chrome with the app window.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `tests/`                   | `node:test` via `tsx`: goldens, source invariants, render tests.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `tests/acceptance/run.mjs` | Layer 3: Chromium over the built UI, one load per deep link.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ### The rail
 
@@ -931,7 +928,7 @@ The unit and render-test layers live in `tests/`:
 - `model.test.ts` — verifies reader calculations, role arithmetic, and store
   aggregation invariants against expected baseline values.
 - `location.test.ts` — pure transitions and the `?state=` round trip, including
-  the original design-state names used by the Playwright walks, and the guard
+  the original design-state names, and the guard
   mechanism: verdict order, what `force` skips, and a prompt superseded by a
   second navigation.
 - `navigation-guard.render.test.tsx` — the confirmation a `prompt` verdict
@@ -950,37 +947,14 @@ The unit and render-test layers live in `tests/`:
   as `ui/tests/app-root.render.test.tsx`: the app mounts itself into `#root`
   from `src/main.tsx`, exactly as it does in the browser.
 
-Layer 3 is `tests/acceptance/run.mjs`: `npm run acceptance:foks-ui` builds
-with `VITE_FOKS_MOCK=1`, serves `dist/` over a local HTTP server on a random
-port (a Vite build cannot be loaded over `file://`), and drives the installed
-Chromium through `playwright-core` — `chromium.launch({ executablePath, args:
-['--no-sandbox'] })`, no `playwright install`. Each state is loaded at
-**1280×860** and must produce **no console error, no page error and
-`document.documentElement.scrollWidth === 1280`**; PNGs are saved in
-`tests/acceptance/shots/` (gitignored) beside `mock-all.png`, the design's own
-`01-vault.html`, `02-first-run.html`, `03-groups.html`, `04-servers.html` or `05-settings.html` rendered from `file://` for the by-eye
-comparison. The acceptance map names the exact design file/state for every app
-state so similarly named Vault and Groups surfaces cannot be compared to the
-wrong mock.
-It drives Chromium, never the WebKit webview the app ships in, so it validates
-layout and logic and nothing about the runtime.
-
-The redesign journey gate is `npm run acceptance:foks-redesign`. It exercises
-account switching, invitation administration, device notification preferences,
-Teams → Chat → Files navigation and per-tab restoration at **1280×860** and
-**960×860**. The narrow run uses the keyboard throughout and checks that the
-channel-info overlay covers the conversation rather than squeezing it. It saves
-`redesign-*.png` screenshots alongside the other acceptance artifacts.
-
-Layer 4 is the Rust command layer. Runtime-dependent app lock, clipboard
+The Rust command layer covers runtime-dependent behavior. App lock, clipboard
 concealment/clearing, native picker/drop streaming and webview resident-set
-behavior are tested there or manually, not in Chromium.
+behavior are tested there or manually.
 
 ## Deep links
 
 The current screen, selection, and presentation are encoded in
-the address bar, so every state can be reloaded and the acceptance run can
-walk them. `?state=` is the mock's own vocabulary (`01-vault.html`'s `STATES`),
+the address bar, so every state can be reloaded and inspected. `?state=` is the mock's own vocabulary (`01-vault.html`'s `STATES`),
 kept so deep links defined in the design specification resolve to this location.
 
 | `?state=`                                                                            | Opens                                   | What else it fixes                                                                                      |

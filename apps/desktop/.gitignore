@@ -1,4 +1,0 @@
-# Screenshots the Playwright acceptance run writes. They are an artefact of a
-# run, not a checked-in baseline: the gate is zero console errors and
-# `scrollWidth === 1280`.
-tests/acceptance/shots/
