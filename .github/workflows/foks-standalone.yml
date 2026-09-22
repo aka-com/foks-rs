@@ -79,7 +79,7 @@ jobs:
       - name: Fetch the locked dependency graph
         run: cargo fetch --locked
       - name: Install Linux server dependencies
-        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libpcsclite-dev libwebkit2gtk-4.1-dev
       - name: Fetch the pinned Go protocol module
         working-directory: tools/foks-v019-oracle
         run: go mod download github.com/foks-proj/go-foks@v0.1.9

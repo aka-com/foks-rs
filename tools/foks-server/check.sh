@@ -68,6 +68,17 @@ done <"$boundary_paths"
 # MCP process tests use the packaged sibling agent executable.
 cargo build --offline --locked -p foks-agent
 
+# The desktop package's Tauri build validates its configured sidecar path even
+# for checks and tests. Reuse the debug agent above instead of building the
+# release binary used for bundles.
+host_target=$(rustc -vV | sed -n 's/^host: //p')
+if [ -z "$host_target" ]; then
+    echo "could not determine the Rust host target" >&2
+    exit 1
+fi
+mkdir -p apps/desktop/src-tauri/binaries
+cp target/debug/foks-agent "apps/desktop/src-tauri/binaries/foks-agent-$host_target"
+
 while IFS= read -r package; do
     if [ "$package" != "foks-server-testkit" ] \
         && cargo tree --offline --locked --edges normal --prefix none -p "$package" \
