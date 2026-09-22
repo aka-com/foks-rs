@@ -517,7 +517,7 @@ test('a federation failure replaces its rows and keeps its own Refresh', async (
   assert.ok(memberRow('sam.ortiz'));
 });
 
-test('a pending membership change offers Resume at the right end of its alert', async () => {
+test('a pending membership change is counted on one band whose Review lists it', async () => {
   const snapshot = await fixture();
   const pending: PendingOperation[] = [
     {
@@ -529,19 +529,31 @@ test('a pending membership change offers Resume at the right end of its alert', 
   const rendered = await group(snapshot, {
     listPendingOperations: async () => pending,
   });
-  const resume = rendered.getByRole('button', {
-    name: 'Resume adding jules.park',
-  });
-  const alert = resume.closest('.band');
+  const review = rendered.getByRole('button', { name: 'Review' });
+  const alert = review.closest('.band');
   assert.ok(alert);
+  assert.equal(alert.querySelector('b')?.textContent, 'Unfinished activity');
   assert.equal(
-    alert.querySelector('b')?.textContent,
-    'Finish a pending membership change',
+    alert.querySelector('.t')?.textContent,
+    'Unfinished activity 1 incomplete membership change. It blocks other actions.',
   );
-  assert.equal(resume.closest('.band .a') !== null, true);
-  // This band is mounted by what the reader did — a change that stopped
-  // partway, read back after the action — so it is announced.
+  assert.equal(review.closest('.band .a') !== null, true);
+  // A newly detected blocking membership operation is announced.
   assert.equal(alert.getAttribute('role'), 'status');
+  // The review sheet lists blocking membership operations first and provides
+  // their Resume actions.
+  ui.fireEvent.click(review);
+  const dialog = rendered.getByRole('dialog');
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByRole('heading', { name: 'Unfinished activity · Engineering' }),
+  );
+  assert.ok(ui.within(dialog).getByText('Adding jules.park'));
+  const resume = ui.within(dialog).getByRole('button', {
+    name: 'Resume adding jules.park',
+  }) as HTMLButtonElement;
+  await ui.waitFor(() => assert.equal(resume.disabled, false));
 });
 
 test('the Members count counts a federated team once', async () => {

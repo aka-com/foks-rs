@@ -121,10 +121,7 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
     );
     await ui.act(async () => {});
     assert.equal(reads, 1);
-    assert.equal(
-      rendered.queryByText('Finish a pending membership change'),
-      null,
-    );
+    assert.equal(rendered.queryByText('Unfinished activity'), null);
     // The username field starts empty, so the addition names its member by
     // being typed rather than by arriving prefilled.
     if (addition)
@@ -143,8 +140,19 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
     // from the read the write's own outcome asked for, not from the
     // freshness window elapsing.
     assert.equal(reads, 2);
-    // A failed sheet stays open. Close it to use the newly displayed Resume action.
+    // Close the failed action sheet before opening the activity sheet from
+    // the updated summary band.
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Cancel' }));
+    const band = rendered.getByRole('status');
+    assert.equal(
+      band.textContent,
+      'Unfinished activity 1 incomplete membership change. It blocks other actions.Review',
+    );
+    await ui.act(async () => {
+      ui.fireEvent.click(
+        ui.within(band).getByRole('button', { name: 'Review' }),
+      );
+    });
     const resumeName = addition
       ? 'Resume adding jules.park'
       : 'Resume the role change';
@@ -153,10 +161,8 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
     });
     assert.ok(resumed);
     assert.equal(reads, 3);
-    assert.equal(
-      rendered.queryByText('Finish a pending membership change'),
-      null,
-    );
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Close' }));
+    assert.equal(rendered.queryByText('Unfinished activity'), null);
   });
 }
 
@@ -219,8 +225,5 @@ test('a failed pending-operation query reports one error and renders no recovery
     (reported[0] as { message: string }).message,
     /could not be read/,
   );
-  assert.equal(
-    rendered.queryByText('Finish a pending membership change'),
-    null,
-  );
+  assert.equal(rendered.queryByText('Unfinished activity'), null);
 });

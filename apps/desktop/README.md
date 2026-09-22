@@ -82,7 +82,12 @@ its state. Request membership prepares and submits in one press; a request
 that stays prepared, or whose submission went unanswered, is finished from
 the sheet's Resume a pending request list. A security key PIN is asked for
 only when the agent requires one. A group that needs attention says so on its own row,
-not a second time under it. Member changes are restricted to unique, locally
+not a second time under it. On the team page, everything that did not finish
+is one band: it counts the incomplete membership changes (interrupted member
+additions and role changes, invitations left unsent, approvals cut short) and
+says how many of them block other actions. Its Review opens the Unfinished
+activity sheet, where the blocking changes lead with their own Resume, ahead
+of the invitation and approval rows. Member changes are restricted to unique, locally
 manageable usernames.
 An inactive or ambiguous federation admission has no extra payload. Active ad-hoc
 groups retain read-only roster facts but suppress member and federation actions.

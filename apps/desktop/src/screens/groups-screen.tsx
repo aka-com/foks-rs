@@ -19,7 +19,7 @@ import {
   reportMutationOutcome,
 } from '../commands/command-policy';
 import { useTabSheetState } from '../navigation-guard';
-import { InvitationRecovery } from '../components/invitation-recovery';
+import { UnfinishedActivity } from '../components/unfinished-activity';
 import { InviteNewUserSheet } from '../components/invite-new-user-sheet';
 import { InvitationActivitySheet } from '../components/invitation-activity-sheet';
 import { MembershipRequests } from '../components/membership-requests';
@@ -1409,6 +1409,7 @@ export function GroupSettingsScreen({
     <InvitationActivitySheet
       bridge={bridge}
       team={store}
+      membership={{ operations: membershipPending, onResume: resumeMembership }}
       onClose={() => setReviewing(false)}
       onComplete={() => onApplied('Team requests updated', store.server)}
     />
@@ -1595,43 +1596,18 @@ export function GroupSettingsScreen({
         />
       ) : (
         <>
-          {canManageRoster && !reviewing ? (
-            <InvitationRecovery
+          {/* Combine blocking membership operations and invitation activity
+              in one review entry point. */}
+          {reviewing ? null : (
+            <UnfinishedActivity
               bridge={bridge}
               store={store}
+              membership={membershipPending}
+              invitations={canManageRoster}
               onError={onError}
               onReview={() => setReviewing(true)}
             />
-          ) : null}
-          {membershipPending.map((operation) => (
-            <Band
-              key={`${operation.kind}:${operation.target ?? ''}`}
-              // This one is mounted by what the reader did — a change that
-              // stopped partway, read back after the action — so it announces.
-              live
-              label="Finish a pending membership change"
-              action={
-                <Button
-                  size="sm"
-                  variant="primary"
-                  aria-label={
-                    operation.kind === 'team-member-addition'
-                      ? `Resume adding ${operation.target ?? 'member'}`
-                      : 'Resume the role change'
-                  }
-                  onClick={() => resumeMembership(operation)}
-                >
-                  Resume
-                </Button>
-              }
-            >
-              {operation.kind === 'team-member-addition'
-                ? `FOKS stopped partway through adding ${operation.target ?? 'a member'}.`
-                : 'FOKS stopped partway through a role change.'}{' '}
-              Finish the pending change before adding, removing, or changing
-              anyone else.
-            </Band>
-          ))}
+          )}
           <Tabs
             label="Team sections"
             idBase={GROUP_TABS}

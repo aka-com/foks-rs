@@ -61,10 +61,10 @@ test('invitation boundary rejects secret fields, bad handles and oversized inbox
     { state: 'submission-unknown', operation_id: 'a'.repeat(32) },
   );
 });
-test('the invitation activity band stays quiet about a read the profile could not admit', async () => {
-  const { InvitationRecovery } = (await vite.ssrLoadModule(
-    '/src/components/invitation-recovery.tsx',
-  )) as typeof import('../src/components/invitation-recovery');
+test('the unfinished activity band stays quiet about a read the profile could not admit', async () => {
+  const { UnfinishedActivity } = (await vite.ssrLoadModule(
+    '/src/components/unfinished-activity.tsx',
+  )) as typeof import('../src/components/unfinished-activity');
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
@@ -94,9 +94,11 @@ test('the invitation activity band stays quiet about a read the profile could no
   const errors: unknown[] = [];
   const rendered = ui.render(
     await overlay(
-      createElement(InvitationRecovery, {
+      createElement(UnfinishedActivity, {
         bridge,
         store: team,
+        membership: [],
+        invitations: true,
         onReview: () => {},
         onError: (error: unknown) => errors.push(error),
       }),
@@ -104,7 +106,7 @@ test('the invitation activity band stays quiet about a read the profile could no
   );
   await ui.act(async () => {});
   assert.deepEqual(errors, []);
-  assert.equal(rendered.queryByText('Invitation activity'), null);
+  assert.equal(rendered.queryByText('Unfinished activity'), null);
   // What changes the session still reaches the handler.
   failure = {
     code: 'agent-lost',

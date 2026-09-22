@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { normalizeCommandError, type Bridge } from '../bridge';
+import { normalizeCommandError } from '../bridge';
+import type { Bridge, PendingOperation } from '../bridge';
 import { useDeviceCache } from '../device-cache';
 import type { InvitationAction, InvitationRow } from '../invitation-contract';
 import {
@@ -33,14 +34,23 @@ import {
 
 type View = 'attention' | 'issued';
 
+/** Pending membership operations and their resume handler. */
+export interface MembershipActivity {
+  operations: readonly PendingOperation[];
+  onResume: (operation: PendingOperation) => void;
+}
+
 export function InvitationActivitySheet({
   bridge,
   team,
+  membership,
   onClose,
   onComplete,
 }: {
   bridge: Bridge;
   team: TeamStore;
+  /** Blocking membership operations to list before invitation activity. */
+  membership?: MembershipActivity;
   onClose: () => void;
   onComplete?: () => Promise<void> | void;
 }): ReactNode {
@@ -241,7 +251,12 @@ export function InvitationActivitySheet({
       { write: false },
     );
 
-  const attention = [...operations.filter(unfinishedOperation), ...approvals];
+  const blocked = membership?.operations ?? [];
+  const attention = [
+    ...blocked,
+    ...operations.filter(unfinishedOperation),
+    ...approvals,
+  ];
   const issued = operations.filter((row) => row.state === 'complete');
 
   const noteOf = (row: InvitationRow) =>
@@ -304,6 +319,42 @@ export function InvitationActivitySheet({
     );
   };
 
+  const membershipRow = (operation: PendingOperation): ReactNode => {
+    const addition = operation.kind === 'team-member-addition';
+    const what = addition
+      ? `Adding ${operation.target ?? 'a member'}`
+      : 'A role change';
+    return (
+      <article
+        key={`${operation.kind}:${operation.target ?? ''}`}
+        className="op"
+      >
+        <p>
+          <b>{what}</b> <Chip tone="bad">Blocking</Chip>
+        </p>
+        <p className="fn">
+          FOKS stopped partway. Nothing else can be added, removed or changed in{' '}
+          {team.name} until this finishes.
+        </p>
+        <div className="btns">
+          <Button
+            size="sm"
+            variant="primary"
+            aria-label={
+              addition
+                ? `Resume adding ${operation.target ?? 'member'}`
+                : 'Resume the role change'
+            }
+            disabled={busy}
+            onClick={() => membership?.onResume(operation)}
+          >
+            Resume
+          </Button>
+        </div>
+      </article>
+    );
+  };
+
   const approvalRow = (row: InvitationRow): ReactNode => (
     <article key={row.request_id} className="op">
       <p>
@@ -359,8 +410,8 @@ export function InvitationActivitySheet({
 
   return (
     <PanelSheet
-      presentation={{ title: 'Invitation activity', onClose }}
-      title={`Invitation activity · ${team.name}`}
+      presentation={{ title: 'Unfinished activity', onClose }}
+      title={`Unfinished activity · ${team.name}`}
       busy={busy}
       glyph={
         <span className="kico invite">
@@ -384,7 +435,7 @@ export function InvitationActivitySheet({
       }
     >
       <SegmentedControl
-        label="Invitation activity view"
+        label="Unfinished activity view"
         value={view}
         items={[
           {
@@ -431,11 +482,12 @@ export function InvitationActivitySheet({
               <Icon name="check" />
             </span>
             <span className="t">
-              <b>No in-progress invitations.</b>
+              <b>Nothing is waiting on you.</b>
             </span>
           </div>
         ) : (
           <>
+            {blocked.map(membershipRow)}
             {operations.filter(unfinishedOperation).map(operationRow)}
             {approvals.map(approvalRow)}
           </>
