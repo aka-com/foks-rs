@@ -7,7 +7,8 @@ use crate::*;
 
 mod clock;
 pub use clock::{
-    AdapterClockState, AdapterTimeSample, ADMISSION_AGE_SECONDS, TERMINAL_RETENTION_SECONDS,
+    AdapterClockState, AdapterTimeSample, MAX_NEW_SUBMISSION_AGE_SECONDS,
+    TERMINAL_RETENTION_SECONDS,
 };
 
 const HANDLE_HASH_DOMAIN: u64 = 0x14d8_6ced_ea89_0362;
@@ -236,7 +237,7 @@ impl HardStateStore {
             "INSERT INTO kv_adapter_submissions(handle_hash,handle,handle_version,schema_version,host_id,user_id,team_id,input_hash,internal_id,state,issued_at,created_at)
              VALUES (?1,?2,1,1,?3,?4,?5,?6,?7,0,?8,?9)",
             params![adapter_handle_hash(handle),handle.to_string(),operation.host_id,operation.scope_id,
-                operation.subject_id,operation.request_hash,operation.operation_id,sql_time(handle.issued_at())?,sql_time(state.admission_floor)?],
+                operation.subject_id,operation.request_hash,operation.operation_id,sql_time(handle.issued_at())?,sql_time(state.validated_time_floor)?],
         )?;
         super::journals::record_mutation_on(&tx, operation)?;
         tx.commit()?;
@@ -274,7 +275,7 @@ impl HardStateStore {
         {
             Ok(Some(state)) => {
                 clock::write(&tx, &row.host_id, &row.user_id, &state)?;
-                Some(state.admission_floor)
+                Some(state.validated_time_floor)
             }
             Ok(None) | Err(Error::AdapterClockUntrusted) => None,
             Err(error) => return Err(error),
@@ -419,7 +420,7 @@ impl HardStateStore {
                     params![
                         host,
                         user,
-                        sql_time(state.admission_floor)?,
+                        sql_time(state.validated_time_floor)?,
                         PRUNE_BATCH as i64
                     ],
                     |r| Ok((r.get::<_, [u8; 32]>(0)?, read_time(r, 1)?)),

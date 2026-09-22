@@ -3,11 +3,11 @@ use crate::commands::accounts::AccountDto;
 use crate::commands::context::AppState;
 use crate::commands::execution::{apply_surveying_profile_operation_with_transport, MutationKind};
 use crate::commands::groups::{
-    add_group_member_operation, admit_group_operation, create_group_operation,
+    add_federated_team_member_operation, add_group_member_operation, create_group_operation,
     demote_group_member_operation, federation_dtos, group_detail_result,
     group_discovery_changed_bindings, party_dtos, remove_group_member_operation,
-    rerun_group_admission_operation, FederationEntryDto, FederationResponse, GroupDetailResultDto,
-    GroupKindInput, MemberResponse, MemberRole, PartyDto, RoleInput,
+    rerun_federated_team_member_add_operation, FederationEntryDto, FederationResponse,
+    GroupDetailResultDto, GroupKindInput, MemberResponse, MemberRole, PartyDto, RoleInput,
 };
 use crate::commands::tests::support::{
     account_ref, phase_four_catalog, phase_four_state, team_ref, test_profile_value,
@@ -609,12 +609,12 @@ fn group_operation_transcripts_use_only_resolved_identities() {
         "invalid-request"
     );
     assert!(matches!(
-        admit_group_operation(
+        add_federated_team_member_operation(
             team,
             team_ref("home.example", "home", "homelab"),
             -3,
         ),
-        Operation::AdmitFederatedTeam {
+        Operation::AddFederatedTeamMember {
             local_profile,
             remote_profile,
             role: FederationRole::Member,
@@ -742,7 +742,7 @@ fn blocked_profiles_stop_group_reads_and_mutations_before_transport() {
 }
 
 #[test]
-fn admission_rerun_requires_one_retained_inactive_operation_and_fresh_remote() {
+fn federated_membership_rerun_requires_one_retained_inactive_operation_and_fresh_remote() {
     let state = phase_four_state(Vec::new());
     let local_id = store_id(&CatalogStoreRef::Team(team_ref(
         "work.example",
@@ -766,11 +766,11 @@ fn admission_rerun_requires_one_retained_inactive_operation_and_fresh_remote() {
         .unwrap()
         .insert(local_id.clone(), vec![entry.clone()]);
     let (local, retained) = state
-        .selected_inactive_admission(&local_id, &operation_id)
+        .selected_inactive_federated_membership(&local_id, &operation_id)
         .unwrap();
     assert!(matches!(
-        rerun_group_admission_operation(local, retained).unwrap(),
-        Operation::AdmitFederatedTeam {
+        rerun_federated_team_member_add_operation(local, retained).unwrap(),
+        Operation::AddFederatedTeamMember {
             remote_profile,
             remote_team_alias,
             visibility: -2,
@@ -779,7 +779,7 @@ fn admission_rerun_requires_one_retained_inactive_operation_and_fresh_remote() {
     ));
     assert_eq!(
         state
-            .selected_inactive_admission(&local_id, "renderer-chosen")
+            .selected_inactive_federated_membership(&local_id, "renderer-chosen")
             .unwrap_err()
             .code,
         "invalid-request"
@@ -793,10 +793,10 @@ fn admission_rerun_requires_one_retained_inactive_operation_and_fresh_remote() {
         .insert(local_id.clone(), vec![no_operation]);
     assert_eq!(
         state
-            .selected_inactive_admission(&local_id, &operation_id)
+            .selected_inactive_federated_membership(&local_id, &operation_id)
             .unwrap_err()
             .code,
-        "admission-not-resumable"
+        "federated-membership-not-resumable"
     );
     state
         .federations
@@ -807,7 +807,7 @@ fn admission_rerun_requires_one_retained_inactive_operation_and_fresh_remote() {
     *state.catalog.lock().unwrap() = Some(phase_four_catalog(vec!["home.example".to_owned()]));
     assert_eq!(
         state
-            .selected_inactive_admission(&local_id, &operation_id)
+            .selected_inactive_federated_membership(&local_id, &operation_id)
             .unwrap_err()
             .code,
         "capability-unavailable"
@@ -823,10 +823,10 @@ fn admission_rerun_requires_one_retained_inactive_operation_and_fresh_remote() {
         .insert(local_id.clone(), vec![duplicate.clone(), duplicate]);
     assert_eq!(
         state
-            .selected_inactive_admission(&local_id, &operation_id)
+            .selected_inactive_federated_membership(&local_id, &operation_id)
             .unwrap_err()
             .code,
-        "admission-not-resumable"
+        "federated-membership-not-resumable"
     );
 }
 

@@ -81,7 +81,7 @@ export function useGroupOperationController({
    * Runs a resumable group write and reads back what it changed.
    *
    * `profile` names the one profile the read back needs; left out, the whole
-   * catalog is read, which is what an admission touching a remote team on
+   * catalog is read, which is what adding a remote team on
    * another server still needs. Every write here moves the team's roster, so
    * the profile holding it is marked stale before the write rather than after:
    * an ambiguous refusal can still leave the write applied, and the mark is
@@ -93,7 +93,7 @@ export function useGroupOperationController({
     profile?: string,
   ): Promise<void> => {
     const result = await attemptMutation(
-      { kind: 'resumable', operation: 'group-membership-or-admission' },
+      { kind: 'resumable', operation: 'group-membership-change' },
       action,
       () => onApplied(message, profile),
     );
@@ -123,13 +123,13 @@ export function useGroupOperationController({
         store.server,
       );
   };
-  const resumeAdmission = (operationId: string): void => {
+  const resumeFederatedMemberAdd = (operationId: string): void => {
     if (store)
-      // An admission binds a remote team on another server, whose profile this
+      // A federated membership binds a remote team on another server, whose profile this
       // page does not know, so the read back stays the whole catalog.
       void mutate(() => {
         markProfileRostersStale(store.server);
-        return bridge.rerunGroupAdmission(store.id, operationId);
+        return bridge.rerunFederatedTeamMemberAdd(store.id, operationId);
       }, 'Team access restored');
   };
   return {
@@ -138,6 +138,6 @@ export function useGroupOperationController({
     onMutationError,
     resumeMembership,
     resumeCreation,
-    resumeAdmission,
+    resumeFederatedMemberAdd,
   };
 }

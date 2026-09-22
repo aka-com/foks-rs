@@ -25,7 +25,7 @@ CREATE TABLE sso_sessions (
     host BLOB NOT NULL REFERENCES sso_policy(host),
     session_hash BLOB NOT NULL CHECK(length(session_hash) = 32),
     config_hash BLOB NOT NULL CHECK(length(config_hash) = 32),
-    admission_hash BLOB NOT NULL CHECK(length(admission_hash) = 32),
+    source_hash BLOB NOT NULL CHECK(length(source_hash) = 32),
     uid BLOB CHECK(uid IS NULL OR length(uid) = 33),
     state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 7),
     revision INTEGER NOT NULL CHECK(revision > 0),
@@ -36,7 +36,7 @@ CREATE TABLE sso_sessions (
     PRIMARY KEY(host, session_hash)
 ) STRICT;
 CREATE INDEX sso_session_expiry ON sso_sessions(host, expires_at_ms);
-CREATE INDEX sso_session_admission ON sso_sessions(host, admission_hash, expires_at_ms);
+CREATE INDEX sso_session_source ON sso_sessions(host, source_hash, expires_at_ms);
 -- Persistent identity linkage is distinct from expiring browser flows.
 CREATE TABLE sso_access (
     host BLOB NOT NULL REFERENCES sso_policy(host),
@@ -59,11 +59,11 @@ CREATE TABLE sso_access (
 CREATE TABLE sso_identity_challenges (
     challenge BLOB PRIMARY KEY CHECK(length(challenge)=32),
     claim_hash BLOB NOT NULL CHECK(length(claim_hash)=32),
-    admission_hash BLOB NOT NULL CHECK(length(admission_hash)=32),
+    source_hash BLOB NOT NULL CHECK(length(source_hash)=32),
     expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms>0)
 ) STRICT;
 CREATE INDEX sso_identity_challenge_expiry ON sso_identity_challenges(expires_at_ms);
-CREATE INDEX sso_identity_challenge_source ON sso_identity_challenges(admission_hash);
+CREATE INDEX sso_identity_challenge_source ON sso_identity_challenges(source_hash);
 CREATE TABLE sso_binding_receipts (
     host BLOB NOT NULL REFERENCES sso_policy(host),
     uid BLOB NOT NULL REFERENCES users(uid),

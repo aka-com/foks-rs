@@ -132,7 +132,7 @@ fn yubi_only_administrator_defers_unattended_and_runs_the_explicit_federation_re
         .with_checked_sessions(&local, &remote, |local, remote| {
             let mut local_store = open_store(local.paths(), &master)?;
             let mut remote_store = open_store(remote.paths(), &master)?;
-            local.admit_federated_team(
+            local.add_federated_team_member(
                 remote,
                 "local-team",
                 "remote-team",
@@ -502,7 +502,7 @@ fn two_hardware_only_profiles_refresh_through_the_explicit_two_key_workflow() {
         .with_checked_sessions(&local, &remote, |local, remote| {
             let mut local_store = open_store(local.paths(), &master)?;
             let mut remote_store = open_store(remote.paths(), &master)?;
-            local.admit_federated_team(
+            local.add_federated_team_member(
                 remote,
                 "local-team",
                 "remote-team",

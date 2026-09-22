@@ -562,7 +562,7 @@ test('the add sheet switches between a person and another server’s group', asy
     /The command admits a team/,
   );
   // The band the person half was given belongs to that half: this one starts
-  // where a new admission starts, not where the other answer was left.
+  // where a new federated membership starts, not where the other answer was left.
   assert.equal(
     document.querySelector('.sheet .vis-value')?.textContent,
     'Visibility 0',
@@ -577,7 +577,7 @@ test('the add sheet switches between a person and another server’s group', asy
     document.querySelector('.sheet .vis-value')?.textContent,
     'Visibility 1',
   );
-  // And switching back does not inherit the admission's band either. The
+  // And switching back does not inherit the federated membership's band either. The
   // switch is re-read: each half draws its own, so the earlier node is gone.
   await ui.act(async () => {
     const control = document.querySelector(

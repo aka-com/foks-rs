@@ -14,7 +14,7 @@ fn aad(row: &SsoSession) -> Vec<u8> {
     out.extend_from_slice(&row.host);
     out.extend_from_slice(&row.session_hash);
     out.extend_from_slice(&row.config_hash);
-    out.extend_from_slice(&row.admission_hash);
+    out.extend_from_slice(&row.source_hash);
     out.push(u8::from(row.uid.is_some()));
     if let Some(uid) = row.uid {
         out.extend_from_slice(&uid);

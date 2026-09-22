@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 39;
+pub(crate) const VERSION: u32 = 40;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "import_readiness",
@@ -403,7 +403,7 @@ CREATE TABLE kv_adapter_clocks (
     process_id BLOB NOT NULL CHECK(length(process_id)=16),
     anchor_wall INTEGER NOT NULL CHECK(anchor_wall>=0),
     anchor_monotonic INTEGER NOT NULL CHECK(anchor_monotonic>=0),
-    admission_floor INTEGER NOT NULL CHECK(admission_floor>=0),
+    validated_time_floor INTEGER NOT NULL CHECK(validated_time_floor>=0),
     reject_issued_before INTEGER NOT NULL CHECK(reject_issued_before>=0),
     PRIMARY KEY(host_id,user_id)
 ) STRICT, WITHOUT ROWID;

@@ -825,7 +825,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       assertNamedGroup(storeId);
       return { applied: true };
     },
-    admitGroup: async ({ storeId, remoteStoreId, visibility }) => {
+    addFederatedTeamMember: async ({ storeId, remoteStoreId, visibility }) => {
       assertNamedGroup(storeId);
       const remote = stores.find(
         (store) => store.id === remoteStoreId && store.kind === 'team',
@@ -844,7 +844,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           'invalid-request',
           'Choose an active named team on a different server.',
         );
-      const operation = `admission-${federation.length + 1}`;
+      const operation = `federated-member-${federation.length + 1}`;
       federation.push({
         store: storeId,
         // Use the profile name rather than the server address.
@@ -902,7 +902,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       );
       return { applied: true };
     },
-    rerunGroupAdmission: async (storeId, operationId) => {
+    rerunFederatedTeamMemberAdd: async (storeId, operationId) => {
       assertNamedGroup(storeId);
       const entry = federation.find(
         (candidate) =>
@@ -911,7 +911,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       );
       if (!entry || entry.active)
         throw failure(
-          'admission-not-resumable',
+          'federated-membership-not-resumable',
           'This team invitation cannot be resumed.',
         );
       entry.active = true;

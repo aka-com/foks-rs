@@ -70,7 +70,7 @@ test('the rail draws the five tabs, the unread badge and the Settings dot', asyn
   );
   // The fixture's three notifications each already have a home of their own —
   // Acme's lapsed check-in and Partner's unverified trust show on Settings,
-  // Homelab's incomplete setup and its inactive admission show on Teams — so
+  // Homelab's incomplete setup and its inactive federated membership show on Teams — so
   // none of them are left for the avatar dot to advertise.
   assert.equal(
     document.querySelector('.side.rail .attn'),

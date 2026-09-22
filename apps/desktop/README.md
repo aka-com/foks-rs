@@ -60,7 +60,7 @@ provides two modes: person mode and federated team mode. Person mode preselects
 the server, displays role selection cards (disabling unauthorized roles with
 tooltips), and validates that the username exists before sending. Federated
 team mode lists remote groups already available on this device because
-`admit_group` accepts a store rather than a name and host. Switching modes
+`add_federated_team_member` accepts a store rather than a name and host. Switching modes
 resets mode-specific role, visibility, and validation state. If an entered
 username already exists in the team roster, client-side validation rejects it
 locally. Server-side validation errors returned by the agent are displayed

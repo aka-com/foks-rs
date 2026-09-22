@@ -3,8 +3,8 @@
 use crate::agent::{AgentError, AgentHandle};
 use crate::commands::accounts::{AccountDto, DeviceDto};
 use crate::commands::groups::{
-    admission_not_resumable, member_not_actionable, member_role_from_dto, FederationEntryDto,
-    MemberRole, PartyDto,
+    federated_membership_not_resumable, member_not_actionable, member_role_from_dto,
+    FederationEntryDto, MemberRole, PartyDto,
 };
 use crate::commands::validation::{
     invalid_request, invalid_response, require_profile_available, required_field,
@@ -1612,7 +1612,7 @@ impl AppState {
         Ok((team, party_id_hex, current))
     }
 
-    pub(super) fn selected_inactive_admission(
+    pub(super) fn selected_inactive_federated_membership(
         &self,
         store_id: &str,
         operation_id: &str,
@@ -1620,7 +1620,7 @@ impl AppState {
         let team = self.selected_active_team_for_mutation(store_id)?;
         if !valid_operation_id_hex(operation_id) {
             return Err(invalid_request(
-                "Choose a valid pending admission to re-run.",
+                "Choose a valid pending federated membership to retry.",
             ));
         }
         let federations = self
@@ -1630,7 +1630,7 @@ impl AppState {
         let Some(entries) = federations.get(store_id) else {
             return Err(AgentError::new(
                 "federation-required",
-                "Refresh this group's federation list before re-running an admission.",
+                "Refresh this group's federation list before retrying a federated membership.",
                 true,
             ));
         };
@@ -1638,10 +1638,10 @@ impl AppState {
             !entry.active && entry.operation_id_hex.as_deref() == Some(operation_id)
         });
         let Some(entry) = matches.next() else {
-            return Err(admission_not_resumable());
+            return Err(federated_membership_not_resumable());
         };
         if matches.next().is_some() {
-            return Err(admission_not_resumable());
+            return Err(federated_membership_not_resumable());
         }
         let entry = entry.clone();
         drop(federations);
@@ -1654,7 +1654,7 @@ impl AppState {
                 .as_ref()
                 .is_some_and(|catalog| catalog.profiles.contains(&entry.remote_profile))
         {
-            return Err(admission_not_resumable());
+            return Err(federated_membership_not_resumable());
         }
         require_profile_available(
             catalog

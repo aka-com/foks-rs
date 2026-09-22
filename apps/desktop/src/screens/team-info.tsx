@@ -19,7 +19,7 @@ import {
 import type { AgentSnapshot, TeamStore } from '../model';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelTitle, listChannels } from '../chat/presentation';
-import { admittedGroups, memberCountOf } from './team-members';
+import { federatedTeamMembers, memberCountOf } from './team-members';
 import { itemCountOf } from './group-tabs';
 import { manageReason } from './group-model';
 import { GroupMark } from './group-mark';
@@ -93,12 +93,12 @@ export function TeamInfoPanel({
     (candidate) =>
       candidate.alias === store.account && candidate.server === store.server,
   );
-  const admitted = admittedGroups(snapshot, store);
+  const federated = federatedTeamMembers(snapshot, store);
   const memberRows = [
     ...parties.filter((party) => party.party_kind === 'user'),
     ...(federationFailure
       ? []
-      : [...admitted.unmatched, ...admitted.ambiguous]),
+      : [...federated.unmatched, ...federated.ambiguous]),
   ];
   const entry = inbox.get(store.id);
   const chatReadable = storeOperationAvailability(
@@ -212,7 +212,7 @@ export function TeamInfoPanel({
                   );
                 })}
                 {!federationFailure &&
-                  admitted.entries.map((entry) => {
+                  federated.entries.map((entry) => {
                     const memberRole = parseRole(entry.destination);
                     return (
                       <div
@@ -234,7 +234,7 @@ export function TeamInfoPanel({
                     );
                   })}
                 {!memberRows.length &&
-                !admitted.entries.length &&
+                !federated.entries.length &&
                 !federationFailure ? (
                   <p>No members yet.</p>
                 ) : null}

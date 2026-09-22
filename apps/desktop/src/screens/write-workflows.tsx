@@ -1111,10 +1111,7 @@ function ExistsSheet({
           <Button
             variant="primary"
             onClick={() => {
-              void onOpenExisting(workflow).then(
-                close,
-                onError,
-              );
+              void onOpenExisting(workflow).then(close, onError);
             }}
           >
             Open existing item

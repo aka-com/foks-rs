@@ -15,7 +15,7 @@ import type { InvitationAction, InvitationReply } from '../invitation-contract';
 import type { RenameAction, RenameProgress } from '../rename-contract';
 import type { SsoAction, SsoProgress } from '../sso-contract';
 import type {
-  AdmitGroupRequest,
+  AddFederatedTeamMemberRequest,
   CreateGroupRequest,
   GroupDetailsDto,
   GroupDiscoveryResponse,
@@ -227,11 +227,13 @@ export interface Bridge {
   demoteGroupMember(request: GroupRoleRequest): Promise<MutationResponse>;
   removeGroupMember(request: GroupMemberRequest): Promise<MutationResponse>;
   resumeGroupMemberEdit(storeId: StoreRef): Promise<MutationResponse>;
-  admitGroup(request: AdmitGroupRequest): Promise<MutationResponse>;
+  addFederatedTeamMember(
+    request: AddFederatedTeamMemberRequest,
+  ): Promise<MutationResponse>;
   removeFederatedGroup(
     request: RemoveFederatedGroupRequest,
   ): Promise<MutationResponse>;
-  rerunGroupAdmission(
+  rerunFederatedTeamMemberAdd(
     storeId: StoreRef,
     operationId: string,
   ): Promise<MutationResponse>;

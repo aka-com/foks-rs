@@ -228,7 +228,7 @@ pub(crate) fn insert_local_permission(
 
 /// Prepared local acceptance, rechecked together with the optional Requested link.
 /// Opaque tokens deliberately have no Debug representation.
-pub struct LocalInvitationAdmission {
+pub struct LocalInvitationAcceptance {
     pub uid: Vec<u8>,
     pub credential: Vec<u8>,
     pub certificate_hash: [u8; 32],
@@ -241,9 +241,9 @@ pub struct LocalInvitationAdmission {
     pub receipt: [u8; 17],
     pub permission: [u8; 17],
 }
-pub(crate) fn insert_local_admission(
+pub(crate) fn commit_local_invitation_acceptance(
     c: &Connection,
-    a: &LocalInvitationAdmission,
+    a: &LocalInvitationAcceptance,
     now: u64,
 ) -> Result<()> {
     let actor = InvitationActor {
@@ -348,13 +348,13 @@ fn stored_role(kind: u64, visibility: i64) -> Result<foks_proto::Role> {
 impl Database {
     pub fn accept_local_invitation(
         &mut self,
-        admission: &LocalInvitationAdmission,
+        acceptance: &LocalInvitationAcceptance,
         now: u64,
     ) -> Result<()> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        insert_local_admission(&tx, admission, now)?;
+        commit_local_invitation_acceptance(&tx, acceptance, now)?;
         tx.commit()?;
         Ok(())
     }
@@ -449,7 +449,7 @@ impl ReadSnapshot<'_> {
 }
 
 /// Called before replacing the roster, so metadata-only edits cannot approve
-/// an existing member's self-invite. The chain remains admission authority.
+/// an existing member's self-invite. The chain remains acceptance authority.
 pub(crate) fn approve_local_additions(
     c: &Connection,
     m: &crate::TeamMutation<'_>,
@@ -480,8 +480,8 @@ pub(crate) fn approve_local_additions(
     Ok(approved)
 }
 
-/// Public guest admission owns only ciphertext and validated public witnesses.
-pub struct RemoteInvitationAdmission {
+/// Public guest acceptance owns only ciphertext and validated public witnesses.
+pub struct RemoteInvitationAcceptance {
     pub certificate_hash: [u8; 32],
     pub team: Vec<u8>,
     pub generation: u64,
@@ -493,7 +493,7 @@ pub struct RemoteInvitationAdmission {
 impl Database {
     pub fn accept_remote_invitation(
         &mut self,
-        a: &RemoteInvitationAdmission,
+        a: &RemoteInvitationAcceptance,
         now: u64,
     ) -> Result<()> {
         if a.exact_request.len() > 16384 || a.receipt[0] != 56 {

@@ -1,7 +1,7 @@
 /**
  * The group page's Members tab.
  *
- * The roster is drawn as one Members list — people and the teams admitted
+ * The roster is drawn as one Members list — people and the federated teams
  * from other servers together, with Machines its own sub-section below —
  * one line of role each: the visibility band rides inside the role chip and
  * the party generation is not shown. What a row cannot do stays in its menu,
@@ -149,7 +149,7 @@ function addPeopleChoice(
   ui.fireEvent.click(addPeopleItem(label));
 }
 
-test('the roster is split into people, machines and admitted groups', async () => {
+test('the roster is split into people, machines and federated teams', async () => {
   await group(await fixture());
   // The invitation panel is mounted for the life of the page, so its own
   // "Membership requests" heading is present — hidden — alongside Members.
@@ -368,7 +368,7 @@ test('a row menu carries actions only, inert with the reason in the title', asyn
   assert.equal(inert(menuItem('Lower role…')), false);
 });
 
-test('an admitted group is one row: role, admission state and its own actions', async () => {
+test('a federated team is one row: role, membership state and its own actions', async () => {
   const rendered = await group(await fixture());
   const row = memberRow('homelab');
   assert.equal(
@@ -389,12 +389,12 @@ test('an admitted group is one row: role, admission state and its own actions', 
     lower.getAttribute('title') ?? '',
     /managed on their own server/,
   );
-  // The admission itself can be removed, once it is active again.
-  const remove = menuItem('Remove admission…');
+  // The federated membership itself can be removed, once it is active again.
+  const remove = menuItem('Remove federated team…');
   assert.equal(inert(remove), true);
   assert.equal(
     remove.getAttribute('title'),
-    'Restore access before removing this admission.',
+    'Restore access before removing this federated membership.',
   );
 });
 
@@ -478,7 +478,7 @@ test('a federation failure replaces its rows and keeps its own Refresh', async (
         store: 'team:eng',
         source: 'federation',
         code: 'unavailable',
-        message: 'The admitted groups could not be read from the agent.',
+        message: 'The federated teams could not be read from the agent.',
         retryable: true,
       },
     ],
@@ -519,7 +519,7 @@ test('a pending membership change offers Resume at the right end of its alert', 
   assert.equal(alert.getAttribute('role'), 'status');
 });
 
-test('the Members count counts an admitted group once', async () => {
+test('the Members count counts a federated team once', async () => {
   const snapshot = await fixture();
   await group(snapshot);
   const members = [...document.querySelectorAll('[role="tab"]')].find((tab) =>
@@ -531,9 +531,9 @@ test('the Members count counts an admitted group once', async () => {
   assert.equal(members.querySelector('.n')?.textContent, '6');
 });
 
-test('a roster party with no admission record is listed, not dropped', async () => {
+test('a roster party with no membership record is listed, not dropped', async () => {
   const snapshot = await fixture();
-  // The admission record is missing, so nothing matches the roster's group.
+  // The membership record is missing, so nothing matches the roster's group.
   await group({ ...snapshot, federation: [] });
   const row = memberRow('homelab');
   assert.equal(
@@ -547,7 +547,7 @@ test('a roster party with no admission record is listed, not dropped', async () 
   const chips = [...row.querySelectorAll('.chip')].map(
     (chip) => chip.textContent,
   );
-  assert.deepEqual(chips, ['Member · sees level 0', 'No admission record']);
+  assert.deepEqual(chips, ['Member · sees level 0', 'No membership record']);
   // It is still a member of this group, so it is still counted.
   const members = [...document.querySelectorAll('[role="tab"]')].find((tab) =>
     tab.textContent?.startsWith('Members'),
@@ -555,7 +555,7 @@ test('a roster party with no admission record is listed, not dropped', async () 
   assert.equal(members?.querySelector('.n')?.textContent, '6');
 });
 
-test('an ambiguous admission record is one row, counted once', async () => {
+test('an ambiguous membership record is one row, counted once', async () => {
   const snapshot = await fixture();
   const [entry] = snapshot.federation;
   // Two records on this Mac name the same remote group on the same host, so
@@ -574,7 +574,7 @@ test('an ambiguous admission record is one row, counted once', async () => {
   const row = memberRow('homelab');
   assert.deepEqual(
     [...row.querySelectorAll('.chip')].map((chip) => chip.textContent),
-    ['Member · sees level 0', 'Ambiguous admission'],
+    ['Member · sees level 0', 'Ambiguous membership'],
   );
   // The records it matches are left to that one row rather than listed beside
   // it, so the group appears once.

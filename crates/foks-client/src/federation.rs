@@ -81,10 +81,10 @@ impl RemoteTeamOutcome {
     }
 }
 
-/// Both authenticated sides of one remote-team admission. The coordinator
+/// Both authenticated sides of adding one remote team as a member. The coordinator
 /// journals only public bindings; credentials, the permission, and the
 /// removal key stay in caller-owned protected memory.
-pub struct FederatedTeamAdmissionRequest<'a> {
+pub struct AddFederatedTeamMemberRequest<'a> {
     pub remote_host: &'a PinnedHost,
     pub remote_credential: &'a DeviceCredential,
     pub remote_team: &'a EntityId,
@@ -95,7 +95,7 @@ pub struct FederatedTeamAdmissionRequest<'a> {
     pub removal_key: &'a SecretSeed,
 }
 
-pub struct FederatedTeamAdmissionOutcome {
+pub struct AddFederatedTeamMemberOutcome {
     pub operation_id: [u8; 16],
     pub remote: RemoteTeamOutcome,
     pub added: AddedRemoteTeamMember,
@@ -106,8 +106,8 @@ pub struct FederatedTeamIndexRangeAllocation {
     pub parent: foks_proto::RationalRange,
 }
 
-/// Durable identities needed to refresh an already-admitted remote team's
-/// view capability without re-entering the admission workflow. Either side may be
+/// Durable identities needed to refresh an already-added remote team's
+/// view capability without repeating the member-add workflow. Either side may be
 /// software- or hardware-backed; the four combinations share one code path.
 pub struct FederatedTeamRefreshRequest<'a, 'device> {
     pub remote_host: &'a PinnedHost,
@@ -170,11 +170,11 @@ impl FoksClient {
     /// state and advances only the parent rather than narrowing the child twice.
     pub fn allocate_federated_team_index_ranges(
         &self,
-        request: &FederatedTeamAdmissionRequest<'_>,
+        request: &AddFederatedTeamMemberRequest<'_>,
         child_store: &mut dyn ProtectedMutationStore,
         parent_store: &mut dyn ProtectedMutationStore,
     ) -> Result<FederatedTeamIndexRangeAllocation> {
-        validate_admission_request(request)?;
+        validate_member_add_request(request)?;
         let child = self.authenticated_team_for_index_range(
             request.remote_host,
             request.remote_credential,
@@ -248,7 +248,7 @@ impl FoksClient {
 
     /// Renews the existing remote-view bearer and proves that the local team
     /// still stores that same capability. This never creates or resumes a
-    /// federation admission workflow and never edits the local team chain.
+    /// federation member-add workflow and never edits the local team chain.
     pub fn refresh_federated_team_capability(
         &self,
         request: &FederatedTeamRefreshRequest<'_, '_>,
@@ -376,26 +376,26 @@ impl FoksClient {
         };
         let [recovered] = recovered.as_slice() else {
             return Err(Error::OperationBinding(
-                "local team did not return the admitted remote permission",
+                "local team did not return the remote member permission",
             ));
         };
         if recovered.member != member || recovered.permission != permission {
             return Err(Error::OperationBinding(
-                "refreshed permission differs from the admitted capability",
+                "refreshed permission differs from the issued capability",
             ));
         }
         Ok(remote_team)
     }
 
-    /// Runs or resumes the durable cross-host admission workflow. A retry first
+    /// Runs or resumes the durable cross-host member-add workflow. A retry first
     /// reobtains the idempotent live permission, then reconciles the local
     /// mutation journal without blindly replaying a possibly committed edit.
-    pub fn admit_remote_team_to_named_team(
+    pub fn add_remote_team_member(
         &self,
-        request: &FederatedTeamAdmissionRequest<'_>,
+        request: &AddFederatedTeamMemberRequest<'_>,
         protected_store: &mut impl ProtectedMutationStore,
-    ) -> Result<FederatedTeamAdmissionOutcome> {
-        validate_admission_request(request)?;
+    ) -> Result<AddFederatedTeamMemberOutcome> {
+        validate_member_add_request(request)?;
         let viewer = FqParty::new(
             request.local_team.clone(),
             request.local_host.host_id().clone(),
@@ -564,7 +564,7 @@ impl FoksClient {
         )?;
         let [recovered] = recovered.as_slice() else {
             return Err(Error::OperationBinding(
-                "local team did not return the admitted remote permission",
+                "local team did not return the remote member permission",
             ));
         };
         if recovered.member != member || recovered.permission != permission {
@@ -583,7 +583,7 @@ impl FoksClient {
             Ok(()) | Err(ProtectedStoreError::Missing) => {}
             Err(error) => return Err(Error::ProtectedMaterial(error.to_string())),
         }
-        Ok(FederatedTeamAdmissionOutcome {
+        Ok(AddFederatedTeamMemberOutcome {
             operation_id,
             remote,
             added,
@@ -985,14 +985,14 @@ fn federation_index_range_plan(
     ))
 }
 
-fn validate_admission_request(request: &FederatedTeamAdmissionRequest<'_>) -> Result<()> {
+fn validate_member_add_request(request: &AddFederatedTeamMemberRequest<'_>) -> Result<()> {
     if request.remote_host.host_id() == request.local_host.host_id()
         || request.destination_role == Role::NONE
         || request.destination_role.kind() != foks_proto::RoleType::Member
         || request.remote_team == request.local_team
     {
         return Err(Error::TeamRequest(
-            "federation admission hosts, parties, or role are invalid",
+            "federation member-add hosts, parties, or role are invalid",
         ));
     }
     request
@@ -1012,7 +1012,7 @@ fn validate_admission_request(request: &FederatedTeamAdmissionRequest<'_>) -> Re
 }
 
 fn federation_saga_operation_id(
-    request: &FederatedTeamAdmissionRequest<'_>,
+    request: &AddFederatedTeamMemberRequest<'_>,
     removal_commitment: &[u8; 32],
 ) -> Result<[u8; 16]> {
     let binding = encode(&Value::Array(vec![

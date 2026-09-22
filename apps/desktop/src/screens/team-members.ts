@@ -2,24 +2,24 @@ import { partiesOf } from '../model';
 import type { AgentSnapshot, FederationEntry, Party, Store } from '../model';
 
 /**
- * The groups admitted here, each one drawn once.
+ * The federated teams that are members here, each one drawn once.
  *
- * An admission is normally an entry and the roster party it matches, listed as
+ * A federated membership is normally an entry and the roster party it matches, listed as
  * the entry. A roster party that matches no entry is a missing record, and one
  * that matches several is an ambiguous record: both are still members of this
  * group, so they are listed as the party the roster holds, and the entries an
  * ambiguous party matches are left to that one row rather than repeated.
  */
-interface AdmittedGroups {
+interface FederatedTeamMembers {
   entries: FederationEntry[];
   unmatched: Party[];
   ambiguous: Party[];
 }
 
-export function admittedGroups(
+export function federatedTeamMembers(
   snapshot: AgentSnapshot,
   store: Store,
-): AdmittedGroups {
+): FederatedTeamMembers {
   const entries = snapshot.federation.filter(
     (entry) => entry.store === store.id,
   );
@@ -48,11 +48,14 @@ export function admittedGroups(
 }
 
 /**
- * How many members the group has: its people and machines, plus the admitted
+ * How many members the group has: its people and machines, plus the federated
  * groups counted once each, however their records read.
  */
 export function memberCountOf(snapshot: AgentSnapshot, store: Store): number {
-  const { entries, unmatched, ambiguous } = admittedGroups(snapshot, store);
+  const { entries, unmatched, ambiguous } = federatedTeamMembers(
+    snapshot,
+    store,
+  );
   return (
     partiesOf(snapshot, store.id).filter((party) => party.party_kind === 'user')
       .length +

@@ -11,7 +11,7 @@ use foks_server_testkit::{TestEnvironment, TestFault};
 use foks_yubi::{MockYubiProvider, Pin, SlotId, YubiProvider as _};
 
 #[test]
-fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
+fn protected_product_workflow_adds_and_reconciles_a_remote_team() {
     let local_environment = TestEnvironment::new().unwrap();
     let remote_environment = TestEnvironment::new().unwrap();
     let _local_server = local_environment.start_server().unwrap();
@@ -152,7 +152,7 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
             )?;
             let mut local_vault = AccountVault::new(&mut local_store);
             let mut remote_vault = AccountVault::new(&mut remote_store);
-            local.admit_federated_team(
+            local.add_federated_team_member(
                 remote,
                 "local-team",
                 "remote-team",
@@ -184,7 +184,7 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
             )?;
             let mut local_vault = AccountVault::new(&mut local_store);
             let mut remote_vault = AccountVault::new(&mut remote_store);
-            local.admit_federated_team(
+            local.add_federated_team_member(
                 remote,
                 "local-team",
                 "remote-team",
@@ -257,7 +257,7 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
             )?;
             let mut local_vault = AccountVault::new(&mut local_store);
             let mut remote_vault = AccountVault::new(&mut remote_store);
-            let report = local.admit_federated_team(
+            let report = local.add_federated_team_member(
                 remote,
                 "local-team",
                 "remote-team",
@@ -291,7 +291,7 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
             )?;
             let mut local_vault = AccountVault::new(&mut local_store);
             let mut remote_vault = AccountVault::new(&mut remote_store);
-            local.admit_federated_team(
+            local.add_federated_team_member(
                 remote,
                 "local-team",
                 "remote-team",
@@ -306,7 +306,7 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
     assert_eq!(repeated.scheduled_job_id_hex, first.scheduled_job_id_hex);
 
     // A local user remains actionable by its authenticated party ID even
-    // though the same roster now includes a host-scoped admitted team. The
+    // though the same roster now includes a host-scoped federated team. The
     // demotion must use the authenticated mixed-roster path; the scoped party
     // remains present and authenticated even though its Member role does not
     // receive the rotated Admin key.
@@ -330,7 +330,7 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
                 .find(|member| member.scoped_host_id_hex.is_some())
                 .map(|member| member.party_id_hex.clone())
                 .ok_or(foks_client_app::Error::InvalidAccount(
-                    "admitted team is missing from the authenticated mixed roster",
+                    "federated team is missing from the authenticated mixed roster",
                 ))?;
             assert!(matches!(
                 local
@@ -475,7 +475,7 @@ fn protected_product_workflow_admits_and_reconciles_a_remote_team() {
         .unwrap()
         .contains("untrusted public scope"));
 
-    // Expulsion uses the admission-time removal key retained only in the
+    // Expulsion uses the member-add removal key retained only in the
     // encrypted vault. The real Rust server validates the removal proof and
     // rotated PTKs; no fake range or roster override participates.
     _remote_server.shutdown().unwrap();
@@ -713,7 +713,7 @@ fn a_federated_refresh_cascades_through_an_intermediate_profile() {
                     &right.paths().credential_store,
                     derive_vault_key(&master),
                 )?;
-                left.admit_federated_team(
+                left.add_federated_team_member(
                     right,
                     "team",
                     "team",

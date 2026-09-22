@@ -2312,7 +2312,7 @@ impl DesktopModel {
         ))
     }
 
-    pub fn federation_admission_operation(
+    pub fn federated_team_member_add_operation(
         &self,
         local_team_alias: &str,
         remote_profile: &str,
@@ -2334,7 +2334,7 @@ impl DesktopModel {
         if role != FederationRole::Member {
             return Err("federated teams can only hold member roles");
         }
-        Ok(Operation::AdmitFederatedTeam {
+        Ok(Operation::AddFederatedTeamMember {
             local_profile,
             local_team_alias: local_team_alias.to_owned(),
             remote_profile: remote_profile.to_owned(),
@@ -4541,7 +4541,7 @@ mod tests {
         });
         let mut model = DesktopModel::new(transport);
         assert_eq!(
-            model.federation_admission_operation(
+            model.federated_team_member_add_operation(
                 "engineering",
                 "partner",
                 "security",
@@ -4553,7 +4553,7 @@ mod tests {
         model.select_profile("local");
         assert_eq!(
             model
-                .federation_admission_operation(
+                .federated_team_member_add_operation(
                     "engineering",
                     "partner",
                     "security",
@@ -4561,7 +4561,7 @@ mod tests {
                     4,
                 )
                 .unwrap(),
-            Operation::AdmitFederatedTeam {
+            Operation::AddFederatedTeamMember {
                 local_profile: "local".to_owned(),
                 local_team_alias: "engineering".to_owned(),
                 remote_profile: "partner".to_owned(),
@@ -4571,7 +4571,7 @@ mod tests {
             }
         );
         assert_eq!(
-            model.federation_admission_operation(
+            model.federated_team_member_add_operation(
                 "engineering",
                 "local",
                 "security",
@@ -4581,7 +4581,7 @@ mod tests {
             Err("enter distinct profiles and both team aliases")
         );
         assert_eq!(
-            model.federation_admission_operation(
+            model.federated_team_member_add_operation(
                 "engineering",
                 "partner",
                 "security",

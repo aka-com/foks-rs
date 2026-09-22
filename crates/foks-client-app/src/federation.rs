@@ -579,7 +579,7 @@ impl FederationDestinationRole {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct FederationAdmissionReport {
+pub struct AddFederatedTeamMemberReport {
     pub operation_id_hex: String,
     pub local_profile: String,
     pub local_team_alias: String,
@@ -618,7 +618,7 @@ pub struct FederationExpulsionReport {
 
 impl CheckedProfileSession<'_> {
     #[allow(clippy::too_many_arguments)]
-    pub fn admit_federated_team(
+    pub fn add_federated_team_member(
         &self,
         remote: &CheckedProfileSession<'_>,
         local_team_alias: &str,
@@ -627,7 +627,7 @@ impl CheckedProfileSession<'_> {
         local_vault: &mut AccountVault<'_>,
         remote_vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
-    ) -> Result<FederationAdmissionReport> {
+    ) -> Result<AddFederatedTeamMemberReport> {
         self.profile.require(Capability::Teams)?;
         self.profile.require(Capability::Federation)?;
         remote.profile.require(Capability::Teams)?;
@@ -717,7 +717,7 @@ impl CheckedProfileSession<'_> {
             derive_mutation_key(master_key),
         )?;
         let removal_key = SecretSeed::new(removal_key);
-        let request = foks_client::FederatedTeamAdmissionRequest {
+        let request = foks_client::AddFederatedTeamMemberRequest {
             remote_host: &remote_host,
             remote_credential: &remote_account.credential,
             remote_team: &remote_team_id,
@@ -737,7 +737,7 @@ impl CheckedProfileSession<'_> {
         )?;
         let outcome = self
             .client
-            .admit_remote_team_to_named_team(&request, &mut local_mutations)?;
+            .add_remote_team_member(&request, &mut local_mutations)?;
 
         let stored = local_team
             .federated_members
@@ -770,7 +770,7 @@ impl CheckedProfileSession<'_> {
             },
         )?;
 
-        Ok(FederationAdmissionReport {
+        Ok(AddFederatedTeamMemberReport {
             operation_id_hex: hex(&outcome.operation_id),
             local_profile: self.profile.name.clone(),
             local_team_alias: local_team_alias.to_owned(),
@@ -1122,7 +1122,7 @@ impl CheckedProfileSession<'_> {
                         && member.remote_team_alias == pending.remote_team_alias
                 })
                 .ok_or(Error::InvalidAccount(
-                    "pending federation expulsion lost its protected admission key",
+                    "pending federation expulsion lost its protected removal key",
                 ))?;
             let removal_key = SecretSeed::new(binding.removal_key);
             if foks_crypto::team_removal_key_commitment(&removal_key)?
@@ -2953,7 +2953,7 @@ mod tests {
                         &remote.paths.credential_store,
                         derive_vault_key(&fixture.master),
                     )?;
-                    local.admit_federated_team(
+                    local.add_federated_team_member(
                         remote,
                         "team",
                         "team",

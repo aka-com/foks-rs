@@ -40,7 +40,7 @@ pub struct AdapterClockPreview {
     pub host_id: String,
     pub user_id: String,
     pub anchor_wall: u64,
-    pub admission_floor: u64,
+    pub validated_time_floor: u64,
     pub reject_issued_before: u64,
     pub proposed_wall: u64,
     pub confirmation_digest: String,
@@ -73,7 +73,7 @@ impl crate::CheckedProfileSession<'_> {
         for value in [
             state.anchor_wall,
             state.anchor_monotonic,
-            state.admission_floor,
+            state.validated_time_floor,
             state.reject_issued_before,
             proposed,
         ] {
@@ -83,7 +83,7 @@ impl crate::CheckedProfileSession<'_> {
             host_id,
             user_id,
             anchor_wall: state.anchor_wall,
-            admission_floor: state.admission_floor,
+            validated_time_floor: state.validated_time_floor,
             reject_issued_before: state.reject_issued_before,
             proposed_wall: proposed,
             confirmation_digest: crate::hex(&foks_crypto::prefixed_hash(
@@ -124,7 +124,7 @@ impl crate::CheckedProfileSession<'_> {
         )?;
         Ok(AdapterClockRepair {
             preview,
-            resulting_floor: updated.admission_floor,
+            resulting_floor: updated.validated_time_floor,
             checkpoint_digest: crate::hex(&self.rollback_checkpoint()?.digest()?),
         })
     }

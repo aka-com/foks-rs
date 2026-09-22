@@ -47,7 +47,7 @@ const FIXTURE_LOCATION_NAMES = [
   'add',
   'demote',
   'remove',
-  'admit',
+  'add-team',
   'servers-server',
   'servers-lapsed',
   'servers-rollback',

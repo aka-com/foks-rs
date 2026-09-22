@@ -11,7 +11,7 @@ impl Database {
         &mut self,
         claim: &IdentityClaim,
         challenge: [u8; 32],
-        admission_hash: [u8; 32],
+        source_hash: [u8; 32],
         now_ms: u64,
     ) -> Result<IdentityChallenge> {
         let encoded = claim
@@ -24,8 +24,8 @@ impl Database {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute("DELETE FROM sso_identity_challenges WHERE challenge IN (SELECT challenge FROM sso_identity_challenges WHERE expires_at_ms<=?1 ORDER BY expires_at_ms LIMIT 128)",[sql_integer(now_ms)?])?;
         let (total, source): (i64, i64) = tx.query_row(
-            "SELECT count(*),coalesce(sum(admission_hash=?1),0) FROM sso_identity_challenges",
-            [admission_hash],
+            "SELECT count(*),coalesce(sum(source_hash=?1),0) FROM sso_identity_challenges",
+            [source_hash],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         if total >= 1024 || source >= 8 {
@@ -36,7 +36,7 @@ impl Database {
             params![
                 challenge,
                 claim_hash,
-                admission_hash,
+                source_hash,
                 sql_integer(expires_at_ms)?
             ],
         )?;

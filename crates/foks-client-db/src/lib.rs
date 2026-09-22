@@ -47,7 +47,7 @@ use thiserror::Error;
 pub use foks_proto::SubmissionHandle;
 pub use repositories::adapter::{
     adapter_handle_hash, AdapterClockState, AdapterLedgerState, AdapterSubmission,
-    AdapterTimeSample, ADMISSION_AGE_SECONDS, TERMINAL_RETENTION_SECONDS,
+    AdapterTimeSample, MAX_NEW_SUBMISSION_AGE_SECONDS, TERMINAL_RETENTION_SECONDS,
 };
 use schema::{APPLICATION_ID, INITIAL as SCHEMA, VERSION as SCHEMA_VERSION};
 
@@ -814,7 +814,32 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         });
     }
     if version == 38 {
-        return merkle_checkpoint::migrate(connection);
+        merkle_checkpoint::migrate(connection)?;
+        return Ok(());
+    }
+    if version == 39 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version: u32 =
+            transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version == 39 {
+            let has_admission_floor: bool = transaction.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM pragma_table_info('kv_adapter_clocks')
+                    WHERE name='admission_floor'
+                )",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_admission_floor {
+                transaction.execute_batch(
+                    "ALTER TABLE kv_adapter_clocks
+                     RENAME COLUMN admission_floor TO validated_time_floor;",
+                )?;
+            }
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        transaction.commit()?;
+        return Ok(());
     }
     if version != SCHEMA_VERSION {
         return Err(Error::UnsupportedSchema {

@@ -3,7 +3,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 46;
+pub const SCHEMA_VERSION: i64 = 47;
 
 const SCHEMA: &str = concat!(
     include_str!("schema/core.sql"),
@@ -41,13 +41,13 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         return Ok(());
     }
-    if application_id == APPLICATION_ID && matches!(version, 43..=45) {
+    if application_id == APPLICATION_ID && matches!(version, 43..=46) {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Recheck under the write lock: another opener may already have upgraded.
         let application_id =
             transaction.pragma_query_value(None, "application_id", |r| r.get(0))?;
         let version = transaction.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if application_id == APPLICATION_ID && matches!(version, 43..=45) {
+        if application_id == APPLICATION_ID && matches!(version, 43..=46) {
             if version == 43 {
                 transaction.execute_batch(
                     "ALTER TABLE rt_user_inboxes ADD COLUMN reconcile_dirty INTEGER NOT NULL
@@ -75,6 +75,25 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
             if has_fence {
                 transaction.execute_batch(
                     "ALTER TABLE sso_policy RENAME COLUMN fence TO blocked_reason;",
+                )?;
+            }
+            let has_admission_hash: bool = transaction.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM pragma_table_info('sso_sessions')
+                    WHERE name='admission_hash'
+                )",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_admission_hash {
+                transaction.execute_batch(
+                    "DROP INDEX sso_session_admission;
+                     ALTER TABLE sso_sessions
+                     RENAME COLUMN admission_hash TO source_hash;
+                     CREATE INDEX sso_session_source
+                     ON sso_sessions(host, source_hash, expires_at_ms);
+                     ALTER TABLE sso_identity_challenges
+                     RENAME COLUMN admission_hash TO source_hash;",
                 )?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;

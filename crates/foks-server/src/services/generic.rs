@@ -106,7 +106,7 @@ pub(crate) fn commit_for_entity_with_invitation(
     clock: &Arc<dyn foks_server_db::Clock>,
     hostchain_tail: &foks_proto::HostchainTail,
     passphrase: Option<PassphraseCompanion>,
-    invitation: Option<foks_server_db::LocalInvitationAdmission>,
+    invitation: Option<foks_server_db::LocalInvitationAcceptance>,
 ) -> Result<(), RpcStatus> {
     let decoded = argument.link.decode_generic().map_err(bad_arguments)?;
     if decoded.entity != *entity

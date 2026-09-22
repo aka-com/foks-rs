@@ -399,7 +399,7 @@ enum TeamCommand {
         team_alias: String,
     },
     /// Add a team from another pinned profile to a local named team.
-    AdmitRemote {
+    AddRemoteMember {
         local_profile: String,
         local_team_alias: String,
         remote_profile: String,
@@ -1965,7 +1965,7 @@ fn team_command(
                 output(json, &report, "team member edit reconciled")
             })
         }
-        TeamCommand::AdmitRemote {
+        TeamCommand::AddRemoteMember {
             local_profile,
             local_team_alias,
             remote_profile,
@@ -1987,7 +1987,7 @@ fn team_command(
                     &remote.paths().credential_store,
                     derive_vault_key(&master),
                 )?;
-                local.admit_federated_team(
+                local.add_federated_team_member(
                     remote,
                     &local_team_alias,
                     &remote_team_alias,

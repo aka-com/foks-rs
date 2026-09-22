@@ -41,7 +41,7 @@ files, symlinks, and permissive secret inputs are rejected.
 `profile show NAME --json` returns the exact persisted profile, including its
 probe target, so automation does not need to duplicate trust-boundary values.
 
-`team admit-remote` coordinates two already-probed profiles and two active
+`team add-remote-member` coordinates two already-probed profiles and two active
 team records under one canonical dual-profile lock. It persists the remote
 binding and removal key before networking, resumes the cross-host mutation
 without blind replay, and registers a federation reconciliation job. `team

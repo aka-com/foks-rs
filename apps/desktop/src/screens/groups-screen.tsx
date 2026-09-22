@@ -1,4 +1,4 @@
-import { admittedGroups, memberCountOf } from './team-members';
+import { federatedTeamMembers, memberCountOf } from './team-members';
 import { useGroupOperationController } from './groups/operation-controller';
 import {
   attemptMutation,
@@ -94,7 +94,8 @@ import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
 
 type Tab = GroupSettingsTab;
-export type GroupSheetKind = 'add' | 'demote' | 'remove' | 'admit' | 'create';
+export type GroupSheetKind =
+  'add' | 'demote' | 'remove' | 'add-team' | 'create';
 type Sheet = GroupSheetKind | null;
 
 const VIS_MIN = -32768;
@@ -263,7 +264,7 @@ function targetReason(
   if (party.label === 'you')
     return 'You cannot change your own role or remove your own account.';
   if (party.party_kind !== 'user' || !party.locally_manageable)
-    return 'Members of an admitted team are managed on their own server and cannot be changed or removed one by one.';
+    return 'Members of an federated team are managed on their own server and cannot be changed or removed one by one.';
   const mine = partiesOf(snapshot, party.store).find(
     (candidate) => candidate.label === 'you',
   );
@@ -315,7 +316,7 @@ function PartyRow({
   const name = partyName(party);
   const lowerable = Boolean(demotionFor(party));
   return (
-    // Only people and machines reach this row, and their admission is their
+    // Only people and machines reach this row, and their access is their
     // membership: there is no inactive state to dim.
     <div className="prow">
       <span className="who2">
@@ -429,11 +430,14 @@ function teamPartyHost(party: Party): string {
 }
 
 /**
- * What an admitted team's row keeps out of its caption: the server, the host
- * this device knows it by, and the operation that admitted it. One block of
+ * What a federated team's row keeps out of its caption: the server, the host
+ * this device knows it by, and the operation that added it. One block of
  * text, so a failure can be reported without reading it off the screen.
  */
-function admissionDetails(entry: FederationEntry, remoteName: string): string {
+function federatedMembershipDetails(
+  entry: FederationEntry,
+  remoteName: string,
+): string {
   return [
     `team ${entry.remote_team_alias} on ${remoteName}`,
     `host ${entry.remote_host_id_hex}`,
@@ -443,7 +447,7 @@ function admissionDetails(entry: FederationEntry, remoteName: string): string {
 }
 
 /**
- * A roster party that stands for another group whose admission record cannot be
+ * A roster party that stands for another group whose membership record cannot be
  * resolved: the group as the roster names it, its role, and what is wrong.
  */
 function TeamPartyRow({
@@ -484,8 +488,8 @@ function TeamPartyRow({
 }
 
 /**
- * One team admitted from another server, drawn as a member row: it keeps its
- * own facts — the admission state, the host id and the operation id, because
+ * One federated team from another server, drawn as a member row: it keeps its
+ * own facts — the membership state, the host id and the operation id, because
  * restoring access needs the operation id — but its caption says what it is,
  * so it is never mistaken for a person.
  */
@@ -512,7 +516,7 @@ function FederationEntryRow({
     ? serverDisplayName(remoteServer)
     : entry.remote_profile;
   const memberReason =
-    'Every member of an admitted team holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
+    'Every member of a federated team holds the role shown on its row. They are managed on their own server and cannot be changed or removed one by one.';
   return (
     <div
       className="prow"
@@ -532,7 +536,7 @@ function FederationEntryRow({
           </b>
           {/* The server the team lives on is what a reader of the roster
               needs. The host and operation identifiers are for reporting a
-              failed admission, so they are in the row's menu instead. */}
+              failed member addition, so they are in the row's menu instead. */}
           <small>team on {remoteName}</small>
         </span>
       </span>
@@ -549,7 +553,7 @@ function FederationEntryRow({
             title={
               manageable
                 ? undefined
-                : 'Only an Admin or an Owner can restore this admission.'
+                : 'Only an Admin or an Owner can restore this federated membership.'
             }
             onClick={() => onRerun(entry.operation_id_hex!)}
           >
@@ -570,34 +574,34 @@ function FederationEntryRow({
               <MenuItem reason={memberReason}>Remove a member…</MenuItem>
               <MenuItem
                 icon="copy"
-                title="Copies this admission’s host and operation identifiers, for reporting a failure."
+                title="Copies this federated membership’s host and operation identifiers, for reporting a failure."
                 onClick={() => {
                   close();
                   onCopy(
-                    admissionDetails(entry, remoteName),
-                    'Admission details copied.',
+                    federatedMembershipDetails(entry, remoteName),
+                    'Membership details copied.',
                   );
                 }}
               >
-                Copy admission details
+                Copy membership details
               </MenuItem>
               <div className="menu-separator" role="separator" />
               <MenuItem
                 danger
                 reason={
                   !manageable
-                    ? 'Only an Admin or an Owner can remove this admission.'
+                    ? 'Only an Admin or an Owner can remove this federated membership.'
                     : entry.active
                       ? undefined
-                      : 'Restore access before removing this admission.'
+                      : 'Restore access before removing this federated membership.'
                 }
-                title="Removes the whole admission and rotates this team’s key."
+                title="Removes the federated team and rotates this team’s key."
                 onClick={() => {
                   close();
                   onRemove(entry);
                 }}
               >
-                Remove admission…
+                Remove federated team…
               </MenuItem>
             </>
           )}
@@ -608,8 +612,8 @@ function FederationEntryRow({
 }
 
 /**
- * The Members tab: people, machines and the teams admitted from other
- * servers in one roster. People and admitted teams share one "Members"
+ * The Members tab: people, machines and the federated teams from other
+ * servers in one roster. People and federated teams share one "Members"
  * heading and one list — a team's row keeps a "team on …" caption naming its
  * server, so it reads as a team rather than a person. (How many people it
  * brings is not drawn: this device holds no roster for a team on another
@@ -630,14 +634,14 @@ function MembersTab({
   onRetry,
   onRetryFederation,
   onRerun,
-  onRemoveAdmission,
+  onRemoveFederatedMembership,
   onCopy,
 }: {
   snapshot: AgentSnapshot;
   store: Store;
   onSheet: (sheet: Sheet, party?: Party) => void;
   /**
-   * Why the roster cannot be added to, and why no group can be admitted —
+   * Why the roster cannot be added to, and why no federated team can be added —
    * each row's own menu states its own reason, because the two are decided
    * separately and one can apply while the other does not.
    */
@@ -649,7 +653,7 @@ function MembersTab({
   onRetry: () => void;
   onRetryFederation: () => void;
   onRerun: (operationId: string) => void;
-  onRemoveAdmission: (entry: FederationEntry) => void;
+  onRemoveFederatedMembership: (entry: FederationEntry) => void;
   onCopy: (text: string, message: string) => void;
 }): ReactNode {
   const manageable = rosterReason === undefined;
@@ -672,7 +676,7 @@ function MembersTab({
   );
   const { entries, unmatched, ambiguous } = federationFailure
     ? { entries: [], unmatched: [], ambiguous: [] }
-    : admittedGroups(snapshot, store);
+    : federatedTeamMembers(snapshot, store);
   const teamCount = entries.length + unmatched.length + ambiguous.length;
   return (
     <div className="roster">
@@ -705,7 +709,7 @@ function MembersTab({
               snapshot={snapshot}
               entry={entry}
               onRerun={onRerun}
-              onRemove={onRemoveAdmission}
+              onRemove={onRemoveFederatedMembership}
               onCopy={onCopy}
               manageable={federationManageable}
             />
@@ -714,16 +718,16 @@ function MembersTab({
             <TeamPartyRow
               key={party.party_id_hex}
               party={party}
-              chip="No admission record"
-              chipTitle="The roster lists this team as a member, but no admission record on this device matches it."
+              chip="No membership record"
+              chipTitle="The roster lists this team as a member, but no membership record on this device matches it."
             />
           ))}
           {ambiguous.map((party) => (
             <TeamPartyRow
               key={party.party_id_hex}
               party={party}
-              chip="Ambiguous admission"
-              chipTitle="The roster lists this team once, but several admission records on this device match it, so none of them can be acted on."
+              chip="Ambiguous membership"
+              chipTitle="The roster lists this team once, but several membership records on this device match it, so none of them can be acted on."
             />
           ))}
         </div>
@@ -793,9 +797,9 @@ function FederationRemovalSheet({
     setBusy(true);
     try {
       const result = await attemptMutation(
-        { kind: 'resumable', operation: 'remove-admission' },
+        { kind: 'resumable', operation: 'remove-federated-membership' },
         () => {
-          // Removing an admission rekeys the team, which moves its chain. The
+          // Removing a federated team rekeys the team, which moves its chain. The
           // read back must not reuse the roster it holds even if the agent's
           // catalog has not yet caught up with that sequence.
           markProfileRostersStale(store.server);
@@ -813,7 +817,7 @@ function FederationRemovalSheet({
       );
       if (
         await reportMutationOutcome(result, onMutationError, () => {
-          toasts.show('Admission removed. Refresh pending.');
+          toasts.show('Federated team removed. Refresh pending.');
         })
       )
         onClose();
@@ -1204,7 +1208,7 @@ export function GroupSheet({
       created?: { accountStoreId: StoreRef; teamAlias: string };
       /**
        * The one profile the read back after this write needs, or absent when
-       * the whole catalog must be read — a federation admission binds a team
+       * the whole catalog must be read — a federated membership binds a team
        * on another server, so both profiles move.
        */
       profile?: string;
@@ -1273,8 +1277,8 @@ export function GroupSheet({
     account: store.account,
     remoteProfile: remote?.server,
   };
-  const admissionReason =
-    sheet === 'admit'
+  const federatedMemberReason =
+    sheet === 'add-team'
       ? ((store.kind === 'team'
           ? manageReason(snapshot, store, 'federation')
           : 'Select a named team.') ??
@@ -1282,18 +1286,18 @@ export function GroupSheet({
           workflowAvailability(snapshot, 'federate', federationTarget),
         ))
       : undefined;
-  // An admission needs the admitted teams, and a read that failed as a whole
-  // is recorded under the roster, so the admit sheet consults both.
+  // Adding a federated team needs the federation list, and a read that failed as a whole
+  // is recorded under the roster, so the federated-team sheet consults both.
   const requiredFailure =
-    sheet === 'admit'
+    sheet === 'add-team'
       ? (groupDetailFailure(snapshot, store.id, 'federation') ??
         groupDetailFailure(snapshot, store.id, 'roster'))
       : ['add', 'demote', 'remove'].includes(sheet)
         ? groupDetailFailure(snapshot, store.id, 'roster')
         : undefined;
-  // Adding a person and admitting a group are the two halves of one sheet, so
+  // Adding a person and adding a federated team are the two halves of one sheet, so
   // both read from the switch rather than from two separate titles.
-  const adding = sheet === 'add' || sheet === 'admit';
+  const adding = sheet === 'add' || sheet === 'add-team';
   const title = adding
     ? sheet === 'add'
       ? `Add someone to ${store.name}`
@@ -1407,14 +1411,14 @@ export function GroupSheet({
           storeId: store.id,
           username: target.username!,
         });
-      } else if (sheet === 'admit' && remote) {
-        if (admissionReason) throw new Error(admissionReason);
+      } else if (sheet === 'add-team' && remote) {
+        if (federatedMemberReason) throw new Error(federatedMemberReason);
         requireWorkflow(snapshot, 'federate', federationTarget);
-        // Both sides of an admission move: the team admitting and the remote
-        // team it admits, which lives on another server.
+        // Both teams in a federated membership move: the local team and the remote
+        // team, which lives on another server.
         markProfileRostersStale(store.server);
         markProfileRostersStale(remote.server);
-        await bridge.admitGroup({
+        await bridge.addFederatedTeamMember({
           storeId: store.id,
           remoteStoreId: remote.id,
           visibility,
@@ -1441,10 +1445,12 @@ export function GroupSheet({
         });
         return;
       } else return;
-      // An admission's other half is a team on another server, so its read
+      // A federated membership's other team is a team on another server, so its read
       // back stays the whole catalog; every other branch changes only the
       // profile this team is on.
-      await complete(sheet === 'admit' ? undefined : { profile: store.server });
+      await complete(
+        sheet === 'add-team' ? undefined : { profile: store.server },
+      );
     } catch (error) {
       // The sheet stays open on a refusal and states it where the field is,
       // in the agent's own words, while the shell reconciles as it always has.
@@ -1497,14 +1503,15 @@ export function GroupSheet({
           ) : (
             <Button
               variant="primary"
-              title={admissionReason}
+              title={federatedMemberReason}
               disabled={
                 busy ||
                 Boolean(requiredFailure) ||
                 (sheet === 'add' && (!username.trim() || Boolean(existing))) ||
                 (sheet === 'demote' &&
                   (!target || !canTarget(snapshot, target) || !demotion)) ||
-                (sheet === 'admit' && (!remote || Boolean(admissionReason))) ||
+                (sheet === 'add-team' &&
+                  (!remote || Boolean(federatedMemberReason))) ||
                 (sheet === 'create' &&
                   (!teamAlias ||
                     !creationAccount ||
@@ -1516,7 +1523,7 @@ export function GroupSheet({
                 ? `Add ${username.trim() || 'someone'}`
                 : sheet === 'demote'
                   ? 'Change role'
-                  : sheet === 'admit'
+                  : sheet === 'add-team'
                     ? `Add ${remote?.alias ?? 'team'}`
                     : 'Create team'}
             </Button>
@@ -1545,7 +1552,10 @@ export function GroupSheet({
             value={sheet}
             items={[
               { id: 'add' as const, label: 'Add a person' },
-              { id: 'admit' as const, label: 'Add a team on another server' },
+              {
+                id: 'add-team' as const,
+                label: 'Add a team on another server',
+              },
             ]}
             onChange={(next) => {
               if (next !== sheet) onSwitch(next);
@@ -1759,7 +1769,7 @@ export function GroupSheet({
             ) : null}
           </>
         ) : null}
-        {sheet === 'admit' ? (
+        {sheet === 'add-team' ? (
           <>
             <SectionLabel>Team</SectionLabel>
             <Inset>
@@ -1933,7 +1943,7 @@ export function GroupSettingsScreen({
   const [sheet, setSheet] = useTabSheetState<Sheet>(
     'groups.sheet',
     () =>
-      ['add', 'demote', 'remove', 'admit', 'party-remove'].includes(initial)
+      ['add', 'demote', 'remove', 'add-team', 'party-remove'].includes(initial)
         ? initial === 'party-remove'
           ? 'remove'
           : (initial as Sheet)
@@ -2019,7 +2029,7 @@ export function GroupSettingsScreen({
     onApplied,
     onMutationError,
     resumeCreation: finishSetup,
-    resumeAdmission,
+    resumeFederatedMemberAdd,
     resumeMembership,
   } = groupOperations;
   const [target, setTarget] = useState<Party | null>(() => {
@@ -2069,7 +2079,7 @@ export function GroupSettingsScreen({
     setTarget(party ?? null);
     setSheet(next);
   };
-  // People, machines and admitted groups, each counted once: an admitted group
+  // People, machines and federated teams, each counted once: a federated team
   // is reported both as a roster party and as a federation entry, and a roster
   // party whose record is missing or ambiguous is still one member.
   const memberCount = useMemo(
@@ -2128,7 +2138,7 @@ export function GroupSettingsScreen({
   const serverName = displayServerName(snapshot, store);
   // The header's badges: server, then the member count, each dropped
   // rather than guessed when it is not known. The count is silent while the
-  // roster or the admitted teams could not be read, the same as the Members
+  // roster or the federated teams could not be read, the same as the Members
   // tab's own count.
   const headerChips = [
     serverName,
@@ -2230,7 +2240,7 @@ export function GroupSettingsScreen({
                     reason={federationReason}
                     onClick={() => {
                       close();
-                      openSheet('admit');
+                      openSheet('add-team');
                     }}
                   >
                     <span className="menu-choice">
@@ -2478,8 +2488,8 @@ export function GroupSettingsScreen({
                     markProfileRostersStale(store.server);
                     void onApplied('Refreshing external teams…', store.server);
                   }}
-                  onRerun={resumeAdmission}
-                  onRemoveAdmission={setRemovalTarget}
+                  onRerun={resumeFederatedMemberAdd}
+                  onRemoveFederatedMembership={setRemovalTarget}
                   onCopy={(text, message) => void copy(text, message)}
                 />
               ) : tab === 'channels' ? (
@@ -2540,7 +2550,7 @@ export function GroupSettingsScreen({
           ) : null}
           {sheet ? (
             <GroupSheet
-              // Adding a person and admitting a group are two halves of one
+              // Adding a person and adding a federated team are two halves of one
               // sheet, but not one set of answers: the band, the role and the
               // refusal belong to the half they were given on, so switching
               // starts the other half rather than inheriting them.

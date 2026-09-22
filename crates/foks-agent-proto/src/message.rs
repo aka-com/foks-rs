@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 29;
+pub const PROTOCOL_VERSION: u32 = 30;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -1021,7 +1021,7 @@ pub enum Operation {
         profile: String,
         team_alias: String,
     },
-    AdmitFederatedTeam {
+    AddFederatedTeamMember {
         local_profile: String,
         local_team_alias: String,
         remote_profile: String,
@@ -1170,7 +1170,7 @@ impl Operation {
             Self::DemoteTeamMember { .. } => "DemoteTeamMember",
             Self::RemoveTeamMember { .. } => "RemoveTeamMember",
             Self::ResumeTeamMemberEdit { .. } => "ResumeTeamMemberEdit",
-            Self::AdmitFederatedTeam { .. } => "AdmitFederatedTeam",
+            Self::AddFederatedTeamMember { .. } => "AddFederatedTeamMember",
             Self::ListFederatedTeams { .. } => "ListFederatedTeams",
             Self::ExpelFederatedTeam { .. } => "ExpelFederatedTeam",
             Self::RefreshFederatedSecurity { .. } => "RefreshFederatedSecurity",
@@ -2079,7 +2079,7 @@ impl std::fmt::Debug for Operation {
                 .field("profile", profile)
                 .field("team_alias", team_alias)
                 .finish(),
-            Self::AdmitFederatedTeam {
+            Self::AddFederatedTeamMember {
                 local_profile,
                 local_team_alias,
                 remote_profile,
@@ -2087,7 +2087,7 @@ impl std::fmt::Debug for Operation {
                 role,
                 visibility,
             } => formatter
-                .debug_struct("AdmitFederatedTeam")
+                .debug_struct("AddFederatedTeamMember")
                 .field("local_profile", local_profile)
                 .field("local_team_alias", local_team_alias)
                 .field("remote_profile", remote_profile)

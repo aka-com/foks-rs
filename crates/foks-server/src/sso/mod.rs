@@ -181,12 +181,8 @@ impl SsoService {
             Some((Instant::now(), provider.clone()));
         Ok(provider)
     }
-    /// Admission is derived from the actual transport peer, never the unauthenticated UID field.
-    pub fn init(
-        &self,
-        arg: &InitOAuth2SessionArgument,
-        admission_identity: &[u8],
-    ) -> Result<String> {
+    /// Per-source limiting is derived from the transport peer, never the unauthenticated UID field.
+    pub fn init(&self, arg: &InitOAuth2SessionArgument, source_identity: &[u8]) -> Result<String> {
         let _permit = self
             .starts
             .clone()
@@ -203,8 +199,8 @@ impl SsoService {
                 .all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
             || arg.nonce.expose().is_empty()
             || arg.nonce.expose().len() > 256
-            || admission_identity.is_empty()
-            || admission_identity.len() > 256
+            || source_identity.is_empty()
+            || source_identity.len() > 256
         {
             return Err(Error::Sso("invalid session request"));
         }
@@ -231,7 +227,7 @@ impl SsoService {
             interrupted: false,
             session_hash: session_hash(&arg.id),
             config_hash: self.config_hash,
-            admission_hash: foks_crypto::prefixed_hash(0x13f6_7bc0_b832_a770, admission_identity),
+            source_hash: foks_crypto::prefixed_hash(0x13f6_7bc0_b832_a770, source_identity),
             uid,
             state: SsoSessionState::Waiting,
             revision: 1,

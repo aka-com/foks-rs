@@ -44,7 +44,7 @@ pub struct SsoSession {
     pub host: [u8; 33],
     pub session_hash: [u8; 32],
     pub config_hash: [u8; 32],
-    pub admission_hash: [u8; 32],
+    pub source_hash: [u8; 32],
     pub uid: Option<[u8; 33]>,
     pub state: SsoSessionState,
     pub revision: u64,
@@ -138,14 +138,14 @@ impl Database {
             params![row.host, sql_integer(now_ms)?],
         )?;
         let (host_count, identity_count): (i64, i64) = tx.query_row(
-            "SELECT count(*),coalesce(sum(admission_hash=?2),0) FROM sso_sessions WHERE host=?1",
-            params![row.host, row.admission_hash],
+            "SELECT count(*),coalesce(sum(source_hash=?2),0) FROM sso_sessions WHERE host=?1",
+            params![row.host, row.source_hash],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         if host_count >= 1000 || identity_count >= 4 {
             return Err(Error::Capacity("SSO sessions"));
         }
-        tx.execute("INSERT INTO sso_sessions(host,session_hash,config_hash,admission_hash,uid,state,revision,expires_at_ms,ciphertext,authorization_epoch) VALUES(?1,?2,?3,?4,?5,0,1,?6,?7,?8)",params![row.host,row.session_hash,row.config_hash,row.admission_hash,row.uid,sql_integer(row.expires_at_ms)?,row.ciphertext,sql_integer(row.authorization_epoch)?])?;
+        tx.execute("INSERT INTO sso_sessions(host,session_hash,config_hash,source_hash,uid,state,revision,expires_at_ms,ciphertext,authorization_epoch) VALUES(?1,?2,?3,?4,?5,0,1,?6,?7,?8)",params![row.host,row.session_hash,row.config_hash,row.source_hash,row.uid,sql_integer(row.expires_at_ms)?,row.ciphertext,sql_integer(row.authorization_epoch)?])?;
         tx.commit()?;
         Ok(())
     }
@@ -209,7 +209,7 @@ fn read_session(
     host: &[u8; 33],
     id: &[u8; 32],
 ) -> Result<Option<SsoSession>> {
-    Ok(c.query_row("SELECT config_hash,admission_hash,uid,state,revision,expires_at_ms,ciphertext,authorization_epoch,interrupted FROM sso_sessions WHERE host=?1 AND session_hash=?2",params![host,id],|r|Ok(SsoSession{host:*host,session_hash:*id,config_hash:r.get(0)?,admission_hash:r.get(1)?,uid:r.get(2)?,state:SsoSessionState::decode(r.get(3)?)?,revision:r.get::<_,i64>(4)? as u64,expires_at_ms:r.get::<_,i64>(5)? as u64,ciphertext:r.get(6)?,authorization_epoch:r.get::<_,i64>(7)? as u64,interrupted:r.get(8)?})).optional()?)
+    Ok(c.query_row("SELECT config_hash,source_hash,uid,state,revision,expires_at_ms,ciphertext,authorization_epoch,interrupted FROM sso_sessions WHERE host=?1 AND session_hash=?2",params![host,id],|r|Ok(SsoSession{host:*host,session_hash:*id,config_hash:r.get(0)?,source_hash:r.get(1)?,uid:r.get(2)?,state:SsoSessionState::decode(r.get(3)?)?,revision:r.get::<_,i64>(4)? as u64,expires_at_ms:r.get::<_,i64>(5)? as u64,ciphertext:r.get(6)?,authorization_epoch:r.get::<_,i64>(7)? as u64,interrupted:r.get(8)?})).optional()?)
 }
 
 pub(crate) fn policy_epoch_matches(

@@ -34,7 +34,7 @@ mod sso_policy;
 mod team;
 mod team_invitations;
 pub use team_invitations::{
-    CertificateUpload, InvitationActor, LocalInvitationAdmission, RemoteInvitationAdmission,
+    CertificateUpload, InvitationActor, LocalInvitationAcceptance, RemoteInvitationAcceptance,
 };
 mod team_names;
 mod transaction;

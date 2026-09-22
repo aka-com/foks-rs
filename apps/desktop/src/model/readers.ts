@@ -68,17 +68,17 @@ export function safestRemovalTarget(
 }
 
 /**
- * Determines whether a party has an active admission in the specified store.
+ * Determines whether a party has an active federated membership in the specified store.
  * User parties are always active. Federated team parties require an active
- * federation admission record.
+ * federated membership record.
  */
-export function admissionActive(
+export function federatedMembershipActive(
   snapshot: AgentSnapshot,
   party: Party,
   ref: StoreRef,
 ): boolean {
   if (party.party_kind === 'user') return true;
-  // When a party is host-scoped, the admission must match the specific remote host ID.
+  // When a party is host-scoped, the membership must match the specific remote host ID.
   const entries = snapshot.federation.filter(
     (f) =>
       f.store === ref &&
@@ -99,7 +99,7 @@ export function readersOf(snapshot: AgentSnapshot, item: Item): Party[] | null {
   if (!store || store.kind !== 'team') return null;
   return partiesOf(snapshot, store.id).filter(
     (party) =>
-      admissionActive(snapshot, party, store.id) &&
+      federatedMembershipActive(snapshot, party, store.id) &&
       admits(party.destination_role, item.read),
   );
 }
@@ -129,7 +129,7 @@ export function isMachine(party: Party): boolean {
 
 /**
  * A roster as a summary line reads it: the people, then the machines, then the
- * teams admitted from other servers — the same three sub-sections the team
+ * federated teams from other servers — the same three sub-sections the team
  * page draws, so a list row and the page it opens agree ("4 people · 1 machine
  * · 1 team").
  */

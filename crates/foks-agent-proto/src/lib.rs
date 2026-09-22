@@ -417,9 +417,9 @@ mod tests {
 
     #[test]
     fn federation_operations_round_trip_with_explicit_profile_bindings() {
-        let admission = Request::new(
+        let member_add = Request::new(
             13,
-            Operation::AdmitFederatedTeam {
+            Operation::AddFederatedTeamMember {
                 local_profile: "local".to_owned(),
                 local_team_alias: "engineering".to_owned(),
                 remote_profile: "partner".to_owned(),
@@ -429,12 +429,12 @@ mod tests {
             },
         );
         assert_eq!(
-            serde_json::to_value(&admission).unwrap(),
+            serde_json::to_value(&member_add).unwrap(),
             serde_json::json!({
                 "version": PROTOCOL_VERSION,
                 "id": 13,
                 "operation": {
-                    "operation": "admit-federated-team",
+                    "operation": "add-federated-team-member",
                     "local_profile": "local",
                     "local_team_alias": "engineering",
                     "remote_profile": "partner",
@@ -445,8 +445,8 @@ mod tests {
             })
         );
         assert_eq!(
-            decode_request(&encode(&admission).unwrap()).unwrap(),
-            admission
+            decode_request(&encode(&member_add).unwrap()).unwrap(),
+            member_add
         );
 
         let listing = Request::new(
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 29);
+        assert_eq!(PROTOCOL_VERSION, 30);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -635,7 +635,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 29);
+        assert_eq!(PROTOCOL_VERSION, 30);
         let request = Request::new(
             20,
             Operation::Chat {

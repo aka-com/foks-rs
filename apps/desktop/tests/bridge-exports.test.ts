@@ -101,7 +101,7 @@ const publicTypes = [
   'CreateGroupRequest',
   'GroupMemberRequest',
   'GroupRoleRequest',
-  'AdmitGroupRequest',
+  'AddFederatedTeamMemberRequest',
   'RemoveFederatedGroupRequest',
   'CheckedProfileResponse',
   'PendingOperationKind',

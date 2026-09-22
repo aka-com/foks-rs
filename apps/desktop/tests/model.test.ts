@@ -8,7 +8,7 @@ import test from 'node:test';
 import { FIXTURE } from '../src/fixture';
 import {
   PROTOCOL_CAPABILITIES,
-  admissionActive,
+  federatedMembershipActive,
   storeDescription,
   storeDescriptionState,
   admits,
@@ -180,7 +180,7 @@ test('readerCount calculates eligible readers from item role and roster', () => 
 
   // staging-token and bundle.tar require Member · visibility 0: the same three
   // plus dana.okafor and deploy-bot — five. Homelab holds Member · visibility 0
-  // and would qualify, but its admission reports inactive.
+  // and would qualify, but its federated membership reports inactive.
   assert.equal(readerCount(FIXTURE, 'team:eng|/deploy/staging-token'), 5);
   assert.equal(readerCount(FIXTURE, 'team:eng|/release/bundle.tar'), 5);
   assert.equal(readerCount(FIXTURE, 'team:eng|/onboarding/README.md'), 5);
@@ -193,35 +193,45 @@ test('readerCount calculates eligible readers from item role and roster', () => 
   );
 });
 
-test('activating a federated team admission grants item read access', () => {
+test('activating a federated team membership grants item read access', () => {
   const homelab = partiesOf(FIXTURE, 'team:eng').find(
     (party) => party.party_kind === 'named-team',
   );
   assert.ok(homelab);
-  assert.equal(admissionActive(FIXTURE, homelab, 'team:eng'), false);
+  assert.equal(federatedMembershipActive(FIXTURE, homelab, 'team:eng'), false);
   assert.equal(admits(homelab.destination_role, 'Member · visibility 0'), true);
 
-  // Activating federation admission increments reader count.
-  const admitted: AgentSnapshot = {
+  // Activating federated membership increments reader count.
+  const activeMembership: AgentSnapshot = {
     ...FIXTURE,
     federation: FIXTURE.federation.map((entry) => ({ ...entry, active: true })),
   };
-  assert.equal(readerCount(admitted, 'team:eng|/deploy/staging-token'), 6);
-  assert.equal(readerCount(admitted, 'team:eng|/deploy/production-token'), 3);
+  assert.equal(
+    readerCount(activeMembership, 'team:eng|/deploy/staging-token'),
+    6,
+  );
+  assert.equal(
+    readerCount(activeMembership, 'team:eng|/deploy/production-token'),
+    3,
+  );
 });
 
-test('admitted groups fail closed when the matching admission is missing or ambiguous', () => {
+test('federated teams fail closed when the matching membership is missing or ambiguous', () => {
   const homelab = partiesOf(FIXTURE, 'team:eng').find(
     (party) => party.party_kind === 'named-team',
   );
   assert.ok(homelab);
   assert.equal(
-    admissionActive({ ...FIXTURE, federation: [] }, homelab, 'team:eng'),
+    federatedMembershipActive(
+      { ...FIXTURE, federation: [] },
+      homelab,
+      'team:eng',
+    ),
     false,
   );
   const active = { ...FIXTURE.federation[0], active: true };
   assert.equal(
-    admissionActive(
+    federatedMembershipActive(
       { ...FIXTURE, federation: [active, { ...active }] },
       homelab,
       'team:eng',
@@ -230,7 +240,11 @@ test('admitted groups fail closed when the matching admission is missing or ambi
   );
   const adhoc = { ...homelab, party_kind: 'ad-hoc-team' as const };
   assert.equal(
-    admissionActive({ ...FIXTURE, federation: [] }, adhoc, 'team:eng'),
+    federatedMembershipActive(
+      { ...FIXTURE, federation: [] },
+      adhoc,
+      'team:eng',
+    ),
     false,
   );
 });
@@ -323,10 +337,16 @@ test('nameOf and prefixOf extract filename and parent directory from path', () =
     nameOf('/documents/aka-recovery-kit-on-this-mac%20%281%29.txt'),
     'aka-recovery-kit-on-this-mac (1).txt',
   );
-  assert.equal(prefixOf('/Project%20Files/Design%20Docs/brief.pdf'), 'Project Files/Design Docs');
+  assert.equal(
+    prefixOf('/Project%20Files/Design%20Docs/brief.pdf'),
+    'Project Files/Design Docs',
+  );
   assert.equal(nameOf('/caf%C3%A9.txt'), 'café.txt');
   assert.equal(nameOf('/bad%escape'), 'bad%escape');
-  assert.equal(displayPath('/Project%20Files/caf%C3%A9.txt'), '/Project Files/café.txt');
+  assert.equal(
+    displayPath('/Project%20Files/caf%C3%A9.txt'),
+    '/Project Files/café.txt',
+  );
   assert.equal(nameOf('/latest-key'), 'latest-key');
   assert.equal(prefixOf('/latest-key'), '');
   assert.equal(nameOf('/'), '/');
@@ -732,7 +752,7 @@ test('safestRemovalTarget selects member with lowest role rank, breaking ties by
   );
 });
 
-test('admissionActive rejects federation admissions with mismatching host IDs', () => {
+test('federatedMembershipActive rejects federated memberships with mismatching host IDs', () => {
   const homelab = FIXTURE.parties.find(
     (party) => party.party_kind !== 'user' && party.scoped_host_id_hex,
   );
@@ -744,14 +764,14 @@ test('admissionActive rejects federation admissions with mismatching host IDs', 
     (entry) => entry.remote_team_id_hex === homelab.party_id_hex,
   );
   assert.ok(own);
-  // Active admissions recorded from a different host must not grant access.
+  // Active memberships recorded from a different host must not grant access.
   const elsewhere = {
     ...own,
     remote_host_id_hex: 'ffff-not-this-host',
     active: true,
   };
   assert.equal(
-    admissionActive(
+    federatedMembershipActive(
       { ...FIXTURE, federation: [elsewhere] },
       homelab,
       own.store,
@@ -759,7 +779,7 @@ test('admissionActive rejects federation admissions with mismatching host IDs', 
     false,
   );
   assert.equal(
-    admissionActive(
+    federatedMembershipActive(
       { ...FIXTURE, federation: [{ ...own, active: true }] },
       homelab,
       own.store,
@@ -919,7 +939,7 @@ test('store security restrictions outrank server lease and inventory failures', 
   assert.equal(storeAvailability(snapshot, neighbor).available, true);
 });
 
-test('every fixture admission names a profile, not an address', () => {
+test('every fixture federated membership names a profile, not an address', () => {
   // Verify that remote_profile references a known server profile ID rather than an address.
   for (const entry of FIXTURE.federation) {
     assert.ok(

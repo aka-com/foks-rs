@@ -5295,7 +5295,7 @@ fn dispatch_result_inner(
                 )?)
             })
         }
-        Operation::AdmitFederatedTeam {
+        Operation::AddFederatedTeamMember {
             local_profile,
             local_team_alias,
             remote_profile,
@@ -5327,7 +5327,7 @@ fn dispatch_result_inner(
                     &remote.paths().credential_store,
                     derive_vault_key(&master),
                 )?;
-                Ok(serde_json::to_value(local.admit_federated_team(
+                Ok(serde_json::to_value(local.add_federated_team_member(
                     remote,
                     &local_team_alias,
                     &remote_team_alias,

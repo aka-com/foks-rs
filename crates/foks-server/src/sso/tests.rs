@@ -342,7 +342,7 @@ fn envelope_survives_operator_root_rotation_and_rejects_missing_or_wrong_keys() 
         host: [1; 33],
         session_hash: [2; 32],
         config_hash: [3; 32],
-        admission_hash: [4; 32],
+        source_hash: [4; 32],
         uid: None,
         state: SsoSessionState::Ready,
         revision: 2,

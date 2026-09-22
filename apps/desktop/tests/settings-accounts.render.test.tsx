@@ -584,7 +584,7 @@ test('a notice this page can route elsewhere is not repeated here', async () => 
   const { rendered } = await renderPeople(lapsed, 'acct:personal');
 
   // The fixture's three notes each resolve to a place of their own — Acme's
-  // server page, Homelab's own page, and Engineering's admissions list — so
+  // server page, Homelab's own page, and Engineering's federated-members list — so
   // none of them are drawn on this page; it would be a second copy of a
   // state the reader can already see where it is acted on.
   assert.equal(rendered.container.querySelector('.people-attention'), null);
@@ -667,7 +667,7 @@ test('a team note with the same alias on two profiles routes to neither', async 
   );
 });
 
-test('a fed- note admitted by two hosts routes to neither', async () => {
+test('a fed- note linked to two hosts routes to neither', async () => {
   const snapshot = await fixture();
   const ambiguous: AgentSnapshot = {
     ...snapshot,
@@ -682,8 +682,8 @@ test('a fed- note admitted by two hosts routes to neither', async () => {
   };
   const { rendered } = await renderPeople(ambiguous);
 
-  // Homelab is admitted into two groups on this Mac, so which one restores the
-  // admission is a guess; the note says what the agent asks for instead.
+  // Homelab is a member of two groups on this Mac, so which one restores the
+  // membership is a guess; the note says what the agent asks for instead.
   assert.equal(
     rendered.queryByRole('button', { name: 'Open Engineering' }),
     null,
@@ -696,7 +696,7 @@ test('a fed- note admitted by two hosts routes to neither', async () => {
   assert.ok(ui.within(list).getByText('Restore access'));
 });
 
-test('an admission already restored does not route the note either', async () => {
+test('a federated membership already restored does not route the note either', async () => {
   const snapshot = await fixture();
   const restored: AgentSnapshot = {
     ...snapshot,
@@ -721,7 +721,7 @@ test('unlinked notifications display the agent action label as a chip', async ()
       {
         id: 'fed-nowhere',
         severity: 'warn',
-        title: 'An admission needs attention',
+        title: 'A federated membership needs attention',
         detail: 'The catalog does not say which group holds it.',
         action: 'Restore access',
       },
@@ -732,7 +732,9 @@ test('unlinked notifications display the agent action label as a chip', async ()
   // No wrong page is offered; the chip reads what the agent asked for, and
   // the caption that would repeat it word for word is not drawn.
   const list = rendered.getByRole('region', { name: /^Needs attention/ });
-  assert.ok(ui.within(list).getByText('An admission needs attention'));
+  assert.ok(
+    ui.within(list).getByText('A federated membership needs attention'),
+  );
   assert.equal(ui.within(list).queryByRole('button'), null);
   assert.ok(ui.within(list).getByText('Restore access'));
   assert.equal(

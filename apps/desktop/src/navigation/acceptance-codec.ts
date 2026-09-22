@@ -38,7 +38,7 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
   add: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   demote: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   remove: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
-  admit: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  'add-team': { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   'servers-server': {
     kind: 'settings',
     section: 'account',

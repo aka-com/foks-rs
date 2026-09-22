@@ -7,7 +7,7 @@ fn row(id: u8) -> SsoSession {
         host: [1; 33],
         session_hash: [id; 32],
         config_hash: [2; 32],
-        admission_hash: [3; 32],
+        source_hash: [3; 32],
         uid: None,
         state: State::Waiting,
         revision: 1,
@@ -85,7 +85,7 @@ fn admission_is_bounded_even_for_terminal_flows_and_releases_on_expiry() {
         Err(Error::Capacity(_))
     ));
     let mut r = row(5);
-    r.admission_hash = [7; 32];
+    r.source_hash = [7; 32];
     db.sso_insert_session(&r, 100).unwrap();
     assert!(db
         .sso_transition(&r, State::Exchanging, &[9; 57], 600_100)
@@ -112,11 +112,11 @@ fn host_admission_cannot_grow_without_bound() {
     for id in 0u32..1000 {
         let mut r = row(1);
         r.session_hash[..4].copy_from_slice(&id.to_be_bytes());
-        r.admission_hash = r.session_hash;
+        r.source_hash = r.session_hash;
         db.sso_insert_session(&r, 100).unwrap();
     }
     let mut r = row(255);
-    r.admission_hash = [255; 32];
+    r.source_hash = [255; 32];
     assert!(matches!(
         db.sso_insert_session(&r, 100),
         Err(Error::Capacity(_))

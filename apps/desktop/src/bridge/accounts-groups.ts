@@ -54,7 +54,7 @@ export interface GroupRoleRequest extends GroupMemberRequest {
   destination: RoleDto;
 }
 
-export interface AdmitGroupRequest {
+export interface AddFederatedTeamMemberRequest {
   storeId: StoreRef;
   remoteStoreId: StoreRef;
   visibility: number;

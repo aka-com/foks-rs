@@ -7,7 +7,12 @@
 
 import { storeNavigationOrder } from './order';
 import { connectionSecurityFailure } from '../profile-connectivity';
-import { admissionActive, partiesOf, peopleGroups, storeOf } from './readers';
+import {
+  federatedMembershipActive,
+  partiesOf,
+  peopleGroups,
+  storeOf,
+} from './readers';
 import { admits } from './roles';
 import { serverName } from './server-name';
 import { serverDisplayName, PROTOCOL_CAPABILITIES } from './types';
@@ -587,7 +592,7 @@ export function canCreateInStore(
       party.label === 'you' &&
       party.party_kind === 'user' &&
       party.locally_manageable &&
-      admissionActive(snapshot, party, store.id),
+      federatedMembershipActive(snapshot, party, store.id),
   );
   return own.length === 1;
 }
@@ -606,7 +611,7 @@ export function canChangeItem(
       party.label === 'you' &&
       party.party_kind === 'user' &&
       party.locally_manageable &&
-      admissionActive(snapshot, party, store.id),
+      federatedMembershipActive(snapshot, party, store.id),
   );
   return own.length === 1 && admits(own[0].destination_role, item.write);
 }

@@ -96,7 +96,7 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
             with_federation: true,
             ..
         } => Scope::SecurityRoot,
-        AdmitFederatedTeam {
+        AddFederatedTeamMember {
             local_profile,
             remote_profile,
             ..
@@ -1066,7 +1066,7 @@ mod tests {
             Scope::profile("a")
         );
         assert_eq!(
-            operation_scope(&Operation::AdmitFederatedTeam {
+            operation_scope(&Operation::AddFederatedTeamMember {
                 local_profile: "b".into(),
                 local_team_alias: "team".into(),
                 remote_profile: "a".into(),

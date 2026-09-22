@@ -146,7 +146,7 @@ fn adapter_unseen_expiry_is_irreversible_without_any_pruned_rows() {
         .adapter_clock(&op.host_id, &op.scope_id)
         .unwrap()
         .unwrap();
-    assert_eq!(clock.reject_issued_before, 300_000 - ADMISSION_AGE_SECONDS);
+    assert_eq!(clock.reject_issued_before, 300_000 - MAX_NEW_SUBMISSION_AGE_SECONDS);
     db.reanchor_adapter_clock(&op.host_id, &op.scope_id, &clock, adapter_time(100_000, 0))
         .unwrap();
     assert!(matches!(

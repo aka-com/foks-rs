@@ -242,7 +242,7 @@ Federation support is an intentionally client-coordinated slice. A Beacon is
 an untrusted HostID-to-address hint; `discover_and_pin` accepts it only after a
 direct probe authenticates the requested HostID. Remote user/team grants use
 the exact v0.1.9 bearer wire, remote public chains are independently verified
-and pinned, and `admit_remote_team_to_named_team` journals a secret-free
+and pinned, and `add_remote_team_member` journals a secret-free
 cross-host saga before constructing the local membership edit. The application
 stores the removal key and stable membership binding in its encrypted vault.
 This standalone workflow is deliberately operator-mediated: one operator must

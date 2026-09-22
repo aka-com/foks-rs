@@ -496,7 +496,7 @@ export function TeamsScreen({
                 </>
               ) : null}
               {/* Invitation options matching the team page: add an individual
-                  user or admit a federated team from another server. Disabled
+                  user or add a federated team from another server. Disabled
                   options provide an explanatory reason directly in the menu. */}
               <MenuItem
                 icon="user"
@@ -516,7 +516,7 @@ export function TeamsScreen({
                 reason={federationReason}
                 onClick={() => {
                   close();
-                  setSheet({ kind: 'admit', store });
+                  setSheet({ kind: 'add-team', store });
                 }}
               >
                 <span className="menu-choice">

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use foks_client::{
-    AddLocalTeamMemberRequest, ChangeTeamMemberRequest, FederatedTeamAdmissionRequest,
+    AddFederatedTeamMemberRequest, AddLocalTeamMemberRequest, ChangeTeamMemberRequest,
     FederatedTeamRefreshRequest, FederationCredential, NamedTeamSecrets, NewYubiDeviceSecrets,
     RetainedTeamMemberRemovalRequest, TeamMemberSelector, TeamPtkRotationSeed, VerifiedMemberParty,
     YubiCredential, YubiDeviceProvisionRequest,
@@ -151,7 +151,7 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
         )
         .unwrap();
     let removal_key = SecretSeed::new([0xe8; 32]);
-    let admission_request = FederatedTeamAdmissionRequest {
+    let member_add_request = AddFederatedTeamMemberRequest {
         remote_host: remote.host(),
         remote_credential: &remote_account.credential,
         remote_team: &remote_team.team,
@@ -170,7 +170,7 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
         .client
         .foks()
         .allocate_federated_team_index_ranges(
-            &admission_request,
+            &member_add_request,
             &mut remote_protected,
             &mut protected,
         )
@@ -178,16 +178,16 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
     assert_eq!(remote.environment.fault_hits(), remote_metadata_fault + 1);
     assert_eq!(allocated.child.high.base, [0x20]);
     assert_eq!(allocated.parent.low.base, [0x80]);
-    let admitted = local
+    let added = local
         .client
         .foks()
-        .admit_remote_team_to_named_team(&admission_request, &mut protected)
+        .add_remote_team_member(&member_add_request, &mut protected)
         .unwrap();
-    assert_eq!(admitted.remote.verified.team_name(), b"remotealpha");
-    assert_eq!(admitted.remote.verified.chain_seqno(), 2);
-    assert_eq!(admitted.added.authenticated.verified.chain_seqno(), 3);
+    assert_eq!(added.remote.verified.team_name(), b"remotealpha");
+    assert_eq!(added.remote.verified.chain_seqno(), 2);
+    assert_eq!(added.added.authenticated.verified.chain_seqno(), 3);
     assert!(matches!(
-        admitted
+        added
             .remote
             .verified
             .group_change_at(2)
@@ -197,7 +197,7 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
         [foks_proto::ChangeMetadata::TeamIndexRange(_)]
     ));
     assert!(matches!(
-        admitted
+        added
             .added
             .authenticated
             .verified
@@ -210,10 +210,10 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
     let repeated = local
         .client
         .foks()
-        .admit_remote_team_to_named_team(&admission_request, &mut protected)
+        .add_remote_team_member(&member_add_request, &mut protected)
         .unwrap();
-    assert_eq!(repeated.operation_id, admitted.operation_id);
-    let remote_member = admitted
+    assert_eq!(repeated.operation_id, added.operation_id);
+    let remote_member = added
         .added
         .authenticated
         .verified
@@ -288,7 +288,7 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
     let stale_remote_direct = [VerifiedMemberParty::User(
         &remote_account.authenticated.verified,
     )];
-    assert!(admitted
+    assert!(added
         .remote
         .verified_recipient(&stale_remote_direct)
         .is_err());
@@ -298,7 +298,7 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
         .authenticate_and_pin(remote.host(), &remote_account.credential)
         .unwrap();
     let remote_direct = [VerifiedMemberParty::User(&current_remote_user.verified)];
-    let remote_recipient = admitted.remote.verified_recipient(&remote_direct).unwrap();
+    let remote_recipient = added.remote.verified_recipient(&remote_direct).unwrap();
     let remaining = [VerifiedMemberParty::Team(&remote_recipient)];
     let mut protected = local.client.open_protected_store().unwrap();
     let after_rotation = local
@@ -343,7 +343,7 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
         .query_row(
             "SELECT state, permission_hash FROM federation_saga_operations
              WHERE operation_id = ?1",
-            [admitted.operation_id.as_slice()],
+            [added.operation_id.as_slice()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
@@ -371,7 +371,7 @@ pub(crate) fn remote_team_membership_and_ptk_tokens() {
         .windows(permission.expose().len())
         .any(|window| window == permission.expose()));
 
-    // Expel the exact host-scoped team with its admission-time removal key.
+    // Expel the exact host-scoped team with its member_add-time removal key.
     // Exercise exact-selector, retained-key, and actor failures before the
     // successful edit, then prove that the edit transaction itself invalidates
     // a bearer granted to the removed exact party+host.
@@ -806,7 +806,7 @@ fn federated_yubi_pair(tag: &str, fill: u8) -> FederatedYubiPair {
     let removal_key = SecretSeed::new([fill ^ 0x27; 32]);
     let mut protected = local.client.open_protected_store().unwrap();
     let mut remote_protected = remote.client.open_protected_store().unwrap();
-    let admission = FederatedTeamAdmissionRequest {
+    let member_add = AddFederatedTeamMemberRequest {
         remote_host: remote.host(),
         remote_credential: &remote_account.credential,
         remote_team: &remote_team,
@@ -819,12 +819,12 @@ fn federated_yubi_pair(tag: &str, fill: u8) -> FederatedYubiPair {
     local
         .client
         .foks()
-        .allocate_federated_team_index_ranges(&admission, &mut remote_protected, &mut protected)
+        .allocate_federated_team_index_ranges(&member_add, &mut remote_protected, &mut protected)
         .unwrap();
     local
         .client
         .foks()
-        .admit_remote_team_to_named_team(&admission, &mut protected)
+        .add_remote_team_member(&member_add, &mut protected)
         .unwrap();
     drop(protected);
 

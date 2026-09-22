@@ -166,7 +166,7 @@ secret inputs come only from private bounded files. There is no device-local
 item-store branch; device pairing is exposed by both the backend transcript
 surface and the Tauri command boundary.
 
-The Teams screen can admit a remote profile's active team into a selected
+The Teams screen can add a remote profile's active team into a selected
 local named team, list protected remote bindings, and surface action-required
 reconciliation failures. The graphical path deliberately defaults to the
 member role; explicit admin/owner selection remains available in the CLI and

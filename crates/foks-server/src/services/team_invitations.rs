@@ -358,7 +358,7 @@ impl InvitationService<'_> {
         let mut permission = [0; 17];
         self.entropy.fill(&mut permission).map_err(internal)?;
         permission[0] = 54;
-        let admission = foks_server_db::LocalInvitationAdmission {
+        let acceptance = foks_server_db::LocalInvitationAcceptance {
             uid: principal.uid().to_vec(),
             credential: principal.device_id().to_vec(),
             certificate_hash: invite.hash,
@@ -395,12 +395,12 @@ impl InvitationService<'_> {
                 self.clock,
                 tail,
                 None,
-                Some(admission),
+                Some(acceptance),
             )?;
         } else {
             self.writer
                 .call_with_current_time(Arc::clone(self.clock), move |db, time| {
-                    db.accept_local_invitation(&admission, time)?;
+                    db.accept_local_invitation(&acceptance, time)?;
                     Ok(())
                 })
                 .map_err(write_error)?;
@@ -451,7 +451,7 @@ impl InvitationService<'_> {
         let mut receipt = [0; 17];
         self.entropy.fill(&mut receipt).map_err(internal)?;
         receipt[0] = 56;
-        let admission = foks_server_db::RemoteInvitationAdmission {
+        let acceptance = foks_server_db::RemoteInvitationAcceptance {
             certificate_hash: invite.hash,
             team: p.team.team.as_bytes().to_vec(),
             generation: p.key.generation,
@@ -463,7 +463,7 @@ impl InvitationService<'_> {
         drop(snapshot);
         self.writer
             .call_with_current_time(Arc::clone(self.clock), move |db, now| {
-                db.accept_remote_invitation(&admission, now)?;
+                db.accept_remote_invitation(&acceptance, now)?;
                 Ok(())
             })
             .map_err(write_error)?;

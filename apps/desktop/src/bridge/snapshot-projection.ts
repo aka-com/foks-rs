@@ -792,7 +792,7 @@ async function projectCatalogCounted(
       const ownerAccount = ownerStore
         ? accounts.find((account) => account.store === ownerStore.id)
         : undefined;
-      const admissions =
+      const memberships =
         party.party_kind === 'named-team'
           ? federation.filter(
               (entry) =>
@@ -816,8 +816,8 @@ async function projectCatalogCounted(
               : party.label,
         // Resolve the remote server's display name rather than its internal profile identifier.
         team_name:
-          admissions.length === 1
-            ? `${admissions[0].remote_team_alias} @ ${displayServerById(admissions[0].remote_profile)}`
+          memberships.length === 1
+            ? `${memberships[0].remote_team_alias} @ ${displayServerById(memberships[0].remote_profile)}`
             : party.team_name,
       };
     });

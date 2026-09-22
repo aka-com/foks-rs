@@ -41,10 +41,10 @@ pub(super) fn member_role_from_dto(role: &RoleDto) -> Result<MemberRole, AgentEr
     }
 }
 
-pub(super) fn admission_not_resumable() -> AgentError {
+pub(super) fn federated_membership_not_resumable() -> AgentError {
     AgentError::new(
-        "admission-not-resumable",
-        "This inactive admission cannot be resumed.",
+        "federated-membership-not-resumable",
+        "This inactive federated membership cannot be resumed.",
         false,
     )
 }
@@ -625,12 +625,12 @@ pub(super) fn remove_group_member_operation(
     })
 }
 
-pub(super) fn admit_group_operation(
+pub(super) fn add_federated_team_member_operation(
     local: foks_agent_proto::TeamStoreRef,
     remote: foks_agent_proto::TeamStoreRef,
     visibility: i16,
 ) -> Operation {
-    Operation::AdmitFederatedTeam {
+    Operation::AddFederatedTeamMember {
         local_profile: local.profile,
         local_team_alias: local.team_alias,
         remote_profile: remote.profile,
@@ -640,7 +640,7 @@ pub(super) fn admit_group_operation(
     }
 }
 
-pub(super) fn rerun_group_admission_operation(
+pub(super) fn rerun_federated_team_member_add_operation(
     local: foks_agent_proto::TeamStoreRef,
     entry: FederationEntryDto,
 ) -> Result<Operation, AgentError> {
@@ -652,7 +652,7 @@ pub(super) fn rerun_group_admission_operation(
             ));
         }
     };
-    Ok(Operation::AdmitFederatedTeam {
+    Ok(Operation::AddFederatedTeamMember {
         local_profile: local.profile,
         local_team_alias: local.team_alias,
         remote_profile: entry.remote_profile,
@@ -969,7 +969,7 @@ pub async fn resume_group_member_edit(
 }
 
 #[tauri::command]
-pub async fn admit_group(
+pub async fn add_federated_team_member(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     state: State<'_, AppState>,
@@ -982,13 +982,13 @@ pub async fn admit_group(
     let _permit = prepare_catalog_mutation(&state).await?;
     let local = state.selected_active_team_for_mutation(&store_id)?;
     let remote = state.selected_remote_named_team(&local.profile, &remote_store_id)?;
-    let operation = admit_group_operation(local, remote, visibility);
+    let operation = add_federated_team_member_operation(local, remote, visibility);
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Create).await
 }
 
 #[tauri::command]
-pub async fn rerun_group_admission(
+pub async fn rerun_federated_team_member_add(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     state: State<'_, AppState>,
@@ -999,8 +999,9 @@ pub async fn rerun_group_admission(
     require_main_window(&webview)?;
     let (_permit, operation) =
         prepare_group_mutation(&state, &store_id, GroupMutationFacts::Federation, || {
-            let (local, entry) = state.selected_inactive_admission(&store_id, &operation_id)?;
-            rerun_group_admission_operation(local, entry)
+            let (local, entry) =
+                state.selected_inactive_federated_membership(&store_id, &operation_id)?;
+            rerun_federated_team_member_add_operation(local, entry)
         })
         .await?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;

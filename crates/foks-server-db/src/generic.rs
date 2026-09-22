@@ -36,7 +36,7 @@ pub enum GenericPassphraseAction<'a> {
 }
 
 pub struct GenericMutation<'a> {
-    pub invitation: Option<&'a crate::LocalInvitationAdmission>,
+    pub invitation: Option<&'a crate::LocalInvitationAcceptance>,
     pub link: GenericLinkMutation<'a>,
     pub passphrase: Option<GenericPassphraseAction<'a>>,
     pub expected_root_epoch: u64,
@@ -99,7 +99,7 @@ impl Database {
             {
                 return Err(Error::Invalid("invitation membership link"));
             }
-            crate::team_invitations::insert_local_admission(
+            crate::team_invitations::commit_local_invitation_acceptance(
                 &transaction,
                 invitation,
                 mutation.now,

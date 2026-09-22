@@ -216,7 +216,7 @@ pub struct PendingOperationSummary {
 }
 
 pub use federation::{
-    FederatedMembershipSummary, FederationAdmissionReport, FederationDestinationRole,
+    AddFederatedTeamMemberReport, FederatedMembershipSummary, FederationDestinationRole,
     FederationExpulsionReport, FederationRefreshReport, UnlockedYubiActor,
 };
 pub use runtime::{JobRun, JobRunReport};

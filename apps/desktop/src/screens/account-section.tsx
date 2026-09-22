@@ -100,7 +100,7 @@ function canRetry(note: Notification): boolean {
 
 /**
  * Returns navigation parameters for the group's Members tab, where setup
- * status and membership admission details can be reviewed and completed.
+ * status and federated membership details can be reviewed and completed.
  */
 function openGroup(group: TeamStore): Destination {
   return {
@@ -207,9 +207,9 @@ function destinationOf(
     return matches.length === 1 ? openGroup(matches[0]) : null;
   }
   if (note.id.startsWith('fed-')) {
-    // `fed-homelab` is Homelab's admission *into* another group, and only the
-    // host group can restore it. The note names the admitted group alone, so
-    // it points somewhere only while exactly one inactive admission carries
+    // `fed-homelab` is Homelab's membership *in* another group, and only the
+    // host group can restore it. The note names the federated group alone, so
+    // it points somewhere only while exactly one inactive membership carries
     // that alias: two hosts would make the choice of page a guess.
     const alias = note.id.slice('fed-'.length);
     const matches = snapshot.federation.filter(
@@ -228,7 +228,7 @@ function destinationOf(
 /**
  * The notices no tab can resolve: a catalog read that only a retry can fix,
  * or a note whose place could not be derived — an alias that matches more
- * than one store, or an admission this Mac cannot place. This is what the
+ * than one store, or a federated membership this Mac cannot place. This is what the
  * rail's account-avatar dot still counts, now that every other note type has
  * a badge or an established home of its own.
  */
@@ -247,10 +247,10 @@ interface UnroutedNoticesProps {
 /**
  * Notices this page cannot route anywhere else: a catalog read that only a
  * retry can fix, or a note whose place could not be resolved — an alias that
- * matches more than one store, or an admission this Mac cannot place. Every
+ * matches more than one store, or a federated membership this Mac cannot place. Every
  * other note already has a home: a lapsed or unverified server shows on
  * Settings › Account, a team whose setup is incomplete shows on Teams, and a
- * team's admission into another team shows as Inactive on the host team's own
+ * team's membership in another team shows as Inactive on the host team's own
  * Members page. Drawing those again here would be a second copy of a state
  * the reader can already see where it is acted on.
  */
@@ -739,10 +739,7 @@ export function AccountSection({
           onClose={() => setSheet(null)}
           onDone={async () => {
             setSheet(null);
-            await onRefresh(
-              'Hardware-key account created.',
-              selected.server,
-            );
+            await onRefresh('Hardware-key account created.', selected.server);
           }}
           onError={(error) => void onMutationError(error)}
         />

@@ -28,9 +28,9 @@ export const accountCommands: Pick<
   | 'demoteGroupMember'
   | 'removeGroupMember'
   | 'resumeGroupMemberEdit'
-  | 'admitGroup'
+  | 'addFederatedTeamMember'
   | 'removeFederatedGroup'
-  | 'rerunGroupAdmission'
+  | 'rerunFederatedTeamMemberAdd'
   | 'discoverGroups'
   | 'configureWebAdmin'
   | 'openWebAdmin'
@@ -87,9 +87,9 @@ export const accountCommands: Pick<
     ),
   resumeGroupMemberEdit: (storeId) =>
     checkedMutation('resume_group_member_edit', { storeId }, decodeMutation),
-  admitGroup: ({ storeId, remoteStoreId, visibility }) =>
+  addFederatedTeamMember: ({ storeId, remoteStoreId, visibility }) =>
     checkedMutation(
-      'admit_group',
+      'add_federated_team_member',
       { storeId, remoteStoreId, visibility },
       decodeMutation,
     ),
@@ -99,9 +99,9 @@ export const accountCommands: Pick<
       { storeId, remoteHostIdHex, remoteTeamIdHex },
       decodeMutation,
     ),
-  rerunGroupAdmission: (storeId, operationId) =>
+  rerunFederatedTeamMemberAdd: (storeId, operationId) =>
     checkedMutation(
-      'rerun_group_admission',
+      'rerun_federated_team_member_add',
       { storeId, operationId },
       decodeMutation,
     ),

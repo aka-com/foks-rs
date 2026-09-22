@@ -82,7 +82,7 @@ export const inviteUnavailableTitle = (serverName: string): string =>
   `Restore access to ${serverName} before inviting someone.`;
 
 /**
- * Why this Mac cannot change a group's roster, or the groups admitted into it —
+ * Why this Mac cannot change a group's roster, or its federated team members —
  * `undefined` when it can. One rule for both the Teams list and the group page,
  * so a row's menu and the page it opens never disagree about what applies.
  */
@@ -105,9 +105,9 @@ export function manageReason(
   if (groupDetailFailure(snapshot, store.id, source))
     return source === 'roster'
       ? 'The roster could not be read. Refresh before making changes.'
-      : 'The admitted teams could not be read. Refresh before making changes.';
+      : 'The federated teams could not be read. Refresh before making changes.';
   // The role this Mac holds is a roster fact, so an unread roster is not
-  // evidence that it lacks one: an admission is refused for what failed to
+  // evidence that it lacks one: adding a federated team is refused for what failed to
   // load, not for a permission nothing could have checked.
   if (groupDetailFailure(snapshot, store.id, 'roster'))
     return 'The roster could not be read. Refresh before making changes.';
@@ -127,7 +127,7 @@ export function rosterManageable(
   return manageReason(snapshot, store, 'roster') === undefined;
 }
 
-/** Whether this Mac can admit another group here, or drop one. */
+/** Whether this Mac can add another federated team here, or remove one. */
 export function federationManageable(
   snapshot: AgentSnapshot,
   store: TeamStore,

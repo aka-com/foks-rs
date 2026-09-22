@@ -1060,7 +1060,7 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             remote_team_alias,
             role,
             visibility,
-        } => Operation::AdmitFederatedTeam {
+        } => Operation::AddFederatedTeamMember {
             local_profile,
             local_team_alias,
             remote_profile,

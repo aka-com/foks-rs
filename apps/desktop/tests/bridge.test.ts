@@ -2692,7 +2692,7 @@ test('the mock rejects member and sharing updates for an active ad-hoc group', a
       normalizeCommandError(error).code === 'group-management-unavailable',
   );
   await assert.rejects(
-    bridge.admitGroup({
+    bridge.addFederatedTeamMember({
       storeId: 'team:homelab',
       remoteStoreId: 'team:eng',
       visibility: 0,

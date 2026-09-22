@@ -163,6 +163,20 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
             params![host_id, epoch, hash, bytes],
         )?;
     }
+    let has_admission_floor: bool = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM pragma_table_info('kv_adapter_clocks')
+            WHERE name='admission_floor'
+        )",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_admission_floor {
+        transaction.execute_batch(
+            "ALTER TABLE kv_adapter_clocks
+             RENAME COLUMN admission_floor TO validated_time_floor;",
+        )?;
+    }
     transaction.execute("UPDATE hard_state_metadata SET hard_state_revision=hard_state_revision+1, write_token=randomblob(16) WHERE singleton=1", [])?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;

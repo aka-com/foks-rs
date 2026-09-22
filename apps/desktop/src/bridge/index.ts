@@ -37,7 +37,7 @@ export {
 } from './core';
 export type {
   AccountDto,
-  AdmitGroupRequest,
+  AddFederatedTeamMemberRequest,
   CreateGroupRequest,
   DiscoveredGroup,
   GroupDetailResult,

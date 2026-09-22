@@ -60,7 +60,7 @@ const STATES = [
   'add',
   'demote',
   'remove',
-  'admit',
+  'add-team',
   'create',
   'manage',
   'party-remove',
@@ -405,7 +405,7 @@ async function groupWalk(context, origin) {
       .waitFor();
 
     await page.goto(`${origin}/?state=federation`, { waitUntil: 'load' });
-    // Admitted teams are drawn in the same list as people now, not a
+    // Federated teams are drawn in the same list as people now, not a
     // separately classed table.
     const inactive = page.locator('.rt.bare .prow', { hasText: 'Inactive' });
     await inactive.getByRole('button', { name: 'Restore access' }).click();

@@ -119,7 +119,7 @@ export interface Party {
   note?: string;
 }
 
-/** One admission of a remote team into a local team. */
+/** One remote-team membership in a local team. */
 export interface FederationEntry {
   store: StoreRef;
   remote_profile: string;
@@ -128,7 +128,7 @@ export interface FederationEntry {
   remote_team_id_hex: string;
   destination: RoleWire;
   operation_id_hex?: string;
-  /** False when the admission is inactive; no extra payload in that case. */
+  /** False when the membership is inactive; no extra payload in that case. */
   active: boolean;
 }
 
