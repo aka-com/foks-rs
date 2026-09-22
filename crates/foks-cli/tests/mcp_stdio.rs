@@ -27,7 +27,7 @@ impl Process {
         let mut child = Command::new(env!("CARGO_BIN_EXE_foks-rs"))
             .args(["--state-dir"])
             .arg(state)
-            .args(["mcp", set, "--profile", "local", "--account", "owner"])
+            .args(["mcp", set, "--profile", "local", "--account-alias", "owner"])
             .args(if read_only {
                 vec!["--read-only"]
             } else {

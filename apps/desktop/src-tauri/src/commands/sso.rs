@@ -218,4 +218,32 @@ mod tests {
         assert!(!public.contains("https"));
         assert!(public.contains("browserAvailable"));
     }
+
+    #[test]
+    fn account_status_uses_the_public_block_reason_name() {
+        let p = SsoProgress {
+            operation_id: None,
+            account_alias: "work".into(),
+            purpose: foks_agent_proto::sso::SsoPurpose::LinkExisting,
+            account_status: Some(
+                serde_json::from_value(serde_json::json!({
+                    "state": "locked-out",
+                    "rolloutMode": 2,
+                    "providerBlockedReason": 4,
+                    "issuer": "https://identity.example",
+                    "authorizationEpoch": 1,
+                    "authorizationGeneration": 0
+                }))
+                .unwrap(),
+            ),
+            state: "locked-out".into(),
+            browser_url: None,
+            expires_at_ms: 100,
+            service_access: false,
+        };
+        let public = serde_json::to_value(public_progress(p)).unwrap();
+        let status = public["accountStatus"].as_object().unwrap();
+        assert_eq!(status["providerBlockedReason"], 4);
+        assert!(!status.contains_key("providerFence"));
+    }
 }

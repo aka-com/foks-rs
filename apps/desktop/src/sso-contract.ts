@@ -7,7 +7,7 @@ export interface SsoAccountStatus {
     | 'locked-out'
     | 'not-eligible';
   rolloutMode: number;
-  providerFence: number;
+  providerBlockedReason: number;
   issuer: string;
   authorizationEpoch: number;
   authorizationGeneration: number;
@@ -111,7 +111,7 @@ function validAccountStatus(value: unknown): boolean {
   const keys = [
     'state',
     'rolloutMode',
-    'providerFence',
+    'providerBlockedReason',
     'issuer',
     'authorizationEpoch',
     'authorizationGeneration',
@@ -129,9 +129,9 @@ function validAccountStatus(value: unknown): boolean {
     Number.isInteger(v.rolloutMode) &&
     Number(v.rolloutMode) >= 0 &&
     Number(v.rolloutMode) <= 2 &&
-    Number.isInteger(v.providerFence) &&
-    Number(v.providerFence) >= 0 &&
-    Number(v.providerFence) <= 4 &&
+    Number.isInteger(v.providerBlockedReason) &&
+    Number(v.providerBlockedReason) >= 0 &&
+    Number(v.providerBlockedReason) <= 4 &&
     typeof v.issuer === 'string' &&
     v.issuer.length <= 4096 &&
     Number.isSafeInteger(v.authorizationEpoch) &&

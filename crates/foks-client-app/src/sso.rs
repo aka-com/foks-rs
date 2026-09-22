@@ -419,9 +419,9 @@ impl CheckedProfileSession<'_> {
 mod tests;
 
 fn require_linkable(status: &foks_proto::IdentityStatus) -> Result<()> {
-    if status.provider_fence != 0 {
+    if status.provider_blocked_reason != 0 {
         return Err(Error::InvalidAccount(
-            "identity provider is fenced; contact the host operator",
+            "identity provider is blocked; contact the host operator",
         ));
     }
     if !matches!(
@@ -460,7 +460,7 @@ impl CheckedProfileSession<'_> {
                 None,
             )?
         };
-        let state = if status.provider_fence != 0 {
+        let state = if status.provider_blocked_reason != 0 {
             "provider-unavailable"
         } else {
             match status.account_state {

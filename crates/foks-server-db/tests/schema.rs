@@ -130,11 +130,13 @@ fn schema_objects(connection: &Connection) -> Vec<(String, String, Option<String
 }
 
 fn predecessor(connection: &Connection, version: i64) {
-    assert!(matches!(version, 43 | 44));
-    for name in EXPIRY_INDEXES {
-        connection
-            .execute_batch(&format!("DROP INDEX {name}"))
-            .unwrap();
+    assert!(matches!(version, 43..=45));
+    if version <= 44 {
+        for name in EXPIRY_INDEXES {
+            connection
+                .execute_batch(&format!("DROP INDEX {name}"))
+                .unwrap();
+        }
     }
     if version == 43 {
         connection
@@ -147,6 +149,9 @@ fn predecessor(connection: &Connection, version: i64) {
             )
             .unwrap();
     }
+    connection
+        .execute_batch("ALTER TABLE sso_policy RENAME COLUMN blocked_reason TO fence;")
+        .unwrap();
     connection
         .pragma_update(None, "user_version", version)
         .unwrap();
@@ -168,7 +173,7 @@ fn writer_upgrades_supported_predecessors_and_preserves_data_and_index_definitio
         })
     };
     let expected = indexes(&reference);
-    for version in [43, 44] {
+    for version in [43, 44, 45] {
         let test = common::TestDatabase::new();
         let path = test.path.clone();
         drop(test.database);

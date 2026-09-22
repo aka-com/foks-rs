@@ -456,6 +456,7 @@ test('decoders successfully parse the full wire contract golden fixture', async 
     version: '0.3.0',
     agentSocket: '/private/foks/agent.sock',
     managedProfile: 'local',
+    computerName: 'Example Mac',
     userName: 'example',
   });
   assert.equal(

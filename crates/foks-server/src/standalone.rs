@@ -772,10 +772,10 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
                     let policy = db
                         .sso_policy(&host)?
                         .ok_or(crate::Error::Sso("OIDC policy missing"))?;
-                    if policy.fence.is_none() {
-                        db.sso_fence_policy(
+                    if policy.blocked_reason.is_none() {
+                        db.sso_block_policy(
                             &host,
-                            foks_server_db::SsoProviderFence::ConfigurationMismatch,
+                            foks_server_db::SsoProviderBlockReason::ConfigurationMismatch,
                         )?;
                     }
                     Ok(())

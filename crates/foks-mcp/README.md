@@ -5,7 +5,7 @@ Run the KV or team MCP server over stdio using an existing FOKS account:
 ```sh
 cargo build --locked --release -p foks-cli -p foks-agent
 target/release/foks-rs --state-dir /absolute/client/state mcp kv \
-  --profile local --account personal
+  --profile local --account-alias personal
 ```
 
 Keep `foks-agent` beside `foks-rs` when installing the binaries. The CLI connects
@@ -21,11 +21,11 @@ A generic MCP client configuration is:
   "mcpServers": {
     "foks-kv": {
       "command": "/absolute/bin/foks-rs",
-      "args": ["--state-dir", "/absolute/client/state", "mcp", "kv", "--profile", "local", "--account", "personal"]
+      "args": ["--state-dir", "/absolute/client/state", "mcp", "kv", "--profile", "local", "--account-alias", "personal"]
     },
     "foks-team": {
       "command": "/absolute/bin/foks-rs",
-      "args": ["--state-dir", "/absolute/client/state", "mcp", "team", "--profile", "local", "--account", "personal"]
+      "args": ["--state-dir", "/absolute/client/state", "mcp", "team", "--profile", "local", "--account-alias", "personal"]
     }
   }
 }
@@ -118,9 +118,9 @@ work. First use establishes the anchor. Local clock repair requires two commands
 
 ```sh
 foks-rs --state-dir /absolute/client/state retention reanchor \
-  --profile local --account personal --unix-seconds <correct-unix-seconds>
+  --profile local --account-alias personal --unix-seconds <correct-unix-seconds>
 foks-rs --state-dir /absolute/client/state retention reanchor \
-  --profile local --account personal --unix-seconds <same-value> \
+  --profile local --account-alias personal --unix-seconds <same-value> \
   --confirm-digest <digest-from-preview>
 ```
 

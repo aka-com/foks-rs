@@ -42,7 +42,7 @@ impl SsoService {
             return Ok(());
         }
         if !refreshable {
-            return Err(Error::Sso("reauthentication required or provider fenced"));
+            return Err(Error::Sso("reauthentication required or provider blocked"));
         }
         let (row, sequence) = self.writer.call({
             let uid = uid.clone();

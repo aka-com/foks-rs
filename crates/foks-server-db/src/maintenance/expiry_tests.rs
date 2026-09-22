@@ -148,7 +148,7 @@ fn sso_disabled_policy_states_millisecond_boundary_and_linkage_are_preserved() {
     assert!(work.vm < 500, "{work:?}");
     f.policy();
     f.db.connection
-        .execute("UPDATE sso_policy SET fence=1", [])
+        .execute("UPDATE sso_policy SET blocked_reason=1", [])
         .unwrap();
     f.seed("sso_sessions", 0, 8, NOW / 1000);
     for state in 0..8 {
@@ -170,7 +170,7 @@ fn sso_disabled_policy_states_millisecond_boundary_and_linkage_are_preserved() {
     assert_eq!(f.db.run_maintenance(NOW + 1000, 0).unwrap().sso_sessions, 1);
     // Active policies use the same expiry rules and retain identity linkage.
     f.db.connection
-        .execute("UPDATE sso_policy SET mode=1,fence=NULL", [])
+        .execute("UPDATE sso_policy SET mode=1,blocked_reason=NULL", [])
         .unwrap();
     f.seed("sso_sessions", 11, 1, NOW / 1000 + 1);
     assert_eq!(f.db.run_maintenance(NOW + 1001, 0).unwrap().sso_sessions, 1);

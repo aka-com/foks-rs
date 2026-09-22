@@ -10,7 +10,7 @@ pub enum SsoRolloutMode {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
-pub enum SsoProviderFence {
+pub enum SsoProviderBlockReason {
     MissingConfiguration = 1,
     ConfigurationMismatch = 2,
     KeyUnavailable = 3,
@@ -23,7 +23,7 @@ pub struct SsoPolicy {
     pub config_hash: [u8; 32],
     pub issuer: String,
     pub mode: SsoRolloutMode,
-    pub fence: Option<SsoProviderFence>,
+    pub blocked_reason: Option<SsoProviderBlockReason>,
     pub revision: u64,
     pub authorization_epoch: u64,
 }
@@ -46,10 +46,11 @@ impl SsoAccessDecision {
         matches!(self, Self::NoPolicy | Self::LinkedActive)
     }
 }
-/// Stable browser authority, independent of refresh CAS revisions. Absence of a
-/// policy is explicit; migration eligibility alone cannot mint a browser stamp.
+/// Stable authorization facts for a web session, independent of refresh CAS
+/// revisions. Absence of a policy is explicit; migration eligibility alone
+/// cannot establish a web-session authorization binding.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SsoAuthorizationStamp {
+pub enum AuthorizationBinding {
     Unconfigured,
     Linked {
         host: [u8; 33],
@@ -78,17 +79,17 @@ pub enum SsoPolicyTransition {
     },
 }
 impl Database {
-    pub fn sso_authorization_stamp(
+    pub fn sso_authorization_binding(
         &self,
         uid: &[u8],
         now_ms: u64,
-    ) -> Result<SsoAuthorizationStamp> {
-        authorization_stamp(&self.connection, uid, now_ms)
+    ) -> Result<AuthorizationBinding> {
+        authorization_binding(&self.connection, uid, now_ms)
     }
 
     /// Eligibility to claim one refresh is separate from permission to use ordinary services.
     pub fn sso_refresh_eligible(&self, uid: &[u8], now_ms: u64) -> Result<bool> {
-        Ok(self.connection.query_row("SELECT EXISTS(SELECT 1 FROM sso_access a JOIN sso_policy p ON p.host=a.host WHERE a.uid=?1 AND p.fence IS NULL AND a.config_hash=p.config_hash AND a.authorization_epoch=p.authorization_epoch AND a.state=0 AND a.interrupted=0 AND a.expires_at_ms<=?2)",params![uid,sql_integer(now_ms)?],|r|r.get(0))?)
+        Ok(self.connection.query_row("SELECT EXISTS(SELECT 1 FROM sso_access a JOIN sso_policy p ON p.host=a.host WHERE a.uid=?1 AND p.blocked_reason IS NULL AND a.config_hash=p.config_hash AND a.authorization_epoch=p.authorization_epoch AND a.state=0 AND a.interrupted=0 AND a.expires_at_ms<=?2)",params![uid,sql_integer(now_ms)?],|r|r.get(0))?)
     }
 
     pub fn sso_policy(&self, host: &[u8; 33]) -> Result<Option<SsoPolicy>> {
@@ -122,7 +123,7 @@ impl Database {
         if users != 0 && mode == SsoRolloutMode::Enforced {
             return Err(Error::Invalid("enforced activation requires an empty host"));
         }
-        tx.execute("INSERT INTO sso_policy(host,rollout_id,config_hash,issuer,mode,fence,revision,authorization_epoch) VALUES(?1,?2,?3,?4,?5,NULL,1,1)", params![host,rollout_id,hash,issuer,mode as u8])?;
+        tx.execute("INSERT INTO sso_policy(host,rollout_id,config_hash,issuer,mode,blocked_reason,revision,authorization_epoch) VALUES(?1,?2,?3,?4,?5,NULL,1,1)", params![host,rollout_id,hash,issuer,mode as u8])?;
         tx.execute(
             "INSERT INTO sso_migration_cohort(host,uid) SELECT ?1,uid FROM users",
             [host],
@@ -132,8 +133,12 @@ impl Database {
         Ok(result)
     }
     /// Fail closed, without repeatedly changing the epoch on identical failed startups.
-    pub fn sso_fence_policy(&mut self, host: &[u8; 33], reason: SsoProviderFence) -> Result<()> {
-        self.connection.execute("UPDATE sso_policy SET fence=?2,revision=revision+1,authorization_epoch=authorization_epoch+1 WHERE host=?1 AND (fence IS NULL OR fence!=?2)", params![host,reason as u8])?;
+    pub fn sso_block_policy(
+        &mut self,
+        host: &[u8; 33],
+        reason: SsoProviderBlockReason,
+    ) -> Result<()> {
+        self.connection.execute("UPDATE sso_policy SET blocked_reason=?2,revision=revision+1,authorization_epoch=authorization_epoch+1 WHERE host=?1 AND (blocked_reason IS NULL OR blocked_reason!=?2)", params![host,reason as u8])?;
         Ok(())
     }
     /// The complete observed policy is the CAS token, including rollout, hash and epoch.
@@ -155,7 +160,7 @@ impl Database {
                 expected_unlinked,
                 accept_lockout,
             } => {
-                if next.mode != SsoRolloutMode::Migration || next.fence.is_some() {
+                if next.mode != SsoRolloutMode::Migration || next.blocked_reason.is_some() {
                     return Err(Error::AuthorizationChanged);
                 }
                 let counts = status(&tx, &next.host)?.ok_or(Error::AuthorizationChanged)?;
@@ -166,10 +171,10 @@ impl Database {
                 next.mode = SsoRolloutMode::Enforced;
             }
             SsoPolicyTransition::Reenable => {
-                if next.fence.is_none() {
+                if next.blocked_reason.is_none() {
                     return Err(Error::AuthorizationChanged);
                 }
-                next.fence = None;
+                next.blocked_reason = None;
                 next.authorization_epoch = next
                     .authorization_epoch
                     .checked_add(1)
@@ -185,14 +190,14 @@ impl Database {
                     ));
                 }
                 next.config_hash = *config_hash;
-                next.fence = None;
+                next.blocked_reason = None;
                 next.authorization_epoch = next
                     .authorization_epoch
                     .checked_add(1)
                     .ok_or(Error::IntegerRange)?;
             }
         }
-        tx.execute("UPDATE sso_policy SET config_hash=?2,mode=?3,fence=?4,revision=?5,authorization_epoch=?6 WHERE host=?1", params![next.host,next.config_hash,next.mode as u8,next.fence.map(|f|f as u8),sql_integer(next.revision)?,sql_integer(next.authorization_epoch)?])?;
+        tx.execute("UPDATE sso_policy SET config_hash=?2,mode=?3,blocked_reason=?4,revision=?5,authorization_epoch=?6 WHERE host=?1", params![next.host,next.config_hash,next.mode as u8,next.blocked_reason.map(|f|f as u8),sql_integer(next.revision)?,sql_integer(next.authorization_epoch)?])?;
         tx.commit()?;
         Ok(next)
     }
@@ -206,12 +211,12 @@ impl ReadDatabase {
     }
 }
 impl ReadSnapshot<'_> {
-    pub fn sso_authorization_stamp(
+    pub fn sso_authorization_binding(
         &self,
         uid: &[u8],
         now_ms: u64,
-    ) -> Result<SsoAuthorizationStamp> {
-        authorization_stamp(self.connection(), uid, now_ms)
+    ) -> Result<AuthorizationBinding> {
+        authorization_binding(self.connection(), uid, now_ms)
     }
 
     pub fn sso_rollout_status(&self, host: &[u8; 33]) -> Result<Option<SsoRolloutStatus>> {
@@ -222,10 +227,10 @@ impl ReadSnapshot<'_> {
     }
 }
 pub(crate) fn read(c: &Connection, host: &[u8; 33]) -> Result<Option<SsoPolicy>> {
-    Ok(c.query_row("SELECT rollout_id,config_hash,issuer,mode,fence,revision,authorization_epoch FROM sso_policy WHERE host=?1", [host], |r| {
+    Ok(c.query_row("SELECT rollout_id,config_hash,issuer,mode,blocked_reason,revision,authorization_epoch FROM sso_policy WHERE host=?1", [host], |r| {
         let mode = match r.get::<_,u8>(3)? { 0=>SsoRolloutMode::Migration,1=>SsoRolloutMode::Enforced,_=>return Err(rusqlite::Error::InvalidQuery) };
-        let fence = match r.get::<_,Option<u8>>(4)? {None=>None,Some(1)=>Some(SsoProviderFence::MissingConfiguration),Some(2)=>Some(SsoProviderFence::ConfigurationMismatch),Some(3)=>Some(SsoProviderFence::KeyUnavailable),Some(4)=>Some(SsoProviderFence::Operator),_=>return Err(rusqlite::Error::InvalidQuery)};
-        Ok(SsoPolicy { host:*host,rollout_id:r.get(0)?,config_hash:r.get(1)?,issuer:r.get(2)?,mode,fence,revision:r.get::<_,i64>(5)? as u64,authorization_epoch:r.get::<_,i64>(6)? as u64 })
+        let blocked_reason = match r.get::<_,Option<u8>>(4)? {None=>None,Some(1)=>Some(SsoProviderBlockReason::MissingConfiguration),Some(2)=>Some(SsoProviderBlockReason::ConfigurationMismatch),Some(3)=>Some(SsoProviderBlockReason::KeyUnavailable),Some(4)=>Some(SsoProviderBlockReason::Operator),_=>return Err(rusqlite::Error::InvalidQuery)};
+        Ok(SsoPolicy { host:*host,rollout_id:r.get(0)?,config_hash:r.get(1)?,issuer:r.get(2)?,mode,blocked_reason,revision:r.get::<_,i64>(5)? as u64,authorization_epoch:r.get::<_,i64>(6)? as u64 })
     }).optional()?)
 }
 fn status(c: &Connection, host: &[u8; 33]) -> Result<Option<SsoRolloutStatus>> {
@@ -246,7 +251,7 @@ pub(crate) fn decision(c: &Connection, uid: &[u8], now_ms: u64) -> Result<SsoAcc
     // as writer callers. Never combine a pre-enforcement mode with post-enforcement data.
     let value: Option<u8> = c
         .query_row(
-            "SELECT CASE WHEN p.fence IS NOT NULL THEN 4
+            "SELECT CASE WHEN p.blocked_reason IS NOT NULL THEN 4
             WHEN a.uid IS NOT NULL THEN CASE WHEN a.config_hash=p.config_hash
                 AND a.authorization_epoch=p.authorization_epoch AND a.state=0
                 AND a.interrupted=0 AND a.expires_at_ms>?2 THEN 2 ELSE 4 END
@@ -270,15 +275,15 @@ pub(crate) fn decision(c: &Connection, uid: &[u8], now_ms: u64) -> Result<SsoAcc
 }
 
 /// One statement so configured absence, policy and linked access cannot race.
-pub(crate) fn authorization_stamp(
+pub(crate) fn authorization_binding(
     c: &Connection,
     uid: &[u8],
     now_ms: u64,
-) -> Result<SsoAuthorizationStamp> {
+) -> Result<AuthorizationBinding> {
     let row = c
         .query_row(
             "SELECT p.host,p.config_hash,p.authorization_epoch,a.authorization_generation,
-            p.fence IS NULL AND a.uid IS NOT NULL AND a.config_hash=p.config_hash
+            p.blocked_reason IS NULL AND a.uid IS NOT NULL AND a.config_hash=p.config_hash
             AND a.authorization_epoch=p.authorization_epoch AND a.state=0
             AND a.interrupted=0 AND a.expires_at_ms>?2
          FROM sso_policy p LEFT JOIN sso_access a ON a.host=p.host AND a.uid=?1",
@@ -295,9 +300,9 @@ pub(crate) fn authorization_stamp(
         )
         .optional()?;
     match row {
-        None => Ok(SsoAuthorizationStamp::Unconfigured),
+        None => Ok(AuthorizationBinding::Unconfigured),
         Some((host, config_hash, policy_epoch, Some(account_generation), true)) => {
-            Ok(SsoAuthorizationStamp::Linked {
+            Ok(AuthorizationBinding::Linked {
                 host,
                 config_hash,
                 policy_epoch: crate::error::unsigned(policy_epoch)?,

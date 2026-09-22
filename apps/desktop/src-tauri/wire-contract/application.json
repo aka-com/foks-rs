@@ -3,17 +3,24 @@
     "version": "0.3.0",
     "agentSocket": "/private/foks/agent.sock",
     "managedProfile": "local",
+    "computerName": "Example Mac",
     "userName": "example"
   },
   "agentStatusCases": {
     "valid": {
       "ready": { "state": "ready" },
+      "readyWithHistory": { "state": "ready", "historyAfter": true },
       "bootstrap": { "state": "bootstrap", "step": "unlock" }
     },
     "invalid": [
       { "base": "ready", "path": ["state"], "value": "offline" },
       { "base": "ready", "path": ["state"] },
       { "base": "ready", "path": ["step"], "value": "unlock" },
+      {
+        "base": "readyWithHistory",
+        "path": ["historyAfter"],
+        "value": "yes"
+      },
       { "base": "bootstrap", "path": ["step"] },
       { "base": "bootstrap", "path": ["step"], "value": null },
       { "base": "bootstrap", "path": ["step"], "value": 1 }

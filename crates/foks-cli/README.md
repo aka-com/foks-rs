@@ -123,8 +123,8 @@ lease, or enable capabilities in an installed desktop.
 
 To exercise the lifecycle on a disposable local test server, run
 `cargo test -p foks-cli --test onboarding_canary`. The canary's cleanup uses
-`device revoke PROFILE ALIAS DEVICE_ID` and
-`recovery revoke PROFILE ACCOUNT_ALIAS BACKUP_ALIAS BACKUP_ID`; backup enrollment
+`device revoke PROFILE --account-alias ACCOUNT_ALIAS DEVICE_ID` and
+`recovery revoke PROFILE --account-alias ACCOUNT_ALIAS BACKUP_ALIAS BACKUP_ID`; backup enrollment
 JSON includes `backup_id_hex` so cleanup never guesses a credential identity.
 
 Organization enrollment and reauthentication use `foks-rs sso`. See the
@@ -133,10 +133,10 @@ Organization enrollment and reauthentication use `foks-rs sso`. See the
 Account rename uses an explicit prepare/confirm flow:
 
 ```sh
-foks-rs account rename prepare --profile local --account work new_username
-foks-rs account rename attempt --profile local --account work --operation OPERATION_ID
-foks-rs account rename status --profile local --account work --operation OPERATION_ID
-foks-rs account rename list --profile local --account work
+foks-rs account rename prepare --profile local --account-alias work new_username
+foks-rs account rename attempt --profile local --account-alias work --operation OPERATION_ID
+foks-rs account rename status --profile local --account-alias work --operation OPERATION_ID
+foks-rs account rename list --profile local --account-alias work
 ```
 
 `cancel` accepts the same operation selector before submission. A later `attempt`
@@ -151,4 +151,8 @@ durable enrollment, one-time export, resident loading and revocation. `account
 admin` configures an account-bound HTTPS origin and requests a checked handoff
 from a host that implements the Go administration methods; the standalone Rust
 server returns unsupported for that operation. Use each command's `--help` for
-the required profile, account and protected-input arguments.
+the required profile, account alias and protected-input arguments.
+
+Commands that assign a member role accept `--member-access standard` (the
+default) or `--member-access restricted`. These names map to the protocol's
+member visibility tiers; raw numeric visibility values are not part of the CLI.

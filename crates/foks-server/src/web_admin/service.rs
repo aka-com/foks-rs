@@ -1,4 +1,4 @@
-//! Typed boundary between bounded transports and transactional browser authority.
+//! Typed boundary between bounded transports and transactional web-session authorization.
 use super::{AdminClock, WebAdminConfig};
 use crate::{Entropy, Error, ReadDatabaseConfig, Result, WriterHandle};
 use foks_server_db::{AdminMoment, ReadSnapshot, WebCredential, WebMutationAuth};

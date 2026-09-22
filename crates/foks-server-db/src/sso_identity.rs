@@ -105,7 +105,10 @@ impl Database {
             account_state,
             rollout_id: p.as_ref().map(|p| p.rollout_id),
             rollout_mode: p.as_ref().map_or(0, |p| p.mode as u8 + 1),
-            provider_fence: p.as_ref().and_then(|p| p.fence).map_or(0, |f| f as u8),
+            provider_blocked_reason: p
+                .as_ref()
+                .and_then(|p| p.blocked_reason)
+                .map_or(0, |f| f as u8),
             issuer: p.as_ref().map_or_else(String::new, |p| p.issuer.clone()),
             authorization_epoch: p.as_ref().map_or(0, |p| p.authorization_epoch),
             authorization_generation: a.as_ref().map_or(0, |a| a.authorization_generation),

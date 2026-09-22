@@ -25,7 +25,8 @@ use crate::commands::servers::{
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
 use crate::commands::validation::exact_profile_confirmation;
 use crate::commands::vault::{
-    CatalogDto, CatalogInventoryDto, DownloadResult, ItemDto, ReadItemDto, StoreDto,
+    CatalogDto, CatalogFailureDto, CatalogInventoryDto, CatalogLocalMetadataDto, CatalogProfileDto,
+    CatalogStoreReadDto, DownloadResult, ItemDto, ReadItemDto, StoreDto,
 };
 use crate::commands::yubikey::{
     YubiAccountDto, YubiCardDto, YubiChangedDto, YubiEnrollmentDto, YubiFederationRefreshDto,
@@ -149,6 +150,13 @@ fn shared_agent_lifecycle_contract_matches_native_dtos() {
             (
                 "ready",
                 AgentStatusDto::from(foks_agent_proto::AgentStatus::ready()),
+            ),
+            (
+                "readyWithHistory",
+                AgentStatusDto::from(foks_agent_proto::AgentStatus::Ready {
+                    timers: vec![],
+                    history_after: Some(true),
+                }),
             ),
             (
                 "bootstrap",
@@ -515,7 +523,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         version: "0.3.0".to_owned(),
         agent_socket: "/private/foks/agent.sock".to_owned(),
         managed_profile: Some("local".to_owned()),
-        computer_name: None,
+        computer_name: Some("Example Mac".to_owned()),
         user_name: Some("example".to_owned()),
     };
     assert_eq!(serde_json::to_value(app_info).unwrap(), fixture["appInfo"]);
@@ -663,17 +671,46 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         team_id_hex: None,
         chain_seqno: None,
     };
+    let team_store = StoreDto {
+        id: "opaque-team-ref".to_owned(),
+        kind: "team",
+        name: "Engineering".to_owned(),
+        server: "foks.example".to_owned(),
+        account: "personal".to_owned(),
+        alias: Some("engineering".to_owned()),
+        active: Some(true),
+        creation_phase: Some("complete".to_owned()),
+        team_kind: Some("named".to_owned()),
+        team_id_hex: Some("03".repeat(33)),
+        chain_seqno: Some(11),
+    };
+    let profile_status = ServerStatusSnapshotDto {
+        profile: "foks.example".to_owned(),
+        configured_endpoint: "foks.example".to_owned(),
+        host: None,
+        compatibility: foks_agent_proto::CompatibilityStatus::NotRequired,
+        chat_supported: None,
+    };
     let catalog = CatalogDto {
-        profiles: vec!["foks.example".to_owned()],
-        stores: vec![store.clone()],
-        known_stores: vec![store],
+        profiles: vec!["foks.example".to_owned(), "blocked.example".to_owned()],
+        stores: vec![store.clone(), team_store.clone()],
+        known_stores: vec![store, team_store],
         inventory: vec![CatalogInventoryDto {
             profile: "foks.example".to_owned(),
             accounts_complete: true,
             teams_complete: true,
         }],
-        store_reads: vec![],
-        full_item_reads: None,
+        store_reads: vec![
+            CatalogStoreReadDto {
+                store: "opaque-store-ref".to_owned(),
+                state: "complete",
+            },
+            CatalogStoreReadDto {
+                store: "opaque-team-ref".to_owned(),
+                state: "failed",
+            },
+        ],
+        full_item_reads: Some(vec!["opaque-store-ref".to_owned()]),
         items: vec![ItemDto {
             store: "opaque-store-ref".to_owned(),
             path: "/wifi/password".to_owned(),
@@ -683,9 +720,48 @@ fn wire_contract_fixture_matches_serialized_shapes() {
             read: KvRole::Member { visibility: -16384 }.into(),
             write: KvRole::Admin.into(),
         }],
-        failures: vec![],
-        blocked_profiles: vec![],
-        local_metadata: None,
+        failures: vec![
+            CatalogFailureDto {
+                scope: "profile",
+                profile: Some("blocked.example".to_owned()),
+                source: Some("server-status".to_owned()),
+                store: None,
+                error: AgentError::new("unavailable", "Profile unavailable.", true),
+            },
+            CatalogFailureDto {
+                scope: "store",
+                profile: Some("foks.example".to_owned()),
+                source: None,
+                store: Some("opaque-team-ref".to_owned()),
+                error: AgentError::new("unavailable", "Store unavailable.", true),
+            },
+        ],
+        blocked_profiles: vec!["blocked.example".to_owned()],
+        local_metadata: Some(CatalogLocalMetadataDto {
+            accounts: vec![AccountDto {
+                local_alias: Some("Personal".to_owned()),
+                store: "opaque-account-ref".to_owned(),
+                profile: "foks.example".to_owned(),
+                alias: "personal".to_owned(),
+                username: "vitalik".to_owned(),
+            }],
+            profiles: vec![
+                CatalogProfileDto {
+                    profile: "foks.example".to_owned(),
+                    label: Some("Primary".to_owned()),
+                    configured_endpoint: "foks.example".to_owned(),
+                    status: Some(profile_status),
+                    error: None,
+                },
+                CatalogProfileDto {
+                    profile: "blocked.example".to_owned(),
+                    label: None,
+                    configured_endpoint: "blocked.example:4430".to_owned(),
+                    status: None,
+                    error: Some(AgentError::new("unavailable", "Profile unavailable.", true)),
+                },
+            ],
+        }),
         generation: 7,
     };
     assert_eq!(serde_json::to_value(catalog).unwrap(), fixture["catalog"]);

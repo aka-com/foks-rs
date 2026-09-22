@@ -1,8 +1,9 @@
-//! Browser authority is checked in the transaction, never from cookie fields or cached grants.
+//! Web-session authorization is checked in the transaction, never from cookie
+//! fields or cached grants.
 use crate::error::{sql_integer, unsigned};
 use crate::{
-    Database, Error, InvitePolicy, InviteRegime, InviteSnapshot, ReadDatabase, ReadSnapshot,
-    Result, SsoAuthorizationStamp,
+    AuthorizationBinding, Database, Error, InvitePolicy, InviteRegime, InviteSnapshot,
+    ReadDatabase, ReadSnapshot, Result,
 };
 use rusqlite::{params, Connection, OptionalExtension as _, TransactionBehavior};
 
@@ -111,11 +112,11 @@ pub struct WebOverview {
     pub invites: u64,
     pub sessions: u64,
 }
-struct Authority {
+struct WebSessionAuthorization {
     id: [u8; 16],
     credential: WebCredential,
     epoch: [u8; 16],
-    stamp: SsoAuthorizationStamp,
+    authorization_binding: AuthorizationBinding,
     expires: u64,
     deadline: u64,
     usable: bool,
@@ -132,7 +133,7 @@ fn credential(
     c: &Connection,
     v: &WebCredential,
     now: AdminMoment,
-) -> Result<(String, String, SsoAuthorizationStamp)> {
+) -> Result<(String, String, AuthorizationBinding)> {
     if v.certificate_expires_at_us <= now.utc_us
         || ![foks_proto::ENTITY_DEVICE, foks_proto::ENTITY_SUBKEY].contains(&v.credential[0])
     {
@@ -144,11 +145,12 @@ fn credential(
         return Err(Error::AuthorizationChanged);
     }
     let (host, name) = local_user(c, &v.host, &v.uid)?;
-    let stamp = crate::sso_policy::authorization_stamp(c, &v.uid, now.utc_us / 1000)?;
-    if matches!(&stamp,SsoAuthorizationStamp::Linked {host,..} if host!=&v.host) {
+    let authorization_binding =
+        crate::sso_policy::authorization_binding(c, &v.uid, now.utc_us / 1000)?;
+    if matches!(&authorization_binding,AuthorizationBinding::Linked {host,..} if host!=&v.host) {
         return Err(Error::AuthorizationChanged);
     }
-    Ok((host, name, stamp))
+    Ok((host, name, authorization_binding))
 }
 fn grant_active(c: &Connection, host: &[u8; 33], uid: &[u8; 33]) -> Result<bool> {
     Ok(c.query_row(
@@ -157,7 +159,7 @@ fn grant_active(c: &Connection, host: &[u8; 33], uid: &[u8; 33]) -> Result<bool>
         |r| r.get(0),
     )?)
 }
-fn load(c: &Connection, hash: &[u8; 32], session: bool) -> Result<Authority> {
+fn load(c: &Connection, hash: &[u8; 32], session: bool) -> Result<WebSessionAuthorization> {
     let sql = if session {
         "SELECT
              record_id,host_id,uid,credential_id,certificate_expires_at_us,instance_epoch,sso_config_hash,sso_policy_epoch,sso_authorization_generation,expires_at_us,deadline_elapsed_us,revoked_at_us
@@ -170,16 +172,16 @@ fn load(c: &Connection, hash: &[u8; 32], session: bool) -> Result<Authority> {
     c.query_row(sql, [hash], |r| {
         let host = r.get(1)?;
         let config: Option<[u8; 32]> = r.get(6)?;
-        let stamp = match config {
-            None => SsoAuthorizationStamp::Unconfigured,
-            Some(config_hash) => SsoAuthorizationStamp::Linked {
+        let authorization_binding = match config {
+            None => AuthorizationBinding::Unconfigured,
+            Some(config_hash) => AuthorizationBinding::Linked {
                 host,
                 config_hash,
                 policy_epoch: r.get::<_, i64>(7)? as u64,
                 account_generation: r.get::<_, i64>(8)? as u64,
             },
         };
-        Ok(Authority {
+        Ok(WebSessionAuthorization {
             id: r.get(0)?,
             credential: WebCredential {
                 host,
@@ -188,7 +190,7 @@ fn load(c: &Connection, hash: &[u8; 32], session: bool) -> Result<Authority> {
                 certificate_expires_at_us: r.get::<_, i64>(4)? as u64,
             },
             epoch: r.get(5)?,
-            stamp,
+            authorization_binding,
             expires: r.get::<_, i64>(9)? as u64,
             deadline: r.get::<_, i64>(10)? as u64,
             usable: r.get(11)?,
@@ -198,13 +200,13 @@ fn load(c: &Connection, hash: &[u8; 32], session: bool) -> Result<Authority> {
     .optional()?
     .ok_or(Error::ReceiptExpired)
 }
-fn authorize(c: &Connection, a: &Authority, now: AdminMoment) -> Result<WebContext> {
+fn authorize(c: &Connection, a: &WebSessionAuthorization, now: AdminMoment) -> Result<WebContext> {
     if !a.usable || a.epoch != now.epoch || a.expires <= now.utc_us || a.deadline <= now.elapsed_us
     {
         return Err(Error::ReceiptExpired);
     }
-    let (host_name, username, stamp) = credential(c, &a.credential, now)?;
-    if stamp != a.stamp {
+    let (host_name, username, authorization_binding) = credential(c, &a.credential, now)?;
+    if authorization_binding != a.authorization_binding {
         return Err(Error::AuthorizationChanged);
     }
     Ok(WebContext {
@@ -237,10 +239,12 @@ fn constant_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
     use subtle::ConstantTimeEq;
     bool::from(a.ct_eq(b))
 }
-fn stamp_columns(s: &SsoAuthorizationStamp) -> (Option<[u8; 32]>, Option<i64>, Option<i64>) {
+fn authorization_binding_columns(
+    s: &AuthorizationBinding,
+) -> (Option<[u8; 32]>, Option<i64>, Option<i64>) {
     match s {
-        SsoAuthorizationStamp::Unconfigured => (None, None, None),
-        SsoAuthorizationStamp::Linked {
+        AuthorizationBinding::Unconfigured => (None, None, None),
+        AuthorizationBinding::Linked {
             config_hash,
             policy_epoch,
             account_generation,

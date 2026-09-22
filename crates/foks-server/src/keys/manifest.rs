@@ -39,10 +39,10 @@ impl KeyGenerationManifest {
         provider: &dyn HostKeyProvider,
         require_genesis_host: bool,
         require_genesis_capability: bool,
-        allow_fenced_recovery: bool,
+        allow_blocked_recovery: bool,
     ) -> Result<()> {
         for purpose in MANIFEST_PURPOSES {
-            if purpose == KeyPurpose::Recovery && allow_fenced_recovery {
+            if purpose == KeyPurpose::Recovery && allow_blocked_recovery {
                 continue;
             }
             if purpose == KeyPurpose::Host && !require_genesis_host {

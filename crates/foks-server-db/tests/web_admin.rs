@@ -271,7 +271,7 @@ fn self_sessions_cannot_mutate_host_policy_and_revoke_all_invalidates_tickets() 
         .is_err());
 }
 #[test]
-fn browser_stamp_allows_refresh_revision_but_rejects_new_binding_generation() {
+fn web_session_authorization_binding_allows_refresh_revision_but_rejects_new_binding_generation() {
     let mut f = fixture();
     f.database
         .sso_activate(

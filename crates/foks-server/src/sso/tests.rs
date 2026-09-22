@@ -462,7 +462,7 @@ fn provider_projection_excludes_operational_paths_but_binds_security_settings() 
 }
 
 #[test]
-fn fence_epoch_is_authenticated_in_session_envelopes() {
+fn block_epoch_is_authenticated_in_session_envelopes() {
     let fixture = Fixture::new();
     let service = fixture.open();
     let arg = init(1);
@@ -475,7 +475,7 @@ fn fence_epoch_is_authenticated_in_session_envelopes() {
     fixture
         .writer
         .call(move |db| {
-            db.sso_fence_policy(&[1; 33], foks_server_db::SsoProviderFence::Operator)?;
+            db.sso_block_policy(&[1; 33], foks_server_db::SsoProviderBlockReason::Operator)?;
             let p = db.sso_policy(&[1; 33])?.unwrap();
             db.sso_transition_policy(&p, &foks_server_db::SsoPolicyTransition::Reenable)?;
             assert!(db.sso_require_policy_epoch(&[1; 33], &hash, 1).is_err());

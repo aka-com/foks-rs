@@ -20,7 +20,7 @@ pub struct McpArguments {
     #[arg(long)]
     profile: String,
     #[arg(long)]
-    account: String,
+    account_alias: String,
     /// Omit and reject all write tools.
     #[arg(long)]
     read_only: bool,
@@ -33,7 +33,11 @@ pub fn run(state: &Path, command: McpCommand) -> Result<(), Box<dyn std::error::
     };
     // Starting an agent is entry-point policy; the SDK adapter only uses authenticated IPC.
     ensure_agent(state)?;
-    let backend = AgentBackend::connect(&state.join("foks-rs.sock"), args.profile, args.account)?;
+    let backend = AgentBackend::connect(
+        &state.join("foks-rs.sock"),
+        args.profile,
+        args.account_alias,
+    )?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(4)

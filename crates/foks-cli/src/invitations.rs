@@ -1,3 +1,4 @@
+use crate::MemberAccessArgument;
 use foks_agent_proto::{
     invitations::{InvitationAction, InvitationRole},
     Operation, ResponseResult, SecretString,
@@ -8,7 +9,7 @@ pub struct Scope {
     #[arg(long)]
     profile: String,
     #[arg(long)]
-    account: String,
+    account_alias: String,
     #[arg(long)]
     pin_file: Option<PathBuf>,
 }
@@ -21,8 +22,8 @@ pub enum InvitationCommand {
         source_team: String,
         #[arg(long, default_value="admin", value_parser=["member","admin","owner"])]
         source_role: String,
-        #[arg(long, default_value_t = 0)]
-        visibility: i16,
+        #[arg(long, value_enum, default_value_t = MemberAccessArgument::Standard)]
+        member_access: MemberAccessArgument,
         #[arg(long)]
         remote_profile: Option<String>,
     },
@@ -76,8 +77,8 @@ pub enum InvitationCommand {
         remote_profile: String,
         team: String,
         request: String,
-        #[arg(long, default_value_t = 0)]
-        visibility: i16,
+        #[arg(long, value_enum, default_value_t = MemberAccessArgument::Standard)]
+        member_access: MemberAccessArgument,
     },
     SyncRemote {
         #[command(flatten)]
@@ -88,8 +89,8 @@ pub enum InvitationCommand {
         source_team: Option<String>,
         #[arg(long, default_value="admin",value_parser=["member","admin","owner"])]
         source_role: String,
-        #[arg(long, default_value_t = 0)]
-        visibility: i16,
+        #[arg(long, value_enum, default_value_t = MemberAccessArgument::Standard)]
+        member_access: MemberAccessArgument,
     },
     Preview {
         #[command(flatten)]
@@ -139,8 +140,8 @@ pub enum InvitationCommand {
         request: String,
         #[arg(long,default_value="member",value_parser=["member","admin","owner"])]
         role: String,
-        #[arg(long, default_value_t = 0)]
-        visibility: i16,
+        #[arg(long, value_enum, default_value_t = MemberAccessArgument::Standard)]
+        member_access: MemberAccessArgument,
     },
     /// Prepare a rejection; attempt its returned operation to submit it once.
     Reject {
@@ -157,14 +158,10 @@ pub fn run(state: &Path, command: InvitationCommand) -> Result<(), Box<dyn std::
             invite,
             source_team,
             source_role,
-            visibility,
+            member_access,
             remote_profile,
         } => {
-            let role = match source_role.as_str() {
-                "owner" => InvitationRole::Owner,
-                "admin" => InvitationRole::Admin,
-                _ => InvitationRole::Member { visibility },
-            };
+            let role = invitation_role(&source_role, member_access)?;
             let action = match remote_profile {
                 Some(remote_profile) => InvitationAction::AcceptTeamRemote {
                     remote_profile,
@@ -254,14 +251,16 @@ pub fn run(state: &Path, command: InvitationCommand) -> Result<(), Box<dyn std::
             remote_profile,
             team,
             request,
-            visibility,
+            member_access,
         } => (
             scope,
             InvitationAction::ApproveRemote {
                 remote_profile,
                 team_alias: team,
                 request_id: request,
-                role: InvitationRole::Member { visibility },
+                role: InvitationRole::Member {
+                    visibility: member_access.visibility(),
+                },
             },
         ),
         InvitationCommand::SyncRemote {
@@ -270,18 +269,14 @@ pub fn run(state: &Path, command: InvitationCommand) -> Result<(), Box<dyn std::
             team_id,
             source_team,
             source_role,
-            visibility,
+            member_access,
         } => (
             scope,
             InvitationAction::SyncRemote {
                 remote_profile,
                 team_id,
                 source_team_alias: source_team,
-                source_role: Some(match source_role.as_str() {
-                    "owner" => InvitationRole::Owner,
-                    "member" => InvitationRole::Member { visibility },
-                    _ => InvitationRole::Admin,
-                }),
+                source_role: Some(invitation_role(&source_role, member_access)?),
             },
         ),
         InvitationCommand::Preview { scope, invite } => {
@@ -318,17 +313,13 @@ pub fn run(state: &Path, command: InvitationCommand) -> Result<(), Box<dyn std::
             team,
             request,
             role,
-            visibility,
+            member_access,
         } => (
             scope,
             InvitationAction::Approve {
                 team_alias: team,
                 request_id: request,
-                role: match role.as_str() {
-                    "admin" => InvitationRole::Admin,
-                    "owner" => InvitationRole::Owner,
-                    _ => InvitationRole::Member { visibility },
-                },
+                role: invitation_role(&role, member_access)?,
             },
         ),
         InvitationCommand::Reject {
@@ -356,7 +347,7 @@ pub fn run(state: &Path, command: InvitationCommand) -> Result<(), Box<dyn std::
     let response = foks_agent_client::AgentClient::new(state.join("foks-rs.sock")).call(
         Operation::Invitations {
             profile: scope.profile,
-            account_alias: scope.account,
+            account_alias: scope.account_alias,
             action,
             pin,
         },
@@ -367,5 +358,23 @@ pub fn run(state: &Path, command: InvitationCommand) -> Result<(), Box<dyn std::
             Ok(())
         }
         ResponseResult::Error { message, .. } => Err(message.into()),
+    }
+}
+
+fn invitation_role(
+    role: &str,
+    member_access: MemberAccessArgument,
+) -> Result<InvitationRole, Box<dyn std::error::Error>> {
+    match role {
+        "owner" if matches!(member_access, MemberAccessArgument::Standard) => {
+            Ok(InvitationRole::Owner)
+        }
+        "admin" if matches!(member_access, MemberAccessArgument::Standard) => {
+            Ok(InvitationRole::Admin)
+        }
+        "member" => Ok(InvitationRole::Member {
+            visibility: member_access.visibility(),
+        }),
+        _ => Err("--member-access applies only to member roles".into()),
     }
 }

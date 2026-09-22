@@ -1,3 +1,4 @@
+use crate::MemberAccessArgument;
 use clap::Subcommand;
 use foks_agent_proto::{bot::BotAction, KvRole, Operation, ResponseResult, SecretString};
 use std::path::{Path, PathBuf};
@@ -7,7 +8,7 @@ pub struct Scope {
     #[arg(long)]
     profile: String,
     #[arg(long)]
-    account: String,
+    account_alias: String,
 }
 #[derive(clap::Args)]
 pub struct Flow {
@@ -40,8 +41,8 @@ pub enum BotCommand {
         scope: Scope,
         #[arg(long,value_parser=["owner","admin","member"])]
         role: String,
-        #[arg(long, default_value_t = 0)]
-        visibility: i16,
+        #[arg(long, value_enum, default_value_t = MemberAccessArgument::Standard)]
+        member_access: MemberAccessArgument,
         #[arg(long)]
         pin_file: Option<PathBuf>,
     },
@@ -104,14 +105,16 @@ pub fn run(state: &Path, command: BotCommand) -> Result<(), Box<dyn std::error::
         BotCommand::Prepare {
             scope,
             role,
-            visibility,
+            member_access,
             pin_file,
         } => {
             let role = match role.as_str() {
-                "owner" if visibility == 0 => KvRole::Owner,
-                "admin" if visibility == 0 => KvRole::Admin,
-                "member" => KvRole::Member { visibility },
-                _ => return Err("visibility applies only to member roles".into()),
+                "owner" if matches!(member_access, MemberAccessArgument::Standard) => KvRole::Owner,
+                "admin" if matches!(member_access, MemberAccessArgument::Standard) => KvRole::Admin,
+                "member" => KvRole::Member {
+                    visibility: member_access.visibility(),
+                },
+                _ => return Err("--member-access applies only to member roles".into()),
             };
             (
                 scope,
@@ -165,7 +168,7 @@ pub fn run(state: &Path, command: BotCommand) -> Result<(), Box<dyn std::error::
     let response = foks_agent_client::AgentClient::new(state.join("foks-rs.sock")).call(
         Operation::BotAccount {
             profile: scope.profile,
-            account_alias: scope.account,
+            account_alias: scope.account_alias,
             action,
         },
     )?;

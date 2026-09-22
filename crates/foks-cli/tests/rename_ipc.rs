@@ -27,7 +27,7 @@ fn cli(state: &Path, action: &str, account: &str, handle: &str) -> std::process:
             action,
             "--profile",
             "local",
-            "--account",
+            "--account-alias",
             account,
             "--operation",
             handle,
@@ -133,7 +133,7 @@ fn cli_and_resident_agent_submit_and_recover_original_rename() {
             "list",
             "--profile",
             "local",
-            "--account",
+            "--account-alias",
             "work",
         ])
         .output()

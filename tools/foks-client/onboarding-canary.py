@@ -54,7 +54,7 @@ class Canary:
         self.machine("owner")
         self.machine("peer")
         self.machine("recovered")
-        args = ["account", "create", "canary", "owner", "--username",
+        args = ["account", "create", "canary", "--account-alias", "owner", "--username",
                 "canary" + secrets.token_hex(8), "--device-name", "onboarding canary",
                 "--email", email]
         if invite:
@@ -63,20 +63,20 @@ class Canary:
         first = self.secret("first-passphrase", secrets.token_urlsafe(32))
         second = self.secret("second-passphrase", secrets.token_urlsafe(32))
         for command, phrase in (("set", first), ("change", second)):
-            report = self.run("owner", "passphrase", command, "canary", "owner",
+            report = self.run("owner", "passphrase", command, "canary", "--account-alias", "owner",
                              "--passphrase-file", phrase, "--passphrase-confirmation-file", phrase)
             if report.get("verified") is not True:
                 raise RuntimeError("passphrase verification")
-        self.rejected("owner", "passphrase", "verify", "canary", "owner", "--passphrase-file", first)
+        self.rejected("owner", "passphrase", "verify", "canary", "--account-alias", "owner", "--passphrase-file", first)
 
-        offer = self.run("owner", "device", "pair-offer", "canary", "owner")
+        offer = self.run("owner", "device", "pair-offer", "canary", "--account-alias", "owner")
         phrase = self.secret("pairing-phrase", offer["phrase"])
         # Different state roots are essential: the finisher holds its profile lock.
         with tempfile.TemporaryFile() as finish_output:
-            finish = subprocess.Popen(self.argv("owner", "device", "pair-finish", "canary", "owner"),
+            finish = subprocess.Popen(self.argv("owner", "device", "pair-finish", "canary", "--account-alias", "owner"),
                                       stdout=finish_output, stderr=subprocess.DEVNULL)
             try:
-                peer = self.run("peer", "device", "pair-accept", "canary", "peer",
+                peer = self.run("peer", "device", "pair-accept", "canary", "--target-account-alias", "peer",
                                 "--phrase-file", phrase, "--device-name", "canary paired device")
                 if finish.wait(timeout=180):
                     raise RuntimeError("pair finish")
@@ -88,28 +88,28 @@ class Canary:
                     finish.kill()
                     finish.wait()
                 phrase.unlink()
-        if self.run("peer", "account", "sync", "canary", "peer")["username"] != owner["username"]:
+        if self.run("peer", "account", "sync", "canary", "--account-alias", "peer")["username"] != owner["username"]:
             raise RuntimeError("paired account identity")
         backup_phrase = self.root / "backup-phrase"
-        backup = self.run("owner", "recovery", "enroll", "canary", "owner", "backup",
+        backup = self.run("owner", "recovery", "enroll", "canary", "--account-alias", "owner", "backup",
                           "--output", backup_phrase)
-        recovered = self.run("recovered", "recovery", "recover", "canary", "recovered",
+        recovered = self.run("recovered", "recovery", "recover", "canary", "--target-account-alias", "recovered",
                              "--phrase-file", backup_phrase, "--device-name", "canary recovered device")
-        if self.run("recovered", "account", "sync", "canary", "recovered")["username"] != owner["username"]:
+        if self.run("recovered", "account", "sync", "canary", "--account-alias", "recovered")["username"] != owner["username"]:
             raise RuntimeError("recovered account identity")
-        self.run("owner", "recovery", "revoke", "canary", "owner", "backup", backup["backup_id_hex"])
+        self.run("owner", "recovery", "revoke", "canary", "--account-alias", "owner", "backup", backup["backup_id_hex"])
         for device in (peer, recovered):
-            self.run("owner", "device", "revoke", "canary", "owner", device["device_id_hex"])
-        devices = self.run("owner", "device", "list", "canary", "owner")
+            self.run("owner", "device", "revoke", "canary", "--account-alias", "owner", device["device_id_hex"])
+        devices = self.run("owner", "device", "list", "canary", "--account-alias", "owner")
         removed = {peer["device_id_hex"], recovered["device_id_hex"], backup["backup_id_hex"]}
         if any(device["id_hex"] in removed for device in devices):
             raise RuntimeError("revoked key remains active")
-        self.rejected("peer", "account", "sync", "canary", "peer")
-        self.rejected("recovered", "account", "sync", "canary", "recovered")
-        report = self.run("owner", "passphrase", "verify", "canary", "owner", "--passphrase-file", second)
+        self.rejected("peer", "account", "sync", "canary", "--account-alias", "peer")
+        self.rejected("recovered", "account", "sync", "canary", "--account-alias", "recovered")
+        report = self.run("owner", "passphrase", "verify", "canary", "--account-alias", "owner", "--passphrase-file", second)
         if report.get("verified") is not True:
             raise RuntimeError("passphrase verification after revocation")
-        self.run("owner", "account", "sync", "canary", "owner")
+        self.run("owner", "account", "sync", "canary", "--account-alias", "owner")
         return CAPABILITIES
 
 

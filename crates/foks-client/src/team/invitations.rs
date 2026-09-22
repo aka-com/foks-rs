@@ -546,7 +546,8 @@ fn local_user_joiner(row: &foks_proto::RawInboxRow) -> Result<(&EntityId, Role)>
 }
 
 /// Rejects a pre-loaded destination team that is not the team the caller
-/// named, so a hoisted load can never resolve a row against another team.
+/// named, so a load supplied with that team can never resolve a row against
+/// another team.
 pub(crate) fn require_invitation_destination(
     host: &PinnedHost,
     team: &EntityId,

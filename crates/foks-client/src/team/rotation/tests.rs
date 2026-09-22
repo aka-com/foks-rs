@@ -239,7 +239,7 @@ fn local_team_actor_api_covers_software_and_yubi_crash_recovery() {
 }
 
 #[test]
-fn removal_demotion_and_generation_advance_have_exact_key_floods() {
+fn membership_changes_rotate_the_required_role_keys() {
     let roles = [
         Role::member(-0x4000),
         Role::member(0),

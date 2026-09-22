@@ -242,15 +242,18 @@ pub fn load_or_bootstrap(
         .map_or(true, |key| {
             Some(key.generation()) != manifest.generation(KeyPurpose::Recovery)
         });
-    let allow_fenced_recovery = activated && recovery_invalid;
-    if allow_fenced_recovery {
-        database.sso_fence_policy(&host, foks_server_db::SsoProviderFence::KeyUnavailable)?;
+    let allow_blocked_recovery = activated && recovery_invalid;
+    if allow_blocked_recovery {
+        database.sso_block_policy(
+            &host,
+            foks_server_db::SsoProviderBlockReason::KeyUnavailable,
+        )?;
     }
     manifest.validate_existing(
         provider,
         require_genesis_host,
         require_genesis_capability,
-        allow_fenced_recovery,
+        allow_blocked_recovery,
     )?;
     super::rotation::validate_host_key_generations(database, provider)?;
     crate::keys::validate_capability_key_generations(database, provider)?;

@@ -158,11 +158,13 @@ enum AccountCommand {
     Create(AccountCreate),
     Resume {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
     },
     Sync {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
     },
 }
 
@@ -170,18 +172,21 @@ enum AccountCommand {
 enum KvCommand {
     List {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
     },
     Get {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         path: String,
         #[arg(long)]
         output: PathBuf,
     },
     Put {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         path: String,
         #[arg(long)]
         input: PathBuf,
@@ -193,7 +198,8 @@ enum KvCommand {
     },
     Mkdir {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         path: String,
         /// Create intermediate parent directories as needed.
         #[arg(long = "mkdir-p", short = 'p')]
@@ -201,7 +207,8 @@ enum KvCommand {
     },
     Remove {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         path: String,
         #[arg(long)]
         recursive: bool,
@@ -212,7 +219,8 @@ enum KvCommand {
 enum JobCommand {
     ScheduleUserRefresh {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         #[arg(long, default_value_t = 900)]
         interval_seconds: u64,
     },
@@ -226,17 +234,21 @@ enum DeviceCommand {
     /// Revoke exactly one software device and rotate account keys.
     Revoke {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         device_id: String,
     },
     List {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
     },
     ProvisionOwner {
         profile: String,
-        source_alias: String,
-        target_alias: String,
+        #[arg(long)]
+        source_account_alias: String,
+        #[arg(long)]
+        target_account_alias: String,
         #[arg(long)]
         device_name: String,
         #[arg(long, default_value_t = 1)]
@@ -244,23 +256,28 @@ enum DeviceCommand {
     },
     ResumeProvision {
         profile: String,
-        target_alias: String,
+        #[arg(long)]
+        target_account_alias: String,
     },
     PairOffer {
         profile: String,
+        #[arg(long)]
         account_alias: String,
     },
     PairRepublish {
         profile: String,
+        #[arg(long)]
         account_alias: String,
     },
     PairFinish {
         profile: String,
+        #[arg(long)]
         account_alias: String,
     },
     PairAccept {
         profile: String,
-        target_alias: String,
+        #[arg(long)]
+        target_account_alias: String,
         #[arg(long)]
         phrase_file: PathBuf,
         #[arg(long)]
@@ -270,7 +287,8 @@ enum DeviceCommand {
     },
     PairResumeAccept {
         profile: String,
-        target_alias: String,
+        #[arg(long)]
+        target_account_alias: String,
     },
 }
 
@@ -279,12 +297,14 @@ enum RecoveryCommand {
     /// Revoke exactly one locally recorded backup credential.
     Revoke {
         profile: String,
+        #[arg(long)]
         account_alias: String,
         backup_alias: String,
         backup_id: String,
     },
     Enroll {
         profile: String,
+        #[arg(long)]
         account_alias: String,
         backup_alias: String,
         #[arg(long)]
@@ -292,7 +312,8 @@ enum RecoveryCommand {
     },
     Recover {
         profile: String,
-        target_alias: String,
+        #[arg(long)]
+        target_account_alias: String,
         #[arg(long)]
         phrase_file: PathBuf,
         #[arg(long)]
@@ -302,7 +323,8 @@ enum RecoveryCommand {
     },
     Resume {
         profile: String,
-        target_alias: String,
+        #[arg(long)]
+        target_account_alias: String,
         #[arg(long)]
         phrase_file: PathBuf,
         #[arg(long)]
@@ -319,6 +341,7 @@ enum TeamCommand {
     },
     CreateNamed {
         profile: String,
+        #[arg(long)]
         account_alias: String,
         team_alias: String,
         #[arg(long)]
@@ -326,6 +349,7 @@ enum TeamCommand {
     },
     CreateAdhoc {
         profile: String,
+        #[arg(long)]
         account_alias: String,
         team_alias: String,
     },
@@ -347,8 +371,8 @@ enum TeamCommand {
         username: String,
         #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
         role: FederationRoleArgument,
-        #[arg(long, default_value_t = 0)]
-        visibility: i16,
+        #[arg(long, value_enum, default_value_t = MemberAccessArgument::Standard)]
+        member_access: MemberAccessArgument,
     },
     ResumeAddMember {
         profile: String,
@@ -362,8 +386,8 @@ enum TeamCommand {
         username: String,
         #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
         role: FederationRoleArgument,
-        #[arg(long, default_value_t = 0)]
-        visibility: i16,
+        #[arg(long, value_enum, default_value_t = MemberAccessArgument::Standard)]
+        member_access: MemberAccessArgument,
     },
     RemoveMember {
         profile: String,
@@ -382,8 +406,8 @@ enum TeamCommand {
         remote_team_alias: String,
         #[arg(long, value_enum, default_value_t = FederationRoleArgument::Member)]
         role: FederationRoleArgument,
-        #[arg(long, default_value_t = 0)]
-        visibility: i16,
+        #[arg(long, value_enum, default_value_t = MemberAccessArgument::Standard)]
+        member_access: MemberAccessArgument,
     },
     /// Lists protected remote-team bindings for one local team.
     ListRemote {
@@ -395,21 +419,21 @@ enum TeamCommand {
     /// Supply `--local-pin-file` and/or `--remote-pin-file` when an administrator
     /// requires hardware authentication. If the refresh accesses
     /// additional hardware-authenticated profiles, supply
-    /// `--unlock PROFILE=ALIAS=PIN_FILE` for each.
+    /// `--unlock PROFILE=ACCOUNT_ALIAS=PIN_FILE` for each.
     RefreshRemote {
         profile: String,
         team_alias: String,
         #[arg(long, requires = "local_pin_file")]
-        local_yubi_alias: Option<String>,
-        #[arg(long, requires = "local_yubi_alias")]
+        local_yubi_account_alias: Option<String>,
+        #[arg(long, requires = "local_yubi_account_alias")]
         local_pin_file: Option<PathBuf>,
-        #[arg(long, requires = "remote_yubi_alias")]
+        #[arg(long, requires = "remote_yubi_account_alias")]
         remote_profile: Option<String>,
         #[arg(long, requires_all = ["remote_profile", "remote_pin_file"])]
-        remote_yubi_alias: Option<String>,
-        #[arg(long, requires = "remote_yubi_alias")]
+        remote_yubi_account_alias: Option<String>,
+        #[arg(long, requires = "remote_yubi_account_alias")]
         remote_pin_file: Option<PathBuf>,
-        /// Additional PROFILE=ALIAS=PIN_FILE hardware unlock. Repeat for
+        /// Additional PROFILE=ACCOUNT_ALIAS=PIN_FILE hardware unlock. Repeat for
         /// each additional hardware-authenticated profile accessed by the refresh.
         #[arg(long = "unlock")]
         unlocks: Vec<String>,
@@ -423,10 +447,30 @@ enum FederationRoleArgument {
     Owner,
 }
 
+/// Named member key-access policies exposed by the CLI.
+#[derive(Clone, Copy, Default, ValueEnum)]
+pub(crate) enum MemberAccessArgument {
+    /// Access to the restricted member key tier.
+    Restricted,
+    /// Access to the standard member key tier.
+    #[default]
+    Standard,
+}
+
+impl MemberAccessArgument {
+    pub(crate) const fn visibility(self) -> i16 {
+        match self {
+            Self::Restricted => -0x4000,
+            Self::Standard => 0,
+        }
+    }
+}
+
 #[derive(clap::Args)]
 struct AccountCreate {
     profile: String,
-    alias: String,
+    #[arg(long)]
+    account_alias: String,
     #[arg(long)]
     username: String,
     #[arg(long)]
@@ -462,14 +506,16 @@ enum YubiCommand {
     Create(YubiCreate),
     ResumeAccount {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         #[arg(long)]
         pin_file: PathBuf,
     },
     Provision(YubiProvision),
     Sync {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         #[arg(long)]
         pin_file: PathBuf,
         /// Also run federated security responders for teams administrable by
@@ -480,11 +526,13 @@ enum YubiCommand {
     },
     PinStatus {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
     },
     ChangePin {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         #[arg(long)]
         old_pin_file: PathBuf,
         #[arg(long)]
@@ -492,7 +540,8 @@ enum YubiCommand {
     },
     ChangePuk {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         #[arg(long)]
         old_puk_file: PathBuf,
         #[arg(long)]
@@ -500,7 +549,8 @@ enum YubiCommand {
     },
     UnblockPin {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         #[arg(long)]
         puk_file: PathBuf,
         #[arg(long)]
@@ -508,38 +558,46 @@ enum YubiCommand {
     },
     RotateManagementKey {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         #[arg(long)]
         pin_file: PathBuf,
     },
     ResumeManagementKey {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         #[arg(long)]
         pin_file: Option<PathBuf>,
     },
     RecoverManagementKey {
         profile: String,
-        yubi_alias: String,
-        software_alias: String,
+        #[arg(long)]
+        yubi_account_alias: String,
+        #[arg(long)]
+        software_account_alias: String,
     },
     RecoverSubkey {
         profile: String,
-        alias: String,
+        #[arg(long)]
+        account_alias: String,
         #[arg(long)]
         pin_file: PathBuf,
     },
     Revoke {
         profile: String,
-        yubi_alias: String,
-        software_alias: String,
+        #[arg(long)]
+        yubi_account_alias: String,
+        #[arg(long)]
+        software_account_alias: String,
     },
 }
 
 #[derive(clap::Args)]
 struct YubiCreate {
     profile: String,
-    alias: String,
+    #[arg(long)]
+    account_alias: String,
     #[arg(long)]
     username: String,
     #[arg(long)]
@@ -568,8 +626,10 @@ struct YubiCreate {
 #[derive(clap::Args)]
 struct YubiProvision {
     profile: String,
-    source_alias: String,
-    target_alias: String,
+    #[arg(long)]
+    source_account_alias: String,
+    #[arg(long)]
+    target_account_alias: String,
     #[arg(long)]
     device_name: String,
     #[arg(long, default_value_t = 1)]
@@ -602,12 +662,13 @@ struct YubiRetryArguments {
 #[derive(clap::Args)]
 struct PassphraseChange {
     profile: String,
-    alias: String,
+    #[arg(long)]
+    account_alias: String,
     #[arg(long)]
     passphrase_file: PathBuf,
     #[arg(long)]
     passphrase_confirmation_file: PathBuf,
-    /// Private PIN file; when supplied, the alias is treated as Yubi-backed.
+    /// Private PIN file; when supplied, the account alias is treated as Yubi-backed.
     #[arg(long)]
     pin_file: Option<PathBuf>,
 }
@@ -615,10 +676,11 @@ struct PassphraseChange {
 #[derive(clap::Args)]
 struct PassphraseVerify {
     profile: String,
-    alias: String,
+    #[arg(long)]
+    account_alias: String,
     #[arg(long)]
     passphrase_file: PathBuf,
-    /// Private PIN file; when supplied, the alias is treated as Yubi-backed.
+    /// Private PIN file; when supplied, the account alias is treated as Yubi-backed.
     #[arg(long)]
     pin_file: Option<PathBuf>,
 }
@@ -844,7 +906,7 @@ fn account_command(
                     _ => return Err("both --passphrase-file and --passphrase-confirmation-file are required when setting a passphrase".into()),
                 };
                 let report = session.create_account(
-                    &arguments.alias,
+                    &arguments.account_alias,
                     &arguments.username,
                     &arguments.device_name,
                     &arguments.email,
@@ -856,17 +918,26 @@ fn account_command(
                 output(json, &report, "account created and synchronized")
             })
         }
-        AccountCommand::Resume { profile, alias } => {
+        AccountCommand::Resume {
+            profile,
+            account_alias,
+        } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report = session.resume_account(&alias, vault, master)?;
+                let report = session.resume_account(&account_alias, vault, master)?;
                 output(json, &report, "account created")
             })
         }
-        AccountCommand::Sync { profile, alias } => {
+        AccountCommand::Sync {
+            profile,
+            account_alias,
+        } => {
             mcp::ensure_agent(state_dir)?;
             let response = foks_agent_client::AgentClient::new(state_dir.join("foks-rs.sock"))
-                .call(foks_agent_proto::Operation::SyncAccount { profile, alias })?;
+                .call(foks_agent_proto::Operation::SyncAccount {
+                    profile,
+                    alias: account_alias,
+                })?;
             match response.result {
                 foks_agent_proto::ResponseResult::Success { value } => {
                     output(json, &value, "account synchronized")
@@ -894,14 +965,14 @@ fn passphrase_command(
                 )?;
                 let report = match arguments.pin_file.as_deref() {
                     Some(path) => session.set_yubi_passphrase(
-                        &arguments.alias,
+                        &arguments.account_alias,
                         read_pin(path)?,
                         passphrase,
                         &provider,
                         vault,
                         master,
                     )?,
-                    None => session.set_passphrase(&arguments.alias, passphrase, vault)?,
+                    None => session.set_passphrase(&arguments.account_alias, passphrase, vault)?,
                 };
                 output(json, &report, "passphrase configured and verified")
             })
@@ -915,14 +986,19 @@ fn passphrase_command(
                 )?;
                 let report = match arguments.pin_file.as_deref() {
                     Some(path) => session.change_yubi_passphrase(
-                        &arguments.alias,
+                        &arguments.account_alias,
                         read_pin(path)?,
                         passphrase,
                         &provider,
                         vault,
                         master,
                     )?,
-                    None => session.change_passphrase(&arguments.alias, None, passphrase, vault)?,
+                    None => session.change_passphrase(
+                        &arguments.account_alias,
+                        None,
+                        passphrase,
+                        vault,
+                    )?,
                 };
                 output(json, &report, "passphrase changed and verified")
             })
@@ -933,13 +1009,15 @@ fn passphrase_command(
                 let passphrase = Passphrase::new(read_passphrase(&arguments.passphrase_file)?)?;
                 let report = match arguments.pin_file.as_deref() {
                     Some(path) => session.verify_yubi_passphrase(
-                        &arguments.alias,
+                        &arguments.account_alias,
                         read_pin(path)?,
                         passphrase,
                         &provider,
                         vault,
                     )?,
-                    None => session.verify_passphrase(&arguments.alias, passphrase, vault)?,
+                    None => {
+                        session.verify_passphrase(&arguments.account_alias, passphrase, vault)?
+                    }
                 };
                 output(json, &report, "passphrase verified")
             })
@@ -954,10 +1032,13 @@ fn kv_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     match command {
-        KvCommand::List { profile, alias } => {
+        KvCommand::List {
+            profile,
+            account_alias,
+        } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
-                let report = session.list_kv(&alias, vault)?;
+                let report = session.list_kv(&account_alias, vault)?;
                 output(
                     json,
                     &report,
@@ -967,7 +1048,7 @@ fn kv_command(
         }
         KvCommand::Get {
             profile,
-            alias,
+            account_alias,
             path,
             output: destination,
         } => {
@@ -982,7 +1063,7 @@ fn kv_command(
                 }
                 let mut file = options.open(&destination)?;
                 let result = (|| {
-                    let bytes = session.write_kv_file(&alias, &path, vault, &mut file)?;
+                    let bytes = session.write_kv_file(&account_alias, &path, vault, &mut file)?;
                     file.sync_all()?;
                     Ok::<_, Box<dyn std::error::Error>>(bytes)
                 })();
@@ -1007,7 +1088,7 @@ fn kv_command(
         }
         KvCommand::Put {
             profile,
-            alias,
+            account_alias,
             path,
             input,
             overwrite,
@@ -1016,32 +1097,39 @@ fn kv_command(
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let mut file = File::open(input)?;
-                let report = session
-                    .put_kv_file(&alias, &path, &mut file, overwrite, mkdir_p, vault, master)?;
+                let report = session.put_kv_file(
+                    &account_alias,
+                    &path,
+                    &mut file,
+                    overwrite,
+                    mkdir_p,
+                    vault,
+                    master,
+                )?;
                 output(json, &report, "KV file committed and synchronized")
             })
         }
         KvCommand::Mkdir {
             profile,
-            alias,
+            account_alias,
             path,
             mkdir_p,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report = session.mkdir_kv(&alias, &path, mkdir_p, vault, master)?;
+                let report = session.mkdir_kv(&account_alias, &path, mkdir_p, vault, master)?;
                 output(json, &report, "KV directory committed and synchronized")
             })
         }
         KvCommand::Remove {
             profile,
-            alias,
+            account_alias,
             path,
             recursive,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report = session.remove_kv(&alias, &path, recursive, vault, master)?;
+                let report = session.remove_kv(&account_alias, &path, recursive, vault, master)?;
                 output(json, &report, "KV entry removed and synchronized")
             })
         }
@@ -1057,7 +1145,7 @@ fn job_command(
     match command {
         JobCommand::ScheduleUserRefresh {
             profile,
-            alias,
+            account_alias,
             interval_seconds,
         } => {
             let interval_micros = interval_seconds
@@ -1066,7 +1154,8 @@ fn job_command(
             let now = now_microseconds()?;
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
-                let id = session.schedule_user_refresh(&alias, interval_micros, now, vault)?;
+                let id =
+                    session.schedule_user_refresh(&account_alias, interval_micros, now, vault)?;
                 output(
                     json,
                     &serde_json::json!({ "job_id": hex(&id), "first_run_at": now }),
@@ -1123,19 +1212,23 @@ fn device_command(
     match command {
         DeviceCommand::Revoke {
             profile,
-            alias,
+            account_alias,
             device_id,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report = session.remove_software_device(&alias, &device_id, vault, master)?;
+                let report =
+                    session.remove_software_device(&account_alias, &device_id, vault, master)?;
                 output(json, &report, "software device revoked")
             })
         }
-        DeviceCommand::List { profile, alias } => {
+        DeviceCommand::List {
+            profile,
+            account_alias,
+        } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
-                let devices = session.list_devices(&alias, vault)?;
+                let devices = session.list_devices(&account_alias, vault)?;
                 output(
                     json,
                     &devices,
@@ -1145,16 +1238,16 @@ fn device_command(
         }
         DeviceCommand::ProvisionOwner {
             profile,
-            source_alias,
-            target_alias,
+            source_account_alias,
+            target_account_alias,
             device_name,
             serial,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.provision_owner_device(
-                    &source_alias,
-                    &target_alias,
+                    &source_account_alias,
+                    &target_account_alias,
                     &device_name,
                     serial,
                     vault,
@@ -1165,11 +1258,12 @@ fn device_command(
         }
         DeviceCommand::ResumeProvision {
             profile,
-            target_alias,
+            target_account_alias,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report = session.resume_owner_device_provision(&target_alias, vault, master)?;
+                let report =
+                    session.resume_owner_device_provision(&target_account_alias, vault, master)?;
                 output(json, &report, "device linked")
             })
         }
@@ -1205,7 +1299,7 @@ fn device_command(
         }
         DeviceCommand::PairAccept {
             profile,
-            target_alias,
+            target_account_alias,
             phrase_file,
             device_name,
             serial,
@@ -1215,7 +1309,7 @@ fn device_command(
             with_vault(state_dir, &session, |session, vault, _| {
                 let report = session.accept_owner_device_pairing(
                     KexAcceptanceInput {
-                        target_alias,
+                        target_alias: target_account_alias,
                         device_name,
                         serial,
                         phrase: phrase.to_string(),
@@ -1227,12 +1321,12 @@ fn device_command(
         }
         DeviceCommand::PairResumeAccept {
             profile,
-            target_alias,
+            target_account_alias,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
                 let report =
-                    session.resume_owner_device_pairing_acceptance(&target_alias, vault)?;
+                    session.resume_owner_device_pairing_acceptance(&target_account_alias, vault)?;
                 output(json, &report, "interactive pairing acceptance resumed")
             })
         }
@@ -1296,7 +1390,7 @@ fn recovery_command(
         }
         RecoveryCommand::Recover {
             profile,
-            target_alias,
+            target_account_alias,
             phrase_file,
             device_name,
             serial,
@@ -1305,7 +1399,7 @@ fn recovery_command(
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
                 let report = session.recover_owner_account(
-                    &target_alias,
+                    &target_account_alias,
                     phrase,
                     &device_name,
                     serial,
@@ -1316,15 +1410,19 @@ fn recovery_command(
         }
         RecoveryCommand::Resume {
             profile,
-            target_alias,
+            target_account_alias,
             phrase_file,
             device_name,
         } => {
             let phrase = read_phrase(&phrase_file)?;
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
-                let report =
-                    session.resume_owner_recovery(&target_alias, phrase, &device_name, vault)?;
+                let report = session.resume_owner_recovery(
+                    &target_account_alias,
+                    phrase,
+                    &device_name,
+                    vault,
+                )?;
                 output(json, &report, "account recovery reconciled")
             })
         }
@@ -1380,7 +1478,7 @@ fn yubi_command(
                 };
                 let report = session.create_yubi_account(
                     YubiSignupInput {
-                        alias: arguments.alias,
+                        alias: arguments.account_alias,
                         username: arguments.username,
                         device_name: arguments.device_name,
                         email: arguments.email,
@@ -1407,13 +1505,14 @@ fn yubi_command(
         }
         YubiCommand::ResumeAccount {
             profile,
-            alias,
+            account_alias,
             pin_file,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             let pin = read_pin(&pin_file)?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report = session.resume_yubi_account(&alias, pin, &provider, vault, master)?;
+                let report =
+                    session.resume_yubi_account(&account_alias, pin, &provider, vault, master)?;
                 output(json, &report, "Hardware-key account creation reconciled")
             })
         }
@@ -1425,8 +1524,8 @@ fn yubi_command(
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.provision_yubi_device(
                     YubiProvisionInput {
-                        source_alias: arguments.source_alias,
-                        target_alias: arguments.target_alias,
+                        source_alias: arguments.source_account_alias,
+                        target_alias: arguments.target_account_alias,
                         device_name: arguments.device_name,
                         serial: arguments.serial,
                         card,
@@ -1444,7 +1543,7 @@ fn yubi_command(
         }
         YubiCommand::Sync {
             profile,
-            alias,
+            account_alias,
             pin_file,
             with_federation,
         } => {
@@ -1453,7 +1552,7 @@ fn yubi_command(
             if !with_federation {
                 return with_vault(state_dir, &session, |session, vault, master| {
                     let report =
-                        session.sync_yubi_account(&alias, pin, &provider, vault, master)?;
+                        session.sync_yubi_account(&account_alias, pin, &provider, vault, master)?;
                     output(json, &report, "Hardware-key account synchronized")
                 });
             }
@@ -1465,7 +1564,7 @@ fn yubi_command(
                     derive_vault_key(&master),
                 )?;
                 let report = session.sync_yubi_account_with_federation(
-                    &alias,
+                    &account_alias,
                     pin,
                     &provider,
                     &mut AccountVault::new(&mut store),
@@ -1483,16 +1582,19 @@ fn yubi_command(
                 )
             })
         }
-        YubiCommand::PinStatus { profile, alias } => {
+        YubiCommand::PinStatus {
+            profile,
+            account_alias,
+        } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
-                let status = session.yubi_pin_status(&alias, &provider, vault)?;
+                let status = session.yubi_pin_status(&account_alias, &provider, vault)?;
                 output(json, &status, "Hardware key PIN status read")
             })
         }
         YubiCommand::ChangePin {
             profile,
-            alias,
+            account_alias,
             old_pin_file,
             new_pin_file,
         } => {
@@ -1500,13 +1602,14 @@ fn yubi_command(
             let old_pin = read_pin(&old_pin_file)?;
             let new_pin = read_pin(&new_pin_file)?;
             with_vault(state_dir, &session, |session, vault, _| {
-                let status = session.change_yubi_pin(&alias, old_pin, new_pin, &provider, vault)?;
+                let status =
+                    session.change_yubi_pin(&account_alias, old_pin, new_pin, &provider, vault)?;
                 output(json, &status, "Hardware key PIN changed")
             })
         }
         YubiCommand::ChangePuk {
             profile,
-            alias,
+            account_alias,
             old_puk_file,
             new_puk_file,
         } => {
@@ -1514,17 +1617,17 @@ fn yubi_command(
             let old_puk = read_pin(&old_puk_file)?;
             let new_puk = read_pin(&new_puk_file)?;
             with_vault(state_dir, &session, |session, vault, _| {
-                session.change_yubi_puk(&alias, old_puk, new_puk, &provider, vault)?;
+                session.change_yubi_puk(&account_alias, old_puk, new_puk, &provider, vault)?;
                 output(
                     json,
-                    &serde_json::json!({ "alias": alias, "changed": true }),
+                    &serde_json::json!({ "account_alias": account_alias, "changed": true }),
                     "Hardware key PUK changed",
                 )
             })
         }
         YubiCommand::UnblockPin {
             profile,
-            alias,
+            account_alias,
             puk_file,
             new_pin_file,
         } => {
@@ -1532,33 +1635,44 @@ fn yubi_command(
             let puk = read_pin(&puk_file)?;
             let new_pin = read_pin(&new_pin_file)?;
             with_vault(state_dir, &session, |session, vault, _| {
-                let status = session.unblock_yubi_pin(&alias, puk, new_pin, &provider, vault)?;
+                let status =
+                    session.unblock_yubi_pin(&account_alias, puk, new_pin, &provider, vault)?;
                 output(json, &status, "Hardware key PIN unblocked")
             })
         }
         YubiCommand::RotateManagementKey {
             profile,
-            alias,
+            account_alias,
             pin_file,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             let pin = read_pin(&pin_file)?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report =
-                    session.rotate_yubi_management_key(&alias, pin, &provider, vault, master)?;
+                let report = session.rotate_yubi_management_key(
+                    &account_alias,
+                    pin,
+                    &provider,
+                    vault,
+                    master,
+                )?;
                 output(json, &report, "Hardware key management key rotated")
             })
         }
         YubiCommand::ResumeManagementKey {
             profile,
-            alias,
+            account_alias,
             pin_file,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             let pin = pin_file.as_deref().map(read_pin).transpose()?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report =
-                    session.resume_yubi_management_key(&alias, pin, &provider, vault, master)?;
+                let report = session.resume_yubi_management_key(
+                    &account_alias,
+                    pin,
+                    &provider,
+                    vault,
+                    master,
+                )?;
                 output(
                     json,
                     &report,
@@ -1568,37 +1682,45 @@ fn yubi_command(
         }
         YubiCommand::RecoverManagementKey {
             profile,
-            yubi_alias,
-            software_alias,
+            yubi_account_alias,
+            software_account_alias,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, _| {
-                let report =
-                    session.recover_yubi_management_key(&yubi_alias, &software_alias, vault)?;
+                let report = session.recover_yubi_management_key(
+                    &yubi_account_alias,
+                    &software_account_alias,
+                    vault,
+                )?;
                 output(json, &report, "Hardware key management key recovered")
             })
         }
         YubiCommand::RecoverSubkey {
             profile,
-            alias,
+            account_alias,
             pin_file,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             let pin = read_pin(&pin_file)?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report = session.recover_yubi_subkey(&alias, pin, &provider, vault, master)?;
+                let report =
+                    session.recover_yubi_subkey(&account_alias, pin, &provider, vault, master)?;
                 output(json, &report, "Hardware key delegated subkey recovered")
             })
         }
         YubiCommand::Revoke {
             profile,
-            yubi_alias,
-            software_alias,
+            yubi_account_alias,
+            software_account_alias,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
-                let report =
-                    session.revoke_yubi_device(&software_alias, &yubi_alias, vault, master)?;
+                let report = session.revoke_yubi_device(
+                    &software_account_alias,
+                    &yubi_account_alias,
+                    vault,
+                    master,
+                )?;
                 output(
                     json,
                     &report,
@@ -1770,9 +1892,9 @@ fn team_command(
             team_alias,
             username,
             role,
-            visibility,
+            member_access,
         } => {
-            let destination = local_team_destination(role, visibility)?;
+            let destination = local_team_destination(role, member_access)?;
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.add_local_team_member(
@@ -1806,9 +1928,9 @@ fn team_command(
             team_alias,
             username,
             role,
-            visibility,
+            member_access,
         } => {
-            let destination = local_team_destination(role, visibility)?;
+            let destination = local_team_destination(role, member_access)?;
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
                 let report = session.demote_local_team_member(
@@ -1849,9 +1971,9 @@ fn team_command(
             remote_profile,
             remote_team_alias,
             role,
-            visibility,
+            member_access,
         } => {
-            let destination = federation_destination(role, visibility)?;
+            let destination = federation_destination(role, member_access)?;
             let local = ProfileSession::open(&registry, &local_profile)?;
             let remote = ProfileSession::open(&registry, &remote_profile)?;
             let credentials = ClientCredentials::open(state_dir)?;
@@ -1884,10 +2006,10 @@ fn team_command(
         TeamCommand::RefreshRemote {
             profile,
             team_alias,
-            local_yubi_alias,
+            local_yubi_account_alias,
             local_pin_file,
             remote_profile,
-            remote_yubi_alias,
+            remote_yubi_account_alias,
             remote_pin_file,
             unlocks,
         } => refresh_remote_command(
@@ -1897,10 +2019,10 @@ fn team_command(
             RefreshRemoteArguments {
                 profile,
                 team_alias,
-                local_yubi_alias,
+                local_yubi_account_alias,
                 local_pin_file,
                 remote_profile,
-                remote_yubi_alias,
+                remote_yubi_account_alias,
                 remote_pin_file,
                 unlocks,
             },
@@ -1925,32 +2047,32 @@ fn team_command(
 struct RefreshRemoteArguments {
     profile: String,
     team_alias: String,
-    local_yubi_alias: Option<String>,
+    local_yubi_account_alias: Option<String>,
     local_pin_file: Option<PathBuf>,
     remote_profile: Option<String>,
-    remote_yubi_alias: Option<String>,
+    remote_yubi_account_alias: Option<String>,
     remote_pin_file: Option<PathBuf>,
     unlocks: Vec<String>,
 }
 
-/// One `PROFILE=ALIAS=PIN_FILE` unlock, parsed but not yet opened.
+/// One `PROFILE=ACCOUNT_ALIAS=PIN_FILE` unlock, parsed but not yet opened.
 struct RequestedUnlock {
     profile: String,
-    alias: String,
+    account_alias: String,
     pin_file: PathBuf,
 }
 
 fn parse_unlock(value: &str) -> Result<RequestedUnlock, Box<dyn std::error::Error>> {
     let mut fields = value.splitn(3, '=');
     let profile = fields.next().unwrap_or_default();
-    let alias = fields.next().unwrap_or_default();
+    let account_alias = fields.next().unwrap_or_default();
     let pin_file = fields.next().unwrap_or_default();
-    if profile.is_empty() || alias.is_empty() || pin_file.is_empty() {
-        return Err("--unlock must be PROFILE=ALIAS=PIN_FILE".into());
+    if profile.is_empty() || account_alias.is_empty() || pin_file.is_empty() {
+        return Err("--unlock must be PROFILE=ACCOUNT_ALIAS=PIN_FILE".into());
     }
     Ok(RequestedUnlock {
         profile: profile.to_owned(),
-        alias: alias.to_owned(),
+        account_alias: account_alias.to_owned(),
         pin_file: PathBuf::from(pin_file),
     })
 }
@@ -1981,24 +2103,24 @@ fn refresh_remote_command(
     let master = credentials.master_key()?;
 
     let mut requested = Vec::new();
-    if let (Some(alias), Some(pin_file)) = (
-        arguments.local_yubi_alias.as_deref(),
+    if let (Some(account_alias), Some(pin_file)) = (
+        arguments.local_yubi_account_alias.as_deref(),
         arguments.local_pin_file.as_deref(),
     ) {
         requested.push(RequestedUnlock {
             profile: arguments.profile.clone(),
-            alias: alias.to_owned(),
+            account_alias: account_alias.to_owned(),
             pin_file: pin_file.to_owned(),
         });
     }
-    if let (Some(profile), Some(alias), Some(pin_file)) = (
+    if let (Some(profile), Some(account_alias), Some(pin_file)) = (
         arguments.remote_profile.as_deref(),
-        arguments.remote_yubi_alias.as_deref(),
+        arguments.remote_yubi_account_alias.as_deref(),
         arguments.remote_pin_file.as_deref(),
     ) {
         requested.push(RequestedUnlock {
             profile: profile.to_owned(),
-            alias: alias.to_owned(),
+            account_alias: account_alias.to_owned(),
             pin_file: pin_file.to_owned(),
         });
     }
@@ -2020,11 +2142,11 @@ fn refresh_remote_command(
                 &checked.paths().credential_store,
                 derive_vault_key(&master),
             )?;
-            AccountVault::new(&mut store).yubi_account(&unlock.alias)
+            AccountVault::new(&mut store).yubi_account(&unlock.account_alias)
         })?;
         let pin = read_pin(&unlock.pin_file)?;
         let device = provider.open(&loaded.locator, Some(&pin))?;
-        opened.push((unlock.profile, unlock.alias, loaded, device));
+        opened.push((unlock.profile, unlock.account_alias, loaded, device));
     }
     let unlocked_credentials = opened
         .iter()
@@ -2033,11 +2155,13 @@ fn refresh_remote_command(
     let actors = opened
         .iter()
         .zip(&unlocked_credentials)
-        .map(|((profile, alias, _, _), credential)| UnlockedYubiActor {
-            profile,
-            alias,
-            credential,
-        })
+        .map(
+            |((profile, account_alias, _, _), credential)| UnlockedYubiActor {
+                profile,
+                alias: account_alias,
+                credential,
+            },
+        )
         .collect::<Vec<_>>();
 
     credentials.with_checked_session(&session, |session| {
@@ -2063,10 +2187,12 @@ fn refresh_remote_command(
 
 fn federation_destination(
     role: FederationRoleArgument,
-    visibility: i16,
+    member_access: MemberAccessArgument,
 ) -> Result<FederationDestinationRole, Box<dyn std::error::Error>> {
     match role {
-        FederationRoleArgument::Member => Ok(FederationDestinationRole::Member { visibility }),
+        FederationRoleArgument::Member => Ok(FederationDestinationRole::Member {
+            visibility: member_access.visibility(),
+        }),
         FederationRoleArgument::Admin | FederationRoleArgument::Owner => {
             Err("federated teams can only hold member roles".into())
         }
@@ -2075,14 +2201,24 @@ fn federation_destination(
 
 fn local_team_destination(
     role: FederationRoleArgument,
-    visibility: i16,
+    member_access: MemberAccessArgument,
 ) -> Result<TeamMemberRole, Box<dyn std::error::Error>> {
     match role {
-        FederationRoleArgument::Member => Ok(TeamMemberRole::Member { visibility }),
-        FederationRoleArgument::Admin if visibility == 0 => Ok(TeamMemberRole::Admin),
-        FederationRoleArgument::Owner if visibility == 0 => Ok(TeamMemberRole::Owner),
+        FederationRoleArgument::Member => Ok(TeamMemberRole::Member {
+            visibility: member_access.visibility(),
+        }),
+        FederationRoleArgument::Admin
+            if matches!(member_access, MemberAccessArgument::Standard) =>
+        {
+            Ok(TeamMemberRole::Admin)
+        }
+        FederationRoleArgument::Owner
+            if matches!(member_access, MemberAccessArgument::Standard) =>
+        {
+            Ok(TeamMemberRole::Owner)
+        }
         FederationRoleArgument::Admin | FederationRoleArgument::Owner => {
-            Err("--visibility applies only to member roles".into())
+            Err("--member-access applies only to member roles".into())
         }
     }
 }
@@ -2397,6 +2533,7 @@ mod tests {
             "yubi",
             "create",
             "local",
+            "--account-alias",
             "hardware",
             "--username",
             "satoshi",
@@ -2427,6 +2564,7 @@ mod tests {
             "yubi",
             "create",
             "local",
+            "--account-alias",
             "hardware",
             "--username",
             "satoshi",
@@ -2475,7 +2613,7 @@ mod tests {
             "refresh-remote",
             "local",
             "engineering",
-            "--local-yubi-alias",
+            "--local-yubi-account-alias",
             "local-hardware",
             "--local-pin-file",
             "/tmp/local-pin",
@@ -2488,7 +2626,7 @@ mod tests {
         let Command::Team(TeamCommand::RefreshRemote {
             profile,
             team_alias,
-            local_yubi_alias,
+            local_yubi_account_alias,
             unlocks,
             ..
         }) = parsed.command
@@ -2497,7 +2635,7 @@ mod tests {
         };
         assert_eq!(profile, "local");
         assert_eq!(team_alias, "engineering");
-        assert_eq!(local_yubi_alias.as_deref(), Some("local-hardware"));
+        assert_eq!(local_yubi_account_alias.as_deref(), Some("local-hardware"));
         assert_eq!(
             unlocks,
             [
@@ -2509,10 +2647,78 @@ mod tests {
         // An unlock that does not name all three fields is a typo, not a
         // partial instruction to guess at.
         assert!(parse_unlock("third=third-hardware").is_err());
-        assert!(parse_unlock("=alias=/tmp/pin").is_err());
+        assert!(parse_unlock("=account_alias=/tmp/pin").is_err());
         let unlock = parse_unlock("third=third-hardware=/tmp/third-pin").unwrap();
         assert_eq!(unlock.profile, "third");
-        assert_eq!(unlock.alias, "third-hardware");
+        assert_eq!(unlock.account_alias, "third-hardware");
         assert_eq!(unlock.pin_file, std::path::Path::new("/tmp/third-pin"));
+    }
+
+    #[test]
+    fn account_aliases_and_member_access_use_named_cli_options() {
+        let account = Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-cli-test",
+            "account",
+            "sync",
+            "local",
+            "--account-alias",
+            "owner",
+        ])
+        .unwrap();
+        assert!(matches!(
+            account.command,
+            Command::Account(AccountCommand::Sync {
+                profile,
+                account_alias
+            }) if profile == "local" && account_alias == "owner"
+        ));
+        assert!(Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-cli-test",
+            "account",
+            "sync",
+            "local",
+            "owner",
+        ])
+        .is_err());
+
+        let team = Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-cli-test",
+            "team",
+            "add-member",
+            "local",
+            "engineering",
+            "alice",
+            "--member-access",
+            "restricted",
+        ])
+        .unwrap();
+        assert!(matches!(
+            team.command,
+            Command::Team(TeamCommand::AddMember {
+                member_access: MemberAccessArgument::Restricted,
+                ..
+            })
+        ));
+        assert!(Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-cli-test",
+            "team",
+            "add-member",
+            "local",
+            "engineering",
+            "alice",
+            "--visibility",
+            "0",
+        ])
+        .is_err());
+        assert_eq!(MemberAccessArgument::Restricted.visibility(), -0x4000);
+        assert_eq!(MemberAccessArgument::Standard.visibility(), 0);
     }
 }

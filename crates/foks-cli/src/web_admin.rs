@@ -9,7 +9,7 @@ pub struct Scope {
     #[arg(long)]
     profile: String,
     #[arg(long)]
-    account: String,
+    account_alias: String,
 }
 #[derive(Subcommand)]
 pub enum AdminCommand {
@@ -52,7 +52,7 @@ pub fn run(state: &Path, command: AdminCommand) -> Result<(), Box<dyn std::error
     let response = foks_agent_client::AgentClient::new(state.join("foks-rs.sock")).call(
         Operation::WebAdmin {
             profile: scope.profile.clone(),
-            account_alias: scope.account.clone(),
+            account_alias: scope.account_alias.clone(),
             action,
         },
     )?;
@@ -61,7 +61,7 @@ pub fn run(state: &Path, command: AdminCommand) -> Result<(), Box<dyn std::error
         ResponseResult::Success { value } => {
             if checking {
                 let result: AdminNavigation = serde_json::from_value(value)?;
-                if result.profile != scope.profile || result.account_alias != scope.account {
+                if result.profile != scope.profile || result.account_alias != scope.account_alias {
                     return Err("admin handoff changed account".into());
                 }
             }

@@ -11,7 +11,7 @@ impl Database {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (_, _, stamp) = credential(&tx, v, now)?;
+        let (_, _, authorization_binding) = credential(&tx, v, now)?;
         cleanup(&tx, now)?;
         capacity(&tx, "web_login_tickets", &v.uid, 3, 1024)?;
         let expires = now
@@ -23,7 +23,8 @@ impl Database {
             .elapsed_us
             .checked_add(expires - now.utc_us)
             .ok_or(Error::IntegerRange)?;
-        let (hash_stamp, epoch, generation) = stamp_columns(&stamp);
+        let (config_hash, epoch, generation) =
+            authorization_binding_columns(&authorization_binding);
         tx.execute(
             "INSERT INTO web_login_tickets VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,0)",
             params![
@@ -34,7 +35,7 @@ impl Database {
                 v.credential,
                 sql_integer(v.certificate_expires_at_us)?,
                 now.epoch,
-                hash_stamp,
+                config_hash,
                 epoch,
                 generation,
                 sql_integer(now.utc_us)?,
@@ -142,9 +143,10 @@ impl Database {
             .elapsed_us
             .checked_add(expires - now.utc_us)
             .ok_or(Error::IntegerRange)?;
-        let (hash_stamp, epoch, generation) = stamp_columns(&a.stamp);
+        let (config_hash, epoch, generation) =
+            authorization_binding_columns(&a.authorization_binding);
         let v = &ctx.credential;
-        tx.execute("INSERT INTO web_admin_sessions VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,?14)",params![session,id,v.host,v.uid,v.credential,sql_integer(v.certificate_expires_at_us)?,now.epoch,hash_stamp,epoch,generation,sql_integer(now.utc_us)?,sql_integer(expires)?,sql_integer(deadline)?,session_csrf])?;
+        tx.execute("INSERT INTO web_admin_sessions VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,?14)",params![session,id,v.host,v.uid,v.credential,sql_integer(v.certificate_expires_at_us)?,now.epoch,config_hash,epoch,generation,sql_integer(now.utc_us)?,sql_integer(expires)?,sql_integer(deadline)?,session_csrf])?;
         audit(
             &tx,
             &v.host,

@@ -486,10 +486,10 @@ fn inbox_count_reports_the_inbox_size_without_expanding_or_storing_rows() {
 }
 
 #[test]
-fn a_hoisted_destination_team_must_be_the_team_the_row_names() {
+fn a_preloaded_destination_team_must_be_the_team_the_row_names() {
     let f = Fixture::start();
-    f.run(|s, v, k| s.create_account("owner", "hoistowner", "laptop", "", "", None, v, k));
-    f.run(|s, v, k| s.create_account("joiner", "hoistjoiner", "laptop", "", "", None, v, k));
+    f.run(|s, v, k| s.create_account("owner", "preloadowner", "laptop", "", "", None, v, k));
+    f.run(|s, v, k| s.create_account("joiner", "preloadjoiner", "laptop", "", "", None, v, k));
     f.run(|s, v, k| s.create_named_team("owner", "project", "project", v, k));
     f.run(|s, v, k| s.create_named_team("owner", "other", "other", v, k));
     let prepared = action(
@@ -552,9 +552,9 @@ fn a_hoisted_destination_team_must_be_the_team_the_row_names() {
                 "invitation destination team does not match the loaded team"
             ))
         ));
-        // Loaded correctly, the hoisted loader resolves the row exactly as
+        // Loaded correctly, the loader supplied with the team resolves the row exactly as
         // the per-row loader does.
-        let hoisted = s.client.load_local_invitation_joiner_with_team(
+        let loaded_with_team = s.client.load_local_invitation_joiner_with_team(
             &host,
             credential,
             &project,
@@ -564,8 +564,8 @@ fn a_hoisted_destination_team_must_be_the_team_the_row_names() {
         let per_row = s
             .client
             .load_local_invitation_joiner(&host, credential, &project, &rows[0])?;
-        assert_eq!(hoisted.uid(), per_row.uid());
-        assert_eq!(hoisted.username_utf8(), per_row.username_utf8());
+        assert_eq!(loaded_with_team.uid(), per_row.uid());
+        assert_eq!(loaded_with_team.username_utf8(), per_row.username_utf8());
         Ok(())
     });
 }

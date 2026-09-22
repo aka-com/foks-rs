@@ -174,7 +174,7 @@ impl Database {
         tx.commit()?;
         Ok(())
     }
-    /// Startup fences exchanges interrupted by a process exit. No authorization code replay.
+    /// Startup blocks exchanges interrupted by a process exit. No authorization code replay.
     pub fn sso_abandon_exchanges(&mut self, host: &[u8; 33]) -> Result<usize> {
         // Preserve authenticated bytes and set an independent fail-closed interruption flag.
         Ok(self.connection.execute(
@@ -194,7 +194,7 @@ pub(crate) fn policy_matches(
     hash: &[u8; 32],
 ) -> Result<()> {
     let valid: bool = c.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sso_policy WHERE host=?1 AND config_hash=?2 AND fence IS NULL)",
+        "SELECT EXISTS(SELECT 1 FROM sso_policy WHERE host=?1 AND config_hash=?2 AND blocked_reason IS NULL)",
         params![host, hash],
         |r| r.get(0),
     )?;

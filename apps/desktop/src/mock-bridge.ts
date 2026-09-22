@@ -1032,7 +1032,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
             ? {
                 state: 'linked',
                 rolloutMode: 1,
-                providerFence: 0,
+                providerBlockedReason: 0,
                 issuer: 'https://identity.example',
                 authorizationEpoch: 1,
                 authorizationGeneration: 1,

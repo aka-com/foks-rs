@@ -176,10 +176,18 @@ fn a_whole_catalog_read_lists_profiles_once_and_carries_local_metadata() {
             .filter(|call| matches!(call, Operation::ListProfiles))
             .count(),
         1,
-        "the hoisted listing is the only one the read issues"
+        "the preloaded listing is the only one the read issues"
     );
     let dto = crate::commands::vault::catalog_dto(&snapshot, 7, Some(&profiles)).unwrap();
     assert_eq!(dto.generation, 7);
+    let encoded = serde_json::to_value(&dto).unwrap();
+    assert_eq!(
+        encoded["localMetadata"]["profiles"][0]["configuredEndpoint"],
+        "work.example"
+    );
+    assert!(encoded["localMetadata"]["profiles"][0]
+        .get("configuredProbe")
+        .is_none());
     let metadata = dto.local_metadata.expect("the read attaches its metadata");
     // The metadata is built from the registry listing, so the profile whose
     // read failed is still a configured server the renderer can draw.
@@ -211,7 +219,7 @@ fn a_store_only_read_attaches_no_local_metadata() {
         foks_desktop::load_stores_cancellable(transport.clone(), Default::default()).unwrap();
     let dto = crate::commands::vault::catalog_dto(&snapshot, 3, None).unwrap();
     assert!(dto.local_metadata.is_none());
-    // The walk still lists the profiles for itself; hoisting the listing for
+    // The walk still lists the profiles for itself; preloading the listing for
     // an item read did not add a second one here.
     assert_eq!(
         transport

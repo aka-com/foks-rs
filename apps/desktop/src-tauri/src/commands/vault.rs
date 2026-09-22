@@ -131,7 +131,7 @@ pub struct CatalogLocalMetadataDto {
 pub struct CatalogProfileDto {
     pub profile: String,
     pub label: Option<String>,
-    pub configured_probe: String,
+    pub configured_endpoint: String,
     pub status: Option<super::servers::ServerStatusSnapshotDto>,
     pub error: Option<AgentError>,
 }
@@ -896,7 +896,7 @@ pub(super) fn catalog_local_metadata(
             CatalogProfileDto {
                 profile: profile.name.clone(),
                 label: profile.label.clone(),
-                configured_probe: profile.probe.clone(),
+                configured_endpoint: profile.probe.clone(),
                 status,
                 error,
             }

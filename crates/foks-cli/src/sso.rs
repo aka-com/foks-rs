@@ -73,7 +73,7 @@ pub struct Scope {
     #[arg(long)]
     profile: String,
     #[arg(long)]
-    account: String,
+    account_alias: String,
 }
 #[derive(clap::Args)]
 pub struct Flow {
@@ -202,7 +202,7 @@ pub fn run(state: &Path, command: SsoCommand) -> Result<(), Box<dyn std::error::
     super::mcp::ensure_agent(state)?;
     let response = AgentClient::new(state.join("foks-rs.sock")).call(Operation::Sso {
         profile: scope.profile,
-        account_alias: scope.account,
+        account_alias: scope.account_alias,
         action,
     })?;
     match response.result {

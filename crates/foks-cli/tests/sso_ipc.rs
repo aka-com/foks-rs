@@ -26,7 +26,7 @@ fn cli(state: &Path, action: &str, account: &str, handle: &str) -> std::process:
             action,
             "--profile",
             "local",
-            "--account",
+            "--account-alias",
             account,
             "--operation",
             handle,

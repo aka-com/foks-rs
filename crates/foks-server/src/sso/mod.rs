@@ -63,9 +63,9 @@ impl SsoService {
                 || existing.mode != config.rollout_mode.into()
             {
                 writer.call(move |db| {
-                    db.sso_fence_policy(
+                    db.sso_block_policy(
                         &host,
-                        foks_server_db::SsoProviderFence::ConfigurationMismatch,
+                        foks_server_db::SsoProviderBlockReason::ConfigurationMismatch,
                     )?;
                     Ok(())
                 })?;
@@ -77,7 +77,10 @@ impl SsoService {
         let key_result = keys.load_existing(crate::keys::KeyPurpose::Recovery);
         if key_result.is_err() && existing.is_some() {
             writer.call(move |db| {
-                db.sso_fence_policy(&host, foks_server_db::SsoProviderFence::KeyUnavailable)?;
+                db.sso_block_policy(
+                    &host,
+                    foks_server_db::SsoProviderBlockReason::KeyUnavailable,
+                )?;
                 Ok(())
             })?;
         } else {
@@ -91,9 +94,9 @@ impl SsoService {
             Ok(_) => {
                 if existing.is_some() {
                     writer.call(move |db| {
-                        db.sso_fence_policy(
+                        db.sso_block_policy(
                             &host,
-                            foks_server_db::SsoProviderFence::ConfigurationMismatch,
+                            foks_server_db::SsoProviderBlockReason::ConfigurationMismatch,
                         )?;
                         Ok(())
                     })?;

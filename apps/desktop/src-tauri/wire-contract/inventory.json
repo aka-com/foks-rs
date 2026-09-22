@@ -190,13 +190,11 @@
   },
   "partialCoverage": {
     "application": [
-      "AppInfo.computerName and absent optional fields",
+      "AppInfo absent optional fields",
       "Lifecycle cases cover variants, not all values, kind/phase cross-products, temporal generation/revision ordering, native state transitions, CommandError codes/details, or every operation/disposition combination.",
       "WindowStateEvent and DropHoverEvent lack shared native serialization fixtures; their production payload constructors are private. Unknown extension fields remain tolerated except contradictory fields belonging to another known lifecycle variant."
     ],
-    "vault": [
-      "CatalogDto.localMetadata, fullItemReads, nonempty storeReads, failures, blockedProfiles, team stores, absent generation, node-kind and role variants"
-    ],
+    "vault": ["CatalogDto absent generation, node-kind and role variants"],
     "groups": [
       "Party and FederationEntry variants, per-detail failures, inactive/adhoc discovered groups"
     ],

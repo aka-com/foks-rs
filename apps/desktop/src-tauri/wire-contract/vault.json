@@ -3,7 +3,7 @@
   "teamItemCreateAccess": { "readRole": "Member:0", "writeRole": "Admin" },
   "cancelledDownload": { "saved": false },
   "catalog": {
-    "profiles": ["foks.example"],
+    "profiles": ["foks.example", "blocked.example"],
     "stores": [
       {
         "id": "opaque-store-ref",
@@ -11,6 +11,19 @@
         "name": "Personal",
         "server": "foks.example",
         "account": "personal"
+      },
+      {
+        "id": "opaque-team-ref",
+        "kind": "team",
+        "name": "Engineering",
+        "server": "foks.example",
+        "account": "personal",
+        "alias": "engineering",
+        "active": true,
+        "team_kind": "named",
+        "team_id_hex": "030303030303030303030303030303030303030303030303030303030303030303",
+        "creation_phase": "complete",
+        "chain_seqno": 11
       }
     ],
     "knownStores": [
@@ -20,6 +33,19 @@
         "name": "Personal",
         "server": "foks.example",
         "account": "personal"
+      },
+      {
+        "id": "opaque-team-ref",
+        "kind": "team",
+        "name": "Engineering",
+        "server": "foks.example",
+        "account": "personal",
+        "alias": "engineering",
+        "active": true,
+        "team_kind": "named",
+        "team_id_hex": "030303030303030303030303030303030303030303030303030303030303030303",
+        "creation_phase": "complete",
+        "chain_seqno": 11
       }
     ],
     "inventory": [
@@ -29,7 +55,11 @@
         "teamsComplete": true
       }
     ],
-    "storeReads": [],
+    "storeReads": [
+      { "store": "opaque-store-ref", "state": "complete" },
+      { "store": "opaque-team-ref", "state": "failed" }
+    ],
+    "fullItemReads": ["opaque-store-ref"],
     "items": [
       {
         "store": "opaque-store-ref",
@@ -41,8 +71,72 @@
         "write": { "role": "Admin" }
       }
     ],
-    "failures": [],
-    "blockedProfiles": [],
+    "failures": [
+      {
+        "scope": "profile",
+        "profile": "blocked.example",
+        "source": "server-status",
+        "error": {
+          "code": "unavailable",
+          "message": "Profile unavailable.",
+          "retryable": true,
+          "ambiguous": false,
+          "fatal": false
+        }
+      },
+      {
+        "scope": "store",
+        "profile": "foks.example",
+        "store": "opaque-team-ref",
+        "error": {
+          "code": "unavailable",
+          "message": "Store unavailable.",
+          "retryable": true,
+          "ambiguous": false,
+          "fatal": false
+        }
+      }
+    ],
+    "blockedProfiles": ["blocked.example"],
+    "localMetadata": {
+      "accounts": [
+        {
+          "local_alias": "Personal",
+          "store": "opaque-account-ref",
+          "profile": "foks.example",
+          "alias": "personal",
+          "username": "vitalik"
+        }
+      ],
+      "profiles": [
+        {
+          "profile": "foks.example",
+          "label": "Primary",
+          "configuredEndpoint": "foks.example",
+          "status": {
+            "profile": "foks.example",
+            "configuredEndpoint": "foks.example",
+            "host": null,
+            "compatibility": { "status": "not-required" },
+            "chatSupported": null
+          },
+          "error": null
+        },
+        {
+          "profile": "blocked.example",
+          "label": null,
+          "configuredEndpoint": "blocked.example:4430",
+          "status": null,
+          "error": {
+            "code": "unavailable",
+            "message": "Profile unavailable.",
+            "retryable": true,
+            "ambiguous": false,
+            "fatal": false
+          }
+        }
+      ]
+    },
     "generation": 7
   },
   "readItem": {

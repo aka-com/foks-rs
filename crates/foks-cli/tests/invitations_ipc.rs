@@ -27,7 +27,7 @@ fn cli(state: &Path, action: &str, account: &str, handle: &str) -> std::process:
             action,
             "--profile",
             "local",
-            "--account",
+            "--account-alias",
             account,
             handle,
         ],
@@ -150,7 +150,7 @@ fn cli_and_resident_agent_publish_and_recover_original_invitation() {
             "list",
             "--profile",
             "local",
-            "--account",
+            "--account-alias",
             "work",
         ])
         .output()

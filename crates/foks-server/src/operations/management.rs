@@ -451,8 +451,8 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
         for (name, value) in [
             ("foks_oidc_rollout_mode", s.policy.mode as u64 + 1),
             (
-                "foks_oidc_provider_fenced",
-                u64::from(s.policy.fence.is_some()),
+                "foks_oidc_provider_blocked",
+                u64::from(s.policy.blocked_reason.is_some()),
             ),
             (
                 "foks_oidc_authorization_epoch",

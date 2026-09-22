@@ -950,7 +950,7 @@ pub(crate) fn migration_two_accounts_owner_proofs_late_link_and_erased_token_rec
         .unwrap();
     assert_eq!(status.committed_receipt, Some(commitment));
     assert!(!status.access_available);
-    assert_ne!(status.provider_fence, 0);
+    assert_ne!(status.provider_blocked_reason, 0);
     assert_eq!(
         environment
             .read_database()
@@ -989,7 +989,7 @@ fn activated_host_with_missing_recovery_key_keeps_owner_status_without_regenerat
         )
         .unwrap();
     assert_eq!(status.account_state, foks_proto::SsoAccountState::Linked);
-    assert_eq!(status.provider_fence, 3);
+    assert_eq!(status.provider_blocked_reason, 3);
     assert!(!status.access_available);
     assert!(client.foks().ping(&host, &created.credential).is_err());
     assert!(!key.exists());

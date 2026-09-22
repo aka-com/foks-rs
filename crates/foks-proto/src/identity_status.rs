@@ -149,8 +149,8 @@ pub struct IdentityStatus {
     pub rollout_id: Option<[u8; 16]>,
     /// 0 = no policy, 1 = migration, 2 = enforced.
     pub rollout_mode: u8,
-    /// 0 = enabled, 1..=4 = durable provider fence reason.
-    pub provider_fence: u8,
+    /// 0 = enabled, 1..=4 = durable provider block reason.
+    pub provider_blocked_reason: u8,
     pub issuer: String,
     pub authorization_epoch: u64,
     pub authorization_generation: u64,
@@ -166,7 +166,7 @@ impl IdentityStatus {
             Value::Unsigned(self.account_state as u64),
             Value::Binary(self.rollout_id.map_or_else(Vec::new, |v| v.to_vec())),
             Value::Unsigned(self.rollout_mode as u64),
-            Value::Unsigned(self.provider_fence as u64),
+            Value::Unsigned(self.provider_blocked_reason as u64),
             Value::Text(self.issuer.as_bytes().to_vec()),
             Value::Unsigned(self.authorization_epoch),
             Value::Unsigned(self.authorization_generation),
@@ -194,7 +194,7 @@ impl IdentityStatus {
                 Some(fixed_blob(&f[3], "rollout ID")?)
             },
             rollout_mode: unsigned(&f[4])? as u8,
-            provider_fence: unsigned(&f[5])? as u8,
+            provider_blocked_reason: unsigned(&f[5])? as u8,
             issuer: text(&f[6])?,
             authorization_epoch: unsigned(&f[7])?,
             authorization_generation: unsigned(&f[8])?,
@@ -214,7 +214,7 @@ impl IdentityStatus {
 pub struct SsoAccountStatusView {
     pub state: SsoAccountState,
     pub rollout_mode: u8,
-    pub provider_fence: u8,
+    pub provider_blocked_reason: u8,
     pub issuer: String,
     pub authorization_epoch: u64,
     pub authorization_generation: u64,
@@ -224,7 +224,7 @@ impl From<&IdentityStatus> for SsoAccountStatusView {
         Self {
             state: s.account_state,
             rollout_mode: s.rollout_mode,
-            provider_fence: s.provider_fence,
+            provider_blocked_reason: s.provider_blocked_reason,
             issuer: s.issuer.clone(),
             authorization_epoch: s.authorization_epoch,
             authorization_generation: s.authorization_generation,

@@ -16,7 +16,7 @@ fn row(id: u8) -> SsoSession {
     }
 }
 #[test]
-fn code_exchange_claims_are_single_owner_durable_and_config_fenced() {
+fn code_exchange_claims_are_single_owner_durable_and_config_blocked() {
     let mut fixture = common::TestDatabase::new();
     let db = &mut fixture.database;
     db.sso_activate(
@@ -195,8 +195,10 @@ fn activation_snapshots_existing_accounts_and_enforcement_is_counted_cas() {
 }
 
 #[test]
-fn fence_is_durable_idempotent_and_reenable_never_resurrects_old_sessions() {
-    use foks_server_db::{SsoPolicyTransition as T, SsoProviderFence as F, SsoRolloutMode as M};
+fn block_reason_is_durable_idempotent_and_reenable_never_resurrects_old_sessions() {
+    use foks_server_db::{
+        SsoPolicyTransition as T, SsoProviderBlockReason as F, SsoRolloutMode as M,
+    };
     let mut fixture = common::TestDatabase::new();
     let db = &mut fixture.database;
     let p = db
@@ -210,13 +212,13 @@ fn fence_is_durable_idempotent_and_reenable_never_resurrects_old_sessions() {
         .unwrap();
     let r = row(1);
     db.sso_insert_session(&r, 100).unwrap();
-    db.sso_fence_policy(&p.host, F::Operator).unwrap();
-    let fenced = db.sso_policy(&p.host).unwrap().unwrap();
-    db.sso_fence_policy(&p.host, F::Operator).unwrap();
-    assert_eq!(db.sso_policy(&p.host).unwrap().unwrap(), fenced);
-    assert_eq!(fenced.authorization_epoch, p.authorization_epoch + 1);
+    db.sso_block_policy(&p.host, F::Operator).unwrap();
+    let blocked = db.sso_policy(&p.host).unwrap().unwrap();
+    db.sso_block_policy(&p.host, F::Operator).unwrap();
+    assert_eq!(db.sso_policy(&p.host).unwrap().unwrap(), blocked);
+    assert_eq!(blocked.authorization_epoch, p.authorization_epoch + 1);
     assert!(db.sso_transition_policy(&p, &T::Reenable).is_err());
-    let enabled = db.sso_transition_policy(&fenced, &T::Reenable).unwrap();
+    let enabled = db.sso_transition_policy(&blocked, &T::Reenable).unwrap();
     assert_eq!(enabled.authorization_epoch, p.authorization_epoch + 2);
     assert_eq!(enabled.mode, p.mode);
     assert!(db
@@ -293,7 +295,7 @@ fn first_link_is_create_only_atomic_and_available_after_enforcement() {
             M::Migration,
         )
         .unwrap();
-    assert!(db.sso_authorization_stamp(&[1; 33], 100).is_err());
+    assert!(db.sso_authorization_binding(&[1; 33], 100).is_err());
     let flow = ready_login(db, 1);
     let competing = ready_login(db, 2);
     db.sso_transition_policy(
@@ -320,15 +322,15 @@ fn first_link_is_create_only_atomic_and_available_after_enforcement() {
         D::LinkedActive
     );
     assert_eq!(
-        db.sso_authorization_stamp(&[1; 33], 104).unwrap(),
-        foks_server_db::SsoAuthorizationStamp::Linked {
+        db.sso_authorization_binding(&[1; 33], 104).unwrap(),
+        foks_server_db::AuthorizationBinding::Linked {
             host: [1; 33],
             config_hash: [2; 32],
             policy_epoch: 1,
             account_generation: 1
         }
     );
-    assert!(db.sso_authorization_stamp(&[1; 33], 500).is_err());
+    assert!(db.sso_authorization_binding(&[1; 33], 500).is_err());
     assert_eq!(db.sso_access_decision(&[1; 33], 500).unwrap(), D::Denied);
     assert_eq!(
         db.sso_session(&[1; 33], &[2; 32]).unwrap().unwrap().state,
@@ -435,7 +437,7 @@ fn receipt_capacity_is_committed_only_and_exact_repeat_succeeds_when_full() {
 }
 
 #[test]
-fn identity_proof_is_one_use_host_bound_and_survives_provider_fencing() {
+fn identity_proof_is_one_use_host_bound_and_survives_provider_blocking() {
     let mut fixture = common::TestDatabase::new();
     fixture.reserve(1_000_000);
     fixture.commit(None).unwrap();
@@ -473,7 +475,7 @@ fn identity_proof_is_one_use_host_bound_and_survives_provider_fencing() {
         foks_proto::SsoAccountState::MigrationEligible
     );
     assert!(!status.access_available);
-    assert_ne!(status.provider_fence, 0);
+    assert_ne!(status.provider_blocked_reason, 0);
     assert!(db.sso_prove_identity(&[2; 33], &proof, 102).is_err());
     let ch = db
         .sso_issue_identity_challenge(&claim, [2; 32], [1; 32], 100)
@@ -518,12 +520,12 @@ fn identity_challenge_quota_depends_on_source_not_claimed_account() {
 }
 
 #[test]
-fn browser_stamp_never_treats_migration_eligibility_as_linked_access() {
+fn web_session_authorization_binding_never_treats_migration_eligibility_as_linked_access() {
     let mut fixture = common::TestDatabase::new();
     let db = &mut fixture.database;
     assert_eq!(
-        db.sso_authorization_stamp(&[2; 33], 100).unwrap(),
-        foks_server_db::SsoAuthorizationStamp::Unconfigured
+        db.sso_authorization_binding(&[2; 33], 100).unwrap(),
+        foks_server_db::AuthorizationBinding::Unconfigured
     );
     db.sso_activate(
         &[1; 33],
@@ -533,5 +535,5 @@ fn browser_stamp_never_treats_migration_eligibility_as_linked_access() {
         foks_server_db::SsoRolloutMode::Migration,
     )
     .unwrap();
-    assert!(db.sso_authorization_stamp(&[2; 33], 100).is_err());
+    assert!(db.sso_authorization_binding(&[2; 33], 100).is_err());
 }

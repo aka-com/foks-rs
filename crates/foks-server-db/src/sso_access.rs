@@ -63,7 +63,7 @@ impl Database {
     }
     pub fn sso_disable_policy(&mut self) -> Result<()> {
         self.connection
-            .execute("UPDATE sso_policy SET fence=1,revision=revision+1,authorization_epoch=authorization_epoch+1 WHERE fence IS NULL OR fence!=1", [])?;
+            .execute("UPDATE sso_policy SET blocked_reason=1,revision=revision+1,authorization_epoch=authorization_epoch+1 WHERE blocked_reason IS NULL OR blocked_reason!=1", [])?;
         Ok(())
     }
     pub fn sso_login(&mut self, binding: &SsoAccountBinding, now_ms: u64) -> Result<()> {

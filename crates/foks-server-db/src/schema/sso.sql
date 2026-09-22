@@ -5,7 +5,7 @@ CREATE TABLE sso_policy (
     rollout_id BLOB NOT NULL CHECK(length(rollout_id)=16),
     issuer TEXT NOT NULL CHECK(length(issuer) BETWEEN 1 AND 4096),
     mode INTEGER NOT NULL CHECK(mode IN (0,1)),
-    fence INTEGER CHECK(fence BETWEEN 1 AND 4),
+    blocked_reason INTEGER CHECK(blocked_reason BETWEEN 1 AND 4),
     revision INTEGER NOT NULL CHECK(revision>0),
     authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch>0),
     UNIQUE(host,issuer)

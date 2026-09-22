@@ -27,7 +27,7 @@ fn bot(state: &Path, action: &str, alias: &str, args: &[&str]) -> std::process::
         action,
         "--profile",
         "local",
-        "--account",
+        "--account-alias",
         alias,
     ];
     all.extend(args);
@@ -149,7 +149,10 @@ fn bot_secrets_cross_real_agent_only_through_private_files_and_live_sessions() {
         "bot",
         &["--input", path.to_str().unwrap()],
     ));
-    success(cli(&state, &["account", "sync", "local", "bot"]));
+    success(cli(
+        &state,
+        &["account", "sync", "local", "--account-alias", "bot"],
+    ));
     let binding = client
         .call(foks_agent_proto::Operation::BindDataAccount {
             profile: "local".into(),
@@ -180,9 +183,12 @@ fn bot_secrets_cross_real_agent_only_through_private_files_and_live_sessions() {
     }
 
     success(bot(&state, "unload", "bot", &[]));
-    assert!(!cli(&state, &["account", "sync", "local", "bot"])
-        .status
-        .success());
+    assert!(!cli(
+        &state,
+        &["account", "sync", "local", "--account-alias", "bot"]
+    )
+    .status
+    .success());
     success(bot(
         &state,
         "load",
@@ -207,9 +213,12 @@ fn bot_secrets_cross_real_agent_only_through_private_files_and_live_sessions() {
     }
     let list = success(cli(&state, &["account", "list", "local"]));
     assert!(list.to_string().contains("bot"));
-    assert!(!cli(&state, &["account", "sync", "local", "bot"])
-        .status
-        .success());
+    assert!(!cli(
+        &state,
+        &["account", "sync", "local", "--account-alias", "bot"]
+    )
+    .status
+    .success());
     success(bot(
         &state,
         "load",
@@ -219,13 +228,19 @@ fn bot_secrets_cross_real_agent_only_through_private_files_and_live_sessions() {
     let target = start["device_id"].as_str().unwrap();
     let revoked = success(bot(&state, "revoke", "work", &["--device-id", target]));
     assert_eq!(revoked["currently_active"], false);
-    assert!(!cli(&state, &["account", "sync", "local", "bot"])
-        .status
-        .success());
+    assert!(!cli(
+        &state,
+        &["account", "sync", "local", "--account-alias", "bot"]
+    )
+    .status
+    .success());
     assert!(
         !bot(&state, "load", "bot", &["--input", path.to_str().unwrap()])
             .status
             .success()
     );
-    success(cli(&state, &["account", "sync", "local", "work"]));
+    success(cli(
+        &state,
+        &["account", "sync", "local", "--account-alias", "work"],
+    ));
 }

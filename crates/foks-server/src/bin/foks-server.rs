@@ -209,7 +209,7 @@ fn oidc_command(command: OidcCommand) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 fn print_oidc_policy(p: &foks_server_db::SsoPolicy) {
-    println!("host={} rollout_id={} provider_hash={} mode={:?} fence={:?} policy_revision={} authorization_epoch={}",encode_hex(&p.host),encode_hex(&p.rollout_id),encode_hex(&p.config_hash),p.mode,p.fence,p.revision,p.authorization_epoch);
+    println!("host={} rollout_id={} provider_hash={} mode={:?} blocked_reason={:?} policy_revision={} authorization_epoch={}",encode_hex(&p.host),encode_hex(&p.rollout_id),encode_hex(&p.config_hash),p.mode,p.blocked_reason,p.revision,p.authorization_epoch);
 }
 
 #[derive(clap::Subcommand)]

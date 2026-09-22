@@ -95,8 +95,8 @@ Cookies use `__Host-`, Secure, HttpOnly, SameSite=Strict and Path=/. Browser ses
 last at most five minutes, capped by certificate expiry, without sliding renewal.
 Every request resolves the current credential and active parent, local account,
 SSO policy epoch/account generation and current operator grant. Routine native
-refresh preserves the SSO stamp; explicit reauthentication requires a new browser
-entry. Provider fencing or expired access denies requests and directs recovery to
+refresh preserves the SSO authorization binding; explicit reauthentication requires a new browser
+entry. Provider blocking or expired access denies requests and directs recovery to
 the native application. This webview never redirects to an identity provider.
 
 Deadline clocks include suspend time (Linux BOOTTIME; macOS MONOTONIC_RAW). A

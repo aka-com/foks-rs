@@ -98,8 +98,8 @@ pub use schema::{APPLICATION_ID, SCHEMA_VERSION};
 pub use sso::{SsoSession, SsoSessionState};
 pub use sso_access::{SsoAccess, SsoAccessState, SsoAccountBinding};
 pub use sso_policy::{
-    SsoAccessDecision, SsoAuthorizationStamp, SsoPolicy, SsoPolicyTransition, SsoProviderFence,
-    SsoRolloutMode, SsoRolloutStatus,
+    AuthorizationBinding, SsoAccessDecision, SsoPolicy, SsoPolicyTransition,
+    SsoProviderBlockReason, SsoRolloutMode, SsoRolloutStatus,
 };
 pub use team::{
     TeamHeader, TeamLocalViewPermissionMutation, TeamMemberMutation, TeamMutation,

@@ -61,6 +61,31 @@ test('browser credentials and unknown fields are rejected at the JS boundary', (
   assert.throws(() => decodeSsoProgress({ ...progress, operationId: 'other' }));
   assert.throws(() => decodeSsoProgress({ ...progress, state: 'invented' }));
 });
+test('account status uses the public provider block reason field', () => {
+  const status = {
+    ...progress,
+    operationId: null,
+    accountStatus: {
+      state: 'locked-out',
+      rolloutMode: 2,
+      providerBlockedReason: 4,
+      issuer: 'https://identity.example',
+      authorizationEpoch: 1,
+      authorizationGeneration: 0,
+    },
+    state: 'locked-out',
+    browserAvailable: false,
+  };
+  assert.deepEqual(decodeSsoProgress(status), status);
+  const legacyStatus: Record<string, unknown> = { ...status.accountStatus };
+  delete legacyStatus.providerBlockedReason;
+  assert.throws(() =>
+    decodeSsoProgress({
+      ...status,
+      accountStatus: { ...legacyStatus, providerFence: 4 },
+    }),
+  );
+});
 test('reopening a saved accepted signup uses status without replaying signup', async () => {
   const { SsoPanel } = (await vite.ssrLoadModule(
     '/src/components/sso-panel.tsx',
@@ -216,7 +241,7 @@ test('account linkage status chooses explicit first-link action and preserves lo
           accountStatus: {
             state: 'locked-out',
             rolloutMode: 2,
-            providerFence: 0,
+            providerBlockedReason: 0,
             issuer: 'https://identity.example',
             authorizationEpoch: 1,
             authorizationGeneration: 0,

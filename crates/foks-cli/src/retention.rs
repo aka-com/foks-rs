@@ -10,7 +10,7 @@ pub enum RetentionCommand {
         #[arg(long)]
         profile: String,
         #[arg(long)]
-        account: String,
+        account_alias: String,
         #[arg(long)]
         unix_seconds: u64,
         /// Exact digest printed by the preview for these time values.
@@ -22,7 +22,7 @@ pub enum RetentionCommand {
 pub fn run(state: &Path, command: RetentionCommand) -> Result<(), Box<dyn std::error::Error>> {
     let RetentionCommand::Reanchor {
         profile,
-        account,
+        account_alias,
         unix_seconds,
         confirm_digest,
     } = command
@@ -45,13 +45,13 @@ pub fn run(state: &Path, command: RetentionCommand) -> Result<(), Box<dyn std::e
     let result = super::with_vault(state, &session, |checked, vault, _| {
         Ok(match confirm_digest {
             Some(ref digest) => serde_json::to_value(checked.reanchor_adapter_clock(
-                &account,
+                &account_alias,
                 unix_seconds,
                 digest,
                 vault,
             )?)?,
             None => serde_json::to_value(checked.adapter_clock_preview(
-                &account,
+                &account_alias,
                 unix_seconds,
                 vault,
             )?)?,

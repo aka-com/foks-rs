@@ -422,7 +422,7 @@ impl FoksClient {
                     }
                     foks_proto::SsoPurpose::Signup => false,
                 };
-                if !matches || status.provider_fence != 0 {
+                if !matches || status.provider_blocked_reason != 0 {
                     return Err(Error::Sso(
                         "account linkage state differs from requested authentication purpose",
                     ));
