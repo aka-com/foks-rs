@@ -798,6 +798,123 @@ test('a failed invitation submission retries the original operation', async () =
   );
 });
 
+for (const state of ['prepared', 'submission-unknown'] as const) {
+  test(`resuming a saved ${state} invitation retains its identity after a connection failure`, async () => {
+    const actionName = state === 'prepared' ? 'attempt' : 'status';
+    const { InviteNewUserSheet } = (await vite.ssrLoadModule(
+      '/src/components/invite-new-user-sheet.tsx',
+    )) as typeof import('../src/components/invite-new-user-sheet');
+    const { mockBridge } = (await vite.ssrLoadModule(
+      '/src/mock-bridge.ts',
+    )) as typeof import('../src/mock-bridge');
+    const { FIXTURE } = (await vite.ssrLoadModule(
+      '/src/fixture.ts',
+    )) as typeof import('../src/fixture');
+    const team = FIXTURE.stores.find(
+      (store): store is TeamStore => store.kind === 'team',
+    );
+    assert.ok(team);
+    const operation = {
+      operation_id: 'd'.repeat(32),
+      team_id: team.team_id_hex,
+      state,
+    };
+    const actions: InvitationAction[] = [];
+    let attempts = 0;
+    const bridge = {
+      ...mockBridge(FIXTURE),
+      invitation: async (_p: string, _a: string, action: InvitationAction) => {
+        actions.push(action);
+        if (action.action === 'list') return [operation];
+        assert.equal(action.action, actionName);
+        if (++attempts === 1)
+          throw new Error("Can't assign requested address (os error 49)");
+        return { ...operation, state: 'complete', invite: 'RecoveredInvite' };
+      },
+    };
+    const r = ui.render(
+      await overlay(
+        createElement(InviteNewUserSheet, {
+          bridge,
+          team,
+          serverLabel: 'Example',
+          onClose() {},
+        }),
+      ),
+    );
+    await ui.waitFor(() => assert.ok(r.getByText('Invitation not finished')));
+    ui.fireEvent.click(
+      r.getByText(state === 'prepared' ? 'Finish creating' : 'Check status'),
+    );
+    await ui.waitFor(() => assert.ok(r.getByRole('alert')));
+    ui.fireEvent.click(r.getByText('Finish creating'));
+    await ui.waitFor(() => assert.ok(r.getByLabelText('Shareable invitation')));
+    assert.deepEqual(actions, [
+      { action: 'list' },
+      { action: actionName, operation_id: operation.operation_id },
+      { action: actionName, operation_id: operation.operation_id },
+    ]);
+  });
+}
+
+test('an acknowledged invitation is finalized and refresh failure preserves successful creation', async () => {
+  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
+    '/src/components/invite-new-user-sheet.tsx',
+  )) as typeof import('../src/components/invite-new-user-sheet');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  );
+  assert.ok(team);
+  const operation = { operation_id: 'e'.repeat(32), state: 'acknowledged' };
+  const actions: InvitationAction[] = [];
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (_p: string, _a: string, action: InvitationAction) => {
+      actions.push(action);
+      if (action.action === 'list') return [];
+      if (action.action === 'create') return operation;
+      assert.equal(action.action, 'status');
+      return { ...operation, state: 'complete', invite: 'ReadyInvite' };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(InviteNewUserSheet, {
+        bridge,
+        team,
+        serverLabel: 'Example',
+        onClose() {},
+        async onComplete() {
+          throw new Error('Connection lost');
+        },
+      }),
+    ),
+  );
+  ui.fireEvent.click(r.getByText('Create invitation'));
+  await ui.waitFor(() =>
+    assert.match(
+      r.getByRole('alert').textContent ?? '',
+      /invitation is ready, but refreshing the team failed: Connection lost/,
+    ),
+  );
+  assert.equal(
+    r.getByLabelText('Shareable invitation').textContent,
+    'ReadyInvite',
+  );
+  assert.equal((r.getByText('Done') as HTMLButtonElement).disabled, false);
+  assert.deepEqual(actions, [
+    { action: 'list' },
+    { action: 'create', team_alias: team.alias },
+    { action: 'status', operation_id: operation.operation_id },
+  ]);
+});
+
 test('delivered requests remain reachable pending membership approval', async () => {
   const { InvitationPanel } = (await vite.ssrLoadModule(
     '/src/components/invitation-panel.tsx',

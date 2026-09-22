@@ -107,10 +107,16 @@ export function InviteNewUserSheet({
   const finish = async (row: InvitationRow): Promise<void> => {
     const id = row.operation_id;
     if (!id) return;
+    // Resumed rows need the same durable identity as newly prepared rows,
+    // including when the request fails before returning an updated state.
+    setOperation(row);
     let current = row;
     if (current.state === 'prepared' || current.state === 'submitting') {
       current = await call({ action: 'attempt', operation_id: id });
-    } else if (current.state === 'submission-unknown') {
+    } else if (
+      current.state === 'submission-unknown' ||
+      current.state === 'acknowledged'
+    ) {
       current = await call({ action: 'status', operation_id: id });
     }
     if (!live.current) return;
@@ -124,7 +130,19 @@ export function InviteNewUserSheet({
     setNeedPin(false);
     setOperation(current);
     setUnfinished((rows) => rows.filter((r) => r.operation_id !== id));
-    if (current.state === 'complete' && current.invite) await onComplete?.();
+    if (current.state === 'complete' && current.invite)
+      await refreshAfterCompletion();
+  };
+
+  const refreshAfterCompletion = async (): Promise<void> => {
+    try {
+      await onComplete?.();
+    } catch (failure) {
+      if (live.current)
+        setError(
+          `The invitation is ready, but refreshing the team failed: ${normalizeCommandError(failure).message}`,
+        );
+    }
   };
 
   const run = async (work: () => Promise<void>): Promise<void> => {
@@ -175,6 +193,7 @@ export function InviteNewUserSheet({
   const checkStatus = (row: InvitationRow) =>
     run(async () => {
       if (!row.operation_id) return;
+      setOperation(row);
       const current = await call({
         action: 'status',
         operation_id: row.operation_id,
@@ -191,7 +210,8 @@ export function InviteNewUserSheet({
           .map((r) => (r.operation_id === row.operation_id ? current : r))
           .filter(unfinishedOperation),
       );
-      if (current.state === 'complete' && current.invite) await onComplete?.();
+      if (current.state === 'complete' && current.invite)
+        await refreshAfterCompletion();
     });
 
   const copy = (text: string, what: string) =>
