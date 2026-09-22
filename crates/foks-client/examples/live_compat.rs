@@ -272,7 +272,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             expected_version: None,
         },
     )?;
-    let cached = session.sync()?;
+    drop(session);
+    let cached = client.sync_user_kv(
+        &host,
+        &created.credential,
+        &created.authenticated.verified,
+        &created.authenticated.puks,
+        &soft_database,
+    )?;
     let file = cached
         .iter()
         .flat_map(|directory| &directory.entries)
