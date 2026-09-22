@@ -38,9 +38,9 @@ jobs:
         run: rustup show active-toolchain
       - name: Fetch the locked dependency graph
         run: cargo fetch --locked
-      - name: Install isolated Linux Secret Service
+      - name: Install Linux client dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring
+        run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring libpcsclite-dev
       - name: Test the isolated AKA-free client graph
         run: tools/foks-client/check.sh
       - name: Test macOS Keychain integration
@@ -73,6 +73,9 @@ jobs:
           cache-dependency-path: tools/foks-v019-oracle/go.sum
       - name: Fetch the locked dependency graph
         run: cargo fetch --locked
+      - name: Fetch the pinned Go protocol module
+        working-directory: tools/foks-v019-oracle
+        run: go mod download github.com/foks-proj/go-foks@v0.1.9
       - name: Check generated protocol metadata
         run: tools/foks-server/generate-protocol.sh --check --offline
       - name: Test offline Go descriptor and fixture guards
