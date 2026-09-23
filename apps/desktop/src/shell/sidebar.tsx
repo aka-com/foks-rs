@@ -309,7 +309,11 @@ export function AccountHeader({
   const usernameOf = (store: AccountStore): string =>
     snapshot.accounts.find((entry) => entry.store === store.id)?.username ??
     store.account;
-  const username = active ? usernameOf(active) : 'No account';
+  const username = active
+    ? usernameOf(active)
+    : accounts.length
+      ? 'Account unavailable'
+      : 'No account';
   const activeServer = active
     ? snapshot.servers.find(
         (candidate) => candidate.profileName === active.server,
@@ -317,7 +321,9 @@ export function AccountHeader({
     : undefined;
   const server = active
     ? serverDisplayLabelOrLoading(activeServer)
-    : 'None on this device';
+    : accounts.length
+      ? 'Choose an account'
+      : 'None on this device';
   // The foot names the host the account lives on. The reader's own label for
   // that server is the accessible name and the tooltip, where a second line
   // costs nothing; the row itself has one line for it and a hostname is what
@@ -342,7 +348,7 @@ export function AccountHeader({
       // Teams is account-scoped, so preserve the Teams location.
       location.kind === 'teams'
     )
-      onNavigate({ ...location, store: store.id });
+      onNavigate({ kind: 'teams', store: store.id });
     else onNavigate({ kind: 'settings', section: 'account', store: store.id });
   };
   const servers = [...new Set(accounts.map((store) => store.server))];

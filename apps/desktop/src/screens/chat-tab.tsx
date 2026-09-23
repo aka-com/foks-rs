@@ -244,9 +244,9 @@ export function ChatTab({
         // The column's button opens the creation form with no team chosen:
         // it belongs to the column rather than to any one team's row.
         onNewChat={openNewChat}
-        onTeams={(next) => onNavigate({ kind: 'teams', store: next })}
+        onTeams={(next) => onNavigate({ kind: 'teams', ref: next })}
         onAddPeople={(next, intent) =>
-          onNavigate({ kind: 'teams', store: next, open: intent })
+          onNavigate({ kind: 'teams', ref: next, open: intent })
         }
         query={query}
       />

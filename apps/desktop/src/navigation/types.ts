@@ -103,11 +103,10 @@ export type Location =
   /** The Files roots page: All items, then vaults, groups and shares. */
   | { kind: 'files' }
   /**
-   * The Teams list, optionally with a sheet open. `store` identifies the team
-   * for `add`, `add-team`, and `invite`; otherwise it selects the account used
-   * for creation, discovery, and joining.
+   * The Teams list, optionally with a sheet open. `store` selects the acting
+   * account; `ref` identifies the target team for add/invite actions.
    */
-  | { kind: 'teams'; store?: StoreRef; open?: TeamsSheetIntent }
+  | { kind: 'teams'; store?: StoreRef; ref?: StoreRef; open?: TeamsSheetIntent }
   /**
    * Devices. `device` is one row's own page: the key id of a Mac or a paper
    * key, or `yubi:<alias>` for a security-key enrollment, which the agent

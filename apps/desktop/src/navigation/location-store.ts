@@ -1,6 +1,11 @@
 import type { Store, StoreRef } from '../model/types';
 import { chatTabLocation } from './chat-tab-memory';
-import { accountAtLocation, railTabOf, sameLocation } from './routes';
+import {
+  accountAtLocation,
+  normalizeTeamsLocation,
+  railTabOf,
+  sameLocation,
+} from './routes';
 import { transition } from './transition';
 import { INITIAL_STATE } from './types';
 import type {
@@ -127,12 +132,15 @@ export class LocationStore {
     };
     let saved = this.tabs.get(tab);
     let location = saved?.location ?? defaults[tab];
+    if (location.kind === 'teams')
+      location = normalizeTeamsLocation(this.stores, location);
     // A Teams sheet intent is spent where it was handed over. The tab resumes
     // the list, never the sheet another screen once asked for.
     if (location.kind === 'teams' && location.open)
       location = {
         kind: 'teams',
         ...(location.store ? { store: location.store } : {}),
+        ...(location.ref ? { ref: location.ref } : {}),
       };
     const target = 'ref' in location ? location.ref : undefined;
     if (
@@ -155,6 +163,7 @@ export class LocationStore {
         location.store !== undefined && location.store !== account;
       if (changed && saved) saved = { ...saved, sheet: undefined };
       location = { ...location, store: account };
+      if (changed && location.kind === 'teams') delete location.ref;
       if (changed && location.kind === 'devices') delete location.device;
       if (changed && location.kind === 'settings') delete location.profile;
     }
@@ -250,6 +259,8 @@ export class LocationStore {
    * records that account as the acting one.
    */
   private resolvedLocation(location: Location): Location {
+    if (location.kind === 'teams')
+      location = normalizeTeamsLocation(this.stores, location);
     const account = accountAtLocation(this.stores, location, this.getAccount());
     if (
       account &&

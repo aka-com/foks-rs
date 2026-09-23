@@ -406,3 +406,33 @@ test('production preserves explicit selection, folders, filters and sorting with
     INITIAL_SCENE,
   );
 });
+
+test('Teams URLs round-trip separate opaque account and team IDs and clear the team on leaving', () => {
+  const location: Location = {
+    kind: 'teams',
+    store: ACCOUNT,
+    ref: TEAM,
+    open: 'invite',
+  };
+  const href = locationHref('http://localhost/', location);
+  assert.deepEqual(decodeProductionLocation(new URL(href).search), location);
+  const next = locationHref(href, { kind: 'settings', store: ACCOUNT });
+  assert.equal(new URL(next).searchParams.has('ref'), false);
+  // Legacy ambiguous IDs are retained until the inventory can classify them.
+  assert.deepEqual(
+    decodeProductionLocation(
+      new URL(
+        locationHref('http://localhost/', {
+          kind: 'teams',
+          store: TEAM,
+          open: 'invite',
+        }),
+      ).search,
+    ),
+    {
+      kind: 'teams',
+      store: TEAM,
+      open: 'invite',
+    },
+  );
+});

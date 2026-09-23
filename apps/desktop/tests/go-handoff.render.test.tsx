@@ -676,7 +676,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
   const profile = 'foks-app';
   const hostId = `02${'7'.repeat(64)}`;
   let checks = 0;
-  let signups = 0;
+  const signupRequests: Parameters<Bridge['createFirstRunAccount']>[0][] = [];
   const bridge: Bridge = {
     ...base,
     native: true,
@@ -697,9 +697,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
       };
     },
     createFirstRunAccount: async (request) => {
-      signups++;
-      assert.equal(request.profile, profile);
-      assert.equal(request.alias, 'native-user');
+      signupRequests.push(request);
       return { applied: true };
     },
   };
@@ -714,7 +712,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
         host_id: hostId,
         chain: 1,
         epoch: 1,
-        accounts: ['native-user'],
+        accounts: ['native_user'],
         trust: { status: 'verified' as const },
         compatibility: { status: 'not-required' as const },
         passiveStatus: {
@@ -729,8 +727,8 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
     accounts: [
       ...FIXTURE.accounts,
       {
-        store: 'acct:native-user',
-        alias: 'native-user',
+        store: 'acct:native_user',
+        alias: 'native_user',
         username: 'native-user',
         server: profile,
       },
@@ -773,8 +771,13 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
     target: { value: 'Native Mac' },
   });
   ui.fireEvent.click(view.getByRole('button', { name: 'Create my account' }));
+  await ui.waitFor(() => assert.equal(signupRequests.length, 1));
+  assert.equal(signupRequests[0].profile, profile);
+  // Preserve the entered username while suggesting its normalized local alias.
+  assert.equal(signupRequests[0].username, 'native-user');
+  assert.equal(signupRequests[0].alias, 'native_user');
   await view.findByText('Save recovery phrase');
-  assert.equal(signups, 1);
+  assert.equal(signupRequests.length, 1);
 });
 
 test('first-run account navigation, server edits, and connection errors stay scoped', async () => {
@@ -1127,8 +1130,8 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
   );
   assert.equal(
     (rendered.getByLabelText('Your name') as HTMLInputElement).value,
-    'cli-owner',
-    'the CLI username is suggested as the local alias, as the chooser does',
+    'cli_owner',
+    'the normalized CLI username is suggested as the local alias, as the chooser does',
   );
 });
 

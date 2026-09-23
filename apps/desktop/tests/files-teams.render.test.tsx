@@ -859,7 +859,7 @@ test('group creation replaces a cancelled foreground catalog load without repeat
   // The first navigation is the page spending the `open` intent by
   // canonicalizing its own address; the creation itself lands on the store.
   assert.deepEqual(destinations, [
-    { kind: 'teams' },
+    { kind: 'teams', store: 'acct:personal' },
     { kind: 'store', ref: 'team:platform' },
   ]);
   assert.equal(rendered.queryByText(/Updated data could not be loaded/), null);

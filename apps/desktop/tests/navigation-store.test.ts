@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  accountAtLocation,
+  sameLocation,
   chatTabLocation,
   INITIAL_STATE,
   LocationStore,
@@ -462,4 +464,81 @@ test('replacement preserves Forward and first-run blocks both directions', () =>
   store.forward({ force: true });
   assert.equal(store.forwardTarget(), null);
   assert.equal(store.getSnapshot().location.kind, 'first-run');
+});
+
+const TEAM_B = {
+  id: 'opaque-team-b',
+  kind: 'team' as const,
+  name: 'B team',
+  alias: 'team',
+  server: ACCOUNT_B.server,
+  account: ACCOUNT_B.account,
+  active: true,
+  team_kind: 'named' as const,
+  team_id_hex: 'ab'.repeat(33),
+};
+
+for (const legacy of [false, true]) {
+  test(`Teams keeps its owning account through navigation (legacy=${legacy})`, () => {
+    const store = new LocationStore();
+    store.setAccountStores([ACCOUNT_A, ACCOUNT_B, TEAM_B]);
+    store.navigate({ kind: 'chat', ref: TEAM_B.id });
+    store.navigate({
+      kind: 'teams',
+      ...(legacy ? { store: TEAM_B.id } : { ref: TEAM_B.id }),
+      open: 'invite',
+    });
+    assert.equal(store.getAccount(), ACCOUNT_B.id);
+    assert.deepEqual(store.getSnapshot().location, {
+      kind: 'teams',
+      store: ACCOUNT_B.id,
+      ref: TEAM_B.id,
+      open: 'invite',
+    });
+    store.navigate({ kind: 'teams', store: ACCOUNT_B.id }, { replace: true });
+    store.navigateTab('settings');
+    assert.equal(store.getAccount(), ACCOUNT_B.id);
+    assert.deepEqual(store.getSnapshot().location, {
+      kind: 'settings',
+      store: ACCOUNT_B.id,
+    });
+    store.navigateTab('teams');
+    assert.equal(store.getAccount(), ACCOUNT_B.id);
+    assert.equal('open' in store.getSnapshot().location, false);
+  });
+}
+
+test('explicit missing or conflicting Teams identities never fall back to another account', () => {
+  const stores = [ACCOUNT_A, ACCOUNT_B, TEAM_B];
+  for (const location of [
+    { kind: 'teams' as const, store: 'missing' },
+    { kind: 'teams' as const, ref: 'missing' },
+    { kind: 'teams' as const, store: ACCOUNT_B.id, ref: 'missing' },
+    { kind: 'teams' as const, store: ACCOUNT_A.id, ref: TEAM_B.id },
+  ])
+    assert.equal(accountAtLocation(stores, location, ACCOUNT_A.id), undefined);
+  assert.equal(
+    accountAtLocation(
+      [ACCOUNT_A, TEAM_B],
+      { kind: 'teams', store: TEAM_B.id },
+      ACCOUNT_A.id,
+    ),
+    undefined,
+  );
+  assert.equal(
+    accountAtLocation(stores, { kind: 'teams' }, ACCOUNT_B.id)?.id,
+    ACCOUNT_B.id,
+  );
+  const store = new LocationStore();
+  store.setAccountStores(stores);
+  store.navigate({ kind: 'teams', ref: TEAM_B.id });
+  store.setAccountStores([ACCOUNT_A, ACCOUNT_B]);
+  assert.equal(store.getAccount(), undefined);
+  assert.equal(
+    sameLocation(
+      { kind: 'teams', ref: TEAM_B.id },
+      { kind: 'teams', ref: 'other' },
+    ),
+    false,
+  );
 });

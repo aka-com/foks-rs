@@ -9,6 +9,7 @@
 export * from './navigation/types';
 export {
   accountAtLocation,
+  normalizeTeamsLocation,
   parentLocation,
   railTabOf,
   sameLocation,

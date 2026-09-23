@@ -55,6 +55,7 @@ export function setUrl(
  */
 const CLEARED_PARAMS: Readonly<Record<string, string | null>> = {
   store: null,
+  ref: null,
   section: null,
   profile: null,
   step: null,
@@ -108,6 +109,7 @@ export function encodeLocation(location: Location): {
         params: {
           ...CLEARED_PARAMS,
           store: location.store ?? null,
+          ref: location.ref ?? null,
           open: location.open ?? null,
         },
       };
@@ -192,11 +194,13 @@ export function decodeProductionLocation(search: string): Location | null {
   }
   if (state === 'files') return { kind: 'files' };
   if (state === 'teams') {
+    const ref = params.get('ref') ?? undefined;
     const store = params.get('store') ?? undefined;
     const open = teamsSheetIntent(params.get('open'));
     return {
       kind: 'teams',
       ...(store ? { store } : {}),
+      ...(ref ? { ref } : {}),
       ...(open ? { open } : {}),
     };
   }

@@ -271,7 +271,7 @@ test('vault and team roots expose scoped folder creation and team info without s
     assert.equal(ui.screen.queryByRole('menu'), null);
     assert.deepEqual(mounted.locations.getSnapshot().location, {
       kind: 'teams',
-      store: 'team:eng',
+      ref: 'team:eng',
       open: intent,
     });
   }

@@ -646,3 +646,52 @@ test('device crumbs use the name resolved for the exact account and address', as
     ['Devices', 'Key'],
   );
 });
+
+for (const legacy of [false, true]) {
+  test(`the rail resolves a Teams target to its owner (legacy=${legacy})`, async () => {
+    await rail({
+      kind: 'teams',
+      ...(legacy ? { store: 'team:eng' } : { ref: 'team:eng' }),
+    });
+    const header = document.querySelector<HTMLButtonElement>('.who')!;
+    assert.equal(header.querySelector('b')?.textContent, 'vitalik');
+    ui.fireEvent.click(header);
+    assert.match(
+      document.querySelector('.acct.on')?.textContent ?? '',
+      /vitalik/,
+    );
+  });
+}
+
+test('an unresolved account is distinguished from an empty device and can be replaced', async () => {
+  const { journal } = await rail({ kind: 'teams', ref: 'missing-team' });
+  const header = document.querySelector<HTMLButtonElement>('.who')!;
+  assert.equal(header.querySelector('b')?.textContent, 'Account unavailable');
+  assert.equal(header.querySelector('small')?.textContent, 'Choose an account');
+  ui.fireEvent.click(header);
+  const accounts = document.querySelectorAll<HTMLButtonElement>('.acct');
+  assert.equal(accounts.length, 2);
+  assert.equal(document.querySelector('.acct.on'), null);
+  ui.fireEvent.click(accounts[0]);
+  assert.deepEqual(journal.navigations.at(-1), {
+    kind: 'teams',
+    store: 'acct:personal',
+  });
+});
+
+test('an empty device still says No account', async () => {
+  const { AccountHeader } = await vite.ssrLoadModule('/src/shell/sidebar.tsx');
+  const { FIXTURE } = await vite.ssrLoadModule('/src/fixture.ts');
+  ui.render(
+    createElement(AccountHeader, {
+      snapshot: { ...FIXTURE, stores: [], accounts: [] },
+      location: { kind: 'teams' },
+      onNavigate: () => {},
+    }),
+  );
+  assert.equal(document.querySelector('.who b')?.textContent, 'No account');
+  assert.equal(
+    document.querySelector('.who small')?.textContent,
+    'None on this device',
+  );
+});

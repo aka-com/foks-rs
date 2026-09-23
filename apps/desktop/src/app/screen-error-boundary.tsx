@@ -15,13 +15,15 @@ import type { Location } from '../location';
 
 /**
  * Returns the router fields that identify a screen for boundary remounting.
- * Chat references and Settings or Devices sections identify pages within a
+ * Chat/Teams references and Settings or Devices sections identify pages within a
  * screen and are included by `screenIdentity` instead.
  */
 export function screenBoundaryKey(location: Location): string {
   return [
     location.kind,
-    'ref' in location && location.kind !== 'chat' ? location.ref : '',
+    location.kind === 'store' || location.kind === 'group-settings'
+      ? location.ref
+      : '',
   ].join(':');
 }
 

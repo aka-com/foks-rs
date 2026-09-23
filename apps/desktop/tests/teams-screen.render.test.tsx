@@ -57,6 +57,10 @@ async function setup(
   const { TeamsScreen } = (await vite.ssrLoadModule(
     '/src/screens/teams-screen.tsx',
   )) as typeof import('../src/screens/teams-screen');
+  const { ScreenErrorBoundary, screenBoundaryKey, screenIdentity } =
+    (await vite.ssrLoadModule(
+      '/src/app/screen-error-boundary.tsx',
+    )) as typeof import('../src/app/screen-error-boundary');
   const { NavigationGuardProvider } = (await vite.ssrLoadModule(
     '/src/navigation-guard.tsx',
   )) as typeof import('../src/navigation-guard');
@@ -93,21 +97,25 @@ async function setup(
           store,
           children:
             state.location.kind === 'teams'
-              ? createElement(TeamsScreen, {
-                  snapshot,
-                  bridge,
-                  location: state.location,
-                  scene,
-                  onNavigate: (next: Location, options?: NavigateOptions) =>
-                    store.navigate(next, options),
-                  onRefresh: async () => {},
-                  onRefreshSnapshot: async () => snapshot,
-                  onError: (error: unknown) => {
-                    throw error;
-                  },
-                  onMutationError: async (error: unknown) => {
-                    throw error;
-                  },
+              ? createElement(ScreenErrorBoundary, {
+                  key: screenBoundaryKey(state.location),
+                  identity: screenIdentity(state.location),
+                  children: createElement(TeamsScreen, {
+                    snapshot,
+                    bridge,
+                    location: state.location,
+                    scene,
+                    onNavigate: (next: Location, options?: NavigateOptions) =>
+                      store.navigate(next, options),
+                    onRefresh: async () => {},
+                    onRefreshSnapshot: async () => snapshot,
+                    onError: (error: unknown) => {
+                      throw error;
+                    },
+                    onMutationError: async (error: unknown) => {
+                      throw error;
+                    },
+                  }),
                 })
               : createElement('p', null, 'Elsewhere'),
         }),
@@ -190,3 +198,74 @@ test('a sheet the reader left open is still restored with the tab', async () => 
   await roundTrip(store);
   assert.ok(ui.screen.getByRole('heading', { name: 'Create a team' }));
 });
+
+for (const legacy of [false, true]) {
+  test(`a team invitation retains its owner after closing (legacy=${legacy})`, async () => {
+    const { store } = await setup({
+      kind: 'teams',
+      ...(legacy ? { store: 'team:eng' } : { ref: 'team:eng' }),
+      open: 'invite',
+    });
+    assert.ok(
+      ui.screen.getByRole('heading', {
+        name: 'Invite a new user to Engineering',
+      }),
+    );
+    assert.deepEqual(store.getSnapshot().location, {
+      kind: 'teams',
+      store: 'acct:work',
+    });
+    const dialog = document.querySelector('[role="dialog"]')!;
+    await ui.act(async () => {
+      ui.fireEvent.keyDown(dialog, { key: 'Escape' });
+    });
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await ui.act(async () => {
+      store.navigateTab('settings');
+    });
+    assert.equal(store.getAccount(), 'acct:work');
+    await ui.act(async () => {
+      store.navigateTab('teams');
+    });
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await ui.act(async () => {
+      ui.fireEvent.click(
+        ui.screen.getByRole('button', { name: 'Create a team' }),
+      );
+    });
+    assert.equal(store.getAccount(), 'acct:work');
+    assert.match(
+      document.querySelector(
+        '[role="radiogroup"][aria-label="Server and account"] [aria-checked="true"]',
+      )?.textContent ?? '',
+      /vitalik/,
+    );
+  });
+}
+
+for (const target of [
+  { store: 'removed-account' },
+  { ref: 'removed-team' },
+  { store: 'acct:personal', ref: 'team:eng' },
+]) {
+  test(`Teams disables account actions for an unresolved explicit target ${JSON.stringify(target)}`, async () => {
+    await setup({ kind: 'teams', ...target, open: 'join' });
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(
+      ui.screen
+        .getByRole('button', {
+          name: 'Join a team…',
+        })
+        .hasAttribute('disabled'),
+      true,
+    );
+    assert.equal(
+      ui.screen
+        .getByRole('button', {
+          name: 'Create a team',
+        })
+        .hasAttribute('disabled'),
+      true,
+    );
+  });
+}

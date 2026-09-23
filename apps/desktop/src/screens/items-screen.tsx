@@ -1447,7 +1447,7 @@ export function ItemsScreen({
                         setFolderMenu(null);
                         locations.navigate({
                           kind: 'teams',
-                          store: contextStore.id,
+                          ref: contextStore.id,
                           open: intent,
                         });
                       }}

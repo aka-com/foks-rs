@@ -46,6 +46,7 @@ import type {
   TeamStore,
 } from '../model';
 import type { Bridge } from '../bridge';
+import { accountAtLocation, normalizeTeamsLocation } from '../location';
 import type { Location, NavigateOptions, TeamsSheetIntent } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { markProfileRostersStale } from '../roster-staleness';
@@ -315,12 +316,9 @@ export function TeamsScreen({
   const accounts = stores.filter(
     (store): store is AccountStore => store.kind === 'account',
   );
-  // The list is the whole Mac's. The address only names the account that
-  // creating, inviting and joining act as; with none, the first account.
-  const acting =
-    (location.store
-      ? accounts.find((store) => store.id === location.store)
-      : undefined) ?? accounts[0];
+  const resolved = normalizeTeamsLocation(stores, location);
+  const acting = accountAtLocation(stores, resolved);
+  const targetRef = resolved.ref;
   // The address can arrive asking for one of these sheets: the Chat tab's
   // empty pane and the Files tree's New team button send a reader here to
   // create a team or to paste an invitation, and `?state=create` and
@@ -357,19 +355,27 @@ export function TeamsScreen({
   // hand it an owner that the replacement immediately supersedes, and the
   // saved record would then outlive the reader closing the sheet: the tab
   // would restore it on the way back.
-  const requested = useRef<TeamsSheetIntent | null>(null);
+  const requested = useRef<{
+    intent: TeamsSheetIntent;
+    account: StoreRef;
+    ref?: StoreRef;
+  } | null>(null);
   useEffect(() => {
     // With no account yet the page cannot say who would create or join, so
     // the intent waits for the catalog rather than being spent on nothing.
     if (!intent || !actingRef.current) return;
-    requested.current = intent;
+    requested.current = {
+      intent,
+      account: actingRef.current.id,
+      ref: targetRef,
+    };
     navigateRef.current(
-      { kind: 'teams', ...(location.store ? { store: location.store } : {}) },
+      { kind: 'teams', store: actingRef.current.id },
       // The page the reader is on, with its address canonicalized: no new
       // entry to go back to, and no screen may refuse it.
       { replace: true, force: true },
     );
-  }, [intent, actingId, location.store]);
+  }, [intent, actingId, targetRef]);
   const teamsRef = useRef(teams);
   teamsRef.current = teams;
   const [inviting, setInviting] = useState<TeamStore | null>(null);
@@ -383,15 +389,21 @@ export function TeamsScreen({
     const store = actingRef.current;
     if (intent || !request || !store) return;
     requested.current = null;
-    if (request === 'create') setSheet({ kind: 'create', store });
-    else if (request === 'join') setJoining(store);
+    if (request.account !== store.id) return;
+    if (request.intent === 'create') setSheet({ kind: 'create', store });
+    else if (request.intent === 'join') setJoining(store);
     else {
       const team = teamsRef.current.find(
-        (candidate) => candidate.id === location.store,
+        (candidate) => candidate.id === request.ref,
       );
-      if (!team) return;
-      if (request === 'invite') setInviting(team);
-      else setSheet({ kind: request, store: team });
+      if (
+        !team ||
+        team.server !== store.server ||
+        team.account !== store.account
+      )
+        return;
+      if (request.intent === 'invite') setInviting(team);
+      else setSheet({ kind: request.intent, store: team });
     }
   }, [intent, actingId, location.store, setSheet, setJoining]);
   // The stuck creation a row asked to forget. Held apart from `sheet`, which
@@ -663,7 +675,7 @@ export function TeamsScreen({
               title={
                 acting
                   ? 'Paste an invitation from an administrator of that team.'
-                  : 'No account on this device can request membership.'
+                  : 'Choose an available account to request membership.'
               }
               onClick={() => setJoining(acting ?? null)}
             >

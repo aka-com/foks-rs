@@ -134,6 +134,10 @@ test('the boundary key identifies screens and page identity includes route field
     ],
     [{ kind: 'chat' }, { kind: 'chat', ref: 'team:eng' }],
     [
+      { kind: 'teams', store: 'acct:work', ref: 'team:eng', open: 'invite' },
+      { kind: 'teams', store: 'acct:work' },
+    ],
+    [
       { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
       { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
     ],

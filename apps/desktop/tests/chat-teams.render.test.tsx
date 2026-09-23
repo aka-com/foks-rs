@@ -2252,7 +2252,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
   ui.fireEvent.click(
     ui.within(teamMenu).getByRole('menuitem', { name: 'Go to team' }),
   );
-  assert.deepEqual(journal.at(-1), { kind: 'teams', store: 'team:eng' });
+  assert.deepEqual(journal.at(-1), { kind: 'teams', ref: 'team:eng' });
   const channel = await ui.waitFor(() => {
     const node = head('Engineering')
       .closest('.chat-team')!
@@ -2307,7 +2307,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
     assert.equal(ui.screen.queryByRole('menu'), null);
     assert.deepEqual(journal.at(-1), {
       kind: 'teams',
-      store: 'team:eng',
+      ref: 'team:eng',
       open: intent,
     });
   }

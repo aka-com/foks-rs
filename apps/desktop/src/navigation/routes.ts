@@ -15,28 +15,52 @@ export function settingsSectionOf(
   return DEFAULT_SETTINGS_SECTION;
 }
 
+/** Older Teams URLs used `store` for both account and team identities. */
+export function normalizeTeamsLocation(
+  stores: readonly Store[],
+  location: Extract<Location, { kind: 'teams' }>,
+): Extract<Location, { kind: 'teams' }> {
+  if (location.ref || !location.store) return location;
+  const team = stores.find(
+    (store) => store.id === location.store && store.kind === 'team',
+  );
+  if (!team) return location;
+  const owner = stores.find(
+    (store) =>
+      store.kind === 'account' &&
+      store.server === team.server &&
+      store.account === team.account,
+  );
+  const normalized = { ...location, ref: team.id };
+  if (owner) normalized.store = owner.id;
+  else delete normalized.store;
+  return normalized;
+}
+
 /** Resolve the account through which a page's object is accessed. */
 export function accountAtLocation(
   stores: readonly Store[],
   location: Location,
   fallback?: StoreRef,
 ): AccountStore | undefined {
+  if (location.kind === 'teams')
+    location = normalizeTeamsLocation(stores, location);
   const accounts = stores.filter(
     (store): store is AccountStore => store.kind === 'account',
   );
-  if ('store' in location && location.store)
-    return accounts.find((account) => account.id === location.store);
+  const requested = 'store' in location ? location.store : undefined;
   if ('ref' in location && location.ref) {
     const target = stores.find((store) => store.id === location.ref);
-    return (
-      target &&
-      accounts.find(
-        (account) =>
-          account.server === target.server &&
-          account.account === target.account,
-      )
+    if (!target || (location.kind === 'teams' && target.kind !== 'team'))
+      return undefined;
+    return accounts.find(
+      (account) =>
+        (!requested || account.id === requested) &&
+        account.server === target.server &&
+        account.account === target.account,
     );
   }
+  if (requested) return accounts.find((account) => account.id === requested);
   if (location.kind === 'settings' && location.profile)
     return accounts.find((account) => account.server === location.profile);
   return accounts.find((account) => account.id === fallback) ?? accounts[0];
@@ -123,7 +147,7 @@ export function sameLocation(a: Location, b: Location): boolean {
   // The sheet intent is part of the address until the page consumes it:
   // asking the list for a sheet it is not showing is a move, not a no-op.
   if (a.kind === 'teams' && b.kind === 'teams')
-    return a.store === b.store && a.open === b.open;
+    return a.store === b.store && a.ref === b.ref && a.open === b.open;
   if (a.kind === 'devices' && b.kind === 'devices')
     return (
       a.section === b.section && a.store === b.store && a.device === b.device
