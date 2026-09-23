@@ -1674,3 +1674,58 @@ test('dismissed onboarding tips persist and can be restored in Preferences', asy
   );
   window.localStorage.removeItem(key);
 });
+
+test('Restart waits for process information and offers retry after a failed read', async () => {
+  let reject!: (error: Error) => void;
+  let resolve!: (info: Awaited<ReturnType<Bridge['agentProcessInfo']>>) => void;
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'mac' },
+    decorate: (bridge) => ({
+      ...bridge,
+      agentProcessInfo: () =>
+        new Promise((done, fail) => {
+          resolve = done;
+          reject = fail;
+        }),
+    }),
+  });
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Restart…' }));
+  assert.ok(rendered.getByText('Loading agent information…'));
+  assert.equal(
+    rendered.queryByText('No agent is answering on the socket.'),
+    null,
+  );
+  await ui.act(async () => reject(new Error('Information unavailable')));
+  assert.equal(
+    rendered.queryByText('No agent is answering on the socket.'),
+    null,
+  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Retry' }));
+  assert.ok(rendered.getByText('Loading agent information…'));
+  await ui.act(async () =>
+    resolve({ pid: null, owned: false, executable: null, startedAt: null }),
+  );
+  assert.ok(rendered.getByText('No agent is answering on the socket.'));
+});
+
+test('server details wait for account and team listings before claiming either is empty', async () => {
+  const snapshot = await fixture();
+  const rendered = await renderSettings(
+    {
+      ...snapshot,
+      stores: [],
+      accounts: [],
+      items: [],
+      profileInventory: snapshot.profileInventory.map((entry) => ({
+        ...entry,
+        accounts: 'unavailable',
+        teams: 'unavailable',
+      })),
+    },
+    { where: { profile: 'personal' } },
+  );
+  assert.ok(rendered.getAllByText('Loading accounts…').length);
+  assert.ok(rendered.getByText('Loading teams…'));
+  assert.equal(rendered.queryByText('No account on this server'), null);
+  assert.equal(rendered.queryByText('No teams on this server'), null);
+});

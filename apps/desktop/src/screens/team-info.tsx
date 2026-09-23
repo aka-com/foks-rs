@@ -1,3 +1,9 @@
+import {
+  groupDetailReadiness,
+  combineReadiness,
+  itemsReadiness,
+} from '../model';
+import { CollectionStatus } from '../components/collection-status';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Button } from '../components';
 import type { Bridge } from '../bridge';
@@ -78,6 +84,12 @@ export function TeamInfoPanel({
     store.id,
     'federation',
   );
+  const fileReadiness = itemsReadiness(snapshot, store.id);
+  const rosterReadiness = groupDetailReadiness(snapshot, store.id, 'roster');
+  const memberReadiness = combineReadiness([
+    rosterReadiness,
+    groupDetailReadiness(snapshot, store.id, 'federation'),
+  ]);
   const parties =
     readable && !rosterFailure
       ? [...partiesOf(snapshot, store.id)].sort(
@@ -162,7 +174,11 @@ export function TeamInfoPanel({
               <dd>
                 {owners.length
                   ? owners.map(partyName).join(', ')
-                  : 'No owner designated'}
+                  : rosterReadiness === 'loading'
+                    ? 'Loading owner…'
+                    : rosterReadiness === 'unavailable'
+                      ? 'Owner unavailable'
+                      : 'No owner designated'}
               </dd>
             </>
           ) : null}
@@ -184,10 +200,15 @@ export function TeamInfoPanel({
           <section>
             <h3>
               Members
-              {!rosterFailure && !federationFailure
+              {!rosterFailure &&
+              !federationFailure &&
+              memberReadiness === 'ready'
                 ? ` · ${memberCountOf(snapshot, store)}`
                 : ''}
             </h3>
+            {!rosterFailure && !federationFailure ? (
+              <CollectionStatus state={memberReadiness} label="members" />
+            ) : null}
             {rosterFailure ? (
               <p role="alert">{rosterFailure.message}</p>
             ) : (
@@ -235,7 +256,8 @@ export function TeamInfoPanel({
                   })}
                 {!memberRows.length &&
                 !federated.entries.length &&
-                !federationFailure ? (
+                !federationFailure &&
+                memberReadiness === 'ready' ? (
                   <p>No members yet.</p>
                 ) : null}
               </>
@@ -298,10 +320,12 @@ export function TeamInfoPanel({
           <section>
             <h3>Files</h3>
             <p>
-              {storeOperationAvailability(snapshot, store, 'vault', options)
-                .available
-                ? plural(itemCountOf(snapshot, store), 'item')
-                : 'Files unavailable.'}
+              {fileReadiness === 'loading'
+                ? 'Loading files…'
+                : storeOperationAvailability(snapshot, store, 'vault', options)
+                      .available
+                  ? plural(itemCountOf(snapshot, store), 'item')
+                  : 'Files unavailable.'}
             </p>
             <Button
               icon="folder"

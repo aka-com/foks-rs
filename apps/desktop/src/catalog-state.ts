@@ -349,6 +349,7 @@ export function mergeProfileSnapshot(
     parties: projected.parties.filter(inScope),
     federation: projected.federation.filter(inScope),
     groupDetailFailures: projected.groupDetailFailures.filter(inScope),
+    groupDetailInventory: projected.groupDetailInventory?.filter(inScope),
     observedExpiredLeases: projected.observedExpiredLeases.filter(
       (entry) => entry.profile === profile,
     ),
@@ -406,6 +407,10 @@ export function mergeProfileSnapshot(
     federation: [
       ...base.federation.filter(outsideStore),
       ...projected.federation,
+    ],
+    groupDetailInventory: [
+      ...(base.groupDetailInventory ?? []).filter(outsideStore),
+      ...(projected.groupDetailInventory ?? []),
     ],
     groupDetailFailures: [
       ...base.groupDetailFailures.filter(outsideStore),

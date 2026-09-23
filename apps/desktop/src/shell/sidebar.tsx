@@ -1,3 +1,4 @@
+import { inventoryReadiness } from '../model';
 /**
  * The navigation rail.
  *
@@ -309,11 +310,14 @@ export function AccountHeader({
   const usernameOf = (store: AccountStore): string =>
     snapshot.accounts.find((entry) => entry.store === store.id)?.username ??
     store.account;
+  const accountReadiness = inventoryReadiness(snapshot, 'accounts');
   const username = active
     ? usernameOf(active)
-    : accounts.length
-      ? 'Account unavailable'
-      : 'No account';
+    : accountReadiness === 'loading'
+      ? 'Loading accounts…'
+      : accounts.length || accountReadiness === 'unavailable'
+        ? 'Account unavailable'
+        : 'No account';
   const activeServer = active
     ? snapshot.servers.find(
         (candidate) => candidate.profileName === active.server,
@@ -321,9 +325,11 @@ export function AccountHeader({
     : undefined;
   const server = active
     ? serverDisplayLabelOrLoading(activeServer)
-    : accounts.length
-      ? 'Choose an account'
-      : 'None on this device';
+    : accountReadiness === 'loading'
+      ? 'Reading this device’s accounts'
+      : accounts.length || accountReadiness === 'unavailable'
+        ? 'Choose an account'
+        : 'None on this device';
   // The foot names the host the account lives on. The reader's own label for
   // that server is the accessible name and the tooltip, where a second line
   // costs nothing; the row itself has one line for it and a hostname is what

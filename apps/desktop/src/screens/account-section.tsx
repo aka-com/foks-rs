@@ -1,3 +1,5 @@
+import { inventoryReadiness } from '../model';
+import { CollectionStatus } from '../components/collection-status';
 import { useToast } from '/kit/toasts';
 import { synchronizeApplied } from '../operation-outcome';
 import { useDeviceMetadata } from '../device-cache';
@@ -532,7 +534,17 @@ export function AccountSection({
         aria-labelledby={panel.labelledBy}
       >
         <div className="settings-main account-main">
-          {unavailable ? (
+          {!selected && inventoryReadiness(snapshot, 'accounts') !== 'ready' ? (
+            <>
+              <CollectionStatus
+                state={inventoryReadiness(snapshot, 'accounts')}
+                label="accounts"
+              />
+              <Button onClick={() => void onRefreshSnapshot().catch(onError)}>
+                Refresh
+              </Button>
+            </>
+          ) : unavailable ? (
             <>
               {noticesAndUnpairedServers}
               <UnavailableAccount
@@ -953,7 +965,14 @@ function AccountPanel({
             </Button>
           }
         >
-          {plural(teams.length, 'team')}
+          {inventoryReadiness(snapshot, 'teams', store.server) === 'ready' ? (
+            plural(teams.length, 'team')
+          ) : (
+            <CollectionStatus
+              state={inventoryReadiness(snapshot, 'teams', store.server)}
+              label="teams"
+            />
+          )}
         </InsetRow>
       </Inset>
       <FreshnessCaption

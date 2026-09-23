@@ -1,3 +1,5 @@
+import { groupDetailReadiness, combineReadiness } from '../model';
+import { CollectionStatus } from '../components/collection-status';
 import { federatedTeamMembers, memberCountOf } from './team-members';
 import { useGroupOperationController } from './groups/operation-controller';
 import { AddPersonSheet } from './groups/add-person-sheet';
@@ -562,6 +564,10 @@ function MembersTab({
 }): ReactNode {
   const manageable = rosterReason === undefined;
   const federationManageable = federationReason === undefined;
+  const memberReadiness = combineReadiness([
+    groupDetailReadiness(snapshot, store.id, 'roster'),
+    groupDetailReadiness(snapshot, store.id, 'federation'),
+  ]);
   const parties = sortRoster(partiesOf(snapshot, store.id));
   const people = parties.filter(
     (party) => party.party_kind === 'user' && !isMachine(party),
@@ -587,12 +593,15 @@ function MembersTab({
       <SituationBand store={store} tab="people" />
       <SectionLabel>
         Members
-        {!failure && !federationFailure ? (
+        {!failure && !federationFailure && memberReadiness === 'ready' ? (
           <span className="count">
             — {plural(memberCountOf(snapshot, store), 'member')}
           </span>
         ) : null}
       </SectionLabel>
+      {!failure && !federationFailure ? (
+        <CollectionStatus state={memberReadiness} label="members" />
+      ) : null}
       {failure ? (
         <Band
           label="Roster unavailable"
@@ -635,7 +644,7 @@ function MembersTab({
             />
           ))}
         </div>
-      ) : (
+      ) : memberReadiness !== 'ready' ? null : (
         <div className="callout">
           <span
             className="kico"
@@ -1370,7 +1379,11 @@ export function GroupSettingsScreen({
   // tab's own count.
   const headerChips = [
     serverName,
-    !canReadRoster || rosterFailure || federationFailure
+    !canReadRoster ||
+    rosterFailure ||
+    federationFailure ||
+    groupDetailReadiness(snapshot, store.id, 'roster') !== 'ready' ||
+    groupDetailReadiness(snapshot, store.id, 'federation') !== 'ready'
       ? null
       : plural(memberCount, 'member'),
   ].filter(Boolean);
@@ -1630,7 +1643,13 @@ export function GroupSettingsScreen({
                 ? {
                     id,
                     label: 'Members',
-                    ...(!canReadRoster || rosterFailure || federationFailure
+                    ...(!canReadRoster ||
+                    rosterFailure ||
+                    federationFailure ||
+                    groupDetailReadiness(snapshot, store.id, 'roster') !==
+                      'ready' ||
+                    groupDetailReadiness(snapshot, store.id, 'federation') !==
+                      'ready'
                       ? {}
                       : { count: memberCount }),
                   }

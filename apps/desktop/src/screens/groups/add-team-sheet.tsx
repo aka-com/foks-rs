@@ -1,3 +1,5 @@
+import { CollectionStatus } from '../../components/collection-status';
+import { inventoryReadiness } from '../../model';
 /** Adds an administered team from another server as a federated member. */
 
 import { useState } from 'react';
@@ -207,6 +209,11 @@ export function AddTeamSheet({
               );
             })}
           </RadioGroup>
+        ) : inventoryReadiness(snapshot, 'teams') !== 'ready' ? (
+          <CollectionStatus
+            state={inventoryReadiness(snapshot, 'teams')}
+            label="teams"
+          />
         ) : (
           <InsetRow label="Team">
             <span className="dim">

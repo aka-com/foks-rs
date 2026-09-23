@@ -1,3 +1,5 @@
+import { inventoryReadiness } from '../model';
+import { CollectionStatus } from '../components/collection-status';
 /**
  * The Chat tab: the inbox column beside one conversation.
  *
@@ -207,10 +209,8 @@ export function ChatTab({
     Boolean(open) && (!entry || (entry.state === 'loading' && !entry.error));
   const channelsEmpty =
     entry?.state === 'ready' && entry.data !== undefined && listed.length === 0;
-  const catalogLoading =
-    snapshot.profileInventoryStatus !== 'complete' &&
-    !snapshot.servers.length &&
-    !snapshot.stores.length;
+  const teamReadiness = inventoryReadiness(snapshot, 'teams');
+  const catalogLoading = teamReadiness !== 'ready';
   useEffect(() => {
     if (info && open && !loading && !channel) setInfo(false);
   }, [channel, info, loading, open]);
@@ -295,6 +295,8 @@ export function ChatTab({
               })
             }
           />
+        ) : catalogLoading && teamReadiness === 'unavailable' ? (
+          <CollectionStatus state={teamReadiness} label="teams" />
         ) : catalogLoading || opening === 'pending' ? (
           <div
             className="app-loading"

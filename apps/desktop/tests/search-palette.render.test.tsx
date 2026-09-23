@@ -12,7 +12,7 @@ import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
 import type { Location } from '../src/location';
-import type { StoreRef } from '../src/model';
+import type { AgentSnapshot, StoreRef } from '../src/model';
 import type { SearchChannel } from '../src/shell/search-palette';
 
 installDom({
@@ -54,6 +54,8 @@ async function palette(
   open = false,
   /** Mount another modal dialog beside the palette, as a sheet would be. */
   dialog = false,
+  transform: (snapshot: AgentSnapshot) => AgentSnapshot = (snapshot) =>
+    snapshot,
 ) {
   const { SearchPalette, useSearchShortcut } = (await vite.ssrLoadModule(
     '/src/shell/search-palette.tsx',
@@ -75,7 +77,7 @@ async function palette(
       setShown(true);
     });
     return createElement(SearchPalette, {
-      snapshot: FIXTURE,
+      snapshot: transform(FIXTURE),
       open: shown,
       channels: CHANNELS,
       onClose: () => {
@@ -347,4 +349,18 @@ test('Escape closes the palette, and it reopens empty', async () => {
     'People',
     'Channels',
   ]);
+});
+
+test('search suppresses no matches while the inventory is incomplete', async () => {
+  const { rendered } = await palette(true, false, (snapshot) => ({
+    ...snapshot,
+    items: [],
+    storeInventory: snapshot.storeInventory.map((entry) => ({
+      ...entry,
+      status: 'loading',
+    })),
+  }));
+  ui.fireEvent.change(field(), { target: { value: 'not-yet-loaded' } });
+  assert.ok(rendered.getByText('Loading search results…'));
+  assert.equal(rendered.queryByText(/No matches for/), null);
 });

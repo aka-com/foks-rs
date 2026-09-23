@@ -1,3 +1,4 @@
+import { CollectionStatus } from './collection-status';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { normalizeCommandError } from '../bridge';
@@ -61,6 +62,7 @@ export function InvitationActivitySheet({
   const [view, setView] = useState<View>('attention');
   const [operations, setOperations] = useState<InvitationRow[]>([]);
   const [approvals, setApprovals] = useState<InvitationRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pin, setPin] = useState('');
@@ -77,41 +79,41 @@ export function InvitationActivitySheet({
   }, []);
 
   const load = useCallback(async (): Promise<void> => {
-    const [list, pending] = await Promise.all([
-      bridge.invitation(profile, account, { action: 'list' }, null),
-      bridge.invitation(
-        profile,
-        account,
-        { action: 'pending-approvals', team_alias: team.alias },
-        null,
-      ),
-    ]);
-    if (!live.current) return;
-    setOperations(
-      invitationRows(list).filter(
-        (row) =>
-          row.team_id === team.team_id_hex &&
-          row.operation_id &&
-          row.state !== 'cancelled',
-      ),
-    );
-    setApprovals(
-      invitationRows(pending).filter(
-        (row) => row.request_id && row.state !== 'complete',
-      ),
-    );
-    setLoaded(true);
+    setLoading(true);
+    try {
+      const [list, pending] = await Promise.all([
+        bridge.invitation(profile, account, { action: 'list' }, null),
+        bridge.invitation(
+          profile,
+          account,
+          { action: 'pending-approvals', team_alias: team.alias },
+          null,
+        ),
+      ]);
+      if (!live.current) return;
+      setOperations(
+        invitationRows(list).filter(
+          (row) =>
+            row.team_id === team.team_id_hex &&
+            row.operation_id &&
+            row.state !== 'cancelled',
+        ),
+      );
+      setApprovals(
+        invitationRows(pending).filter(
+          (row) => row.request_id && row.state !== 'complete',
+        ),
+      );
+      setLoaded(true);
+    } finally {
+      if (live.current) setLoading(false);
+    }
   }, [bridge, profile, account, team.alias, team.team_id_hex]);
 
   useEffect(() => {
-    setBusy(true);
-    load()
-      .catch((failure: unknown) => {
-        if (live.current) setError(normalizeCommandError(failure).message);
-      })
-      .finally(() => {
-        if (live.current) setBusy(false);
-      });
+    load().catch((failure: unknown) => {
+      if (live.current) setError(normalizeCommandError(failure).message);
+    });
   }, [load]);
 
   const call = (action: InvitationAction) =>
@@ -422,7 +424,7 @@ export function InvitationActivitySheet({
         <>
           <Button
             icon="refresh"
-            disabled={busy}
+            disabled={busy || loading}
             onClick={() => void run(load, { write: false })}
           >
             Refresh
@@ -475,8 +477,12 @@ export function InvitationActivitySheet({
           </InsetRow>
         </Inset>
       ) : null}
+      <CollectionStatus
+        state={loading ? 'loading' : 'ready'}
+        label="invitation activity"
+      />
       {view === 'attention' ? (
-        loaded && !attention.length ? (
+        loaded && !loading && !error && !attention.length ? (
           <div className="callout">
             <span className="kico neutral">
               <Icon name="check" />
@@ -492,7 +498,7 @@ export function InvitationActivitySheet({
             {approvals.map(approvalRow)}
           </>
         )
-      ) : loaded && !issued.length ? (
+      ) : loaded && !loading && !error && !issued.length ? (
         <div className="callout">
           <span className="kico neutral">
             <Icon name="door" />
@@ -501,13 +507,13 @@ export function InvitationActivitySheet({
             <b>No invitations yet.</b>
           </span>
         </div>
-      ) : (
+      ) : issued.length ? (
         <>
           <SectionLabel>Issued</SectionLabel>
           {issued.map(issuedRow)}
           <p className="fn">Issued invitations can be copied again here.</p>
         </>
-      )}
+      ) : null}
     </PanelSheet>
   );
 }

@@ -159,3 +159,24 @@ test('roster read failures withhold counts and cached member rows', async () => 
   assert.ok(!ui.screen.queryByText('sam.ortiz'));
   assert.ok(!ui.screen.queryByRole('heading', { name: 'Requests' }));
 });
+
+test('team info waits for roster enrichment after the item catalog is complete', async () => {
+  await mount((snapshot) => ({
+    ...snapshot,
+    parties: [],
+    federation: [],
+    groupDetailInventory: [
+      { store: 'team:eng', roster: 'loading', federation: 'loading' },
+    ],
+    catalogFreshness: {
+      profiles: {
+        local: { refreshing: false, lastAttemptAt: 1, lastSuccessAt: 1 },
+      },
+      stores: {},
+    },
+  }));
+  assert.ok(ui.screen.getByText('Loading members…'));
+  assert.ok(ui.screen.getByText('Loading owner…'));
+  assert.equal(ui.screen.queryByText('No members yet.'), null);
+  assert.equal(ui.screen.queryByText('No owner designated'), null);
+});

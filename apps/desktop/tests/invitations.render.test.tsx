@@ -1090,3 +1090,159 @@ test('requests load independently, show truncation and use millisecond ages', as
   await ui.waitFor(() => assert.ok(r.getByText('History unavailable')));
   assert.equal(r.queryByText('visitor1'), null);
 });
+
+for (const first of ['inbox', 'list'] as const) {
+  test(`Requests waits for each read independently when ${first} finishes first`, async () => {
+    const { MembershipRequests } = (await vite.ssrLoadModule(
+      '/src/components/membership-requests.tsx',
+    )) as typeof import('../src/components/membership-requests');
+    const { mockBridge } = (await vite.ssrLoadModule(
+      '/src/mock-bridge.ts',
+    )) as typeof import('../src/mock-bridge');
+    const { FIXTURE } = (await vite.ssrLoadModule(
+      '/src/fixture.ts',
+    )) as typeof import('../src/fixture');
+    const team = FIXTURE.stores.find(
+      (store): store is TeamStore => store.kind === 'team',
+    );
+    assert.ok(team);
+    const reads = new Map<
+      string,
+      {
+        resolve: (reply: InvitationReply) => void;
+        reject: (error: Error) => void;
+      }
+    >();
+    const bridge = {
+      ...mockBridge(FIXTURE),
+      invitation: (
+        _p: string,
+        _a: string,
+        action: InvitationAction,
+      ): Promise<InvitationReply> =>
+        new Promise((resolve, reject) =>
+          reads.set(action.action, { resolve, reject }),
+        ),
+    };
+    const r = ui.render(
+      await overlay(
+        createElement(MembershipRequests, {
+          bridge,
+          team,
+          servers: FIXTURE.servers,
+          serverLabel: 'Example',
+          onComplete() {},
+          onInvite() {},
+          onActivity() {},
+        }),
+      ),
+    );
+    assert.ok(r.getByText('Loading requests…'));
+    assert.ok(r.getByText('Loading invitations…'));
+    assert.equal(r.queryByText('No requests yet.'), null);
+    assert.equal(r.queryByText('No in-progress invitations.'), null);
+    await ui.act(async () => reads.get(first)!.resolve([]));
+    assert.ok(
+      r.getByText(
+        first === 'inbox' ? 'No requests yet.' : 'No in-progress invitations.',
+      ),
+    );
+    assert.ok(
+      r.getByText(
+        first === 'inbox' ? 'Loading invitations…' : 'Loading requests…',
+      ),
+    );
+    const second = first === 'inbox' ? 'list' : 'inbox';
+    await ui.act(async () =>
+      reads.get(second)!.reject(new Error('Read failed')),
+    );
+    assert.ok(r.getByText('Read failed'));
+    assert.equal(
+      r.queryByText(
+        second === 'inbox' ? 'No requests yet.' : 'No in-progress invitations.',
+      ),
+      null,
+    );
+    ui.fireEvent.click(r.getByText('Refresh'));
+    await ui.act(async () => {
+      reads.get('inbox')!.resolve({
+        rows: [
+          {
+            request_id: 'a'.repeat(32),
+            username: 'waiting-user',
+            verified: true,
+          },
+        ],
+      });
+      reads.get('list')!.resolve([]);
+    });
+    assert.ok(r.getByText('waiting-user'));
+    ui.fireEvent.click(r.getByText('Refresh'));
+    assert.ok(r.getByText('waiting-user'));
+    assert.ok(r.getByText('Loading requests…'));
+    await ui.act(async () => {
+      reads.get('inbox')!.resolve([]);
+      reads.get('list')!.resolve([]);
+    });
+    assert.equal(r.queryByText('waiting-user'), null);
+    assert.ok(r.getByText('No requests yet.'));
+  });
+}
+
+test('activity opens with loading, keeps known membership work, and recovers from a failed read', async () => {
+  const { InvitationActivitySheet } = (await vite.ssrLoadModule(
+    '/src/components/invitation-activity-sheet.tsx',
+  )) as typeof import('../src/components/invitation-activity-sheet');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  );
+  assert.ok(team);
+  let fail!: (error: Error) => void;
+  let resolve!: (reply: InvitationReply) => void;
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: (_p: string, _a: string, action: InvitationAction) =>
+      action.action === 'list'
+        ? new Promise<InvitationReply>((done, reject) => {
+            resolve = done;
+            fail = reject;
+          })
+        : Promise.resolve([]),
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(InvitationActivitySheet, {
+        bridge,
+        team,
+        onClose() {},
+        membership: {
+          operations: [
+            {
+              kind: 'team-member-addition',
+              alias: team.alias,
+              target: 'existing-user',
+            },
+          ],
+          onResume() {},
+        },
+      }),
+    ),
+  );
+  assert.ok(r.getByText('Loading invitation activity…'));
+  assert.ok(r.getByText('Adding existing-user'));
+  assert.equal((r.getByText('Close') as HTMLButtonElement).disabled, false);
+  assert.equal(r.queryByText('Nothing is waiting on you.'), null);
+  await ui.act(async () => fail(new Error('Activity failed')));
+  assert.ok(r.getByText('Activity failed'));
+  assert.equal(r.queryByText('Loading invitation activity…'), null);
+  ui.fireEvent.click(r.getByText('Refresh'));
+  await ui.act(async () => resolve([]));
+  assert.equal(r.queryByText('Activity failed'), null);
+  assert.ok(r.getByText('Adding existing-user'));
+});

@@ -1,3 +1,5 @@
+import { inventoryReadiness } from '../model';
+import { CollectionStatus } from '../components/collection-status';
 import { useDeviceMetadata } from '../device-cache';
 import { synchronizeApplied } from '../operation-outcome';
 import { refreshConnectedCards } from './devices/hardware-controller';
@@ -498,6 +500,20 @@ export function DevicesScreen({
     );
     return () => onDeviceLabel?.(null);
   }, [onDeviceLabel, selectedId, detailAddress, detailName]);
+
+  const accountReadiness = inventoryReadiness(snapshot, 'accounts');
+  if (!selected && accountReadiness !== 'ready')
+    return (
+      <>
+        <PageHeader ruled title="Devices" subtitle="" />
+        <div className="body">
+          <CollectionStatus state={accountReadiness} label="accounts" />
+          <Button onClick={() => void onRefreshSnapshot().catch(onError)}>
+            Refresh
+          </Button>
+        </div>
+      </>
+    );
 
   // An address naming an account this Mac no longer holds is reported as
   // exactly that, and the notice is the only list of the accounts it does

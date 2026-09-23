@@ -1,3 +1,11 @@
+import { CollectionStatus } from '../components/collection-status';
+import {
+  inventoryReadiness,
+  itemsReadiness,
+  groupDetailReadiness,
+  combineReadiness,
+} from '../model';
+import type { CollectionReadiness } from '../model';
 /**
  * The global search palette (⌘K).
  *
@@ -390,6 +398,7 @@ export interface SearchPaletteProps {
   onOpenItem?: (store: StoreRef, path: string) => void;
   /** The channels the caller knows; the palette loads none of its own. */
   channels?: readonly SearchChannel[];
+  channelReadiness?: CollectionReadiness;
 }
 
 /** The keyboard hints along the foot, which never change. */
@@ -456,11 +465,30 @@ function SearchSheet({
   onNavigate,
   onOpenItem,
   channels = [],
+  channelReadiness = 'ready',
 }: Omit<SearchPaletteProps, 'open'>): ReactNode {
   const [query, setQuery] = useState('');
   const [scope, setScope] = useState<SearchScope>('all');
   const [active, setActive] = useState(0);
   const listId = useId();
+  const inventory = combineReadiness([
+    inventoryReadiness(snapshot, 'accounts'),
+    inventoryReadiness(snapshot, 'teams'),
+  ]);
+  const peopleReadiness = combineReadiness([
+    inventory,
+    ...snapshot.stores
+      .filter((store) => store.kind === 'team')
+      .map((store) => groupDetailReadiness(snapshot, store.id, 'roster')),
+  ]);
+  const readiness = combineReadiness([
+    ...(scope === 'all' || scope === 'stores' ? [inventory] : []),
+    ...(scope === 'all' || scope === 'items' ? [itemsReadiness(snapshot)] : []),
+    ...(scope === 'all' || scope === 'people' ? [peopleReadiness] : []),
+    ...(scope === 'all' || scope === 'channels'
+      ? [combineReadiness([inventory, channelReadiness])]
+      : []),
+  ]);
 
   const index = useMemo(
     () => searchIndex(snapshot, channels),
@@ -596,13 +624,15 @@ function SearchSheet({
           ))}
         </div>
 
+        <CollectionStatus state={readiness} label="search results" />
         <div
           className="pal-results"
           id={listId}
           role="listbox"
           aria-label="Search results"
         >
-          {groups.length === 0 ? (
+          {groups.length === 0 &&
+          readiness !== 'ready' ? null : groups.length === 0 ? (
             <p className="pal-none">
               {query.trim() ? `No matches for “${query.trim()}”. ` : ''}
               Search item names, paths, usernames, and channels.

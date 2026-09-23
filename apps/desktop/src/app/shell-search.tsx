@@ -1,3 +1,5 @@
+import { chatAvailable, combineReadiness } from '../model';
+import type { CollectionReadiness } from '../model';
 import { useMemo, type ReactNode } from 'react';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import type { Location } from '../location';
@@ -43,6 +45,19 @@ export function ShellSearch({
       onNavigate={onNavigate}
       onOpenItem={onOpenItem}
       channels={channels}
+      channelReadiness={combineReadiness(
+        snapshot.stores
+          .filter((store) => chatAvailable(snapshot, store))
+          .map((store): CollectionReadiness => {
+            const entry = inbox.get(store.id);
+            if (entry?.data) return 'ready';
+            return entry?.error ||
+              entry?.state === 'unavailable' ||
+              entry?.state === 'blocked'
+              ? 'unavailable'
+              : 'loading';
+          }),
+      )}
     />
   );
 }

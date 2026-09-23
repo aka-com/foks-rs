@@ -855,6 +855,39 @@ async function projectCatalogCounted(
       ),
     );
   }
+  const readTeams = new Set(teams.map((store) => store.id));
+  const groupDetailInventory = stores
+    .filter((store) => store.kind === 'team')
+    .map((store) => {
+      const previous = sameIdentityStores.has(store.id)
+        ? base?.groupDetailInventory?.find((entry) => entry.store === store.id)
+        : undefined;
+      const retained =
+        sameIdentityStores.has(store.id) &&
+        base?.parties.some((party) => party.store === store.id);
+      const state = (source: 'roster' | 'federation') => {
+        if (
+          groupDetailFailures.some(
+            (failure) =>
+              failure.store === store.id && failure.source === source,
+          )
+        )
+          return 'unavailable' as const;
+        if (partial)
+          return (
+            previous?.[source] ??
+            (retained ? ('ready' as const) : ('loading' as const))
+          );
+        return readTeams.has(store.id)
+          ? ('ready' as const)
+          : ('unavailable' as const);
+      };
+      return {
+        store: store.id,
+        roster: state('roster'),
+        federation: state('federation'),
+      };
+    });
   const baseItems = new Map(
     (base?.items ?? []).map((item) => [itemKey(item), item]),
   );
@@ -956,6 +989,7 @@ async function projectCatalogCounted(
       parties,
       federation,
       groupDetailFailures,
+      groupDetailInventory,
     });
   }
   return withFreshness({
@@ -971,6 +1005,7 @@ async function projectCatalogCounted(
     parties,
     federation,
     groupDetailFailures,
+    groupDetailInventory,
     devices: [],
     yubiAccounts: [],
     cardsConnected: [],

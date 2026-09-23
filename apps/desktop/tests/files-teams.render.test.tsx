@@ -864,3 +864,38 @@ test('group creation replaces a cancelled foreground catalog load without repeat
   ]);
   assert.equal(rendered.queryByText(/Updated data could not be loaded/), null);
 });
+
+test('Teams waits for team inventory even after servers and accounts have arrived', async () => {
+  const base = await fixture();
+  const rendered = await teams(() => {}, {
+    snapshot: {
+      ...base,
+      stores: base.stores.filter((store) => store.kind === 'account'),
+      profileInventory: base.profileInventory.map((entry) => ({
+        ...entry,
+        teams: 'unavailable',
+      })),
+    },
+  });
+  assert.ok(rendered.getByRole('status', { name: 'Loading teams' }));
+  assert.equal(rendered.queryByText('No teams yet'), null);
+});
+
+test('Teams does not count unread rosters as zero members', async () => {
+  const base = await fixture();
+  const rendered = await teams(() => {}, {
+    snapshot: {
+      ...base,
+      parties: [],
+      groupDetailInventory: base.stores
+        .filter((store) => store.kind === 'team')
+        .map((store) => ({
+          store: store.id,
+          roster: 'loading',
+          federation: 'loading',
+        })),
+    },
+  });
+  assert.equal(rendered.queryByText(/0 members/), null);
+  assert.ok(rendered.getByText('Engineering'));
+});

@@ -363,3 +363,35 @@ test('grid folder menus preserve their scope for right click and Shift+F10', asy
     { storeId: 'acct:personal', path: '/logins' },
   ]);
 });
+
+test('All items waits for pending inventories and never presents failed reads as an empty vault', async () => {
+  const mounted = await mount();
+  const pending: AgentSnapshot = {
+    ...mounted.snapshot,
+    items: [],
+    storeInventory: mounted.snapshot.storeInventory.map((entry) => ({
+      ...entry,
+      status: 'loading',
+    })),
+  };
+  mounted.update(pending);
+  assert.ok(ui.screen.getByText('Loading items…'));
+  assert.equal(ui.screen.queryByText('Your vault is empty'), null);
+  mounted.update({
+    ...pending,
+    storeInventory: pending.storeInventory.map((entry) => ({
+      ...entry,
+      status: 'unavailable',
+    })),
+  });
+  assert.ok(ui.screen.getByText('Could not load items. Refresh to try again.'));
+  assert.equal(ui.screen.queryByText('Your vault is empty'), null);
+  mounted.update({
+    ...pending,
+    storeInventory: pending.storeInventory.map((entry) => ({
+      ...entry,
+      status: 'available',
+    })),
+  });
+  assert.ok(ui.screen.getByText('Your vault is empty'));
+});

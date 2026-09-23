@@ -1,3 +1,5 @@
+import { CollectionStatus } from '../components/collection-status';
+import type { CollectionReadiness } from '../model';
 import { localAliasOf } from '../model';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
 import { setAppearance, useAppearance, type Appearance } from '../appearance';
@@ -368,22 +370,32 @@ function DeviceSection({
   // The process on the socket: who started it decides whether maintenance can
   // stop it, and Status says so. Re-read whenever the agent's state settles.
   const [process, setProcess] = useState<AgentProcessInfo | null>(null);
+  const [processReadiness, setProcessReadiness] =
+    useState<CollectionReadiness>('loading');
+  const [processAttempt, setProcessAttempt] = useState(0);
   useEffect(() => {
     let alive = true;
     setProcess(null);
-    if (!ready) return;
+    if (!ready) {
+      setProcessReadiness('unavailable');
+      return;
+    }
+    setProcessReadiness('loading');
     void bridge
       .agentProcessInfo()
       .then((info) => {
-        if (alive) setProcess(info);
+        if (alive) {
+          setProcess(info);
+          setProcessReadiness('ready');
+        }
       })
       .catch(() => {
-        // Descriptive only: a failed read leaves the row without its detail.
+        if (alive) setProcessReadiness('unavailable');
       });
     return () => {
       alive = false;
     };
-  }, [bridge, ready, agentLifecycle.state]);
+  }, [bridge, ready, agentLifecycle.state, processAttempt]);
   const foreign = process !== null && process.pid !== null && !process.owned;
   // The restart sheet: opened from the Status row, or by a maintenance action
   // that the agent's ownership refused, in which case it carries the action
@@ -405,6 +417,8 @@ function DeviceSection({
           bridge={bridge}
           request={restart}
           process={process}
+          processReadiness={processReadiness}
+          onRetryInfo={() => setProcessAttempt((attempt) => attempt + 1)}
           onClose={() => setRestart(null)}
           onError={onError}
         />
@@ -673,12 +687,16 @@ function RestartAgentSheet({
   bridge,
   request,
   process,
+  processReadiness,
+  onRetryInfo,
   onClose,
   onError,
 }: {
   bridge: Bridge;
   request: RestartRequest;
   process: AgentProcessInfo | null;
+  processReadiness: CollectionReadiness;
+  onRetryInfo: () => void;
   onClose: () => void;
   onError: (error: unknown) => void;
 }): ReactNode {
@@ -748,7 +766,21 @@ function RestartAgentSheet({
           : 'FOKS will stop the local agent and start it again. This will take a few seconds.'}
       </p>
       <Inset>
-        <InsetRow label="Running agent">{running}</InsetRow>
+        <InsetRow label="Running agent">
+          {processReadiness === 'ready' ? (
+            running
+          ) : (
+            <>
+              <CollectionStatus
+                state={processReadiness}
+                label="agent information"
+              />
+              {processReadiness === 'unavailable' ? (
+                <Button onClick={onRetryInfo}>Retry</Button>
+              ) : null}
+            </>
+          )}
+        </InsetRow>
         {process?.executable ? (
           <InsetRow label="Launched from" valueClass="mono">
             {process.executable}

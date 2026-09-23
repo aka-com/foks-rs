@@ -1,3 +1,5 @@
+import { itemsReadiness } from '../model';
+import { CollectionStatus } from '../components/collection-status';
 /**
  * The Files browser: a folder tree on the left and the selected folder's
  * contents in the middle. The details panel is a third column that the shell
@@ -1295,63 +1297,70 @@ export function ItemsScreen({
       />
     ) : null;
 
-  const listBody = flatMode ? (
-    !items.length ? (
-      state.query ? (
-        searchMiss
-      ) : vaultEmpty ? (
+  const itemReadiness = itemsReadiness(
+    snapshot,
+    selected.store === ALL_ITEMS ? undefined : selected.store,
+  );
+  const listBody =
+    !items.length && itemReadiness !== 'ready' ? (
+      <CollectionStatus state={itemReadiness} label="items" />
+    ) : flatMode ? (
+      !items.length ? (
+        state.query ? (
+          searchMiss
+        ) : vaultEmpty ? (
+          starter
+        ) : (
+          emptyHere(selectedStore)
+        )
+      ) : (
+        <div className="list-window">
+          {contentsHeader}
+          <div className="virtual-rows" ref={listRef}>
+            {rowWindow.padTop ? (
+              <div
+                className="virtual-spacer"
+                style={{ height: rowWindow.padTop }}
+              />
+            ) : null}
+            {view === 'grid' ? (
+              <div
+                className="files-grid"
+                style={{
+                  gridTemplateColumns: `repeat(${gridWindow.columns}, minmax(0, 1fr))`,
+                  paddingBottom: gridWindow.trailingGap,
+                }}
+              >
+                {visibleRows.map((item) => row(item, columns))}
+              </div>
+            ) : (
+              visibleRows.map((item) => row(item, columns))
+            )}
+            {rowWindow.padBottom ? (
+              <div
+                className="virtual-spacer"
+                style={{ height: rowWindow.padBottom }}
+              />
+            ) : null}
+          </div>
+          {nextUp}
+        </div>
+      )
+    ) : showEmptyFolder ? (
+      vaultEmpty ? (
         starter
       ) : (
-        emptyHere(selectedStore)
+        emptyHere(selectedTree?.store)
       )
     ) : (
       <div className="list-window">
         {contentsHeader}
-        <div className="virtual-rows" ref={listRef}>
-          {rowWindow.padTop ? (
-            <div
-              className="virtual-spacer"
-              style={{ height: rowWindow.padTop }}
-            />
-          ) : null}
-          {view === 'grid' ? (
-            <div
-              className="files-grid"
-              style={{
-                gridTemplateColumns: `repeat(${gridWindow.columns}, minmax(0, 1fr))`,
-                paddingBottom: gridWindow.trailingGap,
-              }}
-            >
-              {visibleRows.map((item) => row(item, columns))}
-            </div>
-          ) : (
-            visibleRows.map((item) => row(item, columns))
-          )}
-          {rowWindow.padBottom ? (
-            <div
-              className="virtual-spacer"
-              style={{ height: rowWindow.padBottom }}
-            />
-          ) : null}
+        <div className={view === 'grid' ? 'files-grid' : 'virtual-rows'}>
+          {paneRows}
         </div>
         {nextUp}
       </div>
-    )
-  ) : showEmptyFolder ? (
-    vaultEmpty ? (
-      starter
-    ) : (
-      emptyHere(selectedTree?.store)
-    )
-  ) : (
-    <div className="list-window">
-      {contentsHeader}
-      <div className={view === 'grid' ? 'files-grid' : 'virtual-rows'}>
-        {paneRows}
-      </div>
-      {nextUp}
-    </div>
-  );
+    );
   const listShown = flatMode ? items.length > 0 : !showEmptyFolder;
 
   return (
@@ -1558,7 +1567,9 @@ export function ItemsScreen({
                     ) : null}
                     {scopeLabel}
                     <span className="sub">
-                      {itemCount(shownCount)}
+                      {itemReadiness === 'ready'
+                        ? itemCount(shownCount)
+                        : `${shownCount} items loaded`}
                       {people
                         ? ` · ${people} ${people === 1 ? 'member' : 'members'}`
                         : ''}
@@ -1620,6 +1631,12 @@ export function ItemsScreen({
                     Check in
                   </Button>
                 </div>
+              ) : null}
+              {items.length > 0 ? (
+                <CollectionStatus
+                  state={itemReadiness}
+                  label="remaining items"
+                />
               ) : null}
               {listBody}
             </div>

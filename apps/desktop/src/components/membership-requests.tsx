@@ -1,3 +1,5 @@
+import { CollectionStatus } from './collection-status';
+import type { CollectionReadiness } from '../model';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { normalizeCommandError, type Bridge } from '../bridge';
@@ -62,7 +64,10 @@ export function MembershipRequests({
   const [remoteProfiles, setRemoteProfiles] = useState<Record<string, string>>(
     {},
   );
-  const [loaded, setLoaded] = useState(false);
+  const [requestState, setRequestState] =
+    useState<CollectionReadiness>('loading');
+  const [operationState, setOperationState] =
+    useState<CollectionReadiness>('loading');
   const [truncated, setTruncated] = useState(false);
   const loadGeneration = useRef(0);
   const [busy, setBusy] = useState(false);
@@ -78,18 +83,25 @@ export function MembershipRequests({
   }, []);
 
   const load = useCallback(
-    async (report: boolean, secret: string | null = null): Promise<void> => {
+    async (secret: string | null = null): Promise<void> => {
       const generation = ++loadGeneration.current;
+      setRequestState('loading');
+      setOperationState('loading');
+      setError(null);
       const current = () =>
         live.current && generation === loadGeneration.current;
-      const failed = (failure: unknown) => {
+      const failed = (
+        failure: unknown,
+        setState: (state: CollectionReadiness) => void,
+      ) => {
         if (!current()) return;
+        setState('unavailable');
         if (hardwareUnlockRequested(failure)) {
           setNeedPin(true);
           setError(
             'Enter the PIN for your security key, then refresh requests.',
           );
-        } else if (report) setError(normalizeCommandError(failure).message);
+        } else setError(normalizeCommandError(failure).message);
       };
       await Promise.all([
         bridge
@@ -105,15 +117,16 @@ export function MembershipRequests({
             setTruncated(
               !Array.isArray(inbox) && inbox.possibly_truncated === true,
             );
-            setLoaded(true);
+            setRequestState('ready');
             setPin('');
             setNeedPin(false);
           })
-          .catch(failed),
+          .catch((failure: unknown) => failed(failure, setRequestState)),
         bridge
           .invitation(profile, account, { action: 'list' }, null)
           .then((list) => {
             if (!current()) return;
+            setOperationState('ready');
             setOperations(
               invitationRows(list).filter(
                 (row) =>
@@ -121,14 +134,14 @@ export function MembershipRequests({
               ),
             );
           })
-          .catch(failed),
+          .catch((failure: unknown) => failed(failure, setOperationState)),
       ]);
     },
     [bridge, profile, account, team.alias, team.team_id_hex],
   );
 
   useEffect(() => {
-    void load(false);
+    void load();
   }, [load]);
 
   useEffect(() => {
@@ -136,7 +149,7 @@ export function MembershipRequests({
       const scope = (event as CustomEvent<InvitationActivityDetail>).detail;
       if (scope && (scope.profile !== profile || scope.account !== account))
         return;
-      void load(false);
+      void load();
     };
     window.addEventListener(INVITATION_ACTIVITY, refresh);
     return () => window.removeEventListener(INVITATION_ACTIVITY, refresh);
@@ -474,7 +487,7 @@ export function MembershipRequests({
             size="sm"
             icon="refresh"
             disabled={busy}
-            onClick={() => void run(() => load(true, pin || null), false)}
+            onClick={() => void run(() => load(pin || null), false)}
           >
             Refresh
           </Button>
@@ -488,9 +501,10 @@ export function MembershipRequests({
           more may be pending. Process these requests and refresh to see more.
         </p>
       ) : null}
+      <CollectionStatus state={requestState} label="requests" />
       {rows.length ? (
         rows.map(requestRow)
-      ) : (
+      ) : requestState === 'ready' ? (
         <div className="callout">
           <span className="kico neutral">
             <Icon name="door" />
@@ -503,7 +517,7 @@ export function MembershipRequests({
             Invite new user…
           </Button>
         </div>
-      )}
+      ) : null}
       <SectionLabel
         action={
           <button type="button" className="lnk" onClick={onActivity}>
@@ -513,18 +527,19 @@ export function MembershipRequests({
       >
         Invitations you created
       </SectionLabel>
+      <CollectionStatus state={operationState} label="invitations" />
       {operations.length ? (
         operations.map(operationRow)
-      ) : (
+      ) : operationState === 'ready' ? (
         <div className="callout">
           <span className="kico neutral">
             <Icon name="check" />
           </span>
           <span className="t">
-            <b>{loaded ? 'No in-progress invitations.' : 'Loading…'}</b>
+            <b>No in-progress invitations.</b>
           </span>
         </div>
-      )}
+      ) : null}
     </section>
   );
 }

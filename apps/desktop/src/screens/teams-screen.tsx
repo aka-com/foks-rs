@@ -1,3 +1,5 @@
+import { inventoryReadiness, groupDetailReadiness } from '../model';
+import { CollectionStatus } from '../components/collection-status';
 import { synchronizeApplied } from '../operation-outcome';
 import { useTabSheetState } from '../navigation-guard';
 /**
@@ -228,7 +230,9 @@ function TeamRow({
       'loading',
       'server-status-unavailable',
       'capability-unavailable',
-    ].includes(state) && !groupDetailFailure(snapshot, store.id, 'roster');
+    ].includes(state) &&
+    !groupDetailFailure(snapshot, store.id, 'roster') &&
+    groupDetailReadiness(snapshot, store.id, 'roster') === 'ready';
   const caption = [
     displayServerName(snapshot, store),
     rosterKnown ? plural(partiesOf(snapshot, store.id).length, 'member') : null,
@@ -299,10 +303,8 @@ export function TeamsScreen({
 }: TeamsScreenProps): ReactNode {
   const toasts = useToast();
   const stores = storeNavigationOrder(snapshot);
-  const catalogLoading =
-    snapshot.profileInventoryStatus !== 'complete' &&
-    !snapshot.servers.length &&
-    !snapshot.stores.length;
+  const teamReadiness = inventoryReadiness(snapshot, 'teams');
+  const catalogLoading = teamReadiness !== 'ready';
   // Named teams and ad-hoc shares are one list here; a row's own pill says
   // which it is, so nothing above the list needs to split them.
   // A team whose setup never finished is listed after every team that works;
@@ -727,7 +729,9 @@ export function TeamsScreen({
           })}
         </div>
       ) : null}
-      {catalogLoading ? (
+      {catalogLoading && !teams.length && teamReadiness === 'unavailable' ? (
+        <CollectionStatus state={teamReadiness} label="teams" />
+      ) : catalogLoading && !teams.length ? (
         <div
           className="body app-loading"
           role="status"

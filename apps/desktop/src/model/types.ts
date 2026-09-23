@@ -332,7 +332,15 @@ export interface CatalogFreshness {
   stores: Readonly<Record<StoreRef, CatalogFreshnessEntry>>;
 }
 
+export type CollectionReadiness = 'loading' | 'ready' | 'unavailable';
+
 export interface AgentSnapshot {
+  /** Explicit readiness for roster reads skipped by partial catalog projections. */
+  groupDetailInventory?: readonly {
+    store: StoreRef;
+    roster: CollectionReadiness;
+    federation: CollectionReadiness;
+  }[];
   catalogFreshness?: CatalogFreshness;
   agent: AgentStatus;
   servers: readonly Server[];

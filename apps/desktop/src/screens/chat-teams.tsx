@@ -1,3 +1,5 @@
+import { inventoryReadiness } from '../model';
+import { CollectionStatus } from '../components/collection-status';
 /**
  * The Chat tab's inbox column: every team with chat, at once.
  *
@@ -476,12 +478,19 @@ export function ChatTeamColumn({
       <div className="chat-inbox-scroll">
         {/* Nothing to list and nothing to search: the column says what would
             be here, and the pane beside it says how to get one. */}
-        {!teams.length && !withoutChat.length && (
+        {!teams.length &&
+        !withoutChat.length &&
+        inventoryReadiness(snapshot, 'teams') !== 'ready' ? (
+          <CollectionStatus
+            state={inventoryReadiness(snapshot, 'teams')}
+            label="teams"
+          />
+        ) : !teams.length && !withoutChat.length ? (
           <div className="chat-inbox-none">
             <b>No teams yet</b>
             <span>Teams appear here with their channels.</span>
           </div>
-        )}
+        ) : null}
         {/* The heading draws only once there is a team under it: a search
             that clears every team drops the heading with it. The "+" it
             carries is the column's one action, and it opens the same channel

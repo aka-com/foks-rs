@@ -1,3 +1,5 @@
+import { inventoryReadiness } from '../model';
+import { CollectionStatus } from '../components/collection-status';
 /** Device-wide server inventory and server details embedded in Settings › Account. */
 
 import { useEffect, useState } from 'react';
@@ -621,7 +623,13 @@ function ServerList({
             onCheck={onCheck}
           />
         ))}
-        {!rows.length ? (
+        {!rows.length &&
+        inventoryReadiness(agentSnapshot, 'profiles') !== 'ready' ? (
+          <CollectionStatus
+            state={inventoryReadiness(agentSnapshot, 'profiles')}
+            label="servers"
+          />
+        ) : !rows.length ? (
           <div className="sempty">
             <ServerMark state="unprobed" />
             <b>No servers on this device yet</b>
@@ -866,6 +874,19 @@ function ServerBody({
               </span>
             </span>
           </InsetRow>
+        ) : inventoryReadiness(
+            agentSnapshot,
+            'accounts',
+            server.profileName,
+          ) !== 'ready' ? (
+          <CollectionStatus
+            state={inventoryReadiness(
+              agentSnapshot,
+              'accounts',
+              server.profileName,
+            )}
+            label="accounts"
+          />
         ) : (
           <InsetRow label="You">
             No account on this server<small>Read-only access available</small>
@@ -918,6 +939,16 @@ function ServerBody({
               </InsetRow>
             );
           })
+        ) : inventoryReadiness(agentSnapshot, 'teams', server.profileName) !==
+          'ready' ? (
+          <CollectionStatus
+            state={inventoryReadiness(
+              agentSnapshot,
+              'teams',
+              server.profileName,
+            )}
+            label="teams"
+          />
         ) : (
           <InsetRow label="Teams">No teams on this server</InsetRow>
         )}

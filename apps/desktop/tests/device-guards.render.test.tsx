@@ -447,3 +447,51 @@ test('the two default routes are canonicalized without asking the guards', async
     ui.cleanup();
   }
 });
+
+test('Devices and Account wait for account inventory instead of showing a missing account', async () => {
+  const h = await harness();
+  const { DevicesScreen } = (await vite.ssrLoadModule(
+    '/src/screens/devices-screen.tsx',
+  )) as typeof import('../src/screens/devices-screen');
+  const { AccountSection } = (await vite.ssrLoadModule(
+    '/src/screens/account-section.tsx',
+  )) as typeof import('../src/screens/account-section');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const snapshot: AgentSnapshot = {
+    ...FIXTURE,
+    accounts: [],
+    stores: [],
+    items: [],
+    profileInventory: FIXTURE.profileInventory.map((entry) => ({
+      ...entry,
+      accounts: 'unavailable',
+    })),
+  };
+  for (const [screen, kind] of [
+    [DevicesScreen, 'devices'],
+    [AccountSection, 'settings'],
+  ] as const) {
+    const { rendered } = h.mount(
+      createElement(
+        screen as unknown as ComponentType<Record<string, unknown>>,
+        {
+          snapshot,
+          bridge: h.bridge(),
+          location: { kind, store: 'acct:personal' },
+          scene: kind,
+          panel: { id: 'panel', labelledBy: 'tab' },
+          onNavigate() {},
+          onRefresh: async () => {},
+          onRefreshSnapshot: async () => snapshot,
+          onError() {},
+          onMutationError: async () => {},
+        },
+      ),
+    );
+    assert.ok(rendered.getByText('Loading accounts…'));
+    assert.equal(rendered.queryByText('Account unavailable'), null);
+    ui.cleanup();
+  }
+});

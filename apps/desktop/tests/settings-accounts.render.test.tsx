@@ -174,7 +174,9 @@ test('an ungranted device capability does not invent a missing backup key', asyn
   )) as typeof import('../src/screens/device-alert');
   assert.equal(reads, 0);
   assert.equal(
-    deviceAlertRegistry(observed).getSnapshot().recoveryPhrases.has('acct:personal'),
+    deviceAlertRegistry(observed)
+      .getSnapshot()
+      .recoveryPhrases.has('acct:personal'),
     false,
   );
   assert.equal(
@@ -1376,4 +1378,18 @@ test('a failed security-key attempt retries with a status request', async () => 
   assert.deepEqual(actions, ['attempt', 'attempt', 'status']);
   assert.deepEqual(refreshed, ['Username updated']);
   assert.equal(rendered.queryByRole('dialog'), null);
+});
+
+test('Account waits for its team count while the team inventory is incomplete', async () => {
+  const base = await fixture();
+  const { rendered } = await renderPeople({
+    ...base,
+    stores: base.stores.filter((store) => store.kind === 'account'),
+    profileInventory: base.profileInventory.map((entry) => ({
+      ...entry,
+      teams: 'unavailable',
+    })),
+  });
+  assert.ok(rendered.getByText('Loading teams…'));
+  assert.equal(rendered.queryByText('0 teams'), null);
 });

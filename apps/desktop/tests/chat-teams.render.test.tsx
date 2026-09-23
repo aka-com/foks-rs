@@ -2388,3 +2388,21 @@ test('a quarantined team says what starts chat again instead of offering Retry',
     /Lock and unlock FOKS to start a new chat session\./,
   );
 });
+
+test('Chat waits for team inventory after servers and accounts have arrived', async () => {
+  const base = await snapshotWithChat(['personal', 'acme']);
+  await mount(
+    {
+      ...base,
+      stores: base.stores.filter((store) => store.kind === 'account'),
+      profileInventory: base.profileInventory.map((entry) => ({
+        ...entry,
+        teams: 'unavailable',
+      })),
+    },
+    { kind: 'chat' },
+  );
+  assert.ok(ui.screen.getByRole('status', { name: 'Loading conversations' }));
+  assert.ok(ui.screen.getByText('Loading teams…'));
+  assert.equal(ui.screen.queryByText('No teams yet'), null);
+});
