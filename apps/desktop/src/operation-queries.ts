@@ -109,6 +109,13 @@ export function invitationRecoveryQuery(
   });
 }
 
+/** A plus suffix means the server may have more pending requests. */
+export type TeamRequestCount = number | `${number}+`;
+
+function requestCount(count: number, truncated?: boolean): TeamRequestCount {
+  return truncated ? `${count}+` : count;
+}
+
 /**
  * How many membership requests wait on a team, as one shared row per team.
  * The inbox rows can carry tokens, so only their number is retained; the
@@ -120,7 +127,7 @@ export function teamRequestCountQuery(
   store: TeamStore,
 ) {
   const { server, account, alias } = store;
-  return repository.query<number>(
+  return repository.query<TeamRequestCount>(
     teamRequestCountKey(store),
     async () => {
       // `invitation` owns its own profile admission: the native bridge queues
@@ -128,14 +135,16 @@ export function teamRequestCountQuery(
       // slot while awaiting a request that cannot start until the slot is
       // released, and the inner request would expire at the admission
       // deadline instead of running.
-      const fullInbox = async (): Promise<number> => {
+      const fullInbox = async (): Promise<TeamRequestCount> => {
         const reply = await bridge.invitation(
           server,
           account,
           { action: 'inbox', team_alias: alias },
           null,
         );
-        return Array.isArray(reply) ? reply.length : (reply.rows?.length ?? 0);
+        return Array.isArray(reply)
+          ? reply.length
+          : requestCount(reply.rows?.length ?? 0, reply.possibly_truncated);
       };
       let reply;
       try {
@@ -161,7 +170,10 @@ export function teamRequestCountQuery(
       if (count === undefined) {
         throw new Error('The agent answered a request count without a count.');
       }
-      return count;
+      return requestCount(
+        count,
+        !Array.isArray(reply) && reply.possibly_truncated,
+      );
     },
     // A badge, read for every manageable team at unlock: invitation activity
     // invalidates it, so it need not be re-read on the metadata cadence.
@@ -208,7 +220,7 @@ export function useTeamRequestCounts(
    * such as the shell itself; below it, the provided one is used.
    */
   repository?: MetadataRepository,
-): ReadonlyMap<StoreRef, number> {
+): ReadonlyMap<StoreRef, TeamRequestCount> {
   const devices = useDeviceCache();
   const shared = useMetadataRepository(
     bridge,
@@ -262,17 +274,20 @@ export function useTeamRequestCounts(
  */
 export function teamRequestsBadge(
   snapshot: AgentSnapshot,
-  counts: ReadonlyMap<StoreRef, number>,
+  counts: ReadonlyMap<StoreRef, TeamRequestCount>,
 ): { label: string; description: string } | null {
   let total = 0;
+  let truncated = false;
   for (const store of snapshot.stores) {
     if (store.kind !== 'team' || store.team_kind !== 'named') continue;
-    total += counts.get(store.id) ?? 0;
+    const count = counts.get(store.id) ?? 0;
+    truncated ||= typeof count === 'string';
+    total += typeof count === 'string' ? Number.parseInt(count, 10) : count;
   }
   if (!total) return null;
   return {
-    label: String(total),
-    description: `${plural(total, 'request')} to join a team`,
+    label: String(requestCount(total, truncated)),
+    description: `${truncated ? 'At least ' : ''}${plural(total, 'request')} to join a team`,
   };
 }
 

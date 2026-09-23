@@ -3,6 +3,7 @@ import test, { mock } from 'node:test';
 import type { AppInfo, Bridge } from '../src/bridge';
 import { enqueueProfileWork } from '../src/bridge';
 import type { TeamStore } from '../src/model';
+import { FIXTURE } from '../src/fixture';
 import {
   MetadataRepository,
   RetiredQueryError,
@@ -28,6 +29,8 @@ import {
   reportableTeamRequestError,
   teamRequestCountKey,
   teamRequestCountQuery,
+  teamRequestsBadge,
+  type TeamRequestCount,
   TEAM_REQUEST_FRESHNESS,
 } from '../src/operation-queries';
 import { accountDeviceKey, profileEnrollmentKey } from '../src/device-cache';
@@ -561,4 +564,65 @@ test('a membership write re-reads the operation journal without waiting out its 
   now += PENDING_OPERATION_FRESHNESS + 1;
   await query.load();
   assert.equal(calls, 4);
+});
+
+test('request counts preserve truncation for native and fallback inbox replies', async () => {
+  const store = {
+    id: 'team',
+    kind: 'team',
+    server: 'local',
+    account: 'owner',
+    alias: 'project',
+    team_kind: 'named',
+  } as TeamStore;
+  for (const fallback of [false, true]) {
+    const bridge = {
+      invitation: async (
+        _p: string,
+        _a: string,
+        action: { action: string },
+      ) => {
+        if (action.action === 'inbox-count') {
+          if (fallback)
+            throw Object.assign(new Error('older agent'), {
+              code: 'invalid-request',
+              retryable: false,
+              fatal: false,
+              ambiguous: false,
+            });
+          return { count: 1000, possibly_truncated: true };
+        }
+        return {
+          rows: Array.from({ length: 1000 }, () => ({})),
+          possibly_truncated: true,
+        };
+      },
+    } as unknown as Bridge;
+    assert.equal(
+      await teamRequestCountQuery(
+        new MetadataRepository(() => 0),
+        bridge,
+        store,
+      ).load(),
+      '1000+',
+    );
+  }
+});
+
+test('rail totals retain the lower-bound marker when any team is truncated', () => {
+  const stores = [
+    { id: 'one', kind: 'team', team_kind: 'named' },
+    { id: 'two', kind: 'team', team_kind: 'named' },
+  ] as TeamStore[];
+  const snapshot = { ...FIXTURE, stores };
+  assert.deepEqual(
+    teamRequestsBadge(
+      snapshot,
+      new Map<string, TeamRequestCount>([
+        [stores[0].id, '1000+'],
+        [stores[1].id, 3],
+      ]),
+    ),
+    { label: '1003+', description: 'At least 1003 requests to join a team' },
+  );
 });

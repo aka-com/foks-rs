@@ -39,7 +39,7 @@ export function TeamInfoPanel({
   snapshot: AgentSnapshot;
   store: TeamStore;
   bridge: Bridge;
-  requestCount?: number;
+  requestCount?: import('../operation-queries').TeamRequestCount;
   onNavigate: (location: Location) => void;
   onClose: (restoreFocus?: boolean) => void;
   onError: (error: unknown) => void;

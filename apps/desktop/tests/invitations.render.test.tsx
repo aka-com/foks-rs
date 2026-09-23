@@ -1021,3 +1021,72 @@ for (const remoteRequest of [false, true]) {
     });
   }
 }
+
+test('requests load independently, show truncation and use millisecond ages', async () => {
+  const { MembershipRequests } = (await vite.ssrLoadModule(
+    '/src/components/membership-requests.tsx',
+  )) as typeof import('../src/components/membership-requests');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  );
+  assert.ok(team);
+  let failList: ((error: Error) => void) | undefined;
+  let inboxReads = 0;
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (
+      _p: string,
+      _a: string,
+      action: InvitationAction,
+    ): Promise<InvitationReply> => {
+      if (action.action === 'list')
+        return new Promise((_, reject) => {
+          failList = reject;
+        });
+      if (action.action === 'inbox')
+        return {
+          rows: [
+            {
+              request_id: 'a'.repeat(32),
+              username: `visitor${++inboxReads}`,
+              verified: true,
+              time: Date.now() - 86_400_000,
+            },
+          ],
+          possibly_truncated: true,
+        };
+      return { state: 'complete' };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(MembershipRequests, {
+        bridge,
+        team,
+        servers: FIXTURE.servers,
+        serverLabel: 'Example',
+        onComplete() {},
+        onInvite() {},
+        onActivity() {},
+      }),
+    ),
+  );
+  // The operation history is still pending, but the inbox is already usable.
+  await ui.waitFor(() => assert.ok(r.getByText('visitor1')));
+  assert.ok(r.getByText(/yesterday/));
+  assert.ok(r.getByText(/Showing 1 request; more may be pending/));
+  assert.ok(failList);
+  failList(new Error('History unavailable'));
+  await ui.waitFor(() => assert.ok(r.getByText('Approve')));
+  ui.fireEvent.click(r.getByText('Refresh'));
+  await ui.waitFor(() => assert.ok(r.getByText('visitor2')));
+  failList(new Error('History unavailable'));
+  await ui.waitFor(() => assert.ok(r.getByText('History unavailable')));
+  assert.equal(r.queryByText('visitor1'), null);
+});

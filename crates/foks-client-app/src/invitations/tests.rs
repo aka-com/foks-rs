@@ -67,6 +67,47 @@ fn operation(v: &serde_json::Value) -> String {
     v["operation_id"].as_str().unwrap().into()
 }
 #[test]
+fn mixed_inbox_pages_are_not_mistaken_for_complete_pages() {
+    let local = foks_proto::decode_team_inbox(include_bytes!(
+        "../../../foks-snowpack/tests/fixtures/foks-v0.1.9/invitations/local.inbox"
+    ))
+    .unwrap()
+    .remove(0);
+    let mut remote = local.clone();
+    remote.rsvp = foks_proto::TeamRsvp::new([56; 17]).unwrap();
+    remote.request = foks_proto::RawInboxRequest::Remote(
+        foks_proto::RemoteJoinRequest::decode(include_bytes!(
+            "../../../foks-snowpack/tests/fixtures/foks-v0.1.9/invitations/remote.request"
+        ))
+        .unwrap(),
+    );
+    for (available, expected_limits, expected_len, truncated) in [
+        (40, vec![100], 40, false),
+        (150, vec![100, 1000], 150, false),
+        (1200, vec![100, 1000], 1000, true),
+    ] {
+        let mut limits = Vec::new();
+        let (rows, incomplete) = read_inbox_pages(|limit| {
+            limits.push(limit);
+            // Model Go's cap on a merged, alternating local/remote page.
+            Ok((0..available.min(limit as usize))
+                .map(|n| {
+                    if n % 2 == 0 {
+                        local.clone()
+                    } else {
+                        remote.clone()
+                    }
+                })
+                .collect())
+        })
+        .unwrap();
+        assert_eq!(limits, expected_limits);
+        assert_eq!(rows.len(), expected_len);
+        assert_eq!(incomplete, truncated);
+    }
+}
+
+#[test]
 fn inbox_handle_lookup_covers_go_timestamp_precision() {
     // Model Go's PostgreSQL ctime comparison in microseconds, while the
     // inbox response exports the timestamp truncated to milliseconds.
@@ -156,6 +197,16 @@ fn local_invitations_reopen_scope_handles_and_reuse_durable_admission() {
     assert_eq!(inbox["rows"][0]["verified"], true);
     let id = inbox["rows"][0]["request_id"].as_str().unwrap().to_owned();
     assert!(!inbox.to_string().contains("permission"));
+    // Another reader must not invalidate the handle already on screen.
+    let refreshed = action(
+        &f,
+        "owner",
+        InvitationAction::Inbox {
+            team_alias: "project".into(),
+        },
+    );
+    assert_eq!(refreshed["rows"][0]["request_id"], id);
+
     let rejection = action(
         &f,
         "owner",
@@ -538,6 +589,42 @@ fn inbox_count_reports_the_inbox_size_without_expanding_or_storing_rows() {
     assert_eq!(inbox["possibly_truncated"], counted["possibly_truncated"]);
     f.run(|_, v, _| {
         assert!(v.store.get(&key).is_ok());
+        Ok(())
+    });
+    // The Rust server can return 1000 rows of each kind. Every handle the
+    // reader can store must also pass portability inventory validation.
+    f.run(|s, v, _| {
+        let original = v.store.get(&key)?;
+        let stored: Vec<InboxHandle> = serde_json::from_slice(&original)?;
+        let mut handles: Vec<InboxHandle> = (0..2000)
+            .map(|n| InboxHandle {
+                id: format!("{n:032x}"),
+                row: stored[0].row.clone(),
+            })
+            .collect();
+        let hard = HardStateStore::open(&s.paths.hard_database)?;
+        let suffix = key.strip_prefix("invitation-inbox.").unwrap();
+        v.store
+            .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
+        assert!(validate_inventory_record(
+            v,
+            "invitation-inbox",
+            suffix,
+            &hard
+        )?);
+        handles.push(InboxHandle {
+            id: format!("{:032x}", 2000),
+            row: stored[0].row.clone(),
+        });
+        v.store
+            .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
+        assert!(matches!(
+            validate_inventory_record(v, "invitation-inbox", suffix, &hard),
+            Err(Error::InvalidAccount(
+                "invitation inbox inventory exceeds limit"
+            ))
+        ));
+        v.store.put(&key, &original)?;
         Ok(())
     });
     // An alias this account does not own is refused before any request.

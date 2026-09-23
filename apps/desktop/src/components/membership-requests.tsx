@@ -63,6 +63,8 @@ export function MembershipRequests({
     {},
   );
   const [loaded, setLoaded] = useState(false);
+  const [truncated, setTruncated] = useState(false);
+  const loadGeneration = useRef(0);
   const [busy, setBusy] = useState(false);
   const [pin, setPin] = useState('');
   const [needPin, setNeedPin] = useState(false);
@@ -77,36 +79,50 @@ export function MembershipRequests({
 
   const load = useCallback(
     async (report: boolean, secret: string | null = null): Promise<void> => {
-      try {
-        const [inbox, list] = await Promise.all([
-          bridge.invitation(
-            profile,
-            account,
-            { action: 'inbox', team_alias: team.alias },
-            secret,
-          ),
-          bridge.invitation(profile, account, { action: 'list' }, null),
-        ]);
-        if (!live.current) return;
-        setRows(invitationRows(inbox).filter((row) => row.request_id));
-        setOperations(
-          invitationRows(list).filter(
-            (row) =>
-              row.team_id === team.team_id_hex && unfinishedOperation(row),
-          ),
-        );
-        setLoaded(true);
-        setPin('');
-        setNeedPin(false);
-      } catch (failure) {
-        if (!live.current) return;
+      const generation = ++loadGeneration.current;
+      const current = () =>
+        live.current && generation === loadGeneration.current;
+      const failed = (failure: unknown) => {
+        if (!current()) return;
         if (hardwareUnlockRequested(failure)) {
           setNeedPin(true);
           setError(
             'Enter the PIN for your security key, then refresh requests.',
           );
         } else if (report) setError(normalizeCommandError(failure).message);
-      }
+      };
+      await Promise.all([
+        bridge
+          .invitation(
+            profile,
+            account,
+            { action: 'inbox', team_alias: team.alias },
+            secret,
+          )
+          .then((inbox) => {
+            if (!current()) return;
+            setRows(invitationRows(inbox).filter((row) => row.request_id));
+            setTruncated(
+              !Array.isArray(inbox) && inbox.possibly_truncated === true,
+            );
+            setLoaded(true);
+            setPin('');
+            setNeedPin(false);
+          })
+          .catch(failed),
+        bridge
+          .invitation(profile, account, { action: 'list' }, null)
+          .then((list) => {
+            if (!current()) return;
+            setOperations(
+              invitationRows(list).filter(
+                (row) =>
+                  row.team_id === team.team_id_hex && unfinishedOperation(row),
+              ),
+            );
+          })
+          .catch(failed),
+      ]);
     },
     [bridge, profile, account, team.alias, team.team_id_hex],
   );
@@ -278,7 +294,7 @@ export function MembershipRequests({
         </p>
         <p className="fn">
           {where}
-          {row.time ? ` · ${relativeTime(row.time * 1000)}` : ''}
+          {row.time ? ` · ${relativeTime(row.time)}` : ''}
         </p>
         {row.remote ? (
           <Inset className="form">
@@ -466,6 +482,12 @@ export function MembershipRequests({
       >
         Membership requests
       </SectionLabel>
+      {truncated ? (
+        <p role="status">
+          Showing {rows.length} {rows.length === 1 ? 'request' : 'requests'};
+          more may be pending. Process these requests and refresh to see more.
+        </p>
+      ) : null}
       {rows.length ? (
         rows.map(requestRow)
       ) : (

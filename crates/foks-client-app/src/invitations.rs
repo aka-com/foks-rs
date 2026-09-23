@@ -388,10 +388,25 @@ impl CheckedProfileSession<'_> {
                 let destination = self.invitation_inbox_destination(&host, credential, &team)?;
                 let (rows, possibly_truncated) =
                     self.invitation_inbox_rows(&host, credential, &team, &destination)?;
+                let key = inbox_key(&host, credential.uid(), &team);
+                let previous: Vec<InboxHandle> = match vault.store.get(&key) {
+                    Ok(bytes) => serde_json::from_slice(&bytes)?,
+                    Err(foks_keystore::Error::Missing) => Vec::new(),
+                    Err(error) => return Err(error.into()),
+                };
+                let mut ids = Vec::new();
+                for handle in &previous {
+                    if let Some(row) = foks_proto::decode_team_inbox(&handle.row)?.pop() {
+                        ids.push((row.rsvp, handle.id.clone()));
+                    }
+                }
                 let mut handles = Vec::new();
                 let mut reports = Vec::new();
                 for row in rows {
-                    let id = hex(&random_array::<16>()?);
+                    let id = match ids.iter().find(|(rsvp, _)| rsvp == &row.rsvp) {
+                        Some((_, id)) => id.clone(),
+                        None => hex(&random_array::<16>()?),
+                    };
                     let expanded = match &row.request {
                         foks_proto::RawInboxRequest::Local { joiner, .. }
                             if joiner.entity_type() != foks_proto::ENTITY_USER =>
@@ -449,7 +464,6 @@ impl CheckedProfileSession<'_> {
                     });
                     reports.push(report);
                 }
-                let key = inbox_key(&host, credential.uid(), &team);
                 vault
                     .store
                     .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
@@ -622,8 +636,8 @@ impl CheckedProfileSession<'_> {
     }
 
     /// The team's pending inbox rows and whether the server may have held
-    /// more back. Go limits each request kind separately, so a full first
-    /// page is escalated once; an unrepresentable equal-timestamp group is
+    /// more back. Go caps the merged page; Rust caps each request kind.
+    /// A full combined page is escalated once; an equal-timestamp group is
     /// never skipped. Both inbox actions read their rows here, so the page
     /// they see and the truncation they report are one fact.
     fn invitation_inbox_rows(
@@ -633,8 +647,8 @@ impl CheckedProfileSession<'_> {
         team: &EntityId,
         destination: &foks_client::AuthenticatedTeamOutcome,
     ) -> Result<(Vec<RawInboxRow>, bool)> {
-        let page = |limit| {
-            self.client.team_invitation_inbox_with_team(
+        read_inbox_pages(|limit| {
+            Ok(self.client.team_invitation_inbox_with_team(
                 host,
                 credential,
                 team,
@@ -644,17 +658,8 @@ impl CheckedProfileSession<'_> {
                     end: 0,
                     limit,
                 }),
-            )
-        };
-        let mut rows = page(100)?;
-        if rows.iter().filter(|r| r.rsvp.is_remote()).count() >= 100
-            || rows.iter().filter(|r| !r.rsvp.is_remote()).count() >= 100
-        {
-            rows = page(1000)?;
-        }
-        let possibly_truncated = rows.iter().filter(|r| r.rsvp.is_remote()).count() >= 1000
-            || rows.iter().filter(|r| !r.rsvp.is_remote()).count() >= 1000;
-        Ok((rows, possibly_truncated))
+            )?)
+        })
     }
 
     /// Re-reads one stored handle from the live pending inbox. `destination`
@@ -702,6 +707,17 @@ impl CheckedProfileSession<'_> {
             ))
     }
 }
+fn read_inbox_pages(
+    mut page: impl FnMut(u64) -> Result<Vec<RawInboxRow>>,
+) -> Result<(Vec<RawInboxRow>, bool)> {
+    let mut rows = page(100)?;
+    if rows.len() >= 100 {
+        rows = page(1000)?;
+    }
+    let possibly_truncated = rows.len() >= 1000;
+    Ok((rows, possibly_truncated))
+}
+
 fn inbox_handle_pagination(time: u64) -> InboxPagination {
     // Go stores sub-millisecond ctime values but exports Unix milliseconds.
     // Its inclusive end bound must cover the entire exported millisecond,
@@ -742,7 +758,7 @@ pub(crate) fn validate_inventory_record(
     if family == "invitation-inbox" {
         crate::portability::trust::validate_digest(suffix)?;
         let rows: Vec<InboxHandle> = serde_json::from_slice(&bytes)?;
-        if rows.len() > 1000 {
+        if rows.len() > 2000 {
             return Err(Error::InvalidAccount(
                 "invitation inbox inventory exceeds limit",
             ));

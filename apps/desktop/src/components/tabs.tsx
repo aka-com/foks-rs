@@ -7,7 +7,7 @@ export interface TabItem<T extends string> {
   id: T;
   label: string;
   /** Omit the pill when the tab has no count (Settings). */
-  count?: number;
+  count?: number | `${number}+`;
 }
 
 export interface TabsProps<T extends string> {

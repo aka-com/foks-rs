@@ -206,7 +206,7 @@ function TeamRow({
   snapshot: AgentSnapshot;
   store: TeamStore;
   /** Membership requests waiting on this team, drawn as a chip on the row. */
-  requests?: number;
+  requests?: import('../operation-queries').TeamRequestCount;
   menu: ReactNode;
   onOpen: () => void;
   onContextMenu: (point: { x: number; y: number }) => void;
@@ -267,8 +267,10 @@ function TeamRow({
           {abnormal ? <Chip tone="warn">{description}</Chip> : null}
           {/* The band above the list names the team; the row says it too,
               so on a long list the reader need not match the two by name. */}
-          {requests > 0 ? (
-            <Chip tone="warn">{plural(requests, 'request')}</Chip>
+          {requests ? (
+            <Chip tone="warn">
+              {requests} {requests === 1 ? 'request' : 'requests'}
+            </Chip>
           ) : null}
           <Chip className="kind">
             {store.team_kind === 'adhoc' ? 'Share' : 'Chat'}
@@ -402,7 +404,7 @@ export function TeamsScreen({
   const requestCounts = useTeamRequestCounts(bridge, snapshot, onError);
   const flaggedTeams = teams.filter(
     (store) =>
-      store.team_kind === 'named' && (requestCounts.get(store.id) ?? 0) > 0,
+      store.team_kind === 'named' && Boolean(requestCounts.get(store.id)),
   );
   const canCreate = accounts.some(
     (store) => storeOperationAvailability(snapshot, store, 'teams').available,
@@ -706,8 +708,8 @@ export function TeamsScreen({
                   </Button>
                 }
               >
-                {plural(count, 'request')} to join {store.name}{' '}
-                {count === 1 ? 'is' : 'are'} waiting for you.
+                {count} {count === 1 ? 'request' : 'requests'} to join{' '}
+                {store.name} {count === 1 ? 'is' : 'are'} waiting for you.
               </Band>
             );
           })}
