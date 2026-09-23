@@ -67,6 +67,25 @@ fn operation(v: &serde_json::Value) -> String {
     v["operation_id"].as_str().unwrap().into()
 }
 #[test]
+fn inbox_handle_lookup_covers_go_timestamp_precision() {
+    // Model Go's PostgreSQL ctime comparison in microseconds, while the
+    // inbox response exports the timestamp truncated to milliseconds.
+    let millisecond = 1_700_000_000_123_u64;
+    for fraction in [0, 1, 456, 999] {
+        let stored_microseconds = millisecond * 1000 + fraction;
+        let exported = stored_microseconds / 1000;
+        let page = inbox_handle_pagination(exported);
+        assert!(stored_microseconds >= page.start * 1000);
+        assert!(stored_microseconds <= page.end * 1000);
+        assert!((millisecond - 1) * 1000 < page.start * 1000);
+        assert!((millisecond + 1) * 1000 + 1 > page.end * 1000);
+    }
+    // Malformed extreme timestamps must not overflow or turn end into the
+    // protocol's zero (unbounded) sentinel.
+    assert_eq!(inbox_handle_pagination(u64::MAX).end, u64::MAX);
+}
+
+#[test]
 fn local_invitations_reopen_scope_handles_and_reuse_durable_admission() {
     let f = Fixture::start();
     f.run(|s, v, k| s.create_account("owner", "inviteowner", "laptop", "", "", None, v, k));
@@ -142,7 +161,7 @@ fn local_invitations_reopen_scope_handles_and_reuse_durable_admission() {
         "owner",
         InvitationAction::Reject {
             team_alias: "project".into(),
-            request_id: id,
+            request_id: id.clone(),
         },
     );
     action(
@@ -160,6 +179,60 @@ fn local_invitations_reopen_scope_handles_and_reuse_durable_admission() {
             operation_id: operation(&p),
         },
     );
+    // A newly pending request must not make the old, rejected handle valid,
+    // even if it falls within the widened timestamp window.
+    f.run(|s, v, k| {
+        let host = s.pinned_host()?;
+        let account = v.account("owner")?;
+        let team = EntityId::from_bytes(v.team("project")?.team_id.clone())?;
+        let key = inbox_key(&host, &account.credential.uid, &team);
+        let mut handles: Vec<InboxHandle> = serde_json::from_slice(&v.store.get(&key)?)?;
+        let mut old = foks_proto::decode_team_inbox(&handles[0].row)?;
+        let pending = s.client.team_invitation_inbox(
+            &host,
+            FederationCredential::Software(&account.credential),
+            &team,
+            None,
+        )?;
+        assert_eq!(pending.len(), 1);
+        old[0].time = pending[0].time.saturating_sub(1);
+        handles[0].row = foks_proto::encode_team_inbox(&old)?;
+        v.store
+            .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
+        assert!(matches!(
+            s.invitation_action(
+                "owner",
+                InvitationAction::Approve {
+                    team_alias: "project".into(),
+                    request_id: id.clone(),
+                    role: TeamMemberRole::Member { visibility: 0 },
+                },
+                None,
+                v,
+                k,
+            ),
+            Err(Error::InvalidAccount(
+                "request is no longer in the pending inbox; refresh it"
+            ))
+        ));
+        // The same inclusive window must find the intended RSVP at its
+        // upper boundary. This exercises the actual handle lookup path.
+        old[0] = pending[0].clone();
+        old[0].time = pending[0].time - 1;
+        handles[0].row = foks_proto::encode_team_inbox(&old)?;
+        v.store
+            .put(&key, &Zeroizing::new(serde_json::to_vec(&handles)?))?;
+        let found = s.invitation_inbox_handle(
+            &host,
+            FederationCredential::Software(&account.credential),
+            &team,
+            None,
+            &id,
+            v,
+        )?;
+        assert_eq!(found.rsvp, pending[0].rsvp);
+        Ok(())
+    });
     let inbox = action(
         &f,
         "owner",

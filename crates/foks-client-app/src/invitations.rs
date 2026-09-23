@@ -681,11 +681,7 @@ impl CheckedProfileSession<'_> {
         let row = foks_proto::decode_team_inbox(&row.row)?
             .pop()
             .ok_or(Error::InvalidAccount("empty invitation handle"))?;
-        let pagination = Some(InboxPagination {
-            start: row.time,
-            end: row.time,
-            limit: 1000,
-        });
+        let pagination = Some(inbox_handle_pagination(row.time));
         let fresh = match destination {
             Some(destination) => self.client.team_invitation_inbox_with_team(
                 host,
@@ -704,6 +700,18 @@ impl CheckedProfileSession<'_> {
             .ok_or(Error::InvalidAccount(
                 "request is no longer in the pending inbox; refresh it",
             ))
+    }
+}
+fn inbox_handle_pagination(time: u64) -> InboxPagination {
+    // Go stores sub-millisecond ctime values but exports Unix milliseconds.
+    // Its inclusive end bound must cover the entire exported millisecond,
+    // otherwise an exact-time lookup excludes a still-pending request.
+    // The next millisecond's boundary can also be returned; the caller
+    // matches the RSVP, not the timestamp, to select the original request.
+    InboxPagination {
+        start: time,
+        end: time.saturating_add(1),
+        limit: 1000,
     }
 }
 fn inbox_key(host: &foks_client::PinnedHost, uid: &EntityId, team: &EntityId) -> String {
