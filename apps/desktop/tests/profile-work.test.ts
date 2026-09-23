@@ -416,7 +416,9 @@ test('the chat lane is admitted while the default lane is busy, and stays serial
   await Promise.all([active, chat]);
 });
 
-test('a chat lane timing reports its lane and its own wait', async () => {
+test('a chat lane timing reports its lane and its own wait', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
   const owner = {},
     gate = deferred(),
     chatGate = deferred(),
@@ -426,6 +428,7 @@ test('a chat lane timing reports its lane and its own wait', async () => {
   });
   const active = scheduleProfileWork(owner, 'p', () => gate.promise);
   await flush();
+  now = 100;
   const first = scheduleProfileWork(
     owner,
     'p',
@@ -442,7 +445,11 @@ test('a chat lane timing reports its lane and its own wait', async () => {
     'chat:pending',
     'chat',
   );
+  // Admission overhead and time waiting behind active work are explicit,
+  // independent of CPU scheduling and the real clock's resolution.
+  now = 105;
   await flush();
+  now = 125;
   chatGate.resolve();
   await Promise.all([first, second]);
   gate.resolve();
@@ -456,8 +463,11 @@ test('a chat lane timing reports its lane and its own wait', async () => {
       ['p', undefined, 'foreground'],
     ],
   );
-  // The first chat request was admitted at once; the second waited for it.
-  assert.equal(events[0].queueMilliseconds < events[1].queueMilliseconds, true);
+  // Each wait starts at that request's enqueue time, in its own lane.
+  assert.deepEqual(
+    events.map((event) => event.queueMilliseconds),
+    [5, 25, 0],
+  );
 });
 
 test('each lane bounds its own capacity and the profile outlives one lane draining', async () => {
