@@ -158,15 +158,14 @@ export type Unlisten = () => void;
 
 export type ExitState =
   | { state: 'idle' }
-  | { state: 'decision'; pid: number; unsent: number }
-  | { state: 'stopping'; pid: number; force: boolean }
+  | { state: 'decision'; pid: number | null; unsent: number }
+  | { state: 'stopping'; pid: number | null; force: boolean }
   | { state: 'finalizing' }
-  | { state: 'failed'; pid: number; error: string }
-  | { state: 'force-confirmation'; pid: number; error: string };
+  | { state: 'failed'; pid: number | null; error: string }
+  | { state: 'force-confirmation'; pid: number | null; error: string };
 
 export type ExitAction =
   | 'cancel'
-  | 'leave-running'
   | 'stop-agent'
   | 'retry'
   | 'show-force'
@@ -177,8 +176,8 @@ export function decodeExitState(value: unknown): ExitState {
   const item = record(value, 'exit_state response');
   const state = string(item.state, 'exit_state.state');
   if (state === 'idle' || state === 'finalizing') return { state };
-  const pid = integer(item.pid, 'exit_state.pid');
-  if (pid < 1 || pid > 0xffff_ffff)
+  const pid = item.pid === null ? null : integer(item.pid, 'exit_state.pid');
+  if (pid !== null && (pid < 1 || pid > 0xffff_ffff))
     throw new Error('exit_state.pid must fit a positive u32');
   if (state === 'decision') {
     const unsent = integer(item.unsent, 'exit_state.unsent');

@@ -69,11 +69,13 @@ function ExitOverlay({
               <Icon name="settings" />
             </span>
             <div>
-              <h2 id="exit-decision-title">Quit FOKS?</h2>
+              <h2 id="exit-decision-title">Stop FOKS Agent and quit?</h2>
               {unsent ? <p className="exit-unsent">{unsent}</p> : null}
               <p>
-                FOKS Agent can keep running for command-line tools and faster
-                startup, or it can stop when the app quits.
+                FOKS will stop the agents using this app’s local state,
+                including an agent already running when the app opened. Once
+                shutdown starts, the app stays here until those processes have
+                exited.
               </p>
             </div>
           </div>
@@ -82,16 +84,13 @@ function ExitOverlay({
               {failure}
             </p>
           ) : null}
-          <div className="exit-actions three">
+          <div className="exit-actions">
             <Button
               disabled={sending}
               data-dialog-autofocus="true"
               onClick={() => act('cancel')}
             >
               Keep FOKS open
-            </Button>
-            <Button disabled={sending} onClick={() => act('leave-running')}>
-              Quit and keep agent running
             </Button>
             <Button
               variant="primary"
@@ -123,12 +122,15 @@ function ExitOverlay({
               <h2 id="exit-failed-title">FOKS Agent did not stop</h2>
               <p>
                 FOKS has not quit because its background agent is still running.
-                You can try again, leave it running, or force it to stop.
+                You can try again or force it to stop. The app cannot resume
+                while shutdown is in progress.
               </p>
-              <div className="exit-process">
-                <span>Running agent</span>
-                <code>foks-agent (PID {state.pid})</code>
-              </div>
+              {state.pid !== null ? (
+                <div className="exit-process">
+                  <span>Agent at shutdown</span>
+                  <code>foks-agent (PID {state.pid})</code>
+                </div>
+              ) : null}
               <p className="exit-error">{state.error}</p>
             </div>
           </div>
@@ -142,12 +144,6 @@ function ExitOverlay({
               Force stop…
             </Button>
             <span className="spacer" />
-            <Button disabled={sending} onClick={() => act('cancel')}>
-              Keep FOKS open
-            </Button>
-            <Button disabled={sending} onClick={() => act('leave-running')}>
-              Quit and leave agent running
-            </Button>
             <Button
               variant="primary"
               disabled={sending}
@@ -180,8 +176,8 @@ function ExitOverlay({
               can interrupt a local operation.
             </p>
             <p className="exit-calm">
-              Server data is unaffected, but an in-progress local write may need
-              to be retried after FOKS starts again.
+              An interrupted operation may need to be checked or retried after
+              FOKS starts again.
             </p>
           </div>
         </div>
@@ -221,29 +217,44 @@ export function ExitGuard({
   children?: ReactNode;
 }): ReactNode {
   const [state, setState] = useState<ExitState>(IDLE);
+  const [lastBridge, setLastBridge] = useState(bridge);
+  const exitBridge = bridge ?? lastBridge;
 
   useEffect(() => {
-    setState(IDLE);
-    if (!bridge?.native) return;
+    if (bridge?.native) setLastBridge(bridge);
+  }, [bridge]);
+
+  useEffect(() => {
+    if (!exitBridge?.native) return;
+    const update = (next: ExitState) =>
+      setState((previous) => {
+        const teardown =
+          previous.state !== 'idle' && previous.state !== 'decision';
+        return teardown && (next.state === 'idle' || next.state === 'decision')
+          ? previous
+          : next;
+      });
     let live = true;
     let unlisten: (() => void) | undefined;
+    let receivedEvent = false;
     void (async () => {
-      const release = await bridge.onExitState((next) => {
-        if (live) setState(next);
+      const release = await exitBridge.onExitState((next) => {
+        receivedEvent = true;
+        if (live) update(next);
       });
       if (!live) {
         release();
         return;
       }
       unlisten = release;
-      const current = await bridge.exitState();
-      if (live) setState(current);
+      const current = await exitBridge.exitState();
+      if (live && !receivedEvent) update(current);
     })().catch(() => undefined);
     return () => {
       live = false;
       unlisten?.();
     };
-  }, [bridge]);
+  }, [exitBridge]);
 
   const blocked = state.state !== 'idle';
   return (
@@ -253,9 +264,11 @@ export function ExitGuard({
         inert={blocked || undefined}
         aria-hidden={blocked || undefined}
       >
-        {children}
+        {state.state === 'idle' || state.state === 'decision' ? children : null}
       </div>
-      {blocked && bridge ? <ExitOverlay state={state} bridge={bridge} /> : null}
+      {blocked && exitBridge ? (
+        <ExitOverlay state={state} bridge={exitBridge} />
+      ) : null}
     </div>
   );
 }

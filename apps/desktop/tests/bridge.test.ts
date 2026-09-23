@@ -445,7 +445,10 @@ test('decoders successfully parse the full wire contract golden fixture', async 
     decodePendingOperations([fixture.pendingOperation])[0]?.kind,
     'account-recovery',
   );
-  assert.equal(decodeRecoveryPhrase(fixture.recoveryPhrase).backupAlias, 'paper');
+  assert.equal(
+    decodeRecoveryPhrase(fixture.recoveryPhrase).backupAlias,
+    'paper',
+  );
   assert.equal(
     decodeGroupDiscovery(fixture.groupDiscovery).groups[0]?.name,
     'Engineering',
@@ -2798,7 +2801,11 @@ test('maintenance snapshots decode typed operation and restoration outcomes', ()
   assert.equal(snapshot.disposition.status, 'restoration-failed');
 });
 
-test('exit states decode the owned process and reject malformed transitions', () => {
+test('exit states allow unknown processes without accepting invalid PIDs', () => {
+  assert.deepEqual(
+    decodeExitState({ state: 'decision', pid: null, unsent: 0 }),
+    { state: 'decision', pid: null, unsent: 0 },
+  );
   assert.deepEqual(
     decodeExitState({ state: 'decision', pid: 45904, unsent: 2 }),
     { state: 'decision', pid: 45904, unsent: 2 },

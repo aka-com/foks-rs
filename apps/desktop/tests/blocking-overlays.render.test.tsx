@@ -75,14 +75,18 @@ test('owned-agent exit decision uses sentence-case actions and includes volatile
     ),
   );
   assert.match(
-    (await rendered.findByRole('dialog', { name: 'Quit FOKS?' })).textContent ??
-      '',
+    (await rendered.findByRole('dialog', { name: 'Stop FOKS Agent and quit?' }))
+      .textContent ?? '',
     /2 messages have not been sent/,
   );
   ui.fireEvent.click(
     rendered.getByRole('button', { name: 'Quit and stop agent' }),
   );
   assert.deepEqual(actions, ['stop-agent']);
+  assert.equal(
+    rendered.queryByRole('button', { name: /keep agent running/i }),
+    null,
+  );
   assert.equal(
     rendered.queryByRole('button', { name: 'Quit and Stop Agent' }),
     null,
@@ -122,9 +126,17 @@ test('failed agent shutdown requires a separate force-stop confirmation', async 
       createElement('div', null, 'Vault shell'),
     ),
   );
-  ui.fireEvent.click(
-    await rendered.findByRole('button', { name: 'Force stop…' }),
+  await rendered.findByRole('button', { name: 'Force stop…' });
+  assert.equal(rendered.queryByText('Vault shell'), null);
+  assert.equal(
+    rendered.queryByRole('button', { name: 'Keep FOKS open' }),
+    null,
   );
+  assert.equal(
+    rendered.queryByRole('button', { name: /leave agent running/i }),
+    null,
+  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Force stop…' }));
   assert.ok(
     await rendered.findByRole('alertdialog', {
       name: 'Force stop FOKS Agent?',
@@ -136,6 +148,64 @@ test('failed agent shutdown requires a separate force-stop confirmation', async 
   await ui.waitFor(() => assert.equal(force.hasAttribute('disabled'), false));
   ui.fireEvent.click(force);
   assert.deepEqual(actions, ['show-force', 'force-stop']);
+});
+
+test('teardown survives bridge replacement and a late idle snapshot', async () => {
+  const { FIXTURE, mockBridge, ExitGuard } = await modules();
+  let publish: ((state: import('../src/bridge').ExitState) => void) | undefined;
+  let snapshot:
+    ((state: import('../src/bridge').ExitState) => void) | undefined;
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    onExitState: async (listener) => {
+      publish = listener;
+      return () => {};
+    },
+    exitState: () =>
+      new Promise((resolve) => {
+        snapshot = resolve;
+      }),
+  };
+  const rendered = ui.render(
+    createElement(
+      ExitGuard,
+      { bridge },
+      createElement('div', null, 'Live shell'),
+    ),
+  );
+  await ui.waitFor(() => assert.ok(snapshot));
+  ui.act(() => publish?.({ state: 'stopping', pid: null, force: false }));
+  assert.equal(rendered.queryByText('Live shell'), null);
+  await ui.act(async () => snapshot?.({ state: 'idle' }));
+  assert.ok(rendered.getByText('Stopping FOKS Agent…'));
+  rendered.rerender(
+    createElement(
+      ExitGuard,
+      { bridge: null },
+      createElement('div', null, 'Live shell'),
+    ),
+  );
+  assert.ok(rendered.getByText('Stopping FOKS Agent…'));
+  ui.act(() =>
+    publish?.({ state: 'failed', pid: null, error: 'Still running' }),
+  );
+  assert.ok(rendered.getByText('Still running'));
+  const replacement: Bridge = {
+    ...bridge,
+    exitState: async () => ({ state: 'idle' }),
+  };
+  await ui.act(async () =>
+    rendered.rerender(
+      createElement(
+        ExitGuard,
+        { bridge: replacement },
+        createElement('div', null, 'Live shell'),
+      ),
+    ),
+  );
+  assert.equal(rendered.queryByText('Live shell'), null);
+  assert.ok(rendered.getByText('Still running'));
 });
 
 function deferred<T>(): {
@@ -820,7 +890,10 @@ test('a conceal does not reopen the sheet a scene opened with the page', async (
     await Promise.resolve();
   });
   await ui.waitFor(() => {
-    assert.doesNotMatch(document.body.textContent ?? '', /Save recovery phrase/);
+    assert.doesNotMatch(
+      document.body.textContent ?? '',
+      /Save recovery phrase/,
+    );
   });
   // The page itself is back, so the phrase is gone rather than the whole tab.
   assert.match(document.body.textContent ?? '', /paper-backup/);

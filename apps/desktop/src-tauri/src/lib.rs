@@ -393,9 +393,6 @@ pub fn run() {
                     api.prevent_exit();
                     return;
                 }
-                if exiting.terminate_agent_on_exit() {
-                    agent::terminate_managed_agent();
-                }
                 clipboard::defer_exit_cleanup(app, code, &api);
             }
         });

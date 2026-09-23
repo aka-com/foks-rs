@@ -1,5 +1,4 @@
-//! Coordinates application exit with the renderer's volatile chat queue and
-//! the local agent process owned by this desktop launch.
+//! One-way application teardown. Only verified agent exit permits desktop exit.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,20 +18,20 @@ pub enum ExitState {
     #[default]
     Idle,
     Decision {
-        pid: u32,
+        pid: Option<u32>,
         unsent: usize,
     },
     Stopping {
-        pid: u32,
+        pid: Option<u32>,
         force: bool,
     },
     Finalizing,
     Failed {
-        pid: u32,
+        pid: Option<u32>,
         error: String,
     },
     ForceConfirmation {
-        pid: u32,
+        pid: Option<u32>,
         error: String,
     },
 }
@@ -41,7 +40,6 @@ pub enum ExitState {
 #[serde(rename_all = "kebab-case")]
 pub enum ExitAction {
     Cancel,
-    LeaveRunning,
     StopAgent,
     Retry,
     ShowForce,
@@ -49,57 +47,17 @@ pub enum ExitAction {
     ForceStop,
 }
 
-/// The renderer's volatile-message report and the single application-wide
-/// exit workflow. Multiple close/quit signals share this state, preventing
-/// stacked prompts and concurrent attempts to stop the same process.
+#[derive(Default)]
 pub struct CloseGuard {
     unsent: AtomicUsize,
-    accepted: AtomicBool,
     asking: AtomicBool,
-    leave_agent_running: AtomicBool,
+    renderer_ready: AtomicBool,
     state: Mutex<ExitState>,
-}
-
-impl Default for CloseGuard {
-    fn default() -> Self {
-        Self {
-            unsent: AtomicUsize::new(0),
-            accepted: AtomicBool::new(false),
-            asking: AtomicBool::new(false),
-            leave_agent_running: AtomicBool::new(false),
-            state: Mutex::new(ExitState::Idle),
-        }
-    }
 }
 
 impl CloseGuard {
     pub fn set_unsent(&self, count: usize) {
         self.unsent.store(count, Ordering::Relaxed);
-        if count > 0 {
-            self.accepted.store(false, Ordering::Relaxed);
-        }
-    }
-
-    pub fn unsent(&self) -> usize {
-        if self.accepted.load(Ordering::Relaxed) {
-            0
-        } else {
-            self.unsent.load(Ordering::Relaxed)
-        }
-    }
-
-    fn accept(&self) {
-        self.accepted.store(true, Ordering::Relaxed);
-    }
-
-    fn begin_native_question(&self) -> bool {
-        self.asking
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    }
-
-    fn end_native_question(&self) {
-        self.asking.store(false, Ordering::Relaxed);
     }
 
     pub fn state(&self) -> ExitState {
@@ -114,34 +72,188 @@ impl CloseGuard {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = state.clone();
+        self.emit(app, state);
+    }
+
+    fn emit(&self, app: &tauri::AppHandle, state: ExitState) {
         if let Err(error) = app.emit(EXIT_STATE_EVENT, state) {
-            tracing::error!(%error, "Failed to publish the application exit state");
+            self.renderer_ready.store(false, Ordering::Release);
+            tracing::error!(%error, "Failed to publish application exit state");
         }
     }
 
-    /// Preserve historical agent cleanup for restarts and fatal exits. The
-    /// exception is the reader's explicit choice to leave it running.
-    pub fn terminate_agent_on_exit(&self) -> bool {
-        !self.leave_agent_running.load(Ordering::Acquire)
-    }
-
-    fn begin_owned_agent_exit(&self, app: &tauri::AppHandle, agent: &AgentHandle) -> bool {
-        if self.state() != ExitState::Idle {
-            return true;
-        }
-        let process = agent.process_info();
-        let Some(pid) = process.pid.filter(|_| process.owned) else {
+    fn begin(self: &Arc<Self>, app: &tauri::AppHandle, agent: &Arc<AgentHandle>) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *state == ExitState::Finalizing {
             return false;
-        };
-        self.publish(
-            app,
-            ExitState::Decision {
-                pid,
-                unsent: self.unsent(),
-            },
-        );
+        }
+        let repeated = *state != ExitState::Idle;
+        if !repeated {
+            // Missing endpoint/ownership information never authorizes exit.
+            *state = ExitState::Decision {
+                pid: agent.process_info().pid,
+                unsent: self.unsent.load(Ordering::Relaxed),
+            };
+        }
+        let snapshot = state.clone();
+        drop(state);
+        if !repeated {
+            self.emit(app, snapshot);
+        }
+        // Repeating Cmd-Q supplies a native escape from a failed renderer.
+        // Startup quits work before a renderer has subscribed at all.
+        if repeated || !self.renderer_ready.load(Ordering::Acquire) {
+            native_question(app, self, agent);
+        }
         true
     }
+}
+
+fn transition(state: &ExitState, action: ExitAction) -> Result<ExitState, AgentError> {
+    match (state, action) {
+        (ExitState::Decision { .. }, ExitAction::Cancel) => Ok(ExitState::Idle),
+        (ExitState::Decision { pid, .. }, ExitAction::StopAgent)
+        | (ExitState::Failed { pid, .. }, ExitAction::Retry) => Ok(ExitState::Stopping {
+            pid: *pid,
+            force: false,
+        }),
+        (ExitState::Failed { pid, error }, ExitAction::ShowForce) => {
+            Ok(ExitState::ForceConfirmation {
+                pid: *pid,
+                error: error.clone(),
+            })
+        }
+        (ExitState::ForceConfirmation { pid, error }, ExitAction::CancelForce) => {
+            Ok(ExitState::Failed {
+                pid: *pid,
+                error: error.clone(),
+            })
+        }
+        (ExitState::ForceConfirmation { pid, .. }, ExitAction::ForceStop) => {
+            Ok(ExitState::Stopping {
+                pid: *pid,
+                force: true,
+            })
+        }
+        _ => Err(AgentError::new(
+            "exit-state",
+            "That exit action is no longer available. Shutdown cannot be cancelled once it starts.",
+            false,
+        )),
+    }
+}
+
+fn apply_action(
+    app: &tauri::AppHandle,
+    guard: &Arc<CloseGuard>,
+    agent: &Arc<AgentHandle>,
+    action: ExitAction,
+) -> Result<(), AgentError> {
+    let mut state = guard
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let next = transition(&state, action)?;
+    if matches!(next, ExitState::Stopping { .. }) {
+        agent.begin_exit();
+    }
+    *state = next.clone();
+    drop(state);
+    guard.emit(app, next.clone());
+    if let ExitState::Stopping { pid, force } = next {
+        let app = app.clone();
+        let guard = Arc::clone(guard);
+        let agent = Arc::clone(agent);
+        // Retain the native coordinator independently of renderer lifetime.
+        tauri::async_runtime::spawn(async move {
+            let worker = Arc::clone(&agent);
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                if force {
+                    worker.force_stop_for_exit()
+                } else {
+                    worker.stop_for_exit()
+                }
+            })
+            .await
+            .unwrap_or_else(|_| {
+                Err(AgentError::unknown(
+                    "The shutdown worker was interrupted. Try again.",
+                ))
+            });
+            match result {
+                Ok(()) => {
+                    guard.publish(&app, ExitState::Finalizing);
+                    app.exit(0);
+                }
+                Err(error) => {
+                    guard.publish(
+                        &app,
+                        ExitState::Failed {
+                            pid,
+                            error: error.message,
+                        },
+                    );
+                    if !guard.renderer_ready.load(Ordering::Acquire) {
+                        native_question(&app, &guard, &agent);
+                    }
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
+/// Native fallback shares the exact same transitions; it cannot bypass the
+/// termination wait, even if the webview is unavailable or quits again.
+fn native_question(app: &tauri::AppHandle, guard: &Arc<CloseGuard>, agent: &Arc<AgentHandle>) {
+    let snapshot = guard.state();
+    let (message, yes_label, no_label, yes, no) = match &snapshot {
+        ExitState::Decision { unsent, .. } => (
+            format!("Stop the FOKS agents using this app's local state and quit? Shutdown cannot be cancelled once it starts. {unsent} unsent messages will be discarded."),
+            "Stop agent and quit", "Keep FOKS open", ExitAction::StopAgent, ExitAction::Cancel,
+        ),
+        ExitState::Failed { error, .. } => (
+            format!("FOKS has not quit. {error}\nTry again, or review force-stop options."),
+            "Try again", "Force stop…", ExitAction::Retry, ExitAction::ShowForce,
+        ),
+        ExitState::ForceConfirmation { .. } => (
+            "Force stop FOKS Agent? Interrupted operations may need to be checked after restarting FOKS.".into(),
+            "Force stop and quit", "Back", ExitAction::ForceStop, ExitAction::CancelForce,
+        ),
+        _ => return,
+    };
+    if guard.asking.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let handle = app.clone();
+    let guard = Arc::clone(guard);
+    let agent = Arc::clone(agent);
+    app.dialog()
+        .message(message)
+        .title("Quit FOKS")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            yes_label.into(),
+            no_label.into(),
+        ))
+        .show(move |accepted| {
+            guard.asking.store(false, Ordering::Release);
+            // Ignore a stale native answer if the renderer already acted.
+            if guard.state() != snapshot {
+                return;
+            }
+            if apply_action(&handle, &guard, &agent, if accepted { yes } else { no }).is_ok()
+                && matches!(
+                    guard.state(),
+                    ExitState::Failed { .. } | ExitState::ForceConfirmation { .. }
+                )
+            {
+                native_question(&handle, &guard, &agent);
+            }
+        });
 }
 
 #[tauri::command]
@@ -161,107 +273,12 @@ pub fn exit_state(
     guard: State<'_, Arc<CloseGuard>>,
 ) -> Result<ExitState, AgentError> {
     require_main_window(&webview)?;
+    guard.renderer_ready.store(true, Ordering::Release);
     Ok(guard.state())
 }
 
-fn unsent_question(unsent: usize) -> String {
-    if unsent == 1 {
-        "1 message has not been sent yet. It is only on this device, and closing FOKS discards it."
-            .to_owned()
-    } else {
-        format!(
-            "{unsent} messages have not been sent yet. They are only on this device, and closing \
-             FOKS discards them."
-        )
-    }
-}
-
-/// The unsent-only fallback remains native. The richer in-app decision is
-/// reserved for a process this launch can actually stop.
-fn ask_about_unsent(
-    app: &tauri::AppHandle,
-    guard: &Arc<CloseGuard>,
-    unsent: usize,
-    proceed: impl FnOnce() + Send + 'static,
-) {
-    if !guard.begin_native_question() {
-        return;
-    }
-    let guard = Arc::clone(guard);
-    app.dialog()
-        .message(unsent_question(unsent))
-        .kind(MessageDialogKind::Warning)
-        .title("Unsent messages")
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Close anyway".to_owned(),
-            "Keep FOKS open".to_owned(),
-        ))
-        .show(move |discard| {
-            guard.end_native_question();
-            if discard {
-                guard.accept();
-                proceed();
-            }
-        });
-}
-
-fn finish_exit(app: &tauri::AppHandle, guard: &Arc<CloseGuard>, leave_agent_running: bool) {
-    guard.accept();
-    guard
-        .leave_agent_running
-        .store(leave_agent_running, Ordering::Release);
-    guard.publish(app, ExitState::Finalizing);
-    app.exit(0);
-}
-
-fn current_pid_for_stop(state: &ExitState, force: bool) -> Option<u32> {
-    match (state, force) {
-        (ExitState::Decision { pid, .. }, false) | (ExitState::Failed { pid, .. }, false) => {
-            Some(*pid)
-        }
-        (ExitState::ForceConfirmation { pid, .. }, true) => Some(*pid),
-        _ => None,
-    }
-}
-
-async fn stop_and_exit(
-    app: tauri::AppHandle,
-    guard: Arc<CloseGuard>,
-    agent: Arc<AgentHandle>,
-    force: bool,
-) -> Result<(), AgentError> {
-    let pid = current_pid_for_stop(&guard.state(), force).ok_or_else(|| {
-        AgentError::new(
-            "exit-state",
-            "That exit action is no longer available.",
-            true,
-        )
-    })?;
-    guard.publish(&app, ExitState::Stopping { pid, force });
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        if force {
-            agent.force_stop_for_exit()
-        } else {
-            agent.stop_for_exit()
-        }
-    })
-    .await
-    .map_err(|_| AgentError::unknown("The agent shutdown worker was interrupted."))?;
-    match result {
-        Ok(()) => finish_exit(&app, &guard, false),
-        Err(error) => guard.publish(
-            &app,
-            ExitState::Failed {
-                pid,
-                error: error.message,
-            },
-        ),
-    }
-    Ok(())
-}
-
 #[tauri::command]
-pub async fn handle_exit_action(
+pub fn handle_exit_action(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     guard: State<'_, Arc<CloseGuard>>,
@@ -269,117 +286,35 @@ pub async fn handle_exit_action(
     action: ExitAction,
 ) -> Result<(), AgentError> {
     require_main_window(&webview)?;
-    let guard = Arc::clone(&guard);
-    match action {
-        ExitAction::Cancel => {
-            guard.publish(&app, ExitState::Idle);
-            Ok(())
-        }
-        ExitAction::LeaveRunning => {
-            if !matches!(
-                guard.state(),
-                ExitState::Decision { .. } | ExitState::Failed { .. }
-            ) {
-                return Err(AgentError::new(
-                    "exit-state",
-                    "That exit action is no longer available.",
-                    true,
-                ));
-            }
-            finish_exit(&app, &guard, true);
-            Ok(())
-        }
-        ExitAction::StopAgent | ExitAction::Retry => {
-            stop_and_exit(app, guard, Arc::clone(&state.agent), false).await
-        }
-        ExitAction::ShowForce => {
-            let ExitState::Failed { pid, error } = guard.state() else {
-                return Err(AgentError::new(
-                    "exit-state",
-                    "That exit action is no longer available.",
-                    true,
-                ));
-            };
-            guard.publish(&app, ExitState::ForceConfirmation { pid, error });
-            Ok(())
-        }
-        ExitAction::CancelForce => {
-            let ExitState::ForceConfirmation { pid, error } = guard.state() else {
-                return Err(AgentError::new(
-                    "exit-state",
-                    "That exit action is no longer available.",
-                    true,
-                ));
-            };
-            guard.publish(&app, ExitState::Failed { pid, error });
-            Ok(())
-        }
-        ExitAction::ForceStop => stop_and_exit(app, guard, Arc::clone(&state.agent), true).await,
-    }
+    apply_action(&app, &guard, &state.agent, action)
 }
 
-/// Holds a window close while either the owned-agent decision or the existing
-/// unsent-message question is active.
 pub fn observe(window: &tauri::WebviewWindow, guard: Arc<CloseGuard>) {
     let observed = window.clone();
     window.on_window_event(move |event| {
-        let WindowEvent::CloseRequested { api, .. } = event else {
-            return;
-        };
-        let app = observed.app_handle();
-        let agent = Arc::clone(&app.state::<AppState>().agent);
-        if guard.begin_owned_agent_exit(app, &agent) {
-            api.prevent_close();
-            return;
-        }
-        let unsent = guard.unsent();
-        if unsent == 0 {
-            return;
-        }
-        api.prevent_close();
-        let closing = observed.clone();
-        ask_about_unsent(app, &guard, unsent, move || {
-            if let Err(error) = closing.close() {
-                tracing::error!(%error, "Failed to close the window after the unsent-message confirmation");
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            let app = observed.app_handle();
+            if guard.begin(app, &app.state::<AppState>().agent) {
+                api.prevent_close();
             }
-        });
+        }
     });
 }
 
-/// Handles an application-wide user quit, including commands from the webview.
-pub fn request_app_exit(app: &tauri::AppHandle, guard: &Arc<CloseGuard>, agent: &AgentHandle) {
-    if guard.begin_owned_agent_exit(app, agent) {
-        return;
-    }
-    let unsent = guard.unsent();
-    if unsent > 0 {
-        let exiting = app.clone();
-        ask_about_unsent(app, guard, unsent, move || exiting.exit(0));
-    } else {
+pub fn request_app_exit(app: &tauri::AppHandle, guard: &Arc<CloseGuard>, agent: &Arc<AgentHandle>) {
+    if !guard.begin(app, agent) {
         app.exit(0);
     }
 }
 
-/// Returns whether an OS/menu quit was intercepted for a decision.
 pub fn intercept_exit_request(
     app: &tauri::AppHandle,
     guard: &Arc<CloseGuard>,
-    agent: &AgentHandle,
-    code: Option<i32>,
+    agent: &Arc<AgentHandle>,
+    _code: Option<i32>,
 ) -> bool {
-    if code.is_some() {
-        return false;
-    }
-    if guard.begin_owned_agent_exit(app, agent) {
-        return true;
-    }
-    let unsent = guard.unsent();
-    if unsent == 0 {
-        return false;
-    }
-    let exiting = app.clone();
-    ask_about_unsent(app, guard, unsent, move || exiting.exit(0));
-    true
+    // Explicit exit codes, Cmd-Q and window closes all obey the same gate.
+    guard.begin(app, agent)
 }
 
 #[cfg(test)]
@@ -387,65 +322,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_accepted_departure_no_longer_reports_unsent_messages() {
-        let guard = CloseGuard::default();
-        guard.set_unsent(3);
-        assert_eq!(guard.unsent(), 3);
-        guard.accept();
-        assert_eq!(guard.unsent(), 0);
-    }
-
-    #[test]
-    fn a_later_queue_report_requires_a_new_answer() {
-        let guard = CloseGuard::default();
-        guard.set_unsent(2);
-        guard.accept();
-        guard.set_unsent(0);
-        assert_eq!(guard.unsent(), 0);
-        guard.set_unsent(1);
-        assert_eq!(guard.unsent(), 1);
-    }
-
-    #[test]
-    fn only_one_native_question_is_on_screen_at_a_time() {
-        let guard = CloseGuard::default();
-        assert!(guard.begin_native_question());
-        assert!(!guard.begin_native_question());
-        guard.end_native_question();
-        assert!(guard.begin_native_question());
-    }
-
-    #[test]
-    fn the_unsent_question_counts_the_messages_it_names() {
-        assert!(unsent_question(1).starts_with("1 message has not been sent"));
-        assert!(unsent_question(4).starts_with("4 messages have not been sent"));
-    }
-
-    #[test]
-    fn only_valid_states_supply_a_pid_for_stopping() {
-        let decision = ExitState::Decision { pid: 42, unsent: 0 };
-        let force = ExitState::ForceConfirmation {
-            pid: 42,
-            error: "timed out".into(),
+    fn teardown_is_irreversible_and_duplicate_actions_are_rejected() {
+        let decision = ExitState::Decision {
+            pid: None,
+            unsent: 2,
         };
-        assert_eq!(current_pid_for_stop(&decision, false), Some(42));
-        assert_eq!(current_pid_for_stop(&decision, true), None);
-        assert_eq!(current_pid_for_stop(&force, true), Some(42));
+        assert_eq!(
+            transition(&decision, ExitAction::Cancel).unwrap(),
+            ExitState::Idle
+        );
+        let stopping = transition(&decision, ExitAction::StopAgent).unwrap();
+        for action in [
+            ExitAction::Cancel,
+            ExitAction::StopAgent,
+            ExitAction::Retry,
+            ExitAction::ForceStop,
+        ] {
+            assert!(transition(&stopping, action).is_err());
+        }
+        let failed = ExitState::Failed {
+            pid: None,
+            error: "timeout".into(),
+        };
+        assert!(transition(&failed, ExitAction::Cancel).is_err());
+        assert!(transition(&failed, ExitAction::ForceStop).is_err());
+        let confirm = transition(&failed, ExitAction::ShowForce).unwrap();
+        assert_eq!(
+            transition(&confirm, ExitAction::CancelForce).unwrap(),
+            failed
+        );
+        assert!(matches!(
+            transition(&confirm, ExitAction::ForceStop).unwrap(),
+            ExitState::Stopping { force: true, .. }
+        ));
+        assert!(transition(&ExitState::Finalizing, ExitAction::Cancel).is_err());
     }
 
     #[test]
-    fn exit_states_have_the_renderer_contract_shape() {
+    fn missing_process_information_is_explicit_in_renderer_contract() {
         assert_eq!(
-            serde_json::to_value(ExitState::Decision { pid: 42, unsent: 2 }).unwrap(),
-            serde_json::json!({"state":"decision", "pid":42, "unsent":2})
-        );
-        assert_eq!(
-            serde_json::to_value(ExitState::Stopping {
-                pid: 42,
-                force: true,
+            serde_json::to_value(ExitState::Decision {
+                pid: None,
+                unsent: 2
             })
             .unwrap(),
-            serde_json::json!({"state":"stopping", "pid":42, "force":true})
+            serde_json::json!({"state":"decision", "pid":null, "unsent":2})
         );
     }
 }

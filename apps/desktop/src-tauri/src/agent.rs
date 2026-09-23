@@ -552,6 +552,7 @@ impl StartupGate {
 }
 
 struct ObservedTransport {
+    shutting_down: AtomicBool,
     client: AgentClient,
     /// Shared with the handle that opens it.
     startup_gate: Arc<StartupGate>,
@@ -590,7 +591,9 @@ impl ObservedTransport {
     /// abandoned. A mutation is never abandoned: its outcome would become
     /// ambiguous, which is worse than making maintenance wait for it.
     fn preempted(&self, preemptible: bool) -> bool {
-        preemptible && self.maintenance_pending.load(Ordering::Acquire)
+        preemptible
+            && (self.maintenance_pending.load(Ordering::Acquire)
+                || self.shutting_down.load(Ordering::Acquire))
     }
 
     /// Takes the exclusive reservation that maintenance runs under, asking
@@ -618,7 +621,18 @@ impl ObservedTransport {
     }
 
     #[allow(clippy::result_large_err)]
+    fn require_not_exiting(&self) -> Result<(), DesktopAgentError> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(DesktopAgentError::Local(
+                foks_desktop::LocalAgentCondition::RestartRequired,
+            ));
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::result_large_err)]
     fn require_current(&self) -> Result<(), DesktopAgentError> {
+        self.require_not_exiting()?;
         match *self
             .disposition
             .lock()
@@ -825,6 +839,8 @@ pub struct AgentHandle {
     recovery_credentials_required: AtomicBool,
     maintenance_snapshot: Mutex<MaintenanceSnapshot>,
     pending_stop_pid: Mutex<Option<u32>>,
+    exit_targets: Mutex<Option<Vec<StaleAgentProcess>>>,
+    exit_launch_gate: Mutex<()>,
     maintenance_process: Arc<dyn MaintenanceProcess>,
     maintenance_readiness: Arc<MaintenanceReadiness>,
     /// Closed while the desktop's startup check runs on a background thread
@@ -847,6 +863,7 @@ impl AgentHandle {
         let startup_gate = Arc::new(StartupGate::new_open());
         Self {
             transport: Arc::new(ObservedTransport {
+                shutting_down: AtomicBool::new(false),
                 client,
                 startup_gate: Arc::clone(&startup_gate),
                 maintenance: RwLock::new(()),
@@ -867,6 +884,8 @@ impl AgentHandle {
                 revision: 0,
             }),
             pending_stop_pid: Mutex::new(None),
+            exit_targets: Mutex::new(None),
+            exit_launch_gate: Mutex::new(()),
             maintenance_process: Arc::new(NativeMaintenanceProcess),
             maintenance_readiness: Arc::new(safe_selected_root),
             startup_gate,
@@ -989,7 +1008,7 @@ impl AgentHandle {
         }
         // Recheck protected recovery facts under the spawn lock.
         self.check_recovery_credentials(false)?;
-        let mut launch = launch_agent(&binary, root, &self.socket)?;
+        let mut launch = self.launch_unless_exiting(&binary, root)?;
         let mut last_error = initial_error;
         for _ in 0..50 {
             std::thread::sleep(Duration::from_millis(100));
@@ -1263,6 +1282,9 @@ impl AgentHandle {
             .maintenance
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.transport
+            .require_not_exiting()
+            .map_err(AgentError::from_desktop)?;
         match *self
             .transport
             .disposition
@@ -1312,6 +1334,9 @@ impl AgentHandle {
         &self,
         confirm: &dyn Fn(&AgentTakeover) -> Result<bool, AgentError>,
     ) -> Result<Response, AgentError> {
+        self.transport
+            .require_not_exiting()
+            .map_err(AgentError::from_desktop)?;
         if let Ok(response) = self.probe_status() {
             self.clear_connection_failure();
             self.adopt_orphaned_agent();
@@ -1375,7 +1400,7 @@ impl AgentHandle {
                 }
                 Err(_) => {}
             }
-            let mut launch = launch_agent(binary, state_dir, &self.socket)?;
+            let mut launch = self.launch_unless_exiting(binary, state_dir)?;
             let mut replaced = false;
             for _ in 0..50 {
                 std::thread::sleep(Duration::from_millis(100));
@@ -1528,6 +1553,9 @@ impl AgentHandle {
                     true,
                 )
             })?;
+        self.transport
+            .require_not_exiting()
+            .map_err(AgentError::from_desktop)?;
         match *self
             .transport
             .disposition
@@ -1739,60 +1767,100 @@ impl AgentHandle {
         ))
     }
 
-    /// Stops the agent owned by this desktop and waits until its supervisor
-    /// confirms process exit. Application shutdown uses this without the
-    /// maintenance restore step because the desktop is leaving too.
-    pub fn stop_for_exit(&self) -> Result<(), AgentError> {
-        self.stop_owned_managed_agent()
-    }
-
-    /// Escalates a reader-confirmed failed graceful shutdown. Ownership is
-    /// revalidated immediately before SIGKILL so a replacement socket owner
-    /// can never inherit approval intended for the previous process.
-    pub fn force_stop_for_exit(&self) -> Result<(), AgentError> {
-        self.require_owned_managed_agent()?;
-        let pid = *MANAGED_AGENT_PID
+    /// Irreversible admission barrier. Existing mutations may settle, but no
+    /// new transport call or recovery/startup may begin after confirmation.
+    pub fn begin_exit(&self) {
+        let _launch = self
+            .exit_launch_gate
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(pid) = pid else {
-            unreachable!("owned managed-agent preflight returned without a pid");
-        };
-        *self
-            .pending_stop_pid
+        self.transport.shutting_down.store(true, Ordering::Release);
+        self.startup_gate.release();
+    }
+
+    fn launch_unless_exiting(
+        &self,
+        binary: &Path,
+        root: &Path,
+    ) -> Result<ManagedAgentLaunch, AgentError> {
+        let _launch = self
+            .exit_launch_gate
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pid);
-        #[cfg(unix)]
-        {
-            let signaled = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-            if signaled != 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-            {
-                return Err(AgentError::new(
-                    "agent-force-stop-failed",
-                    "Failed to force stop the managed local agent.",
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.transport
+            .require_not_exiting()
+            .map_err(AgentError::from_desktop)?;
+        launch_agent(binary, root, &self.socket)
+    }
+
+    pub fn stop_for_exit(&self) -> Result<(), AgentError> {
+        self.stop_exit_targets(false)
+    }
+
+    pub fn force_stop_for_exit(&self) -> Result<(), AgentError> {
+        self.stop_exit_targets(true)
+    }
+
+    fn stop_exit_targets(&self, force: bool) -> Result<(), AgentError> {
+        self.begin_exit();
+        let mut targets = self
+            .exit_targets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if targets.is_none() {
+            // Graceful shutdown lets active mutations settle first. Explicit
+            // force-stop may interrupt them; the permanent launch barrier still
+            // prevents startup/recovery from spawning after target capture.
+            let _reservation = if force {
+                None
+            } else {
+                Some(self.transport.reserve_for_maintenance(MAINTENANCE_RESERVATION_WAIT)
+                    .ok_or_else(|| AgentError::new("agent-busy", "Outstanding agent operations are still settling. Try again or force the agent to stop.", true))?)
+            };
+            *targets = Some(self.discover_exit_targets()?);
+        }
+        for target in targets.as_ref().unwrap() {
+            stop_exit_process(target, force, Duration::from_secs(5))?;
+        }
+        // A new process must never inherit consent intended for the captured
+        // targets. Keep the desktop open if somebody else rebound the endpoint.
+        if !self.discover_exit_targets()?.is_empty() {
+            return Err(AgentError::new("agent-exit-replaced", "Another FOKS agent is using this app's local state. Stop it before retrying shutdown.", true));
+        }
+        self.clear_connection_failure();
+        Ok(())
+    }
+
+    fn discover_exit_targets(&self) -> Result<Vec<StaleAgentProcess>, AgentError> {
+        let root = self
+            .socket
+            .parent()
+            .ok_or_else(|| AgentError::unknown("The agent state directory is unavailable."))?;
+        let targets = if root.exists() {
+            matching_agent_processes(root).map_err(|error| {
+                AgentError::new(
+                    "agent-exit-inspection",
+                    format!("Could not inspect FOKS agent processes: {error}"),
                     true,
-                ));
+                )
+            })?
+        } else {
+            Vec::new()
+        };
+        let owned = *MANAGED_AGENT_PID
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if owned.is_some_and(|pid| {
+            !process_has_exited(pid) && !targets.iter().any(|target| target.pid == pid)
+        }) {
+            return Err(AgentError::new("agent-exit-inspection", "The managed agent is still running but its identity could not be verified. Stop it before retrying shutdown.", true));
+        }
+        if let Some(peer) = inspect_takeover_target(&self.socket)? {
+            if !targets.iter().any(|target| target.pid == peer.pid) {
+                return Err(AgentError::new("agent-exit-inspection", "The agent endpoint belongs to a process outside this app's local state. Stop it before retrying shutdown.", true));
             }
         }
-        for _ in 0..50 {
-            if MANAGED_AGENT_PID
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_none()
-            {
-                self.clear_connection_failure();
-                *self
-                    .pending_stop_pid
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        Err(AgentError::new(
-            "agent-force-stop-failed",
-            "The managed local agent is still running after the force stop request.",
-            true,
-        ))
+        Ok(targets)
     }
 
     fn require_owned_managed_agent(&self) -> Result<(), AgentError> {
@@ -2715,6 +2783,49 @@ fn matching_agent_processes(state_dir: &Path) -> std::io::Result<Vec<StaleAgentP
     Ok(processes)
 }
 
+/// Verify the captured process even after its listener has closed. Neither a
+/// missing socket nor a successful signal is evidence of process termination.
+fn stop_exit_process(
+    target: &StaleAgentProcess,
+    force: bool,
+    wait: Duration,
+) -> Result<(), AgentError> {
+    if process_has_exited(target.pid) {
+        return Ok(());
+    }
+    if !agent_process_matches(target) {
+        return Err(AgentError::new(
+            "agent-exit-changed",
+            "The agent process identity changed or could not be verified. It was not terminated.",
+            true,
+        ));
+    }
+    let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+    if unsafe { libc::kill(target.pid as i32, signal) } != 0
+        && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    {
+        return Err(AgentError::new(
+            "agent-stop-failed",
+            "Could not signal the FOKS agent process.",
+            true,
+        ));
+    }
+    let deadline = Instant::now() + wait;
+    loop {
+        if process_has_exited(target.pid) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(AgentError::new(
+                "agent-stop-failed",
+                "FOKS Agent has not exited. Try again or force it to stop.",
+                true,
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[cfg(unix)]
 fn agent_process_matches(target: &StaleAgentProcess) -> bool {
     process_owner_uid(target.pid).ok() == Some(unsafe { libc::geteuid() })
@@ -3267,6 +3378,119 @@ mod tests {
                 )),
             }
         }
+    }
+
+    #[test]
+    fn exit_barrier_blocks_retained_transports_startup_and_recovery() {
+        let temporary = tempfile::tempdir().unwrap();
+        let handle = AgentHandle::new(temporary.path().join("agent.sock"));
+        let retained = Arc::clone(&handle.transport);
+        handle.begin_exit();
+        assert!(retained.reserve_use().is_err());
+        assert!(retained.preempted(true));
+        assert!(!retained.preempted(false));
+        assert!(handle.ensure_started_blocking().is_err());
+        assert!(handle
+            .launch_unless_exiting(Path::new("/nonexistent-agent"), temporary.path())
+            .is_err());
+        assert!(handle.retry_started_blocking().is_err());
+        assert!(handle.auto_recover_blocking().is_err());
+        *retained.disposition.lock().unwrap() = TransportDisposition::Current;
+        assert!(retained.reserve_use().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_waits_for_unowned_process_and_force_stop_works_without_socket() {
+        let temporary = tempfile::tempdir().unwrap();
+        let binary = temporary.path().join("foks-agent");
+        let source = temporary.path().join("agent.c");
+        let ready = temporary.path().join("ready");
+        let socket = temporary.path().join("agent.sock");
+        std::fs::write(
+            &source,
+            r#"
+#include <fcntl.h>
+#include <signal.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
+static int listener;
+static char *socket_path;
+static void stop_listener(int sig) { close(listener); unlink(socket_path); }
+int main(int argc, char **argv) {
+    socket_path = argv[1];
+    listener = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un address;
+    memset(&address, 0, sizeof address);
+    address.sun_family = AF_UNIX;
+    strncpy(address.sun_path, argv[1], sizeof address.sun_path - 1);
+    if (bind(listener, (struct sockaddr *)&address, sizeof address) != 0
+        || chmod(argv[1], 0600) != 0 || listen(listener, 8) != 0) return 1;
+    signal(SIGTERM, stop_listener);
+    close(open(argv[2], O_CREAT | O_WRONLY, 0600));
+    for (;;) pause();
+}
+"#,
+        )
+        .unwrap();
+        assert!(Command::new("cc")
+            .arg("-o")
+            .arg(&binary)
+            .arg(&source)
+            .status()
+            .unwrap()
+            .success());
+        let mut child = Command::new(&binary)
+            .arg(&socket)
+            .arg(&ready)
+            .arg("--state-dir")
+            .arg(temporary.path())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        struct Cleanup(u32);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::kill(self.0 as i32, libc::SIGKILL);
+                }
+            }
+        }
+        let cleanup = Cleanup(pid);
+        let reaper = std::thread::spawn(move || child.wait().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "test process failed to initialize"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let handle = AgentHandle::new(temporary.path().join("agent.sock"));
+        let targets = handle.discover_exit_targets().unwrap();
+        let target = targets.iter().find(|target| target.pid == pid).unwrap();
+        let mut changed = target.clone();
+        changed.started_at += 1;
+        assert_eq!(
+            stop_exit_process(&changed, true, Duration::ZERO)
+                .unwrap_err()
+                .code,
+            "agent-exit-changed"
+        );
+        assert!(!process_has_exited(pid));
+        assert!(stop_exit_process(target, false, Duration::from_millis(100)).is_err());
+        assert!(!process_has_exited(pid));
+        assert!(!socket.exists());
+        // Even an outstanding mutation cannot prevent an explicit force stop.
+        // Neither a live socket nor MANAGED_AGENT_PID is needed to find it.
+        let _active_mutation = handle.transport.maintenance.read().unwrap();
+        handle.force_stop_for_exit().unwrap();
+        assert!(process_has_exited(pid));
+        reaper.join().unwrap();
+        std::mem::forget(cleanup);
     }
 
     #[test]
