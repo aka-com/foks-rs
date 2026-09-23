@@ -423,7 +423,7 @@ export function DevicesScreen({
     const source = entry.source;
     if (source.kind === 'device') {
       const device = source.device;
-      if (device.current) return <Chip tone="you">Current</Chip>;
+      if (device.current) return null;
       if (deviceIsCard(device)) return <Chip tone="ok">Security key</Chip>;
       return (
         <Button
@@ -751,13 +751,17 @@ export function DevicesScreen({
                           </>
                         }
                       >
-                        <span className="ic" aria-hidden="true">
+                        <span className="device-icon" aria-hidden="true">
                           <Icon name={entry.icon} />
                         </span>
                         <span className="t">
                           <b>{entry.name}</b>
                           <small>{kindLabel(entry.kind)}</small>
                         </span>
+                        {entry.source.kind === 'device' &&
+                        entry.source.device.current ? (
+                          <Chip tone="you">Current</Chip>
+                        ) : null}
                       </InsetRow>
                     ))
                   ) : (

@@ -262,9 +262,6 @@ function TeamRow({
           <small>{caption}</small>
         </span>
         <span className="tail">
-          {/* This Mac's role in the team, a chip at the end of the row. */}
-          {role ? <Chip className="role">{roleName(role)}</Chip> : null}
-          {abnormal ? <Chip tone="warn">{description}</Chip> : null}
           {/* The band above the list names the team; the row says it too,
               so on a long list the reader need not match the two by name. */}
           {requests ? (
@@ -272,6 +269,9 @@ function TeamRow({
               {requests} {requests === 1 ? 'request' : 'requests'}
             </Chip>
           ) : null}
+          {/* This Mac's role in the team, a chip at the end of the row. */}
+          {role ? <Chip className="role">{roleName(role)}</Chip> : null}
+          {abnormal ? <Chip tone="warn">{description}</Chip> : null}
           <Chip className="kind">
             {store.team_kind === 'adhoc' ? 'Share' : 'Chat'}
           </Chip>
@@ -708,8 +708,8 @@ export function TeamsScreen({
                   </Button>
                 }
               >
-                {count} {count === 1 ? 'request' : 'requests'} to join{' '}
-                {store.name} {count === 1 ? 'is' : 'are'} waiting for you.
+                {count === 1 ? 'One' : count} outstanding{' '}
+                {count === 1 ? 'request' : 'requests'} to join {store.name}.
               </Band>
             );
           })}

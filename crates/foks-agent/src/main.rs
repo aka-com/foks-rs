@@ -2225,6 +2225,12 @@ fn client_error_response(
                     ErrorCode::InvalidRequest,
                     SSO_UNAVAILABLE_MESSAGE.to_owned(),
                 ),
+                foks_client_app::Error::InvalidAccount(
+                    "request is no longer in the pending inbox; refresh it",
+                ) => (
+                    ErrorCode::Conflict,
+                    "This request is no longer valid. Refresh the requests list.".to_owned(),
+                ),
                 foks_client_app::Error::InvalidAccount(reason)
                     if reason.starts_with("group names use") =>
                 {
