@@ -2157,6 +2157,8 @@ fn sentence(message: String) -> String {
     }
 }
 
+const SSO_UNAVAILABLE_MESSAGE: &str = "This server does not support SSO sign-up. Choose “Create a new account,” or sign in to an existing account.";
+
 /// A sentence for the client-side failures a person can cause, with the crate
 /// chain in `reason`. Anything not listed falls through to the status table
 /// and the leaf-message fallback.
@@ -2170,6 +2172,10 @@ fn client_error_response(
         candidate.downcast_ref::<foks_client::Error>()
     {
         match error {
+                C::Sso("host does not require SSO") => (
+                    ErrorCode::InvalidRequest,
+                    SSO_UNAVAILABLE_MESSAGE.to_owned(),
+                ),
                 C::NoAddress(host) => (
                     ErrorCode::OperationFailed,
                     format!("The server address {host} could not be resolved. Check the name."),
@@ -2215,6 +2221,10 @@ fn client_error_response(
             }
     } else if let Some(error) = candidate.downcast_ref::<foks_client_app::Error>() {
         match error {
+                foks_client_app::Error::InvalidAccount("host does not require SSO") => (
+                    ErrorCode::InvalidRequest,
+                    SSO_UNAVAILABLE_MESSAGE.to_owned(),
+                ),
                 foks_client_app::Error::InvalidAccount(reason)
                     if reason.starts_with("group names use") =>
                 {
@@ -2272,7 +2282,7 @@ fn remote_status_response(id: u64, status: u64, reason: String) -> Option<Respon
         ),
         foks_rpc::STATUS_USERNAME_IN_USE_ERROR => (
             ErrorCode::Conflict,
-            "That name is already taken on this server. Choose another.",
+            "That name is already taken on this server. If this is your account, choose “Sign in to an existing account.” Otherwise, choose another name.",
         ),
         foks_rpc::STATUS_DUPLICATE_ERROR => (
             ErrorCode::Conflict,
@@ -6366,6 +6376,32 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_sso_maps_to_actionable_error_with_diagnostics() {
+        let errors: Vec<Box<dyn std::error::Error>> = vec![
+            Box::new(foks_client_app::Error::InvalidAccount(
+                "host does not require SSO",
+            )),
+            Box::new(foks_client_app::Error::Client(foks_client::Error::Sso(
+                "host does not require SSO",
+            ))),
+        ];
+        for error in errors {
+            let response = dispatch_error_response(9, error.as_ref());
+            let foks_agent_proto::ResponseResult::Error {
+                code,
+                message,
+                fields,
+            } = response.result
+            else {
+                panic!("unavailable SSO returned success");
+            };
+            assert_eq!(code, ErrorCode::InvalidRequest);
+            assert_eq!(message, SSO_UNAVAILABLE_MESSAGE);
+            assert!(fields.reason.unwrap().contains("host does not require SSO"));
+        }
+    }
+
+    #[test]
     fn hard_state_schema_mapping_is_structured_and_wording_independent() {
         let error =
             foks_client_app::Error::ClientDatabase(foks_client_db::Error::UnsupportedSchema {
@@ -6387,8 +6423,13 @@ mod tests {
     }
 
     #[test]
-    fn remote_capacity_statuses_keep_retry_semantics_and_diagnostics() {
+    fn remote_actionable_statuses_keep_codes_and_diagnostics() {
         for (status, expected, message) in [
+            (
+                foks_rpc::STATUS_USERNAME_IN_USE_ERROR,
+                ErrorCode::Conflict,
+                "Sign in to an existing account",
+            ),
             (
                 foks_rpc::STATUS_RATE_LIMIT_ERROR,
                 ErrorCode::RateLimited,

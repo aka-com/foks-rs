@@ -252,7 +252,7 @@ export function SsoSignUpPanel({
       className={embedded ? 'sso-inline' : 'pcard'}
       aria-label="Organization sign-in"
     >
-      {embedded ? null : <h3>Sign up with your organization</h3>}
+      {embedded ? null : <h3>Sign up with SSO</h3>}
       {body}
       {primarySlot ? createPortal(primaryButton, primarySlot) : null}
       {showActions ? (

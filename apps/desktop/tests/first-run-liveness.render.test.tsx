@@ -831,9 +831,7 @@ for (const method of ['recovery', 'sso'] as const) {
       ui.fireEvent.change(rendered.view.getByPlaceholderText('yourname'), {
         target: { value: 'personal' },
       });
-      ui.fireEvent.click(
-        rendered.view.getByText('Sign up with your organization'),
-      );
+      ui.fireEvent.click(rendered.view.getByText('Sign up with SSO'));
       ui.fireEvent.click(
         rendered.view.getByRole('button', {
           name: 'Continue with organization',

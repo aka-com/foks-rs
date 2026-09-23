@@ -445,7 +445,7 @@ in via SSO is a two-step sheet: the account and whether its keys are on a
 security key, then the browser sign-in, with one primary action per step
 (open the browser, check the sign-in, finish). Check linkage reads the
 account's linkage and, where the account is not yet linked, the primary
-becomes Link existing account. First run's Sign up with your organization
+becomes Link existing account. First run's Sign up with SSO
 shares the flow and the browser step; it opens on where to keep the keys
 (this computer or a security key) and ends with Finish sign-up. If
 account access is suspended, username changes are disabled with an explanatory

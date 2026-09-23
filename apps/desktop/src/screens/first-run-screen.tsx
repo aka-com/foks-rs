@@ -2381,7 +2381,7 @@ function FirstRunSession({
             {ssoAvailable && profile ? (
               <div className="choice">
                 <RadioCard
-                  title="Sign up with your organization"
+                  title="Sign up with SSO"
                   detail="Create the account through your organization’s identity provider."
                   selected={ssoSelected}
                   disabled={cliAccountSelected}

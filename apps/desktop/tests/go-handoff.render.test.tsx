@@ -939,7 +939,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
     name: /Create a new account/,
   }) as HTMLButtonElement;
   const organization = view.getByRole('radio', {
-    name: /Sign up with your organization/,
+    name: /Sign up with SSO/,
   }) as HTMLButtonElement;
   assert.equal(create.disabled, true);
   assert.equal(organization.disabled, true);
