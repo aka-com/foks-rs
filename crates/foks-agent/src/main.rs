@@ -2197,7 +2197,7 @@ fn client_error_response(
                 ),
                 C::AccountRequest(reason) if *reason == "device name is not valid after normalization" => (
                     ErrorCode::InvalidRequest,
-                    "Device names use 2 to 200 letters, numbers, spaces, and . _ + ' -, and start with a letter or number.".to_owned(),
+                    foks_client::DEVICE_NAME_RULES.to_owned(),
                 ),
                 C::TeamRequest(reason) if *reason == "team name is not valid under FOKS v0.1.9 normalization" => (
                     ErrorCode::InvalidRequest,

@@ -37,7 +37,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use foks_client::CancellationToken;
+pub use foks_client::{fix_device_name, CancellationToken, DEVICE_NAME_RULES};
 use foks_client::{
     AdHocTeamSecrets, AuthenticatedTeamOutcome, AuthenticatedUserOutcome, DeviceCredential,
     EncryptedFileMutationStore, FoksClient, KvWriteOptions, MutationCoordinator, NamedTeamSecrets,

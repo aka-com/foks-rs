@@ -1,3 +1,6 @@
+import { normalizeUsername } from '../name-normalization';
+import { pastePhrase } from '../phrase-input';
+import { fixDeviceName } from '../device-name';
 import { LocalCompleteStep } from './first-run-complete-step';
 import { ServerVerificationStep } from './first-run-server-step';
 import { RecoveryStep } from './first-run-recovery-step';
@@ -143,7 +146,7 @@ const FIRST_RUN_SETTLED: readonly FirstRunStateName[] = [
 ];
 
 export function accountAliasFor(username: string): string {
-  return username
+  return (normalizeUsername(username.trim()) ?? username)
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+/, '')
@@ -351,8 +354,7 @@ function FirstRunSession({
   const [deviceName, setDeviceName] = useState(
     () =>
       checkpoint.account?.deviceName ??
-      facts?.deviceName ??
-      suggestedDeviceName(),
+      fixDeviceName(facts?.deviceName ?? suggestedDeviceName()),
   );
   const [email, setEmail] = useState('');
   const [invite, setInvite] = useState('');
@@ -576,7 +578,7 @@ function FirstRunSession({
           setUsername((current) => current || userName);
         if (!hasDeviceName && computerName)
           setDeviceName((current) =>
-            current === fallback ? computerName : current,
+            current === fallback ? fixDeviceName(computerName) : current,
           );
       })
       .catch(() => {});
@@ -804,7 +806,13 @@ function FirstRunSession({
     details: { resume?: boolean; phrase?: string } = {},
   ): Promise<void> =>
     accountOperations.runAccountOperation(
-      { deviceName, username, email, invite, phrase: recoveryPhrase },
+      {
+        deviceName: fixDeviceName(deviceName),
+        username,
+        email,
+        invite,
+        phrase: recoveryPhrase,
+      },
       kind,
       alias,
       operation,
@@ -846,7 +854,7 @@ function FirstRunSession({
 
   const resumeAccountOperation = async (): Promise<void> => {
     const resumed = await accountOperations.resumeAccountOperation({
-      deviceName,
+      deviceName: fixDeviceName(deviceName),
       username,
       email,
       invite,
@@ -1090,7 +1098,12 @@ function FirstRunSession({
 
   const createAccount = async (): Promise<void> => {
     if (!agentReady) return;
-    if (!profile || !username.trim() || !deviceName.trim() || !accountAlias)
+    if (
+      !profile ||
+      !username.trim() ||
+      !fixDeviceName(deviceName) ||
+      !accountAlias
+    )
       return;
     setBusy(true);
     setMessage(null);
@@ -1112,7 +1125,7 @@ function FirstRunSession({
               profile: profile.profile,
               alias: accountAlias,
               username: username.trim(),
-              deviceName: deviceName.trim(),
+              deviceName: fixDeviceName(deviceName),
               email,
               invite,
             });
@@ -1164,7 +1177,7 @@ function FirstRunSession({
     if (
       !profile ||
       !recoveryPhrase.trim() ||
-      !deviceName.trim() ||
+      !fixDeviceName(deviceName) ||
       !accountAlias
     )
       return;
@@ -1186,14 +1199,14 @@ function FirstRunSession({
               profile.profile,
               accountAlias,
               recoveryPhrase,
-              deviceName.trim(),
+              fixDeviceName(deviceName),
             );
           else
             await bridge.recoverOwnerAccount(
               profile.profile,
               accountAlias,
               recoveryPhrase,
-              deviceName.trim(),
+              fixDeviceName(deviceName),
             );
         },
         {},
@@ -1223,7 +1236,7 @@ function FirstRunSession({
       !profile ||
       !goCandidate?.pairable ||
       !accountAlias ||
-      !deviceName.trim()
+      !fixDeviceName(deviceName)
     )
       return;
     const phrase = pairingPhrase;
@@ -1246,7 +1259,7 @@ function FirstRunSession({
                 goCandidate.candidateId,
                 profile.profile,
                 accountAlias,
-                deviceName.trim(),
+                fixDeviceName(deviceName),
                 phrase,
               );
           if (provision.alias !== accountAlias) {
@@ -1414,6 +1427,7 @@ function FirstRunSession({
           placeholder="Your device"
           disabled={Boolean(checkpoint.account)}
           onChange={(event) => setDeviceName(event.target.value)}
+          onBlur={() => setDeviceName(fixDeviceName(deviceName))}
         />
       </InsetRow>
     </>
@@ -1450,7 +1464,10 @@ function FirstRunSession({
       <Button
         variant="primary"
         disabled={
-          busy || !accountAlias || !recoveryPhrase.trim() || !deviceName.trim()
+          busy ||
+          !accountAlias ||
+          !recoveryPhrase.trim() ||
+          !fixDeviceName(deviceName)
         }
         onClick={() => void recover()}
       >
@@ -1468,7 +1485,10 @@ function FirstRunSession({
       <Button
         variant="primary"
         disabled={
-          busy || !accountAlias || !deviceName.trim() || !pairingPhrase.trim()
+          busy ||
+          !accountAlias ||
+          !fixDeviceName(deviceName) ||
+          !pairingPhrase.trim()
         }
         onClick={() => void acceptPairing(false)}
       >
@@ -1557,6 +1577,7 @@ function FirstRunSession({
                   aria-label="Recovery phrase"
                   value={recoveryPhrase}
                   onChange={(event) => setRecoveryPhrase(event.target.value)}
+                  onPaste={(event) => pastePhrase(event, setRecoveryPhrase)}
                 />
               </InsetRow>
             ) : null}
@@ -1568,6 +1589,7 @@ function FirstRunSession({
                   placeholder="Enter pairing phrase"
                   value={pairingPhrase}
                   onChange={(event) => setPairingPhrase(event.target.value)}
+                  onPaste={(event) => pastePhrase(event, setPairingPhrase)}
                 />
               </InsetRow>
             ) : null}
@@ -1587,7 +1609,7 @@ function FirstRunSession({
                 type="button"
                 className="lnk"
                 aria-label="Resume pairing"
-                disabled={busy || !accountAlias || !deviceName.trim()}
+                disabled={busy || !accountAlias || !fixDeviceName(deviceName)}
                 onClick={() => void acceptPairing(true)}
               >
                 resume pairing
@@ -1650,6 +1672,7 @@ function FirstRunSession({
                 type="password"
                 value={recoveryPhrase}
                 onChange={(event) => setRecoveryPhrase(event.target.value)}
+                onPaste={(event) => pastePhrase(event, setRecoveryPhrase)}
               />
             </label>
           </div>
@@ -2129,7 +2152,9 @@ function FirstRunSession({
                 busy ||
                 usernameAliasInvalid ||
                 (!checkpoint.account &&
-                  (!username.trim() || !deviceName.trim() || !accountAlias))
+                  (!username.trim() ||
+                    !fixDeviceName(deviceName) ||
+                    !accountAlias))
               }
               onClick={() =>
                 checkpoint.account ? go('protect') : void createAccount()
@@ -2170,6 +2195,7 @@ function FirstRunSession({
               placeholder="Your device"
               disabled={Boolean(checkpoint.account)}
               onChange={(event) => setDeviceName(event.target.value)}
+              onBlur={() => setDeviceName(fixDeviceName(deviceName))}
             />
           </label>
         </div>
@@ -2280,7 +2306,7 @@ function FirstRunSession({
                   busy ||
                   usernameAliasInvalid ||
                   (!checkpoint.account &&
-                    (!username.trim() || !deviceName.trim()))
+                    (!username.trim() || !fixDeviceName(deviceName)))
                 }
                 // If the account was already created when returning from Protect, proceed to protection.
                 onClick={() =>
@@ -2388,7 +2414,7 @@ function FirstRunSession({
                       profile={profile.profile}
                       account={accountAlias}
                       login={false}
-                      deviceName={deviceName}
+                      deviceName={fixDeviceName(deviceName)}
                       invite={invite}
                       disabled={busy}
                       initialOperationId={
@@ -2435,7 +2461,7 @@ function FirstRunSession({
                         setInvite('');
                         accountOperations.accountProvisioned(
                           accountAlias,
-                          deviceName,
+                          fixDeviceName(deviceName),
                         );
                       }}
                     />

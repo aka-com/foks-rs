@@ -2,8 +2,8 @@
 
 use super::{
     derive_device_public, encode_provision_device_request, encode_revoke_device_request,
-    fix_device_name, make_software_puk_rotation_link, make_software_revoke_link,
-    normalize_device_name, now_milliseconds, random_bytes, seal_puk_seed_chain_box,
+    make_software_puk_rotation_link, make_software_revoke_link, normalize_device_name,
+    now_milliseconds, prepare_device_name, random_bytes, seal_puk_seed_chain_box,
     seal_software_puk_boxes, AuthenticatedUserOutcome, DeviceCredential, DeviceLabel,
     DeviceLabelNameAndCommitmentKey, DevicePublicMaterial, DeviceType, Duration, EntityId, Error,
     FoksClient, HardStateStore, MutationCoordinator, MutationDraft, MutationKind,
@@ -179,7 +179,7 @@ impl FoksClient {
             validate_fresh_puk_seeds(&authenticated.verified, std::iter::once(seed))?;
             (seed, 1)
         };
-        let display_name = fix_device_name(&request.device_name);
+        let display_name = prepare_device_name(&request.device_name)?;
         let normalized_name = normalize_device_name(display_name.as_bytes())
             .ok_or(Error::AccountRequest("invalid provisioned device name"))?;
         let device_name = DeviceLabelNameAndCommitmentKey {
@@ -370,7 +370,7 @@ impl FoksClient {
             return Err(Error::AccountRequest("Yubi credential is already enrolled"));
         }
 
-        let display_name = fix_device_name(&request.device_name);
+        let display_name = prepare_device_name(&request.device_name)?;
         let normalized_name = normalize_device_name(display_name.as_bytes())
             .ok_or(Error::AccountRequest("invalid Yubi device name"))?;
         let device_name = DeviceLabelNameAndCommitmentKey {

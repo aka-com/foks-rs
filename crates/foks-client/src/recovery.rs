@@ -22,8 +22,8 @@ use foks_snowpack::{decode, Value};
 use foks_verify::{normalize_device_name, verify_user_chain, VerifiedDevice};
 
 use crate::{
-    fix_device_name, now_milliseconds, random_bytes, AuthenticatedUserOutcome, DeviceCredential,
-    Error, FoksClient, HardStateStore, NewSoftwareDeviceSecrets, PinnedHost,
+    now_milliseconds, prepare_device_name, random_bytes, AuthenticatedUserOutcome,
+    DeviceCredential, Error, FoksClient, HardStateStore, NewSoftwareDeviceSecrets, PinnedHost,
     ProvisionedSoftwareDevice, Result, SoftwareDeviceProvisionRequest, UserPrivateKey,
 };
 
@@ -399,7 +399,7 @@ impl FoksClient {
             .iter()
             .find(|key| key.role == request.role && key.generation == role_key.generation)
             .ok_or(Error::KeyBinding("current recovery-role PUK is not loaded"))?;
-        let display_name = fix_device_name(&request.device_name);
+        let display_name = prepare_device_name(&request.device_name)?;
         let normalized_name = normalize_device_name(display_name.as_bytes())
             .ok_or(Error::AccountRequest("invalid recovery device name"))?;
         let device_name = DeviceLabelNameAndCommitmentKey {

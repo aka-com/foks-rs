@@ -1966,7 +1966,7 @@ fn validate_pending_kex(pending: &PendingKexAcceptance) -> Result<()> {
     if pending.version != CREDENTIAL_VERSION
         || pending.serial == 0
         || pending.device_name.is_empty()
-        || pending.device_name.len() > 256
+        || pending.device_name.len() > foks_proto::MAXIMUM_DEVICE_NAME_BYTES
         || pending.source_candidate_id.is_some() != pending.expected_user.is_some()
         || pending.source_candidate_id.as_ref().is_some_and(|id| {
             id.len() != 64
@@ -2028,6 +2028,27 @@ mod tests {
     use super::*;
     use foks_keystore::EncryptedFileSecretStore;
     use foks_server_testkit::TestEnvironment;
+
+    #[test]
+    fn pending_kex_retains_unicode_device_display_names() {
+        let mut pending = PendingKexAcceptance {
+            version: CREDENTIAL_VERSION,
+            target_alias: "personal".into(),
+            device_name: "é".repeat(200),
+            serial: 1,
+            device_seed: [1; 32],
+            phrase: foks_crypto::KexSecret::generate()
+                .unwrap()
+                .phrase()
+                .expose_joined()
+                .to_string(),
+            source_candidate_id: None,
+            expected_user: None,
+        };
+        assert!(validate_pending_kex(&pending).is_ok());
+        pending.device_name = "é".repeat(2049);
+        assert!(validate_pending_kex(&pending).is_err());
+    }
 
     struct InterruptAccountCommit {
         inner: EncryptedFileSecretStore,

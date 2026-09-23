@@ -91,7 +91,10 @@ fn validate(attempt: &AccountAttempt) -> Result<(), AgentError> {
             .all(|b| b.is_ascii_hexdigit() || b == b'-')
         || !valid_local_name(&attempt.profile)
         || !valid_local_name(&attempt.alias)
-        || !valid_response_text(&attempt.device_name, 256)
+        || !valid_response_text(
+            &attempt.device_name,
+            foks_agent_proto::MAXIMUM_DEVICE_NAME_BYTES,
+        )
         || attempt
             .candidate_id
             .as_deref()

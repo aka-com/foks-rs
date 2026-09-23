@@ -141,7 +141,7 @@ fn macos_computer_name() -> Option<String> {
         }
         let name = String::from_utf8(output.stdout).ok()?;
         let name = name.trim();
-        if name.is_empty() || name.len() > 256 {
+        if name.is_empty() || name.len() > foks_agent_proto::MAXIMUM_DEVICE_NAME_BYTES {
             return None;
         }
         Some(name.to_string())

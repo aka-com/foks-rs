@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+pub use foks_proto::MAXIMUM_DEVICE_NAME_BYTES;
+
 pub mod account;
 pub mod admin;
 pub mod base64_bytes;

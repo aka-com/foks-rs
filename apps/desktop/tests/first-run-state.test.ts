@@ -677,3 +677,22 @@ test('account method is nonsecret progress with a shared Back destination', () =
   assert.equal(recovery.state, 'existing');
   assert.equal(transitionFirstRun(recovery, { type: 'back' }).state, 'checked');
 });
+
+test('setup checkpoints retain Unicode device names using the UTF-8 byte bound', () => {
+  const deviceName = 'e\u0301'.repeat(200);
+  const state = transitionFirstRun(
+    {
+      ...initialFirstRun('own', 'account'),
+      profile: checked,
+      serverAddress: 'foks.example',
+    },
+    {
+      type: 'account-complete',
+      alias: 'personal',
+      username: 'sol',
+      deviceName,
+    },
+  );
+  const decoded = decodeFirstRunCheckpoint(encodeFirstRunCheckpoint(state));
+  assert.equal(decoded?.account?.deviceName, deviceName);
+});

@@ -1273,6 +1273,19 @@ mod tests {
     }
 
     #[test]
+    fn username_normalization_matches_shared_frontend_fixtures() {
+        for line in include_str!("../tests/fixtures/username-normalization.txt").lines() {
+            let (input, expected) = line.split_once('=').unwrap();
+            let expected = (!expected.is_empty()).then_some(expected.as_bytes());
+            assert_eq!(
+                normalize_username(input.as_bytes()).as_deref(),
+                expected,
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
     fn names_match_the_v019_unicode_normalization_matrix() {
         for (input, expected) in [
             ("max", Some("max")),

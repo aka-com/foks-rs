@@ -511,7 +511,7 @@ impl FoksClient {
             return Err(Error::Kex("device serial is zero"));
         }
         let secret = KexSecret::from_phrase(phrase)?;
-        let display_name = crate::fix_device_name(device_name);
+        let display_name = crate::prepare_device_name(device_name)?;
         let normalized_name = crate::normalize_device_name(display_name.as_bytes())
             .ok_or(Error::Kex("device name is invalid"))?;
         let public = derive_device_public(&device_seed)?;

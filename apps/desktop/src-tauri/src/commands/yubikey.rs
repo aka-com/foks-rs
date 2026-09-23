@@ -14,9 +14,10 @@ use crate::commands::validation::{
     bounded_field, bounded_local_name, bounded_secret, confirmed_passphrase, invalid_request,
     invalid_response, optional_bounded_field, optional_confirmed_passphrase,
     positive_recovery_serial, require_main_window, require_nested_response_row_cap,
-    require_response_row_cap, valid_local_name, valid_response_text, valid_typed_entity_id_hex,
-    valid_typed_yubi_id_hex, yubi_retry_configuration, yubi_slots, DEVICE_ID_PREFIX,
-    MAXIMUM_FIRST_RUN_ROWS, MAXIMUM_INVITE_BYTES, MAXIMUM_PASSPHRASE_BYTES, SUBKEY_ID_PREFIX,
+    require_response_row_cap, valid_device_name, valid_local_name, valid_response_text,
+    valid_typed_entity_id_hex, valid_typed_yubi_id_hex, yubi_retry_configuration, yubi_slots,
+    DEVICE_ID_PREFIX, MAXIMUM_FIRST_RUN_ROWS, MAXIMUM_INVITE_BYTES, MAXIMUM_PASSPHRASE_BYTES,
+    SUBKEY_ID_PREFIX,
 };
 use foks_agent_proto::{Operation, PendingOperationKind, SecretString};
 use serde::{Deserialize, Serialize};
@@ -564,7 +565,7 @@ pub async fn create_yubi_account(
     let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
     let alias = bounded_local_name(&alias, "Enter a valid local security-key alias.")?;
     let username = bounded_field(&username, 256, "Enter a username.")?;
-    let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
+    let device_name = valid_device_name(&device_name)?;
     let email = optional_bounded_field(&email, 320, "Enter a valid email address.")?;
     let invite = Zeroizing::new(invite);
     let invite = Zeroizing::new(optional_bounded_field(
@@ -691,7 +692,7 @@ pub async fn provision_yubi_device(
     };
     let target_alias =
         bounded_local_name(&target_alias, "Enter a valid local security-key alias.")?;
-    let device_name = bounded_field(&device_name, 256, "Enter a device name.")?;
+    let device_name = valid_device_name(&device_name)?;
     let (signing_slot, pq_slot) = yubi_slots(signing_slot, pq_slot)?;
     let pin = bounded_secret(pin, 128, "PIN is required and must be at most 128 bytes.")?;
     let retry_configuration = yubi_retry_configuration(puk, pin_attempts, puk_attempts)?;

@@ -808,7 +808,7 @@ impl CheckedProfileSession<'_> {
             return Err(Error::AccountExists);
         }
         if foks_verify::normalize_username(input.username.as_bytes()).is_none()
-            || input.device_name.len() > 256
+            || input.device_name.len() > foks_proto::MAXIMUM_DEVICE_NAME_BYTES
             || input.email.len() > 320
         {
             return Err(Error::InvalidAccount(
@@ -1181,7 +1181,7 @@ impl CheckedProfileSession<'_> {
         if vault.contains(&input.target_alias)? {
             return Err(Error::AccountExists);
         }
-        if input.serial == 0 || input.device_name.len() > 256 {
+        if input.serial == 0 || input.device_name.len() > foks_proto::MAXIMUM_DEVICE_NAME_BYTES {
             return Err(Error::InvalidAccount(
                 "Yubi provision fields are invalid before card preparation",
             ));
@@ -2139,7 +2139,7 @@ fn validate_pending_yubi(pending: &PendingYubiAccount) -> Result<()> {
             passphrase,
         } => {
             if pending.puk_seed.is_none()
-                || device_name.len() > 256
+                || device_name.len() > foks_proto::MAXIMUM_DEVICE_NAME_BYTES
                 || email.len() > 320
                 || InviteCode::from_user_input(invite, true).is_err()
                 || passphrase
@@ -2158,7 +2158,7 @@ fn validate_pending_yubi(pending: &PendingYubiAccount) -> Result<()> {
         } => {
             if pending.puk_seed.is_some()
                 || validate_name(source_alias).is_err()
-                || device_name.len() > 256
+                || device_name.len() > foks_proto::MAXIMUM_DEVICE_NAME_BYTES
                 || *serial == 0
             {
                 return Err(Error::InvalidAccount(
@@ -2320,7 +2320,9 @@ impl CheckedProfileSession<'_> {
         self.profile.require(Capability::Signup)?;
         self.profile.require(Capability::DeviceAdministration)?;
         validate_name(&input.alias)?;
-        if input.device_name.is_empty() || input.device_name.len() > 256 {
+        if input.device_name.is_empty()
+            || input.device_name.len() > foks_proto::MAXIMUM_DEVICE_NAME_BYTES
+        {
             return Err(Error::InvalidAccount("invalid hardware device name"));
         }
         if input.passphrase.is_some() {
@@ -2516,6 +2518,26 @@ mod tests {
             7,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn pending_yubi_retains_unicode_device_display_names() {
+        let mut pending = pending_preparation(
+            CardId {
+                name: "test-card".into(),
+                serial: 1,
+            },
+            SlotId::new(0x82).unwrap(),
+            SlotId::new(0x83).unwrap(),
+        );
+        if let PendingYubiPurpose::Provision { device_name, .. } = &mut pending.purpose {
+            *device_name = "é".repeat(200);
+        }
+        assert!(validate_pending_yubi(&pending).is_ok());
+        if let PendingYubiPurpose::Provision { device_name, .. } = &mut pending.purpose {
+            *device_name = "é".repeat(2049);
+        }
+        assert!(validate_pending_yubi(&pending).is_err());
     }
 
     fn stored_management_state(

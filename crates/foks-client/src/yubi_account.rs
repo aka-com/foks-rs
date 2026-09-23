@@ -17,8 +17,8 @@ use foks_rpc::{encode_registration_select_vhost_request, encode_yubi_signup_requ
 use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::{
-    fix_device_name, normalize_device_name, normalize_username, now_milliseconds, prefixed_hash,
-    random_bytes, AuthenticatedUserOutcome, Error, FoksClient, HardStateStore,
+    normalize_device_name, normalize_username, now_milliseconds, prefixed_hash,
+    prepare_device_name, random_bytes, AuthenticatedUserOutcome, Error, FoksClient, HardStateStore,
     KvDirectoryProjection, MutationCoordinator, MutationDraft, MutationKind, MutationOperation,
     MutationState, PinnedHost, ProtectedMutationStore, Result, YubiCredential,
 };
@@ -97,7 +97,7 @@ impl FoksClient {
         let normalized_username = normalize_username(request.username_utf8.as_bytes()).ok_or(
             Error::AccountRequest("username is not valid after normalization"),
         )?;
-        let display_device_name = fix_device_name(&request.device_name);
+        let display_device_name = prepare_device_name(&request.device_name)?;
         let normalized_device_name = normalize_device_name(display_device_name.as_bytes()).ok_or(
             Error::AccountRequest("device name is not valid after normalization"),
         )?;

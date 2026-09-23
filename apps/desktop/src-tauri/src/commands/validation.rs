@@ -267,11 +267,27 @@ pub(super) fn valid_username(value: &str) -> Result<String, AgentError> {
 
 /// A device name the server will accept, by the same rules the client applies.
 pub(super) fn valid_device_name(value: &str) -> Result<String, AgentError> {
-    let value = bounded_field(value, 256, "Enter a device name.")?;
-    if foks_verify::normalize_device_name(value.as_bytes()).is_none() {
+    if value.len() > foks_agent_proto::MAXIMUM_DEVICE_NAME_BYTES {
         return Err(invalid_request(
-            "Device names use 2 to 200 letters, numbers, spaces, and . _ + ' -, and start with a letter or number.",
+            "Device name input cannot exceed 4,096 bytes.",
         ));
+    }
+    let value = foks_client_app::fix_device_name(value);
+    if value.is_empty() {
+        return Err(invalid_request("Enter a device name."));
+    }
+    if value.chars().any(|c| {
+        c.is_control()
+            || matches!(c,
+        '\u{00ad}' | '\u{061c}' | '\u{200b}'..='\u{200f}' |
+        '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}')
+    }) {
+        return Err(invalid_request(
+            "Remove invisible formatting or control characters from the device name.",
+        ));
+    }
+    if foks_verify::normalize_device_name(value.as_bytes()).is_none() {
+        return Err(invalid_request(foks_client_app::DEVICE_NAME_RULES));
     }
     Ok(value)
 }
@@ -280,12 +296,9 @@ pub(super) fn valid_device_name(value: &str) -> Result<String, AgentError> {
 /// position rather than reported as a failed recovery.
 pub(super) fn recovery_phrase(value: String) -> Result<SecretString, AgentError> {
     let value = Zeroizing::new(value);
-    if value.is_empty()
-        || value.len() > MAXIMUM_RECOVERY_PHRASE_BYTES
-        || value.contains(['\0', '\r', '\n'])
-    {
+    if value.is_empty() || value.len() > MAXIMUM_RECOVERY_PHRASE_BYTES || value.contains('\0') {
         return Err(invalid_request(
-            "Recovery phrase must be a single line of at most 4,096 bytes.",
+            "Recovery phrase must contain at most 4,096 bytes and no null characters.",
         ));
     }
     if let Err(error) = foks_crypto::BackupKey::from_phrase(&value) {

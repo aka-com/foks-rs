@@ -1,3 +1,4 @@
+export { serverTeamName, teamAliasOf } from '../../name-normalization';
 /** Shared types, helpers, and components for team-management sheets. */
 
 import { useState } from 'react';
@@ -30,31 +31,6 @@ export const VIS_MAX = 32767;
 
 /** Placeholder value for an empty team-name field. */
 export const SUGGESTED_GROUP = 'Platform';
-
-/**
- * Returns the server team name, or null if the name is invalid. This mirrors
- * `server_team_name` in foks-client-app: whitespace is collapsed to an
- * underscore, then the lowercase result must contain 3 to 25 letters, digits,
- * or single underscores after dots and dashes are replaced with underscores.
- */
-export function serverTeamName(name: string): string | null {
-  const folded = name.trim().split(/\s+/).filter(Boolean).join('_');
-  const normalized = folded.toLowerCase().replace(/[.-]/g, '_');
-  return /^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(normalized) &&
-    normalized.length >= 3 &&
-    normalized.length <= 25
-    ? folded
-    : null;
-}
-
-/** Converts a display name to its local team alias. */
-export function teamAliasOf(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-}
 
 export function canTarget(snapshot: AgentSnapshot, party: Party): boolean {
   if (!actionableGroupMember(snapshot, party)) return false;

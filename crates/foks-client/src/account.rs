@@ -5,8 +5,8 @@ use super::{
     encode_check_name_exists_request, encode_get_client_version_info_request,
     encode_probe_key_exists_request, encode_registration_select_vhost_request,
     encode_registration_server_config_request, encode_reserve_username_request_at,
-    encode_signup_request_at, fix_device_name, make_software_eldest_link, normalize_device_name,
-    normalize_username, now_milliseconds, prefixed_hash, random_bytes, seal_initial_puk_box,
+    encode_signup_request_at, make_software_eldest_link, normalize_device_name, normalize_username,
+    now_milliseconds, prefixed_hash, prepare_device_name, random_bytes, seal_initial_puk_box,
     AuthenticatedUserOutcome, ClientVersionExt, DeviceCredential, DeviceLabel,
     DeviceLabelNameAndCommitmentKey, DeviceType, Duration, EntityId, Error, FoksClient,
     HardStateStore, InitialPukBoxRandomness, InviteCode, KvDirectoryProjection,
@@ -165,7 +165,7 @@ impl FoksClient {
         let normalized_username = normalize_username(request.username_utf8.as_bytes()).ok_or(
             Error::AccountRequest("username is not valid after normalization"),
         )?;
-        let display_device_name = fix_device_name(&request.device_name);
+        let display_device_name = prepare_device_name(&request.device_name)?;
         let normalized_device_name = normalize_device_name(display_device_name.as_bytes()).ok_or(
             Error::AccountRequest("device name is not valid after normalization"),
         )?;

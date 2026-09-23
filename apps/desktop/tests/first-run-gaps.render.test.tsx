@@ -190,6 +190,8 @@ test('local setup without a managed server reports why it cannot continue', asyn
 
 test('account alias derivation trims, rejects unusable names, and bounds length', async () => {
   const h = await harness();
+  assert.equal(h.accountAliasFor('ééé'), 'eee');
+  assert.equal(h.accountAliasFor('Équipe'), 'equipe');
   assert.equal(h.accountAliasFor('日本語'), '');
   assert.equal(h.accountAliasFor('Ada Lovelace'), 'ada-lovelace');
   assert.equal(h.accountAliasFor('--x--'), 'x');

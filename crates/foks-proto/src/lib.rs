@@ -9,6 +9,10 @@
 use foks_snowpack::{decode, encode, Value};
 use thiserror::Error;
 
+/// Local input/storage bound for a device display name, in UTF-8 bytes.
+/// Protocol validity separately limits its normalized form to 200 bytes.
+pub const MAXIMUM_DEVICE_NAME_BYTES: usize = 4096;
+
 pub const HOSTCHAIN_LINK_OUTER_V1_TYPE_ID: u64 = 0xa23b_a362_0d75_8f7a;
 pub const HOSTCHAIN_LINK_OUTER_TYPE_ID: u64 = 0x8d87_ac22_4920_355c;
 pub const MERKLE_ROOT_TYPE_ID: u64 = 0xa88f_c49b_6df3_a111;

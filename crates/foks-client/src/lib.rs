@@ -117,13 +117,8 @@ pub use transport::*;
 pub use yubi_account::*;
 pub use yubi_management::*;
 
-fn fix_device_name(name: &str) -> String {
-    name.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace(['—', '–'], "-")
-        .replace(['‘', '’'], "'")
-}
+mod device_name;
+pub use device_name::{fix_device_name, prepare_device_name, DEVICE_NAME_RULES};
 
 fn random_bytes<const N: usize>() -> Result<[u8; N]> {
     let mut bytes = [0; N];

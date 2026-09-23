@@ -239,7 +239,27 @@ test('the account pages are numbered sections and a lone sign-in method is prese
     .closest<HTMLElement>('.inset');
   assert.ok(form);
   assert.ok(ui.within(form).getByLabelText('Your name'));
-  assert.ok(ui.within(form).getByLabelText('This device’s name'));
+  const deviceInput = ui
+    .within(form)
+    .getByLabelText<HTMLInputElement>('This device’s name');
+  ui.fireEvent.change(deviceInput, {
+    target: { value: 'Daniel’s MacBook Pro' },
+  });
+  ui.fireEvent.blur(deviceInput);
+  assert.equal(deviceInput.value, "Daniel's MacBook Pro");
+  const recoveryInput = r.view.getByLabelText(
+    'Recovery phrase',
+  ) as HTMLInputElement;
+  ui.fireEvent.paste(recoveryInput, {
+    clipboardData: { getData: () => 'abandon\n0\r\nabandon\u00a01' },
+  });
+  assert.equal(recoveryInput.value, 'abandon 0 abandon 1');
+  recoveryInput.setSelectionRange(8, 9);
+  ui.fireEvent.paste(recoveryInput, {
+    clipboardData: { getData: () => '2' },
+  });
+  assert.equal(recoveryInput.value, 'abandon 2 abandon 1');
+
   assert.ok(r.view.getByRole('button', { name: 'Recover' }));
   assert.equal(r.view.queryByRole('button', { name: 'Continue' }), null);
   // Create: no sign-in method group, and the account rows come second.

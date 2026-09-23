@@ -1,3 +1,4 @@
+import { boundedDeviceName } from './device-name';
 import type { CheckedProfileResponse } from './bridge';
 
 export const FIRST_RUN_STATES = [
@@ -528,7 +529,7 @@ export function decodeFirstRunCheckpoint(
         ) ||
         !boundedText(candidate.id, 64) ||
         !localName(candidate.alias) ||
-        !boundedText(candidate.deviceName, 256) ||
+        !boundedDeviceName(candidate.deviceName) ||
         !['signup', 'recovery', 'copy', 'pairing', 'sso'].includes(
           String(candidate.kind),
         ) ||
@@ -582,7 +583,7 @@ export function decodeFirstRunCheckpoint(
         !exactKeys(candidate, ACCOUNT_KEYS) ||
         !localName(candidate.alias) ||
         !boundedText(candidate.username, 256) ||
-        !boundedText(candidate.deviceName, 256)
+        !boundedDeviceName(candidate.deviceName)
       )
         return null;
       account = {
@@ -598,7 +599,7 @@ export function decodeFirstRunCheckpoint(
         !record(candidate) ||
         !exactKeys(candidate, PROVISIONED_ACCOUNT_KEYS) ||
         !localName(candidate.alias) ||
-        !boundedText(candidate.deviceName, 256)
+        !boundedDeviceName(candidate.deviceName)
       )
         return null;
       provisionedAccount = {

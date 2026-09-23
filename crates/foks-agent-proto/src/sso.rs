@@ -87,7 +87,7 @@ impl SsoAction {
                     && signing_slot != pq_slot
                     && pin.expose().len() <= 32
                     && !device_name.is_empty()
-                    && device_name.len() <= 256
+                    && device_name.len() <= foks_proto::MAXIMUM_DEVICE_NAME_BYTES
                     && invite.expose().len() <= 4096
             }
             Self::FinishYubiSignup { operation_id, pin } => {
@@ -107,7 +107,7 @@ impl SsoAction {
             } => {
                 handle(operation_id)
                     && !device_name.trim().is_empty()
-                    && device_name.len() <= 256
+                    && device_name.len() <= foks_proto::MAXIMUM_DEVICE_NAME_BYTES
                     && invite.expose().len() <= 4096
                     && passphrase.as_ref().is_none_or(|p| p.expose().len() <= 1024)
             }
@@ -134,5 +134,27 @@ mod tests {
         }
         .validate());
         assert!(serde_json::from_str::<SsoAction>(r#"{"action":"status","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","id_token":"secret"}"#).is_err());
+    }
+
+    #[test]
+    fn sso_device_names_allow_unicode_display_bytes() {
+        for (name, expected) in [("é".repeat(200), true), ("é".repeat(2049), false)] {
+            let signup = SsoAction::FinishSignup {
+                operation_id: "a".repeat(32),
+                device_name: name.clone(),
+                invite: SecretString::new(""),
+                passphrase: None,
+            };
+            assert_eq!(signup.validate(), expected);
+            let yubi = SsoAction::BeginYubiSignup {
+                card_serial: 1,
+                signing_slot: 0x82,
+                pq_slot: 0x83,
+                pin: SecretString::new("123456"),
+                device_name: name,
+                invite: SecretString::new(""),
+            };
+            assert_eq!(yubi.validate(), expected);
+        }
     }
 }
