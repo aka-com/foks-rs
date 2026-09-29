@@ -1,0 +1,361 @@
+# The Desktop: Keeping Secrets Out of the Browser
+
+Desktop applications built on web technology run a browser engine inside a
+native window. That gives them a rendering stack, a layout engine, and a
+large ecosystem, and it also gives them a browser engine's attack surface:
+cross-site scripting, supply-chain compromise of a JavaScript dependency,
+and a memory model in which a string, once created, may be copied by the
+garbage collector and linger long after it is "deleted." For a program whose
+purpose is to show people their passwords, that is the wrong place to keep
+anything.
+
+The FOKS desktop is built with Tauri, a framework that pairs a system
+WebKit or WebView2 renderer with a Rust host process. This chapter is about
+the arrangement that keeps key material and file contents out of the
+renderer, and about a handful of engineering ideas that recur throughout the
+host: generation counters, time-of-check-to-time-of-use races, digest-only
+tracking, and bounded background work.
+
+## Three tiers
+
+```
++---------------------------------------------------------------+
+|  WebKit renderer (React, TypeScript)              UNTRUSTED     |
+|  - sees one revealed value at a time, on request               |
+|  - never sees file bytes, vault keys, or signing keys          |
+|  - can call: three Tauri core commands + app commands          |
++------------------------------+--------------------------------+
+                               | Tauri IPC (JSON)
++------------------------------v--------------------------------+
+|  Rust host (foks-desktop, Tauri)                  PRIVILEGED    |
+|  - owns the window, dialogs, clipboard, drag-and-drop          |
+|  - enforces the app lock on every value-bearing command        |
+|  - streams file bytes between disk and the agent               |
++------------------------------+--------------------------------+
+                               | Unix domain socket (foks-rs.sock)
++------------------------------v--------------------------------+
+|  foks-agent (separate process)                    HOLDS KEYS    |
+|  - all cryptography, all network sessions, all databases       |
+|  - also serves the CLI and the MCP server                      |
++---------------------------------------------------------------+
+```
+
+The renderer is treated as untrusted. It renders a catalog of names,
+types, and sizes; it asks for one value at a time; and it receives that
+value only through the single content-returning command. The host is
+privileged but holds no long-lived secrets: it forwards requests to the
+agent and moves bytes between the agent and the disk or clipboard. The
+agent, described in [Chapter 19](19-agent.qmd), is a separate process that
+outlives the window and that the command-line tool and the MCP server
+([Chapter 21](21-mcp.qmd)) connect to as well.
+
+## Exactly three core permissions
+
+Tauri's capability model is an allowlist: a JSON file names which of the
+framework's built-in commands a window's scripts may invoke. The default
+set, `core:default`, expands to 92 commands, including
+`core:image|from_path` (read any file the renderer names) and
+`internal_toggle_devtools`. The FOKS capability file grants three:
+
+| Permission | What it allows |
+|---|---|
+| `core:event:allow-listen` | subscribe to events the host emits |
+| `core:event:allow-unlisten` | unsubscribe |
+| `core:window:allow-start-dragging` | drag the window by its custom title bar |
+
+Notably absent are `emit` and `emit_to`: the renderer cannot synthesize
+events, so it cannot fake a file drop. The bundled dialog and clipboard
+plugins are linked but granted no renderer permissions; only Rust drives
+them.
+
+A permission file is easy to get subtly wrong, so the project checks it by
+test rather than by inspection. At build time Tauri generates an ACL
+manifest describing every permission set and the commands each resolves to.
+A unit test parses that generated manifest and the generated capability,
+resolves each granted permission recursively to concrete
+`manifest|command` pairs, and asserts the resulting set equals exactly the
+three listed above. It then asserts a list of forbidden commands
+(`core:image|from_path`, `core:path|resolve`,
+`core:webview|internal_toggle_devtools`, `core:event|emit`, and others) is
+unreachable. The project's permission notes give the reason this matters:
+whether a command is *compiled in* is not the security boundary, because
+Cargo feature unification across a workspace can pull in features a
+sibling build enabled; only the capability file is a control, and only a
+test that resolves it proves what it grants.
+
+Application-defined commands are not covered by the capability file, so
+every command that can return a value begins with two checks: that the
+call came from the main window, and that the app is unlocked.
+
+## The app lock: a generation counter
+
+An *app lock* hides everything after a period of inactivity or on request,
+and requires the person to authenticate before anything is shown again. The
+subtle requirement is not the locking but what happens to work that was
+already in flight. Suppose a multi-chunk download started, the app locked,
+the person unlocked it, and the download's next chunk arrived. Is the app
+unlocked? Yes. Should the download continue? No: the lock was meant to end
+the session in which it was authorized.
+
+A *generation counter* solves this. A monotonically increasing integer is
+incremented on every lock; an operation records the generation when it
+starts and, before doing anything sensitive, checks that the app is
+unlocked *and* the generation is unchanged. A lock followed by an unlock
+leaves the app unlocked but advances the generation, so the check fails.
+The general pattern appears wherever "the same state" is not the same as
+"a state that looks identical": caches invalidated by a version number,
+optimistic concurrency by a version column, and so on.
+
+In the host, `AppLock` holds a `locked` flag, a `generation` counter, and
+an `authenticating` flag, all atomics. `lock()` sets the flag and
+increments the generation. Long operations bracket themselves with two
+calls:
+
+```
+g = unlocked_generation()          // read generation, require unlocked
+... do work, possibly across many IPC round trips ...
+require_unlocked_generation(g)     // require unlocked AND generation == g
+```
+
+A unit test named for the property, that locking invalidates work even
+after unlock, pins it. The lock starts *engaged* on a platform that can
+authenticate and *disengaged* on one that cannot, so the interface can
+never become permanently inaccessible. Locking also scrubs: it invalidates
+the cached catalog, closes any hosted-administration windows, and clears
+delivered chat notifications. Unlocking uses `authenticating.swap(true)` so
+a second prompt cannot open while one is pending.
+
+### Delegating authentication to the operating system
+
+FOKS has no master password. Authentication is delegated entirely to the
+operating system, so the application never stores or compares a secret of
+its own.
+
+On macOS, the host asks `LAContext` whether biometric policy is available
+(to label the mechanism "biometry" or "password") and then evaluates the
+`DeviceOwnerAuthentication` policy, which accepts Touch ID, an Apple Watch,
+or the account password. A 60-second timeout bounds the prompt, and the
+three cancellation error codes (-2, -4, -9: user, system, and application
+cancel) are reported as "not authenticated" rather than as failures.
+
+On Linux, the host calls polkit over the system D-Bus. It first checks
+that the action `com.aka.foks.desktop.unlock` is registered (the policy
+file is installed by the package; if it is missing, the lock reports itself
+unavailable rather than silently allowing). It then calls
+`CheckAuthorization` with a *subject* of kind `unix-process` identified by
+the host's PID and its **start time**, read as the 22nd field of
+`/proc/<pid>/stat`. Including the start time matters because PIDs are
+reused: a subject identified by PID alone could, after the original
+process exits, name an unrelated process. The policy file sets
+`allow_active=auth_self` and denies inactive and remote sessions, so only
+the user at the active console can authenticate, and no administrator
+privilege is involved.
+
+## Time-of-check to time-of-use
+
+A *TOCTOU* race is a bug in which a program checks a property of something
+(a file, a process, a socket) and then acts on it, but the thing changes in
+between. The check was correct when made and wrong when relied upon. The
+defense is to make the check and the use atomic, or, when that is
+impossible, to identify the thing by an unforgeable handle (an inode, a
+process start time) and re-check that handle immediately before acting.
+
+The host does this in several places. Before it launches the packaged
+agent, it verifies the binary is a regular file (not a symlink), owned by
+the same user as the desktop, not writable by group or world, and
+executable. When it finds an incompatible agent already bound to the
+socket, it reads the peer's PID from the socket (`LOCAL_PEERPID` on macOS,
+`SO_PEERCRED` on Linux), shows the person a confirmation dialog naming
+that process, and then **re-inspects the socket after the dialog closes**.
+If the endpoint no longer matches what was shown, no signal is sent, since
+approval applied only to the endpoint originally displayed. The polkit
+start-time subject above is the same idea applied to processes.
+
+## Clipboard hygiene
+
+Copying a password to the clipboard hands it to every clipboard-history
+tool on the machine. The host's `copy_with_hygiene` does three things:
+
+1. It computes `SHA-256(value)` and a generation number, writes the value
+   to the pasteboard, and then drops the zeroizing string. Only the 32-byte
+   digest and the generation are kept in memory.
+2. A thread sleeps for the auto-clear interval and then calls
+   `clear_if_unchanged`: it reads the current clipboard text, hashes it,
+   and clears the clipboard **only if the digest still matches**. A value
+   the person copied in the meantime is never destroyed. The generation
+   ensures a repeated copy of the same value gets its own timer.
+3. On macOS it also sets the `org.nspasteboard.ConcealedType` pasteboard
+   type, a convention that asks clipboard managers not to record the item.
+   Linux has no equivalent, which is why its timer is shorter.
+
+| Platform | Auto-clear |
+|---|---|
+| Linux | 15 s |
+| macOS and others | 30 s |
+
+The exit handler performs one best-effort clear before the process ends.
+
+## Files: drag-and-drop, upload, and download
+
+A web `<input type="file">` reads bytes into a JavaScript buffer. FOKS
+wants uploads without bytes in the renderer, but it also must not turn a
+"path-taking" command into a general file reader that the renderer could
+point at any file on disk.
+
+The drop event lands in Rust, because Tauri's `dragDropEnabled` routes it
+to the host. `record_drop_paths` accepts **exactly one** UTF-8 path as
+authorized; a multi-file drop is reported for display but authorizes
+nothing. The renderer then calls `upload_path` with the path string it was
+shown, and the host looks it up in the pending set: a path that was not
+dropped, or was already consumed, yields `drop-not-authorized`. Paths
+chosen through the native picker never cross the IPC boundary at all. The
+host rejects symlinks and non-regular files, then streams the file to the
+agent in frames of at most 700 KiB, the agent protocol's payload bound
+from [Chapter 17](17-wire.qmd), each held in a zeroizing buffer. A transcript
+test carries an 84 MiB sparse file through the backend and confirms it
+travels only as bounded frames.
+
+Download reverses the path with three properties: atomicity, integrity,
+and no plaintext left behind on failure. The host opens the native save
+dialog itself, creates a temporary file **in the destination's directory**
+(so the final rename is on one filesystem), and streams chunks from the
+agent, validating that each chunk's store, path, version, and offset match
+the request and that the running total stays under the limit. Each chunk
+buffer is zeroized after it is written. When the agent signals end of
+file, the total length is compared to the item's authenticated size; a
+mismatch is a `response-binding` error. Then `sync_all` flushes the file
+and `persist` renames it into place, which POSIX guarantees is atomic. A
+crash at any earlier point leaves a temporary file, never a partial file
+under the chosen name.
+
+| Bound | Value |
+|---|---|
+| Inline KV write threshold (above this, stream) | 128 KiB |
+| Stream frame | 700 KiB |
+| In-memory reveal | 16 MiB |
+| Download | 1 GiB |
+
+The repository's HTML guide states the download limit as 512 MB; the code
+defines 1 GiB, and the code is authoritative.
+
+## The agent's lifecycle
+
+The host launches the packaged agent with `--request-timeout-seconds 60`
+(the agent's default of 15 s is too short for a path that may raise a
+blocking macOS Keychain prompt), with standard input closed and standard
+output and error redirected to a 0600 log file. A reaper thread waits on
+the child so its exit status is observed. Exit is a one-way state machine
+in the close guard, `Idle → Decision → Stopping → Finalizing`, with `Failed`
+and `ForceConfirmation` branches, and the desktop process ends only after
+the agent's termination has been verified; the state cannot move backward
+from `Finalizing`.
+
+## The notification consumer
+
+The chat view must discover new messages across every channel of every
+team without flooding the agent, while the conversation the person is
+looking at must never feel stale. The consumer that does this is a small
+exercise in bounded background work.
+
+**Round-robin from a persisted cursor.** Each pass walks the inbox snapshot
+in two segments starting at `cursor % size`, so the walk resumes where the
+last one stopped rather than restarting at channel zero and starving the
+channels at the end. The walk allocates no channel array.
+
+**Bounds and budgets.**
+
+| Bound | Value |
+|---|---|
+| Queued jobs | 64 |
+| Progress records (baselines) | 4,096 |
+| Rows per pass | 400 |
+| Bytes per pass | 4 MiB |
+| Rows per channel read | 100 |
+| Bytes per channel read | 1 MiB |
+| Evictions per 5 s window | 64 |
+
+When the progress table is full, the consumer evicts an idle record before
+admitting a new channel, but caps evictions per 5-second window so that
+rotation "must not become an endless baseline RPC loop." Before starting a
+job it reserves a whole channel read against the pass budget; a budget
+miss re-arms after a short yield.
+
+**Geometric backoff, with one exception.** A channel whose pass found
+nothing new doubles its interval from 5 s toward a ceiling of 60 s; a
+pass that observed a newer sequence resets it to 5 s. The module
+documentation is explicit about what this trades: on a degraded host, a
+message in a quiet, unopened channel may be noticed up to 60 s after it
+arrives rather than up to 5 s. No message is skipped; the backoff decides
+when the read happens, not whether. **The channel whose thread is open
+never backs off**: the due-time computation uses the base interval whenever
+the channel is the presented one, whatever interval is stored. Opening a
+channel that had backed off therefore makes it due at the base interval
+immediately.
+
+Timers are armed for the earliest computed deadline, or not at all if
+nothing is due; other wake-ups come from inbox publications or admission
+releases. Baselines are seeded from the inbox projection's own head when it
+is not degraded, costing no request.
+
+## History paging
+
+Chat history is paged with an opaque `before` cursor: a history reply
+carries `messages`, `before` (the cursor for older rows, or null), and the
+integrity fields `missing_predecessors` and `gap` described in
+[Chapter 16](16-chat.qmd). An incremental refresh asks for rows `after`
+the newest sequence held; if the reply reports a gap, the view falls back
+to a full first page and replaces what it held.
+
+A *published-head gate* avoids a class of wasted requests. The inbox
+snapshot carries a `head` sequence per channel, and the decoder enforces
+that `cursor <= head` and that `degraded` is true exactly when they
+differ. When a revision arrives for a reason other than a new message,
+the tail read is skipped if the published head is not beyond the newest
+held sequence, because the server would only confirm that nothing newer
+exists.
+
+The history cache is a least-recently-used map keyed by a binding of
+store, channel, scope, generation, and authority, bounded at 16 channels,
+1,000 rows, and 8 MiB. Reading an entry re-inserts it to refresh recency.
+A binding whose authority or generation has changed is simply not
+current, so a page fetched under an old role cannot be shown after the
+role changes. The row and byte limits come from the shared
+`chat-limits.json` of [Chapter 24](24-performance.qmd).
+
+## Where to look
+
+- `apps/desktop/src-tauri`: `capabilities/default.json`, `src/lib.rs` (the
+  ACL resolution test), `src/applock.rs` and `src/applock/polkit.rs`,
+  `src/clipboard.rs`, `src/dragdrop.rs`, `src/commands/context.rs`
+  (`record_drop_paths`, `upload_path`), `src/commands/vault.rs`
+  (`read_item`, `copy_item_value`, `download_file`),
+  `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
+  takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
+  `linux/com.aka.foks.desktop.policy`.
+- `apps/desktop/src/chat`: `notification-consumer.ts`,
+  `use-chat-history.ts`, `history-cache.ts`; `apps/desktop/src/chat-contract.ts`.
+- `foks-desktop`: `lib.rs` (size constants, streaming), `tests/backend_transcript.rs`.
+
+## Further reading
+
+- Tauri Programme, *Tauri v2 Security: Capabilities*, 2024,
+  https://v2.tauri.app/security/capabilities/
+- Tauri Programme, *Tauri v2 Security: Permissions*, 2024,
+  https://v2.tauri.app/security/permissions/
+- Tauri Programme, *Process Model*, 2024,
+  https://v2.tauri.app/concept/process-model/
+- Apple, *LocalAuthentication: LAContext.evaluatePolicy*, Apple Developer
+  Documentation,
+  https://developer.apple.com/documentation/localauthentication/lacontext/evaluatepolicy(_:localizedreason:reply:)
+- freedesktop.org, *polkit Reference Manual*: `org.freedesktop.PolicyKit1.Authority`,
+  https://www.freedesktop.org/software/polkit/docs/latest/eggdbus-interface-org.freedesktop.PolicyKit1.Authority.html
+- Linux man-pages project, *proc(5)*,
+  https://man7.org/linux/man-pages/man5/proc.5.html
+- Matt Bishop and Michael Dilger, *Checking for Race Conditions in File
+  Accesses*, Computing Systems 9(2), 1996,
+  https://www.usenix.org/publications/compsystems/1996/spr_bishop.pdf
+- OWASP Foundation, *Time of Check Time of Use*, OWASP Community Pages,
+  https://owasp.org/www-community/vulnerabilities/Time_of_check_time_of_use
+- IEEE and The Open Group, *rename()*, The Open Group Base Specifications
+  Issue 8 (POSIX.1-2024),
+  https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html

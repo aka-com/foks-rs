@@ -1,0 +1,63 @@
+project:
+  type: book
+  output-dir: _book
+
+book:
+  title: "Inside foks-rs"
+  subtitle: "The algorithms, data structures, and techniques behind a Rust implementation of the Federated Open Key Store"
+  date: "2026-09-25"
+  search: true
+  chapters:
+    - index.qmd
+    - part: "Part I: Orientation"
+      chapters:
+        - 01-problem.qmd
+        - 02-shape.qmd
+    - part: "Part II: Secrecy"
+      chapters:
+        - 03-key-hierarchy.qmd
+        - 04-hybrid-encryption.qmd
+        - 05-generations.qmd
+        - 06-hesp.qmd
+        - 07-hardware-keys.qmd
+        - 08-local-keystore.qmd
+    - part: "Part III: Authority"
+      chapters:
+        - 09-canonical-encoding.qmd
+        - 10-sigchains.qmd
+        - 11-merkle-tree.qmd
+        - 12-epochs.qmd
+        - 13-client-verification.qmd
+    - part: "Part IV: Data"
+      chapters:
+        - 14-kv-store.qmd
+        - 15-teams.qmd
+        - 16-chat.qmd
+    - part: "Part V: Systems Engineering"
+      chapters:
+        - 17-wire.qmd
+        - 18-server-storage.qmd
+        - 19-agent.qmd
+        - 20-desktop.qmd
+        - 21-mcp.qmd
+        - 22-sso.qmd
+        - 23-compatibility.qmd
+        - 24-performance.qmd
+  appendices:
+    - appendix-a-primer.qmd
+    - appendix-b-glossary.qmd
+    - appendix-c-bibliography.qmd
+    - appendix-d-crate-map.qmd
+
+format:
+  html:
+    theme:
+      light: cosmo
+      dark: darkly
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    number-depth: 2
+    code-copy: true
+    link-external-newwindow: true
+    html-math-method: mathjax

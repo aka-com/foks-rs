@@ -1,0 +1,303 @@
+# Canonical Encoding and Typed Hashing
+
+Every guarantee in Part III rests on hashing and signing bytes. A signature
+chain link is a signed byte string; a Merkle leaf is the hash of a byte
+string; a Merkle root is a signed byte string that contains the hashes of
+other byte strings. None of that works unless two parties who hold the same
+logical object produce the same bytes for it. This chapter is about how FOKS
+makes that true, and about the second, related problem: making sure that a
+signature over one kind of object can never be mistaken for a signature over
+another.
+
+## The problem: signatures cover bytes, not meanings
+
+A digital signature scheme signs a sequence of bytes. Application code, on
+the other hand, deals in structures: a link with a sequence number, a
+previous-hash field, a list of key changes. Between the two sits a
+serialization format, and most serialization formats allow one structure to
+be written in several ways. JSON does not fix the order of object keys or the
+spelling of numbers. Protocol Buffers allow unknown fields and multiple
+encodings of the same integer. Even a compact binary format like MessagePack
+lets the integer 5 be written as one byte or as two, three, five, or nine.
+
+If a verifier re-serializes a structure and hashes the result, it must get the
+same bytes the signer hashed, or the signature fails for no good reason. Worse,
+if two different structures can serialize to the same bytes, a signature over
+one is a valid signature over the other. The standard remedy is a *canonical
+encoding*: a rule under which every value has exactly one byte representation
+and every byte string decodes to at most one value. XML Canonicalization and
+ASN.1's Distinguished Encoding Rules (DER) are the well-known examples; FOKS
+uses a canonical subset of MessagePack.
+
+FOKS has a second reason to care. The Rust implementation must interoperate
+with the reference Go implementation (go-foks v0.1.9). A link signed by a Go
+client must verify in Rust and land at the same Merkle leaf; a root signed by
+a Rust server must verify in Go. "Same bytes" therefore means byte-for-byte
+identical output across two independent code bases that never exchange a
+schema at runtime.
+
+## MessagePack in one page
+
+MessagePack is a binary serialization format in which every value begins with
+a one-byte *marker* that identifies its type and, for small values, carries
+the value itself. Small integers, short strings, short arrays, and small maps
+each fit in a single marker byte; larger values use a marker followed by a
+length or the value in big-endian form.
+
+| Marker bytes    | Meaning                                    |
+|-----------------|--------------------------------------------|
+| `0x00`–`0x7f`   | positive fixint (the value is the marker)  |
+| `0x80`–`0x8f`   | fixmap, 0–15 entries                       |
+| `0x90`–`0x9f`   | fixarray, 0–15 elements                    |
+| `0xa0`–`0xbf`   | fixstr, 0–31 bytes                         |
+| `0xc0`          | nil                                        |
+| `0xc2`, `0xc3`  | false, true                                |
+| `0xc4`–`0xc6`   | bin8, bin16, bin32                         |
+| `0xc7`–`0xc9`, `0xd4`–`0xd8` | extension types                |
+| `0xca`, `0xcb`  | float32, float64                           |
+| `0xcc`–`0xcf`   | uint8, uint16, uint32, uint64              |
+| `0xd0`–`0xd3`   | int8, int16, int32, int64                  |
+| `0xd9`–`0xdb`   | str8, str16, str32                         |
+| `0xdc`, `0xdd`  | array16, array32                           |
+| `0xde`, `0xdf`  | map16, map32                               |
+| `0xe0`–`0xff`   | negative fixint, −32 to −1                 |
+
+The format is compact and simple to parse, but it is not canonical. The
+integer 200 can be a `uint8`, a `uint16`, a `uint32`, or a `uint64`. A
+three-element array can be a fixarray or an `array16`. A map's entries can
+appear in any order. Floats have two widths. Extension types let applications
+define new markers. A canonical profile must remove every one of these
+choices.
+
+## Snowpack: a canonical subset
+
+Snowpack is the name go-foks gives to its MessagePack profile, and
+`foks-snowpack` is the Rust crate that implements it. The crate's own
+description is that it is "not a general-purpose MessagePack codec." Its data
+model has only eight kinds of value:
+
+| Value kind   | Wire form                                                   |
+|--------------|-------------------------------------------------------------|
+| `Null`       | `0xc0`                                                      |
+| `Bool`       | `0xc2` or `0xc3`                                            |
+| `Unsigned`   | shortest of fixint, uint8, uint16, uint32, uint64           |
+| `Negative`   | shortest of negative fixint, int8, int16, int32, int64      |
+| `Binary`     | bin8, bin16, or bin32 with the smallest header that fits    |
+| `Text`       | fixstr, str8, str16, or str32 with the smallest header      |
+| `Array`      | fixarray, array16, or array32; never empty                  |
+| `Variant`    | fixmap with zero entries, or one entry keyed by a fixstr    |
+
+Two structural conventions turn Go structs into these values.
+
+**Structs are positional arrays.** A struct with fields `a`, `b`, `c` is
+encoded as a three-element array in declaration order. Field names never
+appear on the wire, so there is no key-ordering question and no way to omit or
+duplicate a field. (This is go-codec's `toarray` option, which go-foks uses
+for every protocol type.)
+
+**Tagged unions are one-entry maps.** A union with no arm set is the empty
+fixmap `0x80`. A union with an arm set is the one-entry fixmap `0x81` whose
+key is a short string tag of at most 31 bytes and whose value is the arm's
+payload. These are the only maps Snowpack permits. Key ordering therefore
+never arises inside a canonical object; where FOKS's RPC envelope carries
+ordinary named-field maps, the keys appear in sorted order, and that belongs
+to [Chapter 17](17-wire.qmd).
+
+On top of those conventions, the encoder and decoder enforce minimality:
+
+- Unsigned integers use the shortest marker: `0`–`127` as a fixint, then
+  uint8, uint16, uint32, uint64. The decoder rejects, for example, a `uint8`
+  marker followed by a byte of `0x7f` or less.
+- Negative integers likewise, and the `Negative` kind refuses to hold zero
+  or a positive number, so `+5` has exactly one form and so does `−5`.
+- Binary and text lengths use the smallest header; a `bin16` with a length
+  under 256 is rejected.
+- Arrays are never empty. An empty list is represented as `Null` at the
+  schema level. The decoder treats the empty fixarray `0x90` as an error.
+- Floats, extension types, the reserved marker `0xc1`, `map16`, `map32`, and
+  fixmaps with two or more entries are all errors.
+- Nothing may follow the value: trailing bytes are an error.
+- Nesting depth is capped at 64 and the total number of decoded values at
+  1,000,000, and an array header claiming more elements than there are bytes
+  remaining is rejected before any allocation.
+
+The last group is defensive rather than canonical. Snowpack frames arrive
+from the network, and a decoder that allocated whatever a header asked for
+would be an easy target.
+
+## One encoding per value, and how that is tested
+
+The property Snowpack promises is that `decode(encode(v)) = v` for every
+canonical value `v`, and `encode(decode(b)) = b` for every byte string `b` the
+decoder accepts. Together these say the mapping between values and byte
+strings is a bijection on the accepted set: one encoding per value, one value
+per encoding.
+
+`foks-snowpack` tests this with QuickCheck-style property tests. A generator
+builds random values from all eight kinds, choosing top-level array lengths
+from the boundary set 1, 2, 7, 15, 16, 17, 31, 32, and 33 so that the
+fixarray, array16, and array32 transitions are exercised. Two thousand random
+values are encoded, decoded, and compared, and every shrink of a failing case
+must itself remain canonical. Alongside the property tests, a directory of
+byte fixtures written by the Go implementation is round-tripped byte-exactly;
+each fixture was accepted by Go's own canonical checker before it was written,
+so the fixtures are evidence about Go, not a Rust reimplementation of Go.
+
+## Signing the delivered bytes
+
+Canonical encoding solves the problem of two encoders disagreeing. A second
+technique removes the need for a verifier to re-encode at all. Wherever a
+signed object is embedded in a larger one, the inner object's exact encoding
+is carried as an opaque `Binary` value:
+
+- A `SignedBlob` is the two-element array `[Binary(inner), signature]`. The
+  Merkle root and the host's public zone travel this way.
+- A chain link's outer form is `[1, {"1": [Binary(inner), [signatures]]}]`,
+  and the Rust `UserLink` type keeps `inner` verbatim, with the comment that
+  "both stacked signatures and the Merkle leaf commit to these bytes."
+
+The verifier checks the signature over the bytes it was given, then decodes
+those bytes to learn what they say. It never has to reproduce them. This is
+what makes forward compatibility workable: the decoder for a Merkle root
+accepts *at least* five fields, keeps any trailing fields it does not
+understand, and re-encodes them unchanged, so a root minted by a newer server
+still hashes and verifies correctly on an older client.
+
+The leading `1` and the `"1"` tag in the outer form both carry a version
+number. That redundancy is how go-foks's versioned unions serialize, and
+Snowpack preserves it because changing it would change the bytes.
+
+## Typed hashing
+
+The second problem in this chapter is *domain separation*. Suppose a Merkle
+root and some other protocol object happened to encode to the same bytes. A
+signature made over one would then be a valid signature over the other, and a
+verifier could be handed the wrong object with a genuine signature. Canonical
+encoding does not prevent this; it only guarantees that each object has one
+encoding, not that different kinds of object have different encodings.
+
+FOKS's answer is to assign every object kind a 64-bit *type ID* and to prepend
+it, as eight big-endian bytes, to the encoded object before hashing or
+signing. The hash function throughout is SHA-512/256, the FIPS 180-4 variant
+of SHA-512 that uses a distinct initial value and truncates to 256 bits:
+
+$$
+\mathrm{prefixed\_hash}(t, m) = \mathrm{SHA\text{-}512/256}(\mathrm{BE64}(t) \,\|\, m)
+$$
+
+Signatures are computed over the same prefixed message, and keyed
+commitments use HMAC-SHA-512/256 with the same layout: the type ID, then the
+canonical bytes. A selection of the constants used in Part III:
+
+| Constant                          | Value                  | Used for                          |
+|-----------------------------------|------------------------|-----------------------------------|
+| `LINK_OUTER_TYPE_ID`              | `0xed4cc0f7081732b6`   | hash of a user or team link       |
+| `LINK_OUTER_V1_TYPE_ID`           | `0xc2745284af617745`   | signatures on a user or team link |
+| `HOSTCHAIN_LINK_OUTER_TYPE_ID`    | `0x8d87ac224920355c`   | hash of a hostchain link          |
+| `MERKLE_NODE_TYPE_ID`             | `0xe941750dc5b96783`   | hash of a tree node               |
+| `MERKLE_ROOT_TYPE_ID`             | `0xa88fc49b6df3a111`   | hash of a Merkle root             |
+| `MERKLE_ROOT_BLOB_TYPE_ID`        | `0xa22f0c0921d4e651`   | signature on a Merkle root        |
+| `MERKLE_BACK_POINTERS_TYPE_ID`    | `0x8c7c4b855fba9000`   | hash of an epoch's back pointers  |
+| `MERKLE_TREE_RF_INPUT_TYPE_ID`    | `0xb0e268f388acc97a`   | derivation of a tree key          |
+| `TREE_LOCATION_TYPE_ID`           | `0xaeffd88b6cd267d9`   | commitment to a tree location     |
+| `CHAIN_LOCATION_DERIVATION_TYPE_ID` | `0xe516acf96cf56e58` | subchain start location           |
+| `NAME_COMMITMENT_TYPE_ID`         | `0xe37b1fcfba972353`   | username commitment               |
+
+The values are fixed by the Go implementation and copied into
+`foks-proto`; they look random because they are. Note that a link has two
+type IDs, one for its hash and one for the signatures over it, and a root
+likewise. Hashing an object and signing it are different operations on
+different byte strings, and the type IDs keep them apart. The same technique
+extends beyond hashing: [Chapter 4](04-hybrid-encryption.qmd) shows the
+type ID placed in the first eight bytes of an authenticated-encryption nonce
+so that a ciphertext produced for one purpose cannot be opened under another.
+
+Domain separation by prefix is a standard construction. NIST SP 800-185
+formalizes it for the SHA-3 family (cSHAKE's customization string), and most
+modern protocols do something equivalent with a label. The FOKS variant is
+unusual only in using a 64-bit integer rather than a human-readable string.
+
+## `validate` versus `validate_signable`
+
+There is one place where "shortest marker" and "what Go's canonical checker
+accepts" disagree, and it affects every signature in the system. A fixarray
+holds at most 15 elements, so an array of 16 to 31 elements has no shorter
+form than `array16`. The Rust encoder emits `array16` for those lengths, and
+they are legitimately needed: the signup RPC argument has 16 fields. But
+go-foks's canonicality check for signed and hashed objects rejects *every*
+`array16` whose length is 31 or less, including those with no shorter form.
+
+`foks-snowpack` therefore offers two validation modes:
+
+| Function             | `array16` of length 16–31 | Used by                          |
+|----------------------|---------------------------|----------------------------------|
+| `validate`           | accepted                  | the RPC codec                    |
+| `validate_signable`  | rejected                  | every hash, signature, and HMAC  |
+
+Every primitive in `foks-crypto` that hashes or signs a protocol object calls
+`validate_signable` first: `prefixed_hash_signable`, `sign_ed25519_typed`,
+`sign_ed25519_blob` (which validates both the inner bytes and the binary
+wrapper the signature covers, since a wrapper around arbitrary bytes is
+itself a valid `Binary` value), and their verification counterparts. The rule this enforces is simple to
+state: refuse to sign anything the reference implementation would refuse to
+verify. A Rust client cannot produce a link that a Go server rejects, and a
+Rust server cannot mint a root that a Go client rejects.
+
+The rule has a consequence that is easy to miss. An object with 16 to 31
+elements in any array cannot be signed or hashed at all, by either
+implementation. [Chapter 12](12-epochs.qmd) shows where that bites: the
+epoch whose back-pointer list first reaches 16 entries cannot be published.
+
+## Trade-offs
+
+A canonical subset gives up flexibility. There are no floats, so anything
+fractional (team index ranges, for instance) is encoded as a rational with an
+explicit base and exponent. There are no general maps, so every schema change
+that adds a field must append it at the end of a positional array. Empty lists
+cost a special case in every decoder. In exchange, hashing serialized bytes is
+safe, there is no separate canonicalization step that could drift between
+implementations, and the entire canonical surface is small enough to test
+exhaustively at the marker level.
+
+Wrapping inner encodings as opaque binaries costs a few bytes per level of
+nesting and means a verifier holds two copies of a link's content, one as
+bytes and one decoded. It buys independence from re-serialization, which is
+the single most common source of cross-implementation signature failures.
+
+Typed hashing costs eight bytes per hash input and a registry of constants
+that must never collide. It removes an entire class of confusion attacks, and
+the registry doubles as documentation of every object the protocol
+authenticates.
+
+## Where to look
+
+- `foks-snowpack`: the `Value` model, `encode`, `decode`, `validate`, and
+  `validate_signable`; property tests and Go fixtures under `tests/`.
+- `foks-proto`: the type ID constants in the crate root; `codec` for the
+  positional accessors; `SignedBlob`, `HostchainLink`, `MerkleRoot`, and
+  `UserLink` for the opaque-binary wrapping.
+- `foks-crypto`: `prefixed_hash`, `prefixed_hash_signable`,
+  `sign_ed25519_typed`, `sign_ed25519_blob`, and `commitment`.
+- `tools/foks-v019-oracle`: the Go program that writes the fixtures after
+  Go's own canonical checker accepts them.
+
+## Further reading
+
+- Sadayuki Furuhashi et al., *MessagePack specification*, GitHub, 2013–,
+  https://github.com/msgpack/msgpack/blob/master/spec.md
+- National Institute of Standards and Technology, *FIPS PUB 180-4: Secure
+  Hash Standard*, 2015, https://doi.org/10.6028/NIST.FIPS.180-4
+- National Institute of Standards and Technology, *SP 800-185: SHA-3 Derived
+  Functions: cSHAKE, KMAC, TupleHash, and ParallelHash*, 2016,
+  https://doi.org/10.6028/NIST.SP.800-185
+- S. Josefsson and I. Liusvaara, *RFC 8032: Edwards-Curve Digital Signature
+  Algorithm (EdDSA)*, IETF, 2017, https://www.rfc-editor.org/rfc/rfc8032
+- ITU-T, *X.690: ASN.1 encoding rules: BER, CER and DER*, 2021,
+  https://www.itu.int/rec/T-REC-X.690
+- J. Boyer, *RFC 3076: Canonical XML Version 1.0*, IETF, 2001,
+  https://www.rfc-editor.org/rfc/rfc3076
+- K. Claessen and J. Hughes, *QuickCheck: A Lightweight Tool for Random
+  Testing of Haskell Programs*, ICFP, 2000,
+  https://doi.org/10.1145/351240.351266
+- FOKS project, *go-foks* (reference implementation, v0.1.9), GitHub,
+  https://github.com/foks-proj/go-foks

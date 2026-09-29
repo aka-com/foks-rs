@@ -1,0 +1,402 @@
+# The Wire: Framing, RPC, and Mutual TLS
+
+Everything in Parts II through IV assumed that a client and a server could
+exchange bytes. This chapter is about how those bytes are arranged on the
+network, how a call is told apart from a reply, how a device proves to a
+server which key it holds, and why none of that transport machinery has to be
+trusted for the system's security guarantees to hold.
+
+The problem has three layers. At the bottom, a TCP stream is a sequence of
+bytes with no message boundaries; something has to say where one message ends
+and the next begins. Above that, a remote procedure call (RPC) protocol has to
+name the function being called, carry its argument, and match each reply to
+the request that produced it. At the top, the two ends have to know who they
+are talking to. FOKS inherits the first two layers from the Go implementation
+and solves the third with the hostchain from [Chapter 10](10-sigchains.qmd).
+
+## Framing: length-prefixed messages
+
+A *frame* is one message on the wire with an explicit length in front of it.
+The receiver reads the length, then reads exactly that many bytes, and knows
+it holds one complete message before it tries to interpret any of it. This
+is the simplest possible framing and it has a useful side effect: a message
+can be validated as a unit, and the receiver can refuse a message before
+allocating memory for it.
+
+FOKS frames encode the length as a MessagePack unsigned integer, followed by
+the message body, which is a MessagePack array. This is the framing convention
+of go-snowpack-rpc, the Go RPC library FOKS uses, whose design descends from
+the msgpack-rpc family of protocols (a length-prefixed variant of the original
+MessagePack-RPC specification, in which each message is an array whose first
+element is a message-type tag). The length marker is held to the same
+minimality rule as everything else in FOKS: a length that fits in one byte
+must use the one-byte form, and the reader rejects a `uint16` length whose
+value would have fit in a `uint8`, and so on. Only the `fixint`, `uint8`,
+`uint16`, and `uint32` markers are accepted, and the value is checked against
+a ceiling before any buffer is allocated.
+
+| Parameter | Value |
+|---|---|
+| Frame length encoding | minimal MessagePack unsigned integer |
+| Accepted length markers | `fixint`, `uint8`, `uint16`, `uint32` |
+| Default maximum frame | 16 MiB |
+| Server memory reserved per frame | 2 × body length, taken from a byte-counted semaphore |
+
+The server-side reader reserves twice the declared length from a process-wide
+memory budget before it reads the body ([Chapter 18](18-server-storage.qmd)
+describes that budget), so a burst of maximum-size frames from many
+connections cannot exhaust memory: the frames simply wait for permits.
+
+## The RPC envelope
+
+Once a frame is in hand, its body is an array. FOKS uses two shapes.
+
+```
+CALL_V2   (5 elements)   [ 5, sequence, protocol_id, method_position, payload ]
+RESPONSE  (4 elements)   [ 1, sequence, error_or_nil, result ]
+```
+
+The first element is a *message type*. The go-snowpack-rpc protocol defines
+eight: CALL (0), RESPONSE (1), NOTIFY (2), CANCEL (3), CALL_COMPRESSED (4),
+CALL_V2 (5), NOTIFY_V2 (6), and CANCEL_V2 (7). The Rust client emits only
+CALL_V2 and the Rust server answers only CALL_V2. NOTIFY and CANCEL messages,
+in both versions, are parsed for well-formedness and then discarded, because a
+peer never expects a reply to them and closing the connection over a harmless
+control message would drop otherwise healthy sessions. CALL_COMPRESSED, on the
+other hand, does expect a reply, so receiving one is treated as a fatal
+protocol error rather than silently ignored. Nothing in the Rust wire path
+compresses.
+
+The second element is the *sequence number*, which pairs a response with its
+call. The third and fourth elements of a call identify the function: a 32-bit
+*protocol ID* naming a group of related methods (registration, user chains,
+Merkle queries, key-value storage, and so on) and a small integer *method
+position* within that group. Positions need not be contiguous; the key-value
+protocol, for example, uses positions 0 through 18 with 5 and 6 unused. These identifiers
+are the dispatch key on the wire, and [Chapter 23](23-compatibility.qmd)
+explains how they are extracted mechanically from the Go source rather than
+copied by hand.
+
+The Rust server also accepts a six-element call whose trailing element holds
+the caller's log tags, because the Go client attaches tags to every call,
+including the very first probe of a new host. The extra element is bounded by
+the already length-capped frame and is discarded.
+
+### Two codecs, one boundary
+
+[Chapter 9](09-canonical-encoding.qmd) introduced Snowpack, the canonical
+MessagePack subset in which every authenticated object has exactly one byte
+encoding. The RPC envelope is not Snowpack. It is ordinary MessagePack
+produced by Go's `go-codec` library, with named maps, sorted string keys, and
+whatever integer widths the encoder chose. A canonical codec would be far too
+strict for it, and there is no reason to be strict: nothing in the envelope
+is signed or hashed.
+
+The payload slot is different. The argument to a call, and the result in a
+response, are canonical Snowpack, and the Rust code keeps the two layers
+apart by design:
+
+- The client validates an argument as Snowpack *before* wrapping it in the
+  envelope.
+- The envelope parser is a separate cursor that knows how to *skip* every
+  MessagePack type, including floats, extensions, and maps it never
+  interprets, so it can locate the payload slot in a Go-produced frame
+  without decoding anything it does not need.
+- The response decoder returns the exact bytes of the result slot without
+  re-encoding them. Type-specific decoders and verifiers then canonicalize
+  every signed or MACed inner object.
+
+The boundary matters because a signature commits to bytes. If the RPC layer
+re-serialized a payload, even in a semantically equivalent way, the bytes a
+verifier hashed might differ from the bytes the signer hashed. By handing the
+payload across untouched, the envelope can be as permissive as Go requires
+without endangering the canonical core.
+
+### The DataWrap envelope and the bare-payload protocols
+
+Most FOKS protocols do not put the argument directly in the payload slot.
+They wrap it in a two-key map that Go calls `DataWrap`:
+
+```
+{ "Data": <canonical Snowpack argument>, "Header": <compatibility header> }
+```
+
+The header is a fixed 14-byte string encoding `{V: 1, f1: {Vers: 1}}`, a
+versioned union in `go-codec`'s named form. The keys `Data` and `Header` are
+written in that order because `go-codec` sorts struct fields, and the Rust
+decoder requires exactly that order. When checking a header, the Rust code
+accepts any nonzero `Vers`, matching the Go server, which treats only
+compatibility generation zero as too old.
+
+Five protocols do not use `DataWrap` at all: the four team protocols
+(TeamLoader, TeamAdmin, TeamMember, TeamGuest) and the Kex device-pairing
+protocol. Their arguments and results are bare in the payload slot. This is a
+quirk of how those particular Go source files were generated, and it was not
+documented anywhere. The Rust project discovered it by reading Go's
+*generated client code* with an AST parser: each generated method body
+declares local variables named `warg` and `tmp`, and whether those variables
+are typed as `rpc.DataWrap[...]` reveals whether the method wraps its
+argument and result. The finding is rendered into two generated predicates,
+keyed by protocol ID, and a Go test using Go's own descriptors confirms the
+split. The client selects its response decoder by reading the protocol ID
+back out of the request it is about to send.
+
+Even the encoding of "nothing" differs between the two shapes. A wrapped void
+result is a `DataWrap` carrying only a header; a bare void result is a
+literal nil. A test pins the exact six bytes of a bare void response at
+sequence 5: `05 94 01 05 c0 c0`, that is, a one-byte frame length, a
+four-element array, RESPONSE, sequence, nil error, nil result.
+
+One more sanctioned deviation: Go encodes an argument struct with zero fields
+as an empty array (`0x90`), which canonical Snowpack forbids. The server
+accepts exactly that one-byte argument for any method, and the client emits
+it where the Go client would.
+
+### Sequence numbers rewritten without re-encoding
+
+Some requests are expensive to build. A chain mutation, for instance, carries
+a signed link whose bytes must not change between construction and
+transmission. The client therefore prepares every request once with sequence
+number zero and *resequences* it just before sending: the framed call is
+re-parsed, only the second array element is replaced, and the argument bytes
+are copied verbatim into the new frame. The comment in the code states the
+purpose plainly: this preserves signed payloads while allowing an
+authenticated connection to serve more than one request.
+
+### Exactly-once discipline
+
+An RPC over a pooled connection can fail in three ways: before anything was
+written, after the request was written but before a response arrived, or
+mid-response. Only the first is safely retryable; in the other two cases the
+server may already have acted. The client enforces a small set of rules to
+keep every call *exactly-once* from its own point of view.
+
+Each connection carries a `next_sequence` counter. The counter advances only
+after a complete response frame with the expected sequence has been read.
+An application-level error status counts as a complete frame, because it
+arrived with the right sequence and left the stream synchronized. Any other
+failure invalidates the connection so that an unread or partial response can
+never satisfy a later call.
+
+Idle connections in the pool are probed before reuse. A server closes a
+kept-alive session once its own idle timeout elapses; without a probe, the
+close would be discovered only when the next request failed mid-flight, and
+that request could not be retried safely. So before writing anything, the
+client sets the socket non-blocking and calls `peek`. A `WouldBlock` result
+means an ordinary idle connection. Zero bytes means the peer closed cleanly.
+Any readable byte on an idle connection is a TLS close notification or a
+desynchronized stream. In the last two cases the connection is discarded and
+a fresh one is opened. The probe is what lets a hardware-backed credential
+wait minutes for a person to touch a key and then succeed on its first call
+after the pause.
+
+| Pool parameter | Value |
+|---|---|
+| Idle connections per endpoint key | 2 |
+| Idle connections total | 16 |
+| I/O poll interval for deadline and cancellation checks | 250 ms |
+
+The pool key includes the hostname, port, host ID, a fingerprint of the
+client credential, a fingerprint of the trust roots, and which virtual-host
+selection protocol was used, so a connection is reused only for the same
+peer, the same trust, and the same client key.
+
+## Error encoding
+
+A FOKS status is logically a pair: a numeric code and an optional payload
+whose shape depends on the code. On the wire it has two spellings. The Go
+server's application layer encodes a status as a positional Snowpack array
+`[code, switch]`, where `switch` is a one-arm union keyed by a single
+character tag. The Go RPC layer may instead encode a status as a named map
+such as `{Sc: 8012, f11: {...}}`. The Rust client's status checker branches
+on the first byte: `0xc0` (nil) is success, `0x92` (a two-element array) is
+the positional form, and anything else is parsed as a named map.
+
+Four codes receive special handling in the client:
+
+| Code | Name | Payload |
+|---|---|---|
+| 211 | method not found | protocol ID, method position, and name |
+| 1014 | transaction retry | none; a transient conflict the caller may retry (the pairing relay answers each bounded long poll with it, and the client polls again) |
+| 1020 | not implemented | none, and any payload is an error |
+| 8012 | KV stale cache | a path-version vector telling the client which versions to resync |
+
+The Rust server builds its statuses through the Snowpack encoder, which
+reproduces Go's bytes exactly, including `[code, {}]` for a status with no
+payload.
+
+## Mutual TLS: identity carried by the certificate
+
+FOKS uses TLS for confidentiality and integrity on the wire, but it does
+not use the public certificate-authority system to decide whom to trust.
+Instead the hostchain, the signed log of a server's keys described in
+[Chapter 10](10-sigchains.qmd), delegates a *TLS certificate authority* key,
+and everything else follows from that.
+
+```
+           hostchain (signed, Merkle-anchored)
+                       |
+         delegates     |     delegates
+        +--------------+---------------+
+        v                              v
+  "FOKS delegated TLS CA"      "FOKS client identity CA"
+   (Ed25519, self-signed)        (Ed25519, self-signed)
+        |                              |
+        v                              v
+  server leaf certificate       device certificate (7 days)
+   for the canonical name        subject key = device Ed25519 key
+        |                              |
+        v                              v
+   client verifies server         server verifies client
+   against ONLY this CA           against ONLY this CA
+```
+
+### Server identity
+
+First contact with a host goes through the *probe* service over ordinary
+WebPKI TLS, that is, TLS verified against the public root certificates a
+browser would use. The probe response contains the signed hostchain, the
+signed public zone (the list of service endpoints), and the signed Merkle
+root, each of which the client verifies independently as
+[Chapter 13](13-client-verification.qmd) describes. The probe call is not
+pooled and is suitable only for discovery data that will be authenticated by
+other means.
+
+Once the hostchain is verified, the client builds a trust store containing
+*only* the host's own delegated CA certificates and uses that store for every
+other service: registration, user chains, Merkle queries, key-value storage,
+and realtime chat. The public CA system is out of the loop. On the server,
+the delegated CA is a self-signed Ed25519 certificate derived from a host
+purpose key, and the same DER bytes are what the hostchain commits to. A
+server that presents a certificate not chained to the CA in its own host
+chain is rejected, no matter which public authority vouches for it.
+
+### Client identity
+
+Authenticated services require a *client certificate*, which is TLS's
+mechanism for the client to prove possession of a key during the handshake.
+FOKS does not invent a separate login protocol for ordinary RPC. A device's
+Ed25519 key is already enrolled in the user's signature chain; the
+certificate is a thin X.509 wrapper around that key.
+
+1. The device calls the public, unauthenticated
+   `getClientCertChain(uid, device_id)` method.
+2. The server checks that the device is an active credential owner (and that
+   any single-sign-on policy still permits access, see
+   [Chapter 22](22-sso.qmd)), then issues a certificate whose subject public
+   key *is* the device's Ed25519 key, signed by the host's client identity
+   CA. If a certificate with more than a day of validity remaining already
+   exists, it is returned instead of issuing a new one.
+3. The client wraps its device seed as a PKCS#8 Ed25519 private key,
+   confirms the key matches the certificate, and presents the chain in the
+   TLS handshake.
+4. The server's authenticated listener verifies the chain against the client
+   CA. After the handshake, it parses the peer certificate, requires an
+   Ed25519 subject key (OID 1.3.101.112), looks the certificate up in the
+   database to find the credential it was issued to, and **re-checks that
+   the public key in the certificate equals the key inside the credential's
+   entity ID**. The kind of credential (software device, delegated subkey,
+   backup key, bot token) then gates which routes the connection may call.
+
+| Certificate parameter | Value |
+|---|---|
+| Validity | 7 days |
+| Reused if remaining validity exceeds | 1 day |
+| `not_before` backdated for clock skew | 5 minutes |
+| Serial number | 20 random bytes, top bit cleared, never all zero |
+
+The re-check in step 4 is a small thing with a large consequence. The TLS
+library has already verified the chain; the database lookup has already
+found a binding. Comparing the certificate's key to the entity ID closes the
+gap in which a database row could be associated with the wrong certificate,
+and it means the server's notion of "who is calling" is the same public key
+that appears in the user's chain, not merely a certificate the server once
+signed.
+
+### Why "untrusted transport" still holds
+
+The threat model in [Chapter 1](01-problem.qmd) says the server is not
+trusted, and the reader may wonder how that squares with a TLS design in
+which the server issues the client's certificate. The answer is that TLS
+here is a *convenience and a first line of defense*, not the basis of any
+security claim. Every object that matters, a chain link, a Merkle root, a
+key box, an encrypted directory entry, carries its own signature or
+authentication tag, made with keys that the server never sees. A server that
+forged a client certificate could open a connection, but it could not sign a
+chain link as that device, because the signing key is not in the
+certificate. A server that lied about its own TLS CA would be caught by the
+hostchain, which is signed by keys the client pinned at first contact and
+which the Merkle tree makes impossible to rewrite silently. TLS keeps
+passive observers out and gives the server a cheap way to reject
+unauthorized callers early. The inner signatures are what the system
+actually depends on.
+
+## The local IPC protocol, briefly
+
+The agent described in [Chapter 19](19-agent.qmd) talks to its front ends (the
+command-line tool, the desktop, and the MCP server) over a Unix domain
+socket, and that protocol is deliberately different from the FOKS wire
+protocol. It is local, never crosses a network, and carries nothing that is
+signed, so it optimizes for simplicity and bounded resource use rather than
+canonicality.
+
+| Parameter | Value |
+|---|---|
+| Framing | 4-byte big-endian length, then JSON |
+| Maximum message | 1 MiB |
+| Envelope reserve | 32 KiB |
+| Maximum KV payload per frame | 700 KiB |
+| Protocol version | 30 |
+
+Byte payloads are carried as base64 strings rather than JSON integer arrays.
+The module documentation works out why: a uniformly random byte costs about
+3.57 characters as an integer-array element (digits plus a separator,
+averaged over the byte distribution) but a fixed 1.33 as base64. From the
+1 MiB frame cap, the 32 KiB reserved for everything that travels beside the
+payload (version, correlation ID, store reference, path, timing), and the
+base64 ratio, the maximum payload per frame is derived as 700 KiB, and a
+test confirms the worst-case envelope still fits. A request that asks for
+more is refused as invalid; nothing is ever truncated. Every message carries
+a version and a correlation ID, and a response binds to its request's ID.
+Frames are held in zeroizing buffers. Chapter 19 covers the security checks
+on the socket itself: ownership, permissions, and peer credentials.
+
+## Where to look
+
+- `foks-rpc`: `lib.rs` (framing, call and response encoders, `resequence_call`,
+  the compatibility header, the skipping cursor), `server.rs` (inbound
+  message classification, the six-element call, the empty-array argument),
+  `response.rs` and `status.rs` (status encoding and decoding),
+  `generated/protocol_ids.rs` and `generated/status_codes.rs`.
+- `foks-client`: `transport.rs` (connection pool, `is_reusable`,
+  `call_current`, TLS client configuration), `host.rs`
+  (`authenticated_tls_roots`).
+- `foks-server`: `pki/host_tls.rs` (the two CAs and listener configurations),
+  `auth/principal.rs` (certificate-to-credential binding), `net/session.rs`
+  (certificate issuance, asynchronous frame reading, memory permits).
+- `foks-agent-proto`: `frame.rs`, `base64_bytes.rs`, `message.rs`.
+- `tools/foks-protocol-sync`: `internal/extract/extract.go`
+  (`bindingUsesDataWrap`).
+
+## Further reading
+
+- Sadayuki Furuhashi et al., *MessagePack specification*, GitHub, 2013 onward,
+  https://github.com/msgpack/msgpack/blob/master/spec.md
+- MessagePack-RPC project, *MessagePack-RPC Protocol specification*, GitHub,
+  https://github.com/msgpack-rpc/msgpack-rpc/blob/master/spec.md
+- Keybase, *go-framed-msgpack-rpc*, GitHub,
+  https://github.com/keybase/go-framed-msgpack-rpc
+- FOKS project, *go-snowpack-rpc*, GitHub,
+  https://github.com/foks-proj/go-snowpack-rpc
+- E. Rescorla, *The Transport Layer Security (TLS) Protocol Version 1.3*,
+  RFC 8446, IETF, 2018, https://www.rfc-editor.org/rfc/rfc8446
+- D. Cooper et al., *Internet X.509 Public Key Infrastructure Certificate and
+  Certificate Revocation List (CRL) Profile*, RFC 5280, IETF, 2008,
+  https://www.rfc-editor.org/rfc/rfc5280
+- S. Josefsson and J. Schaad, *Algorithm Identifiers for Ed25519, Ed448,
+  X25519, and X448 for Use in the Internet X.509 Public Key Infrastructure*,
+  RFC 8410, IETF, 2018, https://www.rfc-editor.org/rfc/rfc8410
+- S. Turner, *Asymmetric Key Packages*, RFC 5958, IETF, 2010,
+  https://www.rfc-editor.org/rfc/rfc5958
+- S. Josefsson, *The Base16, Base32, and Base64 Data Encodings*, RFC 4648,
+  IETF, 2006, https://www.rfc-editor.org/rfc/rfc4648

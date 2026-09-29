@@ -1,0 +1,168 @@
+# The Problem: Secrets, Teams, and Untrusted Servers
+
+FOKS, the Federated Open Key Store, is a system for storing secrets and
+sharing them within teams, with a server in the middle that is not trusted to
+read the data or to tell the truth about who holds which keys. This chapter
+states that problem precisely, because every technique in the rest of the book
+exists to solve one piece of it.
+
+## What users want
+
+A person or a team wants to keep three kinds of data:
+
+- **Key-value data.** Passwords, API tokens, configuration files, and larger
+  binary files, organized into directories, readable and writable from
+  several devices.
+- **Team structure.** Who is in the team, with what role, and which devices
+  they use. Membership changes over time: people join, leave, and get
+  promoted; devices are added and lost.
+- **Messages.** Real-time chat within a team.
+
+They want this to work across devices they own, to survive the loss of any one
+device, and to be usable by both humans and automated tools. They also want
+the system to be *federated*: a team on one host should be able to include
+users whose accounts live on another host, the way email works across
+providers.
+
+## What the server may not learn or do
+
+The defining design decision of FOKS is that the server is treated as an
+adversary with a very specific set of powers. It stores and relays data, and it
+is honest enough to stay online, but it is assumed capable of reading anything
+it stores and of returning whatever it likes to any request. The system is
+built so that, even then, two guarantees hold.
+
+**Confidentiality.** The server never holds a key that decrypts user data. It
+sees ciphertext, the sizes and timing of requests, public keys, and
+commitments to names. It does not see file names, directory shapes, file
+contents, or chat text. Part II of this book is about how the keys that
+provide this guarantee are created, derived, shared, rotated, and recovered.
+
+**Integrity of history.** The server cannot invent a device, add a member to
+a team, or roll a user back to an earlier set of keys without every client
+noticing. Every change to an identity or team is a signed entry in an
+append-only chain, and the server publishes a signed summary of all chains
+in a Merkle tree, so that a client can check that what it is shown is
+consistent with what everyone else is shown. Part III is about those chains,
+the tree, and the checks clients perform.
+
+Stating the threat model as "what the server can and cannot do" is useful
+because it draws the line clearly. The table below is the line FOKS draws.
+
+| The server can | The server cannot |
+|---|---|
+| See usernames and host names as commitments, device IDs, and public keys | Read stored secrets, file contents, directory names, or chat messages |
+| See the size and timing of every request and stored object | Learn the structure of a directory tree beyond entry counts |
+| Order changes into epochs and publish signed roots | Forge a change to an identity or team, which requires a device signature |
+| Refuse service, rate-limit, or go offline | Present an old state to a client that has seen a newer one without detection |
+| Store and forward invitations and encrypted key parcels | Open a key parcel, which is encrypted to the recipient's device |
+
+The last row of the "cannot" column is the subtle one. Detecting rollback
+requires the client to remember what it has already seen and to refuse to go
+backwards. That memory, and the rules for advancing it, are the subject of
+[Chapter 13](13-client-verification.qmd).
+
+## What the server is trusted for
+
+No design removes trust entirely. FOKS still relies on the server for
+availability, for ordering (the server decides which of two concurrent
+changes comes first), and for delivery of key parcels and invitations. A
+malicious server can deny service, and it can *withhold* a change from one
+client while showing it to another, at least until the client compares notes
+with someone else. The book is careful to say what is and is not detected;
+FOKS as implemented in `foks-rs` gives each client a consistent view of its
+own history but does not include a gossip protocol between clients.
+
+## Constraints that shape the solution
+
+Several further requirements shape the design more than the threat model
+alone would.
+
+**No master password.** Human-chosen passwords are weak and reused, and a
+password typed into a phishing page is lost. FOKS accounts are anchored in
+device keys instead. Losing every device is handled by a printed recovery
+phrase with real entropy behind it, and adding a device is handled by a
+short pairing code. [Chapter 6](06-hesp.qmd) covers both.
+
+**Post-removal secrecy.** When a device is revoked or a member leaves,
+the departed party must not be able to read anything stored afterwards, but
+the remaining members must keep reading everything stored before. (The
+repository calls this "forward secrecy"; [Chapter 5](05-generations.qmd)
+explains why the book uses a narrower term.) This
+requires *generational* keys: a fresh secret for each membership change, with
+a way to reach older secrets from newer ones. [Chapter 5](05-generations.qmd)
+describes the construction.
+
+**Post-quantum resistance.** Data encrypted today may be recorded and
+decrypted years later by a quantum computer that breaks elliptic-curve
+cryptography. Every public-key encryption in FOKS therefore combines a
+classical key agreement with a lattice-based key encapsulation mechanism, so
+that both must fall before any ciphertext does. [Chapter 4](04-hybrid-encryption.qmd)
+explains the hybrid construction.
+
+**Hardware keys.** Some users want their signing key to live on a physical
+token that never releases it. That imposes a different signature algorithm
+and different curve than the software default, and the system must handle
+teams whose members use a mix. [Chapter 7](07-hardware-keys.qmd) covers the
+consequences.
+
+**Byte-for-byte compatibility.** `foks-rs` is a reimplementation of a Go
+program, and clients and servers of the two implementations must
+interoperate. Signatures are computed over encoded bytes, so the encoding must
+be canonical and identical across implementations, and even the reference
+implementation's mistakes must be reproduced. [Chapter 9](09-canonical-encoding.qmd)
+and [Chapter 23](23-compatibility.qmd) cover the encoding and the testing that
+enforces the match.
+
+**A single server should be simple to run.** The reference implementation
+uses PostgreSQL. The Rust server uses one SQLite file with a single writer
+and concurrent readers, trading peak write throughput for simpler operation.
+[Chapter 18](18-server-storage.qmd) describes the resulting design.
+
+**Crashes and retries.** Devices lose power mid-operation, and network calls
+time out after the server has already applied the change. Operations that
+publish randomness or allocate sequence numbers must be resumable without
+duplicating effects. [Chapter 19](19-agent.qmd) and [Chapter 21](21-mcp.qmd)
+describe the journaling and idempotency techniques used.
+
+## Two chains
+
+One organizing idea recurs throughout the book, so it is worth naming here.
+FOKS keeps two independent structures per identity or team.
+
+The **secrecy chain** answers "who can decrypt this?" It runs from a
+device's private key, through the encrypted key parcel for the current
+generation, back through a chain of older generation seeds, down to the
+per-application keys that encrypt files and messages.
+
+The **authority chain** answers "who authorized this change?" It runs from
+a device's signing key, through a signed link in an append-only chain,
+into a leaf of the server's Merkle tree, and finally into the pin a client
+stores locally.
+
+The two chains use different primitives, are verified separately, and fail
+independently. Compromising a signing key lets an attacker append to the
+authority chain but not read data; obtaining a decryption key lets an attacker
+read data but not change membership. Part II follows the secrecy chain
+downward; Part III follows the authority chain upward.
+
+## Where to look
+
+- `README.md` and `docs/GUIDE.html` in the `foks-rs` repository state the
+  project's own threat model and design goals.
+- The upstream Go implementation, `github.com/foks-proj/go-foks`, is the
+  protocol's reference and the target of compatibility testing.
+
+## Further reading
+
+- Ross Anderson, *Security Engineering*, 3rd edition, Wiley, 2020, chapter 5
+  (cryptography) and chapter 6 (access control), https://www.cl.cam.ac.uk/~rja14/book.html
+- Nikita Borisov, Ian Goldberg, and Eric Brewer, *Off-the-Record Communication,
+  or, Why Not to Use PGP*, WPES, 2004, https://otr.cypherpunks.ca/otr-wpes.pdf
+  (an early statement of forward secrecy goals for messaging)
+- Nik Unger et al., *SoK: Secure Messaging*, IEEE Symposium on Security and
+  Privacy, 2015, https://ieeexplore.ieee.org/document/7163029
+- Keybase, *Keybase Book: Server Trust*, https://book.keybase.io/docs/server
+  (a closely related system with the same "untrusted server" stance)
+- Marcela Melara et al., *CONIKS: Bringing Key Transparency to End Users*,
+  USENIX Security, 2015, https://www.usenix.org/conference/usenixsecurity15/technical-sessions/presentation/melara

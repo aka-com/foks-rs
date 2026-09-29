@@ -1,0 +1,426 @@
+# The Server: One Writer, Many Readers
+
+A FOKS host publishes a totally ordered log. Every user chain, every team
+chain, every name commitment, and the global Merkle tree whose each new root
+cites the previous one, must agree on a single sequence of events. That is
+not a property one gets from a database by default; it is a property one
+designs for. This chapter is about how the Rust server gets it from an
+embedded SQLite file, one dedicated writer thread, and a small set of
+bounded queues, and how it keeps the same machine responsive under overload
+and honest under crashes.
+
+## Why SQLite, and why one writer
+
+The reference Go implementation of FOKS uses PostgreSQL. The Rust server
+uses SQLite, an embedded database engine that runs inside the server process
+and stores everything in a single file. The project's own README states the
+trade-off without ceremony: transactions atomically update many tables while
+writes are serialized per database; high-traffic deployments must attend to
+transaction duration, writer queueing, checkpointing, and backup; and
+performance relative to the PostgreSQL-based implementation depends on the
+workload.
+
+The deeper justification is in the server README. Identity and name
+publication and the global Merkle log require one leader or a consensus
+protocol, whichever database sits underneath. Given that a leader is needed
+anyway, a single-process embedded store is the simplest durable thing that
+gives real transactions and one file to back up. The design "intentionally
+favors a simple total order and predictable overload behavior over write
+parallelism." Active/active deployments are not supported, and an
+operating-system lock enforces that.
+
+## Write-ahead logging in general
+
+SQLite's default journaling writes changes into the database file and keeps
+a rollback journal on the side. In *write-ahead logging* (WAL) mode, the
+roles are reversed: committed changes are appended to a separate log file,
+and the main database file is updated later in a step called a
+*checkpoint*. The reason to care is concurrency. With a WAL, a reader sees
+the database as it was at the moment its transaction began, by reading the
+main file plus the WAL entries up to a certain point, and it keeps seeing
+that *snapshot* until it finishes. Readers do not block the writer and the
+writer does not block readers. There is still only one writer at a time.
+
+The cost is that the WAL cannot be checkpointed past the point some reader
+is still using. A reader that holds a transaction open for a long time pins
+WAL frames, the WAL grows, and a checkpoint that insists on completing must
+wait. Much of the maintenance design later in this chapter exists to live
+with that trade.
+
+The Rust server sets its writer connection to WAL mode with `synchronous =
+FULL` (every commit is flushed to stable storage before it is acknowledged),
+`foreign_keys = ON`, `trusted_schema = OFF`, and a hard page-count ceiling
+so that a full disk produces a clean quota error rather than corruption.
+
+| Writer connection pragma | Value |
+|---|---|
+| `journal_mode` | WAL |
+| `synchronous` | FULL |
+| `foreign_keys` | ON |
+| `trusted_schema` | OFF |
+| `temp_store` | MEMORY |
+| `journal_size_limit` | 16 MiB (bounds WAL space retained on natural reuse) |
+| `max_page_count` | derived from a 64 GiB database quota |
+| `busy_timeout` | 5 s |
+
+## The single-writer actor
+
+An *actor* is a component that owns some state exclusively and processes
+messages from a queue one at a time. Other components never touch the state
+directly; they send a message and, if they need an answer, wait for a reply.
+The Rust server makes the read-write SQLite connection the exclusive
+property of one actor.
+
+```
+   RPC handlers (many threads)
+        |   |   |
+        v   v   v
+   +-------------------------+
+   | bounded sync_channel    |   capacity = 64 pending jobs
+   | (try_send: never waits) |   full  -> Error::WriterQueue -> status 1012
+   +-------------------------+
+              |
+              v
+   +-------------------------+
+   | writer thread           |   one OS thread, one RW connection
+   |   recv job              |
+   |   re-check credential   |   (active_credential_owner, sso_require_access)
+   |   sample clock          |
+   |   run closure in txn    |
+   |   send result back      |
+   +-------------------------+
+              |
+              v
+        SQLite file (WAL)
+```
+
+The writer is a dedicated operating-system thread, not an asynchronous
+task, because SQLite calls block. At startup it opens the one read-write
+connection and loops on a `sync_channel`, Rust's bounded
+multiple-producer, single-consumer queue. A job is a boxed closure taking
+`&mut Database` plus a one-shot channel for its result. Callers submit with
+`try_send`, which never blocks: if the queue holds its maximum of 64 pending
+jobs, the caller gets `Error::WriterQueue` immediately, which the RPC layer
+turns into FOKS status 1012, `RateLimited`. A caller whose job was accepted
+then waits on the one-shot channel for the result, so submission is
+non-blocking with respect to capacity, but the caller still waits for
+completion.
+
+Two details of the job wrapper matter for correctness.
+
+**Authorization is re-checked inside the queue.** A handler serving an
+authenticated request attaches the caller's user ID and credential to the
+job. The closure that eventually runs on the writer thread first confirms
+that the credential is still an active owner and that any single-sign-on
+policy still permits access, and only then runs the operation. A device that
+was revoked while the job sat in the queue yields `AuthorizationChanged`, and
+an SSO session that lapsed yields a "reauthentication required" error, rather
+than a stale write. This is a general
+FOKS pattern: validate on a reader for cheap early rejection, then validate
+again inside the serialized transaction, where the answer is authoritative.
+
+**The clock is sampled after the job starts.** `call_with_current_time`
+reads the clock inside the closure, not at enqueue time, so timestamps stay
+monotone with the total order the writer imposes. A test pins this: a job
+queued behind a slow one records a time after the slow one finished.
+
+Queue wait and execution time are measured per job into counters that the
+metrics endpoint exposes, so an operator can see the queue filling before
+callers see rejections.
+
+### One writer process
+
+The single-writer property has to hold across processes too, since an
+operator's offline command (issuing invites, rotating keys) touches the same
+file. `DatabaseWriterGuard` opens a sidecar file `<database>.writer-lock`
+with `O_NOFOLLOW` and mode 0600 and takes an exclusive operating-system
+advisory lock on it. A second process that tries the same fails with
+"database writer is already active." Every offline operator command
+acquires the same guard, so it and a running server are mutually
+exclusive.
+
+The guard also records the database file's *identity*: its device and inode
+numbers. The path is refused if it is a symlink, not a regular file, or has
+more than one hard link. The identity is re-checked after the lock is taken
+and again after SQLite has opened the file, closing the window in which a
+replacement file could become a newly accepted baseline between the
+lock-time check and the open. This check is path-local; there is no global
+registry of inodes.
+
+## Readers: a small pool pinned to snapshots
+
+Network reads go through read-only connections opened with
+`SQLITE_OPEN_READ_ONLY | NO_MUTEX | NOFOLLOW`. Each validates the
+application ID and schema version before use. The pool is a vector of idle
+connections behind a mutex; it opens connections lazily up to a maximum
+(default 32) and, when exhausted, returns `Error::ReaderPool` rather than
+waiting. A lease returns its connection to the pool on drop.
+
+A `ReadSnapshot` wraps a read transaction on one of these connections and
+is the unit of consistency: every query inside it sees the same WAL state.
+Its documentation warns against holding one across network I/O, because an
+open reader delays checkpoints. The realtime handler follows that rule by
+returning its lease before waiting for the writer.
+
+## Never block on overload
+
+The server's stance on overload is uniform: reject immediately with a typed
+status the client can back off from, rather than queue indefinitely. The
+mechanism differs by resource.
+
+| Resource | Bound | On saturation |
+|---|---|---|
+| Writer queue | 64 pending jobs | `try_send` fails; status 1012 |
+| Reader pool | 32 connections | `Error::ReaderPool`; status 1012 |
+| Listener admission queue | 32 pending connections | `try_send` fails; connection dropped |
+| Active sessions per listener | 256 | accept loop waits for a permit |
+| Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
+| Long-poll handlers | min(64, 32) = 32 permits | as above |
+| Request memory | 64 MiB, 2 × frame length reserved per frame | frames wait for permits |
+| Frame size | 16 MiB | rejected before allocation |
+| Request execution timeout | 30 s | connection closed |
+| I/O timeout | 15 s | connection closed |
+
+Handlers run on blocking threads under a semaphore, and they acquire their
+permit with `try_acquire_owned`, so a saturated server answers "rate
+limited" in microseconds. When a handler times out, the connection is
+closed, but the README is careful about what that means: the server does
+not claim a durable mutation was cancelled. The still-running closure
+keeps its permit until it exits, so resource use stays bounded even when a
+client has gone away.
+
+Request memory is a *semaphore of bytes*. Before reading a frame body of
+length N, the session acquires 2N permits from a process-wide budget, one
+share for the input buffer and one for the decoded request. The total bytes
+of requests in flight across all connections is therefore bounded by a
+single number, and a burst of large frames waits for permits rather than
+exhausting memory.
+
+### Token buckets
+
+Per-IP rate limiting uses the *token bucket*, a standard algorithm from
+network traffic shaping. A bucket holds up to B tokens and is refilled at a
+rate of r tokens per second. Each admitted event removes one token; an
+event arriving when the bucket is empty is refused. The parameter B sets
+how large a burst is tolerated after an idle period, and r sets the
+sustained rate. The implementation is a few lines: on each check, add
+`elapsed_seconds × r` to the count, cap at B, and take one if at least one
+remains.
+
+| Bucket | Burst (B) | Rate (r) |
+|---|---|---|
+| Connections per IP | 512 | 256 per second |
+| Framed requests per IP | 2,000 | 1,000 per second |
+
+The subtlety is memory. A naive per-IP map grows without bound when an
+attacker cycles source addresses. The server keeps its buckets in a
+least-recently-used cache capped at 4,096 addresses; when a new address
+arrives at capacity, the bucket used longest ago is evicted. An evicted
+address that returns gets a full bucket, which is a small leniency in
+exchange for a hard memory bound. A request that exceeds its bucket gets
+status 1012 and the connection is closed.
+
+## Schema versioning and single-transaction upgrades
+
+SQLite reserves two integers in the database header for applications: the
+*application ID* and the *user version*. The server writes
+`0x464f4b53` (the ASCII bytes "FOKS") as the application ID and its schema
+version, currently 48, as the user version. Both are checked by every
+connection before use: a file with the wrong application ID is not a FOKS
+database, and a file with the wrong schema version is refused rather than
+guessed at.
+
+The schema itself is one concatenated string of 21 `.sql` files. A fresh
+file (both pragmas zero) receives the whole schema inside one `BEGIN
+IMMEDIATE` transaction, with the version stamped last. A file at version
+43 through 47 is upgraded in one transaction as well. Two properties make
+that upgrade safe:
+
+- The version is *re-read under the write lock* before acting. Another
+  opener may already have upgraded the file between the first read and
+  the acquisition of the transaction.
+- Each step is conditional and idempotent. A column rename is preceded by
+  a `pragma_table_info` probe, so the step runs only if the old column
+  still exists.
+
+Only the writer upgrades; readers only validate. Because the writer takes
+the process lock before it opens the database, an upgrade cannot race with
+an offline operator command. The stated rollback policy is conservative:
+restore a backup with the old binary, never edit `user_version` or delete
+WAL files.
+
+## Invariants written in SQL
+
+The server pushes as much correctness as it can into the schema so that no
+code path, including a future one, can produce an inconsistent state. A
+constraint violation is then an ordinary error, not corruption.
+
+Every table is declared `STRICT`, a SQLite option (since 3.37) that
+enforces column types rather than coercing values. Beyond that, the schema
+uses three devices repeatedly.
+
+**Partial unique indexes as state machines.** A *partial index* covers
+only rows matching a `WHERE` clause. A partial *unique* index therefore
+says "at most one row may be in this state." The host key table has
+
+```
+CREATE UNIQUE INDEX host_key_one_active
+    ON host_key_generations(purpose) WHERE state = 2;
+```
+
+which makes "exactly one active host key" a property the database refuses
+to violate. The same trick gives one in-progress key rotation
+(`WHERE phase != 3`), one active capability key, and one live name per user
+(`WHERE dead = 0`).
+
+**`CHECK` constraints tying nullable columns to state.** A key rotation
+operation has three phases, and which columns must be null in each is
+written as a three-way `CHECK`. A row in the `names` table is either a
+reservation (token and expiry present, no user) or an assignment (user
+present, no token or expiry), and a `CHECK` says exactly that. A key
+generation in state 1 has no activation sequence number; in any other
+state it must have one.
+
+**Singletons.** SQLite has no "exactly one row" table type. Singleton
+tables use `singleton INTEGER PRIMARY KEY CHECK (singleton = 1)`, and the
+single-sign-on policy table uses a unique index on a constant expression,
+`ON sso_policy((1))`, which is another way to say the table holds at most
+one row.
+
+Foreign keys tie chain heads to stored links, and triggers keep Merkle
+roots from referencing missing nodes and keep referenced nodes from being
+deleted. Immutable tables (the SSO migration cohort) get triggers that
+abort any update or delete.
+
+## Bounded maintenance
+
+A maintenance thread wakes every 60 seconds after the previous pass ends
+and submits one job to the writer. That job runs a cleanup transaction and
+then a checkpoint, in that order, so committed cleanup is counted even if
+the checkpoint fails.
+
+### Bounded deletes
+
+Every expiry family is deleted with a statement of the shape
+
+```
+DELETE FROM t WHERE rowid IN (SELECT rowid FROM t WHERE expires_at <= ? LIMIT 128)
+```
+
+A fixed page per pass keeps the writer transaction short no matter how large
+the backlog is. Where a family has two disjoint predicates, such as
+recovery challenges that are either expired-and-unconsumed or consumed, the
+selector merges them with `UNION ALL`, orders the union by expiry and then
+row ID, and applies one `LIMIT 128` so that a single limit covers both
+branches. Partial indexes in a dedicated
+`expiry_indexes.sql` are shaped to these exact predicates. One comment in
+that file records a planner trick: leading a composite index with a column
+that is constant `NULL` in the partial predicate gives the query planner an
+equality plus a range, which it can use even without statistics.
+
+Some things are deliberately not swept. Key-value locks expire when the
+*next acquirer* finds them stale, matching the Go implementation, so there
+is no reaper. Federation permissions are renewable leases or permanent
+tombstones and are never deleted.
+
+### Keyset pagination with a durable cursor
+
+Reclaiming abandoned file uploads (idle for 24 hours with no directory entry
+referencing them) is the one maintenance task that cannot finish in a page,
+so it is made restartable. The general technique is *keyset pagination*:
+instead of `OFFSET n`, which makes the database skip n rows each time and
+gets slower as n grows, the query remembers the key of the last row it saw
+and asks for rows *after* that key in index order. Each page costs the same
+regardless of how far in it is, and the cursor survives across
+transactions, and here across restarts, because it is stored in a singleton
+table.
+
+The pass reads the cursor `(updated_at, uid, file_id)`, selects up to 128
+candidates with `(updated_at, uid, file_id) > (cursor)` in that order,
+and for each runs a single `UPDATE ... SET reclaiming = 1 WHERE ... NOT
+EXISTS (dirent referencing this file)`. Because liveness and marking are one
+statement on the single writer, no directory entry can be published between
+the check and the mark. The cursor advances; it wraps to zero only after a
+page comes back short, meaning the age window was exhausted. Separately,
+uploads already marked are dismantled chunk by chunk, fetching chunk
+*lengths* rather than payloads, until one of three budgets is hit.
+
+| Per-pass reclamation budget | Value |
+|---|---|
+| Age candidates examined | 128 |
+| Chunks deleted | 16 |
+| Chunk bytes deleted | 32 MiB |
+| Wall-clock work budget, checked between statements | 50 ms |
+
+The upload row is deleted last, only once no chunks remain, so a crash at
+any point leaves state the next pass can resume from.
+
+### Checkpoints: PASSIVE, not TRUNCATE
+
+SQLite offers several checkpoint modes. `TRUNCATE` (and `FULL` and
+`RESTART`) waits for readers by invoking the connection's busy handler,
+which in this server would mean waiting up to the 5-second busy timeout on
+the sole writer thread. `PASSIVE` copies whatever frames it can without
+waiting and reports how far it got. The maintenance job requests `PASSIVE`.
+The explicit `checkpoint()` method, which uses `TRUNCATE`, is reserved for
+operators who understand they may wait.
+
+The project measured the difference. In a synthetic comparison on a
+developer machine, with a read transaction held open for the whole phase
+and the busy timeout deliberately shortened to 250 ms so the stalls stayed
+bounded, TRUNCATE checkpoint maxima were 286 to 288 ms and writer queue p99
+was about 290 ms, while PASSIVE with the 16 MiB reuse limit had checkpoint
+maxima of 0.18 to 0.28 ms and queue p99 between 1 and 6 ms. With the
+production 5-second busy timeout the TRUNCATE stall would be correspondingly
+longer. The benchmark notes are explicit that this establishes the
+reader-wait mechanism and does not prove 16 MiB optimal or PASSIVE a hard
+latency bound; [Chapter 24](24-performance.qmd) returns to how such numbers
+are reported. A unit test pins the property that matters: maintenance and
+a following write both finish while a reader is still held.
+
+The checkpoint report is interpreted carefully. SQLite returns a
+`(busy, log, checkpointed)` triple; the outcome is "complete" only if both
+counts are known and equal and `busy` is zero, "deferred" if they differ,
+and "unavailable" if SQLite returned -1. Metrics are arranged so a scrape
+cannot read a half-updated pair.
+
+## Where to look
+
+- `foks-server`: `writer.rs` (the actor, `call_observed`,
+  `DatabaseWriterGuard`), `read_pool.rs`, `rate_limit.rs`, `config.rs`
+  (`SessionLimits`), `net/listener.rs` (admission), `net/session.rs`
+  (`execute_bounded`, request memory), `maintenance.rs`.
+- `foks-server-db`: `connection.rs` (`DatabasePathIdentity`, `ReadSnapshot`,
+  `configure`), `schema.rs` (application ID, version, upgrades),
+  `maintenance.rs`, `maintenance/expiry.rs`, `maintenance/uploads.rs`,
+  `config.rs`, and the SQL under `src/schema/` (`core.sql`, `identity.sql`,
+  `sso.sql`, `expiry_indexes.sql`).
+- `crates/foks-server/README.md` and `BENCHMARKS.md`.
+
+## Further reading
+
+- SQLite Consortium, *Write-Ahead Logging*, sqlite.org,
+  https://www.sqlite.org/wal.html
+- SQLite Consortium, *STRICT Tables*, sqlite.org,
+  https://www.sqlite.org/stricttables.html
+- SQLite Consortium, *Partial Indexes*, sqlite.org,
+  https://www.sqlite.org/partialindex.html
+- SQLite Consortium, *PRAGMA Statements* (`application_id`, `user_version`,
+  `journal_size_limit`, `max_page_count`, `wal_checkpoint`), sqlite.org,
+  https://www.sqlite.org/pragma.html
+- SQLite Consortium, *Isolation in SQLite*, sqlite.org,
+  https://www.sqlite.org/isolation.html
+- Kevin P. Gaffney, Martin Prammer, Larry Brasfield, D. Richard Hipp, Dan
+  Kennedy, and Jignesh M. Patel, *SQLite: Past, Present, and Future*,
+  Proceedings of the VLDB Endowment 15(12), 2022,
+  https://www.vldb.org/pvldb/vol15/p3535-gaffney.pdf
+- Carl Hewitt, Peter Bishop, and Richard Steiger, *A Universal Modular ACTOR
+  Formalism for Artificial Intelligence*, IJCAI, 1973,
+  https://www.ijcai.org/Proceedings/73/Papers/027B.pdf
+- J. Heinanen and R. Guerin, *A Single Rate Three Color Marker*, RFC 2697,
+  IETF, 1999, https://www.rfc-editor.org/rfc/rfc2697
+- Andrew S. Tanenbaum and David J. Wetherall, *Computer Networks*, 5th
+  edition, Pearson, 2011 (traffic shaping and the token bucket)
+- H. T. Kung and John T. Robinson, *On Optimistic Methods for Concurrency
+  Control*, ACM Transactions on Database Systems 6(2), 1981,
+  https://doi.org/10.1145/319566.319567

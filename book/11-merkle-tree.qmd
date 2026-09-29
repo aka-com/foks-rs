@@ -1,0 +1,312 @@
+# The Patricia Merkle Tree
+
+[Chapter 10](10-sigchains.qmd) ended with a gap: a hash chain protects the
+order and content of a history but not its length, and it cannot by itself
+reveal that a server is telling two clients two different stories. Closing
+the gap requires a single, short, signed statement that commits to *every*
+chain on the host at once, and a way for a client to check that a particular
+link, or the absence of one, is covered by that statement. The data structure
+FOKS uses is a binary Patricia trie with Merkle hashing over 256-bit keys.
+This chapter describes it from the general idea down to the byte layout of a
+proof.
+
+## Merkle trees
+
+Ralph Merkle's construction, described in his 1979 thesis and published at
+CRYPTO 1987, arranges data items as the leaves of a tree and labels each
+interior node with the hash of its children's labels. The root label then
+commits to every leaf. To prove that a leaf is in the tree, one supplies the
+labels of the siblings along the path from the leaf to the root; a verifier
+recomputes the path's hashes and compares the result with a root it already
+trusts. The proof has one hash per level, so its size is logarithmic in the
+number of leaves.
+
+Two families of Merkle structure appear in transparency systems, and they
+answer different questions.
+
+A **Merkle log** (Certificate Transparency, RFC 6962 and RFC 9162) is an
+append-only list. Its shape is fixed by the number of entries, which makes
+*consistency proofs* possible: a short proof that the tree with $n$ entries is
+a prefix of the tree with $m > n$ entries. Logs answer "was this entry
+appended, and is the log still the same log?" They do not answer "what is the
+current value for this key?" without scanning.
+
+An **authenticated dictionary** maps keys to values and can prove, for a
+given key, either the value stored under it or that no value is stored.
+CONIKS, Keybase's tree, Google's Key Transparency, and FOKS are all
+dictionaries: the question a client asks is "what is the latest link of this
+user's chain, and is there anything after it?" The price is that a
+dictionary's leaves are overwritten, so a log-style consistency proof is not
+available, and something else must connect one version of the tree to the
+next. That is the subject of [Chapter 12](12-epochs.qmd).
+
+## Patricia tries
+
+A trie stores keys by their digits: at depth $d$ the tree branches on the
+$d$-th digit of the key. A binary trie over 256-bit keys branches on one bit
+per level and would be 256 levels deep. Morrison's PATRICIA (1968) observed
+that most of those levels have only one child and can be skipped: an interior
+node records how many bits all of its descendants share and branches only
+where they actually differ. With $n$ random keys the compressed trie has about
+$\log_2 n$ levels, not 256.
+
+Combining the two ideas gives a *Merkle Patricia trie*: a path-compressed
+binary trie in which every node is identified by the hash of its encoding.
+Ethereum's state trie is a widely known variant with 16-way branching over
+hex digits; FOKS's is binary and stores a bit range.
+
+## The FOKS tree
+
+The tree maps 32-byte keys to 32-byte values. Keys are derived as
+[Chapter 10](10-sigchains.qmd) described (a typed hash of chain type, entity,
+sequence number, and tree location); values are link hashes or, for username
+leaves, a typed hash of the owner's ID. Bits are numbered from the most
+significant bit of byte 0, so bit $i$ is bit $7 - (i \bmod 8)$ of byte
+$\lfloor i/8 \rfloor$. That choice means the trie's left-to-right order is
+the same as byte-string order, which the builder exploits.
+
+There are exactly two node kinds:
+
+| Node kind | Fields                                                                 |
+|-----------|------------------------------------------------------------------------|
+| Leaf      | `key` (32 bytes), `value` (32 bytes)                                   |
+| Interior  | `prefix_bit_start`, `prefix_bit_count`, `prefix` (bytes), `left` (32-byte hash), `right` (32-byte hash) |
+
+An interior node says: every key beneath me agrees on bits
+`[prefix_bit_start, prefix_bit_start + prefix_bit_count)`, and those bits are
+`prefix`; the bit immediately after that range is the *branch bit*, and it
+sends a key left when 0 and right when 1. Children start at
+`prefix_bit_start + prefix_bit_count + 1`. The `prefix` bytes are *clamped*:
+they cover only the bytes touching the bit range, and bits outside the range
+are zeroed. A node whose prefix is not in clamped form is rejected on decode,
+so each interior node has exactly one encoding. A leaf stores its whole key
+and may sit at any depth.
+
+```
+                    root: interior
+                    start=0, count=0, branch bit 0
+                   /                             \
+     (bit 0 = 0)  /                               \  (bit 0 = 1)
+        leaf A                          interior: start=1, count=5
+        key=0b0...                      prefix = bits 1..5 of B and C
+                                        branch bit 6
+                                       /               \
+                          (bit 6 = 0) /                 \ (bit 6 = 1)
+                                 leaf B               leaf C
+```
+
+Here A differs from B and C at bit 0, so the root compresses nothing. B and C
+share bits 1 through 5 and first differ at bit 6, so one interior node covers
+five bits and branches on the sixth. The trie has two interior levels where
+an uncompressed binary trie over the same keys would have seven, and where
+the full key length would allow 256.
+
+## Content addressing
+
+A node's identity is the typed hash of its canonical encoding:
+
+$$
+h(\text{node}) = \mathrm{prefixed\_hash}(\texttt{MERKLE\_NODE\_TYPE\_ID},
+  \mathrm{encode}([\,d,\ \{ t : \text{payload} \}\,]))
+$$
+
+where a leaf has discriminant $d = 0$ and tag $t = \texttt{"1"}$ with payload
+`[key, value]`, and an interior node has $d = 1$ and $t = \texttt{"0"}$ with
+payload `[start, count, prefix, left, right]`. The redundancy of a numeric
+discriminant beside a string tag is again how the Go union serializes.
+
+The node store is a map from hash to encoded bytes and nothing else. The
+empty tree's root is the all-zero hash. Because a node's address is its
+content, the store is idempotent (writing the same node twice is a no-op) and
+a write of *different* bytes to an existing address is treated as corruption,
+never as an update. On the server the store is a SQLite table with the node
+hash as primary key; triggers refuse to insert a root whose node is missing
+and refuse to delete a node any root references.
+
+## Insertion and rebuilding
+
+Conceptually, inserting a key into a Patricia trie means descending while the
+key matches each node's prefix, and where it stops matching, *splitting* the
+compressed edge: the old interior node is replaced by a new one whose prefix
+is the shared portion, with the old node (its prefix shortened) on one side
+and a fresh leaf on the other. Updating the value of an existing key replaces
+the leaf and rehashes the path above it.
+
+`foks-merkle-store` does not do this incrementally. Its `prepare` function
+walks the entire existing tree to collect every leaf into a sorted map,
+applies the batch of `Set` and `Remove` changes, and rebuilds the whole tree
+from the sorted leaf list: find the longest common bit prefix of the group,
+split at the first bit where they differ (a binary search on the sorted
+slice, which works because bit order equals byte order), and recurse. The
+result is then diffed against the store: nodes already present with the same
+bytes are skipped, nodes present with different bytes are an error, and only
+new nodes are written.
+
+The crate's README is direct about the cost: "updates are O(n) … an
+intentional v1 tradeoff." What the rebuild buys is determinism by
+construction. The tree's shape depends only on the set of leaves, so any
+insertion order gives the same root, which a property test checks by
+rotating and reversing the order of 64 inserts. And the same walk that
+collects leaves is an integrity check: it detects cycles, recomputes every
+node's hash and compares it to its address, and verifies that each interior
+node's `prefix_bit_start` equals its actual depth and that every leaf beneath
+a child has the right branch bit. A corrupted store is refused rather than
+extended. The official Go fixtures are replayed by rebuilding the tree from
+the fixture's leaves and asserting that the root and every proof match byte
+for byte.
+
+Content addressing has one more consequence: unchanged subtrees are shared
+between epochs at no cost. Nodes are never modified, so every historical root
+remains fully traversable, and the server can answer a lookup against an
+older root just as it answers one against the current head. The
+`merkle_leaves` table additionally records the epoch at which each key was
+first written (later writes update the value but leave the epoch), which is
+what the "does this key exist" query returns.
+
+## Proofs
+
+A proof is the path from the root to the node where the search for a key
+ends. On the wire it is a `MerklePathCompressed`:
+
+| Part       | Contents                                                                                |
+|------------|-----------------------------------------------------------------------------------------|
+| `edges`    | one 33-byte entry per interior node on the path: `prefix_bit_count` (1 byte) then the sibling child's hash (32 bytes) |
+| `terminal` | either `Leaf { leaf, found_key }` or `PrefixMiss { prefix_bit_start, prefix_bit_count, prefix, left, right }` |
+
+Each edge is 33 bytes because that is all the verifier lacks. It knows the
+query key, so it can reconstruct the interior node's prefix bits from the key
+itself, and it is computing the child's hash as it goes. Only the count of
+compressed bits and the sibling's hash are new information.
+
+```
+   query key bits:  1 01101 0 ...
+                    ^ ^^^^^ ^
+                    | |     +-- branch bit at interior 2
+                    | +-------- 5 prefix bits at interior 2
+                    +---------- branch bit at root (count 0)
+
+   edges = [ (0, h(leaf A)), (5, h(leaf C)) ]
+   terminal = Leaf { leaf: v_B, found_key: None }
+
+   verifier:  h_leaf = H([0, {"1": [key, v_B]}])
+              h_2    = H([1, {"0": [1, 5, clamp(key,1,5), h_leaf, h(leaf C)]}])
+              h_root = H([1, {"0": [0, 0, "", h(leaf A), h_2]}])
+              accept iff h_root == root_node of an authenticated root
+```
+
+The verifier walks the edges, taking `count` from each edge but the prefix
+bits and the branch direction from the *query key's own bits*, rebuilds each
+interior node's encoding, and hashes upward. This is what prevents
+*redirection*: a proof about key A cannot be replayed as a proof about key B,
+because the verifier would reconstruct B's prefixes and branches, produce
+different node encodings, and fail to reach the root. As the documentation
+of the change-marker classifier in `foks-verify` puts it, "a path that
+reconstructs the root at all is proof about `key` and nothing else." The server's proof generator performs the
+same structural checks it performs during a rebuild and refuses to prove
+anything against an empty tree.
+
+## Presence and absence
+
+The verifier accepts a proof against one of three expectations:
+
+- **Exact**: the terminal is a leaf at the query key with a specified value.
+- **Present**: the terminal is a leaf at the query key with any value.
+- **Absent**: the terminal shows that no leaf exists at the query key.
+
+Absence has two forms, and both are bound to the root by hashing the terminal
+node exactly as the tree does:
+
+1. **Foreign leaf.** The search ends at a leaf whose key differs from the
+   query. The verifier requires the found key to agree with the query on every
+   bit consumed so far, so the leaf is genuinely where the query's path ends,
+   and hashes the leaf with its *found* key. Since a leaf may sit at any
+   depth, this is the common case in a sparse trie.
+2. **Prefix miss.** The search reaches an interior node whose `prefix_bit_start`
+   equals the current bit cursor and whose prefix the query does *not* match.
+   The full node is supplied and hashed. Every key beneath that node shares
+   the prefix, so the query key is beneath none of them.
+
+Absence proofs are first-class in FOKS and do three jobs:
+
+- **Chain termination.** After verifying links $1..n$, the client demands an
+  absence proof for the key of link $n+1$, derived from the location link $n$
+  committed to. The server cannot truncate a chain without producing a proof
+  it cannot produce.
+- **Username ownership.** A name's leaves are keyed by an ownership sequence.
+  For sequences $1..k-1$ the client requires presence (earlier owners), for
+  sequence $k$ an exact leaf equal to the typed hash of this user's ID, and
+  for $k+1$ absence, proving that no later claimant has taken the name.
+- **Batched change detection.** To learn whether any member of a team has
+  rotated keys, the client asks for two absence proofs per member, the
+  next-link key and the next-username-ownership key, all derivable from
+  pinned state, in one multi-lookup. A valid absence proof under an
+  authenticated root means the pinned state is still current; anything else,
+  including a malformed response, merely sends the client to do the full
+  chain load it would otherwise have done.
+
+## Comparison with other designs
+
+CONIKS uses a fixed-depth binary Merkle prefix tree in which the position of
+a user is the output of a verifiable random function of the username, so that
+lookups can be proven without revealing the directory's contents. Empty
+subtrees are represented by a hashed placeholder rather than by omission, and
+absence proofs are proofs of an empty subtree. FOKS achieves the same
+unlinkability with commit-then-reveal tree locations (Chapter 10), uses path
+compression so that empty subtrees do not exist, and proves absence with a
+foreign leaf or a prefix miss.
+
+Keybase's tree, on which FOKS's design is closely modeled, is a prefix tree
+keyed by user ID whose leaves hold sigchain tails, published as a sequence of
+signed roots with skip pointers between them. FOKS retains the signed root
+sequence and the skip pointers, and adds per-link hidden locations.
+
+Google's Key Transparency (built on Trillian) and later academic designs such
+as SEEMless and Parakeet combine a sparse Merkle dictionary with a Merkle log
+of dictionary roots, so that consistency between versions is a log
+consistency proof. FOKS's approach to the same problem, the skip-pointer
+history, is the subject of the next chapter.
+
+## Where to look
+
+- `foks-merkle-store`: `node` (the two node kinds, clamped prefixes, hashing),
+  `tree` (leaf collection, rebuild, and diff), `proof` (generation), `key`
+  (chain and username keys), `memory` and `store` (the node-store traits);
+  `tests/official_vectors.rs`, `tests/properties.rs`, and
+  `tests/corruption.rs`.
+- `foks-verify`: `proof` (verification with reconstructed prefixes and the
+  three expectations); `user` for chain termination, username ownership, and
+  the change-marker classification.
+- `foks-proto`: `identity::merkle` for `MerklePathCompressed` and
+  `MerkleTerminal`.
+- `foks-server-db`: `schema/merkle.sql` for the node, leaf, and root tables
+  and their triggers.
+- `foks-client`: `change_marker` for batched absence probing.
+
+## Further reading
+
+- R. C. Merkle, *A Digital Signature Based on a Conventional Encryption
+  Function*, CRYPTO '87, Springer LNCS 293, 1988,
+  https://doi.org/10.1007/3-540-48184-2_32
+- D. R. Morrison, *PATRICIA: Practical Algorithm To Retrieve Information
+  Coded in Alphanumeric*, Journal of the ACM 15(4), 1968,
+  https://doi.org/10.1145/321479.321481
+- B. Laurie, A. Langley, and E. Kasper, *RFC 6962: Certificate
+  Transparency*, IETF, 2013, https://www.rfc-editor.org/rfc/rfc6962
+- B. Laurie, E. Messeri, and R. Stradling, *RFC 9162: Certificate
+  Transparency Version 2.0*, IETF, 2021, https://www.rfc-editor.org/rfc/rfc9162
+- M. S. Melara, A. Blankstein, J. Bonneau, E. W. Felten, and M. J. Freedman,
+  *CONIKS: Bringing Key Transparency to End Users*, USENIX Security, 2015,
+  https://www.usenix.org/conference/usenixsecurity15/technical-sessions/presentation/melara
+- Keybase, *Keybase Book: Server Trust* (sigchains and the Merkle tree),
+  https://book.keybase.io/docs/server
+- Google, *Key Transparency*, GitHub, https://github.com/google/keytransparency
+- M. Chase, A. Deshpande, E. Ghosh, and H. Malvai, *SEEMless: Secure
+  End-to-End Encrypted Messaging with less Trust*, ACM CCS, 2019,
+  https://doi.org/10.1145/3319535.3363202
+- A. Tomescu, V. Bhupatiraju, D. Papadopoulos, C. Papamanthou, N. Triandopoulos,
+  and S. Devadas, *Transparency Logs via Append-Only Authenticated
+  Dictionaries*, ACM CCS, 2019, https://doi.org/10.1145/3319535.3345652
+- G. Wood, *Ethereum: A Secure Decentralised Generalised Transaction Ledger*
+  (Yellow Paper), Appendix D, https://ethereum.github.io/yellowpaper/paper.pdf
+- R. C. Merkle, *Secrecy, Authentication, and Public Key Systems*, PhD thesis, Stanford University, 1979, https://www.merkle.com/papers/Thesis1979.pdf
+- H. Malvai, L. Kokoris-Kogias, A. Sonnino, E. Ghosh, E. Oztürk, K. Lewi, and S. Lawlor, *Parakeet: Practical Key Transparency for End-to-End Encrypted Messaging*, NDSS, 2023, https://www.ndss-symposium.org/ndss-paper/parakeet-practical-key-transparency-for-end-to-end-encrypted-messaging/

@@ -1,0 +1,279 @@
+# Shared Keys and Generations
+
+A user owns several devices and wants all of them to read the same data. A
+team has many members with the same wish. In both cases there must be a key
+that every authorised party holds and no unauthorised party holds, and the
+set of authorised parties changes over time: devices are lost, members leave.
+This chapter describes the *per-user key* (PUK) and *per-team key* (PTK),
+how they are distributed, how they are replaced when membership changes, and
+how old data stays readable afterwards. It ends with the application keys
+derived from them.
+
+## The problem with a shared key
+
+Give a group one symmetric key and every member can read everything. Remove
+a member and the key is no longer secret from an outsider, so it must be
+replaced. Replacing it raises two questions. How do the remaining members
+receive the new key without the departed member also receiving it? And what
+happens to everything that was encrypted under the old key?
+
+The first question is answered by public-key encryption: the new key is
+boxed (as in [Chapter 4](04-hybrid-encryption.qmd)) to each remaining
+member's public key, and the departed member is simply left off the list.
+The second is answered by not re-encrypting old data at all, but by making
+the new key able to unlock the old one. Both ideas are old; FOKS's
+contribution is a concrete, verifiable data structure for them.
+
+## Terminology: which secrecy is this?
+
+The repository's guide calls the property that follows "forward secrecy via
+generational seeds". The term needs care, because in the literature it means
+something narrower.
+
+- *Forward secrecy*, in its original sense, is the property that compromise
+  of a party's long-term keys does not reveal *past* session keys. It is
+  usually achieved with ephemeral keys that are deleted after use.
+- *Post-compromise security* (Cohn-Gordon, Cremers and Garratt) is the
+  property that after a compromise, the protocol can *heal*: once the
+  compromised party is excluded or updates its keys, future messages are
+  again secret from the attacker. Unger et al. survey this under the name
+  "future secrecy" as well.
+
+FOKS's generational keys give a *removal-time* guarantee: a party that held
+generation $g$ and was excluded before generation $g+1$ cannot read anything
+encrypted under $g+1$ or later. That is the post-compromise / future-secrecy
+family, applied to group membership. It is explicitly *not* forward secrecy
+in the ephemeral-key sense: a current member's newest seed unlocks every
+earlier generation (that is the point of the seed chain), so compromising
+one device today reveals the whole history of what that device was entitled
+to read. The book uses the term "forward secrecy" for this property only when
+quoting the repository; otherwise it says "post-removal secrecy".
+
+## PUK, PTK, roles and generations
+
+A PUK or PTK is a 32-byte random seed. From it, `derive_key` (see
+[Chapter 3](03-key-hierarchy.qmd)) produces an Ed25519 verify key, whose
+entity type is 14 (PUK) or 15 (PTK), and an HEPK. So a shared key can both
+sign (team certificates, bearer-token challenges) and receive boxes.
+
+There is one seed per *role* and per *generation*. Roles are totally ordered:
+
+| Role | Order | Notes |
+|---|---|---|
+| None | 0 | no access |
+| Member | 1 | carries a signed 16-bit *visibility* level; a member with higher visibility outranks one with lower |
+| Admin | 2 | |
+| Owner | 3 | |
+
+When a team is created, four PTK seeds are generated, ordered member-min,
+member, admin, owner. The seed for role $r$ is boxed to every party whose
+role is at least $r$. In the client, the device-side filter is
+`receiver.role >= rotation.role` and the team-side filter is
+`rotation.role <= receiver.role`; both say the same thing. An owner can open
+every role's key, an admin cannot open the owner key, and a reader cannot
+open admin material. Data encrypted under the member key is readable by
+everyone; data encrypted under the admin key is readable only by admins and
+owners.
+
+The *generation* is a counter starting at 1 that increments every time the
+seed for a role is replaced.
+
+## Parcels and box sets
+
+When a device wants a shared key it fetches a *parcel* from the server:
+
+| Field | Meaning |
+|---|---|
+| `generation`, `role` | which seed the parcel delivers |
+| `hybrid` | the hybrid box addressed to this recipient |
+| `target`, `target_host`, `target_role`, `target_generation` | the recipient and, for PTKs boxed to a PUK, which PUK generation the box was addressed to |
+| `sender` | the entity that sealed the box |
+| `box_id` | the 16-byte ID of the box set this box came from |
+| `temp_dh_key` | the signed temporary key, if the sender was on a different curve |
+| `seed_chain` | boxes for every earlier generation (next section) |
+
+The server assembles the parcel from a stored box set and the accumulated
+chain. Note what the server does *not* have: any seed. It stores ciphertext
+and routes it.
+
+For a PTK the recipient of each box is a member *user*, not a device: the
+team key is boxed to the user's PUK HEPK, and the user's devices reach it by
+first opening their own PUK. The code comments that "the receiver entity is
+the owning user or team, not its verify key". This indirection means a team
+rotation does not need to know about every member's devices, and a user's
+device change does not touch any team.
+
+### The plaintext binds its context
+
+What gets encrypted in a shared-key box is not the bare 32-byte seed. It is
+
+```
+[[receiver, host], generation, role, seed]
+```
+
+canonically encoded. On opening, the recipient compares the decoded
+receiver, host, generation and role to what the verified chain says the
+parcel should contain, and rejects the seed on any mismatch. A box for one
+role cannot be presented as a box for another; a box for one host cannot be
+replayed on another. This is the same defence-in-depth idea as the typed
+nonce: since XSalsa20-Poly1305 has no associated-data input, the context is
+placed inside the authenticated plaintext instead.
+
+Decoding a seed plaintext has a small subtlety. The generic Snowpack decoder
+would copy the 32 seed bytes into an ordinary heap vector inside its value
+tree, which is neither zeroized nor tracked. `foks-crypto` therefore checks
+that the plaintext ends in a 32-byte binary field, copies those bytes into
+zeroizing storage, overwrites them with zeros in the buffer, and only then
+runs the decoder on the redacted bytes.
+
+## The seed chain
+
+Suppose a rotation replaces generation $g$ with $g+1$. The remaining members
+receive $g+1$ in new boxes. But files, directory entries and messages
+encrypted under $g$, $g-1$, and so on still exist, and re-encrypting all of
+them would be expensive and would still leave the old ciphertexts on the
+server.
+
+The rotating party instead encrypts the *previous* seed under a key derived
+from the *new* seed:
+
+```
+SeedChainBox {
+    generation: g,
+    role:       r,
+    secret_box: XSalsa20-Poly1305(
+                    key   = derive_key(seed[g+1], 2),
+                    nonce = BE64(SHARED_KEY_SEED_TYPE_ID) ‖ 16 random bytes,
+                    msg   = [[party, host], g, r, seed[g]] )
+}
+```
+
+The server stores every chain box and returns the whole chain with a parcel.
+A recipient that has opened the hybrid box for generation $N$ then walks the
+chain backwards:
+
+```
+  hybrid box            chain box            chain box
+  ┌──────────┐   key    ┌──────────┐   key    ┌──────────┐
+  │ seed[N]  │ ───────> │ seed[N-1]│ ───────> │ seed[N-2]│ ───> ...  seed[1]
+  └──────────┘ derive   └──────────┘ derive   └──────────┘
+   (public-key)          (symmetric)           (symmetric)
+```
+
+For each box, in reverse order, the recipient requires
+`box.generation == newer.generation - 1` and the same role, derives
+`derive_key(newer.seed, 2)`, opens the box, checks `[receiver, host,
+generation, role]` against expectations, and continues. The result is the
+list of all seeds, oldest first. One public-key operation unlocks $N$
+generations; the rest is symmetric and cheap. Each hop is authenticated by
+Poly1305 under a key only the holder of the newer seed can derive, so the
+server cannot splice a foreign seed into the chain, and the strict
+generation check means it cannot drop a link either.
+
+Team chains have one variation. The Go implementation creates a single
+global chain per rotated PTK, binds the chain's informational receiver
+field to the editor who performed the rotation, and attaches the same chain
+to every recipient's parcel. `foks-rs` follows this: the team-chain opener
+checks host, generation and role but not receiver, and the caller then binds
+each recovered seed to the team's public-key history from the verified
+chain.
+
+## Rotation
+
+Two events trigger a rotation.
+
+- **Device revocation.** When a user revokes a device, the client generates
+  a fresh PUK seed for every role the user holds, boxes each new seed to
+  every remaining device of sufficient role, seals a seed-chain box carrying
+  the old seed under the new one, and publishes a chain link that names the
+  revoked device and the new PUK generations.
+- **Member removal or role change.** When an admin removes a team member or
+  lowers their role, the same happens for the affected PTK roles, with the
+  boxes addressed to the remaining members' PUKs.
+
+The revoked device or removed member holds seeds up to $g$. It never receives
+a box for $g+1$, and $g+1$ is fresh randomness with no relation to $g$, so
+nothing encrypted under $g+1$ is readable to it. Existing members lose
+nothing, because the chain gives them $g$ from $g+1$. This is the whole of
+the post-removal secrecy argument.
+
+### Signed by the new keys
+
+A rotation link is signed by more than one key, and the order is fixed. Each
+new shared key signs first, in shared-key order, over the link and the
+signatures already accumulated; the acting device (or, for a hardware
+parent, the P-256 key) signs last. The stacking rule, where every signature
+covers the ones before it, is described in
+[Chapter 7](07-hardware-keys.qmd). Its purpose here is to prove *possession*
+of the new seed at the moment the link is published: a link that announces a
+PUK verify key without a signature from the matching seed is rejected. A
+server, or a malicious admin who has not actually generated the key, cannot
+announce a rotation on someone else's behalf.
+
+## Application keys
+
+Shared seeds are never used directly to encrypt data. Each application gets
+its own subtree:
+
+```
+app_root = derive_key(seed, 5)
+app_key  = typed_hmac(app_root, APP_KEY_DERIVATION_TYPE_ID, encode([0, {"0": app_index}]))
+```
+
+with `app_index` 0 for the key-value store and 1 for real-time chat. The
+key-value store then derives two more keys from `app_key` under
+`KV_KEY_DERIVATION_TYPE_ID`: a MAC key (index 1) for integrity bindings on
+directory roots and entries, and a box key (index 2) for encrypting
+per-directory and per-file seeds. Real-time chat derives per-purpose keys
+(channel name, channel description, message data) under its own type ID.
+The repository guide says that "application index 5 derives the kv_app
+key"; 5 is the derivation type for the application root, and the key-value
+store is application 0 beneath it.
+
+The important structural point is that the PUK/PTK-derived box key encrypts
+only *seeds*, never data. A directory has its own seed; a large file has its
+own seed; those seeds encrypt the actual bytes. So a rotation re-encrypts a
+handful of small seed boxes, not the store. [Chapter 14](14-kv-store.qmd)
+and [Chapter 16](16-chat.qmd) follow these keys down to the data.
+
+## Trade-offs
+
+The seed chain deliberately sacrifices forward secrecy among current members
+for simplicity and cost. Any member's current seed unlocks the entire
+history of their role. A design that wanted forward secrecy as well would
+have to delete old seeds and re-encrypt or discard old data, which is at
+odds with a store whose purpose is to keep data.
+
+Rotation cost is linear in the number of recipients: one hybrid box (about
+1.2 kB) per remaining member per rotated role. For a team of a thousand
+members with four roles that is several megabytes per removal. FOKS accepts
+this because removals are rare and the server does the storage; the
+alternative, tree-based group key agreement as in MLS, would reduce the cost
+to logarithmic but at a large increase in protocol complexity and with
+different trust assumptions about the server.
+
+Finally, the roles are a lattice with a single chain (None < Member < Admin
+< Owner), which keeps the "box to everyone of at least this role" rule
+simple. Visibility levels within Member allow finer distinctions without
+breaking the order.
+
+## Where to look
+
+- `foks-crypto` (`lib.rs`): `shared_key_seed_plaintext`,
+  `seal_puk_seed_chain_box`, `open_shared_key_seed_chain`,
+  `open_team_shared_key_seed_chain`, `open_shared_key_parcel_with`,
+  `decode_with_redacted_trailing_seed`, `make_software_puk_change_link`,
+  `make_yubi_puk_rotation_link`, `derive_kv_keys`, `derive_shared_public`.
+- `foks-crypto` (`realtime.rs`): `derive_realtime_keys`.
+- `foks-proto` (`role.rs`, `key_material.rs`): `Role`, `RoleType`,
+  `SharedKeyBoxSet`, `SharedKeyBox`, `SeedChainBox`, `PukParcel`.
+- `foks-client` (`device.rs`, `team/rotation/`): the revocation and
+  member-change flows that decide who receives which box.
+
+## Further reading
+
+- N. Unger, S. Dechand, J. Bonneau, S. Fahl, H. Perl, I. Goldberg, M. Smith, *SoK: Secure Messaging*, IEEE Symposium on Security and Privacy, 2015, https://doi.org/10.1109/SP.2015.22
+- K. Cohn-Gordon, C. Cremers, L. Garratt, *On Post-Compromise Security*, IEEE Computer Security Foundations Symposium, 2016, https://eprint.iacr.org/2016/221
+- D. J. Bernstein, *Cryptography in NaCl*, 2009, https://cr.yp.to/highspeed/naclcrypto-20090310.pdf
+- H. Krawczyk, M. Bellare, R. Canetti, *HMAC: Keyed-Hashing for Message Authentication*, RFC 2104, IETF, 1997, https://www.rfc-editor.org/rfc/rfc2104
+- R. Barnes, B. Beurdouche, R. Robert, J. Millican, E. Omara, K. Cohn-Gordon, *The Messaging Layer Security (MLS) Protocol*, RFC 9420, IETF, 2023, https://www.rfc-editor.org/rfc/rfc9420

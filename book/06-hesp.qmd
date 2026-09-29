@@ -1,0 +1,303 @@
+# Secrets Humans Can Transcribe
+
+Two moments in the life of a FOKS account require a secret to pass through a
+person rather than a wire. The first is the *recovery kit*: a phrase printed
+at signup and stored somewhere safe, used only when every device is lost.
+The second is the *pairing code*: a phrase displayed on an existing device
+and typed into a new one to enrol it. A third, optional, mechanism lets a
+person choose a passphrase for logging in where no device key is available.
+
+Each of these has different security requirements and gets a different
+treatment. The recovery kit protects data at rest indefinitely and needs
+full-strength entropy. The pairing code is single-use and lives for five
+minutes, so it can be shorter. The passphrase is chosen by a human and is
+weak by construction, so it must be stretched. This chapter covers the
+encoding that the first two share, then each mechanism in turn.
+
+## Encoding bits as words and numbers
+
+Hexadecimal is an unforgiving way to transcribe a secret: 52 characters
+from an alphabet where `0`/`O` and `1`/`l` look alike, with no structure to
+help a reader keep their place. Word lists are better. The BIP-39 list used
+by cryptocurrency wallets has 2048 English words chosen so that the first
+four letters are unique and visually similar words are excluded; each word
+carries 11 bits. A 26-byte secret would need 19 words.
+
+FOKS uses a *mixed-radix* encoding instead, called HESP (human-exact secret
+phrase). The secret is treated as one large integer and expanded into
+digits of alternating radix: a base-2048 digit (a word), then a base-$2^k$
+digit (a decimal number), and so on. Mixed-radix conversion is the classic
+algorithm from Knuth's treatment of radix conversion: repeatedly take the
+value modulo the current radix, emit that digit, divide, and move to the
+next radix. FOKS's implementation works on the byte array directly,
+extracting the low 11 or $k$ bits and shifting the whole array right.
+
+The two encodings in use are:
+
+| | Recovery kit | Pairing code |
+|---|---|---|
+| Secret size | 26 bytes | 16 bytes |
+| Tokens | 17: 9 words + 8 numbers | 13: 7 words + 6 numbers |
+| Bits per word | 11 | 11 |
+| Bits per number | 13 (range 0–8191) | 8 (range 0–255) |
+| Entropy | 9 × 11 + 8 × 13 = 203 bits | 7 × 11 + 6 × 8 = 125 bits |
+| Unused high bits | 5 (mask `0x07` on byte 0) | 3 (mask `0x1f` on byte 0) |
+
+The phrase alternates word, number, word, number, ..., word. The first token
+comes from the lowest bits of the secret. As a concrete example from the
+test suite, the 16-byte pairing secret consisting of sixteen `0x01` bytes
+encodes as
+
+```
+cage 32 advice 4 letter 128 avoid 16 acoustic 2 doctor 64 amount
+```
+
+The repository guide gives three reasons for mixing numbers into the
+phrase. The alternating shapes give a transcription cadence that makes
+skipped or duplicated tokens easy to notice. A large share of the entropy
+(104 of 203 bits in the recovery kit) is numeric, so a language model or
+dictionary attack on the word positions alone gains little. And the phrase
+needs no checksum, for a reason explained next.
+
+### Exactness
+
+BIP-39 appends a checksum: the last word's low bits are a hash of the
+entropy, so a mistyped phrase is usually detected. HESP has no checksum.
+Instead the parser is strict. Every word must be found by binary search in
+the 2048-entry list; every number must parse and lie within its range;
+after all tokens are pushed back, the unused high bits of byte 0 must be
+zero, and any arithmetic overflow during reconstruction is an error. The
+consequence is that every phrase corresponds to exactly one secret and
+every secret to exactly one phrase, a property the test suite checks by
+round-tripping random secrets and by comparing against a fixture produced by
+the Go implementation. A typo that produces a valid word or in-range number
+is *not* detected at parse time; it is detected when the resulting key fails
+to open anything. For the pairing code, which is confirmed interactively
+within seconds, that is acceptable. For the recovery kit, such a typo is
+discovered only at recovery time, when the reconstructed key fails to open
+the parcel addressed to the real backup key.
+
+## The recovery kit
+
+The 26-byte recovery secret is not used as a key directly. It is hashed
+under a type ID to produce a standard 32-byte seed:
+
+```
+seed = SHA-512/256( BE64(BACKUP_SEED_TYPE_ID) ‖ bin8(secret26) )
+```
+
+where `bin8(...)` is the canonical two-byte binary header followed by the 26
+bytes. The code builds this 28-byte buffer by hand in zeroizing storage
+rather than calling the generic encoder, so the secret never lands in an
+ordinary heap allocation. From the seed, the full key suite of
+[Chapter 3](03-key-hierarchy.qmd) follows, with entity type 16 (backup key).
+The first word and number of the phrase double as the backup key's public
+device name, so a user can tell which kit corresponds to which enrolled key.
+
+The repository's introduction and guide both say the recovery kit is
+"stretched via Argon2id (64 MiB memory, 3 iterations)". The code does not
+do this: the recovery seed is only typed-hashed as above. Argon2id with
+those parameters is applied to user *passphrases* (below). The code is right
+and the documentation is loose. With 203 bits of entropy, stretching would
+add nothing; Argon2id exists to slow down guessing, and nobody guesses a
+203-bit value.
+
+### Enrolled as a device
+
+The backup key is not a special object on the server. It is enrolled as a
+*device* of the chosen role, with its own entity ID and HEPK, through the
+same provisioning link an ordinary device uses. This has a consequence that
+matters for a printed document: every later PUK rotation
+([Chapter 5](05-generations.qmd)) boxes the new generation to the backup
+key's HEPK exactly as it does to any other device. A kit printed at signup
+stays valid across any number of rotations and device changes. Nothing on
+paper ever needs updating.
+
+### Recovery
+
+When all devices are lost, the user types the phrase on a new machine. The
+client reconstructs the backup seed and its suite, authenticates to the
+server over mutual TLS with the backup key's Ed25519 key (wrapped in
+PKCS#8 like any device key), fetches the latest PUK parcel addressed to the
+backup key, opens it, and then acts as the *existing* device in an ordinary
+provisioning: it builds a link enrolling the new machine's freshly generated
+device key, boxes the current PUK to the new device's HEPK, countersigns,
+and submits. The backup key never becomes the daily device; it is the
+bootstrap that authorises one.
+
+## The pairing code and KEX
+
+Enrolling a second device must not move the user's seeds through the server
+in a form the server can read, and neither device has any prior trust
+relationship with the other. The pairing code supplies the shared secret
+that bootstraps a private channel through the server, which acts only as a
+relay.
+
+From the 16-byte pairing secret two keys are derived, both by typed HMAC:
+
+```
+session_id    = HMAC-SHA-512/256( secret, BE64(KEX_KEY_DERIVATION_TYPE_ID) ‖ encode([0, {}]) )
+secretbox_key = HMAC-SHA-512/256( secret, BE64(KEX_KEY_DERIVATION_TYPE_ID) ‖ encode([1, {}]) )
+```
+
+The session ID is public: the relay uses it to match senders and receivers.
+The secret-box key never leaves the two devices.
+
+### The protocol
+
+The *provisioner* is the existing device (which must hold the owner role);
+the *provisionee* is the new one. Every arrow below is one relay message.
+
+```
+ Provisioner (existing)                 Relay                  Provisionee (new)
+ ───────────────────────                ─────                  ─────────────────
+ generate secret, show phrase
+ seq 0: Start ─────────────────────────>  ·
+                                          ·   <── user types phrase; derive keys
+                                          ·      generate new device seed
+                                          ·  <──────────── seq 0: Hello {entity, hepk, name}
+ verify Hello; build provisioning link
+ naming the new device + HEPK fingerprint;
+ box current PUK to new HEPK
+ seq 1: PleaseSign {unsigned link, ppe?, token} ──>  ·
+                                          ·      check link names *my* device,
+                                          ·      *my* HEPK fingerprint, role ≠ None,
+                                          ·      right host and user; sign first
+                                          ·  <──────────── seq 1: OkSigned {signature}
+ verify signature; countersign second;
+ submit through the durable write path;
+ wait until the chain shows the device
+ seq 2: Done ──────────────────────────>  ·
+                                          ·      fetch certificate chain; done
+```
+
+Every packet on the relay is a `KexWrapperMessage { session_id, sender,
+sequence, payload }`, where `payload` is
+
+```
+XSalsa20-Poly1305( secretbox_key,
+                   nonce = BE64(KEX_CLEARTEXT_TYPE_ID) ‖ 16 random bytes,
+                   KexCleartext { session_id, sender, sequence, message } )
+```
+
+The cleartext repeats the session ID, sender and sequence number that
+appear on the outside of the wrapper, and the receiver checks that they
+match. A relay that re-attributes a packet to a different sender, reorders
+by sequence number, or reflects a device's own packet back to it is
+detected. Each wrapper is additionally signed with the sending device's
+Ed25519 key. The relay verifies that signature, and that the sender is a
+device entity, before queueing the packet, and it keeps only the first packet
+for each (session, sender, sequence) slot. Any device key satisfies the relay,
+so the signature attributes a packet to a key rather than excluding
+strangers; a packet from a party that does not know the secret-box key simply
+fails to open and is discarded by the receiver.
+
+The provisionee's checks on the `PleaseSign` link are the heart of the
+protocol. It decodes the proposed chain link and requires that it names
+exactly one device change, that the entity is its own new device ID, that
+the HEPK fingerprint is the fingerprint of its own HEPK, that the role is
+not None, and that the host and (if known) user are the expected ones. Only
+then does it sign. The provisioner, in turn, verifies the provisionee's
+signature before adding its own. The link ends up with two stacked
+signatures, new device first, existing owner second, which is the order the
+server and every later verifier replays.
+
+The whole exchange has a five-minute budget shared across all receives, and
+each blocking receive at the relay is sliced into 30-second polls so that a
+dropped connection does not tie up server resources for the full wait.
+
+### Why 125 bits is enough here
+
+The pairing secret is single-use and short-lived, the relay sees only
+ciphertext, and an attacker must guess the secret *online*, before the two
+devices finish, in order to inject a `Hello` of their own. Against that
+threat, 125 bits is far beyond reach. The recovery kit protects data at rest
+against an attacker with unlimited time and a copy of the ciphertexts, which
+is why it gets 203 bits.
+
+## Passphrase-protected encryption
+
+Some deployments want a password login: a browser session, or a first
+device with no other credential. Human-chosen passwords are weak, so two
+things are required. The password must be stretched with a memory-hard
+function to make offline guessing expensive. And because passwords change,
+a *history* of the keys derived from them must be kept so that data sealed
+under an old password remains reachable after a change.
+
+### Stretching with Argon2id
+
+Argon2id (RFC 9106) is the password-hashing function recommended for new
+designs. It is *memory-hard*: computing it requires a configurable amount of
+memory as well as time, which reduces the advantage that GPUs and custom
+hardware have over ordinary processors for functions that need only
+arithmetic. FOKS's production parameters are:
+
+| Parameter | Value |
+|---|---|
+| Algorithm | Argon2id, version 0x13 |
+| Memory | 64 MiB (65 536 KiB) |
+| Iterations | 3 |
+| Parallelism (lanes) | 2 |
+| Salt | 16 random bytes; an all-zero salt is rejected |
+| Output | 64 bytes |
+
+A second parameter set (512 KiB, 1 iteration, 1 lane) exists for
+deterministic unit tests and is refused unless the caller explicitly opts
+in. A test pins the production output to the Go implementation's
+`argon2.IDKey(raw, salt, 3, 64*1024, 2, 64)`.
+
+The 64-byte output is split. Bytes 0–31 become a `SecretSeed` from which a
+full device-style key suite is derived with entity type 17 (passphrase
+key); bytes 32–63 are reserved as a local box key, which the Rust code
+derives but does not currently use. The passphrase key is therefore a
+recipient like any other, with an Ed25519 verify key and an HEPK.
+
+### The key history
+
+Each passphrase *generation* has a random 32-byte wrapping key, called an
+SKMWK in the code (secret key material wrapping key). The list of all of
+them, tagged with the user and host, is encrypted under a fresh random
+*session key* in a typed secretbox. That session key is then boxed twice:
+
+- a **passphrase box**: a hybrid box ([Chapter 4](04-hybrid-encryption.qmd))
+  from an ephemeral sender to the passphrase-derived HEPK, carrying the
+  generation and the session key;
+- a **PUK box**: a typed secretbox under `derive_key(owner_puk, 2)`,
+  carrying the generation, the session key and the passphrase public key,
+  with the owner PUK's generation recorded beside it.
+
+Three operations fall out of this structure. A password change stretches
+the new password, appends a new wrapping key to the list, and re-seals
+everything; old wrapping keys are kept, so anything sealed under them still
+opens. A PUK rotation can re-seal the whole parcel through the PUK box
+*without the plaintext password*, because the owner PUK opens the session
+key. And a login decrypts the passphrase box, recovers the current wrapping
+key, and signs the server's registration challenge with the passphrase
+key's Ed25519 key. The in-memory keyring zeroizes its keys on drop.
+
+## Where to look
+
+- `foks-crypto` (`backup.rs`): `BackupKey`, `RecoveryPhrase`, the
+  `push_bits`/`take_low_bits` radix conversion, `derived_seed`,
+  `device_name`.
+- `foks-crypto` (`kex.rs`): `KexSecret`, `KexKeys`, `sign_kex_wrapper`,
+  `countersign_software_kex_provision_link`,
+  `finish_software_kex_provision_link`, `require_kex_device_binding`.
+- `foks-crypto` (`passphrase.rs`): `stretch`, `StretchVersion`,
+  `build_update`, `change_passphrase_with_puk`, `rotate_passphrase_for_puk`,
+  `PassphraseKeyring`.
+- `foks-proto` (`kex.rs`): `KexMessage`, `KexWrapperMessage`,
+  `KexCleartext`.
+- `foks-client` (`kex.rs`, `recovery.rs`, `passphrase.rs`): the
+  provisioner and provisionee state machines, backup-key enrolment and
+  recovery, passphrase login.
+
+## Further reading
+
+- M. Palatinus, P. Rusnak, A. Voisine, S. Bowe, *BIP-39: Mnemonic code for generating deterministic keys*, Bitcoin Improvement Proposals, 2013, https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
+- D. E. Knuth, *The Art of Computer Programming, Volume 2: Seminumerical Algorithms*, 3rd edition, section 4.4 (Radix Conversion), Addison-Wesley, 1997
+- A. Biryukov, D. Dinu, D. Khovratovich, S. Josefsson, *Argon2 Memory-Hard Function for Password Hashing and Proof-of-Work Applications*, RFC 9106, IETF, 2021, https://www.rfc-editor.org/rfc/rfc9106
+- C. Percival, *Stronger Key Derivation via Sequential Memory-Hard Functions*, BSDCan, 2009, https://www.tarsnap.com/scrypt/scrypt.pdf
+- OWASP Foundation, *Password Storage Cheat Sheet*, https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+- D. J. Bernstein, *Extending the Salsa20 nonce*, 2011, https://cr.yp.to/snuffle/xsalsa-20110204.pdf
+- H. Krawczyk, M. Bellare, R. Canetti, *HMAC: Keyed-Hashing for Message Authentication*, RFC 2104, IETF, 1997, https://www.rfc-editor.org/rfc/rfc2104

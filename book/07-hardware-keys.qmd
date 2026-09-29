@@ -1,0 +1,250 @@
+# Hardware Keys
+
+A software device key lives in the local keystore
+([Chapter 8](08-local-keystore.qmd)), which means it lives on a disk and in
+process memory, where malware or a stolen laptop can reach it. A hardware
+token moves the private key into a separate chip that will perform
+operations on request but never reveal the key. FOKS supports YubiKeys
+through their PIV application. This chapter explains what the card can and
+cannot do, how FOKS fits its post-quantum design around a card that knows
+nothing about lattices, why a hardware identity delegates day-to-day work
+to a software subkey, and two general techniques that appear along the way:
+stacked signatures and the decision about where replay protection lives.
+
+## PIV in brief
+
+PIV (Personal Identity Verification, NIST SP 800-73) is a smart-card
+standard originally written for US federal employee badges. A PIV card holds
+key pairs in numbered *slots*, generates keys on-card, and performs
+signatures and Diffie-Hellman operations with them after the holder presents
+a PIN and, optionally, touches the device. YubiKeys implement PIV with a set
+of four standard slots and twenty additional *retired key management* slots
+numbered `0x82` through `0x95`. The supported public-key algorithms are RSA
+and elliptic-curve; FOKS uses P-256 exclusively.
+
+Three properties of the card matter for what follows.
+
+- It can compute an ECDSA signature over a 32-byte digest the host supplies.
+  The card does not hash; the host does.
+- It can compute an ECDH shared secret between a slot's private key and any
+  P-256 public key the host supplies, returning the x-coordinate.
+- It cannot do anything else. There is no ML-KEM on a PIV card.
+
+## Two slots per credential
+
+A FOKS hardware credential occupies two retired slots, both generated
+on-card as P-256 with the PIN and touch policies the user chose (`Never`,
+`Once`, `Always`; a `Once` touch policy maps to the card's cached-touch
+mode).
+
+| Slot | Role | What the host learns |
+|---|---|---|
+| signing slot | identity and signatures; also the classical half of the HEPK | the compressed public key (33 bytes) |
+| PQ slot | source of the ML-KEM key (next section) | the compressed public key and its typed hash, the *PQ key ID* |
+
+The entity ID of a hardware device is type byte 8 followed by the signing
+slot's compressed public key, 34 bytes in all (see
+[Chapter 3](03-key-hierarchy.qmd)). Signatures are ECDSA P-256 in ASN.1 DER
+form over the SHA-512/256 digest of the same typed message that Ed25519
+would sign directly: `SHA-512/256(BE64(type_id) ‖ object)`. After every
+hardware signature, `foks-crypto` immediately re-verifies it against the
+public key before returning it, so a misbehaving card or driver cannot
+produce a link that verifiers will reject.
+
+Encryption to a hardware key uses the signing slot's key for the classical
+Diffie-Hellman step of the hybrid box
+([Chapter 4](04-hybrid-encryption.qmd)). On the card that is an ECDH
+operation with the sender's (possibly temporary) P-256 public key; the
+resulting 32-byte x-coordinate is the `dh_shared` input to the combiner.
+
+## Deriving ML-KEM from the card
+
+The card cannot decapsulate ML-KEM, and FOKS requires every recipient to
+have an ML-KEM key. The construction the Go implementation chose, and
+`foks-rs` reproduces, is to derive the ML-KEM key pair deterministically from
+a secret that only the card can produce.
+
+The host asks the card to compute ECDH between the PQ slot's private key and
+*the PQ slot's own public key*. The result is a 32-byte value, called the
+`pq_self_secret`, that is a function of the private key alone. Nobody
+without the card and its PIN can compute it, and the card computes it the
+same way every time. The host treats this value as a `SecretSeed` and runs
+the standard ML-KEM derivation from [Chapter 3](03-key-hierarchy.qmd):
+
+```
+pq_self_secret = x( ECDH(pq_slot_private, pq_slot_public) )
+mlkem_seed     = derive_key(pq_self_secret, 4, 0) ‖ derive_key(pq_self_secret, 4, 1)
+(ek, dk)       = ML-KEM-768.KeyGen(mlkem_seed)
+```
+
+The HEPK is then `{ classical: signing slot public key, mlkem768: ek }`. To
+decapsulate a box, the host repeats the self-ECDH (one PIN-gated card
+operation), re-derives the decapsulation key, and decapsulates in software.
+
+The code is explicit about what this does and does not achieve. The trait
+documentation says the construction "necessarily materializes derived ML-KEM
+state in the process and must not be described as hardware-native PQ
+security." The ML-KEM private key exists in host memory whenever a box is
+being opened, and the secret it is derived from crosses the card boundary
+each time. What the card provides is that the ML-KEM key cannot be
+reconstructed *without* the card: an attacker with a disk image but no
+token gets nothing. What it does not provide is protection against an
+attacker who controls the host while the card is unlocked. This is the
+honest scope of the design, and the book repeats it because the phrase
+"post-quantum hardware key" would otherwise suggest more.
+
+The PQ slot's public key is identified on the server by
+`prefixed_hash_signable(ECDSA_COMPRESSED_PUBLIC_KEY_TYPE_ID, bin(pubkey))`,
+which lets a client that has only the card find out which slot to use
+without storing anything locally.
+
+## The delegated subkey
+
+Every RPC in FOKS runs over mutually authenticated TLS with the device key
+as the client certificate key ([Chapter 17](17-wire.qmd)). A P-256 key on a
+card could in principle serve that role, but every TLS handshake would then
+require a card operation and possibly a touch, and the Rust TLS stack's
+client-authentication path wants a software private key.
+
+A hardware parent therefore enrols a software Ed25519 *subkey* (entity type
+13) for transport authentication. The subkey's seed must survive across
+sessions and machines without being stored in the clear, so it is sealed to
+the parent in a hybrid *self-box*: the classical step is P-256 ECDH of the
+signing slot with its own public key, the ML-KEM step encapsulates to the
+parent's own HEPK, and the plaintext is `[parent_id, subkey_id, seed]` under
+`SUBKEY_SEED_TYPE_ID`. The box is stored on the server. At login the card
+reopens it (one self-ECDH plus one ML-KEM decapsulation, both as above), the
+host checks that the decoded parent and subkey IDs match expectations and
+that the seed really derives to the named subkey, and the subkey then
+authenticates the transport for the rest of the session. The self-box has
+no `sender_dh` field, and the opener rejects one that does.
+
+The parent still signs every chain link itself. The subkey has no authority
+in the chain; it is a transport credential whose existence is recorded in
+the parent's eldest link so that servers can verify the certificate chain.
+
+## Stacked signatures
+
+Several FOKS links need more than one signature. A hardware device's eldest
+link (the first link of a new user whose first device is a YubiKey) is
+signed by the owner PUK, by the delegated subkey, and by the P-256 parent,
+in that order. A rotation link is signed by each new shared key and then by
+the acting device ([Chapter 5](05-generations.qmd)). A pairing link is signed
+by the new device and then by the existing owner
+([Chapter 6](06-hesp.qmd)).
+
+The general technique is to make each signature cover the previous ones.
+The message that signer $k$ signs is
+
+```
+signing_bytes(k) = encode([ link_body, [sig_0, sig_1, ..., sig_{k-1}] ])
+```
+
+so the first signer signs the body alone (the prefix is encoded as an empty
+value rather than an empty list, one of the canonical-encoding rules of
+[Chapter 9](09-canonical-encoding.qmd)), the second signs the body plus the
+first signature, and so on. A verifier replays the stack in order,
+reconstructing the same prefix at each step.
+
+Two things follow. The *order* of signatures is itself authenticated: a
+stack $[\sigma_A, \sigma_B]$ cannot be reordered to $[\sigma_B, \sigma_A]$
+because $\sigma_B$ was computed over $\sigma_A$ and would not verify over an
+empty prefix. And a signature cannot be removed from the middle of a stack
+without invalidating everything after it. Neither property holds for a flat
+set of independent signatures over the body, where an attacker who obtains
+one valid signature could present it alone or in any combination.
+
+For the hardware eldest link, the fixed order "PUK, subkey, parent" reflects
+authority: the parent, whose signature is the only one that requires
+physical possession, signs last and therefore endorses everything before
+it. The Go implementation fixed these orders and `foks-rs` reproduces them
+exactly, including the comment that the P-256 parent "signs last as required
+by user-chain replay".
+
+## ECDSA malleability and where replay protection lives
+
+ECDSA signatures are *malleable*: for a valid signature $(r, s)$ on a
+message, $(r, n - s)$ is also valid for the same message and key, where $n$
+is the curve order. Many systems, Bitcoin among them, normalise to the
+"low-S" form and reject the other, so that every message has a unique
+signature encoding. YubiKey PIV hardware does not normalise; it returns
+whichever $s$ its computation produced.
+
+`foks-crypto` accepts both forms. The code's comment states the reasoning:
+"to accommodate YubiKey PIV hardware, which does not normalize S values.
+Mutation replay protection relies on chain sequence, previous hash, and
+Merkle root bindings rather than signature malleability resistance." In
+other words, the property that a unique signature encoding would provide,
+that a link cannot be resubmitted in a different-looking form, is provided
+elsewhere: each link carries its sequence number and the hash of its
+predecessor, and the server rejects a link whose sequence number has already
+been used ([Chapter 10](10-sigchains.qmd)). Since the signature is never
+used as an identifier for the link, its malleability is harmless.
+
+This is a small example of a general engineering question: when a primitive
+lacks a property, decide whether the *system* needs that property from the
+primitive, or whether another layer already supplies it. Rejecting high-S
+signatures would have broken every YubiKey without making any attack
+harder.
+
+## Operational safeguards
+
+The hardware layer is defensive in ways a software key does not need to be,
+because the card is a shared, physically removable device.
+
+- Every operation reopens the card by serial number and re-reads both slot
+  public keys, comparing them to the stored locator. A card that has been
+  reprovisioned, or a different card with the same serial, is refused.
+- On first use, the client proves the slot really holds the expected key
+  by having it sign the fixed digest `SHA-512/256("foks-yubi-slot-binding-v1")`
+  and verifying the result.
+- Provisioning refuses to use a slot that already holds a key, and refuses
+  firmware older than 5.2.3, which cannot report slot metadata and so cannot
+  prove a slot is empty.
+- A process-wide mutex serialises all card commands.
+- The PIV *management key* (24 bytes, needed to generate or replace slot
+  keys) can be escrowed under the user's PUK in a typed secretbox, together
+  with the card and slot it belongs to, so that a user who loses the
+  management key can still administer the card from any of their devices.
+
+A deterministic mock provider implements the same traits for integration
+tests, including injectable failure points, so the card-handling logic is
+exercised in continuous integration without hardware.
+
+## Trade-offs
+
+The hardware key buys resistance to key extraction from a compromised or
+stolen host, at the cost of a PIN prompt (and possibly a touch) for each
+chain operation, a longer entity ID and larger signatures, a second curve in
+the hybrid scheme, and the mixed-roster temporary-key machinery of
+[Chapter 4](04-hybrid-encryption.qmd). The post-quantum half is derived
+rather than hardware-resident, which is the best a PIV card can offer today.
+The delegated subkey restores the convenience of software transport
+authentication while keeping chain authority on the card. Each of these is a
+compromise imposed by what the card can do, and each is documented in the
+code as such.
+
+## Where to look
+
+- `foks-yubi` (`hardware.rs`, `provider.rs`, `mock.rs`): slot management,
+  `HardwareYubiDevice`, `ecdh`, `sign_sha512_256`, `prove_slot`,
+  `ensure_slot_empty`, `verify_locator_slots`, `SlotId`.
+- `foks-crypto` (`lib.rs`): the `HybridSecretDecapsulator` and `YubiDevice`
+  traits, `derive_yubi_public_material`, `yubi_mlkem_decapsulate`,
+  `yubi_pq_key_id`, `seal_yubi_subkey_box`, `open_subkey_box`,
+  `make_yubi_eldest_link`, `make_yubi_puk_rotation_link`, `sign_yubi_typed`,
+  `verify_typed`, `seal_yubi_management_key`.
+- `foks-proto` (`yubi.rs`, `identity/chain.rs`): the management-key
+  payload and `signing_bytes` for stacked signatures.
+- `foks-client` (`yubi_account.rs`, `yubi_management.rs`): enrolment and
+  login flows.
+
+## Further reading
+
+- National Institute of Standards and Technology, *Interfaces for Personal Identity Verification*, SP 800-73-4, 2015, https://doi.org/10.6028/NIST.SP.800-73-4
+- Yubico, *PIV Introduction* and *Certificate Slots*, Yubico Developers documentation, https://developers.yubico.com/PIV/Introduction/Certificate_slots.html
+- National Institute of Standards and Technology, *Digital Signature Standard (DSS)*, FIPS 186-5, 2023, https://doi.org/10.6028/NIST.FIPS.186-5
+- Certicom Research, *SEC 1: Elliptic Curve Cryptography*, Version 2.0, 2009, https://www.secg.org/sec1-v2.pdf
+- National Institute of Standards and Technology, *Module-Lattice-Based Key-Encapsulation Mechanism Standard*, FIPS 203, 2024, https://doi.org/10.6028/NIST.FIPS.203
+- P. Wuille, *BIP-62: Dealing with malleability*, Bitcoin Improvement Proposals, 2014, https://github.com/bitcoin/bips/blob/master/bip-0062.mediawiki
+- S. Josefsson, I. Liusvaara, *Edwards-Curve Digital Signature Algorithm (EdDSA)*, RFC 8032, IETF, 2017, https://www.rfc-editor.org/rfc/rfc8032

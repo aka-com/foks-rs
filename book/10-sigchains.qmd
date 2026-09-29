@@ -1,0 +1,343 @@
+# Signature Chains
+
+A user's set of keys changes over time. Devices are added and revoked, shared
+keys are rotated, usernames change. A team's roster changes in the same way,
+and so does the set of keys a server uses to sign its own statements. FOKS
+records each of these histories as a *signature chain*: an ordered list of
+signed entries in which each entry names the one before it. This chapter
+explains the general technique, the exact contents of a FOKS link, how links
+are bound to the Merkle tree described in [Chapter 11](11-merkle-tree.qmd),
+and what the server and the client each check.
+
+## The problem
+
+The server stores the history and hands it to clients on request. The client
+must reconstruct the *current* key state from that history and must be able
+to tell if the server edited an entry, reordered entries, dropped the most
+recent ones, or served one client a different history than another. The
+server cannot forge entries, because it does not hold the signing keys, but
+without further structure it could freely omit, reorder, and replay them.
+
+## Hash chains and append-only logs
+
+The general technique is old. Haber and Stornetta's 1991 time-stamping scheme
+links each document certificate to the previous one by including its hash, so
+that altering any certificate changes every later one. Git commits, blockchain
+blocks, and Keybase sigchains are all instances of the same idea: an entry
+contains the hash of its predecessor, so the whole history up to any entry is
+committed by that entry's hash. Add a signature over each entry and the chain
+also records *who* appended it.
+
+A hash chain with a signature on each link gives three properties:
+
+- **Integrity.** Changing link $n$ changes its hash, which no longer matches
+  the `previous` field of link $n+1$.
+- **Order.** Each link states its own sequence number and the hash of the
+  link before it, so links cannot be reordered without breaking the chain.
+- **Authorship.** Each link is signed by a key that the chain itself, up to
+  that point, has authorized.
+
+What a hash chain does not give is protection against *truncation* (serving
+the chain up to link $n$ and pretending $n+1$ does not exist) or against
+*forking* (serving two different link $n+1$s to two different clients). Those
+need an external, published commitment to the chain's current tail, which is
+what the Merkle tree provides.
+
+## What a FOKS link contains
+
+A user or team link is carried in an outer envelope that separates the signed
+content from the signatures over it:
+
+```
+LinkOuter = [ 1, { "1": [ Binary(inner), [ signature, ... ] ] } ]
+```
+
+The `inner` bytes are the canonical encoding of the link's content and are
+kept verbatim, as [Chapter 9](09-canonical-encoding.qmd) explained. The
+link's hash, which is what goes into the Merkle tree, is
+$\mathrm{prefixed\_hash}(\texttt{LINK\_OUTER\_TYPE\_ID}, \text{outer bytes})$.
+Every link's inner content carries these fields:
+
+| Field                       | Meaning                                                   |
+|-----------------------------|-----------------------------------------------------------|
+| `seqno`                     | position in the chain, starting at 1                      |
+| `previous`                  | hash of the prior link; absent only when `seqno` is 1     |
+| `root`                      | the Merkle root `{epoch, hash}` the signer observed        |
+| `time`                      | the signer's clock, in milliseconds                       |
+| `next_location_commitment`  | a commitment to where the *next* link will sit in the tree |
+| entity and host             | the user or team ID, and the host it lives on              |
+| `signer`                    | the key that made the last signature                      |
+| payload                     | member changes, shared-key generations, metadata          |
+
+The `root` field is a *cross-link* from the chain into the tree, and the
+`next_location_commitment` is the reverse; both are discussed below. The
+payload's metadata items are commitments rather than plaintext: a username
+and a device name each appear as an HMAC over the name with a random 16-byte
+key, and the key is disclosed only to readers entitled to it.
+
+## Chain types
+
+FOKS keeps several kinds of chain, and each has a numeric *chain type* that
+becomes part of its tree keys.
+
+| Chain                    | Chain type | Entity                                   | Notes                                         |
+|--------------------------|-----------:|------------------------------------------|-----------------------------------------------|
+| User chain               | 0          | user ID                                  | devices, PUK generations, username metadata   |
+| Username ownership       | 1          | `0x09` ‖ hash of `[name, host]`          | one leaf per ownership sequence               |
+| User settings subchain   | 2          | user ID                                  | passphrase generation and salt                |
+| Team chain               | 3          | team ID                                  | roster, PTK generations, team metadata        |
+| Team membership subchain | 4          | user ID                                  | which teams the user has joined or requested  |
+| Hostchain                | —          | host ID                                  | the host's own keys; separate encoding        |
+
+The user and team chains are the *main* chains. The settings and membership
+chains are *generic subchains*: they use the same outer envelope and the same
+`previous`/`root`/`next_location_commitment` fields, carry exactly one
+signature each, and differ from the main chains in how their first tree
+location is chosen. The username chain is not a signature chain at all; it is
+a sequence of tree leaves that record who owns a name, discussed in
+[Chapter 11](11-merkle-tree.qmd).
+
+The hostchain has its own envelope, `[1, {"1": [Binary(inner), [signatures]]}]`
+hashed under `HOSTCHAIN_LINK_OUTER_TYPE_ID`. Its inner content is a
+`chainer {seqno, previous, root, time}`, the host ID, the signer, and a list
+of changes, each of which adds a key, revokes a key, or adds a TLS
+certificate authority. Host keys are typed: the host's identity key, a
+delegated Merkle-signer key, a delegated metadata-signer key, and a TLS CA
+key are distinct entity types, and a change item names which one it
+introduces. Two hostchain rules are worth stating. The genesis link must be
+signed by the host's identity key, which is also the host ID. A revoked
+*hostchain-signing* key can never be reintroduced, but revoked delegated keys
+can be, because the Go implementation permits it.
+
+## Stacked signatures
+
+Some links need the consent of more than one key. A user's first link is
+signed by the new per-user key (PUK), optionally by a hardware-backed subkey,
+and by the device that created the account. A link that rotates a shared key
+is signed by the new key, to prove possession, and by the device making the
+change. A hostchain link is signed by every key it introduces and then by the
+signer.
+
+FOKS does not sign the inner bytes once per key. Signature $i$ is computed
+over the encoding of `[Binary(inner), [signature_0, …, signature_{i−1}]]`,
+with the empty prefix encoded as `Null` because Snowpack has no empty arrays.
+Each signer thus signs the inner content *and every signature before it*.
+The stack is ordered, and the order is authenticated: swapping two
+signatures invalidates both. The verifier replays the stack in the order the
+policy dictates. For a user transition the order is: rotated shared keys,
+then the provisioning subkey if any and the added device, then the signing
+device. For a
+hostchain link: introduced keys in the order of the change list, then the
+signer. A wrong count of signatures is fatal.
+
+One detail of the ECDSA path is instructive. Signatures from a YubiKey's
+P-256 key may be produced with either of the two valid $s$ values, because
+the hardware does not normalize them, and the verifier accepts both. The
+code comments that replay protection "relies on chain sequence, previous
+hash, and Merkle root bindings rather than signature malleability
+resistance." Signature malleability would matter if the signature bytes were
+the identity of a link; they are not, because the link's identity is the hash
+of its outer bytes, and a link with different signature bytes is a different
+link with the same `previous`, which the chain rejects.
+
+## Tree-location commitments
+
+A link must be found in the Merkle tree, so it needs a tree key. The obvious
+key, a hash of the user ID and sequence number, would let anyone who knows a
+user ID enumerate that user's history by probing the tree. FOKS instead
+derives the key of link $n$ from a random *tree location* that link $n-1$
+committed to:
+
+```
+  link n-1                         link n
+  +-----------------------------+   +-----------------------------+
+  | seqno = n-1                 |   | seqno = n                   |
+  | next_location_commitment =  |   | previous = H(link n-1)      |
+  |   H(TREE_LOCATION, L_n)  ---+-->| key = H(RF_INPUT,           |
+  |                             |   |   [type, entity, n, L_n])   |
+  +-----------------------------+   +-----------------------------+
+                                       L_n is disclosed alongside link n
+```
+
+The signer of link $n-1$ picks 32 random bytes $L_n$ and puts
+$\mathrm{prefixed\_hash}(\texttt{TREE\_LOCATION\_TYPE\_ID}, \mathrm{Binary}(L_n))$
+into the link. $L_n$ itself is not in the signed link; the server discloses it
+in the chain response next to link $n$. The key under which link $n$ is
+stored is
+
+$$
+\mathrm{prefixed\_hash}(\texttt{MERKLE\_TREE\_RF\_INPUT\_TYPE\_ID},
+  [\,\text{chain type},\ \text{entity ID},\ n,\ L_n\,]).
+$$
+
+Link 1 of a main chain has no predecessor and uses `Null` in place of the
+location. The verifier checks each disclosed location against the previous
+link's commitment before deriving the key, so a server cannot move a link to
+a key of its own choosing. And because $L_{n+1}$ is fixed by link $n$, the
+client can compute the key of the *next* link from state it has already
+verified, which is what makes the absence proofs of
+[Chapter 11](11-merkle-tree.qmd) meaningful.
+
+## Subchain start locations
+
+Generic subchains hide even their first link. The eldest link of a user or
+team carries, in its metadata, a commitment to a 32-byte *seed*. The first
+tree location of each subchain is derived from that seed by a keyed hash:
+
+$$
+L_1 = \mathrm{HMAC\text{-}SHA\text{-}512/256}\big(\text{seed},\
+  \mathrm{BE64}(\texttt{CHAIN\_LOCATION\_DERIVATION\_TYPE\_ID}) \,\|\,
+  \mathrm{encode}([\,\text{chain type},\ \{\}\,])\big).
+$$
+
+The second element of the array is an empty variant, present for
+compatibility with the Go encoding. The seed is disclosed in the subchain
+response to readers entitled to it, and the client checks two things before
+using it: that the seed's commitment matches the one in the owner's eldest
+link, and that the derived location matches where the server actually placed
+link 1. The derivation is pinned by a test vector shared with the Go oracle: a
+seed of 32 `0x35` bytes and the team-membership chain type derive to the
+location beginning `90de9044fcee5b28…`. Later subchain links use ordinary
+next-location commitments.
+
+The effect is that a party who knows only a user ID cannot compute any tree
+key of that user's settings or membership chains, and cannot compute the key
+of any main-chain link after the first without the disclosed locations. The
+tree is public; the map from identities to positions in it is not. This is
+the same unlinkability goal that CONIKS achieves with a verifiable random
+function over the username; FOKS uses commit-then-reveal and a keyed hash
+instead.
+
+## What the server checks
+
+The server accepts a link only inside a single database transaction that
+also mints the Merkle epoch containing it. Before it does, it checks the
+link's `seqno` and `previous` against the stored chain, verifies the
+signature stack against the keys the chain has authorized, and validates the
+`root` field. That last check, `require_cited_root`, demands that a root at
+the cited epoch exists in the server's own root table and that its hash
+matches. A companion check notices when a link was built against a
+chain head that has since been superseded, so that a client racing with
+itself gets a retryable error rather than a fork. The server also re-derives
+the subchain start location from the disclosed seed when a subchain's first
+link arrives.
+
+## What the client checks
+
+The client's verifier, in `foks-verify`, takes the raw response bytes and an
+already-authenticated set of Merkle roots (how those roots become
+authenticated is [Chapter 12](12-epochs.qmd)). For a full user-chain load it
+proceeds as follows.
+
+1. The root the response was built against must be an authenticated root
+   whose epoch is not older than the client's latest, and byte-identical to
+   it if the epochs are equal.
+2. Every username and device-name commitment in the links must be opened by
+   a disclosed `(name, sequence, key)` triple whose HMAC reproduces it.
+3. The username's ownership leaves in the tree must show the name belongs to
+   this user and to no later claimant.
+4. For each link $n$: `seqno` is $n$, `previous` is the hash of link $n-1$,
+   the entity and host match, the cited root is in the authenticated set,
+   the disclosed location matches the prior link's commitment, and a Merkle
+   proof places the link's hash at the derived key under the response root.
+5. The eldest link carries two or three stacked signatures in the required
+   order, and the user ID equals the PUK verification key re-typed as a user
+   ID, so that the identity is self-certifying.
+6. Every later link is fed to a replay state machine that enforces policy:
+   at most one member change per link, the signer must be an active device,
+   shared-key generations only increase, and an owner device must always
+   remain.
+7. After the last link, the key of link $n+1$, computed from the last
+   disclosed location, must be proven *absent* under the response root.
+
+Step 7 is what defeats truncation. The server cannot present links $1..n$ and
+stop, because it must also prove that the place where link $n+1$ would go is
+empty, and it cannot produce that proof if link $n+1$ exists. Incremental
+loads replay only a suffix but still demand that the first disclosed location
+match the pinned commitment, that `previous` match the pinned tail hash, and
+that the same terminal absence proof be present. The team chain verifier
+follows the same skeleton with team-specific policy, and the generic subchain
+verifier in the client crate checks continuity, one signature per link, and
+the seed-derived start location.
+
+## The mutual binding between chains and roots
+
+Three commitments run in a cycle, and every arrow is verified:
+
+```
+   hostchain tail  <------ cited by ------  Merkle root
+        |                                      ^
+        | authorizes the                       | leaves are
+        | Merkle-signer key                    | link hashes
+        v                                      |
+   signature on root  ---- covers -------->  chain links ---- cite ----> Merkle root
+```
+
+- The Merkle root names the hostchain tail `{seqno, hash}` at the time it was
+  minted. A verifier requires that tail to equal the tail of the hostchain it
+  has verified, and requires the root's signature to come from a Merkle-signer
+  key that hostchain currently authorizes.
+- The root's leaves are hashes of chain links, so a root commits to the
+  contents of every chain.
+- Each chain link cites the root its signer saw. The verifier requires that
+  cited root to be an authenticated ancestor of the root the response was
+  built against.
+
+The last of these is the "Merkle root in sigchain" idea from Keybase. A link
+that cites epoch $E$ is signed evidence that the signer had seen a history
+extending at least to $E$; a server that later wanted to rewind history
+before $E$ would have to discard that link too, and any other client that has
+read the chain would notice. Hostchain links carry a cited-root field of the
+same shape, but the Rust hostchain verifier does not check it; for the host's
+own chain the binding runs the other way, from the root to the tail.
+
+## Revocation
+
+A revocation is an ordinary link whose single member change assigns the
+target device the role `NONE` with no keys and no metadata. The replay state
+machine enforces the rules that make it meaningful:
+
+- The signer must be an owner device that is currently active in the chain.
+- Revoking *another* device must, in the same link, rotate every shared key
+  at a role the revoked device could read; the new shared-key generations
+  sign the link too, at the front of the stack. This is what ensures the
+  revoked device cannot read anything encrypted afterward.
+  [Chapter 5](05-generations.qmd) covers how the new generation is
+  distributed.
+- A device revoking *itself* carries no rotation. The roles it could read
+  are marked stale, and a later link from another device must rotate them.
+- The last owner device cannot be revoked.
+
+Because a revocation is a link, it is placed in the tree, cited by later
+links, and proven present like any other; a server cannot hide a revocation
+from a client that loads the chain any more than it can hide a provisioning.
+
+## Where to look
+
+- `foks-proto`: `identity::chain` for `UserLink`, `UnsignedUserLink`,
+  `ChangeMetadata`, and the signing-bytes construction; `host` for
+  `HostchainLink` and `HostchainChange`; `identity::generic` for the
+  subchain response.
+- `foks-crypto`: `subchain_tree_location`, `commitment`, and the
+  tree-location commitment.
+- `foks-verify`: `user` (full and incremental chain verification),
+  `user_transition` (the replay state machine), `team`, and `host`.
+- `foks-client`: `team` for generic subchain verification.
+- `foks-server`: `net::session` for cited-root and superseded-head checks;
+  `services::generic` for subchain admission.
+
+## Further reading
+
+- S. Haber and W. S. Stornetta, *How to Time-Stamp a Digital Document*,
+  Journal of Cryptology 3(2), 1991, https://doi.org/10.1007/BF00196791
+- Keybase, *Keybase Book: Server Trust* (sigchains and the Merkle tree),
+  https://book.keybase.io/docs/server
+- M. S. Melara, A. Blankstein, J. Bonneau, E. W. Felten, and M. J. Freedman,
+  *CONIKS: Bringing Key Transparency to End Users*, USENIX Security, 2015,
+  https://www.usenix.org/conference/usenixsecurity15/technical-sessions/presentation/melara
+- S. A. Crosby and D. S. Wallach, *Efficient Data Structures for
+  Tamper-Evident Logging*, USENIX Security, 2009,
+  https://www.usenix.org/legacy/event/sec09/tech/full_papers/crosby.pdf
+- J. Li, M. Krohn, D. Mazières, and D. Shasha, *Secure Untrusted Data
+  Repository (SUNDR)*, OSDI, 2004,
+  https://www.usenix.org/legacy/event/osdi04/tech/full_papers/li_j/li_j.pdf

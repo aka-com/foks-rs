@@ -1,0 +1,391 @@
+# Real-Time Chat
+
+Chat is the one FOKS application where latency matters. A key-value store
+can be synchronised whenever the client gets around to it; a message should
+appear within a second of being sent. At the same time the server holds
+only ciphertext, must not be able to reorder or drop messages without
+detection, must scale a membership change over a large team without doing
+unbounded work, and must survive a client that crashes between sending and
+learning the answer.
+
+This chapter describes the chat design in `foks-rs`: how messages are
+encrypted under team keys, how each channel forms a hash chain the client
+checks against a bounded ledger, how the server tells each user what has
+changed with a single monotonic counter, and why delivery is built on
+readers pulling with a wake-up rather than the server pushing.
+
+One thing chat is *not* should be said at the outset. FOKS chat does not use
+the Signal protocol or the Double Ratchet. Messages are encrypted under the
+team's shared key at its current generation, exactly as files are. Unger et
+al.'s survey of secure messaging lays out the design space; in its terms,
+FOKS chooses one group key per role and generation with no per-message
+ratchet. Rotation withdraws access from removed members, but a current
+member can derive every earlier generation through the seed chain
+([Chapter 5](05-generations.qmd)), so there is no forward secrecy in the
+strict sense; and the server sees who talks in which channel when. The trade is the same one Keybase's chat
+documentation describes for its own design: history must remain readable on
+a newly added device, which per-message ratcheting would prevent.
+
+## Channels and keys
+
+A channel belongs to a team and an *app*; the only app today is chat. Its
+metadata record holds the channel ID, team, a sequence number, the encrypted
+name and optional description, a pair of roles (the minimum role to read
+and the minimum role to write), a summary of the last message, timestamps,
+a tier, and an `unreadable` flag. The name and description are typed secretboxes with
+random nonces under purpose-specific keys derived from the team's PTK, so
+the server does not learn what a channel is called. A team may have at most 256 channels.
+
+Chat keys are derived from the same PTK seed as the KV keys of
+[Chapter 14](14-kv-store.qmd), one branch over:
+
+| Step | Derivation |
+|---|---|
+| Application key | `derive_key(seed, 5)` |
+| Realtime application key | `HMAC(app_key, APP_KEY_DERIVATION_TYPE_ID ‖ encode([0, "0" → 1]))` |
+| Per-purpose key | `HMAC(realtime, RT_KEY_DERIVATION_TYPE_ID ‖ encode([app, [purpose, nil]]))` |
+
+The purposes are `ChannelName`, `ChannelDescription` and `Data`. A message
+body is encrypted with XSalsa20-Poly1305 under the `Data` key with a
+*derived* nonce: the first 24 bytes of the typed hash of a *noncer* record
+containing the message metadata, sender, app, team and channel. The metadata
+includes a random 16-byte message ID chosen by the sender, so the nonce is
+unique per message, and because the nonce commits to the channel and team,
+a ciphertext copied into another channel fails to decrypt. Every message
+box names the role and generation of the key it was encrypted under, and a
+reader rejects a box whose role differs from the channel's read role.
+
+The Rust implementation defines a second channel format for extended chat
+in which the per-message key is itself derived from context:
+`HMAC(seed, CONTEXT_KEY ‖ encode(context))` where the context names the
+host, team, channel, actor, operation ID, key role and generation, and
+purpose. XSalsa20-Poly1305 has no associated-data input, so this is
+"authenticated context by key derivation": a test flips each field of the
+context and checks decryption fails. A channel's format is fixed at
+creation; extended chat starts in new channels.
+
+## Sequencing on the server
+
+A message on the wire carries a server-assigned `sequence`, the sender's
+random message ID, and in its metadata the `previous_sequence` and
+`previous_id` of the message the sender saw as the head of the channel when
+it composed. Sending runs inside one immediate SQLite transaction on the
+server's single writer ([Chapter 18](18-server-storage.qmd)):
+
+1. Authorise the sender for the channel and check that the box's key role
+   equals the channel's read role.
+2. **Idempotency.** If a row with this message ID already exists, it must be
+   in the same channel, from the same sender, with the same envelope (with
+   the volatile precondition zeroed). If so the original receipt is
+   returned and nobody is woken; if not, the request is a conflict.
+3. **Ordering.** If the sender supplied `expected_previous_sequence`, it
+   must equal the channel's `last_sequence`; and if the metadata names a
+   predecessor, the message at `previous_sequence` must have the claimed
+   `previous_id`. The new sequence is `last + 1`.
+4. **Fan-out.** For every eligible recipient, at most 1,024, increment that
+   user's inbox version and upsert their row for this channel (see below).
+   The sender's own read pointer advances to the new message.
+5. Return the wake targets *with* the commit result. The service notifies
+   pollers only after the commit; a test asserts that retries and failures
+   never notify.
+
+The stored row keeps the submitted envelope and the exact returned message,
+each bounded to 1 MiB, with a uniqueness constraint on `(channel, sequence)`.
+
+## The per-channel hash chain on the client
+
+The server assigns sequence numbers, so a server could in principle renumber,
+drop, or substitute messages. The client's defence is to treat every channel
+as a hash chain and keep a bounded ledger of what it has verified.
+
+Every verified message becomes an *anchor* `(sequence, message ID, digest)`
+where the digest is a domain-separated hash of the whole encoded message.
+Anchors live in the hard-state database (the monotonic one, not the cache)
+with a primary key on `(scope, sequence)` and a uniqueness constraint on
+`(scope, message ID)`.
+
+| Limit | Value |
+|---|---|
+| Anchors retained per channel | 10,000 |
+| Rows per history page | 1,000 |
+| Bytes per history page | 8 MiB |
+| Predecessors fetched per page | 32 |
+| Recovery scan window | 100 sequences |
+
+Verifying a page proceeds as follows:
+
+1. Reject duplicate IDs or sequences within the page, and pages whose
+   sequences are not monotonic.
+2. Decrypt each message under the channel's read role and key generation,
+   rejecting a predecessor pointer that is half-set or that points at or
+   after the message itself.
+3. For each text message whose predecessor is neither in the page nor in
+   the anchor table, fetch the predecessor by sequence and check that its
+   ID is the one the message claims. A mismatch is a "predecessor
+   contradiction".
+4. In one transaction, compare every observed `(sequence, ID, digest)` with
+   what is already stored under both keys. If the server has changed the
+   mapping for any sequence or any ID, the page is rejected as a conflict.
+   Otherwise insert the new anchors and prune the oldest beyond the limit.
+
+Two details matter. Messages of kinds the client does not render still count
+as *observed*, so a server cannot hide a substitution behind an unsupported
+kind; only authenticated text messages become anchors. And predecessors that
+could not be fetched within the byte budget are reported to the caller as
+`missing_predecessors`, with the documented rule that missing predecessors
+are incomplete evidence, never a successful check. A bounded ledger cannot
+prove the whole history, but it makes any rewrite of the last 10,000
+messages of a channel a detectable contradiction, and it does so without
+storing any plaintext.
+
+## Inbox versions
+
+The server needs to tell each user which channels have something new. The
+obvious design, a per-message fan-out row for every recipient, costs
+storage proportional to members times messages. FOKS uses a per-user
+counter instead.
+
+Each user has one `rt_user_inboxes` row per app with a `version`, and one
+`rt_user_channels` row per channel it can see, recording the `inbox_version`
+at which that channel last changed, a `read_through` pointer, and an
+`accessible` flag. Every change visible to the user bumps the user's version
+and stamps the affected channel row with the new value. A client that knows
+version *v* asks for the changed threads since *v* and receives exactly the
+channel rows with `inbox_version > v`. Comparison is one integer; resumption
+is trivial; storage is one row per user per channel.
+
+```
+rt_user_inboxes            rt_user_channels
+uid | version              uid | channel | inbox_version | read_through
+----+--------              ----+---------+---------------+-------------
+ A  |   17                  A  |  c1     |      15       |    402
+                            A  |  c2     |      17       |     88
+                            A  |  c3     |       9       |    120
+
+GetChangedThreads(since = 12)  →  {c1 @ 15, c2 @ 17}
+```
+
+On the client the inbox is soft state: a `(cursor, head, degraded)` triple
+per host, user and app, plus one row per channel. A drain first asks the
+server for its current version. If that is *lower* than the stored head or
+cursor, the server has rolled back, and the local inbox is reset rather than
+merged; a rollback of a cache is not an integrity failure, but it is never
+silently absorbed. Otherwise the client pages through changed threads from
+its cursor, at most 64 pages of at most 100 rows (retrying once at 1,000),
+advancing the cursor with each page. An empty delta whose version is above
+the cursor means the server claims changes it will not enumerate; after one
+retry with the larger page the scope is marked **degraded** and is never
+reported as fully drained, because the rows behind that version have never
+been read.
+
+The inbox is scoped to the user, not the team, so one drain covers every
+team the user belongs to. The agent exploits this with a 2-second gate: when
+five teams of one account synchronise in one cycle, the first runs the
+version query and delta pages and the other four are told the account is
+already current. Only a complete, non-degraded drain sets the gate.
+
+## Membership changes: dirty now, reconcile later
+
+When a user joins or leaves a team, the set of channels it can see changes.
+Recomputing every affected inbox inside the roster transaction would be
+unbounded work on the single writer, and doing it later would leave a window
+where an inbox is clean but wrong. The design splits the two.
+
+Triggers on the `team_members` table and on team host or kind changes set
+`reconcile_dirty = 1` and clear the reconciliation cursor on the affected
+users' *existing* inboxes, in the same transaction as the membership change.
+That is O(affected members) trivial updates, and it guarantees there is
+never a clean-but-stale inbox. The repair is then *pulled* by the user. A
+read classifies the inbox as missing, dirty, incomplete (clean flag but a
+saved cursor) or clean. Only a dirty or incomplete inbox enters the writer
+queue, where one reconciliation page walks the union of "channels of teams I
+belong to" and "channels I have rows for", ordered by channel ID, 4,096
+channels past the saved cursor, deciding readability with a per-team role
+cache, inserting or hiding rows, and bumping the version only when
+accessibility actually changes. A clean inbox is served from a reader
+snapshot without touching the writer at all, and the server's metrics count
+clean skips separately from submissions so an operator can see that idle
+reconciliation is zero.
+
+```
+membership link commits
+   │ trigger, same transaction
+   ▼
+inbox.dirty = 1, cursor = NULL          (O(members), no fan-out)
+   │
+   │ next read by that user
+   ▼
+state == Dirty?  ──no──► serve from reader snapshot
+   │ yes
+   ▼
+writer: reconcile one page of 4,096 channels
+        store next cursor, or NULL when done
+        wake only if accessibility changed
+```
+
+## Delivery: pull with a wake-up
+
+There are two ways to deliver a notification. In **push**, the server keeps
+a connection per client and writes to it when something happens; the server
+must track every connection, and a missed write is a lost notification. In
+**pull**, the client asks periodically; nothing is lost, but the interval
+bounds latency and every poll costs a request. Long polling (RFC 6202) is
+the usual compromise: the client asks, and the server holds the request open
+until there is something to say or a timeout passes.
+
+FOKS uses long polling with a small twist: the wake-up is a *hint*, and the
+inbox version is the only source of truth. A poll runs as follows:
+
+1. Authenticate and authorise on a pooled reader.
+2. Obtain the user's `Notify` handle from the *inbox hub* and arm a
+   notification future **before** reading state. This is the classic
+   lost-wake-up discipline from monitor-based programming: register, then
+   check, so a notification that arrives between the two is not missed.
+3. Read the inbox state. If its version exceeds the client's `since`,
+   return immediately. If the inbox is dirty, reconcile and re-read.
+4. Otherwise wait on the notification with a timeout of the smaller of the
+   remaining poll time and **one second**, then loop.
+
+| Parameter | Value |
+|---|---|
+| Default poll wait | 25 s |
+| Maximum poll wait | 55 s |
+| Fallback re-check interval | 1 s |
+| Concurrent polls per server | at most 32, and never more than the in-flight request limit |
+| Client-requested poll length | 55,000 ms |
+| Agent socket timeout for a poll | 60 s |
+
+The one-second cap is why a hint may be lost, coalesced or delivered to a
+device whose credential was revoked a moment ago without any of that
+mattering: every second the loop re-reads state on a fresh snapshot, so the
+worst case is a second of delay. Sends confirm on the inbox version, never on
+a notification.
+
+The hub maps `(host, user, app)` to a *weak* reference to a `Notify` plus a
+generation number. A poller that disconnects leaves no strong reference, so
+its entry dies on its own; `notify` prunes dead entries as it goes, and each
+new registration performs a bounded cleanup of at most 8 stale entries from
+a FIFO, so no single call does unbounded work. Notification uses
+`notify_waiters`, which wakes every concurrent poll for that user, not just
+one. A membership change wakes every live listener.
+
+Pull was chosen over push because the server already has a monotonic
+per-user version that makes pulling exact and resumable, because a bounded
+number of held requests is easier to admit than an unbounded number of
+subscriptions, and because it makes the correctness of delivery independent
+of the correctness of the notification path. The hub could lose every hint
+and the system would still be correct, one second slower.
+
+## Sending from the client
+
+A send is split into *prepare* and *attempt*. Prepare encrypts the message
+and journals it in a `chat_operations` row in hard state, with the exact
+request bytes in the protected store, so that the client's external
+rollback checkpoint ([Chapter 19](19-agent.qmd)) is published before any
+network delivery. The row moves through `Prepared`, `Uncertain`, and one of
+`Confirmed`, `Rejected` or `Cancelled`, with SQL checks tying a receipt to
+`Confirmed` and a rejection code to `Rejected`.
+
+Attempt never resubmits an uncertain operation automatically. Before
+delivery it re-validates that the pending message is still encrypted under
+the channel's *current* key generation; a message prepared before a rotation
+is held for review rather than sent under a retired key. If the response is
+lost, reconciliation scans forward from a persisted cursor in windows of 100
+sequences, verifying each page as history, and confirms the send only when
+it finds a message with the same client-chosen ID *and* identical metadata,
+wrapper and sender. A message with that ID but different content is an
+integrity error. The cursor is saved after each window, so a restart resumes
+where it stopped.
+
+External callers get a second idempotency layer: a `chat_submissions` row
+maps a 16-byte submission ID to a keyed MAC of the plaintext under the vault
+master key and to the operation it created, so a repeated submission returns
+the recorded outcome and the same ID with different text is a conflict. The
+MAC rather than a hash is used so that durable metadata does not reveal
+guessable text.
+
+### The retention problem
+
+Both sides of this design accumulate rows. The repository's guide states
+the server side plainly: each `rt_messages` row permanently stores two
+encodings of up to 1 MiB each, with no compaction, deletion lifecycle, or
+per-team or per-channel quota, so a single authorised user sending large
+payloads could consume shared disk and interfere with unrelated services.
+The planned resolution is per-team and per-channel quotas, separate capacity
+for identity and KV storage, and an explicit retention lifecycle. On the
+client, terminal `chat_operations` and `chat_submissions` rows are retained
+indefinitely because they are the replay evidence; the guide describes
+bounded replay evidence as the design work needed before they can be
+pruned.
+
+## Current limits
+
+The following are stated in the repository's guide as facts about the
+current implementation, not as design goals:
+
+- Chat is supported for **named teams with direct same-host user
+  memberships only**. Ad-hoc teams and cross-host federated teams cannot
+  use chat until multi-host broadcast routing is finished.
+- **Message edits, reactions, threaded replies, mentions and large
+  attachments are disabled** in production builds. The message-type
+  enumeration reserves values for edits, deletions, reactions, attachments
+  and replies, and the extended channel format described above is the
+  substrate they will use.
+- Message text is bounded at 65,536 bytes; inbox previews are truncated to
+  512 bytes on the way into the agent's cache.
+
+## History cursors, briefly
+
+History is read newest-first in pages, or incrementally after a known
+sequence. The incremental read computes the window from the channel's head
+and the caller's last sequence and returns a `gap` flag when the head has
+gone backwards, when more rows were skipped than the window holds, or when
+the range came back short, any of which means the caller must reload from
+the top. Pages are capped at 1,000 rows and 8 MiB. [Chapter 20](20-desktop.qmd)
+describes how the desktop consumes these cursors, including its bounded
+rotation over channels and its rule that the open conversation never backs
+off.
+
+## Where to look
+
+- `foks-crypto`: `realtime.rs` (`derive_realtime_keys`,
+  `realtime_message_nonce`, message and text sealing), `chat_v2.rs`
+  (context-derived keys).
+- `foks-proto`: `realtime.rs` (`RtMessage`, `RtMessageMetadata`,
+  `RtMessageNoncer`, `RtChannelMetadata`, message types), `chat_context.rs`.
+- `foks-client`: `realtime/history.rs` (`verify_page`, anchors,
+  `read_after`), `realtime/inbox.rs` (`drain_inbox_scope`, previews),
+  `realtime/operations/` (`prepare.rs`, `attempt.rs`, `recovery.rs`).
+- `foks-client-db`: `chat_limits.rs`, `repositories/chat.rs`
+  (`chat_accept_page`, operation states, submissions), `schema.rs`
+  (`chat_operations`, `chat_submissions`, `chat_anchors`),
+  `soft_schema.rs` (inbox state).
+- `foks-agent`: `chat.rs` (drain gate, preview cache), `chat_poll.rs`,
+  `main.rs` (poll timeout), `chat-limits.json` in `foks-agent-proto`.
+- `foks-server`: `net/session/handlers/realtime.rs` (`poll_inner`),
+  `services/realtime.rs`, `services/realtime/inbox_hub.rs`.
+- `foks-server-db`: `realtime/messages.rs` (`rt_send`),
+  `realtime/inbox.rs` (`stamp`, `rt_reconcile_inbox_page`, changed threads),
+  `realtime/limits.rs`, `schema/realtime.sql`,
+  `schema/realtime_invalidation.sql`.
+
+## Further reading
+
+- N. Unger, S. Dechand, J. Bonneau, S. Fahl, H. Perl, I. Goldberg and
+  M. Smith, *SoK: Secure Messaging*, IEEE Symposium on Security and Privacy,
+  2015, https://www.ieee-security.org/TC/SP2015/papers-archived/6949a232.pdf
+- Keybase, *Chat Crypto*, Keybase Book, https://book.keybase.io/docs/chat/crypto
+- S. Loreto, P. Saint-Andre, S. Salsano and G. Wilkins, *Known Issues and
+  Best Practices for the Use of Long Polling and Streaming in Bidirectional
+  HTTP*, RFC 6202, IETF, 2011, https://www.rfc-editor.org/rfc/rfc6202
+- B. W. Lampson and D. D. Redell, *Experience with Processes and Monitors in
+  Mesa*, Communications of the ACM 23(2), 1980,
+  https://doi.org/10.1145/358818.358824
+- Tokio project, *tokio::sync::Notify* (API documentation),
+  https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html
+- S. A. Crosby and D. S. Wallach, *Efficient Data Structures for
+  Tamper-Evident Logging*, USENIX Security 2009,
+  https://www.usenix.org/legacy/event/sec09/tech/full_papers/crosby.pdf
+- D. J. Bernstein, *Cryptography in NaCl*, 2009,
+  https://cr.yp.to/highspeed/naclcrypto-20090310.pdf
+- T. Perrin and M. Marlinspike, *The Double Ratchet Algorithm*, Signal Foundation, 2016, https://signal.org/docs/specifications/doubleratchet/

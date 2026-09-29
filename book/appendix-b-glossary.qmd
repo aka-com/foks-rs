@@ -1,0 +1,294 @@
+# Glossary
+
+Terms the book defines or relies on, in alphabetical order. Each entry gives
+a short definition consistent with the chapter that introduces the term and
+points to where it is explained. Spellings follow the chapters.
+
+## A {.unnumbered}
+
+- **absence proof** — A Merkle proof showing that no leaf exists at a given key, ending either at a foreign leaf whose key diverges from the query or at a prefix miss; FOKS uses it to prove chain termination, name availability, and batched change detection. (Chapter 11)
+- **actor** — A component that owns some state exclusively and processes messages from a queue one at a time; the Rust server's read-write SQLite connection is the property of one such actor. (Chapter 18)
+- **ad hoc team** — A team with no human-readable name, distinguished from a named team by the type byte (20) of its entity ID. (Chapters 3, 15)
+- **AEAD (authenticated encryption with associated data)** — Authenticated encryption that also takes unencrypted associated data as an input to the tag, so that decrypting with different context fails; used locally in the keystore but not on the FOKS wire. (Chapter 8)
+- **agent** — See *resident agent*. (Chapter 19)
+- **anchor** — A `(sequence, message ID, digest)` triple recorded in hard state for every verified chat message, forming a bounded ledger against which later pages are checked for contradictions. (Chapter 16)
+- **app lock** — The desktop mechanism that hides everything after inactivity or on request and requires operating-system authentication before anything is shown again. (Chapter 20)
+- **application key** — A key derived from a shared seed by `derive_key(seed, 5)` and then by a typed HMAC over an application index (0 for the key-value store, 1 for real-time chat); shared seeds are never used to encrypt data directly. (Chapter 5)
+- **Argon2id** — The memory-hard password-hashing function (RFC 9106) FOKS applies to user passphrases, with 64 MiB of memory, 3 iterations, and 2 lanes in production. (Chapter 6)
+- **associated data** — Information that an AEAD scheme authenticates but does not encrypt, supplied identically at encryption and decryption. (Chapter 8)
+- **authenticated dictionary** — A Merkle structure that maps keys to values and can prove, for a given key, either the stored value or that none is stored; the FOKS tree is one, unlike an append-only Merkle log. (Chapter 11)
+- **authenticated encryption** — Encryption that produces a tag checked before any plaintext is released, so that a modified ciphertext is rejected rather than decrypted to garbage. (Chapter 8; Appendix A)
+- **authenticated root** — A Merkle root whose hash has been tied to a signed root through a verified skip-pointer walk; the set of such roots is carried forward after each advance. (Chapter 12)
+- **authority chain** — The chain of evidence answering "who authorized this change?": a device signing key, a signed link, a Merkle leaf, and the pin a client stores locally. (Chapter 1)
+- **authorization code flow** — The OpenID Connect flow in which a browser redirect yields a one-time code that the FOKS server exchanges, server to server, for tokens. (Chapter 22)
+
+## B {.unnumbered}
+
+- **back pointers** — The deterministic list of earlier epochs `E-1, E-2, E-4, ...` (halting after the lowest set bit of `E`) that each Merkle root commits to by hash, forming an authenticated skip list over epochs. (Chapter 12)
+- **backup key** — The device-style key suite (entity type 16) derived from the recovery kit's 26-byte secret; it is enrolled as a device so later rotations box new generations to it. (Chapter 6)
+- **bare payload** — The RPC shape used by the four team protocols and the Kex protocol, whose arguments and results sit directly in the payload slot without the `DataWrap` envelope. (Chapter 17)
+- **Beacon** — A discovery service that returns an untrusted hint (a probe endpoint) for a host ID; the client verifies the probed hostchain against the ID before pinning. (Chapter 15)
+- **bearer token** — A secret whose possession alone grants access; FOKS stores only a hash of each bearer, and keeps an encrypted copy only where it must re-issue the token later. (Chapter 15)
+- **binding MAC** — A typed HMAC over a key-value root or directory entry's client-authored fields, so the server cannot present one party's root as another's, roll a namespace back, or repoint a name at a different node. (Chapter 14)
+- **BIP-39** — The 2048-word mnemonic list from Bitcoin wallets; HESP uses the word list but replaces the checksum with a strict, exact parser. (Chapter 6)
+- **bootstrap mode** — The restricted agent state, before credentials exist, in which only `AgentStatus` and `InitializeState` are accepted. (Chapter 19)
+- **box key** — The key in a KV keyset (index 2) that seals per-directory and per-file seeds and small files; the party's box key encrypts only seeds, never data. (Chapters 5, 14)
+- **box set** — The collection of hybrid boxes a single mutation produces, one per recipient, with a random 16-byte `box_id` and an optional signed temporary DH key. (Chapter 4)
+
+## C {.unnumbered}
+
+- **canonical encoding** — A serialization rule under which every value has exactly one byte representation and every byte string decodes to at most one value, so that hashes and signatures over encoded bytes are portable. (Chapter 9)
+- **capability** — Used in three senses: a verifier-issued result the client database accepts and retains as a signed head (Chapter 13); a short-lived token a team member obtains by answering a challenge (Chapter 15); and Tauri's allowlist of framework commands a window may invoke (Chapter 20).
+- **capability key** — A server-side key generation under which team-view challenges are HMACed and remote view grants are encrypted; rotating it re-seals grants without invalidating the bearers already issued. (Chapter 15)
+- **chain type** — A small integer (0 user, 1 username ownership, 2 user settings, 3 team, 4 team membership) that becomes part of a chain's tree keys. (Chapter 10)
+- **change marker** — The client's batched probe for membership changes: one multi-lookup requesting absence proofs for each pinned member's next-link and next-username-ownership keys, so a valid absence means the pinned state is still current. (Chapters 11, 13, 15)
+- **challenge** — A stateless, self-authenticating team-view request the server builds with an HMAC under its capability key; a member activates it by signing, after which the server stores only a hash of the resulting token. (Chapter 15)
+- **checkpoint (WAL)** — The step in which committed write-ahead-log frames are copied into the main SQLite file; the server uses `PASSIVE` checkpoints so the writer never waits on readers. (Chapter 18)
+- **chunk** — Up to 4 MiB of a large file's plaintext, encrypted under the file seed with a nonce derived from the object ID, byte offset, and finality flag. (Chapter 14)
+- **client certificate** — A seven-day X.509 certificate whose subject key is the device's own Ed25519 key, issued by the host's client-identity CA and presented in every authenticated TLS handshake. (Chapter 17)
+- **commitment** — A value that binds its author to some data without revealing it (hiding and binding); FOKS uses an HMAC under a fresh 16-byte key for usernames and device names, and a typed hash where the committed value is itself unguessable. (Chapter 3; Appendix A)
+- **compare-and-swap** — An update that succeeds only if the row still holds the state and revision the caller read; the single-sign-on session state machine is driven this way. (Chapter 22)
+- **compatibility artifact** — A signed JSON document from the daily hosted canary binding a generation, target host, outcome, capabilities, and digests, structurally unable to grant anything when it reports drift. (Chapter 23)
+- **CONIKS** — A key-transparency design that hides directory positions with a verifiable random function; FOKS reaches the same unlinkability with commit-then-reveal tree locations. (Chapters 10, 11)
+- **consistency proof** — A short proof that one version of a Merkle log is a prefix of a later one; unavailable for the FOKS dictionary tree, whose place is taken by the skip-pointer history. (Chapter 11)
+- **content addressing** — Identifying a Merkle node by the typed hash of its canonical encoding, so the node store is idempotent and unchanged subtrees are shared between epochs. (Chapter 11)
+- **coordinated omission** — The measurement error in which a load generator that waits for each response never issues the requests that would have observed a stall; the benchmark harness avoids it by scheduling requests on the clock. (Chapter 24)
+
+## D {.unnumbered}
+
+- **daemon** — A background process that outlives any single command; the resident agent is one. (Chapter 19)
+- **DataWrap** — The two-key map `{ "Data": argument, "Header": compatibility header }` in which most FOKS protocols wrap their canonical Snowpack payloads. (Chapter 17)
+- **delegated subkey** — A software Ed25519 key (entity type 13) enrolled by a hardware parent for transport authentication, sealed to the parent in a self-box; it has no authority in the chain. (Chapter 7)
+- **derivation type** — The first element of the label in `derive_key`: 0 for the Ed25519 seed, 1 for X25519, 2 for a symmetric key, 4 for the ML-KEM seed halves, 5 for the application-key root. (Chapter 3)
+- **derive_key** — The function that fans a 32-byte seed out into purpose-specific secrets: one HMAC-SHA-512/256 over a type ID and a canonically encoded label. (Chapter 3)
+- **deterministic encryption** — An encoding that hides everything except equality; safe for low-entropy names only under a key the server lacks, which is how the name MAC is used. (Chapter 14)
+- **differential testing** — Testing by giving the same input to independent implementations and comparing outputs; FOKS treats the Go implementation, not the specification, as ground truth. (Chapter 23)
+- **Diffie-Hellman** — Key agreement in which two parties each combine their private key with the other's public key to reach a shared secret; static-static use implicitly authenticates both parties. (Appendix A)
+- **directory seed** — 32 random bytes per directory, sealed under the party's box key with the directory ID as partial nonce, from which the directory's own MAC and box keys derive. (Chapter 14)
+- **dirent (directory entry)** — The record mapping a name to a node: parent ID, random dirent ID, 17-byte node ID, versions, write role, name MAC, name box, and binding MAC. (Chapter 14)
+- **domain separation** — Ensuring a cryptographic function used for one purpose can never produce an output valid for another; FOKS does it by prefixing every hashed, signed, MACed, or encrypted object with its type ID. (Chapters 3, 9)
+
+## E {.unnumbered}
+
+- **ECDSA** — The signature scheme available on PIV hardware, over P-256, signing a SHA-512/256 digest supplied by the host; malleable, so replay protection lives in the chain rather than in signature uniqueness. (Chapter 7)
+- **Ed25519** — The Edwards-curve signature scheme used for every FOKS software key, with 32-byte keys and 64-byte deterministic signatures. (Appendix A)
+- **eldest link** — The first link of a user's or team's chain, carrying stacked signatures (for a hardware-backed user: PUK, subkey, then parent) and a commitment to the subchain seed. (Chapters 7, 10)
+- **entity ID** — One type byte followed by a public key: 33 bytes for software keys, 34 for a hardware key's compressed P-256 point; the type byte is checked by every function that expects a particular kind of entity. (Chapter 3)
+- **epoch** — One version of the Merkle tree; the server mints a new signed root for every accepted mutation, numbered from 1. (Chapter 12)
+- **evidence** — The exact server response bytes a client verified and stores in hard state, replayed through the same verifier on open. (Chapter 13)
+- **exactly-once** — The discipline under which a call or write executes at most once from the caller's point of view: connection sequence counters on the wire, and submission IDs with recorded outcomes for MCP writes. (Chapters 17, 21)
+
+## F {.unnumbered}
+
+- **federation** — A team on one host including members from another, achieved with no host-to-host channel: clients courier signed evidence, and every server verifies with the same code a client would use. (Chapter 15)
+- **fingerprint (HEPK)** — The 32-byte typed hash of a hybrid encryption public key's canonical encoding; chain links carry the fingerprint and the full key is uploaded alongside. (Chapter 4)
+- **fork** — Two different roots at the same epoch, or two different links at the same sequence number; rejected whenever a client sees both. (Chapter 13)
+- **fork consistency** — The guarantee, defined for SUNDR, that an untrusted server can partition clients into groups seeing divergent histories but can never merge them again without detection. (Chapter 13)
+- **forward secrecy** — In its original sense, the property that compromise of long-term keys does not reveal past session keys; the book uses the narrower term *post-removal secrecy* for what FOKS's generational keys provide. (Chapter 5)
+- **frame** — One message on the wire with an explicit length in front of it; FOKS encodes the length as a minimal MessagePack unsigned integer, with a 16 MiB default ceiling. (Chapter 17)
+- **frontend** — A program a person or tool touches (desktop, command-line tool, MCP server) that holds no device key and reaches the agent over a local socket. (Chapter 2)
+
+## G {.unnumbered}
+
+- **generation** — A counter starting at 1 that increments each time the seed for a role is replaced; every object names the generation of the key that protects it. (Chapter 5)
+- **generation counter** — A monotonically increasing integer incremented on every app lock, so in-flight work started before a lock fails its check even after an unlock. (Chapter 20)
+- **generic subchain** — The user settings and team membership chains: same envelope as the main chains, one signature per link, and a first tree location derived from a hidden seed. (Chapter 10)
+- **golden testing** — Recording an output once and failing if it ever changes; FOKS's golden fixtures are produced by the Go implementation so their provenance is independent of the code under test. (Chapter 23)
+- **gossip** — Comparison of roots between clients or with a third party, which closes the fork-consistency gap in the transparency literature and which FOKS does not implement. (Chapter 13)
+
+## H {.unnumbered}
+
+- **hard state** — The client's durable, monotonic database of verified public bytes, pins, and journals, re-verified on load and never trusted merely because it is local; it holds no secrets. (Chapters 13, 19)
+- **HEPK (hybrid encryption public key)** — A recipient's classical Diffie-Hellman public key (X25519 or P-256) packaged with its ML-KEM-768 encapsulation key. (Chapters 3, 4)
+- **HESP (human-exact secret phrase)** — FOKS's mixed-radix encoding of a secret as alternating words and numbers with no checksum, where every phrase corresponds to exactly one secret. (Chapter 6)
+- **HKDF** — The two-step extract-and-expand key derivation function of RFC 5869; FOKS's `derive_key` is not HKDF but a single typed HMAC, despite the repository guide's wording. (Chapter 3; Appendix A)
+- **HMAC** — The standard construction of a message authentication code from a hash function; FOKS uses HMAC-SHA-512/256 for key derivation, commitments, and integrity bindings. (Chapter 3; Appendix A)
+- **host** — A FOKS server identified by a key rather than a domain name; one server process per host. (Chapter 2)
+- **host ID** — The genesis key of a host's hostchain prefixed with the host entity type; the value a client pins on first contact. (Chapter 13)
+- **hostchain** — The signed chain in which a host publishes its identity key and delegates service keys for TLS, Merkle signing, and metadata signing. (Chapters 2, 10)
+- **hybrid box** — The FOKS public-key box: an ML-KEM-768 ciphertext, the sender's classical key, a 16-byte nonce, and an XSalsa20-Poly1305 ciphertext under a key combined from both shared secrets. (Chapter 4)
+- **hybrid encryption** — Running a classical and a post-quantum key exchange side by side and deriving the final key from both, so an attacker must break both. (Chapter 4; Appendix A)
+
+## I {.unnumbered}
+
+- **ID token** — The signed JSON Web Token an OpenID Connect provider issues, whose `nonce` claim FOKS derives from a device-signed binding so that the provider unknowingly signs a commitment to a user, host, and Merkle root. (Chapter 22)
+- **idempotency key** — A unique identifier attached to a request so that a repeat with the same identifier returns the recorded outcome instead of executing again; it must be bound to the request's content and recorded before acting. (Chapter 21)
+- **inbox hub** — The server component mapping `(host, user, app)` to a weak `Notify` handle used to wake long polls; its hints may be lost without affecting correctness. (Chapter 16)
+- **inbox version** — A per-user counter bumped on every change visible to that user and stamped onto the affected channel row, so a client can ask for everything changed since a version it knows. (Chapter 16)
+- **index range** — A rational interval recorded in team chain metadata that places teams in a nesting order; the server rejects overlapping ranges. (Chapter 15)
+- **interior node** — A Merkle Patricia node recording a shared bit range and prefix plus the hashes of its left and right children; its prefix bytes are clamped so it has exactly one encoding. (Chapter 11)
+
+## J {.unnumbered}
+
+- **JSON-RPC 2.0** — The request/response format MCP messages use, with an `id`, `method`, and `params`. (Chapter 21)
+- **JWKS (JSON Web Key Set)** — The provider's published signing keys, fetched from its discovery document, against which ID tokens are verified; refetched once if validation fails immediately after a code exchange. (Chapter 22)
+- **JWT (JSON Web Token)** — A signed JSON document with claims such as `iss`, `sub`, `aud`, `nonce`, `iat`, and `exp`. (Chapter 22)
+
+## K {.unnumbered}
+
+- **KEM (key encapsulation mechanism)** — A public-key primitive with `Encaps(pk)`, returning a random shared secret and a ciphertext, and `Decaps(sk, ciphertext)`, recovering the secret. (Chapter 4; Appendix A)
+- **KEX** — The device-pairing protocol in which a pairing code derives a session ID and a secret-box key, and the provisioner and provisionee exchange encrypted, signed packets through a relay. (Chapter 6)
+- **key suite** — Everything derived from one seed: an Ed25519 signing key, an X25519 static key, and an ML-KEM-768 key pair, with the verify key as identifier. (Chapter 3)
+- **keyset pagination** — Paging by remembering the last key seen and asking for rows after it, so each page costs the same and concurrent inserts cannot skip or repeat entries; used for directory listings and the upload reclamation cursor. (Chapters 14, 18)
+- **KV keyset** — The pair of 32-byte keys (a MAC key and a box key) derived from a party's shared seed for the key-value store, and likewise from each directory seed. (Chapter 14)
+
+## L {.unnumbered}
+
+- **leaf** — A Merkle Patricia node holding a 32-byte key and a 32-byte value; a leaf may sit at any depth. (Chapter 11)
+- **link** — One signed entry in a signature chain, carrying its sequence number, the hash of its predecessor, the Merkle root its signer saw, a next-location commitment, and a payload. (Chapter 10)
+- **long polling** — A delivery compromise in which the server holds a request open until there is something to say or a timeout passes; FOKS re-checks state at least every second regardless of wake-ups. (Chapter 16)
+- **lookup name** — The DNS name (or similar) by which a user first reaches a host, pinned to the host ID in the `host_lookups` table after the first probe. (Chapter 13)
+
+## M {.unnumbered}
+
+- **MAC (message authentication code)** — A keyed function producing a short tag that only holders of the key can compute, giving integrity and authenticity but not secrecy or non-repudiation. (Appendix A)
+- **management key** — The 24-byte PIV key needed to generate or replace slot keys, which can be escrowed under the user's PUK in a typed secretbox. (Chapter 7)
+- **master key** — The single 32-byte key under which every keystore record is encrypted, held in the platform keyring or a key file rather than beside the records. (Chapter 8)
+- **MCP (Model Context Protocol)** — An open specification by which an assistant's host discovers and invokes named tools with typed arguments; the FOKS server exposes key-value and team tools over stdio. (Chapter 21)
+- **memory-hard** — A property of password-hashing functions that require a configurable amount of memory as well as time, reducing the advantage of GPUs and custom hardware. (Chapter 6)
+- **Merkle log** — An append-only Merkle list whose shape is fixed by its length, permitting consistency proofs; Certificate Transparency is the canonical example. (Chapter 11)
+- **Merkle root** — The signed per-epoch object carrying the epoch, time, back-pointers hash, root node hash, and hostchain tail; signed by the host's delegated Merkle-signer key. (Chapter 12)
+- **Merkle tree** — A tree whose leaves are hashes of data and whose interior nodes hash their children, so the root commits to every leaf and membership proofs are logarithmic. (Chapter 11; Appendix A)
+- **MessagePack** — The binary serialization format, not itself canonical, of which Snowpack is a canonical subset. (Chapter 9)
+- **method position** — The small integer identifying a method within a protocol on the wire, extracted mechanically from the Go source. (Chapter 17)
+- **mixed-radix encoding** — Treating a secret as one large integer and expanding it into digits of alternating radix (base-2048 words and base-2^k numbers), as HESP does. (Chapter 6)
+- **ML-KEM-768** — The NIST post-quantum KEM parameter set FOKS uses: 1184-byte encapsulation keys, 1088-byte ciphertexts, 32-byte shared secrets, deterministic key generation from a 64-byte seed. (Chapter 4; Appendix A)
+- **monotonic gate** — The client database checks, inside a transaction, that a verified object does not move backward relative to what is stored: `MerkleRollback`, `MerkleFork`, `ChainRollback`, `ChainFork`, `GenesisChanged`, `HostIdentityChanged`. (Chapter 13)
+- **mutual TLS** — TLS in which both ends present certificates; FOKS roots the server side in a CA the hostchain delegates and the client side in a device certificate bound to the device's Ed25519 key. (Chapter 17)
+
+## N {.unnumbered}
+
+- **name box** — The randomised typed secretbox of a directory entry's name (padded to a power of two), which lets a listing recover plaintext names. (Chapter 14)
+- **name MAC** — The deterministic keyed hash of `[parent, directory_version, name]` under a directory's MAC key, which the server can index, sort, and page by but cannot invert. (Chapter 14)
+- **named team** — A team whose human-readable name is committed in its chain and bound in the Merkle tree under a name key, exactly as usernames are. (Chapter 15)
+- **next-location commitment** — The typed hash, carried in link `n-1`, of the random tree location at which link `n` will be stored, so the server cannot choose where a link lands. (Chapter 10)
+- **node ID** — A 17-byte key-value identifier: one type byte (0 tombstone, 1 directory, 2 file, 3 small file, 4 symlink) plus 16 random bytes. (Chapter 14)
+- **nonce** — A value that must never repeat under one key; XSalsa20 and XChaCha20 take 24-byte nonces, which makes random nonces safe. (Chapter 8; Appendix A)
+
+## O {.unnumbered}
+
+- **OAuth2Binding** — The device-signed payload `{ uid, host, merkle_root, random }` whose typed hash becomes the OpenID Connect nonce, tying the provider's proof to a device signature. (Chapter 22)
+- **OpenID Connect (OIDC)** — The authentication layer over OAuth 2.0 that adds the ID token; the FOKS server is the OAuth client and the provider never touches keys. (Chapter 22)
+- **optimistic concurrency control** — Writing without locks by stating what one read and letting the server reject the write if that belief is stale; FOKS's form is the version vector. (Chapter 14)
+
+## P {.unnumbered}
+
+- **pairing code** — A 16-byte, single-use secret (125 bits of entropy) displayed on an existing device and typed into a new one to bootstrap the KEX channel. (Chapter 6)
+- **parcel** — The object a device fetches to obtain a shared key: the hybrid box for the newest generation, its sender and box set ID, an optional temporary DH key, and the seed chain for every earlier generation. (Chapter 5)
+- **partial unique index** — A unique index restricted by a `WHERE` clause, used to make "at most one row in this state" (one active host key, one in-progress rotation) a property the database enforces. (Chapter 18)
+- **passphrase key** — The device-style key suite (entity type 17) derived from the first 32 bytes of an Argon2id stretch of a user's passphrase. (Chapter 6)
+- **Patricia trie** — A path-compressed binary trie in which an interior node records how many bits its descendants share and branches only where they differ; FOKS's Merkle tree is one over 256-bit keys. (Chapter 11)
+- **peer credentials** — The kernel-reported UID of the process at the other end of a Unix socket (`SO_PEERCRED`, `LOCAL_PEERCRED`), which the agent requires to equal its own. (Chapter 19)
+- **percentile** — The value below which a given fraction of observations fall; the benchmark reports p95, the latency 95% of requests beat. (Chapter 24)
+- **PIV (Personal Identity Verification)** — The smart-card standard (NIST SP 800-73) through which FOKS uses YubiKeys: keys in numbered slots, on-card ECDSA over a supplied digest and P-256 ECDH, nothing else. (Chapter 7)
+- **PKCE (Proof Key for Code Exchange)** — The OAuth extension in which the requester sends `SHA-256(code_verifier)` and later presents the verifier, so an intercepted authorization code cannot be redeemed. (Chapter 22)
+- **PKCS#8** — The private-key container format (RFC 8410 form for Ed25519) in which a device seed is wrapped for the TLS library. (Chapter 3)
+- **post-compromise security** — The property that a protocol can heal after a compromise once the compromised party is excluded or updates its keys; the family FOKS's generational keys belong to. (Chapter 5)
+- **post-removal secrecy** — The book's term for FOKS's guarantee: a party excluded before generation `g+1` cannot read anything encrypted under `g+1` or later, while remaining members keep reading everything before. (Chapters 1, 5)
+- **PQ key ID** — The typed hash of a hardware credential's PQ-slot public key, by which a client with only the card finds the right slot on the server. (Chapter 7)
+- **pq_self_secret** — The x-coordinate of ECDH between a YubiKey PQ slot's private key and its own public key, a card-only value from which the ML-KEM key pair is derived deterministically. (Chapter 7)
+- **prefix miss** — An absence-proof terminal: an interior node at the current bit cursor whose prefix the query does not match, so no key beneath it can be the query. (Chapter 11)
+- **probe** — The only call made over web-PKI TLS: it returns a host's hostchain, signed public zone, and current signed Merkle root for independent verification. (Chapters 13, 17)
+- **profile admission** — The agent's queue of scopes in which reads share a profile, mutations hold it exclusively, and registry changes reserve the whole state root, ending two seconds before the request budget so a "not started" answer is definite. (Chapter 19)
+- **protected mutation store** — An encrypted per-record file store, with names that are typed hashes, holding the exact bytes of in-flight mutations so a crash mid-operation is recoverable. (Chapters 8, 19)
+- **protocol ID** — The 32-bit identifier naming a group of related RPC methods; local extensions are ring-fenced in `0xf04b0000` to `0xf04bffff`. (Chapters 17, 23)
+- **provisioner / provisionee** — In KEX, the existing owner-role device that builds and countersigns the provisioning link, and the new device that checks the link names its own key before signing first. (Chapter 6)
+- **PTK (per-team key)** — A 32-byte seed per team role and generation, boxed to each member user's PUK, from which the team's verify key, HEPK, and application keys derive. (Chapter 5)
+- **PUK (per-user key)** — A 32-byte seed per user role and generation, boxed to each of the user's devices, rotated on device revocation. (Chapter 5)
+- **pull with a wake-up** — FOKS chat delivery: clients long-poll, the inbox version is the only source of truth, and hub notifications are hints that may be lost at the cost of up to one second. (Chapter 16)
+
+## Q {.unnumbered}
+
+- **quota** — Per-namespace limits the server recomputes on every write: 16 GiB, 1,000,000 objects, 4,096 directories, 100,000 dirents. (Chapter 14)
+
+## R {.unnumbered}
+
+- **recovery kit** — A 17-token phrase encoding a 26-byte secret (203 bits of entropy), printed at signup and hashed under a type ID into the backup key's seed. (Chapter 6)
+- **remote view grant** — A bearer token a host issues so a party on another host may read a chain; stored as a hash plus an AEAD-sealed copy for re-issue, valid until revoked. (Chapter 15)
+- **removal key** — A random 32-byte secret created when a member is admitted, committed in the admitting link, and used to HMAC a later removal so the removed member can verify it was authorised. (Chapter 15)
+- **resequencing** — Re-parsing a prepared RPC frame to replace only its sequence number, copying signed argument bytes verbatim, so one authenticated connection can serve many requests. (Chapter 17)
+- **resident agent** — `foks-agent`, the long-lived per-user process that holds device keys, unlocks the keystore, owns the databases, and performs every cryptographic and network operation for the frontends. (Chapters 2, 19)
+- **revision counter and write token** — A counter and a random 16-byte token rerolled on every write to a revision-tracked hard-state table; the pair is copied to the keyring as a rollback checkpoint. (Chapters 13, 19)
+- **revocation** — An ordinary link assigning a device the role `NONE`; revoking another device must rotate every shared key it could read in the same link. (Chapter 10)
+- **role** — A totally ordered access level: None (0), Member (1, with a visibility level), Admin (2), Owner (3); each role has its own shared key, and a holder can open every role's key at or below its own. (Chapters 5, 15)
+- **rollback** — A server presenting an older state than a client has already seen; detected by monotonic checks on epochs, chain lengths, and versions. (Chapter 13)
+- **rollback anchor** — Ciphertext-only rows in soft state recording the last accepted version and bytes of each directory and entry, surviving permission-driven pruning so an older directory cannot be re-presented after a regrant. (Chapters 14, 19)
+- **rollback checkpoint** — The copy of the hard-state revision, write token, pinned chain tail, and Merkle epoch kept in the operating-system keyring and reconciled each session to detect a restored or copied state directory. (Chapters 13, 19)
+- **root (key-value)** — The small record at the top of a namespace: a directory ID, version, party key reference, and a binding MAC under the party's MAC key. (Chapter 14)
+- **roster** — The result of replaying a team chain: each member's role, recorded key generation, verify key, HEPK fingerprint, and removal-key commitment. (Chapter 15)
+- **rotation** — Replacing a role's shared seed with fresh randomness, boxing the new generation to the remaining recipients, and sealing the old seed under the new one in a seed chain box. (Chapter 5)
+
+## S {.unnumbered}
+
+- **salt** — A random value stored beside a password hash so equal passwords give different outputs and precomputed tables are useless; Argon2id in FOKS uses 16 random bytes and rejects an all-zero salt. (Chapter 6; Appendix A)
+- **secrecy chain** — The chain of evidence answering "who can decrypt this?": a device private key, the encrypted parcel for the current generation, the seed chain, and the per-application keys. (Chapter 1)
+- **Secret Service** — The freedesktop D-Bus API (backed by GNOME Keyring or KDE Wallet) in which the keystore master key is held on Linux. (Chapter 8)
+- **secretbox** — NaCl's XSalsa20-Poly1305 authenticated encryption with a 24-byte nonce and no associated-data input, used for every protocol-level symmetric encryption. (Chapter 4; Appendix A)
+- **seed chain** — The sequence of seed-chain boxes (`SeedChainBox`), each a secretbox of generation `g`'s seed under `derive_key(seed[g+1], 2)`, so one public-key operation on the newest generation unlocks every earlier one. (Chapter 5)
+- **self-box** — A hybrid box a hardware parent seals to itself (P-256 self-ECDH plus ML-KEM to its own HEPK) holding its delegated subkey's seed. (Chapter 7)
+- **self-certifying identifier** — An ID that commits to a public key only its holder can use: a user ID is the first owner PUK verify key with the type byte set to 1, a team ID the initial admin PTK verify key re-typed. (Chapter 3)
+- **sequence number (RPC)** — The envelope field pairing a response with its call; a connection's counter advances only after a complete response with the expected number is read. (Chapter 17)
+- **session ID (KEX)** — The public value derived from the pairing secret by typed HMAC, which the relay uses to match senders and receivers. (Chapter 6)
+- **SHA-512/256** — SHA-512 with a distinct initial value truncated to 256 bits, immune to length extension; the hash for every typed hash, HMAC, and commitment in the protocol. (Chapter 9; Appendix A)
+- **SHA3-256** — The Keccak-family hash used in exactly one place, the hybrid key combiner. (Chapter 4; Appendix A)
+- **signature chain** — An ordered list of signed entries in which each entry names the hash of the one before it, giving integrity, order, and authorship but not protection against truncation or forking. (Chapter 10)
+- **SignedBlob** — The two-element array `[Binary(inner), signature]` in which a Merkle root or public zone travels, so verifiers check the delivered bytes without re-encoding. (Chapter 9)
+- **single-writer actor** — The server's one operating-system thread owning the sole read-write SQLite connection, fed by a bounded queue of 64 jobs whose `try_send` never waits. (Chapter 18)
+- **skip pointer** — A back pointer spanning `2^k` epochs; together the pointers form a deterministic, authenticated skip list in which any two epochs are connected by a logarithmic path. (Chapter 12)
+- **SKMWK (secret key material wrapping key)** — A random 32-byte key per passphrase generation, kept in a history so data sealed under an old passphrase stays reachable after a change. (Chapter 6)
+- **small file** — A file of at most 2,040 bytes stored as one typed secretbox under the party's box key, padded to a power of two. (Chapter 14)
+- **Snowpack** — go-foks's canonical subset of MessagePack, with eight value kinds, positional arrays for structs, one-entry maps for unions, minimal markers, and no empty arrays. (Chapter 9)
+- **soft state** — The client's replaceable cache of decrypted projections, chat inbox rows, and discovery hints; it holds plaintext, may be deleted and rebuilt, but is still monotonic per party. (Chapter 19)
+- **SSRF (server-side request forgery)** — Redirecting a server's outbound fetch at something internal; the OIDC network policy refuses non-public addresses, redirects, and oversized responses. (Chapter 22)
+- **stacked signatures** — Multiple signatures on one link where signature `k` covers the body and all signatures before it, so order is authenticated and no signature can be removed from the middle. (Chapters 7, 10)
+- **state-transfer archive** — A streaming, authenticated container for moving a client's whole state between machines, with per-frame nonces and associated data that defeat truncation, reordering, and splicing. (Chapter 8)
+- **STRICT table** — A SQLite table option (since 3.37) enforcing column types rather than coercing values; every FOKS table is declared this way. (Chapter 18)
+- **submission ID** — The `v1-<time>-<random>` identifier under which an MCP write's intent and outcome are recorded, so a repeat returns the outcome and a reuse with different inputs is rejected. (Chapter 21)
+- **SUNDR** — The untrusted-server file system for which fork consistency was defined. (Chapter 13)
+
+## T {.unnumbered}
+
+- **tail (hostchain)** — The `{seqno, hash}` of the most recent hostchain link, named in every Merkle root so that "which host keys" and "which tree" are one statement. (Chapter 12)
+- **team certificate** — A payload signed by the team's admin PTK (and, after rotation, by the founding key second) naming the team and admin key; an invite is the host plus the certificate's typed hash. (Chapter 15)
+- **temporary DH key** — An ephemeral key on the recipient's curve, signed with the sender's long-term key over the box set ID, used when sender and recipient use different curves. (Chapter 4)
+- **three tiers** — Frontends, the resident agent, and servers: local JSON IPC between the first two, Snowpack RPC over TLS between the second and third. (Chapter 2)
+- **TOCTOU (time-of-check to time-of-use)** — A race in which a checked property changes before it is relied upon; defended by identifying things by unforgeable handles (inode, process start time) and re-checking before acting. (Chapter 20)
+- **TOFU (trust on first use)** — Accepting an identity at first contact and requiring every later contact to match it; FOKS pins the genesis of a signed chain rather than a bare key. (Chapter 13)
+- **token bucket** — A rate limiter holding up to B tokens refilled at r per second, one token per admitted event; kept per IP in a 4,096-entry least-recently-used cache. (Chapter 18)
+- **tombstone** — A directory entry whose node ID is all zero, written by `rm` and `mv` so the entry's version advances and any version vector that cited it is reported stale. (Chapter 14)
+- **tree location** — 32 random bytes chosen by the signer of link `n-1` and disclosed with link `n`, from which link `n`'s Merkle key is derived; subchains derive their first location from a seed by keyed hash. (Chapters 3, 10)
+- **trie** — A tree that stores keys by their digits, branching at depth `d` on the `d`-th digit. (Chapter 11)
+- **type ID** — A random 64-bit constant per protocol object kind, prepended big-endian to the canonical encoding before hashing, signing, MACing, or as the first eight bytes of a nonce. (Chapters 3, 9)
+- **typed hash** — `prefixed_hash(T, obj) = SHA-512/256(BE64(T) ‖ obj)`; the `_signable` variant first checks that `obj` is canonical. (Chapters 3, 9)
+- **typed HMAC** — `HMAC-SHA-512/256(k, BE64(T) ‖ obj)`, used for key derivation, commitments, and key-value integrity bindings. (Chapter 3)
+- **typed nonce** — A 24-byte secretbox nonce whose first 8 bytes are a type ID and remaining 16 are random or derived, so a ciphertext for one purpose cannot be opened under another. (Chapter 3)
+- **typed secretbox** — XSalsa20-Poly1305 under a typed nonce with a caller-supplied 16-byte partial nonce; the form of every key-value store encryption. (Chapter 14)
+- **typed signature** — An Ed25519 signature over `BE64(T) ‖ obj`, or for P-256 over the SHA-512/256 digest of that message. (Chapter 3)
+
+## U {.unnumbered}
+
+- **username commitment** — An HMAC over `[name, sequence]` under a random 16-byte key, carried in a chain link in place of the plaintext name; the key is disclosed only to parties entitled to the name. (Chapters 3, 10)
+- **username ownership chain** — A sequence of tree leaves, not a signature chain, recording who owns a name; a client requires presence for earlier sequences, an exact leaf for its own, and absence for the next. (Chapters 10, 11)
+
+## V {.unnumbered}
+
+- **validate_signable** — Snowpack's stricter validation mode, rejecting `array16` of 16 to 31 elements as Go's canonical checker does; every hash, signature, and HMAC uses it, which is the origin of the epoch 65,536 ceiling. (Chapter 9)
+- **variant** — Snowpack's tagged-union value: an empty fixmap, or a one-entry fixmap keyed by a short string tag. (Chapter 9)
+- **version vector** — The precondition sent with every key-value write: the root version and, for each directory the write depends on, its version and the `(dirent id, version)` of every entry listed there. (Chapter 14)
+- **visibility** — A signed 16-bit level carried by the Member role that orders members among themselves without breaking the role order. (Chapters 5, 15)
+
+## W {.unnumbered}
+
+- **WAL (write-ahead logging)** — SQLite's mode in which committed changes are appended to a log and later checkpointed into the main file, so readers see a snapshot and do not block the single writer. (Chapter 18)
+- **warmup** — Running a workload and discarding early observations while caches, pools, and code paths are cold; the benchmark harness uses 15 seconds. (Chapter 24)
+- **write role** — The minimum role that may write into a directory or replace a directory entry, covered by the binding MAC. (Chapter 14)
+
+## X {.unnumbered}
+
+- **X25519** — Diffie-Hellman over Curve25519 using only the x-coordinate, with 32-byte keys and secrets; the classical half of a software device's hybrid key. (Chapter 4; Appendix A)
+- **XChaCha20-Poly1305** — The extended-nonce ChaCha20 AEAD with a 24-byte nonce and associated data, used for the local keystore and server-side session envelopes, never on the wire. (Chapter 8; Appendix A)
+- **XSalsa20-Poly1305** — NaCl's secretbox cipher: Salsa20 extended to a 192-bit nonce via HSalsa20, with a Poly1305 tag; the symmetric cipher of every FOKS wire-format box. (Chapter 4; Appendix A)
+
+## Z {.unnumbered}
+
+- **zeroization** — Overwriting a secret's bytes when it is dropped; every FOKS secret type is wrapped in `Zeroizing` and prints as `[REDACTED]`, and intermediate buffers are zeroizing too. (Chapter 8)
