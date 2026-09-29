@@ -1,0 +1,181 @@
+# The Shape of the System
+
+Before looking at any single technique, it helps to know where each one sits.
+This chapter describes the tiers of a FOKS deployment, the two very different
+wire protocols that connect them, the products built from the `foks-rs`
+workspace, and the layering of its crates. Appendix D lists every crate.
+
+## Three tiers
+
+A running FOKS system has three kinds of process.
+
+```
++--------------------+   +--------------------+   +--------------------+
+|  Frontends         |   |  Resident agent    |   |  Servers (hosts)   |
+|  desktop UI, CLI,  |-->|  foks-agent        |-->|  foks-server,      |
+|  MCP tool server   |   |  keys, state, sync |   |  one per host      |
++--------------------+   +--------------------+   +--------------------+
+   local JSON IPC             Snowpack RPC            federation between
+   over a Unix socket         over TLS                hosts, couriered
+                                                      by clients
+```
+
+**Frontends** are what a person or program touches: the desktop application,
+the command-line tool, and a Model Context Protocol server for AI tools. None
+of them holds a device key or talks to a FOKS server; they send requests to
+the agent and display results. (The command-line tool and the desktop shell
+link a small amount of shared client code for profile bookkeeping and state
+relocation, but every cryptographic and network operation runs in the agent.)
+
+**The resident agent**, `foks-agent`, is a long-lived process owned by the
+operating-system user. It holds device keys, unlocks the local keystore, keeps
+two SQLite databases of verified and cached state, runs background
+synchronization, and performs every cryptographic and network operation on
+behalf of the frontends. Having one such process per user, rather than one per
+window or command, means keys are unlocked once, database locks have one
+owner, and network sessions persist while windows come and go.
+[Chapter 19](19-agent.qmd) covers its design.
+
+**Servers**, one per *host*, store encrypted data, sequence changes, and
+publish signed Merkle roots. A host is identified by a key, not a domain name:
+its identity is a chain of signed links, the *hostchain*, that delegates
+service keys for TLS, Merkle signing, and other roles. Two hosts federate not
+by talking to each other but by clients carrying signed evidence between them.
+[Chapter 15](15-teams.qmd) describes cross-host teams and
+[Chapter 18](18-server-storage.qmd) the server's storage engine.
+
+## Two wire protocols
+
+The agent speaks two protocols that could hardly be more different, and the
+difference is deliberate.
+
+| | Local IPC (frontend to agent) | Remote RPC (agent to server) |
+|---|---|---|
+| Transport | Unix domain socket, owner-only permissions | TCP with TLS (rustls defaults, TLS 1.2 or 1.3), mutual authentication |
+| Framing | 4-byte length prefix, then UTF-8 JSON | Length prefix, then MessagePack RPC envelope |
+| Payload encoding | JSON, base64 for binary | Canonical Snowpack, a MessagePack subset |
+| Message cap | 1 MiB | 16 MiB default frame length |
+| Who authenticates whom | Kernel-reported peer UID must equal the agent's | Seven-day device certificate issued by the host's client-identity CA and bound to the device's Ed25519 key; server certificate chains to a TLS CA introduced in the hostchain |
+| What it optimizes for | Simplicity for UI and tool authors | Deterministic bytes that can be hashed and signed |
+
+The local protocol is ordinary JSON because its clients are TypeScript,
+shell tools, and language models, none of which need to sign anything. Its
+security comes from the operating system: the socket file is created with
+owner-only permissions and every accepted connection is checked against the
+peer's user ID. The remote protocol must produce identical bytes on every
+implementation, because signatures and hashes are computed over encoded
+structures, so it uses a canonical encoding with exactly one byte string per
+value. [Chapter 9](09-canonical-encoding.qmd) explains that encoding and
+[Chapter 17](17-wire.qmd) the framing and TLS layers.
+
+## Products built from one workspace
+
+The repository is a single Cargo workspace that produces four user-facing
+programs, plus a few auxiliary binaries such as the scripted desktop backend
+used in tests.
+
+- `foks-server`: the standalone single-host server.
+- `foks-agent`: the resident daemon.
+- `foks-rs`: the command-line client, which also contains the MCP server
+  entry point.
+- `foks-desktop`: the Tauri 2 desktop application, a React frontend inside a
+  native shell that launches and talks to the agent.
+
+The same workspace holds a test kit that spawns real server and agent
+processes for integration tests, and tools that check compatibility against
+the upstream Go implementation, `github.com/foks-proj/go-foks` at version
+0.1.9, which is the protocol's reference.
+
+## How the crates are layered
+
+The two dozen crates form a layering. Each layer depends only on the layers
+below it, and the seam between client logic and frontends is a pair of IPC
+crates. The diagram is simplified: every crate above `foks-proto` also
+depends on `foks-proto` and `foks-snowpack`.
+
+```
+  frontends:   foks-cli    foks-mcp    foks-desktop / foks-desktop-app
+                   \          |            /
+                    foks-agent-client, foks-agent-proto   (local IPC)
+                                |
+                            foks-agent                    (the daemon)
+                                |
+                          foks-client-app                 (profiles, vaults, chat)
+                                |
+                            foks-client                   (identity, teams, KV)
+                     /          |           \
+       foks-client-db   foks-merkle-store   foks-rpc      (state, tree, transport)
+               |
+          foks-verify                                     (chains, roots, proofs)
+               |
+          foks-crypto                                     (primitives, key suites)
+               |
+           foks-proto                                     (protocol types)
+               |
+         foks-snowpack                                    (canonical encoding)
+
+  server side:  foks-server  ->  foks-server-db  ->  foks-merkle-store, foks-crypto
+                foks-server also uses foks-rpc and foks-verify
+```
+
+Reading the diagram bottom-up gives the order in which this book introduces
+ideas. The encoding at the bottom is what makes signatures portable. The
+protocol types above it are the shared vocabulary of every message. The
+cryptographic crate turns seeds into key suites and seals boxes. The
+verification crate checks chains, roots, and proofs. The client database is
+where verified evidence is pinned; beside it, one crate builds and proves
+Merkle trees and another moves bytes. Everything above that is application
+logic.
+
+Two properties of the layering matter for the rest of the book. First, the
+server and the client share the same encoding, protocol, crypto, and Merkle
+crates, so the server builds the tree with the same encoding, hashing, and
+key-derivation code the client relies on, while proof verification itself
+lives in `foks-verify`. Second, verification is stateless: the `foks-verify` crate
+checks a chain or a root given the bytes and a prior trusted state, and the
+database layer decides whether to accept the result. That separation makes the
+rules in [Chapter 13](13-client-verification.qmd) testable without a network.
+
+## A tour of one operation
+
+To see the tiers working together, follow a single write of a small file to
+a team's key-value store.
+
+1. The desktop sends a JSON request over the local socket with the target
+   path and base64 content.
+2. The agent checks the peer's user ID, decodes the request, and records the
+   prepared mutation in a journal (hard state plus the protected store)
+   before anything is sent, so the operation can be resumed or reconciled
+   after a crash.
+3. The agent loads the team, verifying its chain against the pinned Merkle
+   root, and obtains the current per-team key generation by opening an
+   encrypted parcel with the device's hybrid key.
+4. From the generation seed it derives the key-value keyset, computes a
+   keyed hash of the file name (deterministic, so the server can look it
+   up), encrypts the name under a random nonce (so a reader can list the
+   directory), and encrypts the content.
+5. It sends the ciphertexts over Snowpack RPC with a precondition naming the
+   versions of every directory along the path.
+6. The server's single writer applies the change in one transaction or
+   rejects it if the precondition failed.
+7. The agent updates its soft-state cache, marks the journal entry complete,
+   and answers the desktop.
+
+Every step names a later chapter: peer checks and journaling
+([Chapter 19](19-agent.qmd)), chain verification
+([Chapter 10](10-sigchains.qmd) and [Chapter 13](13-client-verification.qmd)),
+parcels and generations ([Chapter 5](05-generations.qmd)), the key-value
+encryption scheme ([Chapter 14](14-kv-store.qmd)), and the writer thread
+([Chapter 18](18-server-storage.qmd)).
+
+## Where to look
+
+- `Cargo.toml` at the workspace root lists members and default members.
+- `crates/*/Cargo.toml` descriptions give each crate's one-line purpose.
+- `README.md` gives the product list and repository layout.
+- `apps/desktop/README.md` describes the desktop's relationship to the agent.
+
+## Further reading
+
+- Tauri, *Tauri 2 Architecture*, https://v2.tauri.app/concept/architecture/
+- Rust project, *The Cargo Book: Workspaces*, https://doc.rust-lang.org/cargo/reference/workspaces.html

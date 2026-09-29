@@ -1,0 +1,267 @@
+# Hybrid Post-Quantum Encryption
+
+Almost every secret in FOKS is delivered to its readers by public-key
+encryption: a new per-user key is boxed to each device, a per-team key to
+each member, a passphrase session key to the passphrase-derived key, and so
+on. Those boxes sit on a server that the design assumes may be hostile, and
+they may sit there for years. This chapter is about how FOKS builds a box
+that is expected to stay closed even after the arrival of a quantum
+computer, and how it keeps the sender of a box authenticated.
+
+## Why hybrid
+
+Public-key encryption based on the discrete-logarithm problem, which
+includes every elliptic-curve scheme in common use (X25519, P-256 ECDH), is
+broken by Shor's algorithm running on a sufficiently large quantum computer.
+No such computer exists today, but ciphertexts recorded today can be kept
+until one does. This is the "harvest now, decrypt later" threat, and it means
+that data with a long confidentiality lifetime needs post-quantum protection
+now, not when the quantum computer appears.
+
+The post-quantum replacement standardised by NIST is ML-KEM (FIPS 203), a
+*key encapsulation mechanism* built on module lattices. A KEM is a
+public-key primitive with two operations: `Encaps(pk)` returns a random
+shared secret together with a ciphertext, and `Decaps(sk, ciphertext)`
+recovers the same shared secret. It is the natural shape for "send someone a
+symmetric key".
+
+ML-KEM is new. Its mathematics has been studied for two decades, but the
+concrete parameter sets and implementations have had far less scrutiny than
+the elliptic-curve schemes they are meant to replace, and any newly deployed
+primitive carries implementation risk. A *hybrid* scheme runs a classical
+and a post-quantum key exchange side by side and derives the final key from
+both secrets. An attacker then has to break both. If ML-KEM turns out to be
+weaker than hoped, X25519 still protects against classical attackers; if a
+quantum computer arrives, ML-KEM still protects. This is the approach taken
+by the IETF's hybrid TLS design, and NIST SP 800-56C Rev. 2 permits it by
+allowing a second shared secret to be concatenated with the classical one
+before key derivation.
+
+## Combining two secrets safely
+
+Concatenating two shared secrets and hashing them is the obvious combiner,
+and it is almost right. The refinement, worked out in the KEM-combiner
+literature (Giacon, Heuer and Poettering; Bindel et al.), is that the hash
+must also cover the *public values* that produced the secrets: the
+ciphertext or the public keys. Otherwise an attacker who can swap one
+component's ciphertext for another that decapsulates to the same secret can
+sometimes cause two different transcripts to yield the same key. Binding the
+public material into the hash input closes that avenue at no cost. FOKS does
+exactly this.
+
+## The hybrid encryption public key
+
+A FOKS recipient publishes a *hybrid encryption public key* (HEPK)
+containing one classical Diffie-Hellman public key and one ML-KEM-768
+encapsulation key. The classical key is X25519 for software devices and
+P-256 for hardware keys ([Chapter 7](07-hardware-keys.qmd)).
+
+| Component | Algorithm | Size |
+|---|---|---|
+| classical, software | X25519 public key | 32 bytes |
+| classical, hardware | P-256 point, SEC 1 compressed | 33 bytes |
+| post-quantum | ML-KEM-768 encapsulation key | 1184 bytes |
+| ML-KEM-768 ciphertext (per box) | | 1088 bytes |
+| ML-KEM-768 shared secret | | 32 bytes |
+
+The HEPK's canonical encoding is a small tagged tree (a version number, then
+a variant holding the classical key tagged by its curve and the ML-KEM key).
+Its *fingerprint* is `prefixed_hash_signable(HEPK_TYPE_ID, encoding)`. Chain
+links record only the fingerprint; the full HEPK is uploaded next to the
+link and every reader checks it against the fingerprint before use. This
+keeps links small (32 bytes rather than 1.2 kB per key) while still binding
+the whole key to the signed history.
+
+## The hybrid box
+
+A `HybridBox` is what a sender produces for one recipient:
+
+| Field | Content |
+|---|---|
+| `kem_ciphertext` | ML-KEM-768 ciphertext, 1088 bytes |
+| `dh_type` | 1 for X25519, 2 for P-256 |
+| `sender_dh` | the sender's classical public key, or absent (see below) |
+| `nonce` | 16 random bytes |
+| `ciphertext` | XSalsa20-Poly1305 output |
+
+Sealing proceeds in four steps.
+
+**1. Classical agreement.** For an X25519 recipient the sender computes the
+X25519 shared point with its own static X25519 key (derived from its seed as
+in [Chapter 3](03-key-hierarchy.qmd)) and then applies HSalsa20 to it with a
+zero nonce. That last step is not an extra hash for its own sake; it is what
+NaCl's `crypto_box_beforenm` does when it precomputes a key from a
+Diffie-Hellman point, and the Go implementation used `nacl/box.Precompute`
+here. The code comments that FOKS commits the NaCl precomputed key, not the
+raw X25519 output, into the combiner. For a P-256 recipient the classical
+secret is the raw 32-byte x-coordinate of the ECDH point. Either way the
+result is 32 bytes, called `dh_shared`.
+
+**2. Post-quantum encapsulation.** `ML-KEM-768.Encaps(receiver.mlkem768)`
+yields `kem_shared` (32 bytes) and `kem_ciphertext`. The Rust code calls the
+deterministic form of encapsulation with a caller-supplied 32-byte
+`kem_message`; in production that value comes from the operating system's
+random generator, and in tests it is replayed from Go-generated fixtures so
+that the two implementations can be compared byte for byte (see
+[Chapter 23](23-compatibility.qmd)).
+
+**3. Combiner.** The two secrets and the two public values are canonically
+encoded together and hashed with SHA3-256 under a type ID:
+
+```
+payload = encode([1, kem_shared, dh_shared, receiver_hepk, sender_dh])
+key     = SHA3-256( BE64(HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID) ‖ payload )
+```
+
+`receiver_hepk` is the recipient's full HEPK and `sender_dh` the classical
+public key the recipient will use on its side. This is the only place FOKS
+uses SHA-3; everywhere else the hash is SHA-512/256. The repository guide
+describes this step as "SHA-512/256 (or HKDF)", which is not what the code
+does.
+
+**4. Symmetric seal.** The 32-byte `key` encrypts the plaintext with
+XSalsa20-Poly1305 (NaCl's `secretbox`). The 24-byte nonce is the typed
+layout from [Chapter 3](03-key-hierarchy.qmd): `BE64(payload_type_id) ‖
+nonce16`, where `payload_type_id` names what the box carries (for example
+`SHARED_KEY_SEED_TYPE_ID` for a PUK or PTK seed) and `nonce16` is the random
+value stored in the box.
+
+Opening reverses the steps. The recipient first checks that `dh_type`
+matches the curve of its own HEPK, then computes `dh_shared` with its private
+classical key, decapsulates `kem_shared` with its private ML-KEM key,
+recomputes `payload` and `key`, and decrypts. Since the plaintext is
+authenticated by Poly1305, any change to the ciphertext, the KEM ciphertext,
+the nonce, or either public key causes the open to fail.
+
+On the recipient side the two private operations are abstracted behind a
+small trait, `HybridSecretDecapsulator`, with one method for the classical
+agreement and one for ML-KEM decapsulation. Software seeds, backup keys,
+passphrase keys and hardware keys all implement it, which is why one box
+format serves every kind of recipient.
+
+## Security argument
+
+The final key is `SHA3-256(... kem_shared ... dh_shared ...)`. An attacker
+who learns `kem_shared` but not `dh_shared`, or the reverse, learns nothing
+about the key, because SHA3-256 behaves as a random function of its whole
+input. So confidentiality holds as long as *either* X25519/P-256 or ML-KEM-768
+remains secure against the attacker in question. Against today's attackers
+both hold; against a future quantum attacker the elliptic-curve half falls
+and ML-KEM carries the weight.
+
+Two limits of the argument deserve to be stated. First, the ML-KEM half
+provides confidentiality only; the *authentication* of the sender comes
+entirely from the classical Diffie-Hellman step, discussed next. A quantum
+attacker of the future could therefore forge a sender identity on a box, but
+could not read one. FOKS accepts this because a box set is only submitted,
+and only accepted by the server, together with a chain link that names the
+new key and is signed by the sender's long-term signing key, so a forged
+sender would also need a forged link signature; and because the wire format
+inherited from the Go implementation carries classical signatures only.
+Second, the argument assumes both key pairs were
+generated honestly; a recipient that publishes a malformed HEPK weakens only
+its own boxes.
+
+## Authenticated senders
+
+A NaCl-style box authenticates its sender implicitly. If the sender uses a
+*static* Diffie-Hellman key that the recipient already knows (from the
+sender's HEPK in the chain), then only the two parties can compute
+`dh_shared`, so a box that opens correctly must have been sealed by the
+holder of that static key. No signature is needed on the box itself. This is
+how FOKS boxes normally work: the sender's static key is the X25519 key from
+its own HEPK, and the recipient looks it up from the verified chain rather
+than trusting the `sender_dh` field.
+
+This breaks down when the two parties use different curves. A software
+device with an X25519 key cannot perform Diffie-Hellman with a hardware key
+that only has P-256, and vice versa. FOKS's solution is the *temporary DH
+key*.
+
+A *box set* is the collection of boxes a single mutation produces, one per
+recipient, together with a random 16-byte `box_id` and an optional signed
+temporary key:
+
+```
+SharedKeyBoxSet {
+    box_id:      16 random bytes
+    boxes:       [SharedKeyBox, ...]
+    temp_dh_key: Option<TempDhKeySigned { key, time, signature }>
+}
+```
+
+When the recipient roster mixes curves, the sender generates one ephemeral
+key pair on the *recipient's* curve, uses it to compute `dh_shared` for every
+mismatched recipient, and signs
+
+```
+[box_id, [temp_key, time], [signer_id, host_id]]
+```
+
+under `TEMP_DH_KEY_SIG_TEMPLATE_TYPE_ID` with its long-term signing key. The
+recipient, before accepting the temporary key as "the sender", verifies that
+signature against the sender's identity from the chain. Because the signed
+message includes `box_id`, a temporary key cannot be lifted from one box set
+and reused in another. Same-curve recipients in the same set ignore the
+temporary key and use the sender's static key as usual; the code notes that
+this mirrors the Go implementation.
+
+The trick converts implicit authentication into explicit authentication for
+exactly the boxes that need it, and it costs one signature per box set
+rather than one per box.
+
+## Where the randomness comes from
+
+Every sealing function in `foks-crypto` takes its random values (the 32-byte
+KEM message, the 16-byte nonce, and for mixed rosters the ephemeral P-256
+scalar and a timestamp) as explicit arguments instead of drawing them
+internally. The client fills them from the OS generator; the tests replay
+values captured from the Go implementation. This is a small design decision
+with a large payoff: it is what makes differential testing against the
+reference implementation possible at the byte level, and it makes the
+functions pure, so a crash between generating randomness and using it can
+be recovered by replaying the stored values (see
+[Chapter 19](19-agent.qmd)).
+
+## Trade-offs
+
+The price of the hybrid is size. A single box carries a 1088-byte KEM
+ciphertext on top of the classical material, and every recipient's HEPK is
+about 1.2 kB. For a team of a few hundred members a key rotation produces a
+few hundred kilobytes of boxes. FOKS accepts this because rotations are
+infrequent and because the alternative, re-encrypting to a post-quantum key
+only once a quantum threat is credible, would leave every box sealed before
+that date exposed.
+
+The choice of XSalsa20-Poly1305 rather than an AEAD with associated data
+means the boxes have no associated-data input. FOKS compensates by putting
+context into the plaintext (the boxed seed carries its receiver, host,
+generation and role; see [Chapter 5](05-generations.qmd)) and into the nonce.
+The local keystore, which is not constrained by wire compatibility, uses an
+AEAD with associated data instead ([Chapter 8](08-local-keystore.qmd)).
+
+## Where to look
+
+- `foks-crypto` (`lib.rs`): `seal_hybrid_payload`, `open_hybrid_box`,
+  `hybrid_key_derivation_payload`, `software_dh_shared`,
+  `software_mlkem_decapsulate`, `hepk_fingerprint`, `encode_hepk`,
+  `authenticated_sender_dh`, `seal_software_puk_boxes_mixed`,
+  `seal_yubi_puk_boxes`, the `HybridSecretDecapsulator` trait, and the
+  `PukBoxRandomness` family of randomness inputs.
+- `foks-proto` (`identity/hepk.rs`, `key_material.rs`): `Hepk`,
+  `DhPublicKey`, `HybridBox`, `SharedKeyBoxSet`, `TempDhKeySigned`.
+- `foks-yubi` (`hardware.rs`): the P-256 ECDH side of the same box format.
+
+## Further reading
+
+- P. W. Shor, *Polynomial-Time Algorithms for Prime Factorization and Discrete Logarithms on a Quantum Computer*, SIAM Journal on Computing 26(5), 1997, https://doi.org/10.1137/S0097539795293172
+- National Institute of Standards and Technology, *Module-Lattice-Based Key-Encapsulation Mechanism Standard*, FIPS 203, 2024, https://doi.org/10.6028/NIST.FIPS.203
+- A. Langley, M. Hamburg, S. Turner, *Elliptic Curves for Security*, RFC 7748, IETF, 2016, https://www.rfc-editor.org/rfc/rfc7748
+- D. J. Bernstein, *Cryptography in NaCl*, 2009, https://cr.yp.to/highspeed/naclcrypto-20090310.pdf
+- D. J. Bernstein, *Extending the Salsa20 nonce*, 2011, https://cr.yp.to/snuffle/xsalsa-20110204.pdf
+- F. Giacon, F. Heuer, B. Poettering, *KEM Combiners*, PKC 2018, https://eprint.iacr.org/2018/024
+- N. Bindel, J. Brendel, M. Fischlin, B. Goncalves, D. Stebila, *Hybrid Key Encapsulation Mechanisms and Authenticated Key Exchange*, PQCrypto 2019, https://eprint.iacr.org/2018/903
+- D. Stebila, S. Fluhrer, S. Gueron, *Hybrid key exchange in TLS 1.3*, draft-ietf-tls-hybrid-design, IETF Internet-Draft, https://datatracker.ietf.org/doc/draft-ietf-tls-hybrid-design/
+- E. Barker, L. Chen, R. Davis, *Recommendation for Key-Derivation Methods in Key-Establishment Schemes*, NIST SP 800-56C Rev. 2, 2020, https://doi.org/10.6028/NIST.SP.800-56Cr2
+- National Institute of Standards and Technology, *SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions*, FIPS 202, 2015, https://doi.org/10.6028/NIST.FIPS.202
+- Certicom Research, *SEC 1: Elliptic Curve Cryptography*, Version 2.0, 2009, https://www.secg.org/sec1-v2.pdf

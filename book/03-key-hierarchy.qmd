@@ -1,0 +1,290 @@
+# One Seed, Many Keys
+
+A FOKS device needs several different keys. It signs chain links, so it needs
+a signature key. It receives encrypted key material from other devices, so it
+needs a key-agreement key and, because the design is post-quantum, a second
+key for a lattice-based key encapsulation mechanism. It encrypts small
+records for itself, so it needs a symmetric key. Storing four independent
+secrets would multiply every problem that comes with secret storage: backup,
+transfer between machines, zeroization, and the accounting of which secret
+belongs to which purpose.
+
+FOKS stores one 32-byte secret per key-bearing party and derives everything
+else from it. This chapter explains the derivation technique in general, then
+shows how `foks-rs` uses it to produce a device's *key suite*, how public
+keys become identifiers, and how a single 64-bit *type ID* is threaded
+through every hash, MAC, signature, and nonce in the protocol so that no two
+objects can be confused for one another.
+
+## Key derivation from a master secret
+
+A *pseudorandom function* (PRF) is a keyed function whose outputs, to anyone
+who does not know the key, are indistinguishable from random. Given a PRF
+$F$ and a master secret $s$, the value $F(s, \text{label})$ is a fresh secret
+that reveals nothing about $s$ and nothing about $F(s, \text{label}')$ for any
+other label. That single property is enough to fan one secret out into as
+many as needed: choose a distinct label for each purpose.
+
+HMAC (RFC 2104) is the usual choice of PRF. It takes a key and a message and
+returns a fixed-size tag, and its security as a PRF rests on the compression
+function of the underlying hash. With HMAC over SHA-512/256 the output is 32
+bytes, which is exactly the size FOKS wants for every derived secret.
+
+The one thing that can go wrong is label ambiguity. If two callers can
+produce the same label bytes for different purposes, they get the same
+derived key. The labels must therefore be encoded so that distinct meanings
+give distinct byte strings. FOKS solves this with the same canonical encoding
+it uses on the wire (see [Chapter 9](09-canonical-encoding.qmd)).
+
+The better-known HKDF (RFC 5869) is a two-step construction: an *extract*
+step condenses input keying material of uncertain quality into a uniform key,
+and an *expand* step produces output of any length. FOKS does not need the
+extract step, because its seeds are already uniformly random, and it never
+needs more than 32 bytes at a time. The repository's own guide describes
+`derive_key` as an "HKDF hierarchy"; the code is a single keyed HMAC call
+with a typed label. The two are related in spirit but are not the same
+function, and outputs are not interchangeable.
+
+## `derive_key`
+
+Every software key in FOKS (a device key, a per-user key, a per-team key, a
+backup key, a passphrase key, a bot token, a delegated subkey) is a
+`SecretSeed`: 32 bytes held in zeroizing storage and redacted from debug
+output. The function that fans a seed out is:
+
+```
+derive_key(seed, t, i) =
+    HMAC-SHA-512/256( key = seed,
+                      msg = BE64(0xd35c_dcc9_5cae_f674) || encode([t, i]) )
+```
+
+`BE64(x)` is the eight-byte big-endian encoding of `x`; the constant is the
+type ID reserved for key derivation. `encode([t, i])` is the canonical
+Snowpack encoding of a two-element list: the derivation type `t`, and either
+an empty variant (when no index is needed) or a variant tagged `4` carrying
+the index `i`. The derivation types the Rust code uses are:
+
+| `t` | Index | Derived secret | Used for |
+|---|---|---|---|
+| 0 | none | Ed25519 signing seed | identity and all signatures |
+| 1 | none | X25519 static secret | classical half of hybrid encryption |
+| 2 | none | 32-byte symmetric key | secretboxes keyed by a seed (seed chains, passphrase parcels, hardware-key escrow, federation tokens) |
+| 4 | 0 and 1 | two 32-byte halves | concatenated into the 64-byte ML-KEM-768 seed |
+| 5 | none | application-key root | key-value store and chat keys (see [Chapter 5](05-generations.qmd)) |
+
+Type 3 does not appear in the Rust code. The ML-KEM case is the only one that
+needs an index: FIPS 203 defines key generation from a pair of 32-byte
+values $(d, z)$, and the `ml-kem` crate takes them as one 64-byte seed, so
+FOKS derives each half separately and joins them.
+
+Because derivation is deterministic, whoever holds a seed can reconstruct
+the entire suite at any time. This is what makes the recovery phrase in
+[Chapter 6](06-hesp.qmd) sufficient on its own: the phrase encodes one seed,
+and everything else follows from it.
+
+## The device key suite
+
+From a device seed the suite is:
+
+| Component | Derived from | Public form | Size |
+|---|---|---|---|
+| Ed25519 signing key | `derive_key(seed, 0)` | verify key | 32 bytes |
+| X25519 static key | `derive_key(seed, 1)` | X25519 public key | 32 bytes |
+| ML-KEM-768 key pair | `derive_key(seed, 4, 0) ‖ derive_key(seed, 4, 1)` | encapsulation key | 1184 bytes |
+
+The verify key becomes the device's identifier (next section). The X25519
+public key and the ML-KEM encapsulation key are packaged together as a
+*hybrid encryption public key* (HEPK), the object [Chapter 4](04-hybrid-encryption.qmd)
+is about. Chain links carry only a 32-byte typed hash of the HEPK, called its
+fingerprint, and the full key (about 1.2 kB encoded) is uploaded alongside
+and checked against that fingerprint.
+
+The same Ed25519 key does one more job. `foks-rs` talks to servers over
+mutually authenticated TLS, and the client certificate is signed with the
+device's own signing key. The code wraps the 32-byte Ed25519 seed in a
+hand-built PKCS#8 header (the RFC 8410 form that TLS libraries expect), so a
+device authenticates to the transport with the same key that authenticates
+its chain links. There is no separate transport identity to provision or
+revoke.
+
+## Entity IDs
+
+Every party that holds keys has an *entity ID*: one type byte followed by a
+public key. For software keys the public key is the 32-byte Ed25519 verify
+key, so the ID is 33 bytes. For a hardware key (see
+[Chapter 7](07-hardware-keys.qmd)) it is a 33-byte compressed P-256 point, so
+the ID is 34 bytes. The type bytes in use are:
+
+| Type byte | Entity |
+|---|---|
+| 1 | user |
+| 2 | host |
+| 3 | named team |
+| 4 | device |
+| 8 | YubiKey (hardware device) |
+| 10 | host Merkle signer |
+| 11 | host TLS certificate authority |
+| 12 | host metadata signer |
+| 13 | delegated subkey |
+| 14 | per-user key (PUK) verify key |
+| 15 | per-team key (PTK) verify key |
+| 16 | backup key |
+| 17 | passphrase key |
+| 19 | bot token key |
+| 20 | ad hoc team |
+
+The type byte is not decoration. Functions that expect a host ID call
+`require_type(ENTITY_HOST)` and refuse anything else, and the signature
+verifier dispatches on it: type 8 must carry an ECDSA signature, every other
+type must carry Ed25519. Two parties with the same underlying public key but
+different type bytes are different entities.
+
+The most instructive consequence is how users and teams get their IDs. A
+user ID is the first owner per-user key's verify key with the type byte
+overwritten: the code copies the 33-byte PUK verify key and sets byte 0 to 1.
+A team ID is likewise the initial admin per-team key's verify key with byte 0
+set to 3 (named team) or 20 (ad hoc team). Identifiers are therefore
+*self-certifying*: the party that generated the first key chose the ID, the
+ID commits to a public key that only the key holder can use, and a server
+that wanted to substitute a different identity would have to produce a
+different ID. The server assigns nothing.
+
+## Type IDs: domain separation everywhere
+
+*Domain separation* is the practice of making sure that a cryptographic
+function applied for one purpose can never produce an output that is valid
+for another purpose. The classic failure is a signature over raw bytes: if a
+chain link and, say, a Merkle root could be serialized to the same bytes, a
+signature on one would verify as a signature on the other. Fixing such
+collisions one at a time is error-prone. FOKS fixes them systematically.
+
+Every protocol object type has a 64-bit constant called its type ID. A few
+of the ones that appear in this part of the book:
+
+| Constant | Value | Object |
+|---|---|---|
+| `LINK_OUTER_V1_TYPE_ID` | `0xc274_5284_af61_7745` | signed chain link |
+| `SHARED_KEY_SEED_TYPE_ID` | `0xa999_8e7a_59e8_ae25` | boxed PUK/PTK seed |
+| `HEPK_TYPE_ID` | `0x9c58_1bee_d36c_7e0c` | hybrid public key fingerprint |
+| `HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID` | `0x8a9e_3276_4726_2289` | hybrid key combiner |
+| `TEMP_DH_KEY_SIG_TEMPLATE_TYPE_ID` | `0xd51b_5d99_0285_023e` | temporary DH key signature |
+| `BACKUP_SEED_TYPE_ID` | `0xf4c4_fe8d_ff61_a6dc` | recovery-kit seed hash |
+| `KEX_KEY_DERIVATION_TYPE_ID` | `0x8d7b_c770_3f63_ad64` | pairing-code key derivation |
+| `KEX_CLEARTEXT_TYPE_ID` | `0xd2bc_e826_3ea1_dc0b` | pairing packet secretbox |
+| `NAME_COMMITMENT_TYPE_ID` | `0xe37b_1fcf_ba97_2353` | username commitment |
+| `DEVICE_LABEL_TYPE_ID` | `0x9650_2272_0548_6122` | device-name commitment |
+| `APP_KEY_DERIVATION_TYPE_ID` | `0x9431_8317_830b_409b` | application key root |
+| `KV_KEY_DERIVATION_TYPE_ID` | `0xdbdf_2ba2_9c0d_e2cb` | key-value store keys |
+
+The type ID is prepended, big-endian, to the canonical encoding of an object
+before the object is hashed, signed, MACed, or encrypted. Four operations
+share this layout:
+
+- **Typed hash.** `prefixed_hash(T, obj) = SHA-512/256(BE64(T) ‖ obj)`. The
+  variant used for protocol objects, `prefixed_hash_signable`, first checks
+  that `obj` is a valid canonical encoding, so only one byte string per
+  object is ever hashed.
+- **Typed signature.** Ed25519 signs `BE64(T) ‖ obj` directly. For P-256
+  (hardware keys) the same message is first reduced with SHA-512/256, because
+  the card signs a 32-byte digest.
+- **Typed HMAC.** `typed_hmac(k, T, obj) = HMAC-SHA-512/256(k, BE64(T) ‖ obj)`,
+  used for key derivation, commitments, and the integrity bindings of the
+  key-value store.
+- **Typed nonce.** NaCl secretboxes take a 24-byte nonce. FOKS fills the
+  first 8 bytes with the type ID and the remaining 16 with random bytes (or a
+  value derived from the object's identity). A ciphertext produced for one
+  purpose cannot be opened under another purpose even with the same key,
+  because the nonce would differ.
+
+The cost is eight bytes per object. In return, the space of things that can
+collide shrinks to objects of the same declared type, and for those the
+canonical encoding guarantees a unique representation.
+
+Type IDs are random 64-bit values, so they need no central registry. When
+the Rust implementation needs a new local domain that will never appear on
+the wire, it allocates one by hashing a descriptive label: the chat-v2 module
+takes the first eight bytes of SHA-256 over the ASCII strings
+`foks.chat.v2.context-key` and `foks.chat.v2.encrypted-body`, and comments
+that these are not upstream Go IDs. The probability that a label-derived ID
+collides with an existing one is negligible, and the label is a permanent
+record of what the ID means.
+
+The same idea is standardised in NIST SP 800-185 as TupleHash and cSHAKE
+customization strings; FOKS's layout is simpler but serves the same purpose.
+
+## Commitments
+
+A *commitment* is a value that binds its author to some data without
+revealing it. It has two properties: *hiding* (the commitment alone reveals
+nothing about the data) and *binding* (once published, it cannot be opened
+to different data). The HMAC of the data under a fresh random key is a
+commitment: without the key the tag reveals nothing, and finding a second
+input with the same tag under the same key would break HMAC.
+
+FOKS uses commitments where a chain must record a fact without publishing
+it. Usernames and device names are not written into chain links in the
+clear. Instead the link carries
+
+```
+commitment = HMAC-SHA-512/256( key = 16 random bytes,
+                               msg = BE64(NAME_COMMITMENT_TYPE_ID) ‖ encode([name, sequence]) )
+```
+
+and the 16-byte key is disclosed only to parties that are allowed to learn
+the name. Device labels use the same construction under
+`DEVICE_LABEL_TYPE_ID`. A verifier that has both the key and the name can
+check the link; anyone else sees an opaque 32-byte value.
+
+Two more commitments are worth knowing about because they shape
+[Part III](10-sigchains.qmd). Each chain link commits to the Merkle-tree
+location of the *next* link as `prefixed_hash_signable(TREE_LOCATION_TYPE_ID, bin(location))`,
+so the server cannot choose where the next link lands. And a user's or team's
+subchain starts at a hidden location derived from the seed,
+`HMAC-SHA-512/256(seed, BE64(CHAIN_LOCATION_DERIVATION_TYPE_ID) ‖ encode([chain_type, {}]))`,
+so an observer of the tree cannot tell which leaves belong to which party
+without the seed.
+
+## Why this design
+
+The seed-and-derive structure trades one risk for several conveniences. The
+risk is concentration: a single 32-byte value is the whole device, so the
+places it lives (the local keystore of [Chapter 8](08-local-keystore.qmd),
+the recovery kit of [Chapter 6](06-hesp.qmd)) carry the full weight of the
+design. The conveniences are that there is exactly one thing to back up, one
+thing to transfer, one thing to zeroize; that derivation is cheap enough to
+repeat on every use rather than caching derived keys on disk; and that
+adding a new purpose is a matter of choosing a new derivation type.
+
+The choice of a single HMAC over HKDF, and of SHA-512/256 over SHA-256, is
+compatibility: the reference Go implementation made these choices and
+`foks-rs` must produce byte-identical keys from the same seed. The typed
+layout for hashes, signatures, MACs, and nonces was also inherited, and it is
+the part of the design that generalises best. Any protocol that signs more
+than one kind of object should do something like it.
+
+## Where to look
+
+- `foks-crypto` (`crates/foks-crypto/src/lib.rs`): `derive_key`,
+  `derive_mlkem_seed`, `derive_public_material`, `device_signing_key_pkcs8`,
+  `prefixed_hash`, `prefixed_hash_signable`, `typed_hmac`, `commitment`,
+  `sign_ed25519_typed`, `verify_typed`, `seal_typed_secretbox`,
+  `subchain_tree_location`.
+- `foks-crypto` (`account.rs`, `chat_v2.rs`): username commitments and
+  label-derived local type IDs.
+- `foks-proto` (`lib.rs`, `entity.rs`, `key_material.rs`,
+  `identity/hepk.rs`): type ID and entity-type constants, `EntityId`,
+  `SecretSeed`, `Hepk`.
+- `foks-snowpack`: the canonical encoding that makes derivation labels and
+  hashed objects unambiguous.
+
+## Further reading
+
+- H. Krawczyk, M. Bellare, R. Canetti, *HMAC: Keyed-Hashing for Message Authentication*, RFC 2104, IETF, 1997, https://www.rfc-editor.org/rfc/rfc2104
+- M. Bellare, R. Canetti, H. Krawczyk, *Keying Hash Functions for Message Authentication*, CRYPTO 1996, https://cseweb.ucsd.edu/~mihir/papers/kmd5.pdf
+- H. Krawczyk, P. Eronen, *HMAC-based Extract-and-Expand Key Derivation Function (HKDF)*, RFC 5869, IETF, 2010, https://www.rfc-editor.org/rfc/rfc5869
+- National Institute of Standards and Technology, *Secure Hash Standard (SHS)*, FIPS 180-4, 2015, https://doi.org/10.6028/NIST.FIPS.180-4
+- National Institute of Standards and Technology, *SHA-3 Derived Functions: cSHAKE, KMAC, TupleHash, and ParallelHash*, SP 800-185, 2016, https://doi.org/10.6028/NIST.SP.800-185
+- National Institute of Standards and Technology, *Module-Lattice-Based Key-Encapsulation Mechanism Standard*, FIPS 203, 2024, https://doi.org/10.6028/NIST.FIPS.203
+- S. Josefsson, I. Liusvaara, *Edwards-Curve Digital Signature Algorithm (EdDSA)*, RFC 8032, IETF, 2017, https://www.rfc-editor.org/rfc/rfc8032
+- S. Josefsson, J. Schaad, *Algorithm Identifiers for Ed25519, Ed448, X25519, and X448 for Use in the Internet X.509 Public Key Infrastructure*, RFC 8410, IETF, 2018, https://www.rfc-editor.org/rfc/rfc8410
+- S. Halevi, S. Micali, *Practical and Provably-Secure Commitment Schemes from Collision-Free Hashing*, CRYPTO 1996, https://doi.org/10.1007/3-540-68697-5_16

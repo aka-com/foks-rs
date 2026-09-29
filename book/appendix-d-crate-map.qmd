@@ -1,0 +1,63 @@
+# Crate Map
+
+The `foks-rs` workspace contains twenty-four library and binary crates plus the
+Tauri desktop package. Line counts are rough, from `wc -l` over Rust sources
+in September 2026, and are given only to convey relative size.
+
+## Foundations
+
+| Crate | Size | Purpose | Chapters |
+|---|---|---|---|
+| `foks-snowpack` | 1.9k | Canonical Snowpack codec, byte-compatible with Go v0.1.9 | 9 |
+| `foks-proto` | 12.7k | The FOKS v0.1.9 protocol types | 9, 17 |
+| `foks-crypto` | 10.0k | Primitives, key suites, hybrid boxes, HESP phrases, KEX | 3–7 |
+| `foks-merkle-store` | 1.0k | Storage-neutral Patricia Merkle tree, proofs, epoch history | 11, 12 |
+| `foks-verify` | 8.1k | Stateless verification of host, user, and team chains | 10, 13 |
+| `foks-rpc` | 8.6k | Snowpack RPC framing, client calls, mutual TLS | 17 |
+| `foks-protocol-metadata` | 1.5k | Validation and generation of pinned protocol IDs | 23 |
+| `foks-compat-artifact` | 0.6k | Signed hosted-compatibility lease format | 23 |
+
+## Client side
+
+| Crate | Size | Purpose | Chapters |
+|---|---|---|---|
+| `foks-keystore` | 1.5k | Native credential stores: macOS Keychain, Secret Service, encrypted file | 8 |
+| `foks-yubi` | 1.8k | YubiKey PIV provider | 7 |
+| `foks-oidc` | 0.8k | OpenID Connect provider policy, shared by client and server | 22 |
+| `foks-client-db` | 15.1k | Hard-state and soft-state SQLite stores | 13, 14, 19 |
+| `foks-client` | 43.5k | Identity, recovery, teams, and key-value client logic | 5, 14, 15 |
+| `foks-client-app` | 47.7k | Profiles, sessions, vaults, chat operations | 16, 19 |
+| `foks-go-interop` | 1.2k | Reader for an existing go-foks client installation | 23 |
+
+## Agent and frontends
+
+| Crate | Size | Purpose | Chapters |
+|---|---|---|---|
+| `foks-agent-proto` | 6.0k | Local IPC protocol, JSON over a Unix socket, shared chat limits | 17, 19 |
+| `foks-agent-client` | 1.0k | Client library for the agent socket | 19 |
+| `foks-agent` | 16.5k | The resident `foks-agent` daemon | 19 |
+| `foks-cli` | 5.4k | The `foks-rs` command-line tool | 19, 21 |
+| `foks-mcp` | 1.9k | Model Context Protocol server over stdio | 21 |
+| `foks-desktop` | 8.3k | Renderer-independent desktop command library | 20 |
+| `foks-desktop-app` (`apps/desktop/src-tauri`) | 31.4k | The shipping Tauri binary | 20 |
+
+## Server side
+
+| Crate | Size | Purpose | Chapters |
+|---|---|---|---|
+| `foks-server-db` | 24.1k | Authoritative SQLite storage, schema, maintenance | 18 |
+| `foks-server` | 32.1k | Standalone single-host server, writer actor, services | 15, 16, 18, 22 |
+| `foks-server-testkit` | 21.3k | Spawns real server and agent processes for tests | 23, 24 |
+
+## Dependency order
+
+`foks-snowpack` → `foks-proto` → `foks-crypto` → `foks-verify` →
+`foks-client-db` → `foks-client` → `foks-client-app` → `foks-agent`, with
+`foks-client` also depending directly on `foks-merkle-store` and `foks-rpc`
+(both built on `foks-proto`), and with `foks-agent-proto` and
+`foks-agent-client` as the seam on which `foks-cli`, `foks-mcp`,
+`foks-desktop`, and the Tauri app sit. The server chain is `foks-server` →
+`foks-server-db` → {`foks-merkle-store`, `foks-crypto`}, and `foks-server`
+also uses `foks-rpc` and `foks-verify`. The default
+`cargo test` members are the seven core crates: `client-db`, `crypto`,
+`proto`, `snowpack`, `verify`, `client`, and `rpc`.

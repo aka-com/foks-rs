@@ -1,0 +1,242 @@
+# Tools for AI Agents: MCP and Durable Writes
+
+A language-model assistant that can read and write files on a person's
+behalf needs some way to reach those files. Giving it a shell, or a
+database connection, or the person's credentials, hands it far more than it
+needs. The Model Context Protocol exists to give it exactly a set of named
+tools with typed arguments and nothing else. This chapter describes the
+FOKS MCP server, which lets an assistant read and write an encrypted
+key-value store, and the idempotency mechanism that makes its writes safe
+to retry.
+
+## The Model Context Protocol in brief
+
+The *Model Context Protocol* (MCP) is an open specification for connecting
+assistants to external capabilities. A *server* exposes tools (functions
+the model may call), resources (data it may read), and prompts; a *client*,
+usually embedded in the assistant's host application, discovers those and
+invokes them. Messages are JSON-RPC 2.0, a small remote-procedure-call
+format in which a request has an `id`, a `method`, and `params`, and a
+response carries the same `id` with either a `result` or an `error`. The
+transport FOKS uses is *stdio*: the client spawns the server as a child
+process and exchanges newline-delimited JSON over its standard input and
+output. No network port is opened.
+
+A tool call is `tools/call` with a tool name and a JSON object of
+arguments; the reply carries content blocks (text, here) and optionally
+*structured content*, a JSON object the client can act on without parsing
+prose.
+
+## The FOKS tool sets
+
+The server is started from the command-line tool:
+
+```
+foks-rs --state-dir DIR mcp kv   --profile P --account-alias A [--read-only]
+foks-rs --state-dir DIR mcp team --profile P --account-alias A
+```
+
+It binds one profile, one account, and one authenticated host for the life
+of the process. Two tool sets exist.
+
+| Set | Tools |
+|---|---|
+| Team | `list`, `list-memberships` |
+| KV, read-only | `list`, `get`, `stat`, `usage` |
+| KV, normal | the four above plus `put`, `mkdir`, `rm`, `mv`, `foks_status`, `foks_pending` |
+
+The ten upstream tool names and their behaviors are compared against
+go-foks v0.1.9 by a compatibility script that drives both the Rust and the
+pinned Go services through an independent Go MCP SDK. `foks_status` and
+`foks_pending` are local recovery additions with no upstream counterpart.
+(The repository's HTML guide calls these `fennec_status` and
+`fennec_pending` and places `usage` in the Team set; the code uses the
+`foks_` prefix and puts `usage` in the KV set. The code is authoritative.)
+
+Paths refer to the encrypted namespace of [Chapter 14](14-kv-store.qmd);
+symlinks are resolved inside that namespace with a 32-hop limit and cycle
+detection. Binary content travels as standard base64. A `team` argument
+selects an accessible team, which the server resolves through the agent and
+re-checks to be the same profile, account, host, and user; it cannot select
+another account or state directory.
+
+Arguments deserialize with `deny_unknown_fields`, so a misspelled or extra
+key is an error rather than silently ignored. The `put` arguments zeroize
+their content on drop, the invocation type deliberately does not implement
+`Debug` because content can contain credentials, and deserialization errors
+are never echoed to the caller because they can quote input.
+
+### Read-only mode
+
+`--read-only` omits every write tool from the advertised list and rejects
+calls to them. It is the mode to use when the assistant's job is to consult
+secrets rather than change them, and it makes the reduction visible to the
+client at `tools/list` time instead of at first failure.
+
+## Bounds
+
+| Bound | Value |
+|---|---|
+| Input frame | 8 MiB |
+| Output frame | 8 MiB (checked on the *encoded* JSON, minus 1 KiB for the envelope) |
+| Decoded file content | 4 MiB |
+| Catalog or roster rows per page | 1,000 |
+| Active calls | 4 |
+| Queued calls | 16 |
+| Stalled stdout timeout | 30 s |
+
+Concurrency is a semaphore of four permits; each backend call runs on a
+blocking thread with the permit held, and cancellation of the JSON-RPC
+request is linked to a child cancellation token so that dropping the
+request interrupts the blocking IPC read. The output size is checked on the
+serialized bytes rather than the plaintext length because JSON escaping can
+expand a string as much as sixfold. The transport keeps a per-request-ID
+"publishing" marker while a response is being flushed, so a client that
+reuses an ID immediately after seeing the response bytes waits for the
+flush to complete, and a 30-second stall timeout ensures a blocked stdout
+cannot wedge the process.
+
+## No authentication at the MCP layer, and why
+
+The server does not authenticate its client. There is no token, no
+password prompt, and no PIN entry on stdin. That is a deliberate choice,
+and the boundary it relies on is the local socket.
+
+The MCP process runs as the local user and connects to that user's own
+`foks-rs.sock`. The agent on the other end accepts a connection only if the
+peer's UID, obtained from the kernel via `SO_PEERCRED` or `LOCAL_PEERCRED`,
+equals its own ([Chapter 19](19-agent.qmd)); the socket file is mode 0600
+and owner-checked on the client side too. Anyone who can spawn the MCP
+process can already read the same socket directly, so an MCP-level secret
+would add a step without adding a boundary. The account must already be
+usable by the agent (initialized, provisioned, and unlocked through the
+ordinary client); MCP never asks for the credentials that would make it
+so. If the agent is not running, the CLI starts the packaged sibling
+executable found next to itself, never a shell command or an executable
+named by a tool call.
+
+## Idempotency keys
+
+An assistant that calls `put` and then loses the connection before the
+reply has a problem: did the write happen? Calling `put` again might
+create a duplicate or overwrite a concurrent change; not calling it might
+leave the work undone. The general remedy, familiar from payment APIs, is
+the *idempotency key*: the caller attaches a unique identifier to a
+request, the server records the outcome under that identifier, and a
+repeated request with the same identifier returns the recorded outcome
+rather than executing again. Stripe popularized the pattern, and an IETF
+draft standardizes an `Idempotency-Key` HTTP header for it.
+
+Two details make the pattern sound. The key must be bound to the request's
+content, so that reusing a key with different inputs is rejected rather
+than answered with the earlier result. And the server must record the key
+*before* it acts, so that a crash between acting and recording cannot
+produce a second execution.
+
+## Durable submission IDs
+
+Every FOKS MCP write carries a *submission ID* with this canonical form:
+
+```
+v1-<16 lowercase hex Unix seconds>-<32 lowercase hex random>
+```
+
+That is a version tag, an issuance time, and 128 random bits, 52 characters
+in all. The server generates one for each write by default. A client may
+instead supply its own, which is how an assistant keeps its intent across a
+restart of the MCP process: it records the ID before calling, and if the
+reply is lost it asks after the same ID rather than issuing a new write.
+Reusing an ID with different inputs, including a different team, is
+rejected; the ledger stores a hash of the inputs alongside the ID for
+exactly this comparison. A JSON-RPC request ID is not a submission ID and
+is never used as one.
+
+Every write's structured result carries four fields:
+
+| Field | Meaning |
+|---|---|
+| `submission_id` | the ID under which this write is recorded |
+| `status` | `prepared`, `committed`, `rejected`, or `unknown` |
+| `partial` | ancillary namespace work committed but final completion is unproven |
+| `node_id` | the resulting node, present only when authenticated evidence proves it |
+
+The status words have precise meanings. *Prepared* means remote delivery
+has not begun; the same input under the same ID may execute once. *Committed*
+means the operation has sufficient acknowledgment or exact namespace
+evidence. *Rejected* means it cannot execute under that ID. *Unknown* means
+delivery may have occurred: the assistant must inspect status instead of
+issuing the write with a new ID.
+
+The two recovery tools serve that inspection. `foks_status` takes a
+submission ID and reads or reconciles the recorded intent, which may
+involve the agent re-reading the directory to find out whether the write
+landed ([Chapter 19](19-agent.qmd) covers that reconciliation).
+`foks_pending` lists intents that are pending, including handles whose
+original preparation or result reply was lost, so an assistant that has
+forgotten what it was doing can find out.
+
+### Exactly-once under retries
+
+The guarantee these pieces add up to is *exactly-once* from the caller's
+point of view, under the discipline that a caller never repeats a mutation
+with a new ID after an unknown outcome. The submission ledger lives in the
+agent's hard-state database, where its rows are protected by triggers: the
+identifying fields of a submission are immutable once written, a user is
+capped at 64 active and 65,536 retained intents, and terminal evidence is
+retained for 30 days before it may be pruned. Pending and uncertain
+submissions are never deleted by age or storage pressure, because deleting
+one would turn "unknown" into "forgotten."
+
+The ledger also has a clock discipline. New handles must be no more than 24
+hours old and no more than five minutes in the future; a durable rejection
+watermark, made irreversible by a trigger, prevents a clock set backward
+from reopening handles that were already refused as stale. A wall-clock
+jump of more than five minutes, or a restart more than 24 hours past the
+last trusted floor, blocks new admission with `clock-untrusted` while status
+and recovery continue to work; an operator repairs the anchor with an
+explicit two-step command.
+
+Cancellation is honored but does not undo remote work; a cancelled request
+answers "check mutation status before retrying." An interrupted upload may
+leave an unreferenced encrypted object on the server, which the server's
+bounded reclamation ([Chapter 18](18-server-storage.qmd)) collects later. A
+lost delete acknowledgment can remain unknown indefinitely, because the
+current absence of a name cannot prove which delete removed it.
+
+## Protocol versions
+
+The server advertises MCP revision 2025-11-25 and negotiates 2025-06-18,
+2025-03-26, and 2024-11-05 through the official Rust SDK, pinned to an
+exact version. Advertising the newest and accepting older revisions lets
+an assistant host that has not yet updated continue to work.
+
+## Where to look
+
+- `foks-mcp`: `contract.rs` (limits, tool sets, argument types),
+  `session.rs` (concurrency, cancellation, output bound, protocol
+  versions), `transport.rs` (stdio codec, publishing marker, stall
+  timeout), `agent.rs` and `agent/writes.rs` (scope binding, path
+  resolution, submission handles), `README.md`.
+- `foks-cli`: `mcp.rs` (entry point, `ensure_agent`).
+- `foks-proto`: `submission.rs` (`SubmissionHandle`).
+- `foks-client-db`: the `kv_adapter_submissions` and `kv_adapter_clocks`
+  tables in `schema.rs`, `repositories/adapter/`.
+- `tools/foks-v019-oracle/run-mcp-compat.sh`.
+
+## Further reading
+
+- Anthropic and contributors, *Model Context Protocol Specification*,
+  revision 2025-11-25, https://modelcontextprotocol.io/specification/2025-11-25
+- JSON-RPC Working Group, *JSON-RPC 2.0 Specification*, 2010,
+  https://www.jsonrpc.org/specification
+- Model Context Protocol project, *Rust SDK (rmcp)*, GitHub,
+  https://github.com/modelcontextprotocol/rust-sdk
+- J. Jena and S. Dalal, *The Idempotency-Key HTTP Header Field*,
+  draft-ietf-httpapi-idempotency-key-header, IETF, work in progress,
+  https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/
+- Stripe, *Idempotent requests*, Stripe API Reference,
+  https://docs.stripe.com/api/idempotent_requests
+- Pat Helland, *Idempotence Is Not a Medical Condition*, ACM Queue 10(4),
+  2012, https://queue.acm.org/detail.cfm?id=2187821
+- Linux man-pages project, *unix(7)* (`SO_PEERCRED`),
+  https://man7.org/linux/man-pages/man7/unix.7.html

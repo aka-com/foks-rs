@@ -1,0 +1,57 @@
+# Preface {.unnumbered}
+
+This book is about the ideas inside `foks-rs`, a Rust implementation of FOKS,
+the Federated Open Key Store. FOKS is an end-to-end encrypted store for
+secrets, files, team data, and messages, designed so that the servers holding
+the data cannot read it and cannot silently rewrite history. Building such a
+system means solving a series of well-defined problems: how to derive many
+keys from one, how to let a group share a secret and later exclude a member,
+how to prove that a server has not lied about who holds which keys, how to
+encrypt a directory tree without revealing its shape, and how to make all of
+this survive crashes, restarts, and the eventual arrival of quantum computers.
+
+The book explains the algorithms, data structures, and engineering techniques
+`foks-rs` uses to solve those problems. It is not a code walkthrough and not an
+API reference. Where a chapter names a crate or module, it does so only so
+that a curious reader knows where to look next.
+
+## Who this book is for
+
+The reader is assumed to have a modest computer science background: you know
+what a hash function does, that public-key cryptography involves a key pair,
+and how a binary tree works. You do not need to have studied cryptography or
+distributed systems. Each chapter introduces the general technique first,
+then shows how FOKS uses it and why. Appendix A is a primer on the
+cryptographic building blocks that recur throughout the book, and the glossary
+in Appendix B collects the vocabulary.
+
+## How the book is organized
+
+- **Part I, Orientation,** states the problem FOKS solves, the threat model it
+  works under, and the overall shape of the system.
+- **Part II, Secrecy,** covers everything that keeps data confidential: the key
+  hierarchy, hybrid post-quantum encryption, generational keys, human-readable
+  recovery phrases, hardware tokens, and the local keystore.
+- **Part III, Authority,** covers everything that makes history tamper-evident:
+  canonical encoding, signature chains, the Merkle tree, the epoch graph, and
+  client-side verification.
+- **Part IV, Data,** covers the three things people actually store: encrypted
+  key-value trees, teams, and chat.
+- **Part V, Systems engineering,** covers the server's storage design, the
+  local agent, the desktop application, the Model Context Protocol server,
+  single sign-on, compatibility testing against the reference Go
+  implementation, and performance measurement.
+
+Chapters end with two short sections. **Where to look** names the crates and
+modules that implement the chapter's ideas. **Further reading** lists the
+standards, papers, and documentation that describe the underlying techniques.
+The bibliography in Appendix C collects all of them.
+
+## A note on sources
+
+The statements in this book were checked against the `foks-rs` source as of
+September 2026. FOKS is a pre-1.0 project and its internals change; constants
+and schema versions quoted here are a snapshot, not a contract. Where the
+Rust implementation deliberately mirrors a quirk of the upstream Go
+implementation, the book says so, because those quirks are often the most
+instructive parts.

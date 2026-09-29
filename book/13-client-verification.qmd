@@ -1,0 +1,264 @@
+# Verifying on the Client
+
+The previous four chapters described what the server publishes: canonical
+bytes, signed chain links, a Merkle tree, and a signed root per epoch with
+pointers to earlier roots. This chapter is about the other end. A client has
+a local database, a network connection to a server it does not trust, and a
+sequence of sessions separated by restarts. It must decide what to believe,
+remember what it has believed, and refuse anything that contradicts it. The
+chapter also states plainly what this arrangement does and does not detect.
+
+## The problem
+
+Three things can go wrong from the client's point of view. The server it
+reaches under a given name may not be the server it reached last time. The
+server may present a history that is older than, or inconsistent with, what
+the client already verified. And the client's own local storage may have been
+restored from a backup, copied, or tampered with, so that what it "remembers"
+is itself stale. FOKS treats the local database as *hard state*: durable,
+monotonic, and re-verified on load, but never trusted merely because it is
+local.
+
+## Trust on first use
+
+A user reaches a host by a *lookup name*, typically a DNS name. The first
+contact is a probe over ordinary web-PKI TLS that returns the host's entire
+hostchain, its signed public zone (service endpoints), and its current signed
+Merkle root. The client verifies the hostchain from genesis
+([Chapter 10](10-sigchains.qmd)), checks the public zone and root signatures
+against keys the chain delegates, and checks the root's hostchain binding.
+The host's identity is the genesis key of that chain, prefixed with the host
+entity type; nothing about the DNS name or the web-PKI certificate enters
+into it.
+
+The client then records the pair `(lookup_name, host_id)` in a
+`host_lookups` table with an insert-if-absent. On every later probe, the
+table is consulted first: if the name is already pinned to a different host
+ID, the snapshot is rejected with `HostIdentityChanged` before anything else
+is examined. Two further checks apply to the host record itself: a stored
+host's `genesis_key` may never change (`GenesisChanged`), and a discovery
+path that already knows the expected host ID, such as a beacon lookup, must
+find that exact ID in the verified chain or the probe fails.
+
+This is trust on first use (TOFU), the model SSH's `known_hosts` file made
+familiar and that Wendlandt, Andersen, and Perrig analyzed in the
+*Perspectives* paper. The first contact is unauthenticated except by
+web-PKI; every subsequent contact is authenticated against the identity that
+first contact established. FOKS strengthens the model in one way: what is
+pinned is not a bare key but the genesis of a signed chain, so the host can
+rotate its working keys and TLS authorities without the pin changing, as long
+as each rotation is a valid link from the pinned genesis.
+
+## Hard-state monotonicity
+
+Once a host is pinned, every verified object that arrives is admitted through
+a gate that compares it with what is stored. The gates live in
+`foks-client-db` and are enforced inside SQLite transactions.
+
+| Check                                | Error                  | Condition                                                          |
+|--------------------------------------|------------------------|--------------------------------------------------------------------|
+| Merkle epoch went backward           | `MerkleRollback`       | offered root's epoch is below the stored head                      |
+| Different root at the same epoch     | `MerkleFork`           | equal epoch but a different hash *or* different root bytes         |
+| Hostchain got shorter                | `ChainRollback`        | offered chain's sequence number is below the stored one            |
+| Hostchain diverged                   | `ChainFork`            | equal length but different tail or bytes; or longer but not a prefix extension |
+| Host genesis changed                 | `GenesisChanged`       | stored genesis key differs                                         |
+| Name resolved to another host        | `HostIdentityChanged`  | lookup name already pinned to a different host ID                  |
+
+The hostchain check has a detail worth noting. A longer chain is accepted only
+if the stored chain bytes are an encoded-array prefix of the new bytes; the
+client does not merely compare sequence numbers, it confirms the new history
+literally begins with the old. The same discipline applies to user, team, and
+generic-chain snapshots, each of which carries the Merkle epoch and root hash
+it was verified under, with a foreign key into the table of accepted roots.
+
+A failed check rolls back the whole transaction. If a probe carries a valid
+hostchain advance together with a Merkle root that is older than the stored
+head, the hostchain advance is discarded too; the client does not accept half
+of a snapshot. And because a verify-then-accept sequence must not interleave
+with another operation on the same host database (a slower operation
+accepting an older head would read as a rollback of a newer one), the client
+serializes the whole span with a per-database, thread-reentrant lock.
+
+The monotonic gate is intentionally narrow. The verifier in `foks-verify` does
+the cryptographic work and issues a result; the database checks only that the
+result does not move backward relative to what it already holds. The comment
+in the acceptance path says: "Acceptance receives a verifier-issued
+capability. Retain its signed head, not the proof history used to obtain that
+capability."
+
+## Evidence and restoration
+
+What the client stores is not a summary of what it verified but the *exact
+bytes* it verified. A verified user state carries `evidence_bytes`: the
+concatenated server responses, unchanged. A Merkle head carries evidence of
+one of four kinds:
+
+| Evidence kind      | Meaning                                                                  |
+|--------------------|--------------------------------------------------------------------------|
+| `SignedBootstrap`  | the signed root from a probe                                             |
+| `SignedRefresh`    | a later signed probe root following a host-key rotation                  |
+| `SkipPath`         | a signed latest root plus the historical-roots response that connected it to a prior head |
+| `LocalCheckpoint`  | the flattened durable form: only the signed head                         |
+
+On acceptance the evidence is flattened to a `LocalCheckpoint`. Early
+versions of the client stored the full recursive `SkipPath` spine, each
+advance wrapping the evidence of the one before; a schema migration converts
+those to flat checkpoints with an iterative parser written specifically so
+that a spine thousands of levels deep cannot exhaust the stack. The verifier's
+own recursive restorer caps depth at 4,096.
+
+On open, the client does not trust the stored projection. It re-verifies the
+signed head against the stored hostchain, checks that every stored
+authenticated root's bytes hash to its stored hash, and replays the stored
+chain evidence through the same verifier that accepted it originally,
+requiring the projected state to match byte for byte
+(`restore_verified_user`, `restore_verified_team`). The restore function's
+documentation is explicit about its trust boundary: it "deliberately does not
+re-prove the historical roots," and "Never use it for network-supplied
+roots." What is proved on restore is that the database is self-consistent and
+its head is signed by the host; the rest is trusted as local state that was
+verified when it was written.
+
+Because chain evidence pins the roots it cites, roots cannot simply be
+deleted as they age. A garbage collector computes the live set from every
+head, every user, team, and generic snapshot, every epoch named in stored
+evidence, and any caller-supplied pins, refuses to run while any workflow is
+in a non-terminal state, and removes only unreferenced roots. It starts
+automatically once more than 128 roots accumulate.
+
+The application layer above the database, `foks-client-app` running inside
+the agent, adds a defense the database cannot provide for itself. Every write
+to a revision-tracked table bumps a revision counter and rerolls a random
+16-byte write token; the application copies the pair,
+together with the pinned host's chain tail and Merkle epoch, into a
+checkpoint stored in the operating system's keychain, outside the state
+directory. On each session the two are reconciled: a lower revision, an
+unchanged revision with a different token, a higher revision with the same
+token, a host identity change, a chain that no longer contains the
+checkpointed tail, or a lower Merkle epoch each raise `RollbackDetected`.
+This catches a state directory restored from backup, which SQLite alone
+cannot notice. Part V returns to the rest of that design.
+
+## Advancing
+
+A typical session begins with `advance_merkle_root`. The client restores the
+pinned host and its Merkle anchor from hard state, fetches the current signed
+root, computes which historical roots and hashes it needs
+([Chapter 12](12-epochs.qmd)), fetches them, runs
+`verify_signed_merkle_advance`, and passes the result through the monotonic
+gate. Chain loads follow, each verified against the newly authenticated root
+set, with any older roots cited by links proven in batches. If a chain load
+fails only because the root moved underneath it, the client re-probes and
+retries a bounded number of times; every other failure is final.
+
+Where a full reload would be wasteful, the client uses the batched absence
+probes of [Chapter 11](11-merkle-tree.qmd): two keys per pinned member,
+derived locally, answered by one multi-lookup under the current root. A
+proven absence means the pinned state is current; anything else degrades to
+a reload.
+
+## What is detected, and what is not
+
+It is worth being exact about the guarantee. Within a single client's view
+of a single host, the design ensures:
+
+- **No rollback.** The Merkle epoch, the hostchain length, and each chain's
+  sequence number are monotonic in hard state.
+- **No fork at a seen epoch.** Two different roots at the same epoch, whether
+  offered at different times or proved through different skip paths, are
+  rejected.
+- **No unlinked history.** Every newer root must skip-path back to the pinned
+  root; every older root cited by a link must skip-path forward to the latest.
+- **No truncation.** Every chain load ends with an absence proof for the next
+  link.
+- **No substitution.** A leaf's value is the hash of the exact link bytes, and
+  those bytes are signed by keys the replayed chain authorized.
+
+What the design does *not* do, as the code stands, is compare roots between
+clients or with any third party. A server that maintains two permanently
+separate histories, showing one to client A and the other to client B, is
+never contradicted by anything A or B checks on its own. Each sees a
+consistent, monotonic, well-formed history. This is precisely the *fork
+consistency* guarantee that Li, Krohn, Mazières, and Shasha defined for SUNDR:
+an untrusted server can partition its clients into groups that see divergent
+histories, but it can never merge them again without detection, because the
+moment a client in one group sees an object from the other, the skip-path
+and equal-epoch checks fail.
+
+The transparency literature closes this gap with *gossip* or *auditing*.
+Certificate Transparency relies on monitors that fetch entire logs and on
+clients or browsers exchanging signed tree heads out of band. CONIKS
+specifies auditors that record every published root and lets clients compare
+the root they were shown with the one an auditor recorded. Key Transparency
+and SEEMless publish the log of roots so that anyone can check it. FOKS, as
+inspected in `foks-rs`, has no such mechanism: no root gossip between
+clients, no auditor role, and no channel by which a user could learn that a
+colleague's client saw a different epoch 998.
+
+Two features narrow the server's room without closing it. First, every link
+a client submits cites the root that client saw, and the link is then
+published in the tree under a signed root; any other client that reads that
+chain must be able to skip-path from its own view to the cited root. A server
+running two histories therefore cannot let a user from one history write into
+a chain that users from the other history read. Second, a host's identity is
+its genesis key and its roots are signed, so any two roots for the same epoch
+that ever meet, by any route, are unambiguous evidence of misbehavior. The
+missing piece is a route. Users who want stronger assurance today can compare
+root hashes for an epoch out of band; the objects needed to do so are already
+signed and already stored.
+
+## Transport trust
+
+The probe is the only call made over web-PKI TLS. Every other service is
+reached over TLS rooted in the host's own hostchain: a hostchain link of type
+`TlsCa` introduces a certificate authority whose subject key must equal the
+Ed25519 key inside the link's entity ID, and the client builds its trust store
+from only those certificates. In the other direction, an enrolled device
+obtains a seven-day X.509 client certificate whose public key is the
+device's own Ed25519 key, issued by the host's client-identity CA, and
+presents it on every authenticated connection; the server checks that the
+certificate's key equals the key inside the credential it is bound to. The
+chain of trust for the connection therefore starts at the same genesis key as
+the chain of trust for the data. [Chapter 17](17-wire.qmd) covers the
+transport in detail.
+
+## Where to look
+
+- `foks-client-db`: the crate root for `accept_merkle_root` and the error
+  kinds; `repositories::host` for the hostchain and lookup-name gates;
+  `schema` for the `merkle_roots`, `merkle_heads`, and `host_lookups` tables;
+  `merkle_checkpoint` for evidence flattening and legacy conversion;
+  `merkle_gc` for root collection.
+- `foks-client`: `host` for `probe_and_pin`, `probe_and_pin_host_id`, and
+  `authenticated_tls_roots`; `pinning` for the verify-and-accept span; `auth`
+  for `advance_merkle_root` and chain-load retry; `change_marker`.
+- `foks-verify`: `merkle` for the evidence types,
+  `restore_local_merkle_checkpoint`, and `restore_merkle_anchor`; `user` and
+  `team` for `restore_verified_user` and `restore_verified_team`; `host` for
+  `verify_public_host`.
+- `foks-client-app`: `checkpoint` for the keychain-backed rollback checkpoint.
+- `foks-server`: `pki::host_tls` for the delegated TLS and client-identity
+  CAs; `auth::principal` for certificate-to-credential binding.
+
+## Further reading
+
+- D. Wendlandt, D. G. Andersen, and A. Perrig, *Perspectives: Improving
+  SSH-style Host Authentication with Multi-Path Probing*, USENIX Annual
+  Technical Conference, 2008,
+  https://www.usenix.org/legacy/event/usenix08/tech/full_papers/wendlandt/wendlandt.pdf
+- J. Li, M. Krohn, D. Mazières, and D. Shasha, *Secure Untrusted Data
+  Repository (SUNDR)*, OSDI, 2004,
+  https://www.usenix.org/legacy/event/osdi04/tech/full_papers/li_j/li_j.pdf
+- M. S. Melara, A. Blankstein, J. Bonneau, E. W. Felten, and M. J. Freedman,
+  *CONIKS: Bringing Key Transparency to End Users*, USENIX Security, 2015,
+  https://www.usenix.org/conference/usenixsecurity15/technical-sessions/presentation/melara
+- B. Laurie, E. Messeri, and R. Stradling, *RFC 9162: Certificate
+  Transparency Version 2.0*, IETF, 2021, https://www.rfc-editor.org/rfc/rfc9162
+- M. Chase, A. Deshpande, E. Ghosh, and H. Malvai, *SEEMless: Secure
+  End-to-End Encrypted Messaging with less Trust*, ACM CCS, 2019,
+  https://doi.org/10.1145/3319535.3363202
+- Google, *Key Transparency*, GitHub, https://github.com/google/keytransparency
+- Keybase, *Keybase Book: Server Trust* (sigchains and the Merkle tree),
+  https://book.keybase.io/docs/server
+- E. Rescorla, *RFC 8446: The Transport Layer Security (TLS) Protocol
+  Version 1.3*, IETF, 2018, https://www.rfc-editor.org/rfc/rfc8446

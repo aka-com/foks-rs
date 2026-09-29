@@ -1,0 +1,290 @@
+# Epochs and the Skip-Pointer History
+
+The tree of [Chapter 11](11-merkle-tree.qmd) changes whenever anything on the
+host changes, and each change produces a new signed root. A client that
+verified root 995 last week and is now shown root 998 needs to know that 998
+*descends* from 995: that the server extended the history it showed before
+rather than replacing it. A Merkle log answers this with a consistency proof,
+but the FOKS tree is a dictionary whose leaves are overwritten, so no such
+proof exists. This chapter describes the structure FOKS uses instead: a
+deterministic set of back pointers from each root to earlier roots, arranged
+so that any two epochs are connected by a path of logarithmic length.
+
+## Epochs and signed roots
+
+An *epoch* is one version of the tree. The server mints a new epoch for every
+accepted mutation: a signup, a chain link, a host-key rotation. There is no
+batching across requests; one mutation is one epoch, and the root is signed
+and published in the same database transaction that stores the mutation.
+Epochs are numbered from 1, and a root claiming epoch 0 is rejected on decode.
+
+A `MerkleRoot` is a versioned Snowpack object `[1, {"1": [ … ]}]` whose
+inner array has at least these five fields:
+
+| Field           | Type                 | Meaning                                                   |
+|-----------------|----------------------|-----------------------------------------------------------|
+| `epoch`         | unsigned             | this root's epoch number                                  |
+| `time`          | unsigned             | server clock at minting, in milliseconds                  |
+| `back_pointers` | 32 bytes             | typed hash of the list of `(epoch, root hash)` pointers   |
+| `root_node`     | 32 bytes             | hash of the tree's root node (all zero for an empty tree) |
+| `hostchain`     | `[seqno, 32 bytes]`  | the hostchain tail current when the root was minted       |
+
+Any trailing fields are retained as extensions and re-encoded unchanged. The
+root's hash is the typed hash `prefixed_hash(MERKLE_ROOT_TYPE_ID, exact bytes)`. On the wire the root travels as a `SignedBlob`, signed
+under `MERKLE_ROOT_BLOB_TYPE_ID` by the host's delegated Merkle-signer key,
+which must be an active key of type `ENTITY_HOST_MERKLE_SIGNER` in the
+hostchain the client has verified. The `hostchain` field is what
+[Chapter 10](10-sigchains.qmd) called the root-to-chain binding: a verifier
+requires it to equal the tail of the hostchain it trusts, so that "which set
+of host keys was current" and "which tree was current" are one statement.
+
+Note what the root does *not* contain: the hash of the previous root. A plain
+hash chain over roots would let a client verify descent only by fetching every
+intermediate root, which for a client that has been offline for ten thousand
+mutations is ten thousand roots. The `back_pointers` field replaces the single
+previous-hash with a small, deterministic set.
+
+## The back-pointer sequence
+
+Each epoch $E$ points back to a list of earlier epochs. The list is a pure
+function of $E$:
+
+```
+back_pointer_sequence(E):
+    if E in {0, 1}: return []
+    if E == 2:      return [1]
+    if E == 3:      return [2, 1]
+    if E == 4:      return [3, 2, 1]
+    d = 1
+    out = []
+    while E > d:
+        out.push(E - d)
+        if E & d != 0: break      # stop after the first set bit of E
+        d = d * 2
+    return out
+```
+
+Epoch $E$ points to $E-1$, $E-2$, $E-4$, $E-8$, and so on, halting after the
+pointer whose distance equals the lowest set bit of $E$. The cases 3 and 4 are
+special-cased to match the Go implementation, whose early epochs predate the
+general rule. Some values, all of which appear in the crate's tests and, for
+996 through 998, in the Go fixtures:
+
+| Epoch | Binary        | Back pointers        | Count |
+|------:|---------------|----------------------|------:|
+| 8     | `1000`        | 7, 6, 4              | 3     |
+| 16    | `10000`       | 15, 14, 12, 8        | 4     |
+| 996   | `1111100100`  | 995, 994, 992        | 3     |
+| 997   | `1111100101`  | 996                  | 1     |
+| 998   | `1111100110`  | 997, 996             | 2     |
+| 65536 | `1` + 16 zeros | 65535, 65534, …, 32768 | 16  |
+
+Apart from the special cases, an epoch that is not a power of two has one
+more pointer than it has trailing zero bits, and a power of two $2^k$ has
+exactly $k$, because the loop ends when $d$ reaches $E$. On average an epoch has two
+pointers, and no epoch below $2^{16}$ has more than fifteen.
+
+The list is hashed into the root as
+
+$$
+\texttt{back\_pointers} = \mathrm{prefixed\_hash}\big(\texttt{MERKLE\_BACK\_POINTERS\_TYPE\_ID},\
+\mathrm{encode}([[E_1, h_1], [E_2, h_2], \ldots])\big),
+$$
+
+with an empty list encoded as `Null`. The server also stores the pointers
+relationally, in a table whose constraints require every target epoch to be
+smaller than the source and to reference an existing root.
+
+Drawn as a graph, the pointers form a structure in which every epoch reaches
+epoch 1 in $O(\log E)$ hops, and every pair of epochs $E' > E$ is connected by
+$O(\log(E' - E))$ hops:
+
+```
+   epoch:       8     9    10    11    12    13    14    15    16
+
+   distance 1:  8 <-- 9 <-- 10 <-- 11 <-- 12 <-- 13 <-- 14 <-- 15 <-- 16
+   distance 2:  8 <-------- 10 <-------- 12 <-------- 14 <-------- 16
+   distance 4:  8 <---------------------- 12 <---------------------- 16
+   distance 8:  8 <---------------------------------------------- 16
+```
+
+Each arrow is one entry in the source epoch's pointer list: 12 points to 11,
+10, and 8; 16 points to 15, 14, 12, and 8. This is a deterministic skip list
+laid over the epoch sequence, in the sense of Pugh's data structure: level-$k$
+pointers span $2^k$ epochs, and an epoch $E$ carries a level-$k$ pointer
+exactly when $2^k$ divides $E$ and $2^k < E$. Because every
+pointer is committed by a signed root, the structure is an *authenticated*
+skip list, a construction studied by Maniatis and Baker for secure timelines
+and used by Keybase for exactly this purpose.
+
+## Walking from a new root to a pinned one
+
+Suppose the client holds a verified root at epoch $P$ (the *pin*) and the
+server offers a signed root at epoch $L > P$. The client must find a chain of
+back pointers from $L$ to $P$. The walk is greedy: from the current epoch,
+look at its pointer list and jump to the smallest target that is still at
+least $P$; repeat until the current epoch is $P$ or lower. Along the way,
+every pointer target seen becomes a *sibling* whose hash will be needed to
+recompute a pointer list, whether or not it is on the path.
+
+For the fixture case $L = 998$, $P = 995$:
+
+```
+   998 --> pointers [997, 996]   jump to 996 (smallest >= 995); siblings 997
+   996 --> pointers [995, 994, 992]   jump to 995; siblings 994, 992
+   path = [998, 996]        siblings = [997, 996, 995, 994, 992]
+```
+
+The client already holds the two endpoints, so it asks the server for the
+*full roots* of every other epoch on the path (here 996) and the *bare
+hashes* of every sibling other than the endpoints (here 997, 996, 994, and
+992; a path epoch's hash is requested in both lists). The
+request is shaped by `merkle_history_requirements`; the server answers with a
+`HistoricalMerkleRoots { roots, hashes }` and accepts at most 64 epochs per
+list.
+
+Verification then proceeds in `verify_merkle_advance`:
+
+1. Re-derive the pinned root's hash from its stored bytes and confirm it
+   matches the pinned hash. A corrupted pin is reported as `MerkleFork`.
+2. Decode the offered root. An epoch below the pin is `MerkleRollback`. Its
+   `hostchain` field must equal the trusted tail (`MerkleHostchainMismatch`).
+   If the epochs are equal the hashes must be equal, and the walk is over.
+3. Check that the response has exactly the requested shape: the same number
+   of full roots and hashes, in the requested epochs (`MerkleHistoryShape`).
+4. Build a table from epoch to hash containing the pin, the offered root,
+   every supplied full root (hashed locally), every supplied bare hash, and
+   every hash the pin already carried as an authenticated root. An epoch
+   supplied twice with different hashes is a fork.
+5. Walk the path from $L$ downward. At each path epoch, recompute its pointer
+   list from the table, hash the list, and compare with that root's
+   `back_pointers` field. Also confirm that the *previous* path root's
+   pointer list contained this epoch with this hash.
+6. Finally, require that the last pointer list contains $(P, \text{pinned hash})$.
+
+Step 5 is where the bare hashes earn their trust. A sibling hash is accepted
+not because the server sent it but because a root the client has already
+tied to the signed head commits to it through a pointer-list hash. Flip one
+bit of any sibling and the recomputed list no longer hashes to the field in
+the signed root. The verify crate's tests do exactly that.
+
+If the walk succeeds, every hash in the table is now an *authenticated root*,
+and the result carries the whole set forward. Merging two such sets rejects
+any epoch proved to two different hashes.
+
+The walk costs $O(\log N)$ hashes and one or two round trips regardless of
+how many epochs elapsed. The public-signature check happens once, on the
+offered root; the pinned root was signed when it was accepted; and every
+intermediate root is trusted only through the pointer hashes, so the
+intermediate roots' own signatures are never needed.
+
+## Authenticating older roots
+
+Chain links cite the root their signer saw, and those epochs are usually older
+than the client's latest root. The client must confirm that each cited root
+is a genuine ancestor of the latest, or a server could fabricate a root for a
+link to cite. The same walk runs in reverse: for each cited epoch $T$ the
+client asks for the full root at $T$, treats it as an untrusted pin, and
+proves that the trusted latest root descends from it. The user-chain loader
+batches these requests, at most 64 targets per call. After the proof, the
+cited root joins the authenticated set and the link's citation is accepted.
+
+## Host-key rotation
+
+When the host rotates a key, it appends a hostchain link and mints a new
+epoch with the *same* `root_node` but a new `hostchain` tail, then re-runs
+the public-host verification on its own output before publishing. From the
+client's side this is an ordinary advance with an additional hostchain link
+to verify, recorded as `SignedRefresh` evidence; roots that earlier user and
+team snapshots depend on remain valid.
+
+## The epoch 65,536 ceiling
+
+Epoch $65{,}536 = 2^{16}$ is the first whose pointer list has 16 entries.
+Sixteen elements do not fit a fixarray, so Snowpack encodes the list as
+`array16`. As [Chapter 9](09-canonical-encoding.qmd) explained, go-foks
+v0.1.9's canonicality validator for signed and hashed objects rejects every
+`array16` of 31 or fewer elements, with the message "array16 where fixed
+array encoding is possible." The Go oracle test in the repository builds the
+pointer list for epoch 65,536 with Go's own `MerkleBackpointerSequence` and
+shows that Go's `HashBackPointers` fails on it.
+
+The Rust engine reproduces the limit deliberately rather than routing around
+it:
+
+- `MAX_CANONICAL_MERKLE_EPOCH` is 65,536.
+- `back_pointer_hash` returns `EpochLimitExceeded` when the pointer count is
+  in the range 16 to 31, before any encoding takes place.
+- The server maps that error to the `MERKLE_VERIFY_ERROR` status rather than
+  a retryable one, so the failed mutation is reported as what it is.
+- The client's verifier hashes pointer lists through the signable validator,
+  so a client would also reject such a root if a server produced one by other
+  means.
+
+Because epoch 65,536 cannot be published, a compatible tree cannot advance
+past epoch 65,535 at all. At one epoch per mutation, that is the number of
+mutations a v0.1.9-compatible host can accept in its lifetime. The crate's
+README states the situation and the way out: "Raising the ceiling requires a
+coordinated upstream canonicality/wire fix." An implementation that quietly
+emitted a different encoding would produce roots that every existing client
+rejects, which is worse than stopping.
+
+The ceiling is the clearest example in the system of how canonical encoding
+and hash commitment interact. A rule about which MessagePack marker is
+acceptable became a protocol constant, because the bytes the rule governs are
+the bytes every signature and every hash cover, and no single party can change
+them.
+
+## Trade-offs
+
+Compared with a Merkle log of roots (the approach in Key Transparency,
+SEEMless, and similar designs), the skip-pointer history stores no extra tree
+and needs no separate log root; the pointers live inside the object that is
+already signed. The verifier logic is a few dozen lines over a hash table. The
+cost is that proofs are about *roots*, not leaves: the skip walk shows that
+the server's sequence of roots is one sequence, but says nothing about how a
+particular key's value changed between two epochs. FOKS does not need the
+latter, because chain links are themselves hash-chained and the tree only has
+to commit to their tails.
+
+Compared with a plain previous-hash chain over roots, the skip pointers cost
+roughly two extra hashes per root on average and a small relational table on
+the server, and they turn an $O(N)$ walk into an $O(\log N)$ one.
+
+## Where to look
+
+- `foks-merkle-store`: `history` for `back_pointer_sequence`,
+  `back_pointer_hash`, `collect_roots`, and `MAX_CANONICAL_MERKLE_EPOCH`;
+  `tests/history.rs` for the fixture cases.
+- `foks-verify`: `merkle` for `merkle_history_requirements`,
+  `verify_signed_merkle_advance`, `verify_merkle_advance`,
+  `authenticate_historical_roots_from_latest`, and the evidence types.
+- `foks-proto`: `host` for `MerkleRoot`, `MerkleBackPointer`, and
+  `HistoricalMerkleRoots`.
+- `foks-server`: `net::session` for epoch minting and the historical-roots
+  handler; `host::rotation` for key rotation; `error` for the ceiling's
+  status mapping.
+- `foks-client`: `auth` for the advance driver and the batching of cited-root
+  proofs.
+- `tools/foks-v019-oracle`: `merkle_boundary_test.go`.
+
+## Further reading
+
+- W. Pugh, *Skip Lists: A Probabilistic Alternative to Balanced Trees*,
+  Communications of the ACM 33(6), 1990, https://doi.org/10.1145/78973.78977
+- P. Maniatis and M. Baker, *Secure History Preservation Through Timeline
+  Entanglement*, USENIX Security, 2002,
+  https://www.usenix.org/legacy/event/sec02/full_papers/maniatis/maniatis.pdf
+- S. Haber and W. S. Stornetta, *How to Time-Stamp a Digital Document*,
+  Journal of Cryptology 3(2), 1991, https://doi.org/10.1007/BF00196791
+- B. Laurie, A. Langley, and E. Kasper, *RFC 6962: Certificate
+  Transparency*, section 2.1.2 (consistency proofs), IETF, 2013,
+  https://www.rfc-editor.org/rfc/rfc6962
+- Keybase, *Keybase Book: Server Trust* (sigchains and the Merkle tree),
+  https://book.keybase.io/docs/server
+- M. Chase, A. Deshpande, E. Ghosh, and H. Malvai, *SEEMless: Secure
+  End-to-End Encrypted Messaging with less Trust*, ACM CCS, 2019,
+  https://doi.org/10.1145/3319535.3363202
+- Sadayuki Furuhashi et al., *MessagePack specification*, GitHub,
+  https://github.com/msgpack/msgpack/blob/master/spec.md
+- Google, *Key Transparency*, GitHub, https://github.com/google/keytransparency

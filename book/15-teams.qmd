@@ -1,0 +1,411 @@
+# Teams, Roles, Invitations, and Federation
+
+A team is a group of parties that share keys. Everything a team owns, its
+key-value store, its chat channels, its membership of other teams, is
+protected by the team's shared key, the PTK, and the PTK is boxed to each
+member's own key. The hard problems are not the boxing but the bookkeeping
+around it: who is a member, with what authority, as of when; how a change of
+membership is proven to every reader; how a member can be admitted without
+an administrator being online; how the whole arrangement works when the
+team and its member live on different servers that do not trust each other;
+and how a server itself can change its signing key without every client
+that pinned it treating the change as an attack.
+
+Two general techniques recur throughout, so they come first: signed
+append-only chains for authority, and bearer tokens stored as hashes for
+delegation.
+
+## Two general techniques
+
+A **signature chain** is a sequence of records where each record carries the
+hash of its predecessor and a signature by a key the previous records have
+authorised. [Chapter 10](10-sigchains.qmd) describes chains in general and
+[Chapter 13](13-client-verification.qmd) describes how a client verifies one
+against the Merkle tree. For teams the chain is the *only* authority: the
+server stores links, but a link a client cannot verify is a link that does
+not exist.
+
+A **bearer token** is a secret whose possession alone grants access; whoever
+presents it is served, with no further proof of identity. Bearer tokens are
+convenient exactly where identity is awkward: a member of a remote host, a
+client that has already proven itself once and wants a cheap handle for a
+session, or a person who has been invited but has no account yet. Their
+weakness is theft, so a system that issues them should store as little as
+possible. The standard discipline, the same as for passwords, is
+*hash-then-store*: the server keeps only a one-way hash of the token and
+compares hashes on presentation. A stolen database then yields nothing that
+can be presented. FOKS applies this to the session and federation bearers
+described in this chapter, and where it must be able to *re-issue* a token
+later it keeps the token encrypted under a server key that is not in the
+database.
+
+## Team chains
+
+Each team has a chain of `TeamGroupChange` links. A link carries:
+
+| Field | Meaning |
+|---|---|
+| `seqno`, `previous` | position and hash of the previous link |
+| `root` | the Merkle tree root the signer observed |
+| `time` | signing time |
+| `next_location_commitment` | commitment to the hidden Merkle location of the next link |
+| `team`, `host` | the team's ID and home host |
+| `signer`, `signer_owner` | which key signed and which party owns it |
+| `changes` | member additions, role changes and removals |
+| `shared_keys` | new PTK generations introduced by this link |
+| `metadata` | index-range allocations and other annotations |
+
+Each member change names the party, its optional *scoped host* (for a
+member from another server), the `source_role` the party used to sign, and
+the new `role`. Replaying the chain yields a *roster*: for every member, its
+role, the generation of its own shared key that the team last recorded, its
+verify key and the fingerprint of its hybrid encryption public key, and the
+commitment to its removal key (below).
+
+Roles are ordered. A `Role` is a kind plus, for members, a signed 16-bit
+*visibility* level that orders members among themselves:
+
+| Kind | Value | Notes |
+|---|---|---|
+| `None` | 0 | not a member; used as the destination of a removal |
+| `Member` | 1 | carries a visibility level |
+| `Admin` | 2 | may edit the roster and sign certificates |
+| `Owner` | 3 | may do everything an admin can, plus change owners |
+
+Every role has its own PTK, and a member holds the PTKs of every role at or
+below its own. A member with role `r` therefore receives, when loading the
+team, exactly one PTK parcel for every role `≤ r`, and the loader rejects a
+response with more or fewer.
+
+## Membership changes and rotation
+
+Adding a member is a link with a change to a positive role and a box of the
+current PTKs to the new member's key. Removing or demoting a member must do
+more, because the departing member already holds the PTKs it was given, and
+nothing can take them back. The only remedy is to advance the generation of
+every PTK the member could read and box the new generations only to the
+members who remain. [Chapter 5](05-generations.qmd) explains generational
+keys and the seed chain that keeps old data readable; here the question is
+*which* roles must rotate.
+
+The rule is a pure function. Given the member's old role, its destination
+role (`None` for removal), and whether its own key generation is being
+advanced at the same time, every current PTK role `r` rotates if
+
+- `r ≤ old role`, and
+- the member is being removed, **or** its own key generation advanced
+  (its old key may be compromised), **or** `r >` the destination role (it
+  is losing that role).
+
+Promotion is refused by the rotation path; it needs a separate
+key-distribution transaction, because a promotion boxes *existing* keys to
+the member rather than creating new ones.
+
+New PTK seeds are boxed only to recipients whose complete roster the client
+has independently verified against current user and team chains. When a
+team is a member of another team, the requirement is recursive: a parent
+must not box a fresh PTK to a child team whose own PTK is still exposed
+through a stale member. After any mutation the client re-sweeps the whole
+local membership graph child-before-parent, because every mutation advances
+the Merkle tree and recipients verified at different heads must not be
+mixed.
+
+A removal also requires the member's **removal key**: a random 32-byte
+secret created when the member was admitted, whose commitment is published
+in the admitting link and which is boxed both to the admin PTK and to
+the member's own key. A removal is accompanied by an HMAC under that key. The
+inferred purpose, consistent with the Go implementation, is that a removed
+member, who can no longer load the chain, can still verify that the removal
+was authorised.
+
+## Ad-hoc and named teams
+
+FOKS has two kinds of team, distinguished by the type byte of their entity
+ID. A **named team** has a human-readable name that is committed in the
+chain and bound in the Merkle tree under a name key, exactly as usernames
+are, so that a name maps to one team and a client can prove it. An **ad-hoc
+team** has no name. Both kinds take their ID from the verify key of the
+generation-1 admin PTK, with the entity type byte marking the kind. The
+server keeps a single host-wide placeholder name row (`-`) so that ad-hoc
+teams can be loaded through the same code path; the verifier checks that
+this placeholder has no name leaves of its own.
+
+## Invitations
+
+An invitation lets someone join a team when no administrator is present to
+act. It rests on a **team certificate**: a payload signed by the team's
+admin PTK that names the team, the admin key (generation, verify key, and
+hybrid public key fingerprint), a timestamp, the admin's hybrid public key,
+and an optional name of at most 1,024 bytes. What the inviter actually
+shares is a **team invite**: the team's host and the typed hash of the
+certificate. A joiner who receives an invite fetches the certificate from
+the host by hash, verifies it, and boxes a join request to the hybrid
+public key inside it. Join requests are durable rows on the server, one
+pending request per joiner and role; a decision records which chain link
+implemented it. The server's own comments are explicit that the chain
+remains the acceptance authority: a request row is never itself membership.
+
+```
+inviter                       server                       joiner
+  |-- certificate (signed) -->|                              |
+  |   invite = {host, H(cert)}|                              |
+  |=============== invite, out of band ======================>|
+  |                           |<-- lookup by H(cert) --------|
+  |                           |--- certificate ------------->|
+  |                           |<-- boxed join request -------|
+  |<-- pending request ------ |                              |
+  |--- chain link admitting joiner, with PTK boxes --------->|
+```
+
+### The rotated-certificate signature order
+
+A certificate carries one signature if the admin PTK is at generation 1 and
+two otherwise. Signatures are *stacked*, as on chain links: the second
+signature covers the payload and the first signature, so the order is part
+of what is authenticated ([Chapter 10](10-sigchains.qmd) describes
+stacking). For a team whose admin PTK has rotated, the certificate is signed
+by the *current* admin PTK first and by the team's founding key (the
+generation-1 admin PTK, whose public key is the team ID itself) second. The
+founding key's signature is what ties a certificate produced after a
+rotation back to the identity a joiner can look up.
+
+The fixtures captured from the Go v0.1.9 client record what the
+repository's oracle notes call a *reversed* verifier order for rotated
+certificates. Rather than diverge from every existing Go server and client,
+the Rust verifier reproduces that order exactly: signature 0 must be by the
+current key and signature 1 by the founding key, and a test confirms that
+swapping the two makes a rotated certificate fail to verify. This is one of
+the compatibility quirks [Chapter 23](23-compatibility.qmd) collects.
+
+## Session capabilities: challenges and admin tokens
+
+Proving membership by full chain verification on every request would be
+expensive. FOKS instead has a member prove membership once and then use a
+short-lived bearer.
+
+The **team-view challenge** is stateless. The server builds a challenge
+containing the request, the current time, a random 16-byte token, the
+identifier of the server's capability key generation, and an HMAC over all
+of that under the capability key. It stores nothing: the MAC makes the
+challenge self-authenticating, so issuing one costs no write. To activate
+the challenge the member signs it with the key the roster currently records
+for it. The server verifies the MAC, checks that the challenge is within its
+6-hour lifetime, re-derives the member's current verify key from the roster,
+checks the signature, and only then writes a row keyed by the hash of the
+token together with an *activation hash* of the whole request, so an exact
+retry is idempotent while a different activation of the same challenge is
+rejected as superseded. Later loads present the token; the server looks up
+its hash. The agent caches an activated token for five hours, keyed on the
+profile, host, acting party and team together with a digest of the
+credential (its key kind, device identity, hybrid public key and mTLS
+certificate chain), so a token cannot be reused over a different
+credential.
+
+**Team-admin tokens** follow the same shape for invitation-inbox operations:
+the server mints a random token bound to a team, holder, and PTK role and
+generation in an *inert* state, and the holder activates it with a signature
+by the admin or owner PTK over a challenge naming the token. Admin tokens
+live 6 hours; the reservation that precedes activation lives 10 minutes; the
+idempotency record for a completed activation lives 24 hours.
+
+## Federation
+
+A user on host A may be a member of a team on host B. FOKS federation is
+deliberately narrow. There is no host-to-host channel at all; the README
+describes federation as "Beacon discovery followed by independently pinned
+remote hosts, expiring bearer grants for public user/team chains, and a
+durable client-coordinated remote-team admission workflow". The client is
+the courier: every step is a server-side primitive that a client stitches
+together, and every server verifies what it receives with the same code a
+client would use.
+
+### Finding and pinning a remote host
+
+A host ID is the hash-derived identity of a host's signing key, not a DNS
+name. To reach an unfamiliar host the client asks a **Beacon** service for a
+hint: a probe endpoint for that host ID. The hint is untrusted. The client
+probes the endpoint and receives the host's *hostchain* (the chain in which
+the host publishes its signing, metadata, Merkle and TLS keys), its signed
+service map, and its signed Merkle root, and verifies that this material
+authenticates the exact host ID it asked for. Only then is the host pinned
+in hard state, and from that point the pinned hostchain is the authority
+for the remote host's TLS certificates and Merkle roots
+([Chapter 13](13-client-verification.qmd)). Beacon answers go into the
+replaceable soft-state database as routing hints; the pin goes into hard
+state.
+
+### Remote view grants
+
+Reading a party's chain on a foreign host requires permission. A local user
+or a team's administrator asks its *own* host to grant a specific remote
+party `(party ID, host ID)` the right to read its chain; for a team the
+request is signed by the current admin or owner PTK. The host issues a
+bearer token and the client carries it to the remote party.
+
+| Property | Value |
+|---|---|
+| Token | 17 bytes: tag byte 54, then 16 random bytes |
+| Stored identity | domain-separated hash of the token |
+| Stored ciphertext | token under XChaCha20-Poly1305 with the active capability key |
+| AEAD associated data | domain ‖ target ‖ viewer ‖ viewer host ‖ token hash ‖ key generation |
+| Expiry | `i64::MAX`: valid until revoked, matching Go v0.1.9 |
+
+Verification on the target host needs only the hash: it hashes the
+presented token and checks that a current grant exists for that hash and
+that party. Decryption is needed only to *re-issue*. When the host rotates
+its capability key it decrypts each grant under the old generation and
+re-seals it under the new one; the plaintext bearer the remote party already
+holds stays valid, which matters because that bearer may already be sealed
+inside a team's PTK box on the other host. The associated data binds the
+ciphertext to its target, viewer, viewer host and key generation, so a
+leaked row cannot be re-bound to another target even by someone who later
+obtains the key. Revocation is a permanent tombstone. A conformance test
+opens the SQLite file after a grant and asserts the plaintext token does not
+appear in it.
+
+The server README describes grants as 30-day renewable leases. The code
+sets the expiry to the largest representable value, with a comment that Go
+v0.1.9 treats remote-view permissions as valid until explicit revocation
+and that this is the compatible representation of a non-expiring bearer;
+the "extend" path exists to migrate rows that were written with a finite
+expiry. The code wins.
+
+### Remote team membership
+
+For team T on host A to admit party P from host B:
+
+1. T's administrator grants P a remote view permission on A, so P can read
+   T's chain.
+2. The client allocates a **team index range** on each host and records it
+   in each chain's metadata. Index ranges are rational intervals that place
+   teams in a nesting order; the server rejects a joining team whose range
+   overlaps, and the verifier recovers ranges from verified links rather
+   than from server state. They are the boundary of the current support for
+   team nesting.
+3. T's administrator posts a membership link adding P with `scoped_host = B`
+   and stores a **PTK view box** for P, keyed to a specific PTK generation.
+4. P's members later fetch the box and open T's PTK through their own seed
+   chain, which keeps working after T rotates for unrelated reasons because
+   the box stays bound to the historical generation.
+5. On A's public listener P's members authenticate not with certificates,
+   which only A's own users have, but by signing the team-view challenge
+   with the key T's roster records for P.
+
+Remote *user* membership and general nested teams across hosts are out of
+scope in the current implementation; the README enumerates the missing
+pieces.
+
+## Host key rotation
+
+Clients pin a host by its signing key, so rotating that key is the one
+change a host can make that looks, from outside, exactly like an attacker
+substituting a host. The protocol makes the change slow and observable on
+purpose. It takes two links and two conditions.
+
+```
+hostchain:  ... N ──► N+1 ──────────────────► N+2
+                     add new key              revoke old key
+                     signed by new AND old    signed by new only
+                          │                        ▲
+                          └── ≥ 24 h, and an operator-supplied
+                              seqno equal to N+1, observed from an
+                              independently syncing client ───┘
+```
+
+*Stage* creates the new key generation and a durable operation row;
+repeated calls return the same operation, so a crash has a stable ID to
+resume. *Begin* publishes link N+1, which adds the new key and is signed by
+both the new key and the old one, together with a Merkle root that cites it.
+*Complete* refuses unless the operator supplies the exact sequence number of
+the add-link as observed from an independently syncing client or canary,
+and unless at least 24 hours have passed since publication. It then
+publishes link N+2 revoking the old key, signed only by the new key, commits,
+and only afterwards deletes the old private key file, so a crash between
+commit and delete is finished by re-running the command. A checker enforces
+that exactly one key is active and that the staged and retiring sets match
+the operation phase. The observation requirement is a social interlock
+encoded in software: no automatic process can complete a rotation that no
+client has seen.
+
+## The team loader
+
+On the client, loading a team is the verification counterpart of everything
+above. The loader tries the user's PUKs newest first, preferring the one the
+last pinned roster named, and for each:
+
+1. enters the per-host pinning span so that advancing the Merkle head and
+   accepting a chain under it cannot interleave with another operation;
+2. advances the Merkle root and loads the chain incrementally from the
+   pinned sequence number, falling back to a full load if the delta reply
+   omits material it needs;
+3. verifies the chain against Merkle roots authenticated for the returned
+   links;
+4. finds the requesting party in the roster and checks that the roster's
+   verify key and generation match the PUK in use, so a stale key cannot
+   open the team;
+5. expects exactly one PTK parcel per visible role;
+6. opens each parcel, checks the sender's hybrid key fingerprint against the
+   roster, and walks the seed chain: a parcel for generation G must yield
+   every generation up to G, and every opened seed must derive to a public
+   key present in the verified history;
+7. pins the verified snapshot in hard state, subject to the rollback checks.
+
+Between loads, a periodic pass must decide whether any member's own key has
+advanced, which the team chain's sequence number cannot reveal, because a
+member's rotation advances the *member's* chain. The client batches one
+Merkle lookup for up to 256 members, asking for absence proofs of the links
+that would exist if each member's chain had grown; anything short of a proof
+is treated as "advanced" and reloaded, so a misbehaving server can at worst
+cost the client work it would have done anyway.
+
+## Why this design
+
+Authority lives in chains that any client can verify, so a server can
+withhold but not forge. Delegation lives in bearers stored as hashes and,
+when they must be recoverable, encrypted with binding associated data, so a
+database leak yields nothing presentable. Challenges are self-authenticating
+so that issuing them is free and only success writes. Federation needs no
+trust between servers because every server verifies with the client's code
+and the client carries the messages. Host key rotation is slow because the
+one change a pinned client cannot distinguish from an attack must be seen by
+a human before it becomes final.
+
+## Where to look
+
+- `foks-proto`: `identity/chain.rs` (`TeamGroupChange`, `TeamMemberChange`),
+  `role.rs`, `invitations.rs` (`TeamCertificate`, `TeamInvite`),
+  `federation.rs`.
+- `foks-verify`: `team.rs` (chain replay, roster, named and ad-hoc name
+  proofs, index ranges).
+- `foks-crypto`: `invitations.rs` (certificate signing and verification,
+  remote join requests), `lib.rs` (removal keys, federation token hashing,
+  view-token boxes, ad-hoc team IDs).
+- `foks-client`: `team.rs` (`load_and_pin_team` and its helpers),
+  `team/rotation/` (`required_rotation_roles`, witnessed recipients,
+  reconciliation), `team/bearer.rs`, `team/invitations.rs`,
+  `team/remote_invitations.rs`, `federation.rs`, `discovery/`, `host.rs`
+  (`probe_and_pin_host_id`), `change_marker.rs`.
+- `foks-client-app`: `runtime.rs` (the child-before-parent graph sweep),
+  `federation.rs`, `auth_cache.rs`.
+- `foks-server`: `services/federation.rs`, `services/team_loader.rs`,
+  `services/team_admin.rs`, `services/team_invitations.rs`,
+  `host/rotation.rs`, `host/bootstrap.rs`, `keys/rotation.rs`.
+- `foks-server-db`: `schema/team.sql`, `schema/federation.sql`,
+  `schema/team_invitations.sql`.
+
+## Further reading
+
+- M. Jones and D. Hardt, *The OAuth 2.0 Authorization Framework: Bearer
+  Token Usage*, RFC 6750, IETF, 2012, https://www.rfc-editor.org/rfc/rfc6750
+- D. McGrew, *An Interface and Algorithms for Authenticated Encryption*,
+  RFC 5116, IETF, 2008, https://www.rfc-editor.org/rfc/rfc5116
+- H. Krawczyk, M. Bellare and R. Canetti, *HMAC: Keyed-Hashing for Message
+  Authentication*, RFC 2104, IETF, 1997, https://www.rfc-editor.org/rfc/rfc2104
+- C. Gray and D. Cheriton, *Leases: An Efficient Fault-Tolerant Mechanism
+  for Distributed File Cache Consistency*, SOSP 1989,
+  https://doi.org/10.1145/74850.74870
+- S. A. Crosby and D. S. Wallach, *Efficient Data Structures for
+  Tamper-Evident Logging*, USENIX Security 2009,
+  https://www.usenix.org/legacy/event/sec09/tech/full_papers/crosby.pdf
+- P. Helland, *Idempotence Is Not a Medical Condition*, ACM Queue 10(4),
+  2012, https://queue.acm.org/detail.cfm?id=2187821

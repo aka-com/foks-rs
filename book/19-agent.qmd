@@ -1,0 +1,342 @@
+# The Resident Agent
+
+Three programs want to use a person's FOKS credentials: the command-line
+tool, the desktop application, and the MCP server for assistants. Each
+could open the databases, load the keys, and talk to the servers on its
+own, and each would then need to coordinate with the others over shared
+files and locks. `foks-rs` instead runs one long-lived process, the
+*agent*, that owns the keys, the database locks, and the network sessions,
+and that the other three reach over a local socket. This chapter is about
+that process: how it protects its socket, how it bounds its own work, how
+it distinguishes evidence from cache, and how it makes operations safe to
+interrupt and resume.
+
+## Why a daemon
+
+A *daemon* is a background process that outlives any single command. The
+argument for one here has three parts.
+
+First, exclusive ownership. A profile's hard-state database, described
+below, must have one writer, and its signing keys should be decrypted in
+as few places as possible. A single process can hold both without
+inter-process locking on every operation.
+
+Second, sessions. Authenticating to a FOKS host means obtaining a client
+certificate, opening a mutual-TLS connection, and, for team operations,
+acquiring a bearer token by answering a challenge
+([Chapter 17](17-wire.qmd)). A command-line invocation that did all of that
+per command would be slow and would multiply the server's work. The agent
+pools connections and caches view tokens.
+
+Third, background work. Scheduled refreshes of user and team state,
+retention sweeps of the mutation ledger, compatibility-lease polling, and
+chat long-polls all need something that is running when no command is.
+
+The cost is that the agent becomes a local attack surface, and most of the
+code described next exists to close it.
+
+## Owning the state directory
+
+```
+<state-dir>/
+   .foks-rs.lock        exclusive advisory lock, mode 0600, O_NOFOLLOW
+   foks-rs.sock         Unix domain socket, mode 0600, bound via rename
+   foks-rs.sock.bind    staging name used only during bind
+   <profiles>/...       hard and soft databases, encrypted vault
+```
+
+**The lock file.** The agent opens `.foks-rs.lock` with `O_NOFOLLOW` (a
+symlink at that path is an error, not a redirection) and mode 0600, then
+refuses to continue unless the file is a regular file owned by its own
+effective UID with no group or world permission bits. It then takes an
+exclusive, non-blocking advisory lock; `EWOULDBLOCK` is reported as
+"another agent owns this state directory." Offline commands in the
+client library take a state-root lease the same way, so an agent and a
+conflicting command cannot both run.
+
+**Stale sockets.** A leftover socket path from a crashed agent must be
+removed before binding, but a live agent's socket must not be. The check
+requires that the path is a socket, owned by this UID, with mode exactly
+0600; then it attempts a `connect`. A successful connection means another
+agent is alive and the path is not stale. `ECONNREFUSED` means nobody is
+listening. After the probe, the device and inode are compared with what
+was inspected before it: if the path now names a different inode, it was
+swapped during inspection and nothing is removed.
+
+**Binding privately.** A newly bound Unix socket is created with the
+process's umask, which usually leaves it connectable by group or world
+until `chmod` runs. The agent binds at a staging name, `<socket>.bind`,
+sets mode 0600 while nobody knows the name, and then `rename`s it into
+place. The rename is atomic, so the socket is never findable at its real
+name in a permissive state. A comment notes this works on every Unix
+including macOS, where hard-linking a domain socket returns `EPERM`.
+
+**The SocketGuard.** After binding, the agent records the socket's device
+and inode. On exit it removes the path only if the path still names that
+inode. The comment states the invariant: an exiting agent must never
+remove its successor's socket. Every 5 seconds an ownership timer
+re-validates that the lock file, the socket inode, and the state-root
+lease are still this process's; if any has been displaced, as happens
+when the desktop takes over an incompatible agent, the process exits.
+
+**Peer credentials on every connection.** The kernel reports the UID of
+the process at the other end of a Unix socket (`SO_PEERCRED` on Linux,
+`LOCAL_PEERCRED` on macOS). The accept loop rejects any connection whose
+peer UID differs from the agent's effective UID, and any connection for
+which credentials cannot be read. The client library mirrors the checks
+before connecting: the path must be a socket, mode with no group or world
+bits, owned by the same UID. Together these make the socket the trust
+boundary that [Chapter 21](21-mcp.qmd) relies on.
+
+## Bootstrap and ready
+
+A state directory may exist before it has credentials, for instance on the
+first run of the desktop. The agent can bind in that state, but in a
+restricted *bootstrap* mode in which only two operations are accepted:
+`AgentStatus` and `InitializeState`. Every other request answers
+`BootstrapRequired`. Successful initialization verifies access to the new
+vault master key and flips an atomic `ready` flag, after which scheduled
+work and compatibility polling begin. The flag is checked per request,
+so a connection opened during bootstrap needs no special handling once
+the state becomes ready.
+
+## Bounded work and honest deadlines
+
+The agent runs on an asynchronous runtime for I/O and moves every blocking
+client operation onto a worker thread under a semaphore.
+
+| Bound | Default |
+|---|---|
+| Active connections | 32 (at most 4,096) |
+| Requests per connection | 128 |
+| Blocking read workers | 4 (the maximum) |
+| Recovery slot | 1 |
+| Local maintenance slot | 1 |
+| Chat long-poll workers | 4 (at most 32) |
+| Request timeout | 15 s (the desktop passes 60 s) |
+| Admission reply margin | 2 s |
+| Chat poll timeout | 60 s |
+| Device pairing budget | 5 min, with 45 s reserved for completion |
+| Ownership re-check | every 5 s |
+| Retention pass | every 60 s |
+
+Above the worker semaphores sits *profile admission*, a queue of scopes
+in which reads may share a profile, mutations hold it exclusively, and
+registry changes reserve the whole state root. Disjoint profiles may pass
+a blocked waiter, but there is no partial multi-profile hold.
+
+The interesting design is in how deadlines are reported. A client waits
+its own budget from before it connects; the agent's budget starts once the
+request has been read. If admission could wait the whole budget, then an
+operation the agent never started would be answered after every client
+with the same budget had given up, and a definite "not started" would
+arrive as an ambiguous timeout. So admission and the wait for a worker end
+2 seconds earlier than the request budget, leaving room for the reply to
+travel. A test named for the property confirms that admission answers
+before a client with the same budget gives up, and another that admission
+errors are definite non-execution and never ambiguous timeouts.
+
+When an operation *does* exceed its deadline after starting, the agent
+closes the connection with the message that the deadline was exceeded and
+the connection was closed because completion is ambiguous. Closing is the
+honest signal: the caller cannot be told "it failed," because the
+mutation may have applied, and cannot be told "it succeeded." The
+surviving blocking work keeps its worker permit until it exits, so a slow
+operation still counts against capacity. Cancellation is propagated into
+the synchronous network client, which polls its deadline and cancellation
+token every 250 ms during I/O ([Chapter 17](17-wire.qmd)).
+
+## Hard state and soft state
+
+A client accumulates two kinds of local data, and FOKS separates them into
+two SQLite databases with different application IDs, schemas, and rules.
+
+| | Hard state | Soft state |
+|---|---|---|
+| Application ID | `0x464f4b53` ("FOKS") | `0x464b5653` ("FKVS") |
+| Schema version | 40 | 6 |
+| Holds | verified public bytes, monotonic pins, crash-recovery journals, the submission ledger | decrypted KV projections, chat inbox rows, known stores, discovery hints |
+| Contains secrets | no | yes (plaintext cache) |
+| On schema mismatch | refuse | refuse and name the recovery path: delete and rebuild |
+| Losing it | a security event | a re-download |
+
+**Hard state** is evidence: signed chain links, Merkle roots, the exact
+bytes a verifier accepted, and journals recording which mutations have
+been sent. The crate that owns it sits deliberately below the protocol
+verifier and stores what the verifier hands it, byte for byte. Every table
+is `STRICT` with length and range checks on every column, most are
+`WITHOUT ROWID` with composite keys, and cross-row invariants are SQL
+triggers. The store refuses any chain, Merkle root, or KV root older than
+the one it holds, with typed errors (`ChainRollback`, `MerkleRollback`,
+`UserRollback`, `TeamRollback`, `KvRootRollback`) and distinguishes a
+rollback from a *fork* (a different link at the same sequence). This is
+the anti-rollback discipline of [Chapter 13](13-client-verification.qmd)
+made structural. No secret is stored here; every journal table's comment
+says so.
+
+**Soft state** is derived: what the KV store looks like after decryption,
+which chat channels have changed, which endpoints a host advertised.
+Because it holds plaintext, the file must be private (a database with
+group or world bits is refused), and it is opened with `secure_delete` so
+freed pages are overwritten. Because it is a cache, it can be deleted and
+rebuilt. But while it exists it is still *monotonic per party*: a
+projection with a lower version than stored, or different bytes at the
+same version, is refused, and two small ciphertext-only tables keep
+rollback anchors that survive permission-driven pruning, so a server
+cannot show an older directory after a permission is regranted.
+
+Both databases run in WAL mode with `synchronous = FULL` and
+`trusted_schema = OFF`, and both are opened with `NOFOLLOW`.
+
+### A revision counter and a write token
+
+Every revision-tracked table in hard state carries triggers that, on any
+insert, update, or delete, increment a `hard_state_revision` counter and
+reroll a random 16-byte `write_token` in a singleton metadata row. The
+triple `(database_id, revision, write_token)` is used twice.
+
+In-process, it is an exact cache key: restoring a pinned host means
+re-verifying the hostchain and the Merkle skip path, work that grows with
+a profile's age, and since every byte that restore reads lives in a
+revision-tracked table, an unchanged triple means byte-identical inputs.
+
+Out-of-process, the triple, together with the pinned hostchain tail and
+Merkle head, is copied into the operating system's keyring (macOS
+Keychain or the freedesktop Secret Service) as a *rollback checkpoint*.
+Before and after every checked operation the on-disk database is compared
+with the keyring copy. A lower revision, a same revision with a different
+token, or a higher revision with the same token each mean the directory
+was restored from a backup or copied, which SQLite alone cannot detect.
+The failure is reported with an explicit recovery command rather than
+silently accepted.
+
+### Staging and reclamation
+
+Large files downloaded from the KV store stream directly into soft state
+in staged rows rather than through memory. A crash mid-download leaves an
+orphaned stage. `reclaim_orphaned_large_files` deletes stages no entry
+references, and refuses to run while the calling store owns any active
+stage, so a live download is never reclaimed from under itself.
+
+## Resumable operations: journal first, send once, observe
+
+A client that signs a chain link and sends it may crash before it learns
+the answer. If it regenerated the link with fresh randomness and resent,
+two different links could compete for one sequence number. FOKS treats
+"the response was lost" as a first-class state.
+
+Every mutation has a row in a public write-ahead journal with a small
+state machine:
+
+```
+Prepared --> Submitting --> SubmissionUnknown --> RemoteVerified --> Finalized
+    |             |                 |
+    v             v                 v
+ Rejected      Rejected          Rejected
+              (or RemoteVerified directly)
+```
+
+The exact request bytes are not in the journal. They live in a separate
+*protected store*, an encrypted file per record under a key derived from
+the vault master key, referenced from the journal row by an opaque key and
+a domain-separated hash. The coordinator enforces an ordering across the
+two durability domains: protected request first, then the journal row,
+then the socket write; on completion, the terminal journal state is
+committed before the protected request is erased. Each crash window is
+then harmless or recoverable. An orphaned protected record with no journal
+row is harmless. A `Prepared` row means the exact bytes can be resent. A
+`Submitting` row means the request may have reached the server, and
+recovery resolves it only by *observation*: reloading the chain or
+namespace and checking whether the transition appears, never by
+resending. Recovery never regenerates key material; it accepts only the
+exact authenticated transition bound to the journal.
+
+The same pattern is applied per workflow. A KV namespace write journals a
+`kvPut` with its version-vector precondition and, on an unknown outcome,
+refuses to finalize until the authenticated directory carries every
+prepared entry with byte-identical client-authored fields. A team key
+rotation derives its operation ID from the plan so it can be resumed
+exactly. A chat send is split into *prepare* (encrypt and journal) and
+*attempt* (deliver once), and reconciliation scans forward from a
+persisted cursor in windows of 100 sequences looking for a message with
+the same client-chosen ID and identical content.
+
+The submission ledger that [Chapter 21](21-mcp.qmd) exposes to assistants
+is a second idempotency layer over this journal: a handle plus an input
+hash maps to an internal mutation ID, and a `mutation_children` table
+binds the several low-level operations an intent may need (create root,
+`mkdir -p`, then the final put) to their parent.
+
+## Read caches with a short leash
+
+The agent caches authenticated users for 30 seconds, team view tokens for
+5 hours under a digest of the credential's TLS material, resolved KV paths
+for 30 seconds, and a small number of transports. Caches are attached only
+to operations on an explicit read allow-list; any operation that may
+mutate clears every entry before and after execution, including on
+failure. A cached KV path is documented as a candidate, not an answer: the
+caller still presents its remembered version vector to the server, which
+reports it stale if anything moved. Because the server re-validates the
+credential and every response is verified locally, a stale entry can only
+produce a failed read, which the dispatcher retries once with fresh
+authentication.
+
+## One agent, three front ends
+
+The command-line tool, the desktop host, and the MCP server all speak the
+same JSON-over-length-prefixed-frames protocol from
+[Chapter 17](17-wire.qmd) to the same socket. Operations are classified as
+reads or mutations by an explicit allow-list of reads, so a new operation
+defaults to "mutation." The client library wraps any transport error on a
+mutation as `Ambiguous`, since a request that reached the agent may have
+executed; callers then query status by submission ID rather than retry.
+Secret-bearing operation variants are redacted from debug output, and
+serialized frames and decoded secret strings are held in zeroizing
+buffers. The desktop launches the agent if none is running and hands it a
+longer request timeout; the CLI does the same for the MCP server; and
+closing any front end leaves the agent running for the others.
+
+## Where to look
+
+- `foks-agent`: `main.rs` (arguments and limits, `AgentLock`,
+  `remove_stale_agent_socket`, `bind_private_agent_socket`, `SocketGuard`,
+  the accept loop, `handle_connection`, `operation_allowed`, deadline
+  handling), `profile_work.rs`, `read_cache.rs`, `retention.rs`,
+  `chat_poll.rs`, `README.md`.
+- `foks-agent-client`: `lib.rs` (`connect_platform`, `Ambiguous`).
+- `foks-agent-proto`: `message.rs` (`Operation::is_mutation`), `frame.rs`.
+- `foks-client-db`: `lib.rs` (rollback errors, `MutationState`, revision
+  triggers), `schema.rs`, `soft.rs`, `soft_schema.rs`,
+  `repositories/journals.rs`, `repositories/adapter/`.
+- `foks-client`: `mutation.rs` (`MutationCoordinator`,
+  `ProtectedMutationStore`), `protected_store.rs`, `kv/write.rs`,
+  `team/rotation/`, `realtime/operations/`, `host_cache.rs`, `scheduler.rs`.
+- `foks-client-app`: `checkpoint.rs` (the keyring rollback checkpoint),
+  `runtime.rs`.
+- `foks-keystore`: `lib.rs`.
+
+## Further reading
+
+- Linux man-pages project, *unix(7)* (`SO_PEERCRED`), *open(2)*
+  (`O_NOFOLLOW`), *flock(2)*, https://man7.org/linux/man-pages/
+- Apple, *getpeereid(3)* and `LOCAL_PEERCRED`, macOS Manual Pages
+- Matt Bishop and Michael Dilger, *Checking for Race Conditions in File
+  Accesses*, Computing Systems 9(2), 1996,
+  https://www.usenix.org/publications/compsystems/1996/spr_bishop.pdf
+- C. Mohan, Don Haderle, Bruce Lindsay, Hamid Pirahesh, and Peter Schwarz,
+  *ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking
+  and Partial Rollbacks Using Write-Ahead Logging*, ACM Transactions on
+  Database Systems 17(1), 1992, https://doi.org/10.1145/128765.128770
+- Pat Helland, *Idempotence Is Not a Medical Condition*, ACM Queue 10(4),
+  2012, https://queue.acm.org/detail.cfm?id=2187821
+- Cary Gray and David Cheriton, *Leases: An Efficient Fault-Tolerant
+  Mechanism for Distributed File Cache Consistency*, SOSP, 1989,
+  https://doi.org/10.1145/74850.74870
+- SQLite Consortium, *STRICT Tables*, *CREATE TRIGGER*, *PRAGMA
+  secure_delete*, sqlite.org, https://www.sqlite.org/stricttables.html,
+  https://www.sqlite.org/lang_createtrigger.html,
+  https://www.sqlite.org/pragma.html#pragma_secure_delete
+- freedesktop.org, *Secret Service API Specification*,
+  https://specifications.freedesktop.org/secret-service-spec/latest/
+- Apple, *Keychain Services*, Apple Developer Documentation,
+  https://developer.apple.com/documentation/security/keychain-services

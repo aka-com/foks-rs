@@ -1,0 +1,409 @@
+# The Encrypted Key-Value Store
+
+FOKS stores files for users and teams in a directory tree that lives on a
+server. The server must be able to store the tree, hand back any part of it
+on request, page through a large directory, and reject a write that would
+clobber a concurrent one. It must not be able to learn the names of files or
+directories, the contents of files, or, as far as practical, the shape of the
+tree. And when a member is removed from a team, the keys that protect the
+tree must change without re-encrypting every byte the team has ever stored.
+
+Four techniques meet these requirements: a three-level key hierarchy, a
+keyed hash beside a randomised encryption of every name, position-derived
+nonces, and optimistic concurrency in which every write states what it read.
+
+## Cryptographic file systems on untrusted storage
+
+Plutus (Kallahalla et al., 2003) and SiRiUS (Goh et al.,
+2003) both put encrypted files on a server that is trusted to store bytes but
+not to keep them secret or to leave them alone, and both separate the key
+that protects a file's *contents* from the keys that protect its metadata and
+its directory. Keybase's KBFS, the most direct ancestor of the FOKS design,
+also encrypts file and directory names: the server holds a tree whose nodes
+it can address but not read.
+
+A server that cannot read names also cannot answer "does this directory
+contain `config.toml`?" The client must either download the whole directory
+and search locally, or give the server something it *can* compare: a
+deterministic encoding of the name, so that the same name in the same
+directory always encodes to the same bytes. Bellare, Boldyreva and O'Neill
+(2007) formalised what such *deterministic encryption* can offer: it hides
+everything except equality, and only when the values come from a
+distribution the attacker cannot enumerate. A file name is a short,
+low-entropy string, so a deterministic encoding under a public key would be
+guessable. FOKS avoids this by using a *keyed* function whose key the server
+does not have.
+
+## The key hierarchy
+
+Every KV namespace belongs to a *party*: a user or a team, identified by a
+party ID and a host ID. The party's shared key (a PUK for a user, a PTK for a
+team; see [Chapter 5](05-generations.qmd)) exists in generations, and every
+object in the store names the role and generation of the key that protects
+it. From one exact seed the client derives a *KV keyset* of two 32-byte keys
+by the typed-HMAC scheme of [Chapter 3](03-key-hierarchy.qmd):
+
+| Step | Derivation |
+|---|---|
+| Application key | `derive_key(seed, 5)` |
+| KV application key | `HMAC(app_key, APP_KEY_DERIVATION_TYPE_ID ‖ encode([0, "0" → 0]))` |
+| MAC key | `HMAC(kv_app, KV_KEY_DERIVATION_TYPE_ID ‖ encode([1, nil]))` |
+| Box key | `HMAC(kv_app, KV_KEY_DERIVATION_TYPE_ID ‖ encode([2, nil]))` |
+
+Every HMAC is HMAC-SHA-512/256 over a 64-bit type ID followed by the
+canonically encoded object, and every symmetric encryption is a *typed
+secretbox*: XSalsa20-Poly1305 with a 24-byte nonce formed from the 8-byte type
+ID and a 16-byte partial nonce that the caller supplies. The type ID in the
+nonce means that two ciphertexts of different kinds can never be swapped for
+one another even if their keys and partial nonces coincide.
+
+The party keyset is used sparingly: it authenticates the root and seals
+seeds and small files. Everything else is protected by a directory's or a
+file's own seed:
+
+```
+party seed (PUK/PTK, role r, generation g)
+  └─ KV keyset {mac, box}
+       ├─ root binding MAC
+       ├─ directory seed  (32 random bytes, sealed under box key)
+       │    └─ directory keyset {mac, box}
+       │         ├─ dirent name MAC        (deterministic)
+       │         ├─ dirent name box        (randomised)
+       │         └─ dirent binding MAC
+       ├─ small-file box
+       └─ file seed  (32 random bytes, sealed under box key)
+            └─ chunk encryption
+```
+
+The reason for three levels is rotation. When a team member is removed the
+PTK advances to a new generation ([Chapter 5](05-generations.qmd)). If every
+name and chunk were encrypted directly under the PTK, the whole store would
+have to be rewritten; instead only the seed boxes need re-sealing, one per
+directory and one per large file. A `KvDirectoryPair` can hold both an
+`Active` directory record and an `Encrypting` one under a newer generation;
+the client opens one seed per generation and picks the seed an entry was
+written under by its `directory_version`. A third status, `Dead`, also
+exists.
+
+## The root
+
+The root of a namespace is a small record: a 16-byte directory ID, a version
+number, the role and generation of the party key, and a 32-byte *binding
+MAC* computed under the party's MAC key over `[party, key, root id,
+version]`. Because the party (ID and host ID) is inside the MAC, a server
+cannot present one user's root as another's; because the version is inside
+it, a server cannot roll a namespace back to an older root. The client
+verifies the MAC under the generation the root names before following it.
+
+A namespace is created lazily: the first write creates a directory with a
+random ID and seed, then puts a root pointing at it, and if two devices race
+one directory becomes unreferenced garbage. Reads never create a namespace.
+A missing root is an empty store only if the client has never seen a root
+for that party; otherwise it is an error, because the disappearance of a
+known root is what a rollback looks like.
+
+## Directories and entries
+
+A directory record holds its ID, version, party key reference, the sealed
+seed, a `write_role` (the minimum role that may write into it), and its
+status. The seed is sealed under the party's box key with the directory ID as
+the partial nonce, so a seed ciphertext moved to another directory ID fails
+to open.
+
+A directory *entry* (dirent) is the record that maps a name to a node:
+
+| Field | Meaning |
+|---|---|
+| `parent` | 16-byte ID of the containing directory |
+| `id` | 16-byte random dirent ID |
+| `value` | 17-byte node ID: one type byte plus 16 random bytes |
+| `version` | this dirent's version, starting at 1 |
+| `directory_version` | version of the parent when the entry was written |
+| `write_role` | minimum role that may replace this entry |
+| `name_mac` | deterministic keyed hash of the name |
+| `name_box` | randomised encryption of the name |
+| `directory_status` | the parent's status at write time |
+| `binding_mac` | MAC over all client-authored fields |
+| `creation_time` | assigned by the server |
+
+The node type byte distinguishes `None` (0, a tombstone), `Directory` (1),
+`File` (2, a chunked large file), `SmallFile` (3) and `Symlink` (4). A dirent
+points at a node ID; the node is fetched separately, which is what makes
+`mv` cheap: moving an entry changes dirents, not nodes.
+
+## Two encodings of every name
+
+The central technique of the store is that each name is stored twice under
+the directory's keyset. Let `payload = encode([parent, directory_version,
+name])`. Then:
+
+```
+name_mac = HMAC(dir_mac_key, KV_DIRENT_NAME_PAYLOAD_TYPE_ID ‖ payload)
+name_box = secretbox(dir_box_key, nonce = type ‖ random16, pad(payload))
+```
+
+The MAC is *deterministic*: a given name in a given directory at a given
+directory version always produces the same 32 bytes. A client that holds the
+directory seed can compute the MAC of a candidate name and ask the server for
+exactly that entry, and the server can index entries by MAC, sort them, and
+page through them in MAC order. The box is *randomised*: a fresh 16-byte nonce makes two boxes of the same
+name unrelated, and it exists so that a listing can recover plaintext names,
+which a MAC alone cannot. The box's plaintext is padded to a power of two (at least 32 bytes) so
+its length reveals only a bucket, not the exact name length.
+
+Both encodings contain the parent ID and the directory version. On open the
+client decrypts the box, re-encodes canonically, verifies the name MAC and
+the dirent's `binding_mac`, and checks that the parent and version inside
+the plaintext equal the dirent's own fields, which catches a dirent copied
+from another directory or replayed from an older version of this one. The
+binding MAC covers `(parent, id, value, version, directory_version,
+write_role, name_mac, name_box)`, so the server also cannot repoint a name
+at a different node or change the role needed to overwrite it. The one
+field outside it, `creation_time`, is the field the server sets.
+
+### What the server learns
+
+Deterministic encryption trades some secrecy for searchability. The MAC key
+is per directory, derived from a seed the server never sees, and the MAC
+payload includes the directory version. So:
+
+- The server learns equality of names within one directory at one directory
+  version. The directory version changes only when the directory record is
+  re-keyed, not on every write, so the server can tell that a name unlinked
+  and later recreated in the same directory is the same name, and that a
+  lookup by MAC targets an entry it has seen before. Among live entries this
+  reveals nothing new, because names within a directory are unique.
+- The server cannot tell whether two entries in *different* directories
+  share a name, because different directories have unrelated MAC keys.
+- The server cannot run a dictionary attack on names, because it lacks the
+  key; this is what makes a deterministic encoding safe for low-entropy
+  names.
+- The server learns the *access pattern*: which directory IDs a client
+  fetches, in what order, and how many entries each has. It also sees the
+  padded size of every name box, small file and chunk, so sizes are known to
+  within a power-of-two bucket. FOKS does not attempt to hide this; hiding
+  access patterns would require oblivious RAM, at a cost out of proportion
+  to the threat.
+
+The MAC also serves as the *pagination cursor*. A listing returns at most
+100 entries ordered by `(name_mac, dirent_id)`, and the client asks for the
+next page with the last MAC it saw. This is keyset rather than offset
+pagination, so a concurrent insert cannot cause an entry to be skipped or
+repeated, and the order is opaque to the server. The client re-sorts by
+plaintext name after decrypting. Tombstones (type byte zero) are excluded
+from listings, so a deleted name costs a reader nothing.
+
+## Path lookup
+
+The server never receives a path. To resolve `/a/b/c` the client fetches and
+verifies the root, lists the root directory, decrypts names until it finds
+`a`, checks that `a` is a directory, and repeats. Two traversal plans exist:
+a *path walk* that visits one directory per component, and a *complete*
+breadth-first traversal over every reachable directory, with a visited set
+and the protocol's directory limit as a cap. Every decrypted name is
+validated (UTF-8, no NUL, no `/`, not `.` or `..`, unique within the
+directory) before it is trusted. Symlink targets are stored as encrypted
+small-file payloads and returned to the caller rather than followed; only
+the adapter's whole-tree resolver follows them. Paths are absolute, at most
+4,096 bytes, with components of 1 to 255 bytes.
+
+## Files: small, large, and chunked
+
+A file is small if it fits in one upload read and is at most 2,040 bytes. It is one typed secretbox under the
+party's box key with the node's random, single-use object ID as partial
+nonce, and its plaintext is padded to a power of two. A symlink is the same
+box with a different tag inside the plaintext.
+
+Anything larger is a chunked file:
+
+| Parameter | Value |
+|---|---|
+| Maximum plaintext per upload chunk | 4 MiB |
+| Maximum file size | 1 GiB |
+| Maximum chunks read per file | 4,096 |
+| File seed | 32 random bytes, sealed in the file's metadata |
+| Chunk cipher | XSalsa20-Poly1305 under the file seed |
+| Chunk nonce | first 24 bytes of `hash(KV_CHUNK_NONCE_PAYLOAD_TYPE_ID, encode([object_id, offset, final]))` |
+
+The file seed is sealed under the party's box key together with the node's
+object ID and the metadata version, and both are checked on open, so a seed
+cannot be transplanted between files. Chunk plaintexts are padded to a
+power-of-two bucket plus the encoding header, and the padding must be all
+zeros on decryption.
+
+### Why deterministic nonces are safe here
+
+Ordinarily a nonce is chosen at random, because reusing a nonce with the
+same key under a stream cipher leaks the XOR of two plaintexts. The chunk
+nonce is a hash of `(object ID, byte offset, is-final flag)`. It is safe for
+two reasons. First, the key is unique to the file, and within one file each
+`(offset, final)` pair is encrypted exactly once, so no `(key, nonce)` pair
+repeats. Second, making the nonce a function of position turns a class of
+attacks into decryption failures. A server that answers a request for the
+chunk at offset 4 MiB with the chunk at offset 8 MiB cannot succeed: the
+client derives the nonce from the offset it *asked for*, and the
+authentication tag fails. Before decrypting, the client also checks that the
+offset stated in the chunk record equals the one it requested. As Rogaway's treatment of
+nonce-based encryption makes clear, a nonce need only be unique, not
+unpredictable, and choosing it from context authenticates the context for
+free.
+
+The last chunk carries the total encrypted size. The dirent that links the
+node into a directory is written only after the last chunk, so a crash
+mid-upload leaves an unreferenced node, never a name that points at half a
+file.
+
+The Rust implementation seals one extra field into the metadata's opaque
+custom area: the plaintext length. For Go-written files without it, the
+client measures the length on first download, stores it locally keyed on
+the node ID, and treats a later mismatch as an integrity error.
+
+## Optimistic concurrency with version vectors
+
+Two devices or two team members may write to the same directory at once. FOKS uses optimistic concurrency control (Kung and
+Robinson, 1981): a writer does not lock; it states what it believes the
+current state to be, and the server rejects the write if that belief is
+stale. The everyday form of this idea is HTTP's `If-Match` header with an
+entity tag.
+
+The belief is a *version vector*: the root version, and for each directory
+the write depends on, that directory's version and the `(dirent id, version)`
+of every dirent the writer listed there. The server compares the vector with
+its current heads and, if anything cited has moved, returns a stale-cache
+error listing only the objects whose versions are newer. The client refreshes
+those, re-prepares, and retries, up to three attempts.
+
+Two details make the vector trustworthy. First, it cites dirent *IDs*, not
+just names and versions: a dirent's version restarts at 1 when a name is
+unlinked and recreated on a fresh ID, so `(name, version)` alone could name
+different nodes at different times, whereas an unlink writes a tombstone to
+the old dirent and so is reported as stale. Second, a path walk cites only
+what it used: a write beneath `/a/b` cites the root, `a` and `b`, so write
+cost grows with path depth rather than store size.
+
+A vector cannot prove that a peer did not *add* an uncited entry during a
+complete traversal. So after such a traversal the client sends a final cache
+check with every version it saw, and if anything changed the traversal is
+repeated, up to three times.
+
+The agent's path cache stores the vector a lookup produced; a hit is not an
+answer but a candidate that must be resubmitted to the server as a
+precondition, and a refusal means the path must be walked again.
+
+## Mutations
+
+All namespace mutations are a `kvPut` of one or more dirents under a version
+vector:
+
+- **mkdir** creates a directory record with a random ID and seed, sends it
+  with the parent's vector as precondition, then links a `Directory` dirent.
+  Missing intermediate directories are created by the application layer one
+  journaled step at a time, inheriting the item's read and write roles.
+- **rm** rewrites the dirent with an all-zero node ID: a *tombstone*. A
+  directory can only be unlinked recursively. The dirent's version advances,
+  which is what makes the tombstone visible to any vector that cited it.
+- **mv** is one `kvPut` carrying a tombstone at the source and a new dirent
+  at the destination pointing at the *same* node ID. It reads the whole
+  source subtree first to refuse moving a directory into itself, and cites
+  the source's exact version so a concurrent change is rejected.
+- **Overwrite** is permitted only from a file or small file to a file, small
+  file, or symlink; a directory is never replaced by a put. An existing live
+  entry is rejected unless the caller asked to overwrite, and the caller may
+  supply an expected dirent version as a further precondition.
+
+Every mutation is journaled before it is sent, using the intent log of
+[Chapter 19](19-agent.qmd): exact request bytes in a
+protected store first, then a public journal row that records `Prepared`,
+`Submitting`, and, if the response is lost, `SubmissionUnknown`. An unknown
+outcome is resolved by observation, never by resending: the client re-reads
+the directory and finalises only when every prepared dirent appears with the
+same client-authored bytes and MACs. An unacknowledged unlink cannot be
+proven by absence, because absence is also what an unsent unlink looks like.
+
+## The soft-state cache
+
+Decrypted listings and file contents are kept in the client's soft-state
+SQLite database, a cache that may be deleted at any time and rebuilt from
+the network. Even a cache must not let a server roll the client's view
+backwards. The projection refuses a root or directory with
+a lower version than stored and refuses different bytes at the same version.
+Two tables, `kv_directory_history` and `kv_entry_history`, hold
+*ciphertext-only rollback anchors*: the last accepted version and encoded
+bytes of each directory and entry. They survive permission-driven pruning,
+so if a user loses read access to a subtree, its plaintext is dropped but
+its anchors remain, and a later regrant cannot present an older directory as
+current. Cached ciphertext goes through the same decode-and-authenticate
+path as fresh bytes; a test flips a byte of it and checks the traversal
+fails. Large files stream into SQLite in chunks rather than through memory;
+the inline budget for one sync is 512 MiB.
+
+## Quotas
+
+The server enforces per-namespace limits by recomputing, on every write, the
+namespace's total stored bytes and row count:
+
+| Limit | Value |
+|---|---|
+| Bytes per namespace | 16 GiB |
+| Objects per namespace | 1,000,000 |
+| Directories per namespace | 4,096 |
+| Dirents per namespace | 100,000 |
+| Encoded node size | 64 KiB |
+| Encoded dirent size | 4,096 bytes |
+
+The tree-shape limits are protocol constants the client also knows, and the
+server refuses a configuration that would raise them above what a client
+could synchronise. The server's documentation names the recomputed scan as
+an expected saturation point.
+
+## Why this design
+
+Encrypting names only non-deterministically would make lookup cost
+proportional to directory size and rule out server-side paging; encrypting
+them deterministically under a key the server holds would leak equality
+across the store and invite guessing. A per-directory keyed MAC beside a
+randomised box gives the server a stable index it cannot invert, gives
+listings a plaintext name, and confines equality leakage to one directory
+version. The three-level hierarchy confines rotation cost to seed boxes, and
+version vectors that cite IDs make "unchanged" mean unchanged.
+
+## Where to look
+
+- `foks-crypto`: `lib.rs` (`derive_kv_keys`, `KvKeySet`, the KV `seal_*`,
+  `open_*` and `bind_*` functions, the typed secretbox and padding helpers).
+- `foks-proto`: `kv.rs` (`KvRoot`, `KvDirectory`, `KvDirectoryPair`, `KvDirent`,
+  `KvNodeId`, `KvPathVersionVector`, the protocol limits).
+- `foks-client`: `kv/sync.rs` (traversal plans, listing, cache check,
+  streaming downloads), `kv/write.rs` (root initialisation, mkdir, unlink,
+  move, upload, the journaled namespace mutation and its reconciliation),
+  `kv/support.rs`, `kv/mod.rs`.
+- `foks-client-app`: `kv.rs` (path grammar, `mkdir -p`, store references).
+- `foks-client-db`: `soft.rs` and `soft_schema.rs` (the projection, rollback
+  anchors, large-file staging).
+- `foks-server-db`: `kv.rs` (listing by MAC, version-vector checks, capacity
+  accounting), `config.rs`.
+- `foks-agent`: `read_cache.rs` (remembered path vectors).
+
+## Further reading
+
+- M. Bellare, A. Boldyreva and A. O'Neill, *Deterministic and Efficiently
+  Searchable Encryption*, CRYPTO 2007 (Cryptology ePrint Archive 2006/186),
+  https://eprint.iacr.org/2006/186
+- E.-J. Goh, H. Shacham, N. Modadugu and D. Boneh, *SiRiUS: Securing Remote
+  Untrusted Storage*, NDSS 2003,
+  https://www.ndss-symposium.org/ndss2003/sirius-securing-remote-untrusted-storage/
+- M. Kallahalla, E. Riedel, R. Swaminathan, Q. Wang and K. Fu, *Plutus:
+  Scalable Secure File Sharing on Untrusted Storage*, USENIX FAST 2003,
+  https://www.usenix.org/conference/fast-03/plutus-scalable-secure-file-sharing-untrusted-storage
+- Keybase, *Keybase Filesystem (KBFS)*, Keybase Book,
+  https://book.keybase.io/docs/files
+- P. Rogaway, *Nonce-Based Symmetric Encryption*, FSE 2004,
+  https://www.cs.ucdavis.edu/~rogaway/papers/nonce.pdf
+- H. T. Kung and J. T. Robinson, *On Optimistic Methods for Concurrency
+  Control*, ACM Transactions on Database Systems 6(2), 1981,
+  https://doi.org/10.1145/319566.319567
+- R. Fielding and J. Reschke, *Hypertext Transfer Protocol (HTTP/1.1):
+  Conditional Requests*, RFC 7232, IETF, 2014,
+  https://www.rfc-editor.org/rfc/rfc7232
+- D. J. Bernstein, *Cryptography in NaCl*, 2009,
+  https://cr.yp.to/highspeed/naclcrypto-20090310.pdf

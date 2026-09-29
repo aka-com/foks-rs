@@ -1,0 +1,260 @@
+# Measuring Performance
+
+The README of `foks-rs` publishes three latency numbers. This chapter is
+about what those numbers mean, how they were produced, and why the
+methodology behind them is more interesting than the numbers themselves.
+Along the way it introduces three ideas from the practice of latency
+measurement that any reader who benchmarks software should know:
+percentiles, warmup, and coordinated omission.
+
+## Why not the average
+
+Suppose a desktop application makes a history request to its local agent
+every half second, and the developer wants to know whether a new
+background feature has made the foreground slower. The average latency is
+almost useless for this. A feature that makes one request in fifty take a
+full second while leaving the rest untouched barely moves the mean, yet the
+user notices every one of those slow requests. What the user experiences is
+the *tail* of the distribution.
+
+A *percentile* is the value below which a given fraction of observations
+fall. The 95th percentile (p95) is the latency that 95% of requests beat;
+one request in twenty is slower. Percentiles are order statistics: they
+are computed by sorting the observations and indexing, and they are robust
+to a handful of extreme outliers in a way the mean is not. Dean and
+Barroso's *The Tail at Scale* explains why tails matter more as systems
+grow: a user-facing operation that touches many components sees the
+*worst* of them, so the fraction of slow operations compounds.
+
+The benchmark harness computes p95 by sorting the recorded durations and
+taking the element at index ⌊0.95 × n⌋.
+
+## Warmup and coordinated omission
+
+Two systematic errors are easy to make.
+
+*Warmup.* The first seconds of any process are unrepresentative: caches
+are cold, just-in-time compilers have not compiled hot paths, connection
+pools are empty, and the operating system has not paged the binary in.
+Including them in a measurement biases it toward slowness in a way that
+has nothing to do with the code under test. The remedy is to run the
+workload for a while, discard those observations, and only then start
+recording.
+
+*Coordinated omission.* Gil Tene's term for a subtler error. If a load
+generator issues a request, waits for the response, and only then issues
+the next, then a stall in the system under test also stalls the generator.
+Requests that *would* have been sent during the stall, and would have
+experienced it, are never sent, so they never appear in the data. The
+measured distribution omits exactly the observations that would have shown
+the problem, and it does so in coordination with the problem. The remedy
+is to schedule requests by the clock, not by completion: if a request is
+due at time t, its latency is measured from t, whether or not the previous
+one has returned. The harness here does this. Foreground reads are due
+every 500 ms and writes every 2 s on a fixed schedule; a slot that cannot
+be issued because an admission limit was reached is counted as a *missed
+slot*, and a missed slot is a failure.
+
+## The real-process benchmark
+
+The published numbers come from a harness under `scripts/benchmarks` that
+measures the desktop chat notification consumer
+([Chapter 20](20-desktop.qmd)) against everything below it.
+
+**Real processes.** The Rust worker starts a real, isolated FOKS server and
+a separate real agent process with private temporary client state and no
+operating-system keyring. The Node side runs the *production* TypeScript
+services (the inbox service, the notification consumer, and the
+per-profile scheduler) against them. The measurement therefore covers the
+service layer, the local IPC to the agent, the agent's own work, and the
+network round trip to the server. It excludes rendering. Binaries are
+release builds.
+
+**Workloads and arms.** Four workloads, each run with notifications
+`off` and `on`:
+
+| Workload | Channels | Extra condition |
+|---|---|---|
+| steady | 70 | none |
+| backlog | 70 | 120 sequentially confirmed sends injected at measurement start |
+| wide | 200 | none |
+| slow | 70 | 250 ms added after admission; one channel fails permanently |
+
+A second account sends 6 incoming messages per second throughout.
+Foreground history reads arrive every 500 ms and a foreground write
+workflow every 2 s.
+
+**Phases.** Each trial establishes baselines, then runs 15 s of warmup,
+60 s of measurement, and a fixed 10 s drain during which no new traffic is
+sent but in-flight sends remain in the denominator. The summarizer rejects
+any trial whose phases are not exactly (15,000, 60,000, 10,000) ms as not
+an acceptance result; shortened smoke runs are allowed for diagnosis but
+cannot pass.
+
+**Repetitions and ordering.** Three repetitions per arm, with arm order
+alternated on each repetition so that neither arm systematically runs
+first. Each completed trial is appended to a JSON-lines file and `fsync`ed;
+the driver refuses to overwrite an existing results file.
+
+**The metric.** Per trial, the p95 of successful foreground history
+operations from submission to completion. The reported value per arm is
+the **median of the three trial p95s**. Taking the median across trials
+rather than pooling all observations means one anomalous trial (a
+background process on the machine, say) cannot dominate, and it gives a
+value that is itself an observation from a real trial rather than a
+synthetic blend.
+
+**The review trigger.** Notifications `on` versus `off` is flagged for
+review if the p95 increase exceeds **both 20% and 50 ms**. Requiring both
+avoids two false alarms: a 20% increase on a 10 ms baseline is 2 ms and
+not worth a review, and a 50 ms increase on a 2 s baseline is noise. The
+`slow` workload is exempt from the latency trigger because it exists to
+verify that a permanent failure and an injected delay do not stop healthy
+work.
+
+**Correctness gates alongside latency.** A trial is not accepted on
+percentiles alone. At least 99% of confirmed sends must be discovered by
+the drain deadline; `lateDisplays` must be zero; all 120 foreground read
+slots must have been issued; and concurrency observations must stay within
+bounds (at most 2 jobs, 1 per profile, 1 background RPC).
+
+**Provenance.** The driver records the SHA-256 of the agent binary, the
+worker binary, the harness itself, every file under the desktop source
+tree, and the shared limits file, plus the source revision and a digest of
+any uncommitted patch, in every trial. A baseline mode extracts the
+TypeScript from a fixed earlier commit while sharing the same native
+binaries, so that only notification behavior differs between arms.
+Event-loop delay is sampled at 20 ms and its p95 reported, so a
+Node-side stall is distinguishable from an agent-side one.
+
+### The published results
+
+| Workload | Median of three trial p95s |
+|---|---|
+| Steady traffic, 70 channels | 43.7 ms |
+| Message backlog, 70 channels | 38.4 ms |
+| Steady traffic, 200 channels | 45.1 ms |
+
+Linux x86_64, notifications on. The README's caption repeats the
+conditions: 15 s warmup, 60 s measurement, 10 s drain, service/agent/server
+path, rendering excluded. The benchmark guide adds the stance that recurs
+throughout the repository's measurement notes: these are observations on
+one machine, not product capacity claims.
+
+## Scale tests
+
+Two tests exist to exercise limits at their production size rather than at
+the small sizes that keep an ordinary test suite fast.
+
+**Notification rotation at 4,097 channels.** The notification consumer
+bounds the number of per-channel progress records it keeps at 4,096 and
+the number of channels it will evict per 5 s window at 64. The scale test
+builds 17 stores totalling 4,097 channels, one more than the bound, and
+asserts that exactly 64 evictions occur, that no state observation ever
+exceeds 4,096 progress records or 64 queued, that no content pass runs
+during pure rotation, and that after the 5 s window the rotation resumes.
+The same function runs in the ordinary suite with the limits scaled to
+16 and 4, and only with `FOKS_TEST_SCALE=1` at the production values.
+
+**Incremental history at production page size.** The agent's incremental
+history test runs at a page size of 3 in the ordinary suite so that page
+boundaries, gaps, resets, and unknown channels are all reached quickly.
+A second, ignored test runs the identical checks at the production page
+size of 50 rows. Running the boundary logic at both sizes catches
+off-by-one errors that only appear at one of them.
+
+## One source of limits
+
+Both of those tests depend on constants that must agree between Rust and
+TypeScript. They live in a single JSON file,
+`crates/foks-agent-proto/chat-limits.json`, compiled into Rust constants by
+a build script and imported directly by the desktop's TypeScript.
+
+| Constant | Value |
+|---|---|
+| `CHAT_PAGE_ROWS` | 50 |
+| `CHAT_HISTORY_ROWS` | 1,000 |
+| `CHAT_HISTORY_BYTES` | 8 MiB |
+| `CHAT_INBOX_ROWS` | 1,000 |
+| `CHAT_CHANNEL_ROWS` | 256 |
+| `CHAT_TEXT_BYTES` | 65,536 |
+| `CHAT_POLL_MILLISECONDS` | 55,000 |
+| `CHAT_OPEN_VIEWS` | 32 |
+
+The Rust agent asserts equality with its own copies in a test, and the
+benchmark driver hashes the file into every trial's provenance, so a change
+to a limit cannot go unrecorded.
+
+## Measuring a stall: the checkpoint finding
+
+Not every measurement is a percentile over a workload. Sometimes the
+question is whether a specific mechanism causes a specific stall.
+[Chapter 18](18-server-storage.qmd) described the choice of a `PASSIVE` WAL
+checkpoint over `TRUNCATE`. The measurement behind it is a good example of
+a small, targeted benchmark.
+
+The comparison runs the real writer actor and the real maintenance code on
+three disposable databases: `TRUNCATE` with unlimited WAL retention,
+`PASSIVE` with unlimited retention, and `PASSIVE` with the proposed 16 MiB
+reuse limit. It seeds 32 MiB of data while a read transaction is pinned,
+then runs four phases with four concurrent writers and eight maintenance
+passes: a reader held for the whole phase, catch-up after releasing it, two
+overlapping short readers, and an online backup. Each run emits checkpoint
+duration, SQLite's reported outcome and frame positions, and the writer
+queue-wait distribution as p50, p95, p99, and maximum.
+
+The finding was unambiguous in the held-reader phase: `TRUNCATE` produced
+checkpoint maxima of 286 to 288 ms (a stall the benchmark deliberately
+bounded with a 250 ms busy timeout; the production default is 5 s) and
+queue p99 near 290 ms, while `PASSIVE` with the reuse limit produced
+checkpoint maxima of 0.18 to 0.28 ms and queue p99 between 1 and 6 ms. The notes
+also record what the measurement does *not* show: throughput ranges
+between the two `PASSIVE` variants overlap, catch-up after the reader is
+released still occupies the writer with maxima around 44 ms, and nothing
+proves 16 MiB is the optimal limit. Three runs on one developer machine
+are reported with their ranges, SQLite version, and build settings, and
+the reader is asked to repeat them on representative storage before making
+capacity claims.
+
+## What good reporting looks like
+
+The measurement notes across the repository share a few habits worth
+adopting.
+
+- Fixed durations and rates are inputs recorded with the result, never
+  reconstructed afterward.
+- Every reported number carries the hardware, build profile, and source
+  revision it came from, and where possible the hashes of the binaries.
+- Percentiles are reported with their sample counts, and the tail (p99 and
+  maximum) is shown alongside the headline percentile.
+- Correctness gates accompany latency gates; a fast failure is still a
+  failure.
+- The notes say what the measurement does not establish.
+
+## Where to look
+
+- `scripts/benchmarks`: `README.md`, `run-chat-notifications.py`,
+  `chat-notifications.ts`, `summarize-chat-notifications.py`,
+  `test_summary.py`, `inbox-publication.ts`, `results/`.
+- `foks-server-testkit`: `examples/chat_notification_bench.rs`.
+- `apps/desktop/tests/notification-scheduling.test.ts` (the 4,097-channel
+  scale test).
+- `foks-agent`: `chat.rs` (incremental history at production page size).
+- `foks-agent-proto`: `chat-limits.json`, `build.rs`.
+- `foks-server`: `maintenance/checkpoint_bench.rs`, `BENCHMARKS.md`.
+- The top-level `README.md`.
+
+## Further reading
+
+- Jeffrey Dean and Luiz André Barroso, *The Tail at Scale*, Communications
+  of the ACM 56(2), 2013, https://doi.org/10.1145/2408776.2408794
+- Gil Tene, *How NOT to Measure Latency*, Strange Loop, 2015,
+  https://www.youtube.com/watch?v=lJ8ydIuPFeU
+- Gil Tene, *HdrHistogram: A High Dynamic Range Histogram*,
+  https://hdrhistogram.org/ (coordinated omission correction)
+- Brendan Gregg, *Systems Performance: Enterprise and the Cloud*, 2nd
+  edition, Addison-Wesley, 2020 (chapter 2, methodologies; chapter 12,
+  benchmarking)
+- Raj Jain, *The Art of Computer Systems Performance Analysis*, Wiley, 1991
+- SQLite Consortium, *Write-Ahead Logging* (checkpoint modes), sqlite.org,
+  https://www.sqlite.org/wal.html

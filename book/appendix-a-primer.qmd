@@ -1,0 +1,343 @@
+# Cryptographic Building Blocks
+
+This appendix introduces the primitives the rest of the book takes for
+granted. It is written for a reader who knows what a hash function does and
+that public-key cryptography involves a key pair, but who has not studied
+cryptography. Each section says what the primitive promises, what it does
+not promise, which concrete algorithms FOKS uses, and where to read more.
+Only primitives that actually appear in `foks-rs` are included.
+
+## Hash functions
+
+A cryptographic hash function maps an input of any length to a fixed-size
+*digest*. Three properties are expected. *Preimage resistance*: given a
+digest, it is infeasible to find any input that produces it. *Second
+preimage resistance*: given an input, it is infeasible to find a different
+input with the same digest. *Collision resistance*: it is infeasible to find
+any two inputs with the same digest.
+
+Collision resistance is the property most protocols lean on, because it is
+what lets a digest stand in for the data. If a chain link commits to the
+digest of its predecessor, collision resistance is what guarantees that
+there is only one predecessor it could mean. A 256-bit digest gives 128 bits
+of collision resistance (by the birthday bound, an attacker needs about
+$2^{128}$ evaluations), which is the accepted security level for the
+foreseeable future.
+
+FOKS uses two hash functions.
+
+- **SHA-512/256** (FIPS 180-4) is SHA-512 with a different initial value and
+  the output truncated to 256 bits. It has the same 256-bit security as
+  SHA-256 but, because only half of its 512-bit internal state is output,
+  it is immune to *length-extension*: given $H(m)$ alone, an attacker cannot
+  compute the digest of a longer message that begins with $m$, which SHA-256
+  permits. It is the hash for every typed hash, HMAC and commitment in the
+  protocol.
+- **SHA3-256** (FIPS 202) is a member of the Keccak family, built on a
+  different design (a sponge over a permutation) from the SHA-2 family. FOKS
+  uses it in exactly one place, the hybrid key combiner
+  (Chapter 4). The choice is inherited from the Go implementation; a side
+  effect is that the combiner does not share a failure mode with the hash
+  used everywhere else.
+
+References:
+
+- National Institute of Standards and Technology, *Secure Hash Standard (SHS)*, FIPS 180-4, 2015, https://doi.org/10.6028/NIST.FIPS.180-4
+- National Institute of Standards and Technology, *SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions*, FIPS 202, 2015, https://doi.org/10.6028/NIST.FIPS.202
+
+## Message authentication codes and HMAC
+
+A *message authentication code* (MAC) is a function of a secret key and a
+message that produces a short *tag*. Anyone with the key can compute the
+tag; nobody without the key can produce a valid tag for a new message, even
+after seeing tags on many other messages. A MAC gives *integrity* and
+*authenticity* between parties who share a key. It does not give secrecy
+and it does not give non-repudiation: either party could have produced the
+tag.
+
+HMAC (RFC 2104) is the standard way to build a MAC from a hash function. It
+hashes the message twice with the key mixed in at each stage,
+$\text{HMAC}(k, m) = H((k \oplus \text{opad}) \| H((k \oplus \text{ipad}) \| m))$,
+which avoids the length-extension problem of naive $H(k \| m)$ and has a
+proof of security under mild assumptions on $H$. HMAC is also a good
+*pseudorandom function*, which is why it doubles as a key-derivation
+primitive (below).
+
+FOKS uses HMAC-SHA-512/256 for key derivation, for the integrity bindings
+of the key-value store, for name commitments, for capability tokens, and
+for the pairing-code key derivation. Tags are verified in constant time so
+that a comparison's running time does not reveal how many bytes matched.
+
+References:
+
+- H. Krawczyk, M. Bellare, R. Canetti, *HMAC: Keyed-Hashing for Message Authentication*, RFC 2104, IETF, 1997, https://www.rfc-editor.org/rfc/rfc2104
+- M. Bellare, R. Canetti, H. Krawczyk, *Keying Hash Functions for Message Authentication*, CRYPTO 1996, https://cseweb.ucsd.edu/~mihir/papers/kmd5.pdf
+
+## Symmetric authenticated encryption
+
+A symmetric cipher encrypts and decrypts with the same key. Modern practice
+always pairs encryption with authentication, so that a modified ciphertext
+is rejected rather than decrypted to garbage: this is *authenticated
+encryption* (AE). A scheme that also authenticates unencrypted context is
+*authenticated encryption with associated data* (AEAD); Chapter 8 explains
+the associated-data idea.
+
+Both schemes FOKS uses are built the same way: a *stream cipher* generates
+a keystream from the key and a *nonce*, the plaintext is XORed with the
+keystream, and a one-time MAC (Poly1305) keyed from the same keystream
+produces a 16-byte tag over the ciphertext. The nonce must never repeat
+under the same key; if it does, the two keystreams are identical and the
+XOR of the two plaintexts leaks, and the tag key repeats, which allows
+forgery.
+
+- **XSalsa20-Poly1305** is NaCl's `crypto_secretbox`. Salsa20 has a 64-bit
+  nonce, too short to choose at random; XSalsa20 (Bernstein, 2011) extends
+  it to 192 bits by first running a hash-like function, HSalsa20, over the
+  key and the first 128 nonce bits to produce a subkey. With a 24-byte
+  nonce, random nonces are safe. FOKS uses it for every protocol-level
+  symmetric encryption: boxed seeds, seed chains, pairing packets. It has
+  no associated-data input, so FOKS puts context into the nonce and the
+  plaintext.
+- **XChaCha20-Poly1305** is the same extended-nonce construction applied to
+  ChaCha20 (RFC 8439), Salsa20's successor, with associated data. FOKS uses
+  it for local storage only (Chapter 8).
+
+A useful mental model: the cipher provides secrecy against anyone without
+the key, the tag provides integrity against anyone without the key, and the
+nonce's job is to make each encryption under one key independent of the
+others.
+
+References:
+
+- D. J. Bernstein, *Cryptography in NaCl*, 2009, https://cr.yp.to/highspeed/naclcrypto-20090310.pdf
+- D. J. Bernstein, *Extending the Salsa20 nonce*, 2011, https://cr.yp.to/snuffle/xsalsa-20110204.pdf
+- Y. Nir, A. Langley, *ChaCha20 and Poly1305 for IETF Protocols*, RFC 8439, IETF, 2018, https://www.rfc-editor.org/rfc/rfc8439
+- P. Rogaway, *Authenticated-Encryption with Associated-Data*, ACM CCS, 2002, https://web.cs.ucdavis.edu/~rogaway/papers/ad.pdf
+
+## Digital signatures
+
+A signature scheme has a private *signing key* and a public *verify key*.
+The signer produces a signature over a message; anyone with the verify key
+can check it; nobody without the signing key can produce a valid signature
+on a new message. Unlike a MAC, a signature can be verified by parties who
+cannot forge it, so it supports public verifiability and non-repudiation.
+Signatures are what make FOKS's chains (Part III) checkable by everyone
+without trusting the server.
+
+- **Ed25519** (RFC 8032) is the Edwards-curve Digital Signature Algorithm
+  over Curve25519. Keys are 32 bytes, signatures 64 bytes, signing is
+  deterministic (no per-signature randomness to get wrong), and
+  implementations are fast and constant-time. FOKS uses it for every
+  software key. The Rust code calls `verify_strict`, which rejects the
+  edge-case signatures (small-order components, non-canonical encodings)
+  that some verifiers accept.
+- **ECDSA over P-256** (FIPS 186-5) is the signature scheme available on PIV
+  hardware. It signs a 32-byte digest supplied by the host, so FOKS hashes
+  the typed message with SHA-512/256 first. ECDSA is *malleable* (Chapter 7)
+  and, unlike Ed25519, requires a fresh random or derived nonce per
+  signature; the card handles that internally.
+
+A signature is over bytes, not over meaning. Chapter 3 explains why FOKS
+prefixes every signed message with a type ID, and Chapter 9 why the bytes
+must have exactly one canonical form.
+
+References:
+
+- S. Josefsson, I. Liusvaara, *Edwards-Curve Digital Signature Algorithm (EdDSA)*, RFC 8032, IETF, 2017, https://www.rfc-editor.org/rfc/rfc8032
+- D. J. Bernstein, N. Duif, T. Lange, P. Schwabe, B.-Y. Yang, *High-speed high-security signatures*, Journal of Cryptographic Engineering 2(2), 2012, https://ed25519.cr.yp.to/ed25519-20110926.pdf
+- K. Chalkias, F. Garillot, V. Nikolaenko, *Taming the Many EdDSAs*, Security Standardisation Research (SSR), 2020, https://eprint.iacr.org/2020/1244
+- National Institute of Standards and Technology, *Digital Signature Standard (DSS)*, FIPS 186-5, 2023, https://doi.org/10.6028/NIST.FIPS.186-5
+
+## Diffie-Hellman key agreement
+
+Diffie-Hellman lets two parties who each have a key pair compute a shared
+secret that nobody else can compute, without sending the secret. Each
+party combines its own private key with the other's public key, and the
+mathematics of the group guarantees that both arrive at the same value. If
+both keys are long-term (*static-static* DH), the shared secret also
+implicitly authenticates the parties: only the two key holders could have
+computed it. This is how NaCl's `crypto_box`, and FOKS's hybrid box, know
+who sent a message without a signature.
+
+- **X25519** (RFC 7748) is Diffie-Hellman over Curve25519 using only the
+  x-coordinate. Keys and shared secrets are 32 bytes. It is designed so
+  that any 32-byte string is a valid private key and any 32-byte string can
+  be used as a public key without validation, which removes a class of
+  implementation errors.
+- **P-256 ECDH** is Diffie-Hellman over the NIST P-256 curve, the curve PIV
+  cards support. Public keys are points, transmitted in SEC 1 compressed
+  form (33 bytes); the shared secret is the x-coordinate of the result
+  (32 bytes).
+
+A shared secret from Diffie-Hellman is a group element, not a uniformly
+random key, and should be passed through a hash or key-derivation function
+before use. NaCl does this with HSalsa20; FOKS's hybrid combiner does it
+with SHA3-256.
+
+References:
+
+- W. Diffie, M. Hellman, *New Directions in Cryptography*, IEEE Transactions on Information Theory 22(6), 1976, https://doi.org/10.1109/TIT.1976.1055638
+- A. Langley, M. Hamburg, S. Turner, *Elliptic Curves for Security*, RFC 7748, IETF, 2016, https://www.rfc-editor.org/rfc/rfc7748
+- D. J. Bernstein, *Curve25519: new Diffie-Hellman speed records*, PKC 2006, https://cr.yp.to/ecdh/curve25519-20060209.pdf
+- Certicom Research, *SEC 1: Elliptic Curve Cryptography*, Version 2.0, 2009, https://www.secg.org/sec1-v2.pdf
+
+## Key encapsulation and ML-KEM
+
+A *key encapsulation mechanism* (KEM) is a public-key primitive shaped for
+sending a symmetric key. `Encaps(pk)` produces a random shared secret and a
+ciphertext; `Decaps(sk, ciphertext)` recovers the shared secret. Unlike
+Diffie-Hellman, a KEM is one-directional: the sender needs no key pair of
+its own, and the ciphertext carries no information about who sent it. That
+is why FOKS pairs ML-KEM with Diffie-Hellman rather than replacing it.
+
+**ML-KEM** (FIPS 203, derived from the CRYSTALS-Kyber submission) is the
+NIST-standardised post-quantum KEM. Its security rests on the *module
+learning with errors* problem over lattices: roughly, given a matrix of
+polynomials $A$ and a vector $t = A s + e$ where $s$ is a secret with small
+coefficients and $e$ a small random error, recover $s$. Without the error
+term this is linear algebra; with it, the best known algorithms, classical
+and quantum alike, take exponential time. Encapsulation encrypts a random
+value under $t$ using fresh small randomness, and the shared secret is
+hashed from that value. FOKS uses the **ML-KEM-768** parameter set
+(security category 3, comparable to AES-192): encapsulation keys are 1184
+bytes, ciphertexts 1088 bytes, shared secrets 32 bytes, and key generation
+is deterministic from a 64-byte seed $(d, z)$, which lets FOKS derive the
+key pair from a device seed (Chapter 3).
+
+References:
+
+- National Institute of Standards and Technology, *Module-Lattice-Based Key-Encapsulation Mechanism Standard*, FIPS 203, 2024, https://doi.org/10.6028/NIST.FIPS.203
+- J. Bos, L. Ducas, E. Kiltz, T. Lepoint, V. Lyubashevsky, J. M. Schanck, P. Schwabe, G. Seiler, D. Stehlé, *CRYSTALS-Kyber: a CCA-secure module-lattice-based KEM*, IEEE European Symposium on Security and Privacy, 2018, https://eprint.iacr.org/2017/634
+- O. Regev, *On Lattices, Learning with Errors, Random Linear Codes, and Cryptography*, Journal of the ACM 56(6), 2009, https://doi.org/10.1145/1568318.1568324
+
+## Hybrid constructions
+
+A *hybrid* key exchange runs a classical and a post-quantum primitive
+together and derives the final key from both shared secrets, so that the
+result is secure as long as either component is. The essential rule is
+that the derivation must hash the public values (ciphertexts or public
+keys) along with the secrets, which prevents an attacker from substituting
+one component's ciphertext for another that would yield the same combined
+key. Chapter 4 shows FOKS's combiner. The same shape is used by the IETF's
+hybrid TLS key exchange and permitted by NIST SP 800-56C Rev. 2.
+
+References:
+
+- F. Giacon, F. Heuer, B. Poettering, *KEM Combiners*, PKC 2018, https://eprint.iacr.org/2018/024
+- D. Stebila, S. Fluhrer, S. Gueron, *Hybrid key exchange in TLS 1.3*, draft-ietf-tls-hybrid-design, IETF Internet-Draft, https://datatracker.ietf.org/doc/draft-ietf-tls-hybrid-design/
+- E. Barker, L. Chen, R. Davis, *Recommendation for Key-Derivation Methods in Key-Establishment Schemes*, NIST SP 800-56C Rev. 2, 2020, https://doi.org/10.6028/NIST.SP.800-56Cr2
+
+## Key derivation
+
+A *key derivation function* (KDF) turns one secret into others. When the
+input is already a uniformly random key, a pseudorandom function such as
+HMAC suffices: each distinct label yields an independent-looking key, and
+none of them reveals the master. When the input is not uniform (a
+Diffie-Hellman shared secret, or a password), an extra step is needed to
+condense it first.
+
+**HKDF** (RFC 5869) is the standard two-step KDF: *extract* condenses input
+keying material into a uniform pseudorandom key with HMAC under a salt, and
+*expand* generates any amount of output from it with HMAC over a context
+string and a counter. FOKS does not use HKDF. Its `derive_key` is a single
+HMAC-SHA-512/256 over a typed label, which is appropriate because its seeds
+are already uniform and it never needs more than one output block
+(Chapter 3). The two are mentioned together because the repository's own
+guide calls the hierarchy HKDF, and a reader should know the difference.
+
+References:
+
+- H. Krawczyk, P. Eronen, *HMAC-based Extract-and-Expand Key Derivation Function (HKDF)*, RFC 5869, IETF, 2010, https://www.rfc-editor.org/rfc/rfc5869
+- H. Krawczyk, *Cryptographic Extraction and Key Derivation: The HKDF Scheme*, CRYPTO 2010, https://eprint.iacr.org/2010/264
+
+## Password hashing
+
+A password has far less entropy than a key, so an attacker who obtains
+anything derived from it (a hash, a ciphertext) can try guesses offline.
+*Password hashing* functions are deliberately slow and, in modern designs,
+*memory-hard*: they require a large amount of memory per evaluation, so
+that the parallel hardware attackers use (GPUs, ASICs) gains little over an
+ordinary processor. A *salt*, a random value stored alongside, ensures two
+users with the same password get different outputs and that precomputed
+tables are useless.
+
+**Argon2id** (RFC 9106) is the recommended choice. It takes a memory size,
+an iteration count and a parallelism degree as parameters; FOKS's
+production values are 64 MiB, 3 iterations and 2 lanes, with a 16-byte
+random salt and 64 bytes of output (Chapter 6). The "id" variant mixes the
+data-independent memory access of Argon2i (resistant to side-channel
+observation) with the data-dependent access of Argon2d (stronger against
+time-memory trade-offs).
+
+References:
+
+- A. Biryukov, D. Dinu, D. Khovratovich, S. Josefsson, *Argon2 Memory-Hard Function for Password Hashing and Proof-of-Work Applications*, RFC 9106, IETF, 2021, https://www.rfc-editor.org/rfc/rfc9106
+- C. Percival, *Stronger Key Derivation via Sequential Memory-Hard Functions*, BSDCan, 2009, https://www.tarsnap.com/scrypt/scrypt.pdf
+
+## Commitments
+
+A *commitment* lets a party fix a value now and reveal it later, with two
+guarantees: the commitment reveals nothing about the value (*hiding*), and
+the party cannot later open it to a different value (*binding*). The
+simplest practical commitment to a value $v$ is $\text{HMAC}(r, v)$ for a
+fresh random key $r$; opening means revealing $r$ and $v$. FOKS uses this
+for usernames and device names, which appear in chain links only as
+commitments (Chapter 3), and a plain typed hash where the committed value is
+itself unguessable (tree locations, removal keys), so that no separate random
+key is needed to make the commitment hiding.
+
+References:
+
+- S. Halevi, S. Micali, *Practical and Provably-Secure Commitment Schemes from Collision-Free Hashing*, CRYPTO 1996, https://doi.org/10.1007/3-540-68697-5_16
+
+## Merkle trees
+
+A *Merkle tree* is a tree whose leaves are hashes of data items and whose
+every interior node is the hash of its children. The root is a single
+digest that commits to every leaf. To prove that a particular leaf is in
+the tree, one supplies the sibling hashes along the path from the leaf to
+the root, $O(\log n)$ values, and a verifier recomputes the root. Collision
+resistance of the hash guarantees that a proof cannot be constructed for a
+leaf that is not there. FOKS's server publishes a signed Merkle root over
+all chain links, so a client can check that a link it was given is the one
+the server committed to, and that the server has not shown different
+histories to different clients. Chapter 11 describes the specific tree
+(a binary Patricia trie) and Chapter 12 how successive roots are linked.
+
+References:
+
+- R. C. Merkle, *A Digital Signature Based on a Conventional Encryption Function*, CRYPTO 1987, https://doi.org/10.1007/3-540-48184-2_32
+
+## Canonical serialization
+
+Every primitive above operates on bytes. A hash of a data structure is only
+meaningful if there is exactly one way to turn that structure into bytes;
+otherwise two honest parties may compute different digests of the same
+object, or an attacker may find a second encoding of a different object
+that hashes the same. A *canonical* encoding is one that admits a single
+byte string per value: no optional whitespace, no choice of integer width,
+no map-key ordering freedom. FOKS uses a restricted subset of MessagePack
+with these rules enforced on both encoding and decoding; Chapter 9 gives
+the details and the reasoning.
+
+References:
+
+- S. Furuhashi, *MessagePack specification*, https://github.com/msgpack/msgpack/blob/master/spec.md
+
+## Where to look
+
+- `foks-crypto`: every protocol-level use of the primitives above; the
+  crate's top-level module imports name the concrete implementations
+  (`sha2`, `sha3`, `hmac`, `ed25519-dalek`, `x25519-dalek`, `p256`,
+  `ml-kem`, `crypto_secretbox`, `salsa20`, `argon2`).
+- `foks-keystore`: XChaCha20-Poly1305 for local storage.
+- `foks-yubi`: ECDSA and ECDH on PIV hardware.
+- `foks-snowpack`: canonical serialization.
+- The workspace `Cargo.toml` pins the versions of the cryptographic crates.
+
+## Further reading
+
+- J. Katz, Y. Lindell, *Introduction to Modern Cryptography*, 3rd edition, CRC Press, 2020
+- D. Boneh, V. Shoup, *A Graduate Course in Applied Cryptography*, draft, https://toc.cryptobook.us/
+- J.-P. Aumasson, *Serious Cryptography: A Practical Introduction to Modern Encryption*, No Starch Press, 2017
+- D. J. Bernstein, T. Lange, P. Schwabe, *The security impact of a new cryptographic library*, LATINCRYPT 2012, https://cr.yp.to/highspeed/coolnacl-20120725.pdf

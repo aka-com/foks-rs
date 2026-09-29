@@ -1,0 +1,290 @@
+# Staying Compatible with the Reference Implementation
+
+`foks-rs` is not the only FOKS. The reference implementation is written in
+Go, lives at `github.com/foks-proj/go-foks`, and runs the public host at
+`foks.app`. The Rust implementation targets a specific release of it,
+v0.1.9, and must produce and consume bytes that Go code accepts, because
+signatures, hashes, and Merkle leaves all commit to exact bytes. A Rust
+client must be able to sign up against a Go server; a Go client must be
+able to verify a Rust server's hostchain; and a Rust client that reads a
+Go client's on-disk state must find the same keys. This chapter is about
+how the project earns confidence in those claims and keeps it as upstream
+changes.
+
+## Two techniques from the testing literature
+
+*Differential testing*, named by William McKeeman in 1998, tests a program
+by giving the same input to two or more implementations of the same
+specification and comparing their outputs. It needs no oracle that knows
+the right answer, only the observation that if two independent
+implementations disagree, at least one is wrong. McKeeman used it on C
+compilers; it applies equally to serializers, verifiers, and protocol
+handlers. Its weakness is that both implementations can share a mistake.
+Here the comparison is deliberately asymmetric: the reference
+implementation, not the specification, is the ground truth, because
+interoperating with deployed Go code is the goal, whether or not Go matches
+the spec.
+
+*Golden testing* (also called fixture, snapshot, or characterization
+testing) records an output once, stores it, and fails the test if the
+output ever changes. Golden files are cheap and fast but only as
+trustworthy as their provenance: a golden file produced by the code under
+test proves nothing. The fixtures in this chapter were produced by the Go
+implementation, and the manifests record enough to prove that.
+
+The compatibility story has five rings, from cheapest and most hermetic to
+most expensive and most realistic.
+
+```
+  Ring 1   protocol and method IDs        extracted from Go source by AST, pinned by hash
+  Ring 2   Go-certified byte fixtures     checked-in bytes, manifests, re-serialization
+  Ring 3   the Go oracle                  Go code re-verifies Rust output
+  Ring 4   live mixed runs                Rust client on Go server; Go client on Rust server
+  Ring 5   hosted canary                  daily lifecycle against foks.app, signed lease
+```
+
+## Ring 1: identifiers extracted, pinned, and ring-fenced
+
+Every FOKS protocol has a 32-bit ID and every method a small integer
+position, and these are the dispatch keys on the wire
+([Chapter 17](17-wire.qmd)). Copying them by hand from Go source is
+error-prone and, worse, silently wrong when upstream changes one.
+
+`tools/foks-protocol-sync` is a Go program that uses only the standard
+library. It parses the go-foks source with `go/parser` and `go/ast` and
+never imports or executes an upstream package. From the generated protocol
+files it extracts:
+
+- protocol IDs from `var XxxProtocolID = ...` declarations, evaluated by a
+  small constant evaluator;
+- method positions from the single `NewMethodV2(protocol, position,
+  "Proto.method")` call inside each generated client function;
+- whether each protocol wraps its argument and result in `DataWrap`, by
+  inspecting the types of the local variables the generator names `warg`
+  and `tmp` (this is how the bare-payload team and Kex protocols were
+  discovered);
+- status codes and service types from the library's constant tables;
+- for every `.snowp` schema file, two SHA-256 digests: one of the raw
+  bytes and one of a *token-normalized* form.
+
+The token-normalized digest strips comments and whitespace and
+length-prefixes each remaining token, so reformatting a schema changes the
+raw digest but not the semantic one, while renaming a field changes both.
+The output is a JSON artifact with sorted collections, so extraction is
+deterministic, and the generation script runs the extractor **twice** and
+compares the two outputs byte for byte before accepting either.
+
+The artifact's SHA-256 is pinned as a constant in `foks-protocol-metadata`,
+and the artifact records the upstream module path, version, and `go.sum`
+hashes it came from. Ordinary Cargo builds never run Go; they compile
+checked-in generated files, and `generate-protocol.sh --check` fails CI if
+any generated file is stale.
+
+Local extensions to the protocol are ring-fenced so they can never collide
+with a future upstream identifier:
+
+| Local extension | Reserved range |
+|---|---|
+| Protocol IDs | `0xf04b0000` to `0xf04bffff` |
+| Method positions | 65,536 to 131,071, names beginning with `foks` |
+
+A weekly job re-extracts from upstream's current mainline (resolving the
+remote `HEAD` to an immutable commit and fetching at depth 1) and
+classifies every difference against the pinned artifact:
+
+| Class | Meaning |
+|---|---|
+| `wire_breaking` | an ID, position, header flag, or result type changed on something Rust supports, or an identifier was reused for a different name |
+| `behavior_review_required` | a schema whose semantic digest changed feeds a supported protocol |
+| `additive` | a new protocol, method, or status |
+| `outside_local_slice` | a change to something Rust does not implement |
+| `source_only` | the raw digest changed but the semantic digest did not |
+
+The job opens or updates a tracking issue with the report. This turns the
+question "did upstream change something that matters?" into a triaged
+answer rather than a diff to read.
+
+## Ring 2: Go-certified byte fixtures
+
+`tools/foks-v019-oracle` is a Go program that links the official v0.1.9
+modules and writes fixtures under `crates/foks-snowpack/tests/fixtures/`.
+It has two file classes. `.snowp` files pass through Go's own canonical
+checker, `core.AssertCanonicalMsgpack`, and the writer refuses to emit one
+that fails; every checked-in `.snowp` fixture is therefore certified
+canonical by Go, not by Rust. `.frame` files are ordinary RPC frames and
+are deliberately not so classified.
+
+Before writing a probe capture, the oracle verifies the hostchain, the
+public-zone signature, the Merkle root signature, and the binding between
+root and hostchain using Go's verifiers. Only then does it write a
+`manifest.json` listing every file's size and SHA-256 together with
+provenance: host ID, hostchain tail, Merkle epoch, root-node hash, and the
+independently computed prefixed hash of the whole root. The manifest
+deliberately carries no self-asserted "verified: true" fields. Its
+existence is the assertion, because it is written only after Go's checks
+pass.
+
+On the Rust side the tests check every manifest entry's size and digest,
+require that the files on disk are exactly the set in the manifest (no
+strays), and round-trip every `.snowp` file: decode, re-encode, compare
+bytes. The typed decoders in `foks-proto` then decode the same fixtures
+into structs and re-encode to the same bytes, which is the property that
+matters for signatures. The RPC crate does the same for request frames:
+the Rust encoder must reproduce Go's `probe-request.frame`, and a Go test
+pins the Go side of that pair using Go's own generated descriptors.
+
+The mutation fixtures (signup, device provisioning, revocation, key
+rotation, chat, invitations, single sign-on) are generated with
+deterministic randomness from a counter-seeded SHA-256 generator, and the
+Go suite generates the corpus twice, requiring byte-identical output.
+Fixtures also cover the negative space: `.frame` responses for error
+statuses so that status decoding is tested against real Go bytes.
+
+## Ring 3: the Go oracle re-verifies Rust output
+
+Fixtures test that Rust can consume what Go produces. The reverse
+direction, that Go accepts what Rust produces, needs Go code to run on Rust
+output. The oracle does this in several places:
+
+- The Rust server generates host-key add and revoke publications, and the
+  oracle replays the resulting hostchain through Go's `core.PlayChain`.
+- A Go test confirms, from Go's descriptors, that `Probe.probe` uses
+  `DataWrap` and `TeamLoader.loadTeamChain` does not; this is the ground
+  truth behind the Rust headerless predicates.
+- Go's mock PIV bus generates YubiKey fixtures so hardware-key encodings
+  ([Chapter 7](07-hardware-keys.qmd)) are covered without hardware.
+
+## Ring 4: live runs in both directions
+
+Two opt-in test suites run whole implementations against each other.
+
+**Rust client on Go server.** A Go test boots the unmodified v0.1.9
+integration environment, PostgreSQL in Docker via testcontainers included,
+and hands the client side to a Rust binary that performs signup, chain
+loading, PUK retrieval, key-value writes, cache-check synchronization,
+realtime chat, and device pairing. One accommodation was necessary: the Go
+test helper deliberately uses a 1024-bit RSA certificate for its probe
+endpoint in test mode, and the Rust TLS library correctly rejects that key
+size. The test replaces only that ephemeral leaf using the same official
+helper's production-strength path; handlers, CAs, and hostchain material
+remain those of the unmodified environment.
+
+**Go client on Rust server.** Another Go test drives the official client
+library against a Rust server: it probes, plays the Rust hostchain with
+`core.PlayChain`, verifies the bootstrap Merkle root and public zone with
+Go's checkers, then registers, relays a device-pairing session, and sends
+logs. Further scripts cover chat, teams, invitations across mixed hosts,
+single sign-on, MCP, and account flows.
+
+All of these are gated by environment variables so `cargo test` and
+`go test ./...` stay hermetic.
+
+## Ring 5: the hosted canary
+
+A daily job runs a key-value and onboarding lifecycle against the real
+`foks.app` host with a disposable account. Its outcome is published as a
+signed *compatibility artifact*, a small JSON document binding a strictly
+increasing generation, the target host, the run ID, generation and expiry
+times (at most 7 days apart), the pinned protocol-metadata digest, digests
+of the mutation and read results, an outcome, a set of capabilities, and a
+drift reason. Validation encodes the policy structurally: a `Compatible`
+artifact must have non-empty capabilities and no drift reason; a `Drift`
+artifact must have *empty* capabilities and a reason. An artifact reporting
+drift is therefore structurally unable to grant anything. Clients that
+consult the artifact learn whether the Rust implementation is currently
+known to work against that host without trusting a mutable web page.
+
+## Quirks preserved bug-for-bug
+
+Differential testing finds the places where the reference implementation
+does something the specification would not predict. The project preserves
+them, because a Rust implementation that was "more correct" than Go would
+be incompatible with it.
+
+**Bare payloads for team and Kex protocols.** Described in
+[Chapter 17](17-wire.qmd): five protocols omit the `DataWrap` envelope
+because of how their Go source files were generated. Found by AST
+inspection, pinned by a Go test.
+
+**The Merkle epoch limit at 65,536.** Go's canonical checker for signed
+objects rejects any `array16` with 31 or fewer elements, even though
+MessagePack has no shorter encoding for 16 to 31 elements
+([Chapter 9](09-canonical-encoding.qmd)). The skip-pointer list of a Merkle
+root ([Chapter 12](12-epochs.qmd)) grows with the number of trailing zero
+bits in the epoch, so it first reaches 16 entries at epoch 65,536 and has
+16 or more at every later multiple of 32,768. A root at such an
+epoch could not be encoded in a form Go would accept as signable. Rust
+therefore refuses to build back-pointer arrays of 16 to 31 entries and
+exposes `MAX_CANONICAL_MERKLE_EPOCH = 65,536` as a documented limit rather
+than silently diverging.
+
+**Rotated invitation certificate signature order.** A team certificate for
+an invitation carries stacked signatures ([Chapter 15](15-teams.qmd)). When
+the team's admin key has rotated since the certificate was first issued,
+the pinned Go client verifies the signatures in the reverse of the order
+one would expect. The Rust fixture test decodes Go's `rotated` certificate,
+re-creates it byte-exactly, and asserts that swapping the two signatures
+makes verification fail, so Rust matches Go's order rather than its own
+preference.
+
+**Seed-chain receiver binding.** When a team's shared key rotates, Go builds
+one seed chain per rotation and binds its informational "receiver" field
+to the editor who performed the rotation, then attaches that same chain to
+every recipient's parcel. Rust's decoder documents this and requires the
+caller to bind each recovered seed to the authenticated team-chain key
+history instead of trusting the field.
+
+**The founding link's sequence number.** The Go `TeamCreator` emits a
+founding membership link with its sequence number unset (zero) although
+the team link itself is sequence one. The fixtures retain it so Rust can
+decode Go history losslessly, but Rust is not permitted to emit it.
+
+## Reading a Go client's state
+
+Compatibility extends to the disk. `foks-go-interop` lets the Rust agent
+discover, and on macOS import, credentials from an existing go-foks
+installation. The Go secret store is a Snowpack document decoded with the
+same canonical decoder, with a 16 MiB size cap, a cap of 256 candidate
+credentials, `O_NOFOLLOW` on open, and a same-inode check to detect
+concurrent modification. Go's "hard state" SQLite database is opened
+read-only with `trusted_schema = OFF`, `query_only = ON`, and caps of 1,024
+rows and 64 KiB per value, and each row's scoped key is recomputed with the
+same typed hash Go used, so a row is accepted only if it really belongs to
+the identity it claims. The macOS Keychain bundle is an XSalsa20-Poly1305
+secretbox whose 24-byte nonce begins with the big-endian type ID, the
+same domain-separated-nonce convention as the wire cryptography.
+
+## Where to look
+
+- `tools/foks-protocol-sync`: `internal/extract/extract.go`,
+  `internal/drift/drift.go`, `README.md`.
+- `tools/foks-server`: `generate-protocol.sh`, `diff-upstream-protocol.sh`.
+- `foks-protocol-metadata`: `lib.rs` (pinned digest, merge and validation
+  of the local policy, rendering).
+- `tools/foks-v019-oracle`: `main.go`, `live_compat_test.go`,
+  `go_client_rust_live_test.go`, `rpc_fixture_descriptor_test.go`,
+  `README.md`.
+- `foks-snowpack`: `tests/official_fixtures.rs` and the fixture directories
+  under `tests/fixtures/foks-v0.1.9/`.
+- `foks-merkle-store`: `history.rs` (`MAX_CANONICAL_MERKLE_EPOCH`).
+- `foks-crypto`: `invitations.rs`, the seed-chain functions in `lib.rs`.
+- `foks-compat-artifact`: `lib.rs`.
+- `foks-go-interop`: `lib.rs`, `hard_state.rs`.
+- `.github/workflows/foks-protocol-drift.yml`,
+  `.github/workflows/foks-hosted-compat.yml`.
+
+## Further reading
+
+- William M. McKeeman, *Differential Testing for Software*, Digital
+  Technical Journal 10(1), 1998,
+  https://www.hpl.hp.com/hpjournal/dtj/vol10num1/vol10num1art9.pdf
+- Koen Claessen and John Hughes, *QuickCheck: A Lightweight Tool for Random
+  Testing of Haskell Programs*, ICFP, 2000,
+  https://doi.org/10.1145/351240.351266
+- Michael Feathers, *Working Effectively with Legacy Code*, Prentice Hall,
+  2004 (characterization tests)
+- FOKS project, *go-foks*, GitHub, https://github.com/foks-proj/go-foks
+- Go project, *Package ast* and *Package parser*, Go standard library
+  documentation, https://pkg.go.dev/go/ast and https://pkg.go.dev/go/parser
+- Testcontainers, *Testcontainers for Go*,
+  https://golang.testcontainers.org/

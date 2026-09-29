@@ -1,0 +1,337 @@
+# Single Sign-On Without Trusting the Identity Provider
+
+An organization that adopts FOKS usually already has an identity provider:
+a service such as Okta, Google Workspace, or Keycloak that knows who its
+employees are and lets other applications ask. Administrators want new
+FOKS accounts to be gated by that provider, and they want a departing
+employee's FOKS access to end when their corporate login ends. The obvious
+way to do this, letting the provider's answer stand in for a device key,
+would break the system's central promise, because the provider (and the
+FOKS server that talks to it) would then be able to act as the user. This
+chapter explains how the Rust server uses OpenID Connect to gate access
+while ensuring the provider proves identity but never touches keys.
+
+## OpenID Connect in one page
+
+*OAuth 2.0* is a protocol for delegated authorization: a user tells a
+service ("the provider") that some application may act on their behalf,
+and the application receives a token it can present to the provider's
+APIs. *OpenID Connect* (OIDC) is a layer on top of OAuth 2.0 that turns it
+into an authentication protocol by adding one artifact, the *ID token*.
+
+The flow FOKS uses is the *authorization code* flow:
+
+1. The application constructs an authorization URL at the provider,
+   including a `state` value (to correlate the eventual callback with the
+   request that started it), a `nonce` (to bind the ID token to this
+   particular request), and, with PKCE, a `code_challenge`.
+2. The user's browser visits that URL, authenticates with the provider,
+   and is redirected back to the application's *redirect URI* with a
+   one-time *authorization code*.
+3. The application exchanges the code, over a direct server-to-server
+   request to the provider's *token endpoint*, for tokens. With PKCE, it
+   sends the `code_verifier` whose hash was the `code_challenge`, proving
+   that the party redeeming the code is the party that requested it.
+4. Among the tokens is the ID token, a *JSON Web Token* (JWT): a signed
+   JSON document with claims such as `iss` (the issuer), `sub` (a stable
+   subject identifier), `aud` (the intended audience, i.e. the application's
+   client ID), `nonce`, `iat` (issued at), and `exp` (expiry). The
+   application verifies the signature using the provider's published
+   *JSON Web Key Set* (JWKS), fetched from a URL in the provider's
+   *discovery document*.
+
+*PKCE* (Proof Key for Code Exchange, RFC 7636) exists because an
+authorization code travels through a browser redirect and could be
+intercepted. The requesting party generates a random `code_verifier`,
+sends `SHA-256(code_verifier)`, base64url-encoded, as the
+`code_challenge`, and later must present the verifier itself. An
+interceptor who has the code but not the verifier cannot redeem it. RFC 7636
+requires the verifier to be 43 to 128 characters.
+
+## What the provider does and does not decide
+
+The `foks-oidc` crate's first line of documentation is the design in one
+sentence: "A validated provider token is not a FOKS device credential." The
+provider answers exactly one question: is the person at this browser the
+subject `sub` at issuer `iss`? Everything else, in particular which device
+keys belong to the account, remains a matter for the user's signature chain
+([Chapter 10](10-sigchains.qmd)) and is signed by keys the provider never
+sees.
+
+The FOKS *server* is the OAuth client. It holds the client secret, runs the
+browser redirect endpoints, and performs the code exchange. The native FOKS
+client, the agent on the user's machine, never talks to the provider's
+token endpoint. That division is what makes the next section work.
+
+## Binding the provider's proof to a device signature
+
+The critical mechanism is the choice of `nonce`. In ordinary OIDC the nonce
+is random. In FOKS it is *derived from a device-signed binding*:
+
+```
+OAuth2Binding = { uid, host, merkle_root (epoch, hash), random[16] }
+
+nonce = base64url( prefixed_hash( OAUTH2_BINDING_TYPE_ID, encode(binding) ) )
+```
+
+The client builds the binding naming its user ID, the host ID, and the
+Merkle root it currently trusts, and takes a typed hash of it (the
+domain-separated hash of [Chapter 9](09-canonical-encoding.qmd)). That hash
+is the nonce it asks the server to send to the provider. When the provider
+signs an ID token containing that nonce, it has, without knowing it,
+signed a commitment to this user, this host, and this point in the host's
+history.
+
+Later, when the client asks to complete signup, link an existing account, or
+reauthenticate, it submits an `OAuth2IdTokenBinding`: the binding payload
+plus the ID token, signed by the *device key*. The server then checks, in
+order:
+
+- the device signature over the binding verifies;
+- the binding's user ID and host ID are this user and this host;
+- `oauth2_binding_nonce(binding)` equals the nonce stored in the session;
+- the submitted ID token is byte-for-byte the token the server received
+  from the provider for that session;
+- the session's provider token has not expired;
+- the Merkle root the binding cites actually exists on this host.
+
+The effect is a two-way tie. The provider's signature covers the nonce,
+which covers the binding; the device's signature covers the binding *and*
+the ID token. Neither party alone can produce the pair. A stolen ID token
+cannot be attached to another device's binding because the nonce would not
+match; a forged binding cannot be attached to a real ID token because the
+device signature would fail. The result stored in the database is an
+`sso_access` row keyed by `(host, uid)` with a `UNIQUE (host, issuer,
+subject)` constraint: one FOKS account per provider subject.
+
+The purposes are three: `Signup` (a new account whose provider-derived
+username must match the session), `LinkExisting` (an account that predates
+the policy), and `Reauthenticate` (renewing an existing link). Each
+completed binding leaves a receipt with a commitment hash, so an exact
+retry of the same request is recognized rather than re-executed.
+
+## PKCE and the pinned Go client
+
+The code does use PKCE with the `S256` method. The verifier is generated on
+the client (32 random bytes, base64url, giving the RFC minimum of 43
+characters) and sent to the FOKS server in the session-initialization
+call, where it is stored encrypted alongside the nonce. One compatibility
+branch is worth noting. The pinned Go client emits a 27-character verifier
+(20 random bytes), below the RFC minimum. The Rust code accepts that length
+explicitly, computes the S256 challenge by hand because the OIDC library
+would refuse to, and leaves the decision to the provider, which enforces its
+own policy at exchange time. A comment records that the Rust client emits
+the RFC-required length and production providers stay strict.
+
+## Validating the ID token
+
+The validator wraps the `openidconnect` crate's verifier and adds checks the
+library deliberately leaves to callers.
+
+| Check | Rule |
+|---|---|
+| Signing algorithm | RS256 only |
+| Issuer | exact match to the configured issuer |
+| Issue time | not in the future |
+| Expiry | must be after issue time |
+| Nonce | mandatory (optional only on refresh) |
+| `azp` (authorized party) | if present, must equal the client ID; required when the token has more than one audience |
+| Subject | non-empty, at most 255 bytes, ASCII |
+| Token size | at most 1 MiB |
+
+If validation fails immediately after a code exchange, the server refetches
+the provider's JWKS *once* and retries, because a provider may rotate its
+signing keys between discovery and exchange. It never replays the consumed
+authorization code.
+
+The `email` claim, when present, is retained in the encrypted session and
+serves two purposes: it is the fallback source of a username (the local
+part before `@`) when `preferred_username` is absent, and at signup the
+username and email the client claims must equal what the session recorded.
+There is no email-domain allow-list in the operator configuration; the
+policy question "which subjects may sign up" is answered by the provider's
+own configuration and by the host's signup invite policy.
+
+## Guarding the network: SSRF and DNS
+
+The FOKS server fetches URLs it learned from configuration and from the
+provider's discovery document. *Server-side request forgery* (SSRF) is the
+class of attack in which such a fetch is redirected at something internal,
+for example a cloud metadata service at `169.254.169.254` or a database on
+the private network. The `foks-oidc` network policy closes the usual routes.
+
+- Every URL must be `https` (plain `http` only for loopback in tests), with
+  no user information and no fragment, and at most 4,096 characters.
+- A literal IP host must be public: RFC 1918 ranges, loopback, link-local,
+  carrier-grade NAT, documentation ranges, multicast, and the IPv6
+  non-global blocks are all refused.
+- DNS is policed too. A custom resolver looks up the name and then rejects
+  the result if *any* resolved address is non-public, or if there are more
+  than 64 addresses. A provider hostname that resolves to a private address
+  fails before a connection is attempted.
+- The HTTP client has redirects disabled and no proxy, uses a 10-second
+  deadline, and reads every response with a hard 1 MiB cap. Redirects are
+  refused specifically so that a code, verifier, or client secret is never
+  forwarded to a redirect target.
+- Discovery validates the issuer, authorization, token, and JWKS URLs with
+  the same policy and requires that the provider advertise RS256.
+
+## Durable sessions with compare-and-swap revisions
+
+A browser login is a multi-step process spanning seconds to minutes, with
+a process that might restart in the middle. Sessions are therefore rows in
+the database, and the sensitive parts (verifier, nonce, and later the
+tokens) live only in a `ciphertext` column.
+
+The ciphertext is sealed with XChaCha20-Poly1305 under a key derived from
+the host's `Recovery` purpose key, with *associated data* covering the
+host, the session hash, a configuration fingerprint, a hash of the
+transport source, the user ID (if any), the state, the revision, the
+authorization epoch, and the expiry. Associated data is authenticated but
+not encrypted; changing any of it makes decryption fail. Because state and
+revision are in it, a row cannot be rolled back to an earlier state by
+copying an older ciphertext over a newer one.
+
+State changes use *compare-and-swap*: the update succeeds only if the row
+still holds the state and revision the caller read.
+
+```
+UPDATE sso_sessions SET state = ?, revision = revision + 1, ciphertext = ?
+WHERE host = ? AND session_hash = ? AND config_hash = ?
+  AND state = ? AND revision = ? AND expires_at_ms > ? AND interrupted = 0
+```
+
+One changed row means success; zero means someone else moved first, and
+the loser reloads the row and uses whatever was already persisted instead
+of producing a second result. The poll loop tries this at most four times.
+The allowed transitions form a small graph:
+
+```
+Created --> AwaitingBrowser --> Exchanging --> Ready --> Binding --> Completed
+                 |                  |                        |
+                 v                  v                        v
+              Denied         ExchangeUnknown              Rejected
+
+(Cancelled is reachable from Created, AwaitingBrowser, and Ready;
+ Expired from every non-terminal state except Binding.)
+```
+
+`ExchangeUnknown` deserves a word. A code exchange that times out may or
+may not have consumed the one-time code. Rather than guess, the session is
+marked and fails closed; the user starts again. At startup, any session
+that was mid-exchange when the process died is flagged `interrupted`, which
+every later compare-and-swap refuses, so an authorization code is never
+replayed after a crash.
+
+| Session parameter | Value |
+|---|---|
+| Lifetime | 10 minutes |
+| Maximum poll wait per RPC | 30 s |
+| Provider request deadline | 10 s |
+| Sessions per host | 1,000 |
+| Sessions per source identity | 4 |
+
+The browser-facing part is a small HTTP server on a loopback-or-configured
+address with 32 connection slots, keep-alive off, at most 16 headers,
+16 KiB buffers, and a 45-second connection timeout. The callback accepts
+only a fixed set of query keys with no duplicates, requires exactly one of
+`code` or `error`, and, when the provider sends an `iss` parameter
+(RFC 9207), requires it to match exactly. Start requests and callback
+completions draw from separate semaphores so a flood of new sessions cannot
+starve a login that is one step from finishing.
+
+## Re-checking access inside write transactions
+
+Linking an account is the beginning, not the end, of enforcement. Every
+authenticated write submitted to the single-writer actor of
+[Chapter 18](18-server-storage.qmd) re-checks `sso_require_access` on the
+writer thread, at execution time, and so do the certificate-issuance path
+of [Chapter 17](17-wire.qmd) and many reads. The check consults a single SQL
+statement that joins the policy, the user's access row, and the migration
+cohort and returns one of five decisions:
+
+| Decision | Meaning | Native access |
+|---|---|---|
+| `NoPolicy` | the host has no SSO policy | allowed |
+| `MigrationEligible` | policy in migration mode; user is in the cohort but not yet linked | allowed |
+| `LinkedActive` | linked, current configuration and epoch, not expired | allowed |
+| `LinkOnly` | policy enforced; user must link before doing anything else | refused |
+| `Denied` | provider blocked, link expired, or configuration changed | refused |
+
+Doing this as one statement matters because the policy, the access row, and
+the cohort could otherwise be read at different moments and combined into
+a decision no consistent snapshot would produce.
+
+When a link's access has expired, the server tries a refresh: the refresh
+token is decrypted, the access row is compare-and-swapped into a
+`Refreshing` state so that only one refresh runs, and the provider is
+called. Network I/O never happens inside a writer transaction; the writer
+is used only before (to claim the refresh) and after (to record the
+result). A provider outage maps to `ProviderUnavailable` rather than to
+revocation, so a flaky provider does not lock everyone out, but an expired
+link with no refresh available does.
+
+The policy itself is hardened. The `sso_policy` singleton records the
+issuer, a rollout ID, and a fingerprint of the operator configuration. If
+the server starts with a configuration whose fingerprint disagrees with
+the stored one, or without the Recovery key needed to decrypt sessions, it
+*blocks* the policy rather than silently switching providers; every access
+decision then returns `Denied` until an operator resolves it. Enforced
+rollout is permitted only on an empty host, and the migration cohort table
+is made immutable by triggers.
+
+## Why this shape
+
+The simpler design, in which the provider's ID token is the credential,
+fails the threat model on the first page of this book: the server would
+hold everything needed to act as a user. The design here keeps the
+provider in the role of a witness. It attests that a person authenticated,
+and the device attests, with a key the server never had, that the person
+who authenticated is the one operating this device against this host at
+this point in its history. Removing an employee from the provider ends
+their ability to reauthenticate; it does not, and cannot, give the server
+their keys.
+
+## Where to look
+
+- `foks-oidc`: `lib.rs` (token validation, session state graph),
+  `provider.rs` (network policy, guarded resolver, discovery, bounded
+  responses), `exchange.rs` (authorization URL, PKCE, code exchange, JWKS
+  retry).
+- `foks-crypto`: `sso.rs` (`oauth2_binding_nonce`, PKCE helpers, binding
+  signing and verification).
+- `foks-proto`: `sso.rs` (`OAuth2Binding`, `OAuth2IdTokenBinding`).
+- `foks-server`: `sso/mod.rs` (session initialization, policy startup
+  checks), `sso/envelope.rs` (sealing and associated data),
+  `sso/binding.rs` (binding verification, poll loop), `sso/access.rs`
+  (refresh), `sso/http.rs` (browser endpoints), `sso/config.rs`.
+- `foks-server-db`: `sso.rs` (compare-and-swap transitions, interruption
+  flag), `sso_policy.rs` (the access decision), `src/schema/sso.sql`.
+- `foks-client`: `sso.rs` (building the binding and the nonce).
+
+## Further reading
+
+- N. Sakimura, J. Bradley, M. Jones, B. de Medeiros, and C. Mortimore,
+  *OpenID Connect Core 1.0*, OpenID Foundation, 2014,
+  https://openid.net/specs/openid-connect-core-1_0.html
+- N. Sakimura, J. Bradley, M. Jones, and E. Jay, *OpenID Connect Discovery
+  1.0*, OpenID Foundation, 2014,
+  https://openid.net/specs/openid-connect-discovery-1_0.html
+- D. Hardt, *The OAuth 2.0 Authorization Framework*, RFC 6749, IETF, 2012,
+  https://www.rfc-editor.org/rfc/rfc6749
+- N. Sakimura, J. Bradley, and N. Agarwal, *Proof Key for Code Exchange by
+  OAuth Public Clients*, RFC 7636, IETF, 2015,
+  https://www.rfc-editor.org/rfc/rfc7636
+- M. Jones, J. Bradley, and N. Sakimura, *JSON Web Token (JWT)*, RFC 7519,
+  IETF, 2015, https://www.rfc-editor.org/rfc/rfc7519
+- M. Jones, *JSON Web Key (JWK)*, RFC 7517, IETF, 2015,
+  https://www.rfc-editor.org/rfc/rfc7517
+- K. Meyer zu Selhausen and D. Fett, *OAuth 2.0 Authorization Server Issuer
+  Identification*, RFC 9207, IETF, 2022,
+  https://www.rfc-editor.org/rfc/rfc9207
+- D. McGrew, *An Interface and Algorithms for Authenticated Encryption*,
+  RFC 5116, IETF, 2008, https://www.rfc-editor.org/rfc/rfc5116
+- OWASP Foundation, *Server-Side Request Forgery Prevention Cheat Sheet*,
+  OWASP Cheat Sheet Series,
+  https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html
+- Y. Rekhter, B. Moskowitz, D. Karrenberg, G. J. de Groot, and E. Lear, *Address Allocation for Private Internets*, RFC 1918, 1996, https://www.rfc-editor.org/rfc/rfc1918
