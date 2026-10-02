@@ -550,9 +550,9 @@ test('a pending membership change is counted on one band whose Review lists it',
       .getByRole('heading', { name: 'Unfinished activity · Engineering' }),
   );
   assert.ok(ui.within(dialog).getByText('Adding jules.park'));
-  const resume = ui.within(dialog).getByRole('button', {
+  const resume = ui.within(dialog).getByRole<HTMLButtonElement>('button', {
     name: 'Resume adding jules.park',
-  }) as HTMLButtonElement;
+  });
   await ui.waitFor(() => assert.equal(resume.disabled, false));
 });
 
