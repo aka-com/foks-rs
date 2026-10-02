@@ -14,6 +14,8 @@ use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
 
 pub mod secret_file;
+#[cfg(unix)]
+mod transport;
 
 const DEVICE_PAIRING_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CHAT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -135,6 +137,11 @@ impl AgentClient {
         self.put_kv_stream_cancellable(header, reader, &|| false)
     }
 
+    /// Socket I/O observes a single absolute deadline and cancellation. The
+    /// synchronous source must return promptly from each `Read::read` (use an
+    /// in-memory buffer or local regular file, not a pipe/network reader).
+    /// Rust's arbitrary `Read` cannot be interrupted while inside its method;
+    /// cancellation is checked before and after every source read.
     pub fn put_kv_stream_cancellable<R: std::io::Read + ?Sized>(
         &self,
         header: KvUploadHeader,
@@ -158,16 +165,14 @@ fn call_platform(
     mutation: bool,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Response> {
-    use std::io::Write as _;
     let frame = foks_agent_proto::encode(&request);
     request.operation.zeroize_plaintext();
     let frame = frame?;
     let deadline = std::time::Instant::now() + timeout;
     check_upload_cancelled(cancelled, deadline)?;
-    let mut stream = connect_platform(socket, timeout)?;
+    let mut stream = connect_platform(socket, cancelled, deadline)?;
     check_upload_cancelled(cancelled, deadline)?;
-    if let Err(error) = stream.write_all(&frame) {
-        let error = socket_write_error(error);
+    if let Err(error) = transport::write_all(&mut stream, &frame, cancelled, deadline) {
         return Err(if mutation {
             Error::Ambiguous(Box::new(error))
         } else {
@@ -193,26 +198,24 @@ fn upload_platform<R: std::io::Read + ?Sized>(
     reader: &mut R,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Response> {
-    use std::io::Write as _;
-
     let deadline = std::time::Instant::now() + timeout;
     check_upload_cancelled(cancelled, deadline)?;
     let total = header.total_length;
-    let mut stream = connect_platform(socket, timeout)?;
+    let mut stream = connect_platform(socket, cancelled, deadline)?;
     check_upload_cancelled(cancelled, deadline)?;
-    stream
-        .write_all(&foks_agent_proto::encode(&Request::new(
-            id,
-            Operation::PutKvStream { header },
-        ))?)
-        .map_err(socket_write_error)?;
+    transport::write_all(
+        &mut stream,
+        &foks_agent_proto::encode(&Request::new(id, Operation::PutKvStream { header }))?,
+        cancelled,
+        deadline,
+    )?;
     let mut buffer = Zeroizing::new(vec![0u8; MAXIMUM_UPLOAD_FRAME_BYTES]);
     let mut offset = 0u64;
     while offset < total {
         check_upload_cancelled(cancelled, deadline)?;
         let wanted = usize::try_from((total - offset).min(MAXIMUM_UPLOAD_FRAME_BYTES as u64))
             .map_err(|_| Error::Io(std::io::Error::other("upload length overflow")))?;
-        read_upload_chunk(reader, &mut buffer[..wanted])?;
+        read_upload_chunk_cancellable(reader, &mut buffer[..wanted], cancelled, deadline)?;
         let mut frame = KvUploadFrame {
             version: PROTOCOL_VERSION,
             id,
@@ -226,7 +229,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
             content.zeroize();
         }
         let encoded = encoded?;
-        if let Err(error) = stream.write_all(&encoded) {
+        if let Err(error) = transport::write_all(&mut stream, &encoded, cancelled, deadline) {
             return match read_response_cancellable(&mut stream, cancelled, deadline) {
                 Ok(response) if response.id != Some(id) => Err(Error::ResponseBinding),
                 Ok(response)
@@ -238,7 +241,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
                     Ok(response)
                 }
                 Err(cause) => Err(upload_write_failure(error, cause)),
-                Ok(_) => Err(socket_write_error(error)),
+                Ok(_) => Err(error),
             };
         }
         offset = offset
@@ -246,6 +249,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
             .ok_or_else(|| Error::Io(std::io::Error::other("upload offset overflow")))?;
     }
     let mut excess = [0u8; 1];
+    check_upload_cancelled(cancelled, deadline)?;
     if reader.read(&mut excess).map_err(Error::UploadSource)? != 0 {
         excess.zeroize();
         return Err(Error::Io(std::io::Error::new(
@@ -259,7 +263,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
         id,
         payload: KvUploadPayload::Commit,
     })?;
-    if let Err(error) = stream.write_all(&commit) {
+    if let Err(error) = transport::write_all(&mut stream, &commit, cancelled, deadline) {
         return match read_response_cancellable(&mut stream, cancelled, deadline) {
             Ok(response) => Ok(response),
             Err(cause) => Err(Error::Ambiguous(Box::new(upload_write_failure(
@@ -284,15 +288,7 @@ fn check_upload_cancelled(
     Ok(())
 }
 
-fn socket_write_error(error: std::io::Error) -> Error {
-    match error.kind() {
-        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => Error::DeadlineExceeded,
-        _ => Error::Io(error),
-    }
-}
-
-fn upload_write_failure(write: std::io::Error, response: Error) -> Error {
-    let write = socket_write_error(write);
+fn upload_write_failure(write: Error, response: Error) -> Error {
     if matches!(response, Error::Cancelled | Error::DeadlineExceeded) && write.is_connection_loss()
     {
         write
@@ -301,23 +297,38 @@ fn upload_write_failure(write: std::io::Error, response: Error) -> Error {
     }
 }
 
-fn read_upload_chunk<R: std::io::Read + ?Sized>(reader: &mut R, output: &mut [u8]) -> Result<()> {
-    reader.read_exact(output).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::UnexpectedEof {
-            Error::UploadSource(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "upload ended before its declared length",
-            ))
-        } else {
-            Error::UploadSource(error)
-        }
-    })
+fn read_upload_chunk_cancellable<R: std::io::Read + ?Sized>(
+    reader: &mut R,
+    mut output: &mut [u8],
+    cancelled: &dyn Fn() -> bool,
+    deadline: std::time::Instant,
+) -> Result<()> {
+    while !output.is_empty() {
+        check_upload_cancelled(cancelled, deadline)?;
+        let count = match reader.read(output) {
+            Ok(0) => {
+                return Err(Error::UploadSource(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "upload ended before its declared length",
+                )))
+            }
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(Error::UploadSource(error)),
+        };
+        check_upload_cancelled(cancelled, deadline)?;
+        output = &mut output[count..];
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
-fn connect_platform(socket: &Path, timeout: Duration) -> Result<std::os::unix::net::UnixStream> {
+fn connect_platform(
+    socket: &Path,
+    cancelled: &dyn Fn() -> bool,
+    deadline: std::time::Instant,
+) -> Result<std::os::unix::net::UnixStream> {
     use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
-    use std::os::unix::net::UnixStream;
 
     let metadata = std::fs::symlink_metadata(socket)?;
     if !metadata.file_type().is_socket()
@@ -326,10 +337,7 @@ fn connect_platform(socket: &Path, timeout: Duration) -> Result<std::os::unix::n
     {
         return Err(Error::UnsafeSocket);
     }
-    let stream = UnixStream::connect(socket)?;
-    stream.set_read_timeout(Some(timeout.min(Duration::from_millis(100))))?;
-    stream.set_write_timeout(Some(timeout))?;
-    Ok(stream)
+    transport::connect(socket, cancelled, deadline)
 }
 
 #[cfg(unix)]
@@ -339,6 +347,7 @@ fn read_response_cancellable(
     deadline: std::time::Instant,
 ) -> Result<Response> {
     use std::io::{ErrorKind, Read as _};
+    stream.set_nonblocking(true)?;
     let mut read = |mut bytes: &mut [u8]| -> Result<()> {
         while !bytes.is_empty() {
             check_upload_cancelled(cancelled, deadline)?;
@@ -354,7 +363,15 @@ fn read_response_cancellable(
                     if matches!(
                         error.kind(),
                         ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                    ) => {}
+                    ) =>
+                {
+                    transport::wait(
+                        Some(stream),
+                        rustix::event::PollFlags::IN,
+                        cancelled,
+                        deadline,
+                    )?
+                }
                 Err(error) => return Err(Error::Io(error)),
             }
         }
@@ -537,6 +554,8 @@ mod tests {
 
     #[test]
     fn upload_cancellation_after_commit_preserves_its_cause() {
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_cancelled = cancelled.clone();
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("agent.sock");
         let listener = UnixListener::bind(&socket).unwrap();
@@ -546,6 +565,7 @@ mod tests {
             read_frame(&mut stream);
             let frame = foks_agent_proto::decode_upload_frame(&read_frame(&mut stream)).unwrap();
             assert!(matches!(frame.payload, KvUploadPayload::Commit));
+            server_cancelled.store(true, Ordering::Release);
             assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
         });
         let header = KvUploadHeader {
@@ -561,11 +581,9 @@ mod tests {
             precondition: KvPrecondition::Create,
             mkdir_p: false,
         };
-        let checks = std::cell::Cell::new(0);
         let error = AgentClient::new(&socket)
             .put_kv_stream_cancellable(header, &mut std::io::empty(), &|| {
-                checks.set(checks.get() + 1);
-                checks.get() >= 4
+                cancelled.load(Ordering::Acquire)
             })
             .unwrap_err();
         assert!(!error.is_connection_loss());
@@ -577,7 +595,13 @@ mod tests {
     fn upload_chunks_coalesce_valid_short_reads() {
         let mut reader = OneByteReader(9_000);
         let mut output = vec![0; 9_000];
-        read_upload_chunk(&mut reader, &mut output).unwrap();
+        read_upload_chunk_cancellable(
+            &mut reader,
+            &mut output,
+            &|| false,
+            std::time::Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(reader.0, 0);
         assert!(output.iter().all(|byte| *byte == 7));
     }
@@ -698,13 +722,11 @@ mod tests {
                 stream.read_exact(&mut frame[4..]).unwrap();
                 frames.push(frame);
             }
-            assert_eq!(frames.len(), 2, "only header and one chunk may be sent");
-            assert!(matches!(
-                foks_agent_proto::decode_upload_frame(&frames[1])
-                    .unwrap()
-                    .payload,
-                KvUploadPayload::Chunk { .. }
-            ));
+            assert_eq!(
+                frames.len(),
+                1,
+                "cancellation during source read must send neither chunk nor commit"
+            );
         });
         let cancelled = std::cell::Cell::new(false);
         struct Reader<'a>(&'a std::cell::Cell<bool>, bool);
