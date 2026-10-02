@@ -1,10 +1,13 @@
 #![no_main]
 use foks_keystore::state_archive::{ArchiveReader, ArchiveWriter, StateTransferKey};
 use libfuzzer_sys::fuzz_target;
+#[path = "../support/archive.rs"]
+mod archive;
 fuzz_target!(|input: &[u8]| {
     if input.len() > 2_097_152 {
         return;
     }
+    archive::run(input);
     let key =
         StateTransferKey::parse(&format!("FOKS-STATE-TRANSFER-V1:{}", "07".repeat(32))).unwrap();
     // Raw mutation includes the checked-in authenticated two-entry fixture.

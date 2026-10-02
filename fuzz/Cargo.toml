@@ -15,6 +15,9 @@ libfuzzer-sys = "=0.4.10"
 foks-snowpack = { path = "../crates/foks-snowpack" }
 foks-rpc = { path = "../crates/foks-rpc" }
 foks-keystore = { path = "../crates/foks-keystore" }
+foks-agent-proto = { path = "../crates/foks-agent-proto" }
+chacha20poly1305 = "0.11"
+sha2 = "0.11"
 
 [[bin]]
 name = "snowpack"
@@ -36,3 +39,21 @@ path = "fuzz_targets/state_archive.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "server_rpc"
+path = "fuzz_targets/server_rpc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "agent_frames"
+path = "fuzz_targets/agent_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[test]]
+name = "archive_scenarios"
+path = "tests/archive_scenarios.rs"

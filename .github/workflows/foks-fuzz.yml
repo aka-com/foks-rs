@@ -1,7 +1,7 @@
 name: FOKS parser and archive fuzzing
 on:
   pull_request:
-    paths: ['fuzz/**', 'crates/foks-snowpack/**', 'crates/foks-rpc/**', 'crates/foks-keystore/**', '.github/workflows/foks-fuzz.yml']
+    paths: ['fuzz/**', 'crates/foks-snowpack/**', 'crates/foks-rpc/**', 'crates/foks-keystore/**', 'crates/foks-proto/**', 'crates/foks-agent-proto/**', 'crates/foks-server/src/rpc/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/foks-fuzz.yml']
   schedule:
     - cron: '17 7 * * 2'
   workflow_dispatch:
@@ -13,15 +13,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [snowpack, rpc, state_archive]
+        target: [snowpack, rpc, server_rpc, agent_frames, state_archive]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - run: rustup toolchain install nightly --profile minimal
       - run: cargo +nightly install cargo-fuzz --locked --version 0.13.2
+      - name: Verify authenticated archive scenarios
+        if: matrix.target == 'state_archive'
+        run: CARGO_INCREMENTAL=0 cargo +nightly test --locked -j 2 --manifest-path fuzz/Cargo.toml --test archive_scenarios
       - name: Run bounded coverage-guided campaign
         env:
           FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '30' || '600' }}
           CARGO_BUILD_JOBS: '2'
+          CARGO_INCREMENTAL: '0'
         run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time="$FUZZ_SECONDS" -max_len=2097152 -rss_limit_mb=2048
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: failure()
