@@ -85,8 +85,11 @@ jobs:
           npm run typecheck
           npm run test:foks-ui
           npm run build:frontend
-          cargo test --locked -p foks-agent-proto -p foks-agent-client -p foks-client-app -p foks-agent
-          cargo test --locked -p foks-desktop -p foks-desktop-app
+          bash scripts/prepare-desktop-tests.sh
+          cargo test --locked -j 2 -p foks-agent-proto -p foks-agent-client -p foks-agent
+          cargo test --locked -j 2 -p foks-client-app -- --test-threads=1
+          cargo test --locked -j 2 -p foks-desktop
+          cargo test --locked -j 2 -p foks-desktop-app -- --test-threads=1
           cargo clippy --locked -p foks-desktop -p foks-desktop-app --all-targets -- -D warnings
       - name: Run the real managed-agent desktop transcript
         run: npm run test:foks-desktop:real-agent
