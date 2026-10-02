@@ -1,6 +1,21 @@
 //! User eldest links, device provisioning, revocation, and PUK rotation links.
 
-use super::*;
+use crate::backup::{BackupKey, BackupKeyMaterial};
+use crate::bot_token::BotToken;
+use crate::hybrid::{
+    derive_device_public, derive_public_material, derive_shared_public, hepk_fingerprint,
+    DevicePublicMaterial, SharedPublicMaterial, SoftwareKeyKind, YubiDevice,
+};
+use crate::primitives::{commitment, tree_location_commitment};
+use crate::signatures::{sign_seed_typed, sign_yubi_typed};
+use crate::{Error, Result};
+use foks_proto::{
+    ChangeMetadata, DeviceLabelNameAndCommitmentKey, EntityId, Role, SecretSeed,
+    SoftwareEldestPublic, TreeRoot, UnsignedUserLink, UserGroupChange, UserLink, UserMemberChange,
+    UserMemberKeys, UserSharedKey, YubiEldestPublic, DEVICE_LABEL_TYPE_ID, LINK_OUTER_V1_TYPE_ID,
+    NAME_COMMITMENT_TYPE_ID,
+};
+use foks_snowpack::{encode, Value};
 
 /// Complete public result of constructing a software-device eldest link.
 pub struct SoftwareEldestMaterial {

@@ -1,6 +1,12 @@
 //! Shared typed hashes, commitments, MACs, and secretbox primitives.
 
-use super::*;
+use crate::{Error, Result};
+use crypto_secretbox::{aead::Aead, KeyInit, XSalsa20Poly1305};
+use foks_proto::TREE_LOCATION_TYPE_ID;
+use foks_snowpack::{encode, Value};
+use hmac::{Hmac, Mac};
+use sha2::{Digest as _, Sha512_256};
+use zeroize::Zeroizing;
 
 // Rust-local storage/journal domain; never encoded on the v0.1.9 wire.
 const FEDERATION_PERMISSION_TOKEN_HASH_TYPE_ID: u64 = 0x45cf_32f3_7d38_a811;

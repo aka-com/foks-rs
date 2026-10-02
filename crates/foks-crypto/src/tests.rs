@@ -1,10 +1,60 @@
 //! Cross-domain Go fixtures, round trips, and tamper rejection.
 
-use super::*;
+use crate::backup::{BackupKey, BACKUP_SEED_BYTES};
+use crate::hybrid::{
+    derive_device_public, derive_hybrid_key, derive_shared_public, derive_yubi_public_material,
+    open_hybrid_box, open_puk_parcel, open_puk_parcel_for_role, open_puk_parcel_with,
+    open_puk_parcel_with_for_role, open_puk_seed_chain, open_shared_key_parcel_with,
+    open_shared_key_seed_chain, seal_initial_puk_box, seal_puk_seed_chain_box,
+    seal_shared_key_boxes, seal_software_puk_boxes, seal_software_puk_boxes_mixed,
+    seal_yubi_puk_boxes, yubi_mlkem_decapsulate, DevicePublicMaterial, HybridSecretDecapsulator,
+    InitialPukBoxRandomness, PukBoxRandomness, SharedKeyBoxInput, SharedKeyDecapsulator,
+    SoftwarePukBoxInput, SoftwarePukBoxSetRandomness, YubiDevice, YubiPublicMaterial,
+    YubiPukBoxInput, YubiPukBoxSetRandomness,
+};
+use crate::kv::{
+    bind_kv_dirent, derive_kv_keys, open_kv_chunk, open_kv_dirent_name, seal_kv_chunk,
+    seal_kv_dirent_name, LARGE_FILE_SIZE_PAYLOAD_TYPE_ID,
+};
+use crate::primitives::{
+    prefixed_hash, prefixed_hash_signable, seal_typed_secretbox, subchain_tree_location,
+};
+use crate::signatures::{
+    sign_ed25519_blob, sign_ed25519_typed, sign_shared_key_blob, verify_blob, verify_typed,
+};
+use crate::team::{
+    make_add_local_team_member_link, make_change_team_member_link,
+    make_remove_local_team_member_link, make_single_owner_adhoc_team,
+    make_single_owner_adhoc_team_yubi, make_single_owner_named_team, make_team_removal_proof,
+    open_team_remote_member_view_token, open_team_removal_key, open_team_removal_key_for_member,
+    seal_team_remote_member_view_token, team_removal_key_commitment, AdHocTeamInput,
+    AddLocalTeamMemberInput, ChangeTeamMemberInput, NamedTeamInput, RemoveLocalTeamMemberInput,
+    TeamPtkRotation, TeamRemovalKeyExpectation,
+};
+use crate::user::{
+    make_backup_provision_link, make_software_eldest_link, make_software_provision_link,
+    make_software_provision_link_from_backup, make_software_puk_rotation_link,
+    make_software_revoke_link, make_yubi_puk_rotation_link, PukRotation, SoftwareEldestInput,
+    SoftwareProvisionInput, UserMutationBase,
+};
+use crate::{Error, Result};
+use foks_proto::{
+    DeviceLabelNameAndCommitmentKey, DhPublicKey, EntityId, Hepk, KvDirent, KvEncryptedChunk,
+    KvLargeFileMetadata, KvNodeId, KvParty, KvRoot, KvSmallFileBox, KvSmallFilePlaintext, Role,
+    RoleAndGeneration, SecretBox, SecretSeed, SharedKeyBoxSet, SharedKeySeed, Signature,
+    TeamRemovalBoxData, TeamRemovalKeyBox, LINK_OUTER_V1_TYPE_ID, SHARED_KEY_SEED_TYPE_ID,
+};
 use foks_proto::{
     ProbeResponse, PukParcel, TeamChain, UserChain, UserLink, ENTITY_PTK_VERIFY, ENTITY_PUK_VERIFY,
     PUBLIC_ZONE_BLOB_TYPE_ID,
 };
+use foks_snowpack::{decode, encode_ref, Value, ValueRef};
+use p256::ecdh::diffie_hellman as p256_diffie_hellman;
+use p256::ecdsa::Signature as P256Signature;
+use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
+use sha2::{Digest as _, Sha512_256};
+use zeroize::Zeroizing;
 
 const PROBE: &[u8] =
     include_bytes!("../../foks-snowpack/tests/fixtures/foks-v0.1.9/foks.app/probe-response.snowp");

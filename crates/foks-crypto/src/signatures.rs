@@ -1,6 +1,13 @@
 //! Canonical typed signing and verification for software and hardware keys.
 
-use super::*;
+use crate::hybrid::{derive_key, YubiDevice};
+use crate::{Error, Result};
+use ed25519_dalek::{Signature as DalekSignature, Signer as _, SigningKey, VerifyingKey};
+use foks_proto::{EntityId, SecretSeed, Signature};
+use foks_snowpack::{encode, Value};
+use p256::ecdsa::signature::hazmat::PrehashVerifier as _;
+use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256VerifyingKey};
+use sha2::{Digest as _, Sha512_256};
 
 /// Returns the Ed25519 public key for a raw 32-byte server signing seed.
 pub fn ed25519_public_key(seed: &[u8; 32]) -> [u8; 32] {

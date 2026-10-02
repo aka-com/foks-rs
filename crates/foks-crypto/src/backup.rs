@@ -1,6 +1,7 @@
 //! FOKS v0.1.9 backup-key phrases and deterministic key material.
 
 use bip39::Language;
+use foks_proto::SharedKeySeed;
 use foks_proto::{
     DhPublicKey, EntityId, Hepk, RegistrationChallenge, SecretSeed, Signature, BACKUP_SEED_TYPE_ID,
     ENTITY_BACKUP_KEY, REG_CHALLENGE_PAYLOAD_TYPE_ID,
@@ -11,7 +12,7 @@ use zeroize::Zeroizing;
 use crate::{
     derive_public_material, open_puk_parcel_with_for_role, prefixed_hash_signable, sign_seed_typed,
     software_dh_shared, software_mlkem_decapsulate, DevicePublicMaterial, HybridSecretDecapsulator,
-    Result, SharedKeySeed,
+    Result,
 };
 
 pub const BACKUP_SEED_BYTES: usize = 26;

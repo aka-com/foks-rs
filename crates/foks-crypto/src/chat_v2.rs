@@ -2,8 +2,11 @@
 //! projections remain the caller's responsibility; shared keys are not signatures.
 //! The FOKS domain cutover is intentionally incompatible with bodies encrypted
 //! under the former extension domains.
-use super::*;
+use crate::primitives::{open_typed_secretbox, seal_typed_secretbox, typed_hmac};
+use crate::{Error, Result};
 use foks_proto::{RealtimeWire, RtChatContext};
+use foks_proto::{SecretBox, SecretSeed};
+use zeroize::Zeroizing;
 
 /// Assigned local domains: first eight bytes of SHA-256 of the ASCII labels
 /// `foks.chat.v2.context-key` and `foks.chat.v2.encrypted-body` respectively.

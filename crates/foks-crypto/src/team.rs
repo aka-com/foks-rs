@@ -1,6 +1,29 @@
 //! Team creation, membership changes, removal proofs, and scoped token boxes.
 
-use super::*;
+use crate::hybrid::{
+    derive_device_public, derive_key, derive_shared_public, hepk_fingerprint, open_hybrid_box,
+    seal_hybrid_payload, HybridSecretDecapsulator, PukBoxRandomness, SharedPublicMaterial,
+    YubiDevice,
+};
+use crate::primitives::{
+    commitment, open_typed_secretbox, prefixed_hash_signable, seal_typed_secretbox,
+    tree_location_commitment,
+};
+use crate::signatures::{sign_seed_typed, sign_yubi_typed};
+use crate::{Error, Result};
+use foks_proto::{
+    AdHocMembershipLinkPublic, ApprovedMembershipLinkPublic, ChangeMetadata, EntityId, Hepk, Role,
+    SecretBox, SecretSeed, Signature, TeamGroupChange, TeamKeyOwner, TeamMemberChange,
+    TeamMemberKeys, TeamRemovalAndCommitment, TeamRemovalBoxData, TeamRemovalKeyBox,
+    TeamRemovalKeyMetadata, TeamRemovalKeyPayload, TeamRemovalMacPayload, TeamRemovalProof,
+    TreeRoot, UnsignedUserLink, UserLink, UserSharedKey, LINK_OUTER_V1_TYPE_ID,
+    NAME_COMMITMENT_TYPE_ID, TEAM_REMOVAL_KEY_BOX_PAYLOAD_TYPE_ID, TEAM_REMOVAL_KEY_TYPE_ID,
+    TEAM_REMOVAL_MAC_PAYLOAD_TYPE_ID,
+};
+use foks_snowpack::{encode, Value};
+use hmac::{Hmac, Mac};
+use sha2::Sha512_256;
+use zeroize::Zeroizing;
 
 /// Computes the exact v0.1.9 commitment authenticated by named-team member
 /// links and removal-key boxes.

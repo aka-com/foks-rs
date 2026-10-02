@@ -1,6 +1,21 @@
 //! KV key derivation, authenticated names, files, chunks, and metadata.
 
-use super::*;
+use crate::hybrid::derive_key;
+use crate::primitives::{
+    open_typed_secretbox, prefixed_hash, prefixed_hash_signable, require_zero_padding,
+    seal_typed_secretbox, typed_hmac, verify_mac,
+};
+use crate::{Error, Result};
+use crypto_secretbox::{aead::Aead, KeyInit, XSalsa20Poly1305};
+use foks_proto::{
+    KvDirectory, KvDirent, KvDirentName, KvEncryptedChunk, KvLargeFileMetadata, KvNodeId, KvParty,
+    KvRoot, KvSmallFileBox, KvSmallFilePlaintext, KvUploadChunk, KvUploadFinal, RoleAndGeneration,
+    SecretBox, SecretSeed, APP_KEY_DERIVATION_TYPE_ID, KV_CHUNK_NONCE_PAYLOAD_TYPE_ID,
+    KV_DIRENT_BINDING_PAYLOAD_TYPE_ID, KV_DIRENT_NAME_PAYLOAD_TYPE_ID, KV_FILE_KEY_PAYLOAD_TYPE_ID,
+    KV_KEY_DERIVATION_TYPE_ID, KV_ROOT_BINDING_PAYLOAD_TYPE_ID,
+};
+use foks_snowpack::{decode, decode_prefix, encode, encode_ref, Value, ValueRef};
+use zeroize::Zeroizing;
 pub(super) const SMALL_FILE_PAYLOAD_TYPE_ID: u64 = 0xaeec_688f_3145_fddf;
 pub(super) const DIR_KEY_SEED_TYPE_ID: u64 = 0x8aec_e656_6b24_4356;
 // Rust extension stored in KvLargeFileMetadata.custom_metadata. Servers treat

@@ -1,10 +1,18 @@
 //! Go v0.1.9 realtime encryption. The caller supplies authenticated PTK material.
-use super::*;
+use crate::hybrid::derive_key;
+use crate::primitives::{
+    open_typed_secretbox, prefixed_hash_signable, seal_typed_secretbox, typed_hmac,
+};
+use crate::{Error, Result};
+use crypto_secretbox::{aead::Aead, KeyInit, XSalsa20Poly1305};
 use foks_proto::{
     RealtimeWire, RtAppId, RtCiphertext, RtKeyType, RtMessageBody, RtMessageNoncer, RtMessageType,
     RtText, RT_CHANNEL_DESC_TYPE_ID, RT_CHANNEL_NAME_TYPE_ID, RT_KEY_DERIVATION_TYPE_ID,
     RT_MAX_BODY_BYTES, RT_MAX_CIPHERTEXT_BYTES, RT_MSG_NONCER_TYPE_ID,
 };
+use foks_proto::{SecretBox, SecretSeed, APP_KEY_DERIVATION_TYPE_ID};
+use foks_snowpack::{encode, Value};
+use zeroize::Zeroizing;
 
 /// App-scoped keys; deliberately neither Debug nor serializable.
 pub struct RealtimeKeys {
@@ -145,6 +153,7 @@ impl RealtimeKeys {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kv::derive_kv_keys;
     #[test]
     fn purpose_keys_match_go_oracle() {
         let seed = SecretSeed::new(std::array::from_fn(|i| i as u8));

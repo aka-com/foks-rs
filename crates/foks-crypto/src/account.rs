@@ -1,5 +1,14 @@
 //! Username changes share one unsigned transition across software and hardware signers.
-use crate::*;
+use crate::hybrid::{derive_device_public, YubiDevice};
+use crate::primitives::{commitment, tree_location_commitment};
+use crate::signatures::{sign_seed_typed, sign_yubi_typed};
+use crate::user::UserMutationBase;
+use crate::{Error, Result};
+use foks_proto::{
+    ChangeMetadata, EntityId, SecretSeed, UnsignedUserLink, UserGroupChange, UserLink,
+    LINK_OUTER_V1_TYPE_ID, NAME_COMMITMENT_TYPE_ID,
+};
+use foks_snowpack::{encode, Value};
 
 pub struct UsernameChangeInput<'a> {
     pub base: UserMutationBase<'a>,

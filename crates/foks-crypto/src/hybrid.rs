@@ -1,6 +1,32 @@
 //! Device/shared key derivation and authenticated hybrid key distribution.
 
-use super::*;
+use crate::backup::{BackupKey, BackupKeyMaterial};
+use crate::primitives::{
+    open_typed_secretbox, prefixed_hash_signable, require_zero_padding, seal_typed_secretbox,
+};
+use crate::signatures::{sign_seed_typed, sign_yubi_typed, verify_typed};
+use crate::{Error, Result};
+use crypto_secretbox::{aead::Aead, KeyInit, XSalsa20Poly1305};
+use ed25519_dalek::SigningKey;
+use foks_proto::{
+    DhPublicKey, EntityId, Hepk, HybridBox, PukParcel, Role, SecretBox, SecretSeed, SharedKeyBox,
+    SharedKeyBoxSet, SharedKeyBoxTarget, SharedKeySeed, Signature, SubkeySeed, HEPK_TYPE_ID,
+    HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID, SHARED_KEY_SEED_TYPE_ID, SUBKEY_SEED_TYPE_ID,
+    TEMP_DH_KEY_SIG_TEMPLATE_TYPE_ID,
+};
+use foks_snowpack::{decode, decode_prefix, encode, encode_ref, Value, ValueRef};
+use hmac::{Hmac, Mac};
+use ml_kem::{ml_kem_768, Decapsulate as _, KeyExport as _, TryKeyInit as _};
+use p256::ecdh::diffie_hellman as p256_diffie_hellman;
+use p256::ecdsa::VerifyingKey as P256VerifyingKey;
+use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
+use salsa20::cipher::consts::U10;
+use salsa20::hsalsa;
+use sha2::Sha512_256;
+use sha3::{Digest as Sha3Digest, Sha3_256};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 #[cfg(test)]
 type HybridDerivation = (Zeroizing<[u8; 32]>, Zeroizing<Vec<u8>>);
