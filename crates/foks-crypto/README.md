@@ -21,3 +21,11 @@ v0.1.9 client:
 
 Higher-level host-chain policy and SQLite pinning live in `foks-verify` and
 `foks-client-db` respectively.
+
+The public API is re-exported from `lib.rs`. Private implementation domains are
+`primitives` (hashes, MACs and secretboxes), `signatures` (software and hardware
+signing), `hybrid` (key derivation and key distribution), `user` (user/device
+links), `team` (team links and removal material), and `kv` (authenticated storage).
+Account, backup, bot, invitation, pairing, passphrase, chat and SSO protocols keep
+their existing dedicated modules. `tests.rs` retains the cross-domain Go oracle,
+round-trip and tamper-rejection tests so those public boundaries stay exercised.
