@@ -2494,10 +2494,11 @@ mod tests {
             .unwrap();
         drop(registry);
 
-        // A bound but never accepted listener completes the TCP connection from
-        // the backlog and then answers nothing, so the probe stays in flight
-        // until its own timeout.
+        // Accept the probe without answering it, so it stays in flight until
+        // its own timeout. The connection proves publication has left the
+        // registry's locked reservation phase.
         let listener = environment.reserve_loopback_listener().unwrap();
+        listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
         let slow = local_profile(&environment, "slow", format!("127.0.0.1:{port}"));
         let authorizer = std::sync::Arc::new(MemoryPublicationAuthorizer::new());
@@ -2517,10 +2518,17 @@ mod tests {
 
         let staging = PublicationStaging::directory_for(&state.join("profiles"), "slow");
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        while !staging.exists() {
-            assert!(std::time::Instant::now() < deadline, "probe never started");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let probe_connection = loop {
+            match listener.accept() {
+                Ok((connection, _)) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(std::time::Instant::now() < deadline, "probe never started");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("accept probe: {error}"),
+            }
+        };
+        assert!(staging.exists());
         // The probe is in flight. Every other profile is still readable, and
         // the reader does not have to wait out the probe's timeout to say so.
         let started = std::time::Instant::now();
@@ -2533,6 +2541,7 @@ mod tests {
         assert!(add.join().unwrap().is_err());
         assert!(!staging.exists());
         assert!(!authorizer.contains("slow"));
+        drop(probe_connection);
         drop(listener);
     }
 
