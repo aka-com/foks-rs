@@ -778,10 +778,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("private");
         drop(ClientCredentials::initialize(&root, CredentialBackend::PrivateFile).unwrap());
-        assert!(matches!(
-            inspect_native_state(&root),
-            Err(Error::PortabilityUnsupported)
-        ));
+        let inspection = inspect_native_state(&root);
+        assert!(
+            matches!(inspection, Err(Error::PortabilityUnsupported)),
+            "unexpected private-file inspection result: {inspection:?}"
+        );
         if !enabled() {
             return;
         }

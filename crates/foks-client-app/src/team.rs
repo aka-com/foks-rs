@@ -14,11 +14,10 @@ pub(super) fn is_background_team_alias(alias: &str) -> bool {
 }
 
 #[cfg(test)]
-static TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-#[cfg(test)]
 thread_local! {
+    static TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT: std::cell::Cell<bool> = const {
+        std::cell::Cell::new(false)
+    };
     static TEST_FAIL_AFTER_DISCOVERY_PERSIST: std::cell::Cell<bool> = const {
         std::cell::Cell::new(false)
     };
@@ -1151,7 +1150,7 @@ impl CheckedProfileSession<'_> {
             &mut mutations,
         )?;
         #[cfg(test)]
-        if TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        if TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT.with(|fail| fail.replace(false)) {
             return Err(Error::InvalidAccount(
                 "test failpoint after authenticated team-member commit",
             ));
@@ -3146,7 +3145,7 @@ mod tests {
                     1
                 );
 
-                TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT.store(true, std::sync::atomic::Ordering::SeqCst);
+                TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT.with(|fail| fail.set(true));
                 session
                     .demote_local_team_member(
                         "managed-team",
@@ -3185,7 +3184,7 @@ mod tests {
                     )
                     .expect("member visibility promotion introduces its destination key");
                 assert_eq!(raised.team_chain_sequence, 4);
-                TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT.store(true, std::sync::atomic::Ordering::SeqCst);
+                TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT.with(|fail| fail.set(true));
                 let interrupted = session
                     .promote_local_team_member(
                         "managed-team",
