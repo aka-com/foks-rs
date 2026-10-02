@@ -695,15 +695,11 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       );
       if (!item || item.version !== version || item.direntId !== direntId)
         throw failure('conflict', `${path} changed first.`);
-      if (
-        item.kind === 'Folder' &&
-        items.some(
-          (candidate) =>
-            candidate.store === storeId &&
-            candidate.path.startsWith(`${path}/`),
-        )
-      )
-        throw failure('invalid-request', 'Only empty folders can be deleted.');
+      if (item.kind === 'Folder')
+        throw failure(
+          'invalid-request',
+          'Folder removal is not currently supported.',
+        );
       items = items.filter((candidate) => candidate !== item);
       contents.delete(`${storeId}|${path}`);
       return { applied: true };

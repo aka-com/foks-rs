@@ -651,7 +651,6 @@ fn validate_route_result(value: &str) -> Result<(), MetadataError> {
             | "UsernameReservation"
             | "Void"
             | "IdentityCapabilities"
-            | "KvCapabilities"
             | "IdentityChallenge"
             | "IdentityStatus"
             | "WaitListID"

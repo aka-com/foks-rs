@@ -519,7 +519,7 @@ impl KvWriteSession<'_> {
         recursive: bool,
     ) -> Result<Vec<KvDirectoryProjection>> {
         validate_kv_component(name.as_bytes())?;
-        let mut tree = self.scoped_tree(parent)?;
+        let tree = self.scoped_tree(parent)?;
         let projection = tree
             .iter()
             .find(|directory| directory.directory_id == parent)
@@ -533,38 +533,28 @@ impl KvWriteSession<'_> {
             .ok_or(Error::KvResponse("cannot unlink a missing KV entry"))?;
         let selected_id = selected_id.unwrap_or(entry.dirent_id);
         require_selected_entry(&tree, parent, name, selected_id, expected_version)?;
-        let empty_directories = if entry.node_id[0] == KvNodeType::Directory as u8 && !recursive {
-            let assertion = foks_proto::KvEmptyDirectoryAssertion {
-                parent,
-                dirent: entry.dirent_id,
-                version: expected_version.unwrap_or(entry.version),
-                directory: KvNodeId(entry.node_id).object_id(),
-            };
-            self.require_empty_directory_capability()?;
-            tree = self.sync()?;
-            vec![assertion]
-        } else {
-            Vec::new()
-        };
+        if entry.node_id[0] == KvNodeType::Directory as u8 && !recursive {
+            return Err(Error::KvResponse(
+                "unlinking a directory requires recursive mode",
+            ));
+        }
         let options = KvWriteOptions {
             read_role: Role::NONE,
             write_role,
             overwrite: true,
             expected_version,
         };
-        let scope = empty_directories.is_empty().then_some(parent);
-        let (_, tree) =
-            self.mutate_namespace_asserting(tree, scope, empty_directories, |session, tree| {
-                require_selected_entry(tree, parent, name, selected_id, expected_version)?;
-                Ok(vec![session.prepare_dirent(
-                    tree,
-                    parent,
-                    name.as_bytes(),
-                    KvNodeId([0; 17]),
-                    options,
-                    true,
-                )?])
-            })?;
+        let (_, tree) = self.mutate_namespace(tree, Some(parent), |session, tree| {
+            require_selected_entry(tree, parent, name, selected_id, expected_version)?;
+            Ok(vec![session.prepare_dirent(
+                tree,
+                parent,
+                name.as_bytes(),
+                KvNodeId([0; 17]),
+                options,
+                true,
+            )?])
+        })?;
         Ok(tree)
     }
 
@@ -771,47 +761,18 @@ impl KvWriteSession<'_> {
     /// two directories passes `None` and keeps the complete traversal.
     fn mutate_namespace<F>(
         &mut self,
-        tree: Vec<KvDirectoryProjection>,
-        scope_parent: Option<[u8; 16]>,
-        prepare: F,
-    ) -> Result<(Vec<KvDirent>, Vec<KvDirectoryProjection>)>
-    where
-        F: Fn(&Self, &[KvDirectoryProjection]) -> Result<Vec<KvDirent>>,
-    {
-        self.mutate_namespace_asserting(tree, scope_parent, Vec::new(), prepare)
-    }
-
-    fn require_empty_directory_capability(&mut self) -> Result<()> {
-        let response = self.call(KvRequest::Capabilities).map_err(|_| {
-            Error::KvRequest("Cannot verify that this server supports safe empty-folder deletion.")
-        })?;
-        if !foks_rpc::decode_kv_empty_directory_capability_response(&response)? {
-            return Err(Error::KvRequest(
-                "This server does not support safe empty-folder deletion.",
-            ));
-        }
-        Ok(())
-    }
-
-    fn mutate_namespace_asserting<F>(
-        &mut self,
         mut tree: Vec<KvDirectoryProjection>,
         scope_parent: Option<[u8; 16]>,
-        empty_directories: Vec<foks_proto::KvEmptyDirectoryAssertion>,
         prepare: F,
     ) -> Result<(Vec<KvDirent>, Vec<KvDirectoryProjection>)>
     where
         F: Fn(&Self, &[KvDirectoryProjection]) -> Result<Vec<KvDirent>>,
     {
         for attempt in 0..Self::MAX_NAMESPACE_ATTEMPTS {
-            for assertion in &empty_directories {
-                require_empty_directory(&tree, assertion)?;
-            }
             let dirents = prepare(self, &tree)?;
             let request = KvRequest::Put {
                 precondition: kv_version_vector_from_tree(&tree),
                 dirents: dirents.clone(),
-                empty_directories: empty_directories.clone(),
             };
             let operation = self.prepare_namespace_mutation(&request, &dirents)?;
             MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
@@ -874,7 +835,7 @@ impl KvWriteSession<'_> {
         let material =
             MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                 .load_bound_request(&operation)?;
-        let (precondition, dirents, empty_directories) = decode_namespace_material(&material)?;
+        let (precondition, dirents) = decode_namespace_material(&material)?;
         if foks_crypto::prefixed_hash(KV_NAMESPACE_REQUEST_HASH_TYPE_ID, &material)
             != operation.request_hash
         {
@@ -885,15 +846,11 @@ impl KvWriteSession<'_> {
         validate_namespace_operation_binding(&operation, &precondition, &dirents)?;
         match operation.state {
             MutationState::Prepared => {
-                if !empty_directories.is_empty() {
-                    self.require_empty_directory_capability()?;
-                }
                 MutationCoordinator::new(&self.host.database_path, &mut *self.protected_store)
                     .begin_submission(&operation_id)?;
                 if let Err(error) = self.call(KvRequest::Put {
                     precondition,
                     dirents: dirents.clone(),
-                    empty_directories,
                 }) {
                     if is_kv_stale_cache(&error) {
                         MutationCoordinator::new(
@@ -1041,20 +998,15 @@ impl KvWriteSession<'_> {
         request: &KvRequest,
         dirents: &[KvDirent],
     ) -> Result<MutationOperation> {
-        let (precondition, empty_directories) = match request {
-            KvRequest::Put {
-                precondition,
-                empty_directories,
-                ..
-            } => (precondition, empty_directories),
+        let precondition = match request {
+            KvRequest::Put { precondition, .. } => precondition,
             _ => {
                 return Err(Error::KvResponse(
                     "only kvPut can enter the namespace outbox",
                 ));
             }
         };
-        let material =
-            encode_namespace_material_asserting(precondition, dirents, empty_directories)?;
+        let material = encode_namespace_material(precondition, dirents)?;
         let operation_id = random_bytes()?;
         let subject_id = namespace_subject(dirents);
         let expected_version = Some(precondition.root_version);
@@ -1334,50 +1286,11 @@ fn require_selected_entry<'a>(
     Ok(entry)
 }
 
-fn require_empty_directory(
-    tree: &[KvDirectoryProjection],
-    assertion: &foks_proto::KvEmptyDirectoryAssertion,
-) -> Result<()> {
-    let entry = tree
-        .iter()
-        .find(|directory| directory.directory_id == assertion.parent)
-        .and_then(|directory| {
-            directory
-                .entries
-                .iter()
-                .find(|entry| entry.dirent_id == assertion.dirent)
-        })
-        .ok_or(Error::KvResponse("KV dirent version precondition failed"))?;
-    if entry.version != assertion.version
-        || entry.node_id[0] != KvNodeType::Directory as u8
-        || KvNodeId(entry.node_id).object_id() != assertion.directory
-    {
-        return Err(Error::KvResponse("KV dirent version precondition failed"));
-    }
-    let child = tree
-        .iter()
-        .find(|directory| directory.directory_id == assertion.directory)
-        .ok_or(Error::KvRequest("Cannot verify that this folder is empty."))?;
-    if !child.entries.is_empty() {
-        return Err(Error::KvRequest("Only empty folders can be deleted."));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
 fn encode_namespace_material(
     precondition: &foks_proto::KvPathVersionVector,
     dirents: &[KvDirent],
 ) -> Result<Zeroizing<Vec<u8>>> {
-    encode_namespace_material_asserting(precondition, dirents, &[])
-}
-
-fn encode_namespace_material_asserting(
-    precondition: &foks_proto::KvPathVersionVector,
-    dirents: &[KvDirent],
-    empty_directories: &[foks_proto::KvEmptyDirectoryAssertion],
-) -> Result<Zeroizing<Vec<u8>>> {
-    let mut fields = vec![
+    Ok(Zeroizing::new(encode(&Value::Array(vec![
         precondition.to_value(),
         Value::Array(
             dirents
@@ -1385,49 +1298,21 @@ fn encode_namespace_material_asserting(
                 .map(|dirent| Value::Binary(dirent.encoded().to_vec()))
                 .collect(),
         ),
-    ];
-    if !empty_directories.is_empty() {
-        fields.push(Value::Array(
-            empty_directories
-                .iter()
-                .map(|assertion| assertion.to_value())
-                .collect(),
-        ));
-    }
-    Ok(Zeroizing::new(encode(&Value::Array(fields))?))
+    ]))?))
 }
 
-type NamespaceMaterial = (
-    foks_proto::KvPathVersionVector,
-    Vec<KvDirent>,
-    Vec<foks_proto::KvEmptyDirectoryAssertion>,
-);
-
-fn decode_namespace_material(material: &[u8]) -> Result<NamespaceMaterial> {
+fn decode_namespace_material(
+    material: &[u8],
+) -> Result<(foks_proto::KvPathVersionVector, Vec<KvDirent>)> {
     let Value::Array(fields) = decode(material)? else {
         return Err(Error::OperationBinding(
             "KV namespace outbox material is malformed",
         ));
     };
-    let (precondition, encoded_dirents, empty_directories) = match fields.as_slice() {
-        [precondition, Value::Array(dirents)] => (precondition, dirents, Vec::new()),
-        [precondition, Value::Array(dirents), Value::Array(assertions)]
-            if !assertions.is_empty() && assertions.len() <= 2 =>
-        {
-            (
-                precondition,
-                dirents,
-                assertions
-                    .iter()
-                    .map(foks_proto::KvEmptyDirectoryAssertion::from_value)
-                    .collect::<std::result::Result<Vec<_>, _>>()?,
-            )
-        }
-        _ => {
-            return Err(Error::OperationBinding(
-                "KV namespace outbox material has the wrong shape",
-            ))
-        }
+    let [precondition, Value::Array(encoded_dirents)] = fields.as_slice() else {
+        return Err(Error::OperationBinding(
+            "KV namespace outbox material has the wrong shape",
+        ));
     };
     if encoded_dirents.is_empty() || encoded_dirents.len() > 2 {
         return Err(Error::OperationBinding(
@@ -1446,7 +1331,6 @@ fn decode_namespace_material(material: &[u8]) -> Result<NamespaceMaterial> {
     Ok((
         foks_proto::KvPathVersionVector::from_value(precondition)?,
         dirents,
-        empty_directories,
     ))
 }
 
@@ -1496,7 +1380,7 @@ pub(crate) fn finalize_verified_material<S: crate::ProtectedMutationStore + ?Siz
     let mut coordinator = MutationCoordinator::new(database, protected);
     let material = coordinator.load_bound_request(operation)?;
     let node = if operation.kind == MutationKind::KvNamespace {
-        let (precondition, dirents, _) = decode_namespace_material(&material)?;
+        let (precondition, dirents) = decode_namespace_material(&material)?;
         validate_namespace_operation_binding(operation, &precondition, &dirents)?;
         if foks_crypto::prefixed_hash(KV_NAMESPACE_REQUEST_HASH_TYPE_ID, &material)
             != operation.request_hash
@@ -1574,44 +1458,6 @@ mod outbox_tests {
     }
 
     #[test]
-    fn guarded_folder_outbox_retains_assertions_and_rejects_malformed_upgrade() {
-        let dirent = KvDirent::decode(include_bytes!(
-            "../../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/kv-write-dirent.snowp"
-        ))
-        .unwrap();
-        let precondition = foks_proto::KvPathVersionVector {
-            root_version: 3,
-            directories: Vec::new(),
-        };
-        let assertion = foks_proto::KvEmptyDirectoryAssertion {
-            parent: dirent.parent,
-            dirent: dirent.id,
-            version: dirent.version,
-            directory: [7; 16],
-        };
-        let legacy =
-            encode_namespace_material(&precondition, std::slice::from_ref(&dirent)).unwrap();
-        let guarded = encode_namespace_material_asserting(
-            &precondition,
-            std::slice::from_ref(&dirent),
-            std::slice::from_ref(&assertion),
-        )
-        .unwrap();
-        assert_ne!(&*legacy, &*guarded);
-        let (decoded, dirents, assertions) = decode_namespace_material(&guarded).unwrap();
-        assert_eq!(assertions, vec![assertion]);
-        assert_eq!(
-            &*encode_namespace_material_asserting(&decoded, &dirents, &assertions).unwrap(),
-            &*guarded
-        );
-        let Value::Array(mut fields) = decode(&guarded).unwrap() else {
-            panic!()
-        };
-        fields[2] = Value::Null;
-        assert!(decode_namespace_material(&encode(&Value::Array(fields)).unwrap()).is_err());
-    }
-
-    #[test]
     fn namespace_outbox_preserves_exact_request_and_dirents() {
         let dirent = KvDirent::decode(include_bytes!(
             "../../../foks-snowpack/tests/fixtures/foks-v0.1.9/user/kv-write-dirent.snowp"
@@ -1623,9 +1469,7 @@ mod outbox_tests {
         };
         let material =
             encode_namespace_material(&precondition, std::slice::from_ref(&dirent)).unwrap();
-        let (decoded_precondition, decoded_dirents, empty) =
-            decode_namespace_material(&material).unwrap();
-        assert!(empty.is_empty());
+        let (decoded_precondition, decoded_dirents) = decode_namespace_material(&material).unwrap();
         assert_eq!(decoded_precondition, precondition);
         assert_eq!(decoded_dirents.len(), 1);
         assert_eq!(decoded_dirents[0].encoded(), dirent.encoded());

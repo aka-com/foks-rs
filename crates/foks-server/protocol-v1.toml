@@ -164,13 +164,6 @@ protocol_id = 0xf04b0001
 argument_header = true
 result_header = true
 
-[[protocol]]
-name = "KvExtensions"
-upstream = ""
-protocol_id = 0xf04b0002
-argument_header = true
-result_header = true
-
 [[service]]
 name = "registration"
 service_type = 1
@@ -2382,37 +2375,3 @@ statuses = ["oauth2_auth", "ok", "unsupported", "bad_args", "wrong_user", "expir
 max_request_bytes = 16384
 supported = true
 coverage = ["web_admin"]
-
-[[route]]
-protocol = "KvExtensions"
-protocol_id = 0xf04b0002
-method = "foksCapabilities"
-position = 65536
-listeners = ["authenticated"]
-authentication = "active_device_mtls"
-request = "void"
-result = "KvCapabilities"
-upstream_result = "<local-extension>"
-argument_header = true
-result_header = true
-statuses = ["oauth2_auth", "ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
-max_request_bytes = 64
-supported = true
-coverage = ["kv_empty_directory"]
-
-[[route]]
-protocol = "KvExtensions"
-protocol_id = 0xf04b0002
-method = "foksPutEmptyDirectories"
-position = 65537
-listeners = ["authenticated"]
-authentication = "active_device_mtls"
-request = "KvPutEmptyDirectoriesArgument"
-result = "Void"
-upstream_result = "<local-extension>"
-argument_header = true
-result_header = true
-statuses = ["oauth2_auth", "ok", "bad_args", "stale_cache", "kv_permission", "kv_race", "quota_exceeded", "tx_retry"]
-max_request_bytes = 4194304
-supported = true
-coverage = ["kv_empty_directory"]

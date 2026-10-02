@@ -1602,61 +1602,6 @@ pub fn encode_kv_put_request_at(
     )
 }
 
-/// Requires explicit KV extension capability negotiation before submitting.
-pub fn encode_kv_put_with_empty_directories_request_at(
-    auth: KvAuth<'_>,
-    precondition: Option<&KvPathVersionVector>,
-    dirents: &[KvDirent],
-    assertions: &[foks_proto::KvEmptyDirectoryAssertion],
-    sequence: u64,
-) -> Result<Vec<u8>> {
-    if assertions.is_empty() {
-        return encode_kv_put_request_at(auth, precondition, dirents, sequence);
-    }
-    if assertions.len() > 64 {
-        return Err(Error::CollectionTooLarge {
-            kind: "empty-directory assertions",
-            received: assertions.len(),
-            maximum: 64,
-        });
-    }
-    encode_call(
-        KV_EXTENSIONS_PROTOCOL_ID,
-        KV_PUT_EMPTY_DIRECTORIES_POSITION,
-        &encode(&Value::Array(vec![
-            kv_request_header(auth, precondition),
-            Value::Array(dirents.iter().map(KvDirent::to_value).collect()),
-            Value::Array(
-                assertions
-                    .iter()
-                    .map(foks_proto::KvEmptyDirectoryAssertion::to_value)
-                    .collect(),
-            ),
-        ]))?,
-        sequence,
-    )
-}
-
-pub fn encode_kv_capabilities_request_at(sequence: u64) -> Result<Vec<u8>> {
-    encode_call(
-        KV_EXTENSIONS_PROTOCOL_ID,
-        KV_CAPABILITIES_POSITION,
-        &encode(&Value::Null)?,
-        sequence,
-    )
-}
-
-/// Decodes the unwrapped response payload. Unknown versions fail closed.
-pub fn decode_kv_empty_directory_capability_response(bytes: &[u8]) -> Result<bool> {
-    match decode(bytes)? {
-        Value::Array(fields) => match fields.as_slice() {
-            [Value::Unsigned(1), Value::Bool(supported)] => Ok(*supported),
-            _ => Err(Error::Compatibility),
-        },
-        _ => Err(Error::Compatibility),
-    }
-}
-
 pub fn encode_kv_put_root_request_at(
     auth: KvAuth<'_>,
     root: &foks_proto::KvRoot,

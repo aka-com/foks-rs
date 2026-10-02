@@ -41,11 +41,8 @@ same targeted incremental synchronization path after success. Merkle
 advancement always starts from SQLite hard state, so an untrusted response can
 never bless its own root.
 
-Nonrecursive directory unlink requires the Rust
-atomic empty-directory extension and refuses unsupported servers before
-journaling a removal. Protected namespace outbox material retains the exact
-source assertion across recovery; replay uses the dedicated extension method,
-so it cannot fall back to an unguarded legacy Put.
+Directory unlink requires explicit recursive mode. Nonrecursive folder deletion
+is not supported.
 
 Rust uploads with a known plaintext length store a versioned, authenticated
 size extension in `KvLargeFileMetadata.custom_metadata`. The payload is opaque

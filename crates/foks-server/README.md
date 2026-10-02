@@ -25,13 +25,6 @@ delivery, atomic username changes, OIDC signup, existing-account migration, and 
 access enforcement, and Basic encrypted realtime chat for named teams.
 Public-client tests exercise these paths without server test hooks.
 
-The authenticated Rust `KvExtensions` protocol advertises atomic empty-directory
-assertions. Its dedicated `foksPutEmptyDirectories` method binds each assertion
-to an exact source dirent and checks live child heads inside the writer
-transaction. Legacy KV Put, recursive unlink and directory moves retain their
-existing behavior. The distinct method ID prevents unsupported servers from
-interpreting the extension as an unguarded legacy Put.
-
 Federation is limited to Beacon discovery followed by independently pinned
 remote hosts, expiring bearer grants for public user/team chains, and a durable
 client-coordinated remote-team admission workflow. This server answers the public

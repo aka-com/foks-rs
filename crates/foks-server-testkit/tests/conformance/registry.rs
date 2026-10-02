@@ -24,11 +24,6 @@ struct DeclaredRoute {
 
 const COVERAGE: &[Coverage] = &[
     Coverage {
-        name: "kv_empty_directory",
-        run: crate::kv_small::kv_empty_directory,
-        routes: &[("KvExtensions", "foksCapabilities"), ("KvExtensions", "foksPutEmptyDirectories")],
-    },
-    Coverage {
         name: "web_admin",
         run: crate::web_admin::https_native_handoff_invites_cas_and_server_logout,
         routes: &[("User", "newWebAdminPanelURL"), ("User", "checkURL")],

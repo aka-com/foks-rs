@@ -706,7 +706,12 @@ pub(super) fn require_text_item(item: &CatalogItem) -> Result<(), AgentError> {
 }
 
 pub(super) fn remove_item_operation(item: &CatalogItem) -> Result<Operation, AgentError> {
-    // Nonrecursive directories require the client's negotiated atomic emptiness assertion.
+    // Folder deletion is not supported.
+    if item.metadata.node_type == "directory" {
+        return Err(invalid_request(
+            "Folder removal is not currently supported.",
+        ));
+    }
     foks_desktop::remove_kv_operation(item, false).map_err(invalid_request)
 }
 

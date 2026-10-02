@@ -72,10 +72,10 @@ fn recreated_account_and_team_folders_reject_the_previous_selected_identity() {
                     |path: &str, dirent: [u8; 16], version: u64, vault: &mut AccountVault<'_>| {
                         match team_id {
                             None => session.remove_kv_bound(
-                                "owner", path, false, dirent, version, vault, &master,
+                                "owner", path, true, dirent, version, vault, &master,
                             ),
                             Some(id) => session.remove_team_kv_bound(
-                                "owner", "group", id, path, false, dirent, version, vault, &master,
+                                "owner", "group", id, path, true, dirent, version, vault, &master,
                             ),
                         }
                     };
@@ -147,7 +147,7 @@ fn recreated_account_and_team_folders_reject_the_previous_selected_identity() {
                         remove("/source", original.dirent_id, original.version, &mut vault),
                         Err(foks_client_app::Error::KvConflict)
                     ),
-                    "a stale selection must not delete the recreated empty folder"
+                    "a stale selection must not delete the recreated folder"
                 );
                 assert_eq!(
                     count_journals(),

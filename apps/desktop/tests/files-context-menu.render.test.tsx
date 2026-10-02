@@ -277,7 +277,7 @@ test('vault and team roots expose scoped folder creation and team info without s
   }
 });
 
-test('tree and content folders target their own path and require catalog facts for deletion', async () => {
+test('tree and content folders target their own path and explain unsupported deletion', async () => {
   const mounted = await mount();
   const folder = document.querySelector<HTMLElement>(
     '.tpane [data-folder-store="acct:personal"][data-folder-path="/logins"] .fselect',
@@ -288,7 +288,7 @@ test('tree and content folders target their own path and require catalog facts f
   assert.match(
     document.getElementById(deletion.getAttribute('aria-describedby')!)!
       .textContent,
-    /Refresh this vault to load the folder/,
+    /not supported by the desktop agent/,
   );
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
   assert.deepEqual(mounted.folders, [

@@ -16,36 +16,6 @@ pub const MAXIMUM_KV_DIRENT_BYTES: usize = 4096;
 pub const MAXIMUM_KV_LIST_PAGE_ENTRIES: usize = 100;
 pub const MAXIMUM_KV_LIST_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
-/// Rust KV extension: atomically unlink this exact source only if its directory is empty.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct KvEmptyDirectoryAssertion {
-    pub parent: [u8; 16],
-    pub dirent: [u8; 16],
-    pub version: u64,
-    pub directory: [u8; 16],
-}
-
-impl KvEmptyDirectoryAssertion {
-    pub fn to_value(&self) -> Value {
-        Value::Array(vec![
-            Value::Binary(self.parent.to_vec()),
-            Value::Binary(self.dirent.to_vec()),
-            Value::Unsigned(self.version),
-            Value::Binary(self.directory.to_vec()),
-        ])
-    }
-
-    pub fn from_value(value: &Value) -> Result<Self> {
-        let fields = array(value, 4)?;
-        Ok(Self {
-            parent: fixed_blob(&fields[0], "empty-directory source parent")?,
-            dirent: fixed_blob(&fields[1], "empty-directory source dirent")?,
-            version: unsigned(&fields[2])?,
-            directory: fixed_blob(&fields[3], "empty-directory ID")?,
-        })
-    }
-}
-
 // Leave a full MiB for the list container, extended positions, and encoding
 // overhead after the maximum stored dirent and small-file bytes are included.
 const _: () = assert!(

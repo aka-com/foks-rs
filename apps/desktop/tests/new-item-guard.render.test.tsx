@@ -535,10 +535,10 @@ test('ambiguous move keeps the draft visible and cannot be submitted twice', asy
   assert.equal(calls, 1);
 });
 
-test('folder deletion uses its selected version and blocks Escape while pending', async () => {
+test('file deletion uses its selected version and blocks Escape while pending', async () => {
   let request: unknown;
   let finish!: () => void;
-  const { rendered } = await mount({
+  const { rendered, store } = await mount({
     removeItem: async (next) => {
       request = next;
       await new Promise<void>((resolve) => {
@@ -550,25 +550,23 @@ test('folder deletion uses its selected version and blocks Escape while pending'
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
-  const folder = FIXTURE.items.find(
-    (item) => item.store === 'acct:personal' && item.kind === 'Folder',
+  const item = FIXTURE.items.find(
+    (item) => item.store === 'acct:personal' && item.kind === 'File',
   )!;
-  assert.ok(folder);
-  const row = document.querySelector<HTMLElement>(
-    `[data-folder-store="${folder.store}"][data-folder-path="${folder.path}"] .fselect`,
-  );
-  assert.ok(row);
-  ui.fireEvent.contextMenu(row);
-  ui.fireEvent.click(rendered.getByRole('menuitem', { name: 'Delete folder' }));
+  assert.ok(item);
+  await ui.act(async () => {
+    store.select({ store: item.store, path: item.path });
+  });
+  ui.fireEvent.click(await rendered.findByRole('button', { name: 'Delete' }));
   const dialog = await rendered.findByRole('alertdialog');
-  assert.match(dialog.textContent ?? '', /Only an empty folder can be deleted/);
+  assert.match(dialog.textContent ?? '', /This cannot be undone/);
   ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Delete' }));
   await ui.waitFor(() =>
     assert.deepEqual(request, {
-      storeId: folder.store,
-      path: folder.path,
-      version: folder.version,
-      direntId: folder.direntId,
+      storeId: item.store,
+      path: item.path,
+      version: item.version,
+      direntId: item.direntId,
     }),
   );
   ui.fireEvent.keyDown(dialog, { key: 'Escape' });

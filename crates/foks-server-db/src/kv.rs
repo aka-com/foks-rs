@@ -294,17 +294,6 @@ impl Database {
         caller_role: foks_proto::Role,
         mutations: &[KvDirentMutation<'_>],
     ) -> Result<()> {
-        self.put_kv_dirents_with_empty_directories(uid, precondition, caller_role, mutations, &[])
-    }
-
-    pub fn put_kv_dirents_with_empty_directories(
-        &mut self,
-        uid: &[u8],
-        precondition: Option<&foks_proto::KvPathVersionVector>,
-        caller_role: foks_proto::Role,
-        mutations: &[KvDirentMutation<'_>],
-        assertions: &[foks_proto::KvEmptyDirectoryAssertion],
-    ) -> Result<()> {
         if uid.len() != 33 || mutations.is_empty() || mutations.len() > 64 {
             return Err(Error::Invalid("KV dirent mutation batch"));
         }
@@ -320,56 +309,12 @@ impl Database {
                 return Err(Error::Invalid("KV dirent mutation"));
             }
         }
-        if assertions.len() > 64 {
-            return Err(Error::Invalid("KV empty-directory assertion count"));
-        }
-        let mut guarded_sources = std::collections::BTreeSet::new();
-        for assertion in assertions {
-            let tombstone = mutations.iter().find(|mutation| {
-                mutation.parent == &assertion.parent && mutation.id == &assertion.dirent
-            });
-            if assertion.version == 0
-                || !guarded_sources.insert((assertion.parent, assertion.dirent))
-                || !tombstone.is_some_and(|mutation| {
-                    assertion.version.checked_add(1) == Some(mutation.version)
-                        && mutation.node_id == &[0; 17]
-                })
-                // A batch cannot create a child after checking the directory's emptiness.
-                || mutations.iter().any(|mutation| {
-                    mutation.parent == &assertion.directory && mutation.node_id[0] != 0
-                })
-            {
-                return Err(Error::Invalid("KV empty-directory assertion binding"));
-            }
-        }
         if !self.ensure_kv_namespace(uid)? {
             return Err(Error::Invalid("unknown KV namespace"));
         }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // Bind to the persisted source version, including for exact committed
-        // replay, where the current head is already the requested tombstone.
-        for assertion in assertions {
-            let source: Option<Vec<u8>> = transaction
-                .query_row(
-                    "SELECT node_id FROM kv_dirents
-                 WHERE uid = ?1 AND parent_id = ?2 AND dirent_id = ?3 AND version = ?4",
-                    params![
-                        uid,
-                        assertion.parent,
-                        assertion.dirent,
-                        sql_integer(assertion.version)?
-                    ],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            let mut expected = [1; 17];
-            expected[1..].copy_from_slice(&assertion.directory);
-            if source.as_deref() != Some(expected.as_slice()) {
-                return Err(Error::KvConflict);
-            }
-        }
         let mut existing_heads = Vec::with_capacity(mutations.len());
         for mutation in mutations {
             let stored: Option<(i64, Vec<u8>)> = transaction
@@ -394,25 +339,6 @@ impl Database {
             })
         {
             return Ok(());
-        }
-        // The immediate transaction serializes this predicate with every child
-        // insertion. Version vectors alone do not detect newly inserted children.
-        for assertion in assertions {
-            let has_live_children = transaction
-                .query_row(
-                    "SELECT 1 FROM kv_dirent_heads h
-                 JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
-                   AND d.dirent_id = h.dirent_id AND d.version = h.version
-                 WHERE h.uid = ?1 AND h.parent_id = ?2
-                   AND substr(d.node_id, 1, 1) != X'00' LIMIT 1",
-                    params![uid, assertion.directory],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
-            if has_live_children {
-                return Err(Error::KvConflict);
-            }
         }
         if let Some(precondition) = precondition {
             if kv_version_check(&transaction, uid, precondition)? != KvVersionCheck::Current {

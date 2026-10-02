@@ -1486,11 +1486,7 @@ function DeleteSheet({
           {problem}
         </p>
       ) : null}
-      <p>
-        {workflow.item.kind === 'Folder'
-          ? 'Only an empty folder can be deleted. This requires a server that supports safe folder deletion.'
-          : 'This cannot be undone.'}
-      </p>
+      <p>This cannot be undone.</p>
     </SheetDialog>
   );
 }

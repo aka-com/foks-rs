@@ -169,11 +169,7 @@ dirent identity and version remain fixed through concurrent-write retries.
 Deleting and recreating the same path cannot redirect a stale selection to the
 replacement, even when its numeric version is the same.
 
-Real, nonroot folders also offer Delete folder. Deletion is empty-only and keeps
-the selected source identity and version fixed. It requires the server's explicit atomic
-empty-directory extension; older Rust and Go servers are refused before the
-removal is prepared. The server checks for concurrent children in the same
-transaction as the deletion. The desktop does not expose recursive deletion.
+Folder deletion is not supported in the desktop.
 
 **Unsupported operations:** Link editing is not supported directly; links must be
 deleted and recreated. Invitation revocation, expiry and requester withdrawal

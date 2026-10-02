@@ -22,15 +22,6 @@ impl Operations for ServerData {
         principal: &Principal,
     ) -> Result<crate::services::kv::Response, RpcStatus> {
         principal.require_ordinary_device()?;
-        if route == RouteId::KvExtensionsFoksCapabilities
-            && self.should_disconnect(
-                crate::SessionFaultPoint::UnsupportedMethod,
-                "KvExtensions",
-                "foksCapabilities",
-            )
-        {
-            return Err(RpcStatus::Unsupported);
-        }
         let database = self.read_database()?;
         crate::services::kv::dispatch(
             route,

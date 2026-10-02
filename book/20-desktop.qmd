@@ -329,11 +329,7 @@ is an exact absolute path under an existing folder, and a live destination
 is never overwritten. The selected source dirent identity and version remain fixed across retries,
 so a newly created object at the same path cannot satisfy an older selection.
 
-Delete folder is available for real nonroot folders and is empty-only. It
-requires the server's atomic empty-directory extension, whose transaction
-checks concurrent children before removing the source. Unsupported servers
-are refused before a removal is prepared. The desktop exposes no recursive
-folder deletion.
+Folder deletion is not supported in the desktop.
 
 The card grid windows whole rows at the current viewport width through
 `files-grid.ts`, so it can scroll through the full loaded catalog without

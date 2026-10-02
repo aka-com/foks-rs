@@ -121,9 +121,7 @@ pub(super) fn response(
         | TeamAdminRejectJoinReq
         | TeamMemberGrantLocalViewPermissionForTeam
         | TeamAdminCreateTeamAdHoc => team::response(data, call, principal),
-        KvExtensionsFoksCapabilities
-        | KvExtensionsFoksPutEmptyDirectories
-        | KvStoreMkdir
+        KvStoreMkdir
         | KvStorePut
         | KvStorePutRoot
         | KvStoreFileUploadInit

@@ -293,24 +293,17 @@ precondition, and a refusal means the path must be walked again.
 
 ## Mutations
 
-Namespace mutations write one or more dirents under a version vector. Most
-use `kvPut`; empty-only directory unlink uses an explicitly negotiated Rust
-extension:
+Namespace mutations write one or more dirents under a version vector using
+`kvPut`:
 
 - **mkdir** creates a directory record with a random ID and seed, sends it
   with the parent's vector as precondition, then links a `Directory` dirent.
   Missing intermediate directories are created by the application layer one
   journaled step at a time, inheriting the item's read and write roles.
 - **rm** rewrites the dirent with an all-zero node ID: a *tombstone*. A
-  nonrecursive directory unlink requires the Rust atomic empty-directory
-  extension. Its dedicated `KvExtensions.foksPutEmptyDirectories` method
-  binds the selected source parent, dirent, version and child directory, then
-  checks for live child heads in the same transaction as the tombstone. A
-  concurrent child therefore prevents deletion even if the client saw an
-  empty listing. Unsupported servers are refused before journaling the
-  removal; the request cannot become an unguarded legacy `kvPut`. Explicit
-  recursive unlink remains available to library callers. The dirent's
-  version advances, making the tombstone visible to vectors that cited it.
+  directory unlink requires explicit recursive mode; nonrecursive folder
+  deletion is not supported. The dirent's version advances, making the tombstone
+  visible to vectors that cited it.
 - **mv** is one `kvPut` carrying a tombstone at the source and a new dirent
   at the destination pointing at the *same* node ID. It reads the whole
   source subtree first to refuse moving a directory into itself, and cites

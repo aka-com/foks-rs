@@ -3,8 +3,6 @@ use std::sync::Mutex;
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionFaultPoint {
-    /// Return the legacy server's unsupported-method status without dispatching.
-    UnsupportedMethod,
     BeforeDurableMutation,
     AfterDurableCommitBeforeResponse,
     DuringResponseWrite,
