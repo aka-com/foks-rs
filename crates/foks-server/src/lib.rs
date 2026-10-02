@@ -18,6 +18,7 @@ pub mod installation;
 pub mod invites;
 pub mod keys;
 mod maintenance;
+mod merkle;
 mod metrics;
 pub mod net;
 mod operations;

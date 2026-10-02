@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
-use foks_proto::{EntityId, MerkleRoot, SignedBlob, UsernameReservation};
+use foks_proto::{EntityId, UsernameReservation};
 use foks_rpc::RpcStatus;
 use foks_server_db::{TeamAdminTokenActivation, TeamAdminTokenBinding, TeamAdminTokenIssue};
 use foks_snowpack::Value;
 
 use crate::auth::Principal;
 use crate::identity::team_create::{self, Argument};
-use crate::keys::{HostKeyProvider, KeyPurpose};
+use crate::keys::HostKeyProvider;
+use crate::merkle::decode_stored_root as decode_root;
 use crate::{Entropy, WriterHandle};
 
 const RESERVATION_LIFETIME_MICROSECONDS: u64 = 10 * 60 * 1_000_000;
@@ -444,54 +445,21 @@ pub(crate) fn create(
                     foks_merkle_store::username_leaf(&command.team)?,
                 ));
             }
-            let changes = leaves
-                .iter()
-                .map(|(key, value)| foks_merkle_store::LeafChange::Set {
-                    key: *key,
-                    value: *value,
-                })
-                .collect::<Vec<_>>();
-            let merkle_commit = foks_merkle_store::prepare(
-                &database.node_reader(),
-                authoritative.root_node,
-                &changes,
+            let crate::merkle::PreparedPublication {
+                merkle_commit,
+                root_epoch,
+                root_hash,
+                exact_root,
+                exact_signed_root,
+                back_pointers,
+            } = crate::merkle::prepare_publication(
+                database,
+                &authoritative,
+                &leaves,
+                hostchain_tail,
+                now,
+                keys.as_ref(),
             )?;
-            let root_epoch = authoritative
-                .epoch
-                .checked_add(1)
-                .ok_or(crate::Error::Signup("Merkle epoch overflow"))?;
-            let pointer_epochs = foks_merkle_store::back_pointer_sequence(root_epoch);
-            let pointer_roots = database
-                .roots_at(&pointer_epochs)?
-                .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
-            for root in &pointer_roots {
-                decode_root(root)?;
-            }
-            let back_pointers = pointer_roots
-                .into_iter()
-                .map(|root| (root.epoch, root.root_hash))
-                .collect::<Vec<_>>();
-            let root = MerkleRoot {
-                epoch: root_epoch,
-                time: now / 1_000,
-                back_pointers: foks_merkle_store::back_pointer_hash(root_epoch, &back_pointers)?,
-                root_node: merkle_commit.root,
-                hostchain: hostchain_tail,
-                extensions: Vec::new(),
-            };
-            let exact_root = root.encoded()?;
-            let root_hash =
-                foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root)?;
-            let merkle_key = keys.load_or_create(KeyPurpose::Merkle)?;
-            let exact_signed_root = SignedBlob {
-                inner: exact_root.clone(),
-                signature: foks_crypto::sign_ed25519_blob(
-                    merkle_key.expose(),
-                    foks_proto::MERKLE_ROOT_BLOB_TYPE_ID,
-                    &exact_root,
-                )?,
-            }
-            .encoded()?;
             let members = command
                 .members
                 .iter()
@@ -785,50 +753,21 @@ pub(crate) fn edit(
                 Some(&prior_location),
             )?;
             let leaves = [(chain_key, command.link_hash)];
-            let merkle_commit = foks_merkle_store::prepare(
-                &database.node_reader(),
-                root.root_node,
-                &[foks_merkle_store::LeafChange::Set {
-                    key: chain_key,
-                    value: command.link_hash,
-                }],
+            let crate::merkle::PreparedPublication {
+                merkle_commit,
+                root_epoch,
+                root_hash,
+                exact_root,
+                exact_signed_root,
+                back_pointers,
+            } = crate::merkle::prepare_publication(
+                database,
+                &root,
+                &leaves,
+                hostchain_tail,
+                now,
+                keys.as_ref(),
             )?;
-            let root_epoch = root
-                .epoch
-                .checked_add(1)
-                .ok_or(crate::Error::Signup("Merkle epoch overflow"))?;
-            let pointer_epochs = foks_merkle_store::back_pointer_sequence(root_epoch);
-            let pointer_roots = database
-                .roots_at(&pointer_epochs)?
-                .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
-            for historical in &pointer_roots {
-                decode_root(historical)?;
-            }
-            let back_pointers = pointer_roots
-                .into_iter()
-                .map(|historical| (historical.epoch, historical.root_hash))
-                .collect::<Vec<_>>();
-            let next_root = MerkleRoot {
-                epoch: root_epoch,
-                time: now / 1_000,
-                back_pointers: foks_merkle_store::back_pointer_hash(root_epoch, &back_pointers)?,
-                root_node: merkle_commit.root,
-                hostchain: hostchain_tail,
-                extensions: Vec::new(),
-            };
-            let exact_root = next_root.encoded()?;
-            let root_hash =
-                foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &exact_root)?;
-            let merkle_key = keys.load_or_create(KeyPurpose::Merkle)?;
-            let exact_signed_root = SignedBlob {
-                inner: exact_root.clone(),
-                signature: foks_crypto::sign_ed25519_blob(
-                    merkle_key.expose(),
-                    foks_proto::MERKLE_ROOT_BLOB_TYPE_ID,
-                    &exact_root,
-                )?,
-            }
-            .encoded()?;
             let members = command
                 .members
                 .iter()
@@ -1341,17 +1280,6 @@ fn map_edit_error(error: crate::Error) -> RpcStatus {
         }
         other => RpcStatus::TeamError(format!("team edit validation failed: {other}")),
     }
-}
-
-fn decode_root(root: &foks_server_db::RootSnapshot) -> crate::Result<MerkleRoot> {
-    let decoded = MerkleRoot::decode(&root.exact_root)?;
-    let hash =
-        foks_crypto::prefixed_hash_signable(foks_proto::MERKLE_ROOT_TYPE_ID, &root.exact_root)?;
-    if decoded.epoch != root.epoch || decoded.root_node != root.root_node || hash != root.root_hash
-    {
-        return Err(crate::Error::Signup("stored Merkle root binding mismatch"));
-    }
-    Ok(decoded)
 }
 
 fn require_cited_root(
