@@ -626,7 +626,10 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
                 content: b"changed".to_vec(),
                 read_role: KvRole::Member { visibility: -2 },
                 write_role: KvRole::Admin,
-                precondition: KvPrecondition::ExactVersion { version: 19 },
+                precondition: KvPrecondition::ExactEntry {
+                    dirent_id: [7; 16],
+                    version: 19
+                },
                 mkdir_p: false,
             },
             Operation::RemoveKv {
@@ -647,7 +650,10 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
     assert_eq!(replacement.write_role, KvRole::Admin);
     assert_eq!(
         replacement.precondition,
-        KvPrecondition::ExactVersion { version: 19 }
+        KvPrecondition::ExactEntry {
+            dirent_id: [7; 16],
+            version: 19
+        }
     );
 }
 

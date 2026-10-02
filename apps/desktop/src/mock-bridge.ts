@@ -644,14 +644,14 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       });
       return { applied: true };
     },
-    editTextItem: async ({ storeId, path, version, value }) => {
+    editTextItem: async ({ storeId, path, version, direntId, value }) => {
       const index = items.findIndex(
         (item) => item.store === storeId && item.path === path,
       );
       const item = index < 0 ? undefined : items[index];
       if (!item)
         throw failure('conflict', `Item '${path}' was deleted or moved.`);
-      if (item.version !== version)
+      if (item.version !== version || item.direntId !== direntId)
         throw failure('conflict', `${path} changed first.`);
       items[index] = {
         ...item,
@@ -720,20 +720,20 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     },
     pickImportFile: async () => '/tmp/picked-file',
     releaseImportFile: async () => ({ ok: true }),
-    replaceDroppedFile: async ({ storeId, path, version }) => {
+    replaceDroppedFile: async ({ storeId, path, version, direntId }) => {
       const item = items.find(
         (candidate) => candidate.store === storeId && candidate.path === path,
       );
-      if (!item || item.version !== version)
+      if (!item || item.version !== version || item.direntId !== direntId)
         throw failure('conflict', `${path} changed first.`);
       item.version += 1;
       return { applied: true };
     },
-    pickAndReplaceFile: async ({ storeId, path, version }) => {
+    pickAndReplaceFile: async ({ storeId, path, version, direntId }) => {
       const item = items.find(
         (candidate) => candidate.store === storeId && candidate.path === path,
       );
-      if (!item || item.version !== version)
+      if (!item || item.version !== version || item.direntId !== direntId)
         throw failure('conflict', `${path} changed first.`);
       item.version += 1;
       return { applied: true };

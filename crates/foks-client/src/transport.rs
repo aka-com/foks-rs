@@ -266,7 +266,9 @@ impl PooledConnection {
             && !matches!(
                 &result,
                 Err(Error::Rpc(
-                    foks_rpc::Error::RemoteStatus { .. } | foks_rpc::Error::MethodNotFound { .. }
+                    foks_rpc::Error::RemoteStatus { .. }
+                        | foks_rpc::Error::MethodNotFound { .. }
+                        | foks_rpc::Error::KvStaleCache(_)
                 ))
             )
         {
@@ -323,7 +325,9 @@ impl PooledConnection {
             if !matches!(
                 error,
                 Error::Rpc(
-                    foks_rpc::Error::RemoteStatus { .. } | foks_rpc::Error::MethodNotFound { .. }
+                    foks_rpc::Error::RemoteStatus { .. }
+                        | foks_rpc::Error::MethodNotFound { .. }
+                        | foks_rpc::Error::KvStaleCache(_)
                 )
             ) {
                 return response;

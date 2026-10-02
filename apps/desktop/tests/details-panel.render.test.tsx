@@ -681,6 +681,57 @@ test('background version changes retain the draft and its original write precond
   assert.equal(rendered.queryByLabelText('User name'), null);
 });
 
+test('background identity changes preserve the original edit target', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  let submitted: Parameters<Bridge['editTextItem']>[0] | undefined;
+  let conflict: { version: number; draft: string } | undefined;
+  p.bridge.editTextItem = async (request) => {
+    submitted = request;
+    throw {
+      code: 'conflict',
+      message: 'The item changed.',
+      retryable: false,
+      fatal: false,
+      ambiguous: false,
+    };
+  };
+  p.props.onConflict = (item, draft) => {
+    conflict = { version: item.version, draft };
+  };
+  const rendered = ui.render(p.draw());
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
+  const username = await rendered.findByLabelText('User name');
+  ui.fireEvent.change(username, { target: { value: 'retained-draft' } });
+  p.props.snapshot = {
+    ...p.props.snapshot,
+    items: p.props.snapshot.items.map((item) =>
+      item.store === p.subject.store && item.path === p.subject.path
+        ? { ...item, direntId: 'ab'.repeat(16) }
+        : item,
+    ),
+  };
+  rendered.rerender(p.draw());
+  assert.equal(
+    (rendered.getByLabelText('User name') as HTMLInputElement).value,
+    'retained-draft',
+  );
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Save changes' }));
+  await ui.waitFor(() => assert.ok(conflict));
+  assert.equal(submitted?.version, p.subject.version);
+  assert.equal(submitted?.direntId, p.subject.direntId);
+  assert.equal(conflict?.version, p.subject.version);
+  assert.match(conflict.draft, /retained-draft/);
+  p.props.accessGeneration = 1;
+  rendered.rerender(p.draw());
+  await ui.waitFor(() =>
+    assert.ok(rendered.getByRole('button', { name: 'Edit' })),
+  );
+  assert.equal(rendered.queryByLabelText('User name'), null);
+});
+
 /* ------------------------------------------------- the unsaved-edit guard -- */
 
 /** The shell's prompter, reduced to what these tests ask of it. */
@@ -875,6 +926,7 @@ test('a file opens a Replace dialog while text items keep inline Edit', async ()
     storeId: p.subject.store,
     path: p.subject.path,
     version: p.subject.version,
+    direntId: p.subject.direntId,
   });
   assert.equal(ui.screen.queryByRole('dialog'), null);
   assert.ok(replace.isConnected);

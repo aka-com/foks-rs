@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 32;
+pub const PROTOCOL_VERSION: u32 = 33;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -341,6 +341,7 @@ pub struct KvPage {
 pub enum KvPrecondition {
     Create,
     ExactVersion { version: u64 },
+    ExactEntry { dirent_id: [u8; 16], version: u64 },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

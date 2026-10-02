@@ -784,6 +784,7 @@ export function DetailsPanel({
       storeId: target.store,
       path: target.path,
       version: target.version,
+      direntId: target.direntId,
     };
     setSaving(true);
     try {

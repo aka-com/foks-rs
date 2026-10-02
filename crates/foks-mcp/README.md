@@ -143,7 +143,7 @@ are reclaimed in bounded, restartable batches. Server maintenance metrics report
 failures, reclaimed bytes and deferred work. Pinned Go-host upload retention remains
 that host's responsibility; these changes add no remote FOKS methods.
 
-The current hard-state schema is 40 and the agent IPC protocol is 32. Opening a
+The current hard-state schema is 40 and the agent IPC protocol is 33. Opening a
 supported schema-38 or schema-39 database upgrades it to schema 40; other older
 development schemas are rejected. Upgrade the CLI and resident agent together,
 and restart the agent so their IPC versions match. This does not convert legacy

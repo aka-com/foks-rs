@@ -261,11 +261,35 @@ impl KvWriteSession<'_> {
         expected_size: Option<u64>,
         options: KvWriteOptions,
     ) -> Result<KvWriteResult> {
+        self.put_file_with_size_bound(parent, name, reader, expected_size, options, None)
+    }
+
+    /// Binds replacement to the selected identity before upload and across namespace retries.
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_file_with_size_bound<R: Read>(
+        &mut self,
+        parent: [u8; 16],
+        name: &str,
+        reader: &mut R,
+        expected_size: Option<u64>,
+        options: KvWriteOptions,
+        expected_dirent_id: Option<[u8; 16]>,
+    ) -> Result<KvWriteResult> {
+        if expected_dirent_id.is_some()
+            && (!options.overwrite || options.expected_version.is_none())
+        {
+            return Err(Error::KvRequest(
+                "identity-bound replacement requires an exact version",
+            ));
+        }
         if expected_size.is_some_and(|size| size > Self::MAX_UPLOAD_BYTES) {
             return Err(Error::KvRequest("upload exceeds FOKS file size limit"));
         }
         validate_kv_component(name.as_bytes())?;
         let tree = self.scoped_tree(parent)?;
+        if let Some(id) = expected_dirent_id {
+            require_selected_entry(&tree, parent, name, id, options.expected_version)?;
+        }
         let (first, mut carry, first_is_final) = read_kv_upload_chunk(reader)?;
         let first_len = first.len();
         let node_type = if first_is_final && first.len() <= Self::SMALL_FILE_BYTES {
@@ -377,8 +401,14 @@ impl KvWriteSession<'_> {
                 actual_size,
             )?;
         }
-        let mut result =
-            self.link_uploaded_node(tree, parent, name.as_bytes(), node_id, options)?;
+        let mut result = self.link_uploaded_node_bound(
+            tree,
+            parent,
+            name.as_bytes(),
+            node_id,
+            options,
+            expected_dirent_id,
+        )?;
         if node_type == KvNodeType::File {
             for directory in &mut result.path {
                 if let Some(entry) = directory
@@ -743,7 +773,25 @@ impl KvWriteSession<'_> {
         node_id: KvNodeId,
         options: KvWriteOptions,
     ) -> Result<KvWriteResult> {
+        self.link_uploaded_node_bound(tree, parent, name, node_id, options, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn link_uploaded_node_bound(
+        &mut self,
+        tree: Vec<KvDirectoryProjection>,
+        parent: [u8; 16],
+        name: &[u8],
+        node_id: KvNodeId,
+        options: KvWriteOptions,
+        expected_dirent_id: Option<[u8; 16]>,
+    ) -> Result<KvWriteResult> {
         let (dirents, tree) = self.mutate_namespace(tree, Some(parent), |session, tree| {
+            if let Some(id) = expected_dirent_id {
+                let name =
+                    std::str::from_utf8(name).map_err(|_| Error::KvRequest("invalid KV name"))?;
+                require_selected_entry(tree, parent, name, id, options.expected_version)?;
+            }
             Ok(vec![session.prepare_dirent(
                 tree, parent, name, node_id, options, false,
             )?])

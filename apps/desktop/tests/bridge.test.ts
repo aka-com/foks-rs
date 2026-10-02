@@ -98,6 +98,11 @@ test('mock mutations reject a recreated source with the same path and version', 
       (item) => item.direntId === replacement.direntId,
     ),
   );
+  await assert.rejects(bridge.editTextItem({ ...request, value: 'stale' }));
+  await assert.rejects(
+    bridge.replaceDroppedFile({ ...request, sourcePath: '/tmp/stale' }),
+  );
+  await assert.rejects(bridge.pickAndReplaceFile(request));
 });
 
 const catalog: CatalogDto = {
@@ -2572,12 +2577,14 @@ test('account item creation omits roles and item updates preserve existing group
     storeId: text.store,
     path: text.path,
     version: text.version,
+    direntId: text.direntId,
     value: 'changed',
   });
   await bridge.replaceDroppedFile({
     storeId: file.store,
     path: file.path,
     version: file.version,
+    direntId: file.direntId,
     sourcePath: '/tmp/replacement',
   });
   const after = (await bridge.listCatalog()).items;
@@ -2630,6 +2637,7 @@ test('mock editTextItem increments item version and returns updated value on rea
     storeId: original.store,
     path: original.path,
     version: original.version,
+    direntId: original.direntId,
     value: 'user: marcus\npassword: replacement\nurl: https://github.com',
   });
   const edited = (await bridge.listCatalog()).items.find(

@@ -430,7 +430,14 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session, parent, name, options| {
-                session.put_file_with_size(parent, name, reader, expected_size, options)
+                session.put_file_with_size_bound(
+                    parent,
+                    name,
+                    reader,
+                    expected_size,
+                    options,
+                    precondition.dirent_id(),
+                )
             },
         )
     }
@@ -494,7 +501,14 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session, parent, name, options| {
-                session.put_file_with_size(parent, name, reader, expected_size, options)
+                session.put_file_with_size_bound(
+                    parent,
+                    name,
+                    reader,
+                    expected_size,
+                    options,
+                    precondition.dirent_id(),
+                )
             },
         )
     }
@@ -512,6 +526,12 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        if precondition.dirent_id().is_some() {
+            return Err(Error::InvalidConfig(
+                "identity-bound preconditions require a file replacement",
+            ));
+        }
+
         self.put_kv_node_checked(
             alias,
             path,
@@ -540,6 +560,12 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        if precondition.dirent_id().is_some() {
+            return Err(Error::InvalidConfig(
+                "identity-bound preconditions require a file replacement",
+            ));
+        }
+
         self.put_team_kv_node_checked(
             account_alias,
             team_alias,
@@ -609,7 +635,7 @@ impl CheckedProfileSession<'_> {
             KvWriteOptions {
                 read_role: read_role.to_role(),
                 write_role: write_role.to_role(),
-                overwrite: matches!(precondition, KvMutationPrecondition::ExactVersion(_)),
+                overwrite: !matches!(precondition, KvMutationPrecondition::Create),
                 expected_version: precondition.version(),
             },
         )
@@ -665,7 +691,7 @@ impl CheckedProfileSession<'_> {
                     KvWriteOptions {
                         read_role: read_role.to_role(),
                         write_role: write_role.to_role(),
-                        overwrite: matches!(precondition, KvMutationPrecondition::ExactVersion(_)),
+                        overwrite: !matches!(precondition, KvMutationPrecondition::Create),
                         expected_version: precondition.version(),
                     },
                 )
@@ -1306,13 +1332,20 @@ pub struct KvWriteReport {
 pub enum KvMutationPrecondition {
     Create,
     ExactVersion(u64),
+    ExactEntry { dirent_id: [u8; 16], version: u64 },
 }
 
 impl KvMutationPrecondition {
+    fn dirent_id(self) -> Option<[u8; 16]> {
+        match self {
+            Self::ExactEntry { dirent_id, .. } => Some(dirent_id),
+            _ => None,
+        }
+    }
     fn version(self) -> Option<u64> {
         match self {
             Self::Create => None,
-            Self::ExactVersion(version) => Some(version),
+            Self::ExactVersion(version) | Self::ExactEntry { version, .. } => Some(version),
         }
     }
 }
@@ -1459,6 +1492,9 @@ fn verify_precondition(
             .ok_or(Error::KvConflict),
         KvMutationPrecondition::ExactVersion(version) => {
             checked_entry(tree, path, version).map(|_| ())
+        }
+        KvMutationPrecondition::ExactEntry { dirent_id, version } => {
+            checked_bound_entry(tree, path, Some(dirent_id), version).map(|_| ())
         }
     }
 }

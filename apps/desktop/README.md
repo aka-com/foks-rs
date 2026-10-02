@@ -12,7 +12,7 @@ click. Copy value and Download stay in Rust. List rows use
 `src/screens/files-grid.ts` to window complete grid rows at the current viewport
 width, so it can scroll through the full loaded catalog. Account-store creates
 use must-not-exist; edits, removes and file replacements carry the catalog's
-exact version.
+selected dirent identity and exact version.
 List rows show Name and Shared readers; the catalog has no write timestamp, so
 the UI does not invent a Modified value from its version counter. Folder view
 derives a folders-only tree from the filtered catalog, and search temporarily
@@ -20,8 +20,10 @@ returns to the flat list without changing the selected New-item destination.
 Active authenticated groups can create the same four product kinds as account
 stores. Group creates carry explicit read and write roles, with their reader
 preview computed from the selected role and live roster. Text edits, streamed
-file replacements and removals preserve the catalog roles and carry the exact
-listed version. Because v0.1.9 stores files of at most 2,040 bytes in its
+file replacements and removals preserve the catalog roles and carry the selected
+dirent identity and exact listed version. A deleted-and-recreated path cannot
+redirect an open editor or replacement picker to the new entry. Because v0.1.9
+stores files of at most 2,040 bytes in its
 inline `small-file` encoding, a value that fails the explicit text read is
 presented with Download and native Replace actions without changing the wire
 or database format.

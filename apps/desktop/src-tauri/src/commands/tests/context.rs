@@ -49,7 +49,7 @@ fn chat_catalog() -> CatalogSnapshot {
 }
 
 #[test]
-fn recreated_item_cannot_rebind_a_selected_move_or_delete() {
+fn recreated_item_cannot_rebind_a_selected_mutation() {
     let state = phase_four_state(vec![]);
     let mut catalog = chat_catalog();
     let original = catalog.items[0].clone();

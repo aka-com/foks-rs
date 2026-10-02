@@ -209,7 +209,9 @@ export interface Bridge {
   replaceDroppedFile(
     request: ReplaceDroppedFileRequest,
   ): Promise<MutationResponse>;
-  pickAndReplaceFile(request: ItemRequest): Promise<MutationResponse>;
+  pickAndReplaceFile(
+    request: ItemRequest & { direntId: string },
+  ): Promise<MutationResponse>;
   resumeGroupCreation(storeId: StoreRef): Promise<MutationResponse>;
   /**
    * Forgets the local record of a team whose creation never finished. Only a

@@ -947,7 +947,14 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             let mut content =
                 read_private_bytes(&value_file, foks_desktop::MAXIMUM_INLINE_KV_BYTES as u64)?;
             match foks_desktop::edit_kv_file_mutation(&item, std::mem::take(&mut *content))? {
-                KvAccountMutation::Inline(operation) => operation,
+                KvAccountMutation::Inline(mut operation) => {
+                    // This CLI takes an explicit version rather than a catalog selection.
+                    // Native editors retain the ExactEntry produced by the shared builder.
+                    if let Operation::PutKv { precondition, .. } = &mut operation {
+                        *precondition = foks_agent_proto::KvPrecondition::ExactVersion { version };
+                    }
+                    operation
+                }
                 KvAccountMutation::Stream { .. } => {
                     return Err(
                         "Text value exceeds maximum supported size for inline storage".into(),
@@ -1001,7 +1008,9 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             let path = checked_kv_path(path)?;
             let (source, total_length) = open_private_upload(&source_file)?;
             let item = catalog_item(store.catalog_store_ref()?, path, "file", version, roles);
-            let header = foks_desktop::edit_kv_file_upload(&item, total_length)?;
+            let mut header = foks_desktop::edit_kv_file_upload(&item, total_length)?;
+            // Preserve the version-only CLI contract; native selection carries a dirent ID.
+            header.precondition = foks_agent_proto::KvPrecondition::ExactVersion { version };
             return Ok(BackendCall::Upload { header, source });
         }
         Command::Teams { profile } => Operation::ListTeams { profile },

@@ -3021,6 +3021,9 @@ fn wire_precondition(precondition: KvPrecondition) -> KvMutationPrecondition {
     match precondition {
         KvPrecondition::Create => KvMutationPrecondition::Create,
         KvPrecondition::ExactVersion { version } => KvMutationPrecondition::ExactVersion(version),
+        KvPrecondition::ExactEntry { dirent_id, version } => {
+            KvMutationPrecondition::ExactEntry { dirent_id, version }
+        }
     }
 }
 

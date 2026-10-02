@@ -1368,6 +1368,7 @@ pub async fn create_folder(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn edit_text_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -1375,13 +1376,14 @@ pub async fn edit_text_item(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
     value: String,
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
-    let item = state.selected_mutation_item(&store_id, &path, version)?;
+    let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
     require_text_item(&item)?;
     let mutation = foks_desktop::edit_kv_file_mutation(&item, take_text_value(value)?)
         .map_err(invalid_request)?;
@@ -1512,6 +1514,7 @@ pub fn release_import_file(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn replace_dropped_file(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -1519,13 +1522,14 @@ pub async fn replace_dropped_file(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
     source_path: String,
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
-    let item = state.selected_mutation_item(&store_id, &path, version)?;
+    let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
     require_file_item(&item)?;
     let header = file_edit_header(&item, 0)?;
     let source_path = Zeroizing::new(source_path);
@@ -1546,12 +1550,13 @@ pub async fn pick_and_replace_file(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
-    let item = state.selected_mutation_item(&store_id, &path, version)?;
+    let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
     require_file_item(&item)?;
     let header = file_edit_header(&item, 0)?;
     let picker_app = app.clone();

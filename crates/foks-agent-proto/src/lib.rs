@@ -114,6 +114,44 @@ mod tests {
     }
 
     #[test]
+    fn overwrite_identity_survives_inline_and_stream_request_encoding() {
+        let store = KvStoreRef::Account(AccountStoreRef {
+            profile: "local".to_owned(),
+            account_alias: "personal".to_owned(),
+        });
+        let precondition = KvPrecondition::ExactEntry {
+            dirent_id: [42; 16],
+            version: 1,
+        };
+        for operation in [
+            Operation::PutKv {
+                store: store.clone(),
+                path: "/secret".to_owned(),
+                content: b"replacement".to_vec(),
+                read_role: KvRole::Owner,
+                write_role: KvRole::Owner,
+                precondition,
+                mkdir_p: false,
+            },
+            Operation::PutKvStream {
+                header: KvUploadHeader {
+                    adapter: None,
+                    store,
+                    path: "/secret".to_owned(),
+                    total_length: 8192,
+                    read_role: KvRole::Owner,
+                    write_role: KvRole::Owner,
+                    precondition,
+                    mkdir_p: false,
+                },
+            },
+        ] {
+            let request = Request::new(49, operation);
+            assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        }
+    }
+
+    #[test]
     fn serialized_inline_kv_plaintext_can_be_cleared_in_place() {
         let mut operation = Operation::PutKv {
             store: KvStoreRef::Account(AccountStoreRef {
@@ -621,7 +659,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 32);
+        assert_eq!(PROTOCOL_VERSION, 33);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -638,7 +676,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 32);
+        assert_eq!(PROTOCOL_VERSION, 33);
         let request = Request::new(
             20,
             Operation::Chat {

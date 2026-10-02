@@ -1449,7 +1449,8 @@ pub fn edit_kv_file_mutation(
         content,
         item.metadata.read_role,
         item.metadata.write_role,
-        KvPrecondition::ExactVersion {
+        KvPrecondition::ExactEntry {
+            dirent_id: item.metadata.dirent_id,
             version: item.metadata.version,
         },
         false,
@@ -1490,7 +1491,8 @@ pub fn edit_kv_file_upload(
         total_length,
         item.metadata.read_role,
         item.metadata.write_role,
-        KvPrecondition::ExactVersion {
+        KvPrecondition::ExactEntry {
+            dirent_id: item.metadata.dirent_id,
             version: item.metadata.version,
         },
         false,
@@ -4038,7 +4040,7 @@ mod tests {
             KvAccountMutation::Inline(Operation::PutKv {
                 read_role: KvRole::Member { visibility: -1 },
                 write_role: KvRole::Admin,
-                precondition: KvPrecondition::ExactVersion { version: 7 },
+                precondition: KvPrecondition::ExactEntry { version: 7, .. },
                 mkdir_p: false,
                 ..
             })
@@ -4048,7 +4050,7 @@ mod tests {
             KvAccountMutation::Stream {
                 header: KvUploadHeader {
                     adapter: None,
-                    precondition: KvPrecondition::ExactVersion { version: 7 },
+                    precondition: KvPrecondition::ExactEntry { version: 7, .. },
                     read_role: KvRole::Member { visibility: -1 },
                     write_role: KvRole::Admin,
                     ..
@@ -4084,7 +4086,7 @@ mod tests {
                 total_length: 64,
                 read_role: KvRole::Member { visibility: -1 },
                 write_role: KvRole::Admin,
-                precondition: KvPrecondition::ExactVersion { version: 7 },
+                precondition: KvPrecondition::ExactEntry { version: 7, .. },
                 mkdir_p: false,
                 ..
             }
@@ -4096,7 +4098,7 @@ mod tests {
                 total_length: 64,
                 read_role: KvRole::Member { visibility: -1 },
                 write_role: KvRole::Admin,
-                precondition: KvPrecondition::ExactVersion { version: 7 },
+                precondition: KvPrecondition::ExactEntry { version: 7, .. },
                 ..
             }
         ));

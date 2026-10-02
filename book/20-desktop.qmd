@@ -329,6 +329,11 @@ is an exact absolute path under an existing folder, and a live destination
 is never overwritten. The selected source dirent identity and version remain fixed across retries,
 so a newly created object at the same path cannot satisfy an older selection.
 
+Text edits and picked or dropped file replacements preserve the selected
+dirent identity and version too. The client validates them before uploading
+content and on every namespace retry, so recreation cannot redirect an open
+editor or file picker to a different entry.
+
 Folder deletion is not supported in the desktop.
 
 The card grid windows whole rows at the current viewport width through

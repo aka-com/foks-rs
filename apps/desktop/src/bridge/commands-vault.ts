@@ -108,10 +108,10 @@ export const vaultCommands: Pick<
       },
       decodeMutation,
     ),
-  editTextItem: ({ storeId, path, version, value }) =>
+  editTextItem: ({ storeId, path, version, direntId, value }) =>
     checkedMutation(
       'edit_text_item',
-      { storeId, path, version, value },
+      { storeId, path, version, direntId, value },
       decodeMutation,
     ),
   moveItem: ({ storeId, path, version, destination, direntId }) =>
@@ -144,16 +144,16 @@ export const vaultCommands: Pick<
     ),
   releaseImportFile: (sourcePath) =>
     checked('release_import_file', { sourcePath }, decodeCommandAck, false),
-  replaceDroppedFile: ({ storeId, path, version, sourcePath }) =>
+  replaceDroppedFile: ({ storeId, path, version, direntId, sourcePath }) =>
     checkedMutation(
       'replace_dropped_file',
-      { storeId, path, version, sourcePath },
+      { storeId, path, version, direntId, sourcePath },
       decodeMutation,
     ),
-  pickAndReplaceFile: ({ storeId, path, version }) =>
+  pickAndReplaceFile: ({ storeId, path, version, direntId }) =>
     checkedMutation(
       'pick_and_replace_file',
-      { storeId, path, version },
+      { storeId, path, version, direntId },
       decodeMutation,
     ),
 };

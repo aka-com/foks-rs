@@ -134,6 +134,7 @@ export interface CreateFolderRequest extends CreateRoleRequest {
 export type CreateFileRequest = CreateFolderRequest;
 
 export interface EditTextRequest {
+  direntId: string;
   storeId: StoreRef;
   path: string;
   value: string;
@@ -155,6 +156,7 @@ export interface ImportDroppedFileRequest extends CreateRoleRequest {
 }
 
 export interface ReplaceDroppedFileRequest extends ItemRequest {
+  direntId: string;
   /** Path authorized by a native file picker or drop event. */
   sourcePath: string;
 }
