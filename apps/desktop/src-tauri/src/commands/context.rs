@@ -1798,6 +1798,30 @@ impl AppState {
         }
     }
 
+    pub(super) fn selected_bound_mutation_item(
+        &self,
+        store: &str,
+        path: &str,
+        version: u64,
+        dirent_id: &str,
+    ) -> Result<CatalogItem, AgentError> {
+        let item = self.selected_mutation_item(store, path, version)?;
+        let expected: String = item
+            .metadata
+            .dirent_id
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if dirent_id != expected {
+            return Err(AgentError::new(
+                "conflict",
+                "This item was replaced. Refresh the vault before modifying it.",
+                false,
+            ));
+        }
+        Ok(item)
+    }
+
     pub(super) fn selected_mutation_item(
         &self,
         store: &str,

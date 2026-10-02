@@ -7,6 +7,7 @@ import type { Item } from '../src/model';
 const login: Item = {
   store: 'acct:personal',
   path: '/logins/example.com',
+  direntId: '00000000000000000000000000000001',
   kind: 'Secret',
   size: 0,
   version: 1,

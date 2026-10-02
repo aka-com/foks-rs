@@ -1012,11 +1012,56 @@ impl CheckedProfileSession<'_> {
         Ok(KvWriteReport::from_path(path, version, &tree))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn remove_kv_checked(
         &self,
         alias: &str,
         path: &str,
         recursive: bool,
+        expected_version: u64,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
+        self.remove_kv_selected(
+            alias,
+            path,
+            recursive,
+            None,
+            expected_version,
+            vault,
+            master_key,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn remove_kv_bound(
+        &self,
+        alias: &str,
+        path: &str,
+        recursive: bool,
+        dirent_id: [u8; 16],
+        expected_version: u64,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
+        self.remove_kv_selected(
+            alias,
+            path,
+            recursive,
+            Some(dirent_id),
+            expected_version,
+            vault,
+            master_key,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn remove_kv_selected(
+        &self,
+        alias: &str,
+        path: &str,
+        recursive: bool,
+        dirent_id: Option<[u8; 16]>,
         expected_version: u64,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
@@ -1042,13 +1087,20 @@ impl CheckedProfileSession<'_> {
         )?;
         let tree = session.resolve_path(&path_components(&parent_path)?)?;
         let parent = resolve_directory(&tree, &parent_path)?;
-        let existing = checked_entry(&tree, path, expected_version)?;
+        let existing = checked_bound_entry(&tree, path, dirent_id, expected_version)?;
         let write_role = projected_write_role(existing)?;
         let next_version = expected_version
             .checked_add(1)
             .ok_or(Error::InvalidAccount("KV version overflow"))?;
         let tree = session
-            .unlink(parent, &name, Some(expected_version), write_role, recursive)
+            .unlink_bound(
+                parent,
+                &name,
+                existing.dirent_id,
+                expected_version,
+                write_role,
+                recursive,
+            )
             .map_err(checked_write_error)?;
         Ok(KvWriteReport::from_path(path, next_version, &tree))
     }
@@ -1065,6 +1117,58 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<KvWriteReport> {
+        self.remove_team_kv_selected(
+            account_alias,
+            team_alias,
+            team_id_hex,
+            path,
+            recursive,
+            None,
+            expected_version,
+            vault,
+            master_key,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn remove_team_kv_bound(
+        &self,
+        account_alias: &str,
+        team_alias: &str,
+        team_id_hex: &str,
+        path: &str,
+        recursive: bool,
+        dirent_id: [u8; 16],
+        expected_version: u64,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
+        self.remove_team_kv_selected(
+            account_alias,
+            team_alias,
+            team_id_hex,
+            path,
+            recursive,
+            Some(dirent_id),
+            expected_version,
+            vault,
+            master_key,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn remove_team_kv_selected(
+        &self,
+        account_alias: &str,
+        team_alias: &str,
+        team_id_hex: &str,
+        path: &str,
+        recursive: bool,
+        dirent_id: Option<[u8; 16]>,
+        expected_version: u64,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
         let (parent_path, name) = split_parent(path)?;
         self.with_team_kv_write_session(
             account_alias,
@@ -1075,13 +1179,20 @@ impl CheckedProfileSession<'_> {
             |session| {
                 let tree = session.resolve_path(&path_components(&parent_path)?)?;
                 let parent = resolve_directory(&tree, &parent_path)?;
-                let existing = checked_entry(&tree, path, expected_version)?;
+                let existing = checked_bound_entry(&tree, path, dirent_id, expected_version)?;
                 let write_role = projected_write_role(existing)?;
                 let next_version = expected_version
                     .checked_add(1)
                     .ok_or(Error::InvalidAccount("KV version overflow"))?;
                 let tree = session
-                    .unlink(parent, &name, Some(expected_version), write_role, recursive)
+                    .unlink_bound(
+                        parent,
+                        &name,
+                        existing.dirent_id,
+                        expected_version,
+                        write_role,
+                        recursive,
+                    )
                     .map_err(checked_write_error)?;
                 Ok(KvWriteReport::from_path(path, next_version, &tree))
             },
@@ -1266,6 +1377,8 @@ pub struct KvChunkReport {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct KvCatalogEntry {
     pub path: String,
+    /// Stable source identity; versions restart when a path is recreated.
+    pub dirent_id: [u8; 16],
     pub node_type: String,
     pub version: u64,
     pub size: Option<u64>,
@@ -1321,6 +1434,19 @@ fn checked_entry<'a>(
     Ok(entry)
 }
 
+fn checked_bound_entry<'a>(
+    tree: &'a [KvDirectoryProjection],
+    path: &str,
+    dirent_id: Option<[u8; 16]>,
+    version: u64,
+) -> Result<&'a foks_client_db::KvProjectedEntry> {
+    let entry = checked_entry(tree, path, version)?;
+    if dirent_id.is_some_and(|id| id != entry.dirent_id) {
+        return Err(Error::KvConflict);
+    }
+    Ok(entry)
+}
+
 fn verify_precondition(
     tree: &[KvDirectoryProjection],
     path: &str,
@@ -1340,7 +1466,9 @@ fn verify_precondition(
 fn checked_write_error(error: foks_client::Error) -> Error {
     match error {
         foks_client::Error::KvResponse(
-            "KV dirent version precondition failed" | "KV entry already exists",
+            "KV dirent version precondition failed"
+            | "KV dirent identity precondition failed"
+            | "KV entry already exists",
         ) => Error::KvConflict,
         error => Error::Client(error),
     }
@@ -1835,6 +1963,7 @@ fn flatten_catalog_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvCatalogE
             let write_role = projected_write_role(entry)?;
             output.push(KvCatalogEntry {
                 path: path.clone(),
+                dirent_id: entry.dirent_id,
                 node_type: node_type_name(node_type)?,
                 version: entry.version,
                 // FOKS does not expose plaintext size in node metadata. The

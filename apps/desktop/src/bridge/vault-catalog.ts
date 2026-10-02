@@ -30,6 +30,7 @@ export interface StoreDto {
 }
 
 export interface ItemDto {
+  direntId: string;
   store: StoreRef;
   path: string;
   kind: NodeKind;
@@ -140,8 +141,11 @@ export interface EditTextRequest {
   version: number;
 }
 
-export type MoveItemRequest = ItemRequest & { destination: string };
-export type RemoveItemRequest = ItemRequest;
+export type MoveItemRequest = ItemRequest & {
+  destination: string;
+  direntId: string;
+};
+export type RemoveItemRequest = ItemRequest & { direntId: string };
 
 export interface ImportDroppedFileRequest extends CreateRoleRequest {
   storeId: StoreRef;
@@ -220,6 +224,7 @@ function decodeItem(value: unknown, at: string): ItemDto {
     store: string(item.store, `${at}.store`),
     path: string(item.path, `${at}.path`),
     kind: kind as NodeKind,
+    direntId: string(item.direntId, `${at}.direntId`),
     size: nullableInteger(item.size, `${at}.size`),
     version: integer(item.version, `${at}.version`),
     read: decodeRole(item.read, `${at}.read`),

@@ -326,7 +326,8 @@ role changes. The row and byte limits come from the shared
 
 Items and folders offer Rename or move within their current vault. The target
 is an exact absolute path under an existing folder, and a live destination
-is never overwritten. The selected source version remains fixed across retries.
+is never overwritten. The selected source dirent identity and version remain fixed across retries,
+so a newly created object at the same path cannot satisfy an older selection.
 
 Delete folder is available for real nonroot folders and is empty-only. It
 requires the server's atomic empty-directory extension, whose transaction

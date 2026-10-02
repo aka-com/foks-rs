@@ -65,6 +65,7 @@
         "store": "opaque-store-ref",
         "path": "/wifi/password",
         "kind": "Secret",
+        "direntId": "07070707070707070707070707070707",
         "size": 42,
         "version": 7,
         "read": { "role": "Member", "visibility": -16384 },

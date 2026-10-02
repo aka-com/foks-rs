@@ -165,10 +165,12 @@ cancelled, concealed or unmounted.
 Items and folders can be renamed or moved within their current vault from their
 context menu; items also expose Rename or move in the details panel. The destination
 is an exact absolute path in an existing folder, never an overwrite. The source
-version remains fixed through concurrent-write retries.
+dirent identity and version remain fixed through concurrent-write retries.
+Deleting and recreating the same path cannot redirect a stale selection to the
+replacement, even when its numeric version is the same.
 
 Real, nonroot folders also offer Delete folder. Deletion is empty-only and keeps
-the selected source version fixed. It requires the server's explicit atomic
+the selected source identity and version fixed. It requires the server's explicit atomic
 empty-directory extension; older Rust and Go servers are refused before the
 removal is prepared. The server checks for concurrent children in the same
 transaction as the deletion. The desktop does not expose recursive deletion.

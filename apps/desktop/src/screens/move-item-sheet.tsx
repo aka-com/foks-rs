@@ -58,6 +58,7 @@ export function MoveSheet({
     setError(null);
     try {
       await bridge.moveItem({
+        direntId: item.direntId,
         storeId: item.store,
         path: item.path,
         version: item.version,

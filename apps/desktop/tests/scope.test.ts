@@ -9,6 +9,7 @@ import { folderAt, folderTree } from '../src/screens/scope';
 const item = (path: string): Item => ({
   store: 'acct:personal',
   path,
+  direntId: '00000000000000000000000000000001',
   kind: 'Secret',
   size: 1,
   version: 1,

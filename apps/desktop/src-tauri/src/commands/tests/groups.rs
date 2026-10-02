@@ -50,6 +50,7 @@ fn catalog_activity_and_profile_health_gate_group_writes() {
         items: vec![CatalogItem {
             store: CatalogStoreRef::Team(team.clone()),
             metadata: foks_agent_proto::KvEntryMetadata {
+                dirent_id: [7; 16],
                 path: "/shared".to_owned(),
                 node_type: "small-file".to_owned(),
                 version: 4,
@@ -83,6 +84,7 @@ fn catalog_activity_and_profile_health_gate_group_writes() {
         items: vec![CatalogItem {
             store: CatalogStoreRef::Team(team.clone()),
             metadata: foks_agent_proto::KvEntryMetadata {
+                dirent_id: [7; 16],
                 path: "/shared".to_owned(),
                 node_type: "small-file".to_owned(),
                 version: 4,

@@ -137,6 +137,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'acct:personal',
       path: '/logins/github.com',
+      direntId: '00000000000000000000000000000001',
       kind: 'Secret',
       size: 142,
       version: 9,
@@ -148,6 +149,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'acct:personal',
       path: '/logins/fastmail.com',
+      direntId: '00000000000000000000000000000002',
       kind: 'Secret',
       size: 96,
       version: 2,
@@ -158,6 +160,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'acct:personal',
       path: '/env/prod/DATABASE_URL',
+      direntId: '00000000000000000000000000000003',
       kind: 'Secret',
       size: 96,
       version: 3,
@@ -168,6 +171,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'acct:personal',
       path: '/ssh/id_ed25519',
+      direntId: '00000000000000000000000000000004',
       kind: 'File',
       size: 419,
       version: 1,
@@ -177,6 +181,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'acct:personal',
       path: '/ssh',
+      direntId: '00000000000000000000000000000005',
       kind: 'Folder',
       size: 0,
       version: 1,
@@ -186,6 +191,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'acct:personal',
       path: '/documents/passport-scan.pdf',
+      direntId: '00000000000000000000000000000006',
       kind: 'File',
       size: 2841992,
       version: 1,
@@ -195,6 +201,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'acct:personal',
       path: '/agents/anthropic-api-key',
+      direntId: '00000000000000000000000000000007',
       kind: 'Secret',
       size: 108,
       version: 4,
@@ -205,6 +212,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'team:eng',
       path: '/deploy/production-token',
+      direntId: '00000000000000000000000000000008',
       kind: 'Secret',
       size: 88,
       version: 12,
@@ -215,6 +223,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'team:eng',
       path: '/deploy/staging-token',
+      direntId: '00000000000000000000000000000009',
       kind: 'Secret',
       size: 88,
       version: 3,
@@ -225,6 +234,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'team:eng',
       path: '/release/bundle.tar',
+      direntId: '0000000000000000000000000000000a',
       kind: 'File',
       size: 84399718,
       version: 5,
@@ -234,6 +244,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'team:eng',
       path: '/onboarding/README.md',
+      direntId: '0000000000000000000000000000000b',
       kind: 'File',
       size: 5120,
       version: 2,
@@ -243,6 +254,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'team:household',
       path: '/wifi/guest-password',
+      direntId: '0000000000000000000000000000000c',
       kind: 'Secret',
       size: 64,
       version: 4,
@@ -253,6 +265,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'team:household',
       path: '/documents/emergency.pdf',
+      direntId: '0000000000000000000000000000000d',
       kind: 'File',
       size: 2841992,
       version: 7,
@@ -262,6 +275,7 @@ const RAW: AgentSnapshot = {
     {
       store: 'team:household',
       path: '/streaming/netflix',
+      direntId: '0000000000000000000000000000000e',
       kind: 'Secret',
       size: 70,
       version: 1,

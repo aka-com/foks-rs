@@ -474,6 +474,7 @@ test('item rename keeps the selected source version and blocks dismissal during 
       storeId: item.store,
       path: item.path,
       version: item.version,
+      direntId: item.direntId,
       destination: '/renamed-item',
     }),
   );
@@ -567,6 +568,7 @@ test('folder deletion uses its selected version and blocks Escape while pending'
       storeId: folder.store,
       path: folder.path,
       version: folder.version,
+      direntId: folder.direntId,
     }),
   );
   ui.fireEvent.keyDown(dialog, { key: 'Escape' });

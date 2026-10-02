@@ -42,6 +42,7 @@ fn a_kv_write_names_the_store_it_lands_in() {
         &CatalogItem {
             store: CatalogStoreRef::Account(account.clone()),
             metadata: KvEntryMetadata {
+                dirent_id: [7; 16],
                 path: "/note".into(),
                 version: 7,
                 node_type: "small-file".into(),
@@ -125,6 +126,7 @@ fn guarded_worker_in_one_profile_does_not_block_another_or_local_aliases() {
             &CatalogItem {
                 store: CatalogStoreRef::Account(account_ref(profile, "personal")),
                 metadata: KvEntryMetadata {
+                    dirent_id: [7; 16],
                     path: "/note".into(),
                     version: 7,
                     node_type: "small-file".into(),

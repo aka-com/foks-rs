@@ -1543,6 +1543,7 @@ pub fn move_kv_operation(item: &CatalogItem, destination: &str) -> Result<Operat
         return Err("source and destination are identical");
     }
     Ok(Operation::MoveKv {
+        dirent_id: item.metadata.dirent_id,
         store: kv_store_ref(&item.store),
         path: item.metadata.path.clone(),
         destination,
@@ -1552,6 +1553,7 @@ pub fn move_kv_operation(item: &CatalogItem, destination: &str) -> Result<Operat
 
 pub fn remove_kv_operation(item: &CatalogItem, recursive: bool) -> Result<Operation, &'static str> {
     Ok(Operation::RemoveKv {
+        expected_dirent_id: Some(item.metadata.dirent_id),
         store: kv_store_ref(&item.store),
         path: item.metadata.path.clone(),
         recursive,
@@ -3103,6 +3105,7 @@ mod tests {
                     Ok(serde_json::to_value(KvPage {
                         snapshot_version: 7,
                         entries: vec![KvEntryMetadata {
+                            dirent_id: [7; 16],
                             path: path.to_owned(),
                             node_type: "small-file".to_owned(),
                             version: 1,
@@ -3459,6 +3462,7 @@ mod tests {
                     Ok(serde_json::to_value(KvPage {
                         snapshot_version: 7,
                         entries: vec![KvEntryMetadata {
+                            dirent_id: [7; 16],
                             path: path.to_owned(),
                             node_type: "small-file".to_owned(),
                             version: 1,
@@ -3544,6 +3548,7 @@ mod tests {
             Ok(serde_json::to_value(KvPage {
                 snapshot_version: 7,
                 entries: vec![KvEntryMetadata {
+                    dirent_id: [7; 16],
                     path: format!("/{page}"),
                     node_type: "small-file".to_owned(),
                     version: 1,
@@ -3601,6 +3606,7 @@ mod tests {
                 1 => Ok(serde_json::to_value(KvPage {
                     snapshot_version: 7,
                     entries: vec![KvEntryMetadata {
+                        dirent_id: [7; 16],
                         path: "/stale".to_owned(),
                         node_type: "small-file".to_owned(),
                         version: 1,
@@ -3619,6 +3625,7 @@ mod tests {
                 3 => Ok(serde_json::to_value(KvPage {
                     snapshot_version: 8,
                     entries: vec![KvEntryMetadata {
+                        dirent_id: [7; 16],
                         path: "/fresh".to_owned(),
                         node_type: "small-file".to_owned(),
                         version: 1,
@@ -3632,6 +3639,7 @@ mod tests {
                 4 => Ok(serde_json::to_value(KvPage {
                     snapshot_version: 8,
                     entries: vec![KvEntryMetadata {
+                        dirent_id: [7; 16],
                         path: "/second".to_owned(),
                         node_type: "small-file".to_owned(),
                         version: 1,
@@ -3902,6 +3910,7 @@ mod tests {
         let item = CatalogItem {
             store: CatalogStoreRef::Account(account.clone()),
             metadata: KvEntryMetadata {
+                dirent_id: [7; 16],
                 path: "/large".to_owned(),
                 node_type: "file".to_owned(),
                 version: 9,
@@ -3935,6 +3944,7 @@ mod tests {
                 account_alias: "personal".to_owned(),
             }),
             metadata: KvEntryMetadata {
+                dirent_id: [7; 16],
                 path: "/large".to_owned(),
                 node_type: "file".to_owned(),
                 version: 9,
@@ -4004,6 +4014,7 @@ mod tests {
         let item = CatalogItem {
             store: account.clone(),
             metadata: KvEntryMetadata {
+                dirent_id: [7; 16],
                 path: "/password".to_owned(),
                 node_type: "small-file".to_owned(),
                 version: 7,

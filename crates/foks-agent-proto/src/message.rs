@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 31;
+pub const PROTOCOL_VERSION: u32 = 32;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -320,6 +320,7 @@ pub enum KvRole {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct KvEntryMetadata {
+    pub dirent_id: [u8; 16],
     pub path: String,
     pub node_type: String,
     pub version: u64,
@@ -952,12 +953,15 @@ pub enum Operation {
         mkdir_p: bool,
     },
     MoveKv {
+        dirent_id: [u8; 16],
         store: KvStoreRef,
         path: String,
         destination: String,
         version: u64,
     },
     RemoveKv {
+        #[serde(default)]
+        expected_dirent_id: Option<[u8; 16]>,
         store: KvStoreRef,
         path: String,
         recursive: bool,
@@ -1961,24 +1965,28 @@ impl std::fmt::Debug for Operation {
                 .field("mkdir_p", mkdir_p)
                 .finish(),
             Self::MoveKv {
+                dirent_id,
                 store,
                 path,
                 destination,
                 version,
             } => formatter
                 .debug_struct("MoveKv")
+                .field("dirent_id", dirent_id)
                 .field("store", store)
                 .field("path", path)
                 .field("destination", destination)
                 .field("version", version)
                 .finish(),
             Self::RemoveKv {
+                expected_dirent_id,
                 store,
                 path,
                 recursive,
                 precondition,
             } => formatter
                 .debug_struct("RemoveKv")
+                .field("expected_dirent_id", expected_dirent_id)
                 .field("store", store)
                 .field("path", path)
                 .field("recursive", recursive)

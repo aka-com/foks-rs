@@ -18,6 +18,7 @@ fn namespace_and_membership_writes_keep_exclusive_nonabandonable_admission() {
     let cases = [
         (
             Operation::MoveKv {
+                dirent_id: [7; 16],
                 store: KvStoreRef::Account(AccountStoreRef {
                     profile: "local".into(),
                     account_alias: "owner".into(),

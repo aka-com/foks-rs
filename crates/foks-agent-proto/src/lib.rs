@@ -542,6 +542,7 @@ mod tests {
         let page = KvPage {
             snapshot_version: 9,
             entries: vec![KvEntryMetadata {
+                dirent_id: [7; 16],
                 path: "/shared.txt".to_owned(),
                 node_type: "small-file".to_owned(),
                 version: 4,
@@ -620,7 +621,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 31);
+        assert_eq!(PROTOCOL_VERSION, 32);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -637,7 +638,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 31);
+        assert_eq!(PROTOCOL_VERSION, 32);
         let request = Request::new(
             20,
             Operation::Chat {
@@ -684,6 +685,7 @@ mod tests {
                 mkdir_p: true,
             },
             Operation::RemoveKv {
+                expected_dirent_id: None,
                 store: team,
                 path: "/secret".to_owned(),
                 recursive: false,

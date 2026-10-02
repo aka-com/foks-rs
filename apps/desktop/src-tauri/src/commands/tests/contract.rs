@@ -711,6 +711,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         ],
         full_item_reads: Some(vec!["opaque-store-ref".to_owned()]),
         items: vec![ItemDto {
+            dirent_id: "07".repeat(16),
             store: "opaque-store-ref".to_owned(),
             path: "/wifi/password".to_owned(),
             kind: "Secret",

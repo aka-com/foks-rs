@@ -78,7 +78,13 @@ test('an edit conflict with a deleted item preserves a new-item draft', async ()
   const { rendered } = await mount((base) => ({
     // The save meets an item another session has already deleted.
     editTextItem: async (request) => {
-      await base.removeItem(request);
+      await base.removeItem({
+        ...request,
+        direntId: (await base.listCatalog()).items.find(
+          (item) =>
+            item.store === request.storeId && item.path === request.path,
+        )!.direntId,
+      });
       return base.editTextItem(request);
     },
   }));
@@ -149,7 +155,13 @@ test('delete conflicts distinguish modified and deleted items', async () => {
     removeItem: async (request) => {
       if (gone) {
         // Another session deleted it first.
-        await base.removeItem(request);
+        await base.removeItem({
+          ...request,
+          direntId: (await base.listCatalog()).items.find(
+            (item) =>
+              item.store === request.storeId && item.path === request.path,
+          )!.direntId,
+        });
       } else {
         // Another session changed it first.
         await base.editTextItem({ ...request, value: 'theirs' });

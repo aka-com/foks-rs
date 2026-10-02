@@ -967,7 +967,15 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
                 version,
                 KvRoleArguments::owner(),
             );
-            foks_desktop::remove_kv_operation(&item, false)?
+            // This CLI accepts a version, but has no selected catalog identity.
+            let mut operation = foks_desktop::remove_kv_operation(&item, false)?;
+            if let Operation::RemoveKv {
+                expected_dirent_id, ..
+            } = &mut operation
+            {
+                *expected_dirent_id = None;
+            }
+            operation
         }
         Command::KvCreateFile {
             store,
@@ -1235,6 +1243,8 @@ fn catalog_item(
     CatalogItem {
         store,
         metadata: KvEntryMetadata {
+            // Synthetic command-line item; renderer selections use real identities.
+            dirent_id: [0; 16],
             path,
             node_type: node_type.to_owned(),
             version,

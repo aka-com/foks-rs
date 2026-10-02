@@ -62,6 +62,44 @@ import {
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 
+test('mock mutations reject a recreated source with the same path and version', async () => {
+  const bridge = mockBridge(FIXTURE);
+  await bridge.createTextItem({
+    value: 'test',
+    storeId: 'acct:personal',
+    path: '/aba-test',
+  });
+  const original = (await bridge.listCatalog()).items.find(
+    (item) => item.path === '/aba-test',
+  )!;
+  const request = {
+    storeId: original.store,
+    path: original.path,
+    version: original.version,
+    direntId: original.direntId,
+  };
+  await bridge.removeItem(request);
+  await bridge.createTextItem({
+    value: 'test',
+    storeId: original.store,
+    path: original.path,
+  });
+  const replacement = (await bridge.listCatalog()).items.find(
+    (item) => item.path === '/aba-test',
+  )!;
+  assert.equal(replacement.version, original.version);
+  assert.notEqual(replacement.direntId, original.direntId);
+  await assert.rejects(
+    bridge.moveItem({ ...request, destination: '/aba-moved' }),
+  );
+  await assert.rejects(bridge.removeItem(request));
+  assert.ok(
+    (await bridge.listCatalog()).items.some(
+      (item) => item.direntId === replacement.direntId,
+    ),
+  );
+});
+
 const catalog: CatalogDto = {
   profiles: ['foks.example.net'],
   stores: [
@@ -94,6 +132,7 @@ const catalog: CatalogDto = {
       store:
         '{"Account":{"profile":"foks.example.net","account_alias":"satoshi"}}',
       path: '/logins/example.test',
+      direntId: '00000000000000000000000000000001',
       kind: 'Secret',
       size: 42,
       version: 3,
@@ -1825,6 +1864,7 @@ test('loadSnapshot evaluates store access based on server lease validity and pro
       store: store.id,
       path: '/value',
       kind: 'Secret' as const,
+      direntId: '07'.repeat(16),
       size: 1,
       version: 1,
       read: { role: 'Owner' as const },
@@ -2049,6 +2089,7 @@ test('loadSnapshot omits rosters for lapsed servers and enriches active member a
         kind: item.kind,
         size: item.size,
         version: item.version,
+        direntId: item.direntId,
         read: roleDto(item.read),
         write: roleDto(item.write),
       })),

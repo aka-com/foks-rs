@@ -334,6 +334,7 @@ function AccessBlock({
   const candidate: Item = {
     store: store.id,
     path: '/preview',
+    direntId: '0'.repeat(32),
     kind: 'Secret',
     size: 0,
     version: 0,
@@ -1441,6 +1442,7 @@ function DeleteSheet({
               void (async () => {
                 try {
                   await bridge.removeItem({
+                    direntId: workflow.item.direntId,
                     storeId: workflow.item.store,
                     path: workflow.item.path,
                     version: workflow.item.version,

@@ -410,6 +410,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       kind: item.kind,
       size: item.size,
       version: item.version,
+      direntId: item.direntId,
       read: roleDto(item.read),
       write: roleDto(item.write),
     })),
@@ -601,6 +602,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       assertFree(storeId, path);
       const roles = createRoles(storeId, readRole, writeRole);
       items.push({
+        direntId: crypto.randomUUID().replaceAll('-', ''),
         store: storeId,
         path,
         kind: 'Secret',
@@ -616,6 +618,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       assertFree(storeId, path);
       const roles = createRoles(storeId, readRole, writeRole);
       items.push({
+        direntId: crypto.randomUUID().replaceAll('-', ''),
         store: storeId,
         path,
         kind: 'Link',
@@ -631,6 +634,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       assertFree(storeId, path);
       const roles = createRoles(storeId, readRole, writeRole);
       items.push({
+        direntId: crypto.randomUUID().replaceAll('-', ''),
         store: storeId,
         path,
         kind: 'Folder',
@@ -658,11 +662,11 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       contents.set(`${storeId}|${path}`, value);
       return { applied: true };
     },
-    moveItem: async ({ storeId, path, version, destination }) => {
+    moveItem: async ({ storeId, path, version, destination, direntId }) => {
       const item = items.find(
         (candidate) => candidate.store === storeId && candidate.path === path,
       );
-      if (!item || item.version !== version)
+      if (!item || item.version !== version || item.direntId !== direntId)
         throw failure('conflict', `${path} changed first.`);
       assertFree(storeId, destination);
       if (destination.startsWith(`${path}/`))
@@ -674,7 +678,10 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       )) {
         const oldPath = candidate.path;
         candidate.path = destination + oldPath.slice(path.length);
-        if (candidate === item) candidate.version = 1;
+        if (candidate === item) {
+          candidate.version = 1;
+          candidate.direntId = crypto.randomUUID().replaceAll('-', '');
+        }
         const content = contents.get(`${storeId}|${oldPath}`);
         contents.delete(`${storeId}|${oldPath}`);
         if (content !== undefined)
@@ -682,11 +689,11 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       }
       return { applied: true };
     },
-    removeItem: async ({ storeId, path, version }) => {
+    removeItem: async ({ storeId, path, version, direntId }) => {
       const item = items.find(
         (candidate) => candidate.store === storeId && candidate.path === path,
       );
-      if (!item || item.version !== version)
+      if (!item || item.version !== version || item.direntId !== direntId)
         throw failure('conflict', `${path} changed first.`);
       if (
         item.kind === 'Folder' &&
@@ -705,6 +712,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       assertFree(storeId, path);
       const roles = createRoles(storeId, readRole, writeRole);
       items.push({
+        direntId: crypto.randomUUID().replaceAll('-', ''),
         store: storeId,
         path,
         kind: 'File',

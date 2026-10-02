@@ -314,7 +314,8 @@ extension:
 - **mv** is one `kvPut` carrying a tombstone at the source and a new dirent
   at the destination pointing at the *same* node ID. It reads the whole
   source subtree first to refuse moving a directory into itself, and cites
-  the source's exact version so a concurrent change is rejected.
+  the source's dirent identity and exact version so a concurrent change or
+  same-path recreation is rejected.
 - **Overwrite** is permitted only from a file or small file to a file, small
   file, or symlink; a directory is never replaced by a put. An existing live
   entry is rejected unless the caller asked to overwrite, and the caller may

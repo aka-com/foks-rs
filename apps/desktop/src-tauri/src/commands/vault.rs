@@ -52,6 +52,8 @@ pub struct StoreDto {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ItemDto {
+    #[serde(rename = "direntId")]
+    pub dirent_id: String,
     pub store: String,
     pub path: String,
     pub kind: &'static str,
@@ -291,6 +293,12 @@ fn item_dto(item: &CatalogItem) -> Result<ItemDto, AgentError> {
             }
         },
         // Large-file sizes remain optional for legacy and Go-created files.
+        dirent_id: item
+            .metadata
+            .dirent_id
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
         size: item.metadata.size,
         version: item.metadata.version,
         read: item.metadata.read_role.into(),
@@ -1377,6 +1385,7 @@ pub async fn edit_text_item(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn move_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -1384,13 +1393,14 @@ pub async fn move_item(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
     destination: String,
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
-    let item = state.selected_mutation_item(&store_id, &path, version)?;
+    let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
     let operation =
         foks_desktop::move_kv_operation(&item, &destination).map_err(invalid_request)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
@@ -1410,12 +1420,13 @@ pub async fn remove_item(
     store_id: String,
     path: String,
     version: u64,
+    dirent_id: String,
 ) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
-    let item = state.selected_mutation_item(&store_id, &path, version)?;
+    let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
     let operation = remove_item_operation(&item)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_kv_mutation(

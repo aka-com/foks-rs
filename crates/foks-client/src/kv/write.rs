@@ -484,6 +484,40 @@ impl KvWriteSession<'_> {
         write_role: Role,
         recursive: bool,
     ) -> Result<Vec<KvDirectoryProjection>> {
+        self.unlink_selected(parent, name, None, expected_version, write_role, recursive)
+    }
+
+    /// Remove only the selected dirent, even if its path is deleted and recreated.
+    #[allow(clippy::too_many_arguments)]
+    pub fn unlink_bound(
+        &mut self,
+        parent: [u8; 16],
+        name: &str,
+        dirent_id: [u8; 16],
+        expected_version: u64,
+        write_role: Role,
+        recursive: bool,
+    ) -> Result<Vec<KvDirectoryProjection>> {
+        self.unlink_selected(
+            parent,
+            name,
+            Some(dirent_id),
+            Some(expected_version),
+            write_role,
+            recursive,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn unlink_selected(
+        &mut self,
+        parent: [u8; 16],
+        name: &str,
+        selected_id: Option<[u8; 16]>,
+        expected_version: Option<u64>,
+        write_role: Role,
+        recursive: bool,
+    ) -> Result<Vec<KvDirectoryProjection>> {
         validate_kv_component(name.as_bytes())?;
         let mut tree = self.scoped_tree(parent)?;
         let projection = tree
@@ -497,6 +531,8 @@ impl KvWriteSession<'_> {
             .iter()
             .find(|entry| entry.name == name.as_bytes())
             .ok_or(Error::KvResponse("cannot unlink a missing KV entry"))?;
+        let selected_id = selected_id.unwrap_or(entry.dirent_id);
+        require_selected_entry(&tree, parent, name, selected_id, expected_version)?;
         let empty_directories = if entry.node_id[0] == KvNodeType::Directory as u8 && !recursive {
             let assertion = foks_proto::KvEmptyDirectoryAssertion {
                 parent,
@@ -519,6 +555,7 @@ impl KvWriteSession<'_> {
         let scope = empty_directories.is_empty().then_some(parent);
         let (_, tree) =
             self.mutate_namespace_asserting(tree, scope, empty_directories, |session, tree| {
+                require_selected_entry(tree, parent, name, selected_id, expected_version)?;
                 Ok(vec![session.prepare_dirent(
                     tree,
                     parent,
@@ -560,6 +597,51 @@ impl KvWriteSession<'_> {
         destination_name: &str,
         options: KvWriteOptions,
     ) -> Result<KvWriteResult> {
+        self.move_entry_selected(
+            source_parent,
+            source_name,
+            None,
+            source_version,
+            destination_parent,
+            destination_name,
+            options,
+        )
+    }
+
+    /// Move only the selected source identity and version across all CAS retries.
+    #[allow(clippy::too_many_arguments)]
+    pub fn move_entry_bound(
+        &mut self,
+        source_parent: [u8; 16],
+        source_name: &str,
+        source_id: [u8; 16],
+        source_version: u64,
+        destination_parent: [u8; 16],
+        destination_name: &str,
+        options: KvWriteOptions,
+    ) -> Result<KvWriteResult> {
+        self.move_entry_selected(
+            source_parent,
+            source_name,
+            Some(source_id),
+            Some(source_version),
+            destination_parent,
+            destination_name,
+            options,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn move_entry_selected(
+        &mut self,
+        source_parent: [u8; 16],
+        source_name: &str,
+        source_id: Option<[u8; 16]>,
+        source_version: Option<u64>,
+        destination_parent: [u8; 16],
+        destination_name: &str,
+        options: KvWriteOptions,
+    ) -> Result<KvWriteResult> {
         validate_kv_component(source_name.as_bytes())?;
         validate_kv_component(destination_name.as_bytes())?;
         if source_parent == destination_parent && source_name == destination_name {
@@ -568,21 +650,31 @@ impl KvWriteSession<'_> {
         // A move reads the whole source subtree to reject a cycle, so it
         // keeps the complete traversal rather than a path walk.
         let tree = self.sync()?;
-        let (dirents, tree) = self.mutate_namespace(tree, None, |session, tree| {
-            let source_directory = tree
-                .iter()
-                .find(|directory| directory.directory_id == source_parent)
-                .ok_or(Error::KvResponse(
-                    "source directory is not in the verified cache",
-                ))?;
-            let source_entry = source_directory
-                .entries
-                .iter()
-                .find(|entry| entry.name == source_name.as_bytes())
-                .ok_or(Error::KvResponse("move source does not exist"))?;
-            if source_version.is_some_and(|version| version != source_entry.version) {
-                return Err(Error::KvResponse("KV dirent version precondition failed"));
+        // Legacy callers select on the first authenticated read; bound callers
+        // retain their earlier catalog selection. Never replace this on retry.
+        let source_id = match source_id {
+            Some(id) => id,
+            None => {
+                tree.iter()
+                    .find(|directory| directory.directory_id == source_parent)
+                    .and_then(|directory| {
+                        directory
+                            .entries
+                            .iter()
+                            .find(|entry| entry.name == source_name.as_bytes())
+                    })
+                    .ok_or(Error::KvResponse("move source does not exist"))?
+                    .dirent_id
             }
+        };
+        let (dirents, tree) = self.mutate_namespace(tree, None, |session, tree| {
+            let source_entry = require_selected_entry(
+                tree,
+                source_parent,
+                source_name,
+                source_id,
+                source_version,
+            )?;
             let source = KvDirent::decode(&source_entry.dirent_bytes)?;
             if source.value.node_type()? == KvNodeType::None {
                 return Err(Error::KvResponse("move source is tombstoned"));
@@ -1216,6 +1308,32 @@ impl KvWriteSession<'_> {
     }
 }
 
+fn require_selected_entry<'a>(
+    tree: &'a [KvDirectoryProjection],
+    parent: [u8; 16],
+    name: &str,
+    dirent_id: [u8; 16],
+    version: Option<u64>,
+) -> Result<&'a foks_client_db::KvProjectedEntry> {
+    let entry = tree
+        .iter()
+        .find(|directory| directory.directory_id == parent)
+        .and_then(|directory| {
+            directory
+                .entries
+                .iter()
+                .find(|entry| entry.name == name.as_bytes())
+        })
+        .ok_or(Error::KvResponse("KV dirent identity precondition failed"))?;
+    if entry.dirent_id != dirent_id {
+        return Err(Error::KvResponse("KV dirent identity precondition failed"));
+    }
+    if version.is_some_and(|version| entry.version != version) {
+        return Err(Error::KvResponse("KV dirent version precondition failed"));
+    }
+    Ok(entry)
+}
+
 fn require_empty_directory(
     tree: &[KvDirectoryProjection],
     assertion: &foks_proto::KvEmptyDirectoryAssertion,
@@ -1401,6 +1519,59 @@ pub(crate) fn finalize_verified_material<S: crate::ProtectedMutationStore + ?Siz
 #[cfg(test)]
 mod outbox_tests {
     use super::*;
+
+    #[test]
+    fn selected_source_binding_survives_recreated_path_on_refresh() {
+        let parent = [1; 16];
+        let original_id = [2; 16];
+        let mut tree = vec![KvDirectoryProjection {
+            host_id: Vec::new(),
+            party_id: Vec::new(),
+            root_version: 1,
+            root_directory_id: parent,
+            root_bytes: Vec::new(),
+            directory_id: parent,
+            directory_version: 1,
+            directory_bytes: Vec::new(),
+            entries: vec![foks_client_db::KvProjectedEntry {
+                readable: true,
+                dirent_id: original_id,
+                node_id: [3; 17],
+                version: 1,
+                directory_version: 1,
+                name: b"selected".to_vec(),
+                write_role_type: 3,
+                write_role_visibility: 0,
+                creation_time: 1,
+                dirent_bytes: Vec::new(),
+                node_bytes: None,
+                content: None,
+                symlink: None,
+                large_file_size: None,
+            }],
+        }];
+        // Both mutation closures reuse this original binding after a stale-CAS
+        // refresh; a recreated path can have exactly the same visible version.
+        let selected = require_selected_entry(&tree, parent, "selected", original_id, Some(1))
+            .unwrap()
+            .dirent_id;
+        tree[0].entries[0].dirent_id = [4; 16];
+        for version in [Some(1), None] {
+            assert!(matches!(
+                require_selected_entry(&tree, parent, "selected", selected, version),
+                Err(Error::KvResponse("KV dirent identity precondition failed"))
+            ));
+        }
+        assert!(require_selected_entry(&tree, parent, "selected", [4; 16], Some(1)).is_ok());
+        tree[0].entries[0].dirent_id = original_id;
+        tree[0].entries[0].version = 2;
+        assert!(matches!(
+            require_selected_entry(&tree, parent, "selected", selected, Some(1)),
+            Err(Error::KvResponse("KV dirent version precondition failed"))
+        ));
+        tree[0].entries.clear();
+        assert!(require_selected_entry(&tree, parent, "selected", selected, Some(1)).is_err());
+    }
 
     #[test]
     fn guarded_folder_outbox_retains_assertions_and_rejects_malformed_upgrade() {

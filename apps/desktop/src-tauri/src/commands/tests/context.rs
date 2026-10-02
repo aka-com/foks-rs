@@ -29,6 +29,7 @@ fn chat_catalog() -> CatalogSnapshot {
     catalog.items.push(foks_desktop::CatalogItem {
         store,
         metadata: foks_agent_proto::KvEntryMetadata {
+            dirent_id: [7; 16],
             path: "/item".into(),
             node_type: "small-file".into(),
             version: 1,
@@ -45,6 +46,38 @@ fn chat_catalog() -> CatalogSnapshot {
         server_status: success(serde_json::json!({"profile":"chat", "configured_probe":"chat.example", "host":null, "chat_supported":true, "compatibility":{"status":"not-required"}})),
     });
     catalog
+}
+
+#[test]
+fn recreated_item_cannot_rebind_a_selected_move_or_delete() {
+    let state = phase_four_state(vec![]);
+    let mut catalog = chat_catalog();
+    let original = catalog.items[0].clone();
+    catalog.items[0].metadata.dirent_id = [8; 16];
+    let (load, _) = state.begin_catalog_load_checked().unwrap();
+    assert!(state.publish_catalog(load, catalog, |_| {}));
+    let store = store_id(&original.store);
+    assert_eq!(
+        state
+            .selected_bound_mutation_item(
+                &store,
+                &original.metadata.path,
+                original.metadata.version,
+                &"07".repeat(16),
+            )
+            .unwrap_err()
+            .code,
+        "conflict"
+    );
+    let replacement = state
+        .selected_bound_mutation_item(
+            &store,
+            &original.metadata.path,
+            original.metadata.version,
+            &"08".repeat(16),
+        )
+        .unwrap();
+    assert_eq!(replacement.metadata.dirent_id, [8; 16]);
 }
 
 #[test]
@@ -367,6 +400,7 @@ fn a_write_discards_only_the_items_of_the_store_it_landed_in() {
     catalog.items.push(foks_desktop::CatalogItem {
         store: untouched.clone(),
         metadata: foks_agent_proto::KvEntryMetadata {
+            dirent_id: [7; 16],
             path: "/other".into(),
             node_type: "small-file".into(),
             version: 3,

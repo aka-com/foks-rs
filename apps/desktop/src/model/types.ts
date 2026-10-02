@@ -83,6 +83,7 @@ export type ItemKind = 'Password' | 'Document' | 'Folder';
 export type NodeType = 'small_file' | 'file' | 'symlink' | 'directory';
 
 export interface Item {
+  direntId: string;
   store: StoreRef;
   path: string;
   kind: NodeKind;

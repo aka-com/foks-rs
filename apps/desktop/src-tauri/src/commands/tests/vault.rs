@@ -327,6 +327,7 @@ pub(super) fn download_item(_total: u64) -> CatalogItem {
     CatalogItem {
         store: CatalogStoreRef::Account(store),
         metadata: foks_agent_proto::KvEntryMetadata {
+            dirent_id: [7; 16],
             path: "/large.bin".to_owned(),
             node_type: "file".to_owned(),
             version: 9,
@@ -347,6 +348,7 @@ fn read_text_issues_exactly_one_version_bound_read() {
             account_alias: "personal".to_owned(),
         }),
         metadata: foks_agent_proto::KvEntryMetadata {
+            dirent_id: [7; 16],
             path: "/wifi/password".to_owned(),
             node_type: "small-file".to_owned(),
             version: 7,
@@ -416,6 +418,7 @@ fn catalog_dto_rejects_unknown_kinds_and_preserves_unknown_sizes() {
         items: vec![CatalogItem {
             store: CatalogStoreRef::Account(account.clone()),
             metadata: foks_agent_proto::KvEntryMetadata {
+                dirent_id: [7; 16],
                 path: "/bad".to_owned(),
                 node_type: "socket".to_owned(),
                 version: 1,
@@ -537,6 +540,7 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
     let item = CatalogItem {
         store: store.clone(),
         metadata: foks_agent_proto::KvEntryMetadata {
+            dirent_id: [7; 16],
             path: "/wifi/password".to_owned(),
             node_type: "small-file".to_owned(),
             version: 19,
@@ -626,6 +630,7 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
                 mkdir_p: false,
             },
             Operation::RemoveKv {
+                expected_dirent_id: Some([7; 16]),
                 store: KvStoreRef::Team(team.clone()),
                 path: "/wifi/password".to_owned(),
                 recursive: false,
@@ -673,6 +678,7 @@ fn team_create_and_edit_conflicts_are_returned_after_one_attempt_without_retry()
     let item = CatalogItem {
         store,
         metadata: foks_agent_proto::KvEntryMetadata {
+            dirent_id: [7; 16],
             path: "/wifi/password".to_owned(),
             node_type: "small-file".to_owned(),
             version: 19,
@@ -758,20 +764,22 @@ fn renderer_remove_boundary_binds_file_and_folder_versions_without_recursion() {
     assert!(matches!(
         remove_item_operation(&file).unwrap(),
         Operation::RemoveKv {
+            expected_dirent_id: Some(dirent_id),
             recursive: false,
             precondition: KvPrecondition::ExactVersion { version: 9 },
             ..
-        }
+        } if dirent_id == [7; 16]
     ));
     let mut folder = file;
     folder.metadata.node_type = "directory".to_owned();
     assert!(matches!(
         remove_item_operation(&folder).unwrap(),
         Operation::RemoveKv {
+            expected_dirent_id: Some(dirent_id),
             recursive: false,
             precondition: KvPrecondition::ExactVersion { version: 9 },
             ..
-        }
+        } if dirent_id == [7; 16]
     ));
 }
 
@@ -973,6 +981,8 @@ fn catalog_preserves_incomplete_creation_phase() {
 fn move_preserves_exact_source_and_invalidates_its_store() {
     let item = download_item(0);
     let operation = foks_desktop::move_kv_operation(&item, "/renamed").unwrap();
+    assert!(matches!(&operation, Operation::MoveKv { dirent_id, .. }
+        if *dirent_id == item.metadata.dirent_id));
     assert!(
         matches!(&operation, Operation::MoveKv { path, destination, version, .. }
         if path == &item.metadata.path && destination == "/renamed" && *version == item.metadata.version)

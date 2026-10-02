@@ -114,14 +114,18 @@ export const vaultCommands: Pick<
       { storeId, path, version, value },
       decodeMutation,
     ),
-  moveItem: ({ storeId, path, version, destination }) =>
+  moveItem: ({ storeId, path, version, destination, direntId }) =>
     checkedMutation(
       'move_item',
-      { storeId, path, version, destination },
+      { storeId, path, version, destination, direntId },
       decodeMutation,
     ),
-  removeItem: ({ storeId, path, version }) =>
-    checkedMutation('remove_item', { storeId, path, version }, decodeMutation),
+  removeItem: ({ storeId, path, version, direntId }) =>
+    checkedMutation(
+      'remove_item',
+      { storeId, path, version, direntId },
+      decodeMutation,
+    ),
   importDroppedFile: ({ storeId, path, sourcePath, readRole, writeRole }) =>
     checkedMutation(
       'import_dropped_file',

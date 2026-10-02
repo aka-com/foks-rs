@@ -2755,6 +2755,7 @@ fn paginate_catalog(
     let mut end = offset;
     for entry in &report.entries[offset..maximum_end] {
         let entry = KvEntryMetadata {
+            dirent_id: entry.dirent_id,
             path: entry.path.clone(),
             node_type: entry.node_type.clone(),
             version: entry.version,
@@ -5004,6 +5005,7 @@ fn dispatch_result_inner(
             })
         }
         Operation::MoveKv {
+            dirent_id,
             store,
             path,
             destination,
@@ -5017,20 +5019,22 @@ fn dispatch_result_inner(
             )?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let report = match &store {
-                    KvStoreRef::Account(store) => session.move_kv_checked(
+                    KvStoreRef::Account(store) => session.move_kv_bound(
                         &store.account_alias,
                         &path,
                         &destination,
+                        dirent_id,
                         version,
                         vault,
                         master,
                     )?,
-                    KvStoreRef::Team(store) => session.move_team_kv_checked(
+                    KvStoreRef::Team(store) => session.move_team_kv_bound(
                         &store.account_alias,
                         &store.team_alias,
                         &store.team_id,
                         &path,
                         &destination,
+                        dirent_id,
                         version,
                         vault,
                         master,
@@ -5040,6 +5044,7 @@ fn dispatch_result_inner(
             })
         }
         Operation::RemoveKv {
+            expected_dirent_id,
             store,
             path,
             recursive,
@@ -5058,24 +5063,54 @@ fn dispatch_result_inner(
             )?;
             with_vault_and_master(state_dir, &session, |session, vault, master| {
                 let report = match &store {
-                    KvStoreRef::Account(store) => session.remove_kv_checked(
-                        &store.account_alias,
-                        &path,
-                        recursive,
-                        version,
-                        vault,
-                        master,
-                    )?,
-                    KvStoreRef::Team(store) => session.remove_team_kv_checked(
-                        &store.account_alias,
-                        &store.team_alias,
-                        &store.team_id,
-                        &path,
-                        recursive,
-                        version,
-                        vault,
-                        master,
-                    )?,
+                    KvStoreRef::Account(store) => {
+                        if let Some(dirent_id) = expected_dirent_id {
+                            session.remove_kv_bound(
+                                &store.account_alias,
+                                &path,
+                                recursive,
+                                dirent_id,
+                                version,
+                                vault,
+                                master,
+                            )?
+                        } else {
+                            session.remove_kv_checked(
+                                &store.account_alias,
+                                &path,
+                                recursive,
+                                version,
+                                vault,
+                                master,
+                            )?
+                        }
+                    }
+                    KvStoreRef::Team(store) => {
+                        if let Some(dirent_id) = expected_dirent_id {
+                            session.remove_team_kv_bound(
+                                &store.account_alias,
+                                &store.team_alias,
+                                &store.team_id,
+                                &path,
+                                recursive,
+                                dirent_id,
+                                version,
+                                vault,
+                                master,
+                            )?
+                        } else {
+                            session.remove_team_kv_checked(
+                                &store.account_alias,
+                                &store.team_alias,
+                                &store.team_id,
+                                &path,
+                                recursive,
+                                version,
+                                vault,
+                                master,
+                            )?
+                        }
+                    }
                 };
                 Ok(serde_json::to_value(report)?)
             })
@@ -8932,6 +8967,7 @@ mod tests {
             snapshot_version,
             entries: (0..entries)
                 .map(|index| foks_client_app::KvCatalogEntry {
+                    dirent_id: [7; 16],
                     path: format!("/{index}"),
                     node_type: "small-file".to_owned(),
                     version: index + 1,
@@ -9122,6 +9158,7 @@ mod tests {
             snapshot_version: 7,
             entries: (0..3)
                 .map(|index| foks_client_app::KvCatalogEntry {
+                    dirent_id: [7; 16],
                     path: format!("/{index}"),
                     node_type: "small-file".to_owned(),
                     version: index + 1,
@@ -9203,6 +9240,7 @@ mod tests {
             snapshot_version: 8,
             entries: (0..500)
                 .map(|index| foks_client_app::KvCatalogEntry {
+                    dirent_id: [7; 16],
                     path: format!("/{index}-{}", "x".repeat(4096)),
                     node_type: "small-file".to_owned(),
                     version: index + 1,
@@ -9324,6 +9362,7 @@ mod tests {
             snapshot_version: 12,
             entries: (0..u64::from(LIMIT))
                 .map(|index| foks_client_app::KvCatalogEntry {
+                    dirent_id: [7; 16],
                     path: format!("/{index}-{}", "p".repeat(2048)),
                     node_type: "small-file".to_owned(),
                     version: index + 1,
@@ -9550,6 +9589,7 @@ mod tests {
             (
                 7,
                 Operation::RemoveKv {
+                    expected_dirent_id: None,
                     store: account_store(),
                     path: "/directory".to_owned(),
                     recursive: false,
