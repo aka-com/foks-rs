@@ -14,7 +14,7 @@ import type {
 import { roleDto, normalizeCommandError } from './bridge';
 import { FIXTURE } from './fixture';
 import type { RenameProgress } from './rename-contract';
-import { catalog } from './model/lease';
+import { storeReadable } from './model/lease';
 import { parseRole, roleRank, visibilityOf } from './model/roles';
 import { itemKey } from './model/types';
 import type { RoleWire, Store, AgentSnapshot } from './model/types';
@@ -393,30 +393,42 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         'Managing members and shared access requires a named team.',
       );
   };
-  const catalogResponse = (): CatalogDto => ({
-    profiles: [...new Set(servers.map((server) => server.profileName))],
-    stores: stores.map((store) => ({ ...store })),
-    knownStores: stores.map((store) => ({ ...store })),
-    inventory: [...new Set(servers.map((server) => server.profileName))].map(
-      (profile) => ({
-        profile,
-        accountsComplete: true,
-        teamsComplete: true,
-      }),
-    ),
-    items: catalog({ ...snapshot, items }).map((item) => ({
-      store: item.store,
-      path: item.path,
-      kind: item.kind,
-      size: item.size,
-      version: item.version,
-      direntId: item.direntId,
-      read: roleDto(item.read),
-      write: roleDto(item.write),
-    })),
-    failures: [],
-    blockedProfiles: [],
-  });
+  const catalogResponse = (): CatalogDto => {
+    // Native catalog responses include directory entries with their identity and
+    // version. The presentation catalog() intentionally filters those out.
+    const current = { ...snapshot, stores, servers, items };
+    const readable = new Set(
+      stores
+        .filter((store) => storeReadable(current, store.id))
+        .map((store) => store.id),
+    );
+    return {
+      profiles: [...new Set(servers.map((server) => server.profileName))],
+      stores: stores.map((store) => ({ ...store })),
+      knownStores: stores.map((store) => ({ ...store })),
+      inventory: [...new Set(servers.map((server) => server.profileName))].map(
+        (profile) => ({
+          profile,
+          accountsComplete: true,
+          teamsComplete: true,
+        }),
+      ),
+      items: items
+        .filter((item) => readable.has(item.store))
+        .map((item) => ({
+          store: item.store,
+          path: item.path,
+          kind: item.kind,
+          size: item.size,
+          version: item.version,
+          direntId: item.direntId,
+          read: roleDto(item.read),
+          write: roleDto(item.write),
+        })),
+      failures: [],
+      blockedProfiles: [],
+    };
+  };
   const chat = mockChat(snapshot);
   const describeServerStatus: Bridge['describeServerStatus'] = async (
     profile,

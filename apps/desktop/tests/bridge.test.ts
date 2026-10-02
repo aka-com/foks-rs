@@ -2504,12 +2504,17 @@ test('group item creation requires and preserves explicit read and write permiss
         read: { role: 'Member', visibility: 0 },
         write: { role: 'Admin' },
       },
+      {
+        path: '/shared/folder',
+        read: { role: 'Owner' },
+        write: { role: 'Owner' },
+      },
     ],
   );
   assert.equal(
     created.some(({ path }) => path === '/shared/folder'),
-    false,
-    'folders are not listed as standalone items in the catalog',
+    true,
+    'native catalogs include folders even when the presentation filters them',
   );
   await assert.rejects(
     bridge.createTextItem({
@@ -3276,4 +3281,44 @@ test('catalog decoding preserves explicit item-read completion provenance', () =
     catalog.profiles,
   );
   assert.throws(() => decodeCatalog({ ...catalog, fullItemReads: [1] }));
+});
+
+test('mock catalogs retain empty folder identities through a rename', async () => {
+  const bridge = mockBridge(FIXTURE);
+  await bridge.createFolder({
+    storeId: 'acct:personal',
+    path: '/empty-folder',
+  });
+  const folder = (await bridge.listCatalog()).items.find(
+    (item) => item.store === 'acct:personal' && item.path === '/empty-folder',
+  );
+  assert.ok(folder);
+  assert.equal(folder.kind, 'Folder');
+  assert.equal(folder.version, 1);
+  assert.match(folder.direntId, /^[0-9a-f]{32}$/);
+  await bridge.moveItem({
+    storeId: folder.store,
+    path: folder.path,
+    version: folder.version,
+    direntId: folder.direntId,
+    destination: '/renamed-folder',
+  });
+  const entries = (await bridge.listCatalog()).items;
+  assert.equal(
+    entries.some((item) => item.path === '/empty-folder'),
+    false,
+  );
+  const renamed = entries.find((item) => item.path === '/renamed-folder');
+  assert.ok(renamed);
+  assert.equal(renamed.kind, 'Folder');
+  assert.notEqual(renamed.direntId, folder.direntId);
+  await assert.rejects(
+    bridge.removeItem({
+      storeId: renamed.store,
+      path: renamed.path,
+      version: renamed.version,
+      direntId: renamed.direntId,
+    }),
+    (error: unknown) => normalizeCommandError(error).code === 'invalid-request',
+  );
 });
