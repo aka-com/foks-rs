@@ -1,5 +1,6 @@
 use super::*;
 
+mod checked_move;
 mod data;
 mod data_stat;
 pub use data_stat::*;

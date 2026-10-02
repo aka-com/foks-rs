@@ -774,6 +774,7 @@ export function VaultShell({
               onClose={() => {
                 locations.setDetails(false);
               }}
+              onMove={(item) => setWorkflow({ kind: 'move', item })}
               onDelete={(item) => setWorkflow({ kind: 'delete', item })}
               onConflict={(item, draft, operation) =>
                 setWorkflow({ kind: 'conflict', item, draft, operation })

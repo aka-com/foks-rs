@@ -321,6 +321,7 @@ pub fn run() {
             commands::vault::create_link,
             commands::vault::create_folder,
             commands::vault::edit_text_item,
+            commands::vault::move_item,
             commands::vault::remove_item,
             commands::vault::import_dropped_file,
             commands::vault::pick_import_file,

@@ -964,3 +964,21 @@ fn catalog_preserves_incomplete_creation_phase() {
         "preparing"
     );
 }
+
+#[test]
+fn move_preserves_exact_source_and_invalidates_its_store() {
+    let item = download_item(0);
+    let operation = foks_desktop::move_kv_operation(&item, "/renamed").unwrap();
+    assert!(
+        matches!(&operation, Operation::MoveKv { path, destination, version, .. }
+        if path == &item.metadata.path && destination == "/renamed" && *version == item.metadata.version)
+    );
+    assert_eq!(
+        crate::commands::execution::kv_mutation_store(&foks_desktop::KvAccountMutation::Inline(
+            operation
+        )),
+        Some(item.store.clone())
+    );
+    assert!(foks_desktop::move_kv_operation(&item, &item.metadata.path).is_err());
+    assert!(foks_desktop::move_kv_operation(&item, "relative").is_err());
+}

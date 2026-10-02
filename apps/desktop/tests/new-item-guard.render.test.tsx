@@ -437,3 +437,100 @@ test('a new item resumes its typed input after a rail tab switch', async () => {
   assert.equal(rendered.queryByText('New password'), null);
   assert.equal(store.getSnapshot().sheet, undefined);
 });
+
+test('item rename keeps the selected source version and blocks dismissal during the write', async () => {
+  let request: unknown;
+  let finish!: () => void;
+  const { rendered, store } = await mount({
+    moveItem: async (next) => {
+      request = next;
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return { applied: true };
+    },
+  });
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const item = FIXTURE.items.find(
+    (item) => item.store === 'acct:personal' && item.kind !== 'Folder',
+  )!;
+  await ui.act(async () => {
+    store.select({ store: item.store, path: item.path });
+  });
+  ui.fireEvent.click(
+    await rendered.findByRole('button', { name: 'Rename or move…' }),
+  );
+  const dialog = await rendered.findByRole('dialog', {
+    name: 'Rename or move',
+  });
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Destination path'), {
+    target: { value: '/renamed-item' },
+  });
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Move' }));
+  await ui.waitFor(() =>
+    assert.deepEqual(request, {
+      storeId: item.store,
+      path: item.path,
+      version: item.version,
+      destination: '/renamed-item',
+    }),
+  );
+  ui.fireEvent.keyDown(dialog, { key: 'Escape' });
+  assert.ok(rendered.getByRole('dialog', { name: 'Rename or move' }));
+  await ui.act(async () => finish());
+  await ui.waitFor(() =>
+    assert.equal(
+      rendered.queryByRole('dialog', { name: 'Rename or move' }),
+      null,
+    ),
+  );
+});
+
+test('ambiguous move keeps the draft visible and cannot be submitted twice', async () => {
+  let calls = 0;
+  const { rendered, store } = await mount({
+    moveItem: async () => {
+      calls++;
+      throw {
+        code: 'ambiguous',
+        message: 'Move outcome is unknown.',
+        fatal: false,
+        ambiguous: true,
+        retryable: false,
+      };
+    },
+  });
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const item = FIXTURE.items.find(
+    (item) => item.store === 'acct:personal' && item.kind !== 'Folder',
+  )!;
+  await ui.act(async () => {
+    store.select({ store: item.store, path: item.path });
+  });
+  ui.fireEvent.click(
+    await rendered.findByRole('button', { name: 'Rename or move…' }),
+  );
+  const dialog = await rendered.findByRole('dialog', {
+    name: 'Rename or move',
+  });
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Destination path'), {
+    target: { value: '/uncertain' },
+  });
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Move' }));
+  await ui.waitFor(() => assert.equal(calls, 1));
+  await ui.waitFor(() =>
+    assert.ok(
+      (
+        ui
+          .within(dialog)
+          .getByRole('button', { name: 'Move' }) as HTMLButtonElement
+      ).disabled,
+    ),
+  );
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Move' }));
+  assert.equal(calls, 1);
+});

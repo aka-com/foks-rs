@@ -109,6 +109,7 @@ export function ScreenRouter({
       onNewFolder={(storeId, initialFolder) =>
         setWorkflow({ kind: 'new-folder', storeId, initialFolder })
       }
+      onMove={(item) => setWorkflow({ kind: 'move', item })}
       onDelete={(item) => setWorkflow({ kind: 'delete', item })}
       onSettings={(storeId) =>
         locations.navigate({

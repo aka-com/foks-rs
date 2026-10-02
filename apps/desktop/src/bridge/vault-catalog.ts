@@ -140,6 +140,7 @@ export interface EditTextRequest {
   version: number;
 }
 
+export type MoveItemRequest = ItemRequest & { destination: string };
 export type RemoveItemRequest = ItemRequest;
 
 export interface ImportDroppedFileRequest extends CreateRoleRequest {

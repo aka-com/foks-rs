@@ -1537,6 +1537,19 @@ pub fn create_kv_directory_operation(
     })
 }
 
+pub fn move_kv_operation(item: &CatalogItem, destination: &str) -> Result<Operation, &'static str> {
+    let destination = required_path(destination)?;
+    if destination == item.metadata.path {
+        return Err("source and destination are identical");
+    }
+    Ok(Operation::MoveKv {
+        store: kv_store_ref(&item.store),
+        path: item.metadata.path.clone(),
+        destination,
+        version: item.metadata.version,
+    })
+}
+
 pub fn remove_kv_operation(item: &CatalogItem, recursive: bool) -> Result<Operation, &'static str> {
     Ok(Operation::RemoveKv {
         store: kv_store_ref(&item.store),

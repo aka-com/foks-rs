@@ -185,6 +185,7 @@ interface RowProps {
   onReveal: (item: Item) => void;
   onDownload: (item: Item) => void;
   onDelete: (item: Item) => void;
+  onMove?: (item: Item) => void;
   accessNow: () => number;
 }
 
@@ -200,6 +201,7 @@ function Row({
   onReveal,
   onDownload,
   onDelete,
+  onMove,
   accessNow,
 }: RowProps): ReactNode {
   const rowRef = useRef<HTMLDivElement>(null);
@@ -363,6 +365,14 @@ function Row({
                 </MenuItem>
               </>
             )}
+            {onMove ? (
+              <MenuItem
+                reason={writeProblem}
+                onClick={choose(() => onMove(item))}
+              >
+                Rename or move…
+              </MenuItem>
+            ) : null}
             <MenuItem
               icon="trash"
               danger
@@ -637,6 +647,7 @@ export interface ItemsScreenProps {
   onNew: (kind: NewKind, storeId: string, folder?: string) => void;
   onResume: (storeId: string) => Promise<void>;
   onDelete: (item: Item) => void;
+  onMove?: (item: Item) => void;
   onSettings: (storeId: string) => void;
   onTeamInfo?: (storeId: string, trigger?: HTMLElement) => void;
   onNewFolder?: (storeId: string, path: string) => void;
@@ -665,6 +676,7 @@ export function ItemsScreen({
   onNew,
   onResume,
   onDelete,
+  onMove,
   onSettings,
   onTeamInfo,
   onNewFolder,
@@ -1074,6 +1086,13 @@ export function ItemsScreen({
       onCopy={copyItem}
       onReveal={revealItem}
       onDownload={downloadItem}
+      onMove={
+        onMove
+          ? (item) => {
+              if (allowAction(item, true)) onMove(item);
+            }
+          : undefined
+      }
       onDelete={(item) => {
         if (allowAction(item, true)) onDelete(item);
       }}
@@ -1098,6 +1117,14 @@ export function ItemsScreen({
       ]
     : [];
 
+  const contextFolder = folderMenu
+    ? snapshot.items.find(
+        (item) =>
+          item.store === folderMenu.storeId &&
+          item.path === folderMenu.path &&
+          item.kind === 'Folder',
+      )
+    : undefined;
   const contextStore = folderMenu
     ? storeOf(snapshot, folderMenu.storeId)
     : undefined;
@@ -1414,6 +1441,27 @@ export function ItemsScreen({
               >
                 New folder
               </MenuItem>
+              {folderMenu.path !== '/' && onMove ? (
+                <MenuItem
+                  reason={
+                    contextFolder
+                      ? itemActionProblem(
+                          snapshot,
+                          contextFolder,
+                          true,
+                          accessNow(),
+                        )
+                      : 'Refresh this vault to load the folder before moving it.'
+                  }
+                  onClick={() => {
+                    setFolderMenu(null);
+                    if (contextFolder && allowAction(contextFolder, true))
+                      onMove(contextFolder);
+                  }}
+                >
+                  Rename or move…
+                </MenuItem>
+              ) : null}
               {folderMenu.path !== '/' ? (
                 <MenuItem
                   icon="trash"

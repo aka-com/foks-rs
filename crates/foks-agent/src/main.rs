@@ -5003,6 +5003,42 @@ fn dispatch_result_inner(
                 Ok(serde_json::to_value(report)?)
             })
         }
+        Operation::MoveKv {
+            store,
+            path,
+            destination,
+            version,
+        } => {
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                let report = match &store {
+                    KvStoreRef::Account(store) => session.move_kv_checked(
+                        &store.account_alias,
+                        &path,
+                        &destination,
+                        version,
+                        vault,
+                        master,
+                    )?,
+                    KvStoreRef::Team(store) => session.move_team_kv_checked(
+                        &store.account_alias,
+                        &store.team_alias,
+                        &store.team_id,
+                        &path,
+                        &destination,
+                        version,
+                        vault,
+                        master,
+                    )?,
+                };
+                Ok(serde_json::to_value(report)?)
+            })
+        }
         Operation::RemoveKv {
             store,
             path,

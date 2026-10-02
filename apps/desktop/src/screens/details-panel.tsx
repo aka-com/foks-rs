@@ -229,6 +229,7 @@ export interface DetailsPanelProps {
   onRevealHandled?: () => void;
   onClose: () => void;
   onDelete: (item: Item) => void;
+  onMove?: (item: Item) => void;
   onConflict: (
     item: Item,
     draft: string,
@@ -263,6 +264,7 @@ export function DetailsPanel({
   onRevealHandled,
   onClose,
   onDelete,
+  onMove,
   onConflict,
   onApplied,
   onCommandError,
@@ -1150,6 +1152,17 @@ export function DetailsPanel({
                     ? 'Replace'
                     : 'Edit'}
               </Button>
+              {onMove ? (
+                <Button
+                  disabled={Boolean(writeProblem)}
+                  title={writeProblem}
+                  onClick={() => {
+                    if (requireAccess(true)) onMove(item);
+                  }}
+                >
+                  Rename or move…
+                </Button>
+              ) : null}
               <Button
                 variant="danger"
                 icon="trash"

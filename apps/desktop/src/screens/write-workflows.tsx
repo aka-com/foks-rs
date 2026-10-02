@@ -1,3 +1,4 @@
+import { MoveSheet } from './move-item-sheet';
 import { useTabSheetState } from '../navigation-guard';
 import { useCallback, useId, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
@@ -124,6 +125,7 @@ export type WriteWorkflow =
       initialFolder?: string;
       draft?: NewDraft;
     }
+  | { kind: 'move'; item: Item }
   | { kind: 'delete'; item: Item }
   | {
       kind: 'conflict';
@@ -1225,6 +1227,18 @@ export function WriteOverlay({
         setWorkflow={setWorkflow}
         onOpenExisting={onOpenExisting}
         onError={(error) => onError(error)}
+      />
+    );
+  if (workflow.kind === 'move')
+    return (
+      <MoveSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        item={workflow.item}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onMutationError={onMutationError}
+        accessNow={accessNow}
       />
     );
   if (workflow.kind === 'conflict')

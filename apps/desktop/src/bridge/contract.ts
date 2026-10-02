@@ -73,6 +73,7 @@ import type {
   MutationResponse,
   ReadItemResponse,
   RemoveItemRequest,
+  MoveItemRequest,
   ReplaceDroppedFileRequest,
 } from './vault-catalog';
 import type { YubiCommand, YubiEnrollment } from './yubikey';
@@ -196,6 +197,7 @@ export interface Bridge {
   createLink(request: CreateLinkRequest): Promise<MutationResponse>;
   createFolder(request: CreateFolderRequest): Promise<MutationResponse>;
   editTextItem(request: EditTextRequest): Promise<MutationResponse>;
+  moveItem(request: MoveItemRequest): Promise<MutationResponse>;
   removeItem(request: RemoveItemRequest): Promise<MutationResponse>;
   importDroppedFile(
     request: ImportDroppedFileRequest,

@@ -29,6 +29,7 @@ export const vaultCommands: Pick<
   | 'createLink'
   | 'createFolder'
   | 'editTextItem'
+  | 'moveItem'
   | 'removeItem'
   | 'importDroppedFile'
   | 'pickImportFile'
@@ -111,6 +112,12 @@ export const vaultCommands: Pick<
     checkedMutation(
       'edit_text_item',
       { storeId, path, version, value },
+      decodeMutation,
+    ),
+  moveItem: ({ storeId, path, version, destination }) =>
+    checkedMutation(
+      'move_item',
+      { storeId, path, version, destination },
       decodeMutation,
     ),
   removeItem: ({ storeId, path, version }) =>

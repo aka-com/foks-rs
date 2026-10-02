@@ -129,6 +129,7 @@ pub(super) fn kv_mutation_store(mutation: &KvAccountMutation) -> Option<CatalogS
             Operation::PutKv { store, .. }
             | Operation::PutKvSymlink { store, .. }
             | Operation::MkdirKv { store, .. }
+            | Operation::MoveKv { store, .. }
             | Operation::RemoveKv { store, .. },
         ) => store,
         KvAccountMutation::Inline(_) => return None,

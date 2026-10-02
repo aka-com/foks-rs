@@ -658,6 +658,30 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       contents.set(`${storeId}|${path}`, value);
       return { applied: true };
     },
+    moveItem: async ({ storeId, path, version, destination }) => {
+      const item = items.find(
+        (candidate) => candidate.store === storeId && candidate.path === path,
+      );
+      if (!item || item.version !== version)
+        throw failure('conflict', `${path} changed first.`);
+      assertFree(storeId, destination);
+      if (destination.startsWith(`${path}/`))
+        throw failure('conflict', 'A folder cannot contain itself.');
+      for (const candidate of items.filter(
+        (candidate) =>
+          candidate.store === storeId &&
+          (candidate.path === path || candidate.path.startsWith(`${path}/`)),
+      )) {
+        const oldPath = candidate.path;
+        candidate.path = destination + oldPath.slice(path.length);
+        if (candidate === item) candidate.version = 1;
+        const content = contents.get(`${storeId}|${oldPath}`);
+        contents.delete(`${storeId}|${oldPath}`);
+        if (content !== undefined)
+          contents.set(`${storeId}|${candidate.path}`, content);
+      }
+      return { applied: true };
+    },
     removeItem: async ({ storeId, path, version }) => {
       const item = items.find(
         (candidate) => candidate.store === storeId && candidate.path === path,

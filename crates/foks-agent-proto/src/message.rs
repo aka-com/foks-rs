@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 30;
+pub const PROTOCOL_VERSION: u32 = 31;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -951,6 +951,12 @@ pub enum Operation {
         #[serde(default)]
         mkdir_p: bool,
     },
+    MoveKv {
+        store: KvStoreRef,
+        path: String,
+        destination: String,
+        version: u64,
+    },
     RemoveKv {
         store: KvStoreRef,
         path: String,
@@ -1156,6 +1162,7 @@ impl Operation {
             Self::PutKvStream { .. } => "PutKvStream",
             Self::PutKvSymlink { .. } => "PutKvSymlink",
             Self::MkdirKv { .. } => "MkdirKv",
+            Self::MoveKv { .. } => "MoveKv",
             Self::RemoveKv { .. } => "RemoveKv",
             Self::CreateTeam { .. } => "CreateTeam",
             Self::ResumeTeamCreation { .. } => "ResumeTeamCreation",
@@ -1944,6 +1951,18 @@ impl std::fmt::Debug for Operation {
                 .field("write_role", write_role)
                 .field("precondition", precondition)
                 .field("mkdir_p", mkdir_p)
+                .finish(),
+            Self::MoveKv {
+                store,
+                path,
+                destination,
+                version,
+            } => formatter
+                .debug_struct("MoveKv")
+                .field("store", store)
+                .field("path", path)
+                .field("destination", destination)
+                .field("version", version)
                 .finish(),
             Self::RemoveKv {
                 store,

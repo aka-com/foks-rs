@@ -130,6 +130,7 @@ pub(super) fn operation_scope(operation: &Operation) -> Scope {
         | PutKv { store, .. }
         | PutKvSymlink { store, .. }
         | MkdirKv { store, .. }
+        | MoveKv { store, .. }
         | RemoveKv { store, .. } => kv_scope(store),
         PutKvStream { header } => match &header.adapter {
             Some(submission) => Scope::profile(&submission.scope.profile),
