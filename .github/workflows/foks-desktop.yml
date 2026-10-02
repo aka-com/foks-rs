@@ -75,7 +75,7 @@ jobs:
         with:
           node-version-file: .node-version
       - name: Install native dependencies
-        run: sudo apt-get update && sudo apt-get install --yes libgtk-3-dev libpcsclite-dev libwebkit2gtk-4.1-dev
+        run: sudo apt-get update && sudo apt-get install --yes libgtk-3-dev libpcsclite-dev libwebkit2gtk-4.1-dev webkit2gtk-driver xvfb librsvg2-bin
       - name: Install pinned npm and locked dependencies
         run: |
           npm install --global "$(node -p "require('./package.json').packageManager")"
@@ -93,6 +93,21 @@ jobs:
           cargo clippy --locked -p foks-desktop -p foks-desktop-app --all-targets -- -D warnings
       - name: Run the real managed-agent desktop transcript
         run: npm run test:foks-desktop:real-agent
+      - name: Exercise the packaged production WebView
+        run: |
+          cargo install tauri-driver --locked --version 2.0.6
+          npm run bundle:deb
+          deb=$(find target/release/bundle/deb -maxdepth 1 -name 'foks-desktop_*.deb' -print -quit)
+          test -n "$deb"
+          dpkg-deb -x "$deb" "$RUNNER_TEMP/foks-webview-package"
+          xvfb-run -a python3 scripts/test-packaged-webview.py \
+            "$RUNNER_TEMP/foks-webview-package/usr/bin/foks-desktop" \
+            --agent "$RUNNER_TEMP/foks-webview-package/usr/bin/foks-agent"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: linux-webview-test
+          path: target/webview-test/
 
   macos:
     name: macOS arm64 signed and notarized DMG

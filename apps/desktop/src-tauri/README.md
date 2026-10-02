@@ -99,3 +99,18 @@ handlers with Tauri. Command names and wire DTO shapes stay aligned with
 Domain response decoding stays with its handlers. Shared helpers have visibility
 limited to the command layer. Tests live under `src/commands/tests/`, grouped by
 domain, with cross-domain wire-contract tests and shared fixtures kept separately.
+
+## Production WebView smoke test
+
+Linux CI extracts the Debian package and runs `scripts/test-packaged-webview.py`
+under Xvfb with `tauri-driver` and `WebKitWebDriver`. It checks real renderer
+startup, native agent-status and app-lock IPC, and agent-disconnect errors using
+temporary agent state. It does not access a credential store or remote account.
+Logs and a screenshot are saved in `target/webview-test`. Run it locally with:
+
+```sh
+xvfb-run -a python3 scripts/test-packaged-webview.py /path/to/foks-desktop --agent /path/to/foks-agent
+```
+
+This complements the command-layer and headless packaged-startup suites; it
+does not yet automate account enrollment or OS authentication dialogs.

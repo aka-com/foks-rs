@@ -1,0 +1,38 @@
+[package]
+name = "foks-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "=0.4.10"
+foks-snowpack = { path = "../crates/foks-snowpack" }
+foks-rpc = { path = "../crates/foks-rpc" }
+foks-keystore = { path = "../crates/foks-keystore" }
+
+[[bin]]
+name = "snowpack"
+path = "fuzz_targets/snowpack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rpc"
+path = "fuzz_targets/rpc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "state_archive"
+path = "fuzz_targets/state_archive.rs"
+test = false
+doc = false
+bench = false
