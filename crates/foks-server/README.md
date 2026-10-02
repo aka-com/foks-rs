@@ -410,6 +410,25 @@ uses a read-only source connection. Restore accepts only a complete manifest,
 integrity-checked database, and exact declared key set, and requires empty
 destination paths.
 
+Restore and retention validation also accept the same prior schemas as server
+startup (43 through 47, upgraded to 48). They copy the database and any WAL into
+a private temporary directory, apply the normal transactional migrations,
+checkpoint, and validate that copy. Restore installs the migrated database;
+validation never opens or changes the original snapshot in SQLite. Retention
+can still remove validated snapshots according to its configured count.
+Unsupported schemas, failed migrations, incomplete key sets, and symlinked
+artifacts fail validation before a restore destination is created or retention
+deletes any snapshots. Restoring a prior schema invalidates its old SSO browser
+challenges, sessions, access state, and binding receipts, as normal startup
+migration does.
+
+Provide temporary disk space for the database, optional WAL, and migration
+work. Each input file is limited to `maximum_database_bytes`; migration also
+uses the configured database limit. Temporary copies are removed on success
+and on returned errors. Backup directories must remain immutable while being
+validated or restored; copying a concurrently changing live database is not a
+supported backup procedure.
+
 The SQLite snapshot includes names, invite policy/hash/redemption metadata,
 passphrase salts and encrypted PPE history, recovery credentials, user/team
 chains, current projections, encrypted PUK/PTK histories, capability policy

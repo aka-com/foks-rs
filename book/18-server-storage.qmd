@@ -227,8 +227,8 @@ SQLite reserves two integers in the database header for applications: the
 `0x464f4b53` (the ASCII bytes "FOKS") as the application ID and its schema
 version, currently 48, as the user version. Both are checked by every
 connection before use: a file with the wrong application ID is not a FOKS
-database, and a file with the wrong schema version is refused rather than
-guessed at.
+database. Readers require the current schema; the writer accepts explicitly
+supported prior schemas and migrates them before use.
 
 The schema itself is one concatenated string of 21 `.sql` files. A fresh
 file (both pragmas zero) receives the whole schema inside one `BEGIN
@@ -248,6 +248,17 @@ the process lock before it opens the database, an upgrade cannot race with
 an offline operator command. The stated rollback policy is conservative:
 restore a backup with the old binary, never edit `user_version` or delete
 WAL files.
+
+Backup restore and retention validation apply those same migrations to a
+private temporary copy, including any WAL, and validate the resulting current
+schema. Restore installs the checkpointed copy. The original backup is never
+opened by SQLite or migrated in place, so it remains available to its original
+binary unless retention deliberately deletes it. Unsupported versions and
+failed migrations stop restore or retention before destination publication or
+snapshot deletion. Temporary space is required for the copy and migration;
+each input database or WAL file is bounded by the configured database size
+limit. As on normal startup, the migration to 48 discards old SSO browser
+challenges, sessions, access state, and binding receipts.
 
 ## Invariants written in SQL
 

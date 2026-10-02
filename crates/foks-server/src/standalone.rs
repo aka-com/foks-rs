@@ -91,8 +91,17 @@ pub(crate) struct HostKeyBackupFiles {
     generated: Vec<String>,
 }
 
+struct ValidatedBackup {
+    database: PathBuf,
+    key_files: HostKeyBackupFiles,
+    // Own the private, migrated snapshot until validation or restore finishes.
+    _scratch: tempfile::TempDir,
+}
+
 /// Validates a completed backup and installs its database and encrypted keys
-/// into an empty standalone-server installation. The operator-provided root
+/// into an empty standalone-server installation. Supported prior schemas are
+/// migrated in a private copy; the original backup is never opened by SQLite.
+/// The operator-provided root
 /// key is deliberately not part of the backup and is checked at startup.
 pub fn restore_backup(
     artifacts: &BackupArtifacts,
@@ -106,7 +115,8 @@ pub fn restore_backup(
         return Err(crate::Error::Config("restore destination is not empty"));
     }
 
-    let host_key_files = read_validated_backup_artifacts(artifacts, database_config.clone())?;
+    let validated = read_validated_backup_artifacts(artifacts, database_config)?;
+    let host_key_files = &validated.key_files;
 
     if let Some(parent) = database_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -117,7 +127,7 @@ pub fn restore_backup(
     // Publish the authoritative database first. If a later key copy fails,
     // startup observes its manifest and fails closed rather than bootstrapping
     // a replacement host over a key-only partial restore.
-    copy_new_file(&artifacts.database, database_path)?;
+    copy_new_file(&validated.database, database_path)?;
     if let Some(parent) = database_path.parent() {
         std::fs::File::open(parent)?.sync_all()?;
     }
@@ -140,9 +150,9 @@ pub fn restore_backup(
             &key_directory.join(name),
         )?;
     }
-    for name in host_key_files.generated {
+    for name in &host_key_files.generated {
         copy_new_file(
-            &artifacts.key_directory.join(&name),
+            &artifacts.key_directory.join(name),
             &key_directory.join(name),
         )?;
     }
@@ -153,7 +163,7 @@ pub fn restore_backup(
 fn read_validated_backup_artifacts(
     artifacts: &BackupArtifacts,
     database_config: foks_server_db::Config,
-) -> Result<HostKeyBackupFiles> {
+) -> Result<ValidatedBackup> {
     const MAXIMUM_MANIFEST_BYTES: u64 = 4 * 1024;
     validate_backup_artifact_layout(artifacts)?;
     let manifest_metadata = regular_file_metadata(&artifacts.key_manifest)?;
@@ -166,8 +176,46 @@ fn read_validated_backup_artifacts(
         .read_to_end(&mut manifest)?;
     let decoded_manifest = crate::keys::KeyGenerationManifest::decode(&manifest)?;
 
-    regular_file_metadata(&artifacts.database)?;
-    let backup = foks_server_db::ReadDatabase::open(&artifacts.database, database_config)?;
+    // Never open the original in SQLite: even a read-only WAL connection can
+    // create or change sidecars. Rebuild its SHM and migrate only this copy.
+    let scratch = tempfile::Builder::new()
+        .prefix("foks-backup-check-")
+        .tempdir()?;
+    let database_path = scratch.path().join("foks-server.sqlite");
+    copy_backup_database_file(
+        &artifacts.database,
+        &database_path,
+        database_config.maximum_database_bytes,
+    )?;
+    let source_wal = artifacts.database.with_file_name("foks-server.sqlite-wal");
+    match std::fs::symlink_metadata(&source_wal) {
+        Ok(_) => {
+            copy_backup_database_file(
+                &source_wal,
+                &scratch.path().join("foks-server.sqlite-wal"),
+                database_config.maximum_database_bytes,
+            )?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    // A backup must already be a FOKS database. In particular, do not let a
+    // blank SQLite file become a new database through the normal initializer.
+    match foks_server_db::ReadDatabase::open(&database_path, database_config.clone()) {
+        Ok(reader) => drop(reader),
+        Err(foks_server_db::Error::SchemaVersion { .. }) => {}
+        Err(error) => return Err(error.into()),
+    }
+    // Database::open is the single authority on which prior schemas migrate.
+    // Unsupported versions still fail; no backup-specific migration is added.
+    let migrated = foks_server_db::Database::open(&database_path, database_config.clone())?;
+    if migrated.checkpoint()?.outcome() != foks_server_db::CheckpointOutcome::Complete {
+        return Err(crate::Error::Database(foks_server_db::Error::Invalid(
+            "backup migration checkpoint incomplete",
+        )));
+    }
+    drop(migrated);
+    let backup = foks_server_db::ReadDatabase::open(&database_path, database_config)?;
     if !backup.integrity_check()? {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
             "backup integrity check failed",
@@ -208,7 +256,11 @@ fn read_validated_backup_artifacts(
         regular_file_metadata(&artifacts.key_directory.join(name))?;
     }
     validate_backup_key_directory(&artifacts.key_directory, &host_key_files)?;
-    Ok(host_key_files)
+    Ok(ValidatedBackup {
+        database: database_path,
+        key_files: host_key_files,
+        _scratch: scratch,
+    })
 }
 
 pub(crate) fn validate_completed_backup(
@@ -322,6 +374,42 @@ fn copy_new_file(source: &Path, destination: &Path) -> Result<()> {
     }
     let mut destination = options.open(destination)?;
     std::io::copy(&mut source, &mut destination)?;
+    destination.flush()?;
+    destination.sync_all()?;
+    Ok(())
+}
+
+fn copy_backup_database_file(source: &Path, destination: &Path, maximum_bytes: u64) -> Result<()> {
+    regular_file_metadata(source)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut source = options.open(source)?;
+    let metadata = source.metadata()?;
+    if !metadata.is_file() {
+        return Err(crate::Error::Key("backup artifact is not a regular file"));
+    }
+    if metadata.len() > maximum_bytes {
+        return Err(foks_server_db::Error::Capacity("backup database or WAL bytes").into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut destination = options.open(destination)?;
+    // A concurrent append must not turn the temporary copy into an unbounded
+    // write. Backups are immutable inputs; SQLite never opens their originals.
+    std::io::copy(&mut (&mut source).take(maximum_bytes), &mut destination)?;
+    if source.read(&mut [0_u8; 1])? != 0 {
+        return Err(foks_server_db::Error::Capacity("backup database or WAL bytes").into());
+    }
     destination.flush()?;
     destination.sync_all()?;
     Ok(())

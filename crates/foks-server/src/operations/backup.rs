@@ -231,6 +231,9 @@ fn is_staging_backup_name(name: &str) -> bool {
 }
 
 #[cfg(test)]
+mod compatibility_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
