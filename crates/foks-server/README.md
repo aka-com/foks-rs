@@ -489,3 +489,18 @@ grants, signup invites/policy and browser-session management. It preserves the
 pinned native handoff RPCs and exchanges tickets once for short-lived browser
 sessions. See [ADMINISTRATION.md](ADMINISTRATION.md) for HTTPS deployment, bootstrap,
 authority and backup/restore rules. It is disabled by default.
+
+## Operational failure diagnostics
+
+Scheduled backups and manual/periodic maintenance emit a bounded stderr record:
+`FOKS operation failed: phase=backup_retention, reason=schema_mismatch`.
+Backup phases are `backup_read`, `backup_create`, `backup_publish`, and
+`backup_retention`. Maintenance phases are `maintenance_admission` (including
+clock sampling before dispatch), `maintenance_expiry`, `maintenance_admin`, and
+`maintenance_checkpoint`.
+
+Reasons are `disk_full`, `permission_denied`, `io`, `schema_mismatch`,
+`corrupt_storage`, `busy`, `capacity`, `invalid_state`, `storage`, or `internal`.
+These records contain no paths, SQL, identities, request content, or underlying
+error text. Existing failure counters and committed-reclamation accounting retain
+their meanings; a retention failure can occur after a new snapshot is published.

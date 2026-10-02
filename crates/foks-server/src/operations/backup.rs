@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
+use crate::diagnostics::operational::{checked, Phase};
 use crate::{BackupSchedule, Error, Result, ServerMetrics};
 
 pub(crate) struct BackupScheduler {
@@ -103,13 +104,21 @@ fn run_backup(
     sequence: u64,
     cancelled: &AtomicBool,
 ) -> Result<u64> {
-    let now = source.clock.now_micros()?;
+    let (now, database, host_key_files) = checked(
+        Phase::BackupRead,
+        (|| {
+            let now = source.clock.now_micros()?;
+            let database = foks_server_db::ReadDatabase::open(
+                &source.database_path,
+                source.database_config.clone(),
+            )?;
+            let host_key_files = crate::standalone::host_key_backup_files(&database)?;
+            Ok((now, database, host_key_files))
+        })(),
+    )?;
     let name = format!("backup-{now:020}-{sequence:020}");
     let destination = schedule.directory.join(&name);
     let staging = schedule.directory.join(format!(".{name}.tmp"));
-    let database =
-        foks_server_db::ReadDatabase::open(&source.database_path, source.database_config.clone())?;
-    let host_key_files = crate::standalone::host_key_backup_files(&database)?;
     let created = crate::standalone::create_backup(
         &staging,
         &source.key_directory,
@@ -121,18 +130,27 @@ fn run_backup(
             Ok(())
         },
     );
-    if let Err(error) = created {
+    if let Err(error) = checked(Phase::BackupCreate, created) {
         if std::fs::symlink_metadata(&staging).is_ok_and(|metadata| metadata.file_type().is_dir()) {
             let _ = std::fs::remove_dir_all(&staging);
         }
         return Err(error);
     }
-    std::fs::rename(&staging, &destination)?;
-    std::fs::File::open(&schedule.directory)?.sync_all()?;
-    enforce_retention(
-        &schedule.directory,
-        schedule.retain,
-        &source.database_config,
+    checked(
+        Phase::BackupPublish,
+        (|| {
+            std::fs::rename(&staging, &destination)?;
+            std::fs::File::open(&schedule.directory)?.sync_all()?;
+            Ok(())
+        })(),
+    )?;
+    checked(
+        Phase::BackupRetention,
+        enforce_retention(
+            &schedule.directory,
+            schedule.retain,
+            &source.database_config,
+        ),
     )?;
     Ok(now)
 }

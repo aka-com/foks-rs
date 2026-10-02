@@ -28,6 +28,7 @@ libc = { workspace = true }
 lru = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
+rusqlite = { workspace = true }
 rustls-pki-types = { workspace = true }
 signal-hook = { workspace = true }
 serde = { workspace = true }
@@ -42,7 +43,6 @@ zeroize = { workspace = true }
 [dev-dependencies]
 foks-oidc = { workspace = true, features = ["test-support"] }
 foks-client-db = { workspace = true }
-rusqlite = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

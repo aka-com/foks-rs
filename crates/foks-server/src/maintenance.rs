@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::diagnostics::operational::{checked, report as report_failure, Phase};
 use crate::{Error, Result, ServerMetrics, WriterHandle};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(test)]
 mod checkpoint_bench;
@@ -99,9 +101,15 @@ fn run_with_checkpoint(
 )> {
     metrics.maintenance_attempted();
     let worker_metrics = Arc::clone(&metrics);
+    let admitted = Arc::new(AtomicBool::new(false));
+    let worker_admitted = Arc::clone(&admitted);
     let result = writer.call_with_current_time(clock, move |database, now| {
+        worker_admitted.store(true, Ordering::Release);
         let cutoff = now.saturating_sub(ABANDONED_UPLOAD_AGE_MICROS);
-        let report = database.run_maintenance(now, cutoff)?;
+        let report = checked(
+            Phase::MaintenanceExpiry,
+            database.run_maintenance(now, cutoff).map_err(Error::from),
+        )?;
         worker_metrics.expiry_reclaimed(&report);
         worker_metrics.uploads_reclaimed(&report);
         if let Some(admin) = admin {
@@ -113,6 +121,7 @@ fn run_with_checkpoint(
             {
                 Ok(report) => worker_metrics.admin_cleanup_succeeded(&report),
                 Err(error) => {
+                    report_failure(Phase::MaintenanceAdmin, &error);
                     worker_metrics.admin_cleanup_failed();
                     return Err(error);
                 }
@@ -122,11 +131,17 @@ fn run_with_checkpoint(
         let started = Instant::now();
         let checkpoint = checkpoint(database);
         worker_metrics.checkpoint_finished(&checkpoint, now / 1_000_000, started.elapsed());
-        let checkpoint = checkpoint?;
+        let checkpoint = checked(
+            Phase::MaintenanceCheckpoint,
+            checkpoint.map_err(Error::from),
+        )?;
         worker_metrics.maintenance_succeeded(now / 1_000_000);
         Ok((report, checkpoint))
     });
-    if result.is_err() {
+    if let Err(error) = &result {
+        if !admitted.load(Ordering::Acquire) {
+            report_failure(Phase::MaintenanceAdmission, error);
+        }
         metrics.maintenance_failed();
     }
     result

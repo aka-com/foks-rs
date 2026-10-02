@@ -1,6 +1,8 @@
 use crate::rpc::Listener;
 use crate::Error;
 
+pub(crate) mod operational;
+
 /// Stable, deliberately coarse failure classes suitable for operator logs.
 ///
 /// Diagnostics never receive the underlying error, request bytes, identity,
