@@ -143,9 +143,11 @@ are reclaimed in bounded, restartable batches. Server maintenance metrics report
 failures, reclaimed bytes and deferred work. Pinned Go-host upload retention remains
 that host's responsibility; these changes add no remote FOKS methods.
 
-This is an explicit pre-v1 local schema/protocol cutover: hard-state schema 35 and
-agent protocol 18. Older development databases require explicit recreation; there
-is no implicit conversion of legacy IDs or pending operations.
+The current hard-state schema is 40 and the agent IPC protocol is 31. Opening a
+supported schema-38 or schema-39 database upgrades it to schema 40; other older
+development schemas are rejected. Upgrade the CLI and resident agent together,
+and restart the agent so their IPC versions match. This does not convert legacy
+submission IDs or make pending operations eligible for replay.
 
 The server advertises MCP 2025-11-25 and negotiates 2025-06-18, 2025-03-26 and
 2024-11-05 through the official pinned Rust SDK. The ten upstream tool names and

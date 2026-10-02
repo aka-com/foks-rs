@@ -47,8 +47,10 @@ external checkpoint.
 The native credential namespace is also bound to the canonical client-state
 root path. Copying a state root therefore cannot create a second set of
 path-local lock files that shares the same master key and rollback watermark;
-the copied root is rejected before either credential or checkpoint use. A
-native state root is deliberately immovable. Export/import is not implemented.
+the copied root is rejected before either credential or checkpoint use. Explicit
+same-filesystem relocation updates the native binding through crash-recoverable
+maintenance. Encrypted export/import uses a separate state-transfer workflow
+and a durable verification gate for imported profiles.
 The database-ID locks and claims deliberately coordinate only profiles below
 that one client root. A root-wide manifest lock serializes cross-profile
 read-modify-write updates; there is no machine-global or cross-root lock
@@ -228,10 +230,10 @@ rotation and historical seed-chain preservation; standalone software PUK
 rotation over a complete role prefix; single-owner ad-hoc and named-team
 creation with four generation-1 PTKs and authenticated creator membership;
 same-host named-team user additions under authenticated open-viewership policy;
-same-host named-team user removal plus generalized removal, demotion, and
-member-key-generation changes for local, nested-team, and federated members,
-with TeamAdmin removal-key retrieval, mandatory PTK rotation, and historical
-seed-chain preservation;
+same-host named-team user promotion and removal plus generalized member edits
+for local, nested-team, and federated members, with TeamAdmin removal-key
+retrieval, PTK distribution/rotation according to the authenticated change
+schedule, and historical seed-chain preservation;
 public probe; hostchain-delegated TLS CAs and virtual-host
 selection; host, Merkle, user, and team-chain verification; certificate
 retrieval for already enrolled software and Yubi subkeys; device mTLS;
@@ -260,8 +262,9 @@ account mutation. Passphrase-only device recovery remains outside this slice.
 
 The device-mutation convenience path requires the owner device and new
 software-device seeds in one process so both exact signatures can be built.
-It does not implement FOKS's interactive device-to-device KEX. Revocation
-rejects self-revocation and can distribute rotated PUKs only to Curve25519
+The separate interactive software-device KEX APIs exchange an offer through the
+public relay and keep the final provisioning mutation in the durable journal.
+Revocation rejects self-revocation and can distribute rotated PUKs only to Curve25519
 software recipients; accounts whose remaining eligible credentials include
 Yubi/P-256 keys therefore fail closed. Owner-PUK rotations query server PPE
 state and include the next encrypted passphrase annex in the same mutation. A
@@ -269,9 +272,9 @@ lost provision response can be reconciled with the caller-retained seed through
 the public certificate-fetch and authentication methods; mutation secrets are
 never placed in SQLite. If a caller supplies `NoPassphraseConfigured`, the client
 still confirms absence through `User.getPpeParcel`; a stale assertion fails
-closed rather than orphaning PPE history. Generic user-settings links are not
-part of the verified projection, so Go-server interoperability for PPE annexes
-on user mutations remains narrower than the standalone Rust path.
+closed rather than orphaning PPE history. Generic user-settings links accompany
+PPE updates and are authenticated against their chain history and the committed
+parcel, including PPE annexes on user mutations.
 
 Passphrase enrollment/change uses the upstream V1 Argon2id and PPE box formats.
 The raw input and stretched credential are redacted and zeroized locally, and
@@ -291,10 +294,12 @@ signing. Browser URLs and provider tokens stay in bounded native/server owners;
 public local status exposes no credentials. The Rust server encrypts retained
 refresh state, rechecks access on authenticated requests and queued writes, and
 fences uncertain token refresh rather than replaying a possibly rotating token.
-Reauthentication can refresh an already linked issuer/subject identity. There
-is no transition that links an existing device-only account after OIDC policy is
-enabled, so such a deployment requires a separately designed migration rather
-than inserting linkage rows or bypassing policy checks.
+Reauthentication refreshes an already linked issuer/subject identity. The
+explicit `LinkExisting` flow migrates eligible existing accounts under the
+Rust host's identity extension, requiring successful provider validation and
+proof from an existing device. Account linkage state and current provider policy
+are checked before binding; first linkage never falls back to implicit linking
+on a host without that extension.
 
 Ad-hoc team creation requires an enrolled software or Yubi owner device and
 the current owner PUK. A software device signs the membership link directly;
@@ -345,10 +350,13 @@ addition and no PTK rotation. The caller-retained removal key is committed in
 that link, dual-boxed to the current admin PTK and target PUK, and excluded
 from SQLite. Reconciliation replays the authenticated team chain and checks
 the exact expected link rather than trusting the latest roster projection.
-The direct product surface also exposes strict demotions, removals, and
-authenticated roster listing. Promotion is absent from that direct edit because
-it requires distributing newly visible existing PTKs and is not safely
-represented by the single demotion/removal transaction.
+The direct product surface also exposes local-user promotions, strict demotions,
+removals, and authenticated roster listing. Promotion distributes newly visible
+existing PTKs and introduces a generation-one PTK if the destination role does
+not yet have one. It requires the member's current, non-stale source key; a
+source-key change must be refreshed separately first. The protected pending
+intent and public mutation journal retain exact transition evidence for restart
+reconciliation.
 
 Named-team removal and downgrade accept exactly one member already present in
 the authenticated roster. A caller-retained removal key may be used by the
@@ -443,15 +451,16 @@ Username changes retain signed name history and bind durable attempts to an
 immutable UID and request. Resident bot credentials are imported into bounded
 session owners, exported at most once during enrollment, and never written to
 public SQLite. Hosted web-administration bearer URLs stay inside the native
-handoff and are checked against an account-bound HTTPS origin. The local Rust
-server has no corresponding web-administration session issuer.
+handoff and are checked against an account-bound HTTPS origin. The optional
+Rust-hosted administration service exchanges one-time tickets for short-lived
+browser sessions. Explicit host-operator grants authorize host administration;
+team roles and OIDC claims do not grant that authority.
 
-Not yet implemented: additional founding members; direct role promotion;
-federated trust administration or push propagation; direct remote-user
+Not yet implemented: additional founding members; federated trust
+administration or push propagation; direct remote-user
 membership; automatic cross-team PTK rotation after remote roster/key changes;
-Git; ad-hoc-team or extended chat; passphrase-based device recovery; migration
-of existing device-only accounts into OIDC policy; local web administration; or
-a full federated FOKS server. These omissions should fail by absence, not by
+Git; ad-hoc-team or extended chat; passphrase-based device recovery; or a full
+federated FOKS server. These omissions should fail by absence, not by
 permissive fallbacks.
 
 ## Testing strategy

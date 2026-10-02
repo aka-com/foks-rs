@@ -97,9 +97,12 @@ advanced at the same time, every current PTK role `r` rotates if
   (its old key may be compromised), **or** `r >` the destination role (it
   is losing that role).
 
-Promotion is refused by the rotation path; it needs a separate
-key-distribution transaction, because a promotion boxes *existing* keys to
-the member rather than creating new ones.
+Promotion uses a distinct distribution schedule within the membership-edit
+path: it boxes newly visible *existing* PTKs to the member and creates a
+generation-one PTK only if the destination role has none. It requires the
+member's current source key; a stale or changed PUK/PTK must be refreshed in a
+separate transition first. The client journals the exact promotion for restart
+reconciliation, and the desktop exposes it as Raise role.
 
 New PTK seeds are boxed only to recipients whose complete roster the client
 has independently verified against current user and team chains. When a

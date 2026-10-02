@@ -8,9 +8,11 @@ validates all responses at runtime, and passes opaque store references back unch
 details panel until Hide, selection change or window blur. Link destinations
 load automatically at the selected version and Open target navigates in one
 click. Copy value and Download stay in Rust. List rows use
-`apps/desktop/kit/virtual-list.ts`; cards are capped at 200 because the virtual list
-does not model a wrapping grid. Account-store creates use must-not-exist;
-edits, removes and file replacements carry the catalog's exact version.
+`apps/desktop/kit/virtual-list.ts`; card view uses
+`src/screens/files-grid.ts` to window complete grid rows at the current viewport
+width, so it can scroll through the full loaded catalog. Account-store creates
+use must-not-exist; edits, removes and file replacements carry the catalog's
+exact version.
 List rows show Name and Shared readers; the catalog has no write timestamp, so
 the UI does not invent a Modified value from its version counter. Folder view
 derives a folders-only tree from the filtered catalog, and search temporarily
@@ -56,17 +58,19 @@ and an "Ambiguous admission" chip where several do, in which case those records
 are not listed again beside it. Add someone on `<server>`… and Send setup instructions…
 follow the people and machine rows and go with them when the roster could not
 be read; Add a group… follows the admitted ones. Each membership action is
-its own sheet: Add FOKS user, Add FOKS team, Lower role, Remove and Create a
-team share their chrome and controls but nothing else. Add FOKS user states the
-server (it is the team's), offers role cards that keep an unauthorized role in
+its own sheet: Add FOKS user, Add FOKS team, Raise role, Lower role, Remove and
+Create a team share their chrome and controls but nothing else. Add FOKS user
+states the server (it is the team's), offers role cards that keep an unauthorized role in
 place with the reason, and refuses a username the roster already holds before
 sending; the agent's own refusal is stated under the field and cleared when it
 changes. Add FOKS team lists remote groups already available on this device
 because `add_federated_team_member` accepts a store rather than a name and
-host. Lower role states the member and their present role as a fact row and
-offers only the roles below it; raising a role is remove and add again, which
-the sheet says. Create a team opens on the kind, named team or ad-hoc share,
-then the name and the server and account; nothing is behind a disclosure.
+host. Raise role and Lower role state the member and their present role as a
+fact row and offer only higher or lower roles respectively, within the acting
+account's authority. Promotion keeps the existing membership and distributes
+the newly accessible team keys. Create a team opens on the kind, named team or
+ad-hoc share, then the name and the server and account; nothing is behind a
+disclosure.
 Settings states the group's
 name with "Team names cannot be changed after creation." and the static Invite only policy.
 A group with incomplete setup displays no tabs. The application navigates to the new
@@ -158,9 +162,20 @@ cancelled, concealed or unmounted.
   instead. The address is the one place a ref is written, through the
   `?store=` parameter the location codec has always encoded.
 
+Items and folders can be renamed or moved within their current vault from their
+context menu; items also expose Rename or move in the details panel. The destination
+is an exact absolute path in an existing folder, never an overwrite. The source
+version remains fixed through concurrent-write retries.
+
+Real, nonroot folders also offer Delete folder. Deletion is empty-only and keeps
+the selected source version fixed. It requires the server's explicit atomic
+empty-directory extension; older Rust and Go servers are refused before the
+removal is prepared. The server checks for concurrent children in the same
+transaction as the deletion. The desktop does not expose recursive deletion.
+
 **Unsupported operations:** Link editing is not supported directly; links must be
-deleted and recreated. Role promotions require removal and re-addition with key
-rotation. Un-admit and invite-link operations are not supported.
+deleted and recreated. Invitation revocation, expiry and requester withdrawal
+remain unsupported.
 The live bridge now loads each group roster and federation
 admission, so Sharing and every readable-by count are computed from agent
 responses rather than fixture facts.
@@ -230,7 +245,7 @@ paths only; file bytes never cross into the renderer. The shell polls
 `take_agent_connection_loss`; Retry calls `retry_agent_connection` and then
 reloads the catalog, never replaying the interrupted write.
 
-Phase 4 adds `list_accounts`, `create_group`, member add/demote/remove and their
+Phase 4 adds `list_accounts`, `create_group`, member add/promote/demote/remove and their
 resumable continuations, federated admission/re-run, and `copy_text`. Each
 mutation is followed by a fresh catalog/roster load; an ambiguous result is
 never replayed. Group creation supports named and ad-hoc groups, while active
@@ -1009,7 +1024,7 @@ kept so deep links defined in the design specification resolve to this location.
 | `group-files`                                                                        | Engineering group page                  | Files tab; `tab=files` reaches it on any group                                                          |
 | `danger`                                                                             | Engineering group page                  | Settings tab                                                                                            |
 | `store` · `items`                                                                    | Engineering                             | group vault                                                                                             |
-| `add` · `demote` · `remove` · `admit`                                                | Engineering group page                  | the named Group sheet; `add` and `admit` are the two halves of one sheet                                |
+| `add` · `promote` · `demote` · `remove` · `admit`                                                | Engineering group page                  | the named Group sheet; `add` and `admit` are the two halves of one sheet                                |
 | `invite`                                                                             | Engineering group page                  | the Invite sheet, seeded to the account holding the group                                               |
 | `create`                                                                             | Teams                                   | named/ad-hoc Create group sheet on the acting account; `store=` names it, else this Mac's first         |
 | `groups-lease` · `groups-inactive`                                                   | Engineering group page or Homelab vault | distinct lease/inactive takeovers                                                                       |

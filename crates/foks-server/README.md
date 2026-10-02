@@ -25,6 +25,13 @@ delivery, atomic username changes, OIDC signup, existing-account migration, and 
 access enforcement, and Basic encrypted realtime chat for named teams.
 Public-client tests exercise these paths without server test hooks.
 
+The authenticated Rust `KvExtensions` protocol advertises atomic empty-directory
+assertions. Its dedicated `foksPutEmptyDirectories` method binds each assertion
+to an exact source dirent and checks live child heads inside the writer
+transaction. Legacy KV Put, recursive unlink and directory moves retain their
+existing behavior. The distinct method ID prevents unsupported servers from
+interpreting the extension as an unguarded legacy Put.
+
 Federation is limited to Beacon discovery followed by independently pinned
 remote hosts, expiring bearer grants for public user/team chains, and a durable
 client-coordinated remote-team admission workflow. This server answers the public
@@ -66,10 +73,10 @@ boxes; the raw passphrase stays in the client. Signup can establish generation
 1, an active ordinary device can set or change it, and `Reg.login` consumes a
 host-bound, one-time challenge before returning encrypted PPE history. An
 owner-PUK rotation must atomically append a reboxed PPE generation whenever a
-passphrase exists. Generic user-settings links sent by Go clients are accepted
-as interoperability inputs but are not projected because this slice does not
-implement that separate chain. Public passphrase login does not by itself
-provision a device or expose the upstream interactive recovery workflow.
+passphrase exists. Generic user-settings links are verified and persisted with
+their chain history; accompanying PPE updates commit in the same transaction.
+Public passphrase login does not by itself provision a device or expose the
+upstream interactive recovery workflow.
 
 YubiKey support matches the non-interactive v0.1.9 lifecycle slice: the server
 validates P-256 parent signatures and PQ-slot hints, stores an encrypted

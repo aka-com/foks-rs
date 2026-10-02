@@ -282,9 +282,10 @@ what it used: a write beneath `/a/b` cites the root, `a` and `b`, so write
 cost grows with path depth rather than store size.
 
 A vector cannot prove that a peer did not *add* an uncited entry during a
-complete traversal. So after such a traversal the client sends a final cache
-check with every version it saw, and if anything changed the traversal is
-repeated, up to three times.
+complete traversal. After a traversal the client sends a final cache check
+with every version it saw and repeats the traversal when a cited version
+changed, up to three times. This still cannot prove directory emptiness:
+a newly inserted child need not change any version in the supplied vector.
 
 The agent's path cache stores the vector a lookup produced; a hit is not an
 answer but a candidate that must be resubmitted to the server as a
@@ -292,16 +293,24 @@ precondition, and a refusal means the path must be walked again.
 
 ## Mutations
 
-All namespace mutations are a `kvPut` of one or more dirents under a version
-vector:
+Namespace mutations write one or more dirents under a version vector. Most
+use `kvPut`; empty-only directory unlink uses an explicitly negotiated Rust
+extension:
 
 - **mkdir** creates a directory record with a random ID and seed, sends it
   with the parent's vector as precondition, then links a `Directory` dirent.
   Missing intermediate directories are created by the application layer one
   journaled step at a time, inheriting the item's read and write roles.
 - **rm** rewrites the dirent with an all-zero node ID: a *tombstone*. A
-  directory can only be unlinked recursively. The dirent's version advances,
-  which is what makes the tombstone visible to any vector that cited it.
+  nonrecursive directory unlink requires the Rust atomic empty-directory
+  extension. Its dedicated `KvExtensions.foksPutEmptyDirectories` method
+  binds the selected source parent, dirent, version and child directory, then
+  checks for live child heads in the same transaction as the tombstone. A
+  concurrent child therefore prevents deletion even if the client saw an
+  empty listing. Unsupported servers are refused before journaling the
+  removal; the request cannot become an unguarded legacy `kvPut`. Explicit
+  recursive unlink remains available to library callers. The dirent's
+  version advances, making the tombstone visible to vectors that cited it.
 - **mv** is one `kvPut` carrying a tombstone at the source and a new dirent
   at the destination pointing at the *same* node ID. It reads the whole
   source subtree first to refuse moving a directory into itself, and cites

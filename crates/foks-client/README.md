@@ -41,6 +41,12 @@ same targeted incremental synchronization path after success. Merkle
 advancement always starts from SQLite hard state, so an untrusted response can
 never bless its own root.
 
+Nonrecursive directory unlink requires the Rust
+atomic empty-directory extension and refuses unsupported servers before
+journaling a removal. Protected namespace outbox material retains the exact
+source assertion across recovery; replay uses the dedicated extension method,
+so it cannot fall back to an unguarded legacy Put.
+
 Rust uploads with a known plaintext length store a versioned, authenticated
 size extension in `KvLargeFileMetadata.custom_metadata`. The payload is opaque
 to the server and is bound to the immutable file ID and metadata version. The
@@ -121,11 +127,10 @@ mutation in the durable WAL. Yubi/P-256 mutation recipients and self-revocation
 are not yet exposed by these convenience APIs. When an owner PUK rotates, the client
 queries passphrase state and atomically appends the required PPE annex; an
 explicit `NoPassphraseConfigured` token is accepted only after the server
-confirms that no passphrase exists. Rust-to-Go standalone set/change requests
-use the upstream wire methods but do not publish the Go client's separate
-generic user-settings links; PPE annexes on user mutations therefore remain a
-known cross-server compatibility boundary until that chain family is
-implemented.
+confirms that no passphrase exists. Standalone set/change requests and PPE
+annexes on user mutations include the corresponding generic user-settings link.
+The client authenticates that chain and checks the committed link against the
+PPE parcel before accepting the update.
 
 `create_yubi_account` and `provision_yubi_device` build the corresponding
 P-256 parent plus delegated Ed25519 mTLS credential. A fresh, host-bound,
@@ -230,8 +235,9 @@ the committed removal MAC, and reconciles the exact signed transition.
 `remove_team_member_and_rotate_ptks` retrieves that same committed key through
 an exact, short-lived TeamAdmin bearer token, so callers do not need to retain
 it. `change_team_member_and_rotate_ptks` generalizes the authenticated rotation
-path to role demotions, PUK/PTK generation advances, nested-team members, and
-federated users or teams. Callers supply sealed verified user/team states for
+path to role promotions and demotions, PUK/PTK generation advances, nested-team
+members, and federated users or teams. Callers supply sealed verified user/team
+states for
 the complete post-transition recipient roster; remote host scope and source
 role are part of every lookup, encrypted PTK parcel, removal MAC, operation ID,
 and reconciliation check. The resume API locates the unique public journal row
@@ -273,12 +279,13 @@ admitted by the Rust server policy; managed extended channels and content
 actions remain outside the implemented protocol surface.
 
 OIDC support covers protected software and YubiKey signup, browser-flow recovery,
-signed provider bindings, reauthentication, and ongoing service-access status.
-An OIDC-enabled Rust host requires linked access for every account; there is no
-workflow to migrate an existing device-only account into that policy. Account
-helpers also cover durable username changes, resident bot-token enrollment and
-revocation, and checked hosted web-administration handoff. The Rust server does
-not issue local web-administration sessions.
+signed provider bindings, explicit linkage of existing accounts, reauthentication,
+and ongoing service-access status. First linkage requires the Rust host identity
+extension and proof from an existing device; it never falls back to implicit
+linkage. Account helpers also cover durable username changes, resident bot-token
+enrollment and revocation, and checked hosted web-administration handoff. The
+optional Rust-hosted administration service issues one-time handoff tickets and
+short-lived browser sessions; host-operator authority requires an explicit grant.
 
 See [SECURITY.md](SECURITY.md) for the trust boundaries, invariant ownership,
 secret lifecycle, review order, and explicitly unimplemented surfaces.

@@ -322,6 +322,22 @@ current, so a page fetched under an old role cannot be shown after the
 role changes. The row and byte limits come from the shared
 `chat-limits.json` of [Chapter 24](24-performance.qmd).
 
+## Vault edits
+
+Items and folders offer Rename or move within their current vault. The target
+is an exact absolute path under an existing folder, and a live destination
+is never overwritten. The selected source version remains fixed across retries.
+
+Delete folder is available for real nonroot folders and is empty-only. It
+requires the server's atomic empty-directory extension, whose transaction
+checks concurrent children before removing the source. Unsupported servers
+are refused before a removal is prepared. The desktop exposes no recursive
+folder deletion.
+
+The card grid windows whole rows at the current viewport width through
+`files-grid.ts`, so it can scroll through the full loaded catalog without
+mounting every card. It no longer imposes the former 200-card cap.
+
 ## Where to look
 
 - `apps/desktop/src-tauri`: `capabilities/default.json`, `src/lib.rs` (the

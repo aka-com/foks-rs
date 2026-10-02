@@ -163,7 +163,7 @@ A subtle point documented in `PERMISSIONS.md`: "Whether a command is compiled in
 
 **Problem.** Keeping a long catalog responsive.
 
-**How it works.** `apps/desktop/kit/virtual-list.ts` is a pure function `virtualListWindow({heights, listTop, scrollTop, viewport, overscan}) -> {start, end, padTop, padBottom}`. It prefix-sums row heights (measured or estimated), clamps `scrollTop` to `total - viewport` to avoid an empty flash after filtering (lines 61-68), finds the first row not fully scrolled out and the last row starting before the viewport bottom, expands by `overscan`, and returns spacer heights for unmounted rows. It is DOM-free so the arithmetic is unit-tested. Cards are capped at 200 because the virtual list "does not model a wrapping grid" (`apps/desktop/README.md:11`).
+**How it works.** `apps/desktop/kit/virtual-list.ts` is a pure function `virtualListWindow({heights, listTop, scrollTop, viewport, overscan}) -> {start, end, padTop, padBottom}`. It prefix-sums row heights (measured or estimated), clamps `scrollTop` to `total - viewport` to avoid an empty flash after filtering (lines 61-68), finds the first row not fully scrolled out and the last row starting before the viewport bottom, expands by `overscan`, and returns spacer heights for unmounted rows. It is DOM-free so the arithmetic is unit-tested. Update (2026-10-01): the card grid uses `apps/desktop/src/screens/files-grid.ts` to window complete rows at the viewport width; the earlier 200-card cap is gone.
 
 **References.** react-window / TanStack Virtual documentation for the windowing concept.
 
