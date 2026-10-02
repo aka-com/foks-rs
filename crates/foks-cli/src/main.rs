@@ -379,6 +379,17 @@ enum TeamCommand {
         team_alias: String,
         username: String,
     },
+    /// Promotes a team member to a higher role.
+    PromoteMember {
+        profile: String,
+        team_alias: String,
+        /// Authenticated party ID from `team members`.
+        party_id_hex: String,
+        #[arg(long, value_enum, default_value_t = FederationRoleArgument::Admin)]
+        role: FederationRoleArgument,
+        #[arg(long, value_enum, default_value_t = MemberAccessArgument::Standard)]
+        member_access: MemberAccessArgument,
+    },
     /// Demotes a team member to a lower role.
     DemoteMember {
         profile: String,
@@ -1927,6 +1938,26 @@ fn team_command(
                     master,
                 )?;
                 output(json, &report, "local team-member addition reconciled")
+            })
+        }
+        TeamCommand::PromoteMember {
+            profile,
+            team_alias,
+            party_id_hex,
+            role,
+            member_access,
+        } => {
+            let destination = local_team_destination(role, member_access)?;
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.promote_local_team_member(
+                    &team_alias,
+                    &party_id_hex,
+                    destination,
+                    vault,
+                    master,
+                )?;
+                output(json, &report, "local team member promoted")
             })
         }
         TeamCommand::DemoteMember {

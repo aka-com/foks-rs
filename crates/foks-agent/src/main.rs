@@ -5289,6 +5289,31 @@ fn dispatch_result_inner(
                 )?)
             })
         }
+        Operation::PromoteTeamMember {
+            profile,
+            team_alias,
+            party_id_hex,
+            role,
+            visibility,
+        } => {
+            let destination = team_destination(role, visibility)?;
+            let session =
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
+            let credentials = open_credentials(state_dir)?;
+            with_vault_in(&credentials, &session, |session, vault, master| {
+                Ok(serde_json::to_value(
+                    session.promote_local_team_member_in_authenticated_roster(
+                        &team_alias,
+                        &party_id_hex,
+                        destination,
+                        vault,
+                        &registry,
+                        &credentials,
+                        master,
+                    )?,
+                )?)
+            })
+        }
         Operation::DemoteTeamMember {
             profile,
             team_alias,

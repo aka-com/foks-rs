@@ -583,6 +583,34 @@ pub(super) fn add_group_member_operation(
     })
 }
 
+pub(super) fn promote_group_member_operation(
+    team: foks_agent_proto::TeamStoreRef,
+    party_id_hex: &str,
+    current: MemberRole,
+    destination: RoleInput,
+) -> Result<Operation, AgentError> {
+    let destination_role = MemberRole::from(destination);
+    if !current.is_strictly_lower_than(destination_role) {
+        return Err(AgentError::new(
+            "not-a-promotion",
+            "Select a role higher than the member's current role.",
+            false,
+        ));
+    }
+    if !valid_typed_entity_id_hex(party_id_hex, USER_ID_PREFIX) {
+        return Err(invalid_request("Select a valid user."));
+    }
+    let party_id_hex = party_id_hex.to_owned();
+    let (role, visibility) = destination.parts();
+    Ok(Operation::PromoteTeamMember {
+        profile: team.profile,
+        team_alias: team.team_alias,
+        party_id_hex,
+        role,
+        visibility,
+    })
+}
+
 pub(super) fn demote_group_member_operation(
     team: foks_agent_proto::TeamStoreRef,
     party_id_hex: &str,
@@ -905,6 +933,28 @@ pub async fn resume_group_member_addition(
     };
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_operation(&state, operation, MutationKind::Resume).await
+}
+
+#[tauri::command]
+pub async fn promote_group_member(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+    username: String,
+    destination: RoleInput,
+) -> Result<MutationDto, AgentError> {
+    let unlocked = crate::applock::unlocked_generation(&app)?;
+    require_main_window(&webview)?;
+    let (_permit, operation) =
+        prepare_group_mutation(&state, &store_id, GroupMutationFacts::Members, || {
+            let (team, party_id_hex, current) =
+                state.selected_member_target(&store_id, &username)?;
+            promote_group_member_operation(team, &party_id_hex, current, destination)
+        })
+        .await?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
+    apply_operation(&state, operation, MutationKind::Guarded).await
 }
 
 #[tauri::command]

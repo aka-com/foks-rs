@@ -25,6 +25,7 @@ export const accountCommands: Pick<
   | 'createGroup'
   | 'addGroupMember'
   | 'resumeGroupMemberAddition'
+  | 'promoteGroupMember'
   | 'demoteGroupMember'
   | 'removeGroupMember'
   | 'resumeGroupMemberEdit'
@@ -71,6 +72,12 @@ export const accountCommands: Pick<
     checkedMutation(
       'resume_group_member_addition',
       { storeId, username },
+      decodeMutation,
+    ),
+  promoteGroupMember: ({ storeId, username, destination }) =>
+    checkedMutation(
+      'promote_group_member',
+      { storeId, username, destination },
       decodeMutation,
     ),
   demoteGroupMember: ({ storeId, username, destination }) =>

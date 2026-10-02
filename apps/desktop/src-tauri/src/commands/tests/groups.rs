@@ -5,9 +5,10 @@ use crate::commands::execution::{apply_surveying_profile_operation_with_transpor
 use crate::commands::groups::{
     add_federated_team_member_operation, add_group_member_operation, create_group_operation,
     demote_group_member_operation, federation_dtos, group_detail_result,
-    group_discovery_changed_bindings, party_dtos, remove_group_member_operation,
-    rerun_federated_team_member_add_operation, FederationEntryDto, FederationResponse,
-    GroupDetailResultDto, GroupKindInput, MemberResponse, MemberRole, PartyDto, RoleInput,
+    group_discovery_changed_bindings, party_dtos, promote_group_member_operation,
+    remove_group_member_operation, rerun_federated_team_member_add_operation, FederationEntryDto,
+    FederationResponse, GroupDetailResultDto, GroupKindInput, MemberResponse, MemberRole, PartyDto,
+    RoleInput,
 };
 use crate::commands::tests::support::{
     account_ref, phase_four_catalog, phase_four_state, team_ref, test_profile_value,
@@ -1076,4 +1077,38 @@ fn failed_group_discovery_retires_the_catalog_and_requires_refresh() {
     assert_ne!(state.chat_generation.load(Ordering::Acquire), before);
     assert_eq!(work_example_stores(&state), 0);
     assert!(state.mutation_requires_refresh.load(Ordering::Acquire));
+}
+
+#[test]
+fn promotion_requires_a_strictly_higher_role_and_preserves_member_identity() {
+    let team = team_ref("work.example", "personal", "engineering");
+    let party = "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    for (current, destination) in [
+        (MemberRole::Member { visibility: 0 }, RoleInput::Admin),
+        (
+            MemberRole::Member { visibility: 0 },
+            RoleInput::Member { visibility: 1 },
+        ),
+        (MemberRole::Admin, RoleInput::Owner),
+    ] {
+        assert!(
+            matches!(promote_group_member_operation(team.clone(), party, current, destination).unwrap(),
+            Operation::PromoteTeamMember { party_id_hex, .. } if party_id_hex == party)
+        );
+    }
+    for (current, destination) in [
+        (MemberRole::Admin, RoleInput::Admin),
+        (MemberRole::Owner, RoleInput::Admin),
+        (
+            MemberRole::Member { visibility: 1 },
+            RoleInput::Member { visibility: 0 },
+        ),
+    ] {
+        assert_eq!(
+            promote_group_member_operation(team.clone(), party, current, destination)
+                .unwrap_err()
+                .code,
+            "not-a-promotion"
+        );
+    }
 }

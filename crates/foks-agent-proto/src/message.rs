@@ -1011,6 +1011,13 @@ pub enum Operation {
         team_alias: String,
         username: String,
     },
+    PromoteTeamMember {
+        profile: String,
+        team_alias: String,
+        party_id_hex: String,
+        role: TeamRole,
+        visibility: i16,
+    },
     DemoteTeamMember {
         profile: String,
         team_alias: String,
@@ -1174,6 +1181,7 @@ impl Operation {
             Self::ListTeamMembers { .. } => "ListTeamMembers",
             Self::AddTeamMember { .. } => "AddTeamMember",
             Self::ResumeTeamMemberAddition { .. } => "ResumeTeamMemberAddition",
+            Self::PromoteTeamMember { .. } => "PromoteTeamMember",
             Self::DemoteTeamMember { .. } => "DemoteTeamMember",
             Self::RemoveTeamMember { .. } => "RemoveTeamMember",
             Self::ResumeTeamMemberEdit { .. } => "ResumeTeamMemberEdit",
@@ -2065,6 +2073,20 @@ impl std::fmt::Debug for Operation {
                 .field("profile", profile)
                 .field("team_alias", team_alias)
                 .field("username", username)
+                .finish(),
+            Self::PromoteTeamMember {
+                profile,
+                team_alias,
+                party_id_hex,
+                role,
+                visibility,
+            } => formatter
+                .debug_struct("PromoteTeamMember")
+                .field("profile", profile)
+                .field("team_alias", team_alias)
+                .field("party_id_hex", party_id_hex)
+                .field("role", role)
+                .field("visibility", visibility)
                 .finish(),
             Self::DemoteTeamMember {
                 profile,

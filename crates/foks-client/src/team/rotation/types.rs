@@ -354,7 +354,7 @@ impl<'a> VerifiedMemberParty<'a> {
     }
 }
 
-/// A removal, role demotion, or member credential-generation advance.
+/// A removal, role change, or member credential-generation advance.
 /// `replacement` is absent only for removal and otherwise supplies the
 /// independently verified current PUK/PTK named by the replacement roster row.
 pub struct ChangeTeamMemberRequest<'a> {

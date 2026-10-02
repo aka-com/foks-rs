@@ -164,10 +164,6 @@ export function LowerRoleSheet({
           />
         </Inset>
       ) : null}
-      <p className="fn">
-        Roles can only be lowered here. To grant {name} a higher role, remove
-        them and add them again with the new role.
-      </p>
     </SheetDialog>
   );
 }

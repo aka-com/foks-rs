@@ -715,6 +715,48 @@ impl CheckedProfileSession<'_> {
         ))
     }
 
+    pub fn promote_local_team_member(
+        &self,
+        team_alias: &str,
+        party_id_hex: &str,
+        destination: TeamMemberRole,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<TeamMemberMutationReport> {
+        self.change_local_team_member(
+            team_alias,
+            party_id_hex,
+            Some(destination),
+            None,
+            vault,
+            master_key,
+            true,
+        )
+    }
+
+    pub(super) fn promote_local_team_member_with_parties(
+        &self,
+        team_alias: &str,
+        party_id_hex: &str,
+        destination: TeamMemberRole,
+        parties: &std::collections::BTreeMap<
+            super::runtime::TeamRefreshPartyKey,
+            super::runtime::TeamRefreshParty,
+        >,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<TeamMemberMutationReport> {
+        self.change_local_team_member(
+            team_alias,
+            party_id_hex,
+            Some(destination),
+            Some(parties),
+            vault,
+            master_key,
+            true,
+        )
+    }
+
     pub fn demote_local_team_member(
         &self,
         team_alias: &str,
@@ -730,6 +772,7 @@ impl CheckedProfileSession<'_> {
             None,
             vault,
             master_key,
+            false,
         )
     }
 
@@ -740,7 +783,15 @@ impl CheckedProfileSession<'_> {
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
     ) -> Result<TeamMemberMutationReport> {
-        self.change_local_team_member(team_alias, party_id_hex, None, None, vault, master_key)
+        self.change_local_team_member(
+            team_alias,
+            party_id_hex,
+            None,
+            None,
+            vault,
+            master_key,
+            false,
+        )
     }
 
     pub(super) fn demote_local_team_member_with_parties(
@@ -762,6 +813,7 @@ impl CheckedProfileSession<'_> {
             Some(parties),
             vault,
             master_key,
+            false,
         )
     }
 
@@ -783,6 +835,7 @@ impl CheckedProfileSession<'_> {
             Some(parties),
             vault,
             master_key,
+            false,
         )
     }
 
@@ -961,6 +1014,7 @@ impl CheckedProfileSession<'_> {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn change_local_team_member(
         &self,
         team_alias: &str,
@@ -974,6 +1028,7 @@ impl CheckedProfileSession<'_> {
         >,
         vault: &mut AccountVault<'_>,
         master_key: &[u8; 32],
+        promotion: bool,
     ) -> Result<TeamMemberMutationReport> {
         self.profile.require(Capability::Teams)?;
         let stored = vault.team(team_alias)?;
@@ -996,9 +1051,11 @@ impl CheckedProfileSession<'_> {
         let (target_member, target_user, remaining) =
             local_edit_parties(&context, &target_id, supplied_parties)?;
         let destination_role = destination.map_or(Role::NONE, TeamMemberRole::role);
-        if destination_role >= target_member.role {
+        if (promotion && destination_role <= target_member.role)
+            || (!promotion && destination_role >= target_member.role)
+        {
             return Err(foks_client::Error::TeamRequest(
-                "member edits must be strict demotions; promotion needs a separate key-distribution flow",
+                "member edit must strictly change the role in the requested direction",
             )
             .into());
         }
@@ -2373,10 +2430,12 @@ fn validate_stored_team_member_edit(
     EntityId::from_bytes(edit.actor_device_id.clone())?.require_type(foks_proto::ENTITY_DEVICE)?;
     EntityId::from_bytes(edit.target_id.clone())?.require_type(foks_proto::ENTITY_USER)?;
     let source = edit.source_role.role()?;
-    let destination = edit.destination_role.role()?;
-    if destination >= source {
+    edit.destination_role.role()?;
+    // Source is the recipient's key role, not their previous team role.
+    // Direction and editor authority are checked against the authenticated roster.
+    if source == Role::NONE {
         return Err(Error::InvalidAccount(
-            "pending team member edit is not a demotion or removal",
+            "pending member edit source role is invalid",
         ));
     }
     let mut prior = None;
@@ -3114,6 +3173,68 @@ mod tests {
                             && member.destination_role == TeamMemberRole::Member { visibility: 0 }
                     }));
 
+                // A new visibility role introduces a generation-one PTK; promotion
+                // to an existing Admin role must instead distribute its current PTK.
+                let raised = session
+                    .promote_local_team_member(
+                        "managed-team",
+                        &managed_party_id,
+                        TeamMemberRole::Member { visibility: 1 },
+                        &mut vault,
+                        &master,
+                    )
+                    .expect("member visibility promotion introduces its destination key");
+                assert_eq!(raised.team_chain_sequence, 4);
+                TEST_FAIL_AFTER_MEMBER_EDIT_COMMIT.store(true, std::sync::atomic::Ordering::SeqCst);
+                let interrupted = session
+                    .promote_local_team_member(
+                        "managed-team",
+                        &managed_party_id,
+                        TeamMemberRole::Admin,
+                        &mut vault,
+                        &master,
+                    )
+                    .expect_err("promotion commit failpoint retains its durable intent");
+                assert!(
+                    interrupted.to_string().contains("test failpoint"),
+                    "{interrupted:?}"
+                );
+                let promoted = session
+                    .resume_local_team_member_edit("managed-team", &mut vault, &master)
+                    .expect("committed promotion reconciles");
+                assert_eq!(promoted.team_chain_sequence, 5);
+                assert_eq!(promoted.destination_role, Some(TeamMemberRole::Admin));
+                let member_user = session
+                    .client
+                    .authenticate_and_pin(&host, &member.credential)?;
+                let member_team = session.client.load_and_pin_team(
+                    &host,
+                    &member.credential,
+                    &member_user.verified,
+                    &member_user.puks,
+                    &entity_id_from_hex(&promoted.team_id_hex)?,
+                )?;
+                assert!(member_team.ptks.iter().any(|key| key.role == Role::ADMIN));
+
+                assert!(member_team.ptks.iter().any(|key| key.role == Role::ADMIN && key.generation == 1),
+                    "promotion restores access through the historical Admin seed chain");
+                let mut stored_team = vault.team("managed-team")?;
+                stored_team.account_alias = "member".to_owned();
+                vault.put_team(&stored_team)?;
+                session.promote_local_team_member("managed-team", &managed_party_id,
+                    TeamMemberRole::Owner, &mut vault, &master)
+                    .expect_err("an Admin cannot promote itself to Owner");
+                assert!(vault.team_member_edit("managed-team")?.is_none(),
+                    "definitively unauthorized edits must not leave a pending intent");
+                stored_team.account_alias = "owner".to_owned();
+                vault.put_team(&stored_team)?;
+
+                let owner_promotion = session.promote_local_team_member(
+                    "managed-team", &managed_party_id, TeamMemberRole::Owner, &mut vault, &master,
+                ).expect("owner can promote an admin to owner without changing their source identity");
+                assert_eq!(owner_promotion.team_chain_sequence, 6);
+                assert_eq!(owner_promotion.target_uid_hex, managed_party_id);
+
                 let removed = session
                     .remove_local_team_member(
                         "managed-team",
@@ -3122,7 +3243,7 @@ mod tests {
                         &master,
                     )
                     .expect("application local-member removal succeeds");
-                assert_eq!(removed.team_chain_sequence, 4);
+                assert_eq!(removed.team_chain_sequence, 7);
                 assert_eq!(removed.destination_role, None);
                 let members = session
                     .list_team_members("managed-team", &mut vault)

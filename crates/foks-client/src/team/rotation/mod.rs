@@ -234,6 +234,22 @@ fn prepared_rotation_operation_id(
         ));
     }
     let target = unique_target(&authenticated_team.verified, selector)?;
+    // Reject unauthorized edits before callers persist a durable intent.
+    // The submission path additionally binds the editor's exact current key.
+    if !authenticated_team.verified.members().iter().any(|member| {
+        member.party == *actor
+            && member.scoped_host.is_none()
+            && member.role >= Role::ADMIN
+            && member.role >= target.role
+            && member.role >= destination_role
+    }) || (target.party == *actor
+        && target.scoped_host.is_none()
+        && destination_role == Role::NONE)
+    {
+        return Err(Error::TeamRequest(
+            "team editor is not authorized for this member transition",
+        ));
+    }
     let replacement_key = validate_replacement(target, destination_role, replacement)?;
     let expected_seqno = authenticated_team
         .verified
@@ -281,10 +297,9 @@ fn prepared_refresh_operation_id(
 }
 
 impl FoksClient {
-    /// Returns the exact ordered PTK roles required for a member demotion,
-    /// removal, or source-key generation advance. Promotion is rejected: it
-    /// needs a distinct key-distribution transaction and is not safe to model
-    /// as this rotation primitive.
+    /// Returns the ordered PTK roles to rotate or introduce for a member edit.
+    /// Promotions distribute existing higher-role keys to the member and only
+    /// introduce a PTK when the destination role has no key yet.
     pub fn team_member_rotation_roles(
         &self,
         authenticated_team: &AuthenticatedTeamOutcome,
@@ -1143,13 +1158,14 @@ impl FoksClient {
             box_rotated_ptks(host, actor.party, sender_seed, &rotation_keys, &receivers)?;
         let seed_chain = rotation_keys
             .iter()
-            .map(|rotation| {
+            .filter_map(|rotation| rotation.previous.map(|previous| (rotation, previous)))
+            .map(|(rotation, previous)| {
                 seal_puk_seed_chain_box(
                     rotation.seed,
-                    &rotation.previous.seed,
+                    &previous.seed,
                     actor.party,
                     host.host_id(),
-                    rotation.previous.generation,
+                    previous.generation,
                     rotation.role,
                     random_bytes()?,
                 )
@@ -2568,7 +2584,10 @@ impl FoksClient {
             authorized_actor_member(&authenticated_team.verified, uid, actor_public)?;
         let target = unique_target(&authenticated_team.verified, selector)?;
         let self_target = target.party == *uid && target.scoped_host.is_none();
-        if (self_target && destination_role == Role::NONE) || actor_member.role < target.role {
+        if (self_target && destination_role == Role::NONE)
+            || actor_member.role < target.role
+            || actor_member.role < destination_role
+        {
             return Err(Error::TeamRequest(
                 "team editor is not authorized for this member transition",
             ));
@@ -2711,15 +2730,25 @@ impl FoksClient {
         } else {
             None
         };
-        let ptk_boxes = box_rotated_ptks(host, uid, &box_sender.seed, &rotation_keys, &receivers)?;
+        let box_inputs = member_change_ptk_inputs(
+            &authenticated_team,
+            target,
+            destination_role,
+            &rotation_keys,
+            &receivers,
+        )?;
+        let ptk_boxes = seal_ptk_inputs(host, uid, &box_sender.seed, &box_inputs)?;
         let mut seed_chain = Vec::with_capacity(rotation_keys.len());
         for rotation in &rotation_keys {
+            let Some(previous) = rotation.previous else {
+                continue;
+            };
             seed_chain.push(seal_puk_seed_chain_box(
                 rotation.seed,
-                &rotation.previous.seed,
+                &previous.seed,
                 uid,
                 host.host_id(),
-                rotation.previous.generation,
+                previous.generation,
                 rotation.role,
                 random_bytes()?,
             )?);
@@ -2821,26 +2850,17 @@ impl FoksClient {
                 ));
             }
         }
-        let expected_boxes = rotation_keys
+        let expected_boxes = box_inputs
             .iter()
-            .flat_map(|rotation| {
-                receivers
-                    .iter()
-                    .filter(move |receiver| rotation.role <= receiver.member.role)
-                    .map(move |receiver| {
-                        (
-                            rotation.role,
-                            rotation.generation,
-                            receiver.member.party.as_bytes().to_vec(),
-                            receiver
-                                .member
-                                .scoped_host
-                                .as_ref()
-                                .map(|host| host.as_bytes().to_vec()),
-                            receiver.member.source_role,
-                            receiver.member.generation,
-                        )
-                    })
+            .map(|input| {
+                (
+                    input.role,
+                    input.generation,
+                    input.receiver_id.as_bytes().to_vec(),
+                    input.receiver_host.map(|host| host.as_bytes().to_vec()),
+                    input.receiver_role,
+                    input.receiver_generation,
+                )
             })
             .collect::<std::collections::BTreeSet<_>>();
         let actual_boxes = decoded
@@ -2995,7 +3015,7 @@ struct ValidatedRotation<'a> {
     role: Role,
     generation: u64,
     seed: &'a SecretSeed,
-    previous: &'a TeamPrivateKey,
+    previous: Option<&'a TeamPrivateKey>,
     verify_key: EntityId,
 }
 

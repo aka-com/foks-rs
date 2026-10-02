@@ -127,33 +127,19 @@ pub(crate) fn validate(
         .map(|(_, member)| *member)
         .collect::<Vec<_>>();
     let mut expected_boxes = BTreeSet::new();
-    if verified.introduced_keys.is_empty() {
-        for member in &added {
-            for key in verified
-                .shared_keys
+    for member in &verified.members {
+        let previous = old.get(&member_key(member));
+        for key in verified
+            .shared_keys
+            .iter()
+            .filter(|key| key.role <= member.role)
+        {
+            let newly_introduced = verified
+                .introduced_keys
                 .iter()
-                .filter(|key| key.role <= member.role)
-            {
-                expected_boxes.insert((
-                    member.party.as_bytes().to_vec(),
-                    member
-                        .scoped_host
-                        .as_ref()
-                        .map(|host| host.as_bytes().to_vec()),
-                    member.source_role,
-                    member.generation,
-                    key.role,
-                    key.generation,
-                ));
-            }
-        }
-    } else {
-        for key in &verified.introduced_keys {
-            for member in verified
-                .members
-                .iter()
-                .filter(|member| key.role <= member.role)
-            {
+                .any(|introduced| introduced.role == key.role);
+            let newly_visible = previous.is_none_or(|old| key.role > old.role);
+            if newly_introduced || newly_visible {
                 expected_boxes.insert((
                     member.party.as_bytes().to_vec(),
                     member

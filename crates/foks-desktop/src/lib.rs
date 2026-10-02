@@ -2466,6 +2466,27 @@ impl DesktopModel {
         })
     }
 
+    pub fn promote_team_member_operation(
+        &self,
+        team_alias: &str,
+        party_id_hex: &str,
+        role: TeamRole,
+        visibility: i16,
+    ) -> Result<Operation, &'static str> {
+        let profile = self
+            .selected_profile
+            .clone()
+            .ok_or("select a profile first")?;
+        validate_team_party_input(team_alias, party_id_hex, role, visibility)?;
+        Ok(Operation::PromoteTeamMember {
+            profile,
+            team_alias: team_alias.to_owned(),
+            party_id_hex: party_id_hex.to_owned(),
+            role,
+            visibility,
+        })
+    }
+
     pub fn demote_team_member_operation(
         &self,
         team_alias: &str,

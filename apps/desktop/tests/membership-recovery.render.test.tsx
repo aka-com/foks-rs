@@ -28,8 +28,9 @@ test.after(async () => {
   await vite.close();
 });
 
-for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
-  test(`exposes and completes ${kind} after an interrupted change without reopening settings`, async () => {
+for (const action of ['add', 'demote', 'promote'] as const) {
+  const kind = action === 'add' ? 'team-member-addition' : 'team-member-edit';
+  test(`exposes and completes ${action} ${kind} after an interrupted change without reopening settings`, async () => {
     const { GroupSettingsScreen } = (await vite.ssrLoadModule(
       '/src/screens/groups-screen.tsx',
     )) as typeof import('../src/screens/groups-screen');
@@ -46,11 +47,7 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
       '/src/mock-bridge.ts',
     )) as typeof import('../src/mock-bridge');
     const addition = kind === 'team-member-addition';
-    window.history.replaceState(
-      null,
-      '',
-      addition ? '/?state=add' : '/?state=demote',
-    );
+    window.history.replaceState(null, '', `/?state=${action}`);
     const store = FIXTURE.stores.find((entry) => entry.id === 'team:eng');
     assert.ok(store?.kind === 'team');
     const portalRoot = document.getElementById('overlays');
@@ -83,6 +80,7 @@ for (const kind of ['team-member-addition', 'team-member-edit'] as const) {
       },
       addGroupMember: interrupted,
       demoteGroupMember: interrupted,
+      promoteGroupMember: interrupted,
       resumeGroupMemberAddition: async (request) => {
         assert.equal(request.storeId, store.id);
         assert.equal(request.username, 'jules.park');

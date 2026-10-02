@@ -226,6 +226,7 @@ export interface Bridge {
   resumeGroupMemberAddition(
     request: GroupMemberRequest,
   ): Promise<MutationResponse>;
+  promoteGroupMember(request: GroupRoleRequest): Promise<MutationResponse>;
   demoteGroupMember(request: GroupRoleRequest): Promise<MutationResponse>;
   removeGroupMember(request: GroupMemberRequest): Promise<MutationResponse>;
   resumeGroupMemberEdit(storeId: StoreRef): Promise<MutationResponse>;

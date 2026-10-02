@@ -5,6 +5,7 @@ import { useGroupOperationController } from './groups/operation-controller';
 import { AddPersonSheet } from './groups/add-person-sheet';
 import { AddTeamSheet } from './groups/add-team-sheet';
 import { CreateTeamSheet } from './groups/create-team-sheet';
+import { RaiseRoleSheet } from './groups/raise-role-sheet';
 import { LowerRoleSheet } from './groups/lower-role-sheet';
 import { RemoveMemberSheet } from './groups/remove-member-sheet';
 import {
@@ -98,7 +99,7 @@ import { useToast } from '/kit/toasts';
 
 type Tab = GroupSettingsTab;
 export type GroupSheetKind =
-  'add' | 'demote' | 'remove' | 'add-team' | 'create';
+  'add' | 'promote' | 'demote' | 'remove' | 'add-team' | 'create';
 type Sheet = GroupSheetKind | null;
 
 export { serverTeamName } from './groups/sheet-support';
@@ -250,13 +251,27 @@ function PartyRow({
             <>
               <MenuItem
                 reason={
+                  actionable &&
+                  parseRole(party.destination_role)?.kind !== 'owner'
+                    ? undefined
+                    : (reason ?? 'This member already has the highest role.')
+                }
+                onClick={() => {
+                  close();
+                  onSheet('promote', party);
+                }}
+              >
+                Raise role…
+              </MenuItem>
+              <MenuItem
+                reason={
                   actionable
                     ? lowerable
                       ? undefined
                       : 'This member is already at the lowest role.'
                     : reason
                 }
-                title="Roles can only be lowered. To raise one, remove the member and add them again, which rotates the team key."
+                title="Lowers access and rotates the affected team keys."
                 onClick={() => {
                   close();
                   onSheet('demote', party);
@@ -1131,6 +1146,8 @@ export function GroupSheet({
       return <AddPersonSheet {...base} onInvite={onInvite} />;
     case 'add-team':
       return <AddTeamSheet {...base} />;
+    case 'promote':
+      return <RaiseRoleSheet {...base} target={target} />;
     case 'demote':
       return <LowerRoleSheet {...base} target={target} />;
     case 'remove':
@@ -1179,7 +1196,14 @@ export function GroupSettingsScreen({
   const [sheet, setSheet] = useTabSheetState<Sheet>(
     'groups.sheet',
     () =>
-      ['add', 'demote', 'remove', 'add-team', 'party-remove'].includes(initial)
+      [
+        'add',
+        'promote',
+        'demote',
+        'remove',
+        'add-team',
+        'party-remove',
+      ].includes(initial)
         ? initial === 'party-remove'
           ? 'remove'
           : (initial as Sheet)
@@ -1269,6 +1293,8 @@ export function GroupSettingsScreen({
     resumeMembership,
   } = groupOperations;
   const [target, setTarget] = useState<Party | null>(() => {
+    if (initial === 'promote')
+      return parties.find((party) => party.username === 'dana.okafor') ?? null;
     if (initial === 'demote')
       return parties.find((party) => party.username === 'priya.n') ?? null;
     if (initial === 'remove')

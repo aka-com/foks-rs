@@ -288,6 +288,15 @@ enum Command {
         team_alias: String,
         username: String,
     },
+    TeamPromoteMember {
+        profile: String,
+        team_alias: String,
+        party_id_hex: String,
+        #[arg(long, value_enum, default_value_t = FederationRoleArgument::Admin)]
+        role: FederationRoleArgument,
+        #[arg(long, default_value_t = 0)]
+        visibility: i16,
+    },
     TeamDemoteMember {
         profile: String,
         team_alias: String,
@@ -1023,6 +1032,19 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             profile,
             team_alias,
             username,
+        },
+        Command::TeamPromoteMember {
+            profile,
+            team_alias,
+            party_id_hex,
+            role,
+            visibility,
+        } => Operation::PromoteTeamMember {
+            profile,
+            team_alias,
+            party_id_hex: checked_user_party_id(party_id_hex)?,
+            role: desktop_team_role(role),
+            visibility,
         },
         Command::TeamDemoteMember {
             profile,

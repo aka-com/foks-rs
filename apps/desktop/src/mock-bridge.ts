@@ -816,6 +816,28 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       assertNamedGroup(storeId);
       return { applied: true };
     },
+    promoteGroupMember: async ({ storeId, username, destination }) => {
+      assertNamedGroup(storeId);
+      const party = parties.find(
+        (candidate) =>
+          candidate.store === storeId && candidate.username === username,
+      );
+      if (!party || !party.locally_manageable)
+        throw failure(
+          'member-not-actionable',
+          'That roster party cannot be changed here.',
+        );
+      const current = parseRole(party.destination_role);
+      const next = parseRole(destination);
+      const higher =
+        roleRank(next) > roleRank(current) ||
+        (current?.kind === 'member' &&
+          next?.kind === 'member' &&
+          visibilityOf(next) > visibilityOf(current));
+      if (!higher) throw failure('not-a-promotion', 'Choose a higher role.');
+      party.destination_role = destination;
+      return { applied: true };
+    },
     demoteGroupMember: async ({ storeId, username, destination }) => {
       assertNamedGroup(storeId);
       const party = parties.find(

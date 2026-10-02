@@ -333,6 +333,7 @@ pub fn run() {
             commands::groups::abandon_group_creation,
             commands::groups::add_group_member,
             commands::groups::resume_group_member_addition,
+            commands::groups::promote_group_member,
             commands::groups::demote_group_member,
             commands::groups::remove_group_member,
             commands::groups::resume_group_member_edit,

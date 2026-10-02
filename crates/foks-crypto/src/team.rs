@@ -831,8 +831,8 @@ pub fn make_remove_local_team_member_link(
     )
 }
 
-/// Constructs and stacked-signs a removal, demotion, or member credential
-/// generation advance together with its exact PTK rotations.
+/// Constructs and stacked-signs a removal, role change, or member credential
+/// generation advance together with its exact PTK introductions or rotations.
 pub fn make_change_team_member_link(
     input: &ChangeTeamMemberInput<'_>,
     actor_puk_seed: &SecretSeed,
@@ -922,7 +922,7 @@ pub fn make_change_team_members_link(
     let mut shared_keys = Vec::with_capacity(rotations.len());
     for rotation in rotations {
         if rotation.role == Role::NONE
-            || rotation.generation < 2
+            || rotation.generation == 0
             || prior_role.is_some_and(|role| role >= rotation.role)
         {
             return Err(Error::NamedTeamMaterial);

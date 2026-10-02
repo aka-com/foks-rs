@@ -2303,6 +2303,36 @@ impl CheckedProfileSession<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn promote_local_team_member_in_authenticated_roster(
+        &self,
+        team_alias: &str,
+        party_id_hex: &str,
+        destination: super::team::TeamMemberRole,
+        local_vault: &mut AccountVault<'_>,
+        registry: &ProfileRegistry,
+        credentials: &ClientCredentials,
+        master_key: &[u8; 32],
+    ) -> Result<super::team::TeamMemberMutationReport> {
+        self.profile.require(Capability::Teams)?;
+        let _scheduler_lock = super::runtime::ProfileLock::scheduler(&self.paths)?;
+        let parties = self.authenticated_member_edit_parties(
+            team_alias,
+            local_vault,
+            registry,
+            credentials,
+            master_key,
+        )?;
+        self.promote_local_team_member_with_parties(
+            team_alias,
+            party_id_hex,
+            destination,
+            &parties,
+            local_vault,
+            master_key,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn demote_local_team_member_in_authenticated_roster(
         &self,
         team_alias: &str,

@@ -103,9 +103,45 @@ test('lowering a role states the present role and offers only the roles below it
       .disabled,
     false,
   );
-  assert.match(
-    document.querySelector('.sheet .fn')?.textContent ?? '',
-    /Roles can only be lowered here/,
+  assert.doesNotMatch(
+    document.body.textContent ?? '',
+    /remove them and add them again/,
+  );
+});
+
+test('an Admin can raise member access without offering Owner', async () => {
+  const r = await sheet('promote', 'dana.okafor');
+  assert.ok(r.getByRole('heading', { name: 'Raise dana.okafor’s role' }));
+  assert.deepEqual(radioTitles('New role'), [
+    'Admin',
+    'Higher member visibility',
+  ]);
+  assert.equal(
+    (r.getByRole('button', { name: 'Change role' }) as HTMLButtonElement)
+      .disabled,
+    false,
+  );
+  ui.fireEvent.click(
+    r.getByRole('radio', { name: /Higher member visibility/ }),
+  );
+  assert.ok(r.getByText('Visibility 1'));
+  assert.equal(
+    (
+      r.getByRole('button', {
+        name: 'Lower the visibility band',
+      }) as HTMLButtonElement
+    ).disabled,
+    true,
+  );
+});
+
+test('an Admin cannot offer a higher role to another Admin', async () => {
+  const r = await sheet('promote', 'priya.n');
+  assert.deepEqual(radioTitles('New role'), []);
+  assert.equal(
+    (r.getByRole('button', { name: 'Change role' }) as HTMLButtonElement)
+      .disabled,
+    true,
   );
 });
 

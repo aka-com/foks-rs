@@ -850,6 +850,31 @@ func writeMutationFixtures(output, userDir string) error {
 	}
 	cryptorand.Reader = mutationRandom
 
+	// A direct promotion uses the same generic EditTeam protocol. The official
+	// verifier must accept the unchanged source key and existing destination PTK,
+	// with no removal proof, no replacement identity and no PTK rotation.
+	cryptorand.Reader = &deterministicFixtureReader{counter: 20_000}
+	promoteRole := proto.MemberRole{DstRole: proto.AdminRole, Member: *targetMember}
+	promoteLink, err := teamlib.MakeTeamLink(
+		revokeChange.Entity.Host, namedTeamID, ownerKey, ownerPuk,
+		[]proto.MemberRole{promoteRole}, nil,
+		proto.ChainEldestSeqno+2, *addHash, *treeRoot, nil,
+	)
+	if err != nil {
+		return fmt.Errorf("official promotion construction: %w", err)
+	}
+	openedPromotion, err := teamlib.OpenTeamLink(
+		promoteLink.Link, additionSet, &namedTeamID,
+		revokeChange.Entity.Host, openedAddition.RosterPost,
+	)
+	if err != nil {
+		return fmt.Errorf("official promotion verification: %w", err)
+	}
+	if len(openedPromotion.SharedKeys) != 0 {
+		return fmt.Errorf("promotion unexpectedly rotates a PTK")
+	}
+	cryptorand.Reader = mutationRandom
+
 	// Remove the member just added. A removal from the default member role
 	// rotates the member-min and member PTKs, boxes their new generations only
 	// to the remaining owner, and chains each old generation under the new one.

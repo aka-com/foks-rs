@@ -51,11 +51,6 @@ pub(super) fn validate_replacement<'a>(
         }
         return Ok(None);
     }
-    if destination_role > target.role {
-        return Err(Error::TeamRequest(
-            "this transition cannot promote a team member",
-        ));
-    }
     let party = replacement.ok_or(Error::TeamRequest(
         "non-removal transition requires verified replacement keys",
     ))?;
@@ -79,6 +74,13 @@ pub(super) fn validate_replacement<'a>(
             "replacement key generation regresses or conflicts with the roster",
         ));
     }
+    if destination_role > target.role
+        && (key.generation != target.generation || party.has_stale_shared_key(target.source_role))
+    {
+        return Err(Error::TeamRequest(
+            "refresh the member's source key before promotion",
+        ));
+    }
     if destination_role == target.role && key.generation == target.generation {
         return Err(Error::TeamRequest("team-member transition makes no change"));
     }
@@ -100,18 +102,9 @@ pub(super) fn validate_rotation_seeds<'a>(
         destination_role,
         replacement_generation,
     );
-    let expected = expected_roles
-        .iter()
-        .map(|role| {
-            current
-                .iter()
-                .find(|key| key.role == *role)
-                .expect("required roles come from current keys")
-        })
-        .collect::<Vec<_>>();
-    if supplied.len() != expected.len() {
+    if supplied.len() != expected_roles.len() {
         return Err(Error::TeamRequest(
-            "PTK rotation roles do not match the removal schedule",
+            "PTK roles do not match the member-change schedule",
         ));
     }
     let current_verify_keys = team
@@ -121,16 +114,19 @@ pub(super) fn validate_rotation_seeds<'a>(
         .map(|key| key.verify_key.as_bytes().to_vec())
         .collect::<std::collections::BTreeSet<_>>();
     let mut new_verify_keys = std::collections::BTreeSet::new();
-    let mut rotations = Vec::with_capacity(expected.len());
-    for (public, supplied) in expected.into_iter().zip(supplied) {
-        if supplied.role != public.role {
+    let mut rotations = Vec::with_capacity(expected_roles.len());
+    for (role, supplied) in expected_roles.into_iter().zip(supplied) {
+        if supplied.role != role {
             return Err(Error::TeamRequest(
-                "PTK rotation roles are missing, duplicated, or out of order",
+                "PTK roles are missing, duplicated, or out of order",
             ));
         }
-        let previous = current_team_private_key(team, public)?;
+        let public = current.iter().find(|key| key.role == role);
+        let previous = public
+            .map(|key| current_team_private_key(team, key))
+            .transpose()?;
         let verify_key = derive_shared_public(supplied.seed, ENTITY_PTK_VERIFY)?.verify_key;
-        if supplied.seed == &previous.seed
+        if previous.is_some_and(|key| supplied.seed == &key.seed)
             || current_verify_keys.contains(verify_key.as_bytes())
             || !new_verify_keys.insert(verify_key.as_bytes().to_vec())
         {
@@ -138,12 +134,13 @@ pub(super) fn validate_rotation_seeds<'a>(
                 "replacement PTKs must be fresh and distinct",
             ));
         }
-        let generation = public
-            .generation
-            .checked_add(1)
-            .ok_or(Error::TeamRequest("PTK generation overflow"))?;
+        let generation = public.map_or(Ok(1), |key| {
+            key.generation
+                .checked_add(1)
+                .ok_or(Error::TeamRequest("PTK generation overflow"))
+        })?;
         rotations.push(ValidatedRotation {
-            role: public.role,
+            role,
             generation,
             seed: supplied.seed,
             previous,
@@ -230,7 +227,7 @@ pub(super) fn validate_refresh_rotation_seeds<'a>(
                 .checked_add(1)
                 .ok_or(Error::TeamRequest("PTK generation overflow"))?,
             seed: supplied.seed,
-            previous,
+            previous: Some(previous),
             verify_key,
         });
     }
@@ -246,15 +243,23 @@ pub(super) fn required_rotation_roles(
 ) -> Vec<Role> {
     let source_generation_changed =
         replacement_generation.is_some_and(|generation| generation > old_generation);
-    current
+    let current = current
         .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut required = current
+        .iter()
+        .copied()
         .filter(|role| {
             *role <= old_role
                 && (destination_role == Role::NONE
                     || source_generation_changed
                     || *role > destination_role)
         })
-        .collect()
+        .collect::<std::collections::BTreeSet<_>>();
+    if destination_role != Role::NONE && !current.contains(&destination_role) {
+        required.insert(destination_role);
+    }
+    required.into_iter().collect()
 }
 
 pub(super) fn resolve_remaining_receivers<'a>(
@@ -529,6 +534,14 @@ pub(super) fn box_rotated_ptks(
     rotations: &[ValidatedRotation<'_>],
     receivers: &[Receiver<'_>],
 ) -> Result<foks_proto::SharedKeyBoxSet> {
+    let inputs = rotated_ptk_inputs(rotations, receivers);
+    seal_ptk_inputs(host, actor, actor_seed, &inputs)
+}
+
+pub(super) fn rotated_ptk_inputs<'a>(
+    rotations: &'a [ValidatedRotation<'a>],
+    receivers: &'a [Receiver<'a>],
+) -> Vec<SharedKeyBoxInput<'a>> {
     let mut inputs = Vec::new();
     for rotation in rotations {
         for receiver in receivers
@@ -547,6 +560,56 @@ pub(super) fn box_rotated_ptks(
             });
         }
     }
+    inputs
+}
+
+pub(super) fn member_change_ptk_inputs<'a>(
+    team: &'a AuthenticatedTeamOutcome,
+    target: &VerifiedTeamMemberState,
+    destination: Role,
+    rotations: &'a [ValidatedRotation<'a>],
+    receivers: &'a [Receiver<'a>],
+) -> Result<Vec<SharedKeyBoxInput<'a>>> {
+    let mut inputs = rotated_ptk_inputs(rotations, receivers);
+    if destination > target.role {
+        let receiver = receivers
+            .iter()
+            .find(|receiver| {
+                receiver.member.party == target.party
+                    && receiver.member.scoped_host == target.scoped_host
+                    && receiver.member.source_role == target.source_role
+            })
+            .ok_or(Error::TeamBinding(
+                "promoted member has no authenticated receiver",
+            ))?;
+        for public in team
+            .verified
+            .shared_keys()
+            .iter()
+            .filter(|key| key.role > target.role && key.role <= destination)
+        {
+            let private = current_team_private_key(team, public)?;
+            inputs.push(SharedKeyBoxInput {
+                seed: &private.seed,
+                generation: public.generation,
+                role: public.role,
+                receiver_id: &receiver.member.party,
+                receiver_host: receiver.member.scoped_host.as_ref(),
+                receiver_hepk: &receiver.key.hepk,
+                receiver_role: receiver.member.source_role,
+                receiver_generation: receiver.member.generation,
+            });
+        }
+    }
+    Ok(inputs)
+}
+
+pub(super) fn seal_ptk_inputs(
+    host: &PinnedHost,
+    actor: &EntityId,
+    actor_seed: &foks_proto::SecretSeed,
+    inputs: &[SharedKeyBoxInput<'_>],
+) -> Result<foks_proto::SharedKeyBoxSet> {
     let randomness = (0..inputs.len())
         .map(|_| random_box_randomness())
         .collect::<Result<Vec<PukBoxRandomness>>>()?;
@@ -561,7 +624,7 @@ pub(super) fn box_rotated_ptks(
         actor_seed,
         &sender.hepk,
         random_bytes()?,
-        &inputs,
+        inputs,
         &randomness,
     )?)
 }
@@ -621,19 +684,23 @@ pub(super) fn rotation_operation_id(
                 ])
             }),
         Value::Unsigned(binding.expected_seqno),
-        Value::Array(
-            binding
-                .introduced
-                .iter()
-                .map(|(role, generation, verify)| {
-                    Value::Array(vec![
-                        role.to_value(),
-                        Value::Unsigned(*generation),
-                        Value::Binary(verify.as_bytes().to_vec()),
-                    ])
-                })
-                .collect(),
-        ),
+        if binding.introduced.is_empty() {
+            Value::Null
+        } else {
+            Value::Array(
+                binding
+                    .introduced
+                    .iter()
+                    .map(|(role, generation, verify)| {
+                        Value::Array(vec![
+                            role.to_value(),
+                            Value::Unsigned(*generation),
+                            Value::Binary(verify.as_bytes().to_vec()),
+                        ])
+                    })
+                    .collect(),
+            )
+        },
     ]))?;
     let hash = prefixed_hash(TEAM_MUTATION_OPERATION_ID_TYPE_ID, &identity);
     Ok(hash[..16].try_into().expect("hash prefix has fixed length"))

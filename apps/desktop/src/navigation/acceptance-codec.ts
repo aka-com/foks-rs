@@ -36,6 +36,7 @@ const STATE_ALIASES: Readonly<Record<string, Location>> = {
   'rekey-menu': { kind: 'group-settings', ref: 'team:eng', tab: 'settings' },
   invite: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   add: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
+  promote: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   demote: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   remove: { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   'add-team': { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
