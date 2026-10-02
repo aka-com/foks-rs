@@ -688,6 +688,15 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       );
       if (!item || item.version !== version)
         throw failure('conflict', `${path} changed first.`);
+      if (
+        item.kind === 'Folder' &&
+        items.some(
+          (candidate) =>
+            candidate.store === storeId &&
+            candidate.path.startsWith(`${path}/`),
+        )
+      )
+        throw failure('invalid-request', 'Only empty folders can be deleted.');
       items = items.filter((candidate) => candidate !== item);
       contents.delete(`${storeId}|${path}`);
       return { applied: true };
@@ -1164,7 +1173,10 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       phrase: firstRunFixture.recoveryPhrase,
     }),
     commitOwnerBackup: async (_profile, _accountAlias, backupAlias, phrase) => {
-      if (backupAlias !== 'paper' || phrase !== firstRunFixture.recoveryPhrase) {
+      if (
+        backupAlias !== 'paper' ||
+        phrase !== firstRunFixture.recoveryPhrase
+      ) {
         throw failure('invalid-request', 'The recovery phrase does not match.');
       }
       return { applied: true };

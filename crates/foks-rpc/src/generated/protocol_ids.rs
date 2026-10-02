@@ -143,6 +143,10 @@ pub const IDENTITY_CAPABILITIES_POSITION: u64 = 65536;
 pub const IDENTITY_CHALLENGE_POSITION: u64 = 65537;
 pub const IDENTITY_PROVE_POSITION: u64 = 65538;
 
+pub const KV_EXTENSIONS_PROTOCOL_ID: u64 = 0xf04b0002;
+pub const KV_CAPABILITIES_POSITION: u64 = 65536;
+pub const KV_PUT_EMPTY_DIRECTORIES_POSITION: u64 = 65537;
+
 /// Reports whether this protocol omits its argument header.
 pub const fn is_headerless_argument_protocol(protocol_id: u64) -> bool {
     matches!(

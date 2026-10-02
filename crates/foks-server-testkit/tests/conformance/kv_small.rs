@@ -678,3 +678,96 @@ pub(crate) fn a_resolved_path_costs_a_fraction_of_a_complete_traversal() {
          created={created} unscoped={unscoped}"
     );
 }
+
+#[test]
+pub(crate) fn kv_empty_directory() {
+    let fixture = Fixture::start("kv-empty-directory");
+    let created = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("kvemptyuser", 0x45))
+        .unwrap();
+    let root = created.kv_projection[0].root_directory_id;
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let mut session = fixture
+        .client
+        .foks()
+        .user_kv_write_session(
+            fixture.host(),
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            fixture.client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    let empty = session.mkdir(root, "empty", options()).unwrap();
+    let journal = rusqlite::Connection::open(fixture.client.hard_state_path()).unwrap();
+    let count_journals = || {
+        journal
+            .query_row("SELECT count(*) FROM mutation_operations", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap()
+    };
+    let journals_before = count_journals();
+    let faults_before = fixture
+        .environment
+        .arm_fault(foks_server_testkit::TestFault::KvCapabilitiesUnsupported);
+    let unsupported = session
+        .unlink(
+            root,
+            "empty",
+            Some(empty.dirent_version),
+            Role::OWNER,
+            false,
+        )
+        .unwrap_err();
+    assert!(unsupported
+        .to_string()
+        .contains("safe empty-folder deletion"));
+    assert_eq!(fixture.environment.fault_hits(), faults_before + 1);
+    assert_eq!(
+        count_journals(),
+        journals_before,
+        "unknown capability must not create a namespace outbox entry",
+    );
+    assert!(session.sync().unwrap().iter().any(|directory| {
+        directory.directory_id == root
+            && directory.entries.iter().any(|entry| entry.name == b"empty")
+    }));
+    session
+        .unlink(
+            root,
+            "empty",
+            Some(empty.dirent_version),
+            Role::OWNER,
+            false,
+        )
+        .unwrap();
+    let folder = session.mkdir(root, "folder", options()).unwrap();
+    session
+        .put_file(
+            folder.node_id.object_id(),
+            "child",
+            &mut Cursor::new(b"keep"),
+            options(),
+        )
+        .unwrap();
+    assert!(session
+        .unlink(
+            root,
+            "folder",
+            Some(folder.dirent_version),
+            Role::OWNER,
+            false
+        )
+        .is_err());
+    assert!(session
+        .sync()
+        .unwrap()
+        .iter()
+        .any(
+            |directory| directory.directory_id == folder.node_id.object_id()
+                && !directory.entries.is_empty()
+        ));
+}

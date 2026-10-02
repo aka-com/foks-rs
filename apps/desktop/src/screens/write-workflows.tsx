@@ -1395,9 +1395,17 @@ function DeleteSheet({
   onDeleteConflict: (item: Item) => Promise<void>;
 }): ReactNode {
   const [deleting, setDeleting] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
+  const [failureMessage, setFailureMessage] = useState<string | null>(null);
   const [, recheckAccess] = useState(0);
   const accessDescriptionId = useId();
   const problem = itemActionProblem(snapshot, workflow.item, true, accessNow());
+  useSheetGuard(
+    deleting
+      ? { verdict: 'refuse', reason: 'Wait for the deletion to finish.' }
+      : null,
+    !deleting,
+  );
   return (
     <SheetDialog
       danger
@@ -1407,18 +1415,21 @@ function DeleteSheet({
           <Icon name="trash" />
         </span>
       }
+      dismissible={!deleting}
       title={`Delete ${nameOf(workflow.item.path)}?`}
       footer={
         <>
-          <Button onClick={() => setWorkflow(null)}>Cancel</Button>
+          <Button disabled={deleting} onClick={() => setWorkflow(null)}>
+            Cancel
+          </Button>
           <Button
             variant="primary"
             danger
-            disabled={deleting || Boolean(problem)}
+            disabled={deleting || uncertain || Boolean(problem)}
             title={problem}
             aria-describedby={problem ? accessDescriptionId : undefined}
             onClick={() => {
-              if (deleting) return;
+              if (deleting || uncertain) return;
               if (
                 itemActionProblem(snapshot, workflow.item, true, accessNow())
               ) {
@@ -1426,6 +1437,7 @@ function DeleteSheet({
                 return;
               }
               setDeleting(true);
+              setFailureMessage(null);
               void (async () => {
                 try {
                   await bridge.removeItem({
@@ -1433,13 +1445,20 @@ function DeleteSheet({
                     path: workflow.item.path,
                     version: workflow.item.version,
                   });
-                  await onApplied(
-                    `Deleted ${nameOf(workflow.item.path)}`,
-                    storeOf(snapshot, workflow.item.store)?.server,
-                  );
                   setWorkflow(null);
+                  // Keep refresh failure separate from the acknowledged deletion.
+                  try {
+                    await onApplied(
+                      `Deleted ${nameOf(workflow.item.path)}`,
+                      storeOf(snapshot, workflow.item.store)?.server,
+                    );
+                  } catch (failure) {
+                    await onMutationError(failure, { report: false });
+                  }
                 } catch (error) {
                   const typed = normalizeCommandError(error);
+                  setUncertain(typed.ambiguous);
+                  setFailureMessage(typed.message);
                   if (typed.code === 'conflict') {
                     // Changed or already gone: the shell's refresh finds out
                     // which and says so, rather than this sheet assuming.
@@ -1459,12 +1478,17 @@ function DeleteSheet({
         </>
       }
     >
+      {failureMessage ? <p role="alert">{failureMessage}</p> : null}
       {problem ? (
         <p id={accessDescriptionId} className="action-error" role="status">
           {problem}
         </p>
       ) : null}
-      <p>This cannot be undone.</p>
+      <p>
+        {workflow.item.kind === 'Folder'
+          ? 'Only an empty folder can be deleted. This requires a server that supports safe folder deletion.'
+          : 'This cannot be undone.'}
+      </p>
     </SheetDialog>
   );
 }

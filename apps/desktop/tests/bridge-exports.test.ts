@@ -91,6 +91,7 @@ const publicTypes = [
   'CreateFolderRequest',
   'CreateFileRequest',
   'EditTextRequest',
+  'MoveItemRequest',
   'RemoveItemRequest',
   'ImportDroppedFileRequest',
   'ReplaceDroppedFileRequest',

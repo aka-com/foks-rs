@@ -403,6 +403,11 @@ impl TestEnvironment {
 
     pub fn arm_fault(&self, fault: TestFault) -> u64 {
         let (point, protocol, method) = match fault {
+            TestFault::KvCapabilitiesUnsupported => (
+                foks_server::SessionFaultPoint::UnsupportedMethod,
+                "KvExtensions",
+                "foksCapabilities",
+            ),
             TestFault::SsoAfterCommitBeforeResponse => (
                 foks_server::SessionFaultPoint::AfterDurableCommitBeforeResponse,
                 "Reg",
@@ -519,6 +524,7 @@ impl TestEnvironment {
 
 #[derive(Clone, Copy, Debug)]
 pub enum TestFault {
+    KvCapabilitiesUnsupported,
     SsoAfterCommitBeforeResponse,
     RevokeAfterCommitBeforeResponse,
     ProvisionAfterCommitBeforeResponse,

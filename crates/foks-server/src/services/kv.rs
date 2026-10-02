@@ -93,6 +93,13 @@ pub(crate) fn dispatch(
     writer: &WriterHandle,
     clock: &Arc<dyn foks_server_db::Clock>,
 ) -> Result<Response, RpcStatus> {
+    if route == RouteId::KvExtensionsFoksCapabilities {
+        foks_rpc::arguments::decode_void(argument).map_err(bad_arguments)?;
+        return Ok(Response::Data(
+            encode(&Value::Array(vec![Value::Unsigned(1), Value::Bool(true)]))
+                .map_err(bad_arguments)?,
+        ));
+    }
     if matches!(
         route,
         RouteId::KvStoreGetRoot
@@ -130,7 +137,10 @@ pub(crate) fn dispatch(
         RouteId::KvStorePutSmallFileOrSymlink => {
             put_small_file_or_symlink(argument, principal, reader, writer, &authority)
         }
-        RouteId::KvStorePut => put(argument, principal, reader, writer, &authority),
+        RouteId::KvStorePut => put(argument, principal, reader, writer, &authority, false),
+        RouteId::KvExtensionsFoksPutEmptyDirectories => {
+            put(argument, principal, reader, writer, &authority, true)
+        }
         RouteId::KvStorePutRoot => put_root(argument, principal, reader, writer, &authority),
         RouteId::KvStoreLockAcquire => {
             lock_acquire(argument, principal, reader, writer, &authority)
@@ -500,11 +510,38 @@ fn put(
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     authority: &KvAuthority,
+    asserted: bool,
 ) -> Result<Response, RpcStatus> {
-    let fields = fields(argument, 2)?;
+    let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
+        return Err(bad_arguments("KV put arguments are not a tuple"));
+    };
+    if fields.len() != if asserted { 3 } else { 2 } {
+        return Err(bad_arguments("KV put argument count"));
+    }
+    let assertions = if let Some(value) = fields.get(2) {
+        let Value::Array(values) = value else {
+            return Err(bad_arguments("empty-directory assertions are not a list"));
+        };
+        if values.is_empty() || values.len() > 64 {
+            return Err(bad_arguments("KV empty-directory assertion count"));
+        }
+        values
+            .iter()
+            .map(foks_proto::KvEmptyDirectoryAssertion::from_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(bad_arguments)?
+    } else {
+        Vec::new()
+    };
     let precondition = request_precondition(&fields[0])?;
     let snapshot = reader.snapshot().map_err(|_| RpcStatus::TransactionRetry)?;
-    check_precondition(&snapshot, authority, precondition.as_ref())?;
+    if assertions.is_empty() {
+        check_precondition(&snapshot, authority, precondition.as_ref())?;
+    } else {
+        // Version matching belongs to the transaction so exact committed replay
+        // succeeds. Preserve the usual read-access checks for supplied vectors.
+        check_precondition_access(&snapshot, authority, precondition.as_ref())?;
+    }
     let Value::Array(values) = &fields[1] else {
         return Err(bad_arguments("KV dirents are not a list"));
     };
@@ -570,11 +607,12 @@ fn put(
                     exact,
                 })
                 .collect::<Vec<_>>();
-            database.put_kv_dirents(
+            database.put_kv_dirents_with_empty_directories(
                 &uid,
                 precondition.as_ref(),
                 write_authority.maximum_role,
                 &mutations,
+                &assertions,
             )?;
             Ok(())
         })
@@ -862,7 +900,7 @@ fn request_precondition(
     }
 }
 
-fn check_precondition(
+fn check_precondition_access(
     reader: &foks_server_db::ReadSnapshot<'_>,
     authority: &KvAuthority,
     supplied: Option<&foks_proto::KvPathVersionVector>,
@@ -887,6 +925,18 @@ fn check_precondition(
         .ok_or_else(|| RpcStatus::NotFound("cached root not found".to_owned()))?;
     let root = foks_proto::KvRoot::decode(&root.exact).map_err(|_| RpcStatus::TransactionRetry)?;
     authority.require_read_key(root.key)?;
+    Ok(())
+}
+
+fn check_precondition(
+    reader: &foks_server_db::ReadSnapshot<'_>,
+    authority: &KvAuthority,
+    supplied: Option<&foks_proto::KvPathVersionVector>,
+) -> Result<(), RpcStatus> {
+    let Some(supplied) = supplied else {
+        return Ok(());
+    };
+    check_precondition_access(reader, authority, Some(supplied))?;
     match reader
         .kv_version_check(&authority.party, supplied)
         .map_err(|_| RpcStatus::TransactionRetry)?

@@ -1937,3 +1937,37 @@ result = "Void"
 max_request_bytes = 16384
 statuses = ["oauth2_auth", "ok", "unsupported", "bad_args", "wrong_user", "expired", "permission_denied", "rate_limited", "tx_retry"]
 coverage = ["web_admin"]
+
+# Additive Rust KV features. Legacy KV wire requests remain unchanged.
+[[protocol]]
+name = "KvExtensions"
+local_id = 0xf04b0002
+id_constant = "KV_EXTENSIONS_PROTOCOL_ID"
+
+[[route]]
+protocol = "KvExtensions"
+method = "foksCapabilities"
+local_position = 65536
+position_constant = "KV_CAPABILITIES_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "void"
+result = "KvCapabilities"
+statuses = ["oauth2_auth", "ok", "bad_args", "permission_denied", "rate_limited", "tx_retry"]
+max_request_bytes = 64
+supported = true
+coverage = ["kv_empty_directory"]
+
+[[route]]
+protocol = "KvExtensions"
+method = "foksPutEmptyDirectories"
+local_position = 65537
+position_constant = "KV_PUT_EMPTY_DIRECTORIES_POSITION"
+listeners = ["authenticated"]
+authentication = "active_device_mtls"
+request = "KvPutEmptyDirectoriesArgument"
+result = "Void"
+statuses = ["oauth2_auth", "ok", "bad_args", "stale_cache", "kv_permission", "kv_race", "quota_exceeded", "tx_retry"]
+max_request_bytes = 4194304
+supported = true
+coverage = ["kv_empty_directory"]

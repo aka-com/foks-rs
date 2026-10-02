@@ -1466,7 +1466,21 @@ export function ItemsScreen({
                 <MenuItem
                   icon="trash"
                   danger
-                  reason="Deleting folders is not supported by the desktop agent."
+                  reason={
+                    contextFolder
+                      ? itemActionProblem(
+                          snapshot,
+                          contextFolder,
+                          true,
+                          accessNow(),
+                        )
+                      : 'Refresh this vault to load the folder before deleting it.'
+                  }
+                  onClick={() => {
+                    setFolderMenu(null);
+                    if (contextFolder && allowAction(contextFolder, true))
+                      onDelete(contextFolder);
+                  }}
                 >
                   Delete folder
                 </MenuItem>

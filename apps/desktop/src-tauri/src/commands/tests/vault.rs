@@ -753,7 +753,7 @@ fn native_file_replacement_accepts_both_file_encodings() {
 }
 
 #[test]
-fn renderer_remove_boundary_rejects_folders_and_is_never_recursive() {
+fn renderer_remove_boundary_binds_file_and_folder_versions_without_recursion() {
     let file = download_item(1);
     assert!(matches!(
         remove_item_operation(&file).unwrap(),
@@ -765,10 +765,14 @@ fn renderer_remove_boundary_rejects_folders_and_is_never_recursive() {
     ));
     let mut folder = file;
     folder.metadata.node_type = "directory".to_owned();
-    assert_eq!(
-        remove_item_operation(&folder).unwrap_err().code,
-        "invalid-request"
-    );
+    assert!(matches!(
+        remove_item_operation(&folder).unwrap(),
+        Operation::RemoveKv {
+            recursive: false,
+            precondition: KvPrecondition::ExactVersion { version: 9 },
+            ..
+        }
+    ));
 }
 
 pub(super) struct UploadTransport {

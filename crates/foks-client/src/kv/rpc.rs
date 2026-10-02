@@ -18,6 +18,7 @@ use crate::{FoksClient, PinnedHost, PooledConnection, Result};
 
 #[derive(Clone, Debug)]
 pub(crate) enum KvRequest {
+    Capabilities,
     Root,
     Usage,
     Directory([u8; 16]),
@@ -40,6 +41,7 @@ pub(crate) enum KvRequest {
     Put {
         precondition: KvPathVersionVector,
         dirents: Vec<KvDirent>,
+        empty_directories: Vec<foks_proto::KvEmptyDirectoryAssertion>,
     },
     PutSmall {
         id: KvNodeId,
@@ -71,6 +73,7 @@ pub(crate) enum KvRequest {
 impl KvRequest {
     pub(crate) fn encode(&self, auth: KvAuth<'_>, sequence: u64) -> Result<Vec<u8>> {
         match self {
+            Self::Capabilities => Ok(foks_rpc::encode_kv_capabilities_request_at(sequence)?),
             Self::Root => Ok(encode_kv_get_root_request_at(auth, sequence)?),
             Self::Usage => Ok(encode_kv_usage_request_at(auth, sequence)?),
             Self::Directory(directory) => {
@@ -108,12 +111,25 @@ impl KvRequest {
             Self::Put {
                 precondition,
                 dirents,
-            } => Ok(encode_kv_put_request_at(
-                auth,
-                Some(precondition),
-                dirents,
-                sequence,
-            )?),
+                empty_directories,
+            } => {
+                if empty_directories.is_empty() {
+                    Ok(encode_kv_put_request_at(
+                        auth,
+                        Some(precondition),
+                        dirents,
+                        sequence,
+                    )?)
+                } else {
+                    Ok(foks_rpc::encode_kv_put_with_empty_directories_request_at(
+                        auth,
+                        Some(precondition),
+                        dirents,
+                        empty_directories,
+                        sequence,
+                    )?)
+                }
+            }
             Self::PutSmall { id, boxed } => Ok(encode_kv_put_small_file_or_symlink_request_at(
                 auth, *id, boxed, sequence,
             )?),
