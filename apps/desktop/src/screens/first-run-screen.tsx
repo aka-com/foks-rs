@@ -17,6 +17,21 @@ import {
   useSetupSession,
 } from './first-run/use-setup-session';
 import { useAccountOperations } from './first-run/use-account-operations';
+import { ServerAddressStep } from './first-run/server-address-step';
+import { AccountSetupStep } from './first-run/account-setup-step';
+import { SigninPrimaryAction, SigninSections } from './first-run/signin-step';
+import { JoiningChoice } from './first-run/setup-method-choice';
+import { WaitingForTeamStep } from './first-run/waiting-for-team-step';
+import { SetupChecklistStep } from './first-run/setup-checklist-step';
+import { useProtectionActions } from './first-run/use-protection-actions';
+import { useRecoveryBackup } from './first-run/use-recovery-backup';
+import {
+  protectionNavigationPolicy,
+  setupNavigationEvent,
+  selectedSigninMethod,
+  type SigninMethod,
+} from './first-run/session-transitions';
+import { useSetupReconciliation } from './first-run/use-setup-reconciliation';
 import { useServerWorkflow } from './first-run/use-server-workflow';
 import { useTeamDiscovery } from './first-run/use-team-discovery';
 export { profileNameFor } from './first-run/use-server-workflow';
@@ -38,10 +53,8 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import {
-  Band,
   Button,
   Chip,
-  CopyBox,
   Icon,
   Inset,
   InsetRow,
@@ -60,30 +73,14 @@ import type {
   GoProfileDiscovery,
   PendingOperation,
 } from '../bridge';
-import {
-  enqueueProfileWork,
-  isAgentReadinessError,
-  normalizeCommandError,
-} from '../bridge';
-import {
-  completedFirstRunSteps,
-  firstRunStepCount,
-  transitionFirstRun,
-  setupBackTarget,
-} from '../first-run-state';
+import { isAgentReadinessError, normalizeCommandError } from '../bridge';
+import { transitionFirstRun } from '../first-run-state';
 import type {
   FirstRunCheckpoint,
   FirstRunPath,
   FirstRunStateName,
 } from '../first-run-state';
-import {
-  classifyFirstRunFailure,
-  presentFirstRunFailure,
-  reconcileFirstRunFailure,
-  type FirstRunFailure,
-  type FirstRunOperation,
-} from '../first-run-failure';
-import type { FoksIconName } from '../icons';
+import { presentFirstRunFailure } from '../first-run-failure';
 import type { RailAgentState } from '../shell/sidebar';
 import type { Location } from '../location';
 import { displayPath, kindOf, nameOf, storeReadable } from '../model';
@@ -92,34 +89,8 @@ import { GoProfileChooser } from './go-profile-chooser';
 import { readableBy } from './scope';
 import { useToast } from '/kit/toasts';
 
-const PERSONAL_FIXED =
-  'Your Personal vault is private to your account. To share items with others, use a team.';
-
 const MISSING_SERVER_EXPLANATION =
   'The account you were creating could not be found on the server. This may happen because of a restart, server reset, or other error.';
-
-/** Authentication methods for an existing account. */
-type SigninMethod = 'recover' | 'import' | 'pair';
-
-/**
- * A section label with its position in the pane's sequence. The account
- * pages are read top to bottom, each section unlocking the next, so the
- * labels are numbered over the sections actually shown.
- */
-function StepLabel({
-  n,
-  children,
-}: {
-  n: number;
-  children: ReactNode;
-}): ReactNode {
-  return (
-    <SectionLabel className="step">
-      <span className="n">{n}</span>
-      {children}
-    </SectionLabel>
-  );
-}
 
 function MissingServerWarning({ action }: { action?: ReactNode }): ReactNode {
   return (
@@ -162,85 +133,6 @@ function suggestedDeviceName(): string {
   if (/iPad/i.test(source)) return 'iPad';
   if (/Mac/i.test(source)) return 'Mac';
   return 'This computer';
-}
-
-/** Setup options for the initial screen: creating a new vault or joining an existing team. */
-const JOINING_OPTIONS: readonly {
-  path: FirstRunPath;
-  icon: FoksIconName;
-  title: string;
-  detail: string;
-}[] = [
-  {
-    path: 'own',
-    icon: 'user',
-    title: 'Set up my own account',
-    detail: 'Set up your account and Personal vault.',
-  },
-  {
-    path: 'invited',
-    icon: 'users',
-    title: 'Join an existing team',
-    detail: 'Accept an invitation to join someone else’s team.',
-  },
-];
-
-function JoiningChoice({
-  value,
-  onChange,
-}: {
-  value: FirstRunPath | null;
-  onChange: (path: FirstRunPath) => void;
-}): ReactNode {
-  const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  // Radio group keyboard navigation.
-  const move = (from: number, step: number): void => {
-    const next =
-      (from + step + JOINING_OPTIONS.length) % JOINING_OPTIONS.length;
-    onChange(JOINING_OPTIONS[next].path);
-    refs.current[next]?.focus();
-  };
-  return (
-    <div
-      className="setup-method-options"
-      role="radiogroup"
-      aria-label="Setup method"
-    >
-      {JOINING_OPTIONS.map((option, index) => {
-        const on = value === option.path;
-        return (
-          <button
-            key={option.path}
-            ref={(node) => {
-              refs.current[index] = node;
-            }}
-            type="button"
-            role="radio"
-            aria-checked={on}
-            tabIndex={on || (value === null && index === 0) ? 0 : -1}
-            className={on ? 'setup-method-option on' : 'setup-method-option'}
-            onClick={() => onChange(option.path)}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-                event.preventDefault();
-                move(index, 1);
-              } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-                event.preventDefault();
-                move(index, -1);
-              }
-            }}
-          >
-            <span className="pip" aria-hidden="true" />
-            <Icon name={option.icon} className="ic" />
-            <span className="txt">
-              <span className="ptitle">{option.title}</span>
-              <span className="bd">{option.detail}</span>
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
 }
 
 export interface FirstRunExperienceProps {
@@ -385,18 +277,20 @@ function FirstRunSession({
   const [goStart, setGoStart] = useState<'existing' | 'new'>('existing');
   const [goScanError, setGoScanError] = useState<string | null>(null);
   const [goScanAttempt, setGoScanAttempt] = useState(0);
-  const [generatedRecoveryPhrase, setGeneratedRecoveryPhrase] = useState<
-    string | null
-  >(null);
-  const [recoveryPhraseConcealed, setRecoveryPhraseConcealed] = useState(false);
-  const [phraseWritten, setPhraseWritten] = useState(false);
+  const {
+    generatedRecoveryPhrase,
+    recoveryPhraseConcealed,
+    setRecoveryPhraseConcealed,
+    phraseWritten,
+    setPhraseWritten,
+    phraseOperation,
+    prepare: prepareBackup,
+    clearBackup,
+    navigateBackup,
+  } = useRecoveryBackup();
   // Pending path selection before confirmation.
   const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
-  const [pending, setPending] = useState<PendingOperation[]>([]);
-  const pendingRef = useRef<PendingOperation[]>([]);
   const [otherMutationBusy, setBusy] = useState(false);
-  const [phraseOperation, setPhraseOperation] = useState<symbol | null>(null);
-  const phraseOwner = useRef<symbol | null>(null);
   const [personalRefreshing, setPersonalRefreshing] = useState(false);
   const [personalRefreshError, setPersonalRefreshError] = useState<
     string | null
@@ -407,65 +301,16 @@ function FirstRunSession({
     Record<'copy' | 'recover' | 'pair', string | null>
   >({ copy: null, recover: null, pair: null });
   const [message, setMessage] = useState<string | null>(null);
-  // The failure the message on screen came from, so a banner can offer the
-  // raw chain behind it. Only `fail` sets it, and the reason is offered only
-  // while the text it reported is still the text being shown.
-  const [lastFailure, setLastFailure] = useState<FirstRunFailure | null>(null);
-  const backupPreparation = useRef<{
-    key: string;
-    promise: Promise<{ backupAlias: string; phrase: string }>;
-  } | null>(null);
   const profile = checkpoint.profile;
-  const fail = useCallback(
-    (
-      operation: FirstRunOperation,
-      error: unknown,
-      report: (message: string) => void = setMessage,
-      isCurrent: () => boolean = () => mounted.current,
-      onFailure?: (failure: FirstRunFailure) => void,
-    ): void => {
-      if (!isCurrent()) return;
-      const failure = classifyFirstRunFailure(operation, error);
-      setLastFailure(failure);
-      onFailure?.(failure);
-      // The command layer sets its write gate when a first-run mutation
-      // returns an ambiguous or response-binding result, and only a fresh
-      // catalog load releases it. Without this refresh the user is stuck on
-      // "Refresh the vault..." until the app restarts, so reconcile here and
-      // re-read pending operations so a committed-but-unacknowledged signup
-      // can still be resumed.
-      if (failure.recovery !== 'pending') {
-        report(failure.error.message);
-        return;
-      }
-      report(presentFirstRunFailure(failure).detail);
-      // A first server check can set the gate before a profile has been
-      // selected. Only the pending-operation read needs a profile.
-      void reconcileFirstRunFailure(failure, async () => {
-        if (!isCurrent()) return;
-        await onRefreshSnapshot();
-        if (!isCurrent()) return;
-        if (profile) {
-          const rows = await enqueueProfileWork<PendingOperation[] | null>(
-            bridge,
-            profile.profile,
-            () =>
-              isCurrent()
-                ? bridge.listPendingOperations(profile.profile)
-                : Promise.resolve(null),
-          );
-          if (!isCurrent() || !rows) return;
-          pendingRef.current = rows;
-          setPending(rows);
-        }
-      }).then((reconciled) => {
-        if (!isCurrent()) return;
-        onFailure?.(reconciled);
-        report(presentFirstRunFailure(reconciled).detail);
-      });
-    },
-    [bridge, mounted, onRefreshSnapshot, profile],
-  );
+  const { pending, lastFailure, fail } = useSetupReconciliation({
+    bridge,
+    agentReady,
+    checkpoint,
+    mounted,
+    onRefreshSnapshot,
+    setMessage,
+    setUsername,
+  });
   const serverWorkflow = useServerWorkflow({
     bridge,
     agentReady,
@@ -762,36 +607,31 @@ function FirstRunSession({
 
   const go = useCallback(
     (next: FirstRunStateName): void => {
-      if (next === 'phrase') setRecoveryPhraseConcealed(false);
+      const policy = protectionNavigationPolicy(
+        { state, backupCommitted: checkpoint.backupCommitted },
+        next,
+      );
+      navigateBackup(policy);
       setMessage(null);
       setDuplicateAlias(null);
       setConnectionErrors({ copy: null, recover: null, pair: null });
       setRecoveryPhrase('');
       setPairingPhrase('');
       setInvite('');
-      if (next !== 'protect' && next !== 'phrase') {
+      if (policy.clearPassphrase) {
         setPassphrase('');
         setConfirmation('');
-        backupPreparation.current = null;
-        setGeneratedRecoveryPhrase(null);
-        setPhraseWritten(false);
-      } else if (state === 'phrase' && next !== 'phrase') {
-        if (!checkpoint.backupCommitted) {
-          backupPreparation.current = null;
-          setGeneratedRecoveryPhrase(null);
-        }
-        setPhraseWritten(false);
       }
-      const current = checkpointRef.current;
-      if (next === setupBackTarget(current)) send({ type: 'back' });
-      else if (next === 'account' || next === 'existing')
-        send({
-          type: 'select-account-method',
-          method: next === 'existing' ? 'recover' : 'create',
-        });
-      else send({ type: 'navigate', state: next });
+      send(setupNavigationEvent(checkpointRef.current, next));
     },
-    [checkpoint.backupCommitted, checkpointRef, send, setDuplicateAlias, state],
+    [
+      checkpoint.backupCommitted,
+      checkpointRef,
+      send,
+      setDuplicateAlias,
+      state,
+      navigateBackup,
+    ],
   );
   const openExisting = useCallback((): void => {
     go('existing');
@@ -913,19 +753,14 @@ function FirstRunSession({
   );
 
   const clearSecrets = useCallback((): void => {
-    phraseOwner.current = null;
-    setPhraseOperation(null);
+    clearBackup();
     setInvite('');
     setPassphrase('');
     setConfirmation('');
     setRecoveryPhrase('');
     setPairingPhrase('');
-    backupPreparation.current = null;
-    setGeneratedRecoveryPhrase(null);
-    setRecoveryPhraseConcealed(false);
-    setPhraseWritten(false);
     secretsHeld.current = false;
-  }, []);
+  }, [clearBackup]);
 
   /**
    * Why the sidebar's Leave setup is inert: a write is out that this screen is
@@ -996,54 +831,6 @@ function FirstRunSession({
   );
 
   useEffect(() => {
-    if (!agentReady || !profile) {
-      if (pendingRef.current.length > 0) {
-        pendingRef.current = [];
-        setPending([]);
-      }
-      return;
-    }
-    let alive = true;
-    void enqueueProfileWork(bridge, profile.profile, () =>
-      bridge.listPendingOperations(profile.profile),
-    ).then(
-      (rows) => {
-        if (!alive) return;
-        const current = pendingRef.current;
-        const unchanged =
-          current.length === rows.length &&
-          current.every(
-            (entry, index) =>
-              entry.kind === rows[index]?.kind &&
-              entry.alias === rows[index]?.alias &&
-              entry.target === rows[index]?.target,
-          );
-        if (!unchanged) {
-          pendingRef.current = rows;
-          setPending(rows);
-        }
-        if (checkpoint.returning) {
-          const recoveries = rows.filter(
-            (row) => row.kind === 'account-recovery' && !row.target,
-          );
-          if (recoveries.length === 1) {
-            const resumableAlias = recoveries[0]?.alias;
-            if (resumableAlias) {
-              setUsername((current) => current || resumableAlias);
-            }
-          }
-        }
-      },
-      (error) => {
-        if (alive) fail('pending-read', error);
-      },
-    );
-    return () => {
-      alive = false;
-    };
-  }, [agentReady, bridge, checkpoint.returning, fail, profile]);
-
-  useEffect(() => {
     if (
       !agentReady ||
       state !== 'phrase' ||
@@ -1052,38 +839,15 @@ function FirstRunSession({
       !accountAlias
     )
       return;
-    const owner = Symbol('phrase preparation');
-    phraseOwner.current = owner;
-    setPhraseOperation(owner);
-    const key = `${profile.profile}\u0000${accountAlias}`;
-    const attempt =
-      backupPreparation.current?.key === key
-        ? backupPreparation.current.promise
-        : bridge.prepareOwnerBackup(profile.profile, accountAlias, 'paper');
-    backupPreparation.current = { key, promise: attempt };
-    void attempt.then(
-      (result) => {
-        if (phraseOwner.current === owner) {
-          setGeneratedRecoveryPhrase(result.phrase);
-          setPhraseOperation(null);
-        }
-      },
-      (error) => {
-        if (phraseOwner.current !== owner) return;
-        backupPreparation.current = null;
-        setPhraseOperation(null);
-        go('protect');
-        fail('backup-prepare', error);
-      },
-    );
-    return () => {
-      if (phraseOwner.current === owner) phraseOwner.current = null;
-      setPhraseOperation((current) => (current === owner ? null : current));
-    };
+    return prepareBackup(bridge, profile.profile, accountAlias, (error) => {
+      go('protect');
+      fail('backup-prepare', error);
+    });
   }, [
     accountAlias,
     agentReady,
     generatedRecoveryPhrase,
+    prepareBackup,
     bridge,
     fail,
     go,
@@ -1280,106 +1044,30 @@ function FirstRunSession({
     }
   };
 
-  const continueProtection = async (): Promise<void> => {
-    if (!agentReady) return;
-    if (!profile || !checkpoint.account) return;
-    setBusy(true);
-    setMessage(null);
-    try {
-      let next: FirstRunCheckpoint = checkpoint;
-      if (passphrase || confirmation) {
-        await bridge.setFirstRunPassphrase({
-          profile: profile.profile,
-          alias: checkpoint.account.alias,
-          passphrase,
-          confirmation,
-        });
-        next = transitionFirstRun(next, { type: 'passphrase-set' });
-      }
-      setPassphrase('');
-      setConfirmation('');
-      commit(
-        transitionFirstRun(next, {
-          type: 'navigate',
-          state: checkpoint.path === 'invited' ? 'waiting' : 'checklist-own',
-        }),
-      );
-    } catch (error) {
-      fail('passphrase', error);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const finishLocalProtection = async (skip = false): Promise<void> => {
-    if (!agentReady) return;
-    if (!profile || !checkpoint.account) return;
-    if (skip) {
-      clearSecrets();
-      send({ type: 'finish-local', skipped: true });
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    try {
-      let next: FirstRunCheckpoint = checkpoint;
-      if (passphrase || confirmation) {
-        await bridge.setFirstRunPassphrase({
-          profile: profile.profile,
-          alias: checkpoint.account.alias,
-          passphrase,
-          confirmation,
-        });
-        next = transitionFirstRun(next, { type: 'passphrase-set' });
-      }
-      if (!next.backupCommitted && generatedRecoveryPhrase && phraseWritten) {
-        await bridge.commitOwnerBackup(
-          profile.profile,
-          accountAlias,
-          'paper',
-          generatedRecoveryPhrase,
-        );
-        next = transitionFirstRun(next, { type: 'backup-committed' });
-      }
-      const skipped = !next.passphraseSet && !next.backupCommitted;
-      clearSecrets();
-      commit(transitionFirstRun(next, { type: 'finish-local', skipped }));
-    } catch (error) {
-      fail('passphrase', error);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const collapseLocalBackup = (): void => {
-    setMessage(null);
-    send({ type: 'navigate', state: 'protect' });
-  };
-
-  const commitBackup = async (): Promise<void> => {
-    if (!agentReady) return;
-    if (!profile || !generatedRecoveryPhrase || !phraseWritten) return;
-    if (checkpoint.backupCommitted) {
-      setPhraseWritten(false);
-      send({ type: 'navigate', state: 'protect' });
-      return;
-    }
-    setBusy(true);
-    try {
-      await bridge.commitOwnerBackup(
-        profile.profile,
-        accountAlias,
-        'paper',
-        generatedRecoveryPhrase,
-      );
-      setPhraseWritten(false);
-      send({ type: 'backup-committed' });
-    } catch (error) {
-      fail('backup-commit', error);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const {
+    continueProtection,
+    finishLocalProtection,
+    collapseLocalBackup,
+    commitBackup,
+  } = useProtectionActions({
+    bridge,
+    agentReady,
+    checkpoint,
+    accountAlias,
+    passphrase,
+    confirmation,
+    generatedRecoveryPhrase,
+    phraseWritten,
+    setBusy,
+    setMessage,
+    setPassphrase,
+    setConfirmation,
+    setPhraseWritten,
+    clearSecrets,
+    send,
+    commit,
+    fail,
+  });
 
   const retryPersonal = (): void => {
     setPersonalRefreshing(true);
@@ -1440,65 +1128,28 @@ function FirstRunSession({
   /* Sign-in authentication methods: CLI pairing and credential import when an
      eligible FOKS CLI profile is detected, followed by recovery phrase recovery.
      When only one method is available, it is selected automatically. */
-  const signinMethods: SigninMethod[] = [
-    ...(goCandidate?.pairable ? (['pair'] as const) : []),
-    ...(goCandidate?.copyable ? (['import'] as const) : []),
-    'recover',
-  ];
   const pendingFor = (kind: PendingOperation['kind']): boolean =>
     pending.some((row) => row.kind === kind && row.alias === accountAlias);
-  const signinMethod: SigninMethod | null =
-    chosenSigninMethod && signinMethods.includes(chosenSigninMethod)
-      ? chosenSigninMethod
-      : signinMethods.length === 1
-        ? 'recover'
-        : signinMethods.includes('pair') && pendingFor('pairing-acceptance')
-          ? 'pair'
-          : pendingFor('account-recovery')
-            ? 'recover'
-            : null;
-  /* The page foot's primary action follows the method. Recovery and pairing
-     need their phrase typed first; import needs only the alias. */
-  const signinPrimary =
-    signinMethod === 'recover' ? (
-      <Button
-        variant="primary"
-        disabled={
-          busy ||
-          !accountAlias ||
-          !recoveryPhrase.trim() ||
-          !fixDeviceName(deviceName)
-        }
-        onClick={() => void recover()}
-      >
-        {pendingFor('account-recovery') ? 'Resume recovery' : 'Recover'}
-      </Button>
-    ) : signinMethod === 'import' ? (
-      <Button
-        variant="primary"
-        disabled={busy || !accountAlias}
-        onClick={() => void copyGoCandidate()}
-      >
-        Import credentials
-      </Button>
-    ) : signinMethod === 'pair' ? (
-      <Button
-        variant="primary"
-        disabled={
-          busy ||
-          !accountAlias ||
-          !fixDeviceName(deviceName) ||
-          !pairingPhrase.trim()
-        }
-        onClick={() => void acceptPairing(false)}
-      >
-        Accept pairing
-      </Button>
-    ) : (
-      <Button variant="primary" disabled>
-        Continue
-      </Button>
-    );
+  const signinMethod = selectedSigninMethod({
+    candidate: goCandidate,
+    chosen: chosenSigninMethod,
+    pending,
+    alias: accountAlias,
+  });
+  const signinPrimary = (
+    <SigninPrimaryAction
+      signinMethod={signinMethod}
+      busy={busy}
+      accountAlias={accountAlias}
+      recoveryPhrase={recoveryPhrase}
+      pairingPhrase={pairingPhrase}
+      deviceName={deviceName}
+      recoveryPending={pendingFor('account-recovery')}
+      recover={recover}
+      copyGoCandidate={copyGoCandidate}
+      acceptPairing={acceptPairing}
+    />
+  );
   const methodError = (key: keyof typeof connectionErrors): ReactNode => {
     const text = connectionErrors[key];
     return text ? (
@@ -1507,128 +1158,33 @@ function FirstRunSession({
       </p>
     ) : null;
   };
-  /* The sign-in pages' numbered sections: the method, then, once one is
-     chosen, the account and device rows with the method's own row and notes.
-     `first` is the number of the method section, since Set up your account
-     draws its setup-method group before these. */
   const signinSections = (first: number): ReactNode => (
-    <>
-      <StepLabel n={first}>Sign in method</StepLabel>
-      <Inset>
-        <RadioGroup label="Sign-in method">
-          {goCandidate?.pairable ? (
-            <RadioCard
-              title="Use the FOKS CLI to link this as a new device"
-              detail={
-                <>
-                  Pair the desktop app with{' '}
-                  <strong>foks --simple-ui key assist</strong> in Terminal.
-                </>
-              }
-              selected={signinMethod === 'pair'}
-              onSelect={() => setChosenSigninMethod('pair')}
-            />
-          ) : null}
-          {goCandidate?.copyable ? (
-            <RadioCard
-              title="Import this device’s FOKS CLI credentials"
-              detail="Copy your device credentials from the FOKS CLI. This may require a Keychain prompt."
-              selected={signinMethod === 'import'}
-              onSelect={() => setChosenSigninMethod('import')}
-            />
-          ) : null}
-          <RadioCard
-            title="Recover with recovery phrase"
-            detail="Enter your recovery phrase to restore full access on this device."
-            selected={signinMethod === 'recover'}
-            onSelect={() => setChosenSigninMethod('recover')}
-          />
-        </RadioGroup>
-      </Inset>
-      {/* If the account already exists, display its details as read-only fields
-          regardless of the selected sign-in method. */}
-      {signinMethod || checkpoint.account ? (
-        <>
-          <StepLabel n={first + 1}>Account and device</StepLabel>
-          {signinMethod === 'pair' ? (
-            <>
-              <p className="hint">
-                In Terminal, switch the official FOKS CLI to this account, then
-                run:
-              </p>
-              <CopyBox
-                text="foks --simple-ui key assist"
-                onCopy={(value) =>
-                  void bridge
-                    .copyText(value)
-                    .then(() => toasts.show('Command copied.'))
-                }
-              >
-                <code>foks --simple-ui key assist</code>
-              </CopyBox>
-            </>
-          ) : null}
-          <Inset className="account-form">
-            {identityRows}
-            {signinMethod === 'recover' ? (
-              <InsetRow label="Phrase">
-                <input
-                  type="password"
-                  aria-label="Recovery phrase"
-                  value={recoveryPhrase}
-                  onChange={(event) => setRecoveryPhrase(event.target.value)}
-                  onPaste={(event) => pastePhrase(event, setRecoveryPhrase)}
-                />
-              </InsetRow>
-            ) : null}
-            {signinMethod === 'pair' ? (
-              <InsetRow label="Pairing phrase">
-                <input
-                  type="password"
-                  aria-label="Pairing phrase"
-                  placeholder="Enter pairing phrase"
-                  value={pairingPhrase}
-                  onChange={(event) => setPairingPhrase(event.target.value)}
-                  onPaste={(event) => pastePhrase(event, setPairingPhrase)}
-                />
-              </InsetRow>
-            ) : null}
-          </Inset>
-          {aliasInvalidNotice}
-          {signinMethod === 'import' ? (
-            <p className="hint">
-              Both apps will share the same device credentials. Revoking the
-              device in either client will disable both.
-            </p>
-          ) : null}
-          {signinMethod === 'pair' ? (
-            <p className="hint">
-              Select the account in the CLI, enter the pairing phrase above, and
-              follow the terminal prompts to complete pairing. Or,{' '}
-              <button
-                type="button"
-                className="lnk"
-                aria-label="Resume pairing"
-                disabled={busy || !accountAlias || !fixDeviceName(deviceName)}
-                onClick={() => void acceptPairing(true)}
-              >
-                resume pairing
-              </button>{' '}
-              for an existing account.
-            </p>
-          ) : null}
-          {signinMethod
-            ? methodError(
-                signinMethod === 'recover'
-                  ? 'recover'
-                  : signinMethod === 'import'
-                    ? 'copy'
-                    : 'pair',
-              )
-            : null}
-        </>
-      ) : null}
-    </>
+    <SigninSections
+      first={first}
+      signinMethod={signinMethod}
+      pairable={Boolean(goCandidate?.pairable)}
+      copyable={Boolean(goCandidate?.copyable)}
+      accountConnected={Boolean(checkpoint.account)}
+      identityRows={identityRows}
+      aliasInvalidNotice={aliasInvalidNotice}
+      recoveryPhrase={recoveryPhrase}
+      pairingPhrase={pairingPhrase}
+      busy={busy}
+      accountAlias={accountAlias}
+      deviceName={deviceName}
+      setChosenSigninMethod={setChosenSigninMethod}
+      setRecoveryPhrase={setRecoveryPhrase}
+      setPairingPhrase={setPairingPhrase}
+      acceptPairing={acceptPairing}
+      onCopyCommand={(value) =>
+        void bridge.copyText(value).then(() => toasts.show('Command copied.'))
+      }
+      error={
+        signinMethod
+          ? methodError(signinMethod === 'import' ? 'copy' : signinMethod)
+          : null
+      }
+    />
   );
   /* Where the account page's Back goes; signing in shares it. */
   const accountBackTarget = checkpoint.managedLocal ? 'local' : 'checked';
@@ -2012,115 +1568,25 @@ function FirstRunSession({
     );
   else if (['address', 'no-address', 'error'].includes(state))
     content = (
-      <Pane
-        title={checkpoint.path === 'invited' ? 'Team Server' : 'Server Setup'}
-        header={false}
-        scope={
-          state === 'no-address' && checkpoint.path === 'invited'
-            ? 'Finding your server address'
-            : undefined
+      <ServerAddressStep
+        state={state}
+        path={checkpoint.path}
+        busy={busy}
+        adminShort={adminShort}
+        address={address}
+        addressInvalid={addressInvalid}
+        inputRef={serverAddressInput}
+        serverCheckPresentation={serverCheckPresentation}
+        message={message}
+        go={go}
+        checkServer={checkServer}
+        editServerAddress={editServerAddress}
+        onCopy={(value) =>
+          void bridge
+            .copyText(value)
+            .then(() => toasts.show('Copied to clipboard.'))
         }
-        foot={
-          <Foot back={() => go('who')}>
-            <Button
-              variant="primary"
-              disabled={busy}
-              onClick={() => void checkServer()}
-            >
-              Continue
-            </Button>
-          </Foot>
-        }
-      >
-        <h1>
-          {checkpoint.path === 'invited'
-            ? 'Select a server address'
-            : 'Select a server'}
-        </h1>
-        <p className="lead">
-          FOKS synchronizes your account, teams, and encrypted vaults through a
-          server.{' '}
-          {checkpoint.path === 'invited'
-            ? `Enter the server address provided by ${adminShort}.`
-            : null}
-        </p>
-        <Inset
-          className={state === 'error' || addressInvalid ? 'err' : undefined}
-        >
-          <label className="fr server-address-row">
-            <span className="k">Address</span>
-            <span className="v">
-              <input
-                ref={serverAddressInput}
-                aria-label="Server address"
-                value={address}
-                placeholder="e.g. foks.app:4430"
-                onChange={(event) => {
-                  editServerAddress(event.target.value);
-                }}
-              />
-            </span>
-          </label>
-        </Inset>
-        <Button
-          className="official-server"
-          disabled={busy}
-          onClick={() => {
-            editServerAddress('foks.app:4430');
-          }}
-        >
-          Use the official FOKS server
-        </Button>
-        {state === 'error' && !addressInvalid ? (
-          <div className="crit" role="alert">
-            <b>
-              {serverCheckPresentation?.title ??
-                message ??
-                (address
-                  ? `Could not connect to ${address}`
-                  : 'No server address provided')}
-            </b>
-            <p>
-              {serverCheckPresentation?.detail ??
-                'Confirm the address is correct, then retry.'}
-            </p>
-            {serverCheckPresentation?.reason ? (
-              <Toggle label="Details">
-                <pre>{serverCheckPresentation.reason}</pre>
-              </Toggle>
-            ) : null}
-          </div>
-        ) : null}
-        {checkpoint.path === 'invited' && state === 'no-address' ? (
-          <div className="pcard">
-            <h3>{`Ask ${adminShort} for the server address`}</h3>
-            <p>
-              Contact them through your usual communication channel. This is the
-              only detail needed right now.
-            </p>
-            <CopyBox
-              text="What’s the address of the FOKS server our team is on?"
-              onCopy={(value) =>
-                void bridge
-                  .copyText(value)
-                  .then(() => toasts.show('Copied to clipboard.'))
-              }
-            >
-              “What’s the address of the FOKS server our team is on?”
-            </CopyBox>
-            <p>
-              In the next step, you will choose a username and share it with
-              them so they can add you to the team.
-            </p>
-          </div>
-        ) : checkpoint.path === 'invited' ? (
-          <p className="hint">
-            <button className="lnk" onClick={() => go('no-address')}>
-              Don’t have a server address?
-            </button>
-          </p>
-        ) : null}
-      </Pane>
+      />
     );
   else if ((state === 'checked' || state === 'compare') && profile)
     content = (
@@ -2267,252 +1733,105 @@ function FirstRunSession({
     // its own panel carries the primary action.
     const ssoAvailable = Boolean(profile) && !checkpoint.account;
     const ssoSelected = !signingIn && ssoAvailable && showSso;
+    const organizationSignup = profile ? (
+      <SsoPanel
+        key={`${profile.profile}/${accountAlias}`}
+        embedded
+        primarySlot={ssoPrimarySlot}
+        bridge={bridge}
+        profile={profile.profile}
+        account={accountAlias}
+        login={false}
+        deviceName={fixDeviceName(deviceName)}
+        invite={invite}
+        disabled={busy}
+        initialOperationId={
+          checkpoint.sso?.alias === accountAlias
+            ? checkpoint.sso.operationId
+            : undefined
+        }
+        initialHardware={checkpoint.sso?.hardware}
+        executeSignup={executeSsoSignup}
+        onProgress={(progress, hardware) => {
+          if (
+            ['cancelled', 'expired', 'denied', 'rejected'].includes(
+              progress.state,
+            ) &&
+            !checkpointRef.current.provisioning
+          ) {
+            const next = {
+              ...checkpointRef.current,
+              sso: undefined,
+              accountMethod: 'create' as const,
+            };
+            updateRetainedSetup(checkpointRef.current, next);
+            commit(next);
+            return;
+          }
+          if (
+            progress.operationId &&
+            !checkpointRef.current.provisioning &&
+            !checkpointRef.current.provisionedAccount
+          )
+            commit({
+              ...checkpointRef.current,
+              sso: {
+                operationId: progress.operationId,
+                alias: accountAlias,
+                hardware,
+              },
+            });
+        }}
+        onComplete={() => {
+          setInvite('');
+          accountOperations.accountProvisioned(
+            accountAlias,
+            fixDeviceName(deviceName),
+          );
+        }}
+      />
+    ) : null;
     content = (
-      <Pane
-        title="Your account"
-        header={false}
-        scope={
-          signingIn
-            ? 'Device authorization required'
-            : 'Keys are generated securely on your device.'
-        }
-        wide
-        foot={
-          <Foot
-            back={() =>
-              go(
-                signingIn
-                  ? checkpoint.account
-                    ? 'protect'
-                    : accountBackTarget
-                  : accountBackTarget,
-              )
-            }
-          >
-            {signingIn ? (
-              checkpoint.account ? (
-                <Button onClick={() => go('protect')}>
-                  Skip to latest step
-                </Button>
-              ) : (
-                signinPrimary
-              )
-            ) : ssoSelected ? (
-              <span className="foot-slot" ref={setSsoPrimarySlot} />
-            ) : (
-              <Button
-                variant="primary"
-                disabled={
-                  busy ||
-                  usernameAliasInvalid ||
-                  (!checkpoint.account &&
-                    (!username.trim() || !fixDeviceName(deviceName)))
-                }
-                // If the account was already created when returning from Protect, proceed to protection.
-                onClick={() =>
-                  checkpoint.account ? go('protect') : void createAccount()
-                }
-              >
-                {checkpoint.account
-                  ? 'Continue'
-                  : pending.some(
-                        (row) =>
-                          row.kind === 'account-signup' &&
-                          row.alias === accountAlias,
-                      )
-                    ? 'Resume account setup'
-                    : 'Create my account'}
-              </Button>
-            )}
-          </Foot>
-        }
-      >
-        <h1>Set up your account</h1>
-        <p className="lead">
-          {signingIn ? (
-            <>
-              Your account already exists on {profile?.canonicalName}. Recover
-              it with your recovery phrase
-              {goCandidate ? ' or connect using the official FOKS CLI' : ''}.
-            </>
-          ) : (
-            'Your account keys are generated on this device; only the public keys are sent to the server.'
-          )}
-        </p>
-        <StepLabel n={1}>Setup method</StepLabel>
-        <Inset>
-          <RadioGroup label="Account setup">
-            <div className="choice">
-              <RadioCard
-                title="Create a new account"
-                detail="Set up a new FOKS account on this device."
-                selected={!signingIn && !ssoSelected}
-                disabled={Boolean(checkpoint.sso) || cliAccountSelected}
-                off={cliAccountSelected}
-                onSelect={() => {
-                  go('account');
-                }}
-              />
-              {!signingIn && !ssoSelected ? (
-                <div className="choice-body">
-                  <Toggle
-                    label="Email or invite code"
-                    defaultOpen={Boolean(email || invite)}
-                  >
-                    <Inset className="account-form">
-                      <InsetRow label="Email">
-                        <input
-                          value={email}
-                          placeholder="you@example.net"
-                          onChange={(event) => setEmail(event.target.value)}
-                        />
-                      </InsetRow>
-                      <InsetRow label="Invite code">
-                        <input
-                          value={invite}
-                          onChange={(event) => setInvite(event.target.value)}
-                        />
-                      </InsetRow>
-                    </Inset>
-                  </Toggle>
-                </div>
-              ) : null}
-            </div>
-            {ssoAvailable && profile ? (
-              <div className="choice">
-                <RadioCard
-                  title="Sign up with SSO"
-                  detail="Create the account through your organization’s identity provider."
-                  selected={ssoSelected}
-                  disabled={cliAccountSelected}
-                  off={cliAccountSelected}
-                  onSelect={() => {
-                    clearSecrets();
-                    send({
-                      type: 'select-account-method',
-                      method: 'organization',
-                    });
-                  }}
-                />
-                {ssoSelected ? (
-                  <div className="choice-body">
-                    <Toggle label="Invite code" defaultOpen={Boolean(invite)}>
-                      <Inset className="account-form">
-                        <InsetRow label="Invite code">
-                          <input
-                            value={invite}
-                            onChange={(event) => setInvite(event.target.value)}
-                          />
-                        </InsetRow>
-                      </Inset>
-                    </Toggle>
-                    <SsoPanel
-                      key={`${profile.profile}/${accountAlias}`}
-                      embedded
-                      primarySlot={ssoPrimarySlot}
-                      bridge={bridge}
-                      profile={profile.profile}
-                      account={accountAlias}
-                      login={false}
-                      deviceName={fixDeviceName(deviceName)}
-                      invite={invite}
-                      disabled={busy}
-                      initialOperationId={
-                        checkpoint.sso?.alias === accountAlias
-                          ? checkpoint.sso.operationId
-                          : undefined
-                      }
-                      initialHardware={checkpoint.sso?.hardware}
-                      executeSignup={executeSsoSignup}
-                      onProgress={(progress, hardware) => {
-                        if (
-                          [
-                            'cancelled',
-                            'expired',
-                            'denied',
-                            'rejected',
-                          ].includes(progress.state) &&
-                          !checkpointRef.current.provisioning
-                        ) {
-                          const next = {
-                            ...checkpointRef.current,
-                            sso: undefined,
-                            accountMethod: 'create' as const,
-                          };
-                          updateRetainedSetup(checkpointRef.current, next);
-                          commit(next);
-                          return;
-                        }
-                        if (
-                          progress.operationId &&
-                          !checkpointRef.current.provisioning &&
-                          !checkpointRef.current.provisionedAccount
-                        )
-                          commit({
-                            ...checkpointRef.current,
-                            sso: {
-                              operationId: progress.operationId,
-                              alias: accountAlias,
-                              hardware,
-                            },
-                          });
-                      }}
-                      onComplete={() => {
-                        setInvite('');
-                        accountOperations.accountProvisioned(
-                          accountAlias,
-                          fixDeviceName(deviceName),
-                        );
-                      }}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-            <div className="choice">
-              <RadioCard
-                title="Sign in to an existing account"
-                detail="Add this device to an account you already have."
-                selected={signingIn}
-                onSelect={() => {
-                  if (signingIn) return;
-                  openExisting();
-                }}
-              />
-            </div>
-          </RadioGroup>
-        </Inset>
-        {signingIn ? (
-          signinSections(2)
-        ) : (
-          <>
-            <StepLabel n={2}>Account and device</StepLabel>
-            <Inset className="account-form">{identityRows}</Inset>
-            {aliasInvalidNotice}
-            {message ? (
-              <p className="crit" role="alert">
-                <FailureText text={message} reason={reasonFor(message)} />
-              </p>
-            ) : null}
-            {duplicateAlias && !busy && !identityLoading ? (
-              <div className="band info" role="status">
-                <span className="t">
-                  “{duplicateAlias.alias}” is already set up on this device for
-                  this server. Use that account, or choose a different username.
-                </span>
-                <span className="a">
-                  <Button
-                    variant="primary"
-                    onClick={() => void adoptDuplicateAccount()}
-                  >
-                    Use existing account
-                  </Button>
-                </span>
-              </div>
-            ) : null}
-          </>
+      <AccountSetupStep
+        checkpoint={checkpoint}
+        signingIn={signingIn}
+        cliAccountSelected={cliAccountSelected}
+        ssoAvailable={ssoAvailable}
+        ssoSelected={ssoSelected}
+        busy={busy}
+        usernameAliasInvalid={usernameAliasInvalid}
+        username={username}
+        deviceName={deviceName}
+        signupPending={pending.some(
+          (row) => row.kind === 'account-signup' && row.alias === accountAlias,
         )}
-      </Pane>
+        email={email}
+        invite={invite}
+        goCandidatePresent={Boolean(goCandidate)}
+        accountBackTarget={accountBackTarget}
+        identityLoading={identityLoading}
+        duplicateAlias={duplicateAlias}
+        message={message}
+        identityRows={identityRows}
+        aliasInvalidNotice={aliasInvalidNotice}
+        signinPrimary={signinPrimary}
+        signinSections={signinSections}
+        organizationSignup={organizationSignup}
+        failureText={
+          <FailureText text={message ?? ''} reason={reasonFor(message)} />
+        }
+        go={go}
+        createAccount={createAccount}
+        openExisting={openExisting}
+        setEmail={setEmail}
+        setInvite={setInvite}
+        onPrimarySlot={setSsoPrimarySlot}
+        onChooseOrganization={() => {
+          clearSecrets();
+          send({ type: 'select-account-method', method: 'organization' });
+        }}
+        adoptDuplicateAccount={adoptDuplicateAccount}
+      />
     );
   }
   // Only the managed-local path keeps a separate page for an existing account;
@@ -2594,336 +1913,55 @@ function FirstRunSession({
         personalRefreshError={personalRefreshError}
       />
     );
-  else if (state === 'waiting' && checkpoint.selectedGroup)
-    content = (
-      <Pane
-        title="Team vault unavailable"
-        foot={
-          <Foot>
-            <Button onClick={() => go('checklist-invited')}>
-              Finish later
-            </Button>
-          </Foot>
-        }
-      >
-        <h1>{checkpoint.selectedGroup.name}</h1>
-        <p className="lead">
-          {/* Reached either from a vault that could not be opened or from a
-              team the catalog no longer binds, which the checkpoint does not
-              tell apart; the retry below finds out which. */}
-          {message ||
-            'This team’s vault could not be opened. Retry to check your membership again, or choose another team.'}
-        </p>
-        <div className="setup-actions">
-          <Button
-            variant="primary"
-            disabled={busy}
-            busy={busy}
-            onClick={() => void discover()}
-          >
-            {busy ? 'Retrying…' : 'Retry loading team'}
-          </Button>
-          <Button
-            onClick={() => {
-              commit({
-                ...checkpoint,
-                selectedGroup: undefined,
-                group: undefined,
-                added: false,
-              });
-              setMessage(null);
-            }}
-          >
-            Choose another team
-          </Button>
-        </div>
-      </Pane>
-    );
   else if (state === 'waiting')
     content = (
-      <Pane
-        title={`Waiting for ${admin} to add ${checkpoint.account?.username}`}
-        header={false}
-        wide
-        foot={
-          <Foot>
-            <Button onClick={() => go('checklist-invited')}>
-              Finish later
-            </Button>
-          </Foot>
+      <WaitingForTeamStep
+        checkpoint={checkpoint}
+        busy={busy}
+        message={message}
+        admin={admin}
+        adminShort={adminShort}
+        group={group}
+        discoveredGroups={discoveredGroups}
+        discoveryOutcome={discoveryOutcome}
+        discover={discover}
+        selectDiscoveredGroup={selectDiscoveredGroup}
+        go={go}
+        onChooseAnotherTeam={() => {
+          commit({
+            ...checkpoint,
+            selectedGroup: undefined,
+            group: undefined,
+            added: false,
+          });
+          setMessage(null);
+        }}
+        onCopy={(value) =>
+          void bridge
+            .copyText(value)
+            .then(() => toasts.show('Copied to clipboard.'))
         }
-      >
-        <h1>
-          Waiting for {admin} to add {checkpoint.account?.username}
-        </h1>
-        <p className="lead">
-          Your account ({checkpoint.account?.username}) on{' '}
-          {profile?.canonicalName} is ready. {adminShort} must add you to{' '}
-          <b>{group}</b>. Once they have added you, select Check now to finish
-          joining.
-        </p>
-        {discoveredGroups.length > 1 ? (
-          <div className="pcard">
-            <h3>Choose an existing team</h3>
-            <p>
-              You’re already a member of these teams. Open one to get started.
-            </p>
-            <div className="btns">
-              {discoveredGroups.map((found) => (
-                <Button
-                  key={`${found.kind}:${found.teamIdHex}:${found.alias}`}
-                  onClick={() => selectDiscoveredGroup(found)}
-                >
-                  Open “{found.name ?? found.alias}”
-                </Button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        <div className="setup-grid">
-          <div className="col">
-            <div className="pcard">
-              <h3>Message for {adminShort}</h3>
-              <CopyBox
-                text={`Add ${checkpoint.account?.username} on ${profile?.canonicalName} to ${group}`}
-                onCopy={(value) =>
-                  void bridge
-                    .copyText(value)
-                    .then(() => toasts.show('Copied to clipboard.'))
-                }
-              >
-                “Add {checkpoint.account?.username} on {profile?.canonicalName}{' '}
-                to {group}”
-              </CopyBox>
-              <p>
-                Send this message to {adminShort} so they have your exact
-                username and server.
-              </p>
-            </div>
-            <Inset className="checklist">
-              <InsetRow label={<Icon name="users" />}>
-                <b>{group} will appear under Teams</b>
-                <span className="hint">
-                  Teams appear once membership is confirmed by the server.
-                </span>
-              </InsetRow>
-              <InsetRow label={<Icon name="eye" />}>
-                <b>Access depends on your team role</b>
-                <span className="hint">
-                  Roles include <b>Member</b>, <b>Admin</b>, and <b>Owner</b>.
-                  You can only access items permitted by your assigned role and
-                  visibility level.
-                </span>
-              </InsetRow>
-              <InsetRow label={<Icon name="door" />}>
-                <b>You can close FOKS anytime</b>
-                <span className="hint">
-                  Your account and server settings are saved on this device.
-                  When you reopen FOKS, you can continue setup.
-                </span>
-              </InsetRow>
-            </Inset>
-          </div>
-          <div className="col">
-            <div className="pcard">
-              <h3>Check now</h3>
-              <div className="checkrow">
-                <Button
-                  variant="primary"
-                  disabled={busy}
-                  onClick={() => void discover()}
-                >
-                  Check now
-                </Button>
-                <span className="status">
-                  {/* Only a check that completed and found nothing says the
-                      team was not found; a failed check says it failed, and
-                      the sentence below carries what went wrong. */}
-                  <Chip>
-                    {!message
-                      ? 'Not checked yet'
-                      : discoveryOutcome === 'failed'
-                        ? 'Check failed'
-                        : 'Checked: now'}
-                  </Chip>
-                  {message && discoveryOutcome === 'not-found' ? (
-                    <>Team not found yet. Only Personal is available.</>
-                  ) : null}
-                </span>
-              </div>
-              <p>
-                Select <b>Check now</b> to look for pending team invitations.
-                FOKS will also check automatically each time you open the app.
-              </p>
-              <Band label="Team updates">
-                <b>Check now</b> checks the server for team memberships linked
-                to your account. FOKS also checks when it opens.
-              </Band>
-              {message ? <div className="res">{message}</div> : null}
-              <p className="note">
-                You can use <b>Personal</b> while you wait. If {adminShort} has
-                already added you, confirm that they entered{' '}
-                <code>{checkpoint.account?.username}</code>.
-              </p>
-              <details className="dd">
-                <summary>
-                  <Icon name="chevronDown" />
-                  Details
-                </summary>
-                <p>
-                  Checks your account ({checkpoint.account?.username}) on{' '}
-                  {profile?.canonicalName} and updates your team list.
-                </p>
-              </details>
-            </div>
-            <div className="pcard">
-              <h3>Use your Personal vault</h3>
-              <p>
-                {PERSONAL_FIXED} You can store private items in <b>Personal</b>{' '}
-                right away; items in Personal are never shared with {group}.
-              </p>
-              <Button onClick={() => go('checklist-invited')}>
-                Continue to my vault
-              </Button>
-            </div>
-          </div>
-        </div>
-      </Pane>
+      />
     );
-  else if (state === 'checklist-invited' || state === 'checklist-own') {
-    const stepsDone = completedFirstRunSteps(checkpoint);
-    const stepsTotal = firstRunStepCount(checkpoint);
-    const recoverySet = Boolean(
-      checkpoint.passphraseSet || checkpoint.backupCommitted,
-    );
-    // Completed checklist items display one summary line; server connection
-    // details are available in Settings. If recovery setup was skipped, the
-    // warning banner explains that unbacked accounts cannot be recovered.
+  else if (state === 'checklist-invited' || state === 'checklist-own')
     content = (
-      <Pane title="Get started" header={false}>
-        <h1>Get started</h1>
-        <p className="lead">
-          {stepsDone === stepsTotal
-            ? 'Your account is ready. Start using your Personal vault.'
-            : 'Completed steps are saved. Finish account recovery below, or start using your Personal vault.'}
-        </p>
-        {personalRefreshError ? (
-          <p className="crit" role="alert">
-            {personalRefreshError}
-          </p>
-        ) : null}
-        <Inset className="checklist">
-          <InsetRow label="✓">
-            <b>
-              {checkpoint.path === 'invited'
-                ? 'Their server'
-                : 'Select a server'}
-            </b>
-            <span className="hint">Using {profile?.canonicalName}</span>
-          </InsetRow>
-          <InsetRow label="✓">
-            <b>Your account</b>
-            <span className="hint">
-              {checkpoint.accountMethod === 'recover'
-                ? 'Restored account as'
-                : 'Created as'}{' '}
-              {checkpoint.account?.username}
-            </span>
-          </InsetRow>
-          <InsetRow
-            className={recoverySet ? undefined : 'skipped'}
-            label={recoverySet ? '✓' : '!'}
-          >
-            <b>Save recovery phrase</b>
-            <span className="hint">
-              {recoverySet
-                ? [
-                    checkpoint.backupCommitted ? 'Recovery phrase saved' : null,
-                    checkpoint.passphraseSet ? 'Passphrase set' : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')
-                : 'Recovery phrase not saved'}
-            </span>
-          </InsetRow>
-          {checkpoint.path === 'invited' ? (
-            <InsetRow
-              className={checkpoint.added ? undefined : 'pending'}
-              label={checkpoint.added ? '✓' : '4'}
-              action={
-                <span className="checklist-actions">
-                  <Button
-                    size="sm"
-                    icon="copy"
-                    onClick={() =>
-                      void bridge
-                        .copyText(
-                          `Add ${checkpoint.account?.username} on ${profile?.canonicalName} to ${group}`,
-                        )
-                        .then(() => toasts.show('Message copied.'))
-                    }
-                  >
-                    Copy message
-                  </Button>
-                  <Button size="sm" onClick={() => go('waiting')}>
-                    Check now
-                  </Button>
-                </span>
-              }
-            >
-              <b>Waiting for {admin} to add you</b>
-              <span className="hint">
-                Check again after {adminShort} adds you to {group}.
-              </span>
-              <Band label="Team discovery">
-                Check now looks up teams for this signed-in account.
-              </Band>
-            </InsetRow>
-          ) : null}
-        </Inset>
-        {recoverySet ? null : (
-          <div className="checklist-notice">
-            <Band
-              // Every other band's label is the short lead-in the sentence
-              // after it completes, not a sentence of its own.
-              label="Recovery not set up"
-              action={
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() => go('protect')}
-                >
-                  Set up recovery
-                </Button>
-              }
-            >
-              The keys for {checkpoint.account?.username} are saved only on this
-              device, so this account cannot be recovered if the device is lost.
-            </Band>
-          </div>
-        )}
-        <div className="checklist-cta">
-          {!accountStore ? (
-            <Button disabled={personalRefreshing} onClick={retryPersonal}>
-              {personalRefreshing
-                ? 'Loading Personal vault…'
-                : 'Retry loading Personal vault'}
-            </Button>
-          ) : null}
-          <Button
-            variant="primary"
-            disabled={!accountStore}
-            onClick={() => {
-              if (accountStore)
-                onNavigate({ kind: 'store', ref: accountStore });
-            }}
-          >
-            Continue to my vault
-          </Button>
-        </div>
-      </Pane>
+      <SetupChecklistStep
+        checkpoint={checkpoint}
+        personalRefreshError={personalRefreshError}
+        admin={admin}
+        adminShort={adminShort}
+        group={group}
+        accountStore={accountStore}
+        personalRefreshing={personalRefreshing}
+        retryPersonal={retryPersonal}
+        onNavigate={onNavigate}
+        go={go}
+        onCopy={(value) =>
+          void bridge.copyText(value).then(() => toasts.show('Message copied.'))
+        }
+      />
     );
-  } else
+  else
     content = (
       <Pane title={group} subtitle={`Team on ${profile?.canonicalName}`} wide>
         <Notice
