@@ -1,4 +1,5 @@
 use super::*;
+use foks_snowpack::encode;
 
 fn positional(tag: &[u8], fields: Vec<Value>) -> Vec<u8> {
     encode(&Value::Array(vec![
