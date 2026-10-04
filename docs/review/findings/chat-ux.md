@@ -55,7 +55,7 @@ Desktop-UI and docs. (1) Sort in listChannels instead of inheriting agent order.
 
 **Already tracked:** Channel rename/delete is deferred (ISSUES.md 'Extended channel management … remain disabled'); the ordering, preview, fold and menu changes here are not tracked
 
-**Mockup:** [Channel column: stable order, previews, mute](../mockups/chat-channel-column.html)
+**Mockup:** [Chat channel column](../mockups/chat-channel-column.html)
 
 <details><summary>Verifier note</summary>
 
@@ -91,7 +91,7 @@ Opening a channel always scrolls to the bottom, and 300 ms later the newest mess
 
 Desktop-UI only. (1) Anchored open: when the conversation has unread > 0, make the first request `history {before: String(read_through + 41)}`, through a distinct 'anchor' load mode in useChatHistory. Do not reuse load(older): that path calls viewport.capture(older) and conversationResult's prepend logic. Scroll the NEW divider to about 30% from the top. (2) Give HistoryWindow a `detached` flag, set when the held tail is below the published head. While detached, make no incremental `after` reads. Page forward with explicit range reads (`before = held_tail + 51`) behind a 'Load newer messages' sentinel, and clear `detached` when a page reaches the published head. Keep treating gap=true from an `after` read as a reset, because it also signals rollback and omitted rows. (3) Mark read by visibility: an IntersectionObserver on [data-message] rows tracks the highest sequence that has been at least 50% visible for 500 ms while focusedWindow(), and that sequence goes to markRead in place of messages.at(-1). The server pointer is monotonic. (4) When the divider is above the viewport, pin a banner reading 'N new messages since <time> · Jump · Mark as read (Esc)'. Clear newFrom on Esc, on mark-all, or when leaving the channel. (5) Replace the chevron with a 'N new messages ↓' pill that counts rows newer than the highest sequence held when atBottom became false. (6) Add tests in chat.render.test.tsx for anchored open with unread=120, visibility-based marking, the pill count, and a rollback gap still resetting while detached.
 
-**Mockup:** [Open at first unread, read by what you saw](../mockups/chat-unread-anchored-open.html)
+**Mockup:** [Open at first unread](../mockups/chat-unread-anchored-open.html)
 
 <details><summary>Verifier note</summary>
 
@@ -126,7 +126,7 @@ For admins-only channels, the header member count (shown only when the channel h
 
 Desktop-UI only. Add channelAudience(snapshot, storeId, channel) next to readersOf in model/readers.ts (or in chat/presentation.ts). It normalizes 'Member (n)' to {role:'Member', visibility:n}, keeps the user parties whose destination_role satisfies admits(destination_role, read_role), and marks the subset that also satisfies admits(destination_role, write_role). Use the reader count in the header sub-line when there is no description, in the empty-state sentence ('Only the 3 admins and owners of Engineering can read it'), and in the info panel. In the panel, add the rows 'Who can read' and 'Who can post', and a reader list with role and a 'can post'/'read only' tag. Keep 'Manage in Teams' for membership changes. Either use roleTextWithoutBand for the role labels or delete it. Add render tests for an admin-tier channel in a 6-member team with 2 admins, and for a member-tier channel with a banded read role.
 
-**Mockup:** [Channel audience and alert settings](../mockups/chat-channel-info-and-alerts.html)
+**Mockup:** [Channel readers and alerts](../mockups/chat-channel-info-and-alerts.html)
 
 <details><summary>Verifier note</summary>
 
@@ -160,7 +160,7 @@ Desktop-UI first. (1) Add a hint row under the composer: 'Enter to send · Shift
 
 **Already tracked:** Edit of sent messages and mentions as protocol features are deferred in ISSUES.md 'Existing disclosed limitations'; the plain-text @-completion and Up-to-restore-unsent here need no protocol change
 
-**Mockup:** [Channel column: stable order, previews, mute](../mockups/chat-channel-column.html), [Composer: formatting, mentions, drafts, budget](../mockups/chat-composer.html)
+**Mockup:** [Chat channel column](../mockups/chat-channel-column.html), [Chat composer refinements](../mockups/chat-composer.html)
 
 <details><summary>Verifier note</summary>
 
@@ -200,7 +200,7 @@ Unsent work appears in three layouts. OutgoingRow shows avatar, 'You', status an
 
 **Already tracked:** ISSUES.md 'Existing disclosed limitations' covers degraded inbox and bounded anchors (the behaviour, not its presentation); book/16-chat.qmd 'Sending from the client' describes the states
 
-**Mockup:** [Delivery, sender identity and integrity states](../mockups/chat-delivery-and-integrity.html)
+**Mockup:** [Delivery and integrity](../mockups/chat-delivery-and-integrity.html)
 
 <details><summary>Verifier note</summary>
 
@@ -236,7 +236,7 @@ Step 1 (desktop UI, S-M): a find-in-conversation bar (Ctrl/⌘+F, or the topbar 
 
 **Already tracked:** apps/desktop/README.md:743-746 and chat-teams.tsx:347-348 document the absence; this adds a no-IPC first step and an agent index design
 
-**Mockup:** [Find in conversation and message search](../mockups/chat-find-and-search.html)
+**Mockup:** [Chat find and search](../mockups/chat-find-and-search.html)
 
 <details><summary>Verifier note</summary>
 
@@ -272,7 +272,7 @@ In conversation-model.ts, trim instead of throwing. When appending at the tail, 
 
 **Already tracked:** book/20-desktop.qmd 'History paging' documents the 16-channel / 1,000-row / 8 MiB cache bounds, but not the error and reset behaviour at the cap
 
-**Mockup:** [Open at first unread, read by what you saw](../mockups/chat-unread-anchored-open.html)
+**Mockup:** [Open at first unread](../mockups/chat-unread-anchored-open.html)
 
 <details><summary>Verifier note</summary>
 
@@ -305,7 +305,7 @@ Ctrl+K reaches channels through the search palette, but there is no Alt+Up/Down 
 
 Desktop-UI only. (1) In ChatTab, add document key handlers that do nothing while anyDialogOpen() is true. Alt+Up/Down moves to the previous/next listed channel, and Alt+Shift+Up/Down to the next unread, unmuted channel. Leave Alt+Up/Down to the textarea when the caret is not on the first or last line. (2) Give message rows a roving tabindex: Up/Down/Home/End to move, Enter, Shift+F10 or the ContextMenu key to open the message actions, and Esc back to the composer. (3) Add a visually hidden role='status' aria-live='polite' announcer for messages that arrive while the window is focused, rate-limited, naming sender and channel only (no body, consistent with the notification previews setting). (4) For channel rows, open the existing column menu at the row's getBoundingClientRect() when the contextmenu event comes from the keyboard, rather than at clientX/clientY. (5) Optionally, Esc in a scrolled-up thread with an empty composer marks the channel read through the newest message. (6) Add a '?' shortcut sheet that lists only bindings that exist, in the platform's modifier notation. Cover the bindings with keyboard tests in chat.render.test.tsx and chat-teams.render.test.tsx.
 
-**Mockup:** [Open at first unread, read by what you saw](../mockups/chat-unread-anchored-open.html), [Reading messages and acting on them](../mockups/chat-reading-and-message-actions.html)
+**Mockup:** [Open at first unread](../mockups/chat-unread-anchored-open.html), [Message reading and actions](../mockups/chat-reading-and-message-actions.html)
 
 <details><summary>Verifier note</summary>
 
@@ -334,7 +334,7 @@ A message such as [https://bank.example/login](https://evil.example/) renders as
 
 Desktop-UI: render every link with title={url}. When the label differs from the URL, append a muted host suffix ('(evil.example)') after the link, taken from new URL(url).hostname, which is already punycode. If the label parses as a URL or bare hostname whose host differs from the destination host, style the link as a warning. Clicking it then opens a renderer confirmation naming both hosts, with Copy link, Cancel (default) and Open anyway. Do not add a renderer-controlled `confirm` flag to open_chat_link. It cannot enforce anything, and the host never sees the label. If a host-enforced step is wanted, open_chat_link must show a native dialog naming the destination host for every chat link, without a flag. Tests: label/host mismatch; punycode host shown as xn--; label identical to URL (no suffix); relative-looking labels such as 'here' (suffix only, no warning).
 
-**Mockup:** [Reading messages and acting on them](../mockups/chat-reading-and-message-actions.html)
+**Mockup:** [Message reading and actions](../mockups/chat-reading-and-message-actions.html)
 
 <details><summary>Verifier note</summary>
 
@@ -368,7 +368,7 @@ The UI reads conversation.muted and .hidden everywhere: captions, dimmed rows, a
 
 Device-local first, with no protocol change. Extend the chat_local Settings with `muted: BTreeSet<String>`, keyed by the same notificationKey(scope, channel) derivation and bounded at 4096 like overrides. Add a per-team default alert mode. Expose both in the local Session. In inbox-service's published projection, set muted = server.muted || local.muted, so channelMeta, teamUnread, channelUnreadTotal and the rail badge work unchanged. Muting implies alerts 'none' unless the user chooses otherwise. An optional 'Mentions only' mode should be labelled as a text match. It matches @<own username> case-insensitively at word boundaries within the first 256 characters the notification consumer reads. Name it as distinct from the protocol mentions deferred in ISSUES.md:187-188. Add a UI item 'Mute channel' to the channel context menu and info panel, and a team-level alerts default to the team header menu. Later step (agent): sync these preferences as an encrypted record in the user's own KV store, so the server holds only ciphertext. Record in ISSUES.md that server-side muted/hidden cannot be set on the pinned protocol.
 
-**Mockup:** [Channel column: stable order, previews, mute](../mockups/chat-channel-column.html), [Channel audience and alert settings](../mockups/chat-channel-info-and-alerts.html)
+**Mockup:** [Chat channel column](../mockups/chat-channel-column.html), [Channel readers and alerts](../mockups/chat-channel-info-and-alerts.html)
 
 <details><summary>Verifier note</summary>
 
@@ -406,7 +406,7 @@ Desktop-UI only. Add a MessageActions component rendered on hover and on focus-w
 
 **Already tracked:** ISSUES.md 'Existing disclosed limitations' (edits, deletion, reactions, threads, mentions and attachments remain disabled) and book/16-chat.qmd 'Current limits'; this adds actions that need no protocol change as a first step
 
-**Mockup:** [Reading messages and acting on them](../mockups/chat-reading-and-message-actions.html)
+**Mockup:** [Message reading and actions](../mockups/chat-reading-and-message-actions.html)
 
 <details><summary>Verifier note</summary>
 
@@ -439,7 +439,7 @@ Desktop-UI only, inside message-text.tsx and keeping its bounded, non-recursive 
 
 **Already tracked:** Mentions as a protocol feature are deferred (ISSUES.md 'Existing disclosed limitations'); the @-highlight here is only styling of Basic text
 
-**Mockup:** [Reading messages and acting on them](../mockups/chat-reading-and-message-actions.html)
+**Mockup:** [Message reading and actions](../mockups/chat-reading-and-message-actions.html)
 
 <details><summary>Verifier note</summary>
 
@@ -471,7 +471,7 @@ Sender names come only from the current team roster. A message from someone who 
 
 Agent/IPC: add `senders: [{uid, username: Option, member: bool}]` to ChatResult::History in agent-proto. In chat-contract.ts, validate at most CHAT_PAGE_ROWS distinct entries, user-entity uid hex ('01' prefix, 66 chars) and username ≤ CHAT_LABEL_BYTES. In the agent, take `member` from the team chain the chat session already verifies (team.verified.members()). Resolve usernames for the page's distinct senders with load_and_pin_user_as_local_team using the team view token, which this server still authorizes for removed members. Confirm the same against Go v0.1.9. Fall back to locally pinned user state, and cache results in a bounded per-host LRU in the agent so pages do not trigger repeated chain loads. A failed load yields username: None, not an error. Desktop: prefer the roster name, then the history-provided name with a 'former member' marker when member=false, then a neutral 'Unknown member' with the full UID in a tooltip and a Copy ID action, never raw hex as the name. Keep avatar hue keyed on the UID.
 
-**Mockup:** [Delivery, sender identity and integrity states](../mockups/chat-delivery-and-integrity.html)
+**Mockup:** [Delivery and integrity](../mockups/chat-delivery-and-integrity.html)
 
 <details><summary>Verifier note</summary>
 

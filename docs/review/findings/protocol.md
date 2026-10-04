@@ -92,7 +92,7 @@ Phase 1, read-side only with no wire or server change: add `RealtimeKeys::open_m
 
 **Already tracked:** ISSUES.md 'Existing disclosed limitations' (edits, reactions, threads remain disabled) and 'Deferred extended-chat prerequisite'. This finding adds a smaller, interop-only first step using the already-pinned Pegged wire form, plus the send-blocking defect, which is not recorded.
 
-**Mockup:** [Extended chat preview: replies, files, channel settings, presence](../mockups/chat-capability-gated-extensions.html)
+**Mockup:** [Extended chat preview](../mockups/chat-capability-gated-extensions.html)
 
 <details><summary>Verifier note</summary>
 
@@ -316,7 +316,7 @@ Change the response to `[1, host, features: [u64...]]`. Assign feature IDs in th
 
 **Already tracked:** ISSUES.md 'Deferred extended-chat prerequisite' (method-position namespace only). This finding adds the response-shape extensibility and feature-gating of the unused public chat_v2 API.
 
-**Mockup:** [Extended chat preview: replies, files, channel settings, presence](../mockups/chat-capability-gated-extensions.html)
+**Mockup:** [Extended chat preview](../mockups/chat-capability-gated-extensions.html)
 
 <details><summary>Verifier note</summary>
 

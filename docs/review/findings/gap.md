@@ -87,7 +87,7 @@ Add an agent operation VerifyRecoveryPhrase{profile, account_alias, phrase: Secr
 
 **Already tracked:** Not tracked. book/06-hesp.qmd:61-79 names the late-detection problem but proposes no remedy.
 
-**Mockup:** [Test your recovery phrase](../mockups/devices-recovery-phrase-test.html)
+**Mockup:** [Recovery phrase test](../mockups/devices-recovery-phrase-test.html)
 
 <details><summary>Verifier note</summary>
 
@@ -405,7 +405,7 @@ Toasts default to 2,600 ms, and the timers start on mount with no pause on hover
 
 Make #toasts a persistent role=status aria-live=polite region, with a separate assertive region for warnings, and append messages into them. Pause timers on hover, on focus within the toast and while document.hidden. Scale duration with message length: at least 4 s, warnings 8 s. Remove the '⚠' heuristic. Expose AUTO_CLEAR_SECONDS through a native command so copy toasts can read 'Password copied · clears in 30 s'. Add a render test with fake timers covering pause and announcement.
 
-**Mockup:** [Login items: field copy, generator, quick copy](../mockups/vault-login-copy-and-generator.html)
+**Mockup:** [Login copy and generator](../mockups/vault-login-copy-and-generator.html)
 
 <details><summary>Verifier note</summary>
 

@@ -53,7 +53,7 @@ Locking happens only by hand. The account popover's Lock item and the Settings �
 
 Implement the policy in the Rust host, not the renderer, because the renderer is untrusted. Add an `IdlePolicy { lock_after: Option<Duration>, lock_on_sleep: bool, clear_clipboard_on_lock: bool, clipboard_seconds: u64 }` stored in host state (an app-config file), with get/set commands that require main window and unlocked state. Timer: the renderer calls a throttled `note_activity` (at most once per 30 s, on pointer and key events), and the host locks when the deadline passes. A compromised renderer could keep the session alive, but it already holds an unlocked session. OS triggers, handled in the host: on macOS, the `com.apple.screenIsLocked` distributed notification and NSWorkspace will-sleep; on Linux, logind `PrepareForSleep` and the session `Lock` signal over D-Bus (the host already talks to polkit). Make `clipboard_seconds` configurable within [10, 120] and clear on lock. Return `clearsInSeconds` in the copy acknowledgement so the toast can show a countdown. Add a CmdOrCtrl+L 'Lock' accelerator to install_macos_menu and a matching renderer shortcut. Until this ships, correct book/20-desktop.qmd.
 
-**Mockup:** [Auto-lock and clipboard policy](../mockups/security-auto-lock.html)
+**Mockup:** [Auto-lock and clipboard](../mockups/security-auto-lock.html)
 
 <details><summary>Verifier note</summary>
 
@@ -91,7 +91,7 @@ New passwords are stored as one small file `user: X\npassword: Y\nurl: Z`. kindO
 
 1) Add a host command copy_item_field(storeId, path, version, field: 'password'|'username'|'url'|'value') in src-tauri/commands/vault.rs next to read_text. It parses the decrypted small file in Rust, accepting the same aliases as newItemDraft (user/username, url/website), and passes only the selected value to clipboard::copy_with_hygiene. A missing field returns a typed field-missing error. Point the list-row Copy, the details Copy and the palette quick action at field 'password' for Password items. 2) Add one non-secret bit, e.g. shape: 'login'|'text'|null, to the catalog. Compute it in foks-client's metadata sync, which already opens each small-file node before zeroizing it (crates/foks-client/src/kv/sync.rs:1080-1094). Carry it through the soft projection, KvCatalogReport, the agent's KvEntryMetadata (agent IPC only, not Go wire) and its cached-catalog pages, then ItemDto and decodeItem. Field values stay out of the catalog. 3) In kindOf, use shape when present and keep the /logins/ prefix only as a fallback. Extend the inline login edit form, currently gated on isLogin, to cover these items. 4) Make the mock project items exactly as production does: move the masked templates out of Item.value into a mock-only plaintext map, and record copied fields so tests can assert them. No protocol change; the stored format stays a v0.1.9 small file.
 
-**Mockup:** [Login items: field copy, generator, quick copy](../mockups/vault-login-copy-and-generator.html)
+**Mockup:** [Login copy and generator](../mockups/vault-login-copy-and-generator.html)
 
 <details><summary>Verifier note</summary>
 
@@ -128,7 +128,7 @@ Make Delete mean 'move to /.trash' within the same store. (1) Trash location: di
 
 **Already tracked:** book/20-desktop.qmd:337 states 'Folder deletion is not supported in the desktop.' This finding adds a design (folder move into role-scoped trash) that removes the reason for that restriction.
 
-**Mockup:** [Trash, undo and bulk organising](../mockups/vault-trash-and-undo.html)
+**Mockup:** [Trash and undo](../mockups/vault-trash-and-undo.html)
 
 <details><summary>Verifier note</summary>
 
@@ -256,7 +256,7 @@ Moving an item means typing a full absolute destination path into a free-text fi
 
 (1) Replace the path field with a FolderPicker built from `folderTree` for the item's store. It has a tree, a 'New folder' inline action that calls the existing createFolder (already mkdir -p), and a Name field defaulting to the current name, with a path preview. Keep the free-text path behind a 'Path' disclosure, as NewSheet does. (2) Add row-to-tree-folder drag within the renderer using pointer events (pointerdown, pointermove, pointerup with elementFromPoint on [data-folder-store]) rather than HTML5 dataTransfer. The window's native dragDropEnabled handler stays reserved for OS file drops through record_drop_paths. (3) Add `MultiSelection` (ordered keys plus an anchor) with ⌘-click and shift-click, and a selection toolbar. Add `move-many` and `delete-many` (later `trash-many`) workflows that run MoveKv or RemoveKv sequentially; the host already takes a per-profile mutation permit. Report per-item outcomes, reusing the ambiguous/uncertain handling, and offer 'Retry failed'. Do not batch dirents into one kvPut until a measured need appears.
 
-**Mockup:** [Trash, undo and bulk organising](../mockups/vault-trash-and-undo.html)
+**Mockup:** [Trash and undo](../mockups/vault-trash-and-undo.html)
 
 <details><summary>Verifier note</summary>
 
@@ -287,7 +287,7 @@ The New password sheet's Password field is a plain masked input with no reveal t
 
 Add a `PasswordInput` component (apps/desktop/src/components) with Reveal and Generate actions, used by NewSheet and the login edit form. Generate in the renderer with `crypto.getRandomValues` and rejection sampling (no modulo bias). This is acceptable because the renderer already holds the typed value in this sheet. Policies: random characters (length 8–64, default 24, character classes, avoid ambiguous characters) and passphrase (an embedded EFF short wordlist, 4–8 words, separator). Remember the last policy per device in localStorage. Strength: compute entropy exactly for generated values; for typed values use a bundled offline estimator such as zxcvbn-ts, loaded lazily, and show warnings only, never a block. Defer reuse detection, which would need agent-side comparison of plaintexts.
 
-**Mockup:** [Login items: field copy, generator, quick copy](../mockups/vault-login-copy-and-generator.html)
+**Mockup:** [Login copy and generator](../mockups/vault-login-copy-and-generator.html)
 
 <details><summary>Verifier note</summary>
 
@@ -320,7 +320,7 @@ The palette can only navigate. Choosing an item opens its store and selects it, 
 
 Extend SearchEntry with `actions` and handle modifier keys in the palette's keydown handler. Enter opens. ⌘C copies through the existing `copy_item_value` for text items now, and through `copy_item_field` (fe-product-login-fields-copy) for a login's password once that command exists. Files get no copy action. Intercept ⌘C only when the query input's selection is collapsed, so copying query text still works. ⇧⌘C copies the username once field copy exists, and ⌘O opens the URL. Add a per-device `recents` list (last 10 opened or copied items) and `favorites` (star toggle in the details header and ⌘D in the palette). Persist only opaque identifiers (store ref and dirent id) and resolve names from the live snapshot at render time, dropping ids that no longer resolve. Do not write item names or paths to localStorage, because that would put decrypted metadata on disk beyond the lock. Wrap storage access in try/catch and clear it on sign-out. An empty query shows Recent, Favorites, then Actions (New password, Add document, Lock through the existing lockFromMenu path, Settings, Add a device). Index folders as results that navigate with locations.setFolder. Parse `in:<vault>` and `kind:password|document` tokens in the pure `searchResults` so they can be unit-tested. State in the palette footer that values are not searched.
 
-**Mockup:** [Login items: field copy, generator, quick copy](../mockups/vault-login-copy-and-generator.html)
+**Mockup:** [Login copy and generator](../mockups/vault-login-copy-and-generator.html)
 
 <details><summary>Verifier note</summary>
 

@@ -53,7 +53,7 @@ Introduce per-message verdicts in foks-client history: add ChatContent::Unverifi
 
 **Already tracked:** SECURITY.md:441-447 and book/16-chat.qmd describe channel quarantine as the design; neither ISSUES.md nor the book treats a member-authored malformed message as an availability risk.
 
-**Mockup:** [Delivery, sender identity and integrity states](../mockups/chat-delivery-and-integrity.html), [Extended chat preview: replies, files, channel settings, presence](../mockups/chat-capability-gated-extensions.html)
+**Mockup:** [Delivery and integrity](../mockups/chat-delivery-and-integrity.html), [Extended chat preview](../mockups/chat-capability-gated-extensions.html)
 
 <details><summary>Verifier note</summary>
 
@@ -88,7 +88,7 @@ Phase 1 (Go-compatible): an owner provisions /.chat once, with read_role MIN_ROL
 
 **Already tracked:** ISSUES.md deferred extended-chat section ('attachment authorization and committed-object retention are designs'); the KV-backed Go-compatible path is new.
 
-**Mockup:** [Extended chat preview: replies, files, channel settings, presence](../mockups/chat-capability-gated-extensions.html)
+**Mockup:** [Extended chat preview](../mockups/chat-capability-gated-extensions.html)
 
 <details><summary>Verifier note</summary>
 
@@ -125,7 +125,7 @@ At the admission sites (channel count in channels.rs:111 and 159, fanout in inbo
 
 **Already tracked:** ISSUES.md Stage 1 (quotas) and Stage 6 (fanout > 1,024) describe the limits but not the status mapping or the resulting uncertain operations.
 
-**Mockup:** [Delivery, sender identity and integrity states](../mockups/chat-delivery-and-integrity.html)
+**Mockup:** [Delivery and integrity](../mockups/chat-delivery-and-integrity.html)
 
 <details><summary>Verifier note</summary>
 
@@ -161,7 +161,7 @@ Add foksChatUpdateChannel once a durable vendor method namespace is assigned, as
 
 **Already tracked:** ISSUES.md 'Existing disclosed limitations' (extended channel management disabled); the format-1 revision path and its client constraints are new.
 
-**Mockup:** [Extended chat preview: replies, files, channel settings, presence](../mockups/chat-capability-gated-extensions.html)
+**Mockup:** [Extended chat preview](../mockups/chat-capability-gated-extensions.html)
 
 <details><summary>Verifier note</summary>
 
@@ -197,7 +197,7 @@ The FOKS-RS server always returns hidden=false and muted=false. Neither the Go n
 
 **Already tracked:** ISSUES.md 'Existing disclosed limitations' lists mentions as disabled; preferences, mute semantics and sender labels are not tracked.
 
-**Mockup:** [Channel audience and alert settings](../mockups/chat-channel-info-and-alerts.html)
+**Mockup:** [Channel readers and alerts](../mockups/chat-channel-info-and-alerts.html)
 
 <details><summary>Verifier note</summary>
 
@@ -363,7 +363,7 @@ Settle negotiation rules in the same change that ISSUES.md 'Deferred extended-ch
 
 **Already tracked:** ISSUES.md 'Deferred extended-chat prerequisite' covers only the method-position namespace; version negotiation, unknown-bit tolerance, dependency rules and agent exposure are not tracked.
 
-**Mockup:** [Extended chat preview: replies, files, channel settings, presence](../mockups/chat-capability-gated-extensions.html)
+**Mockup:** [Extended chat preview](../mockups/chat-capability-gated-extensions.html)
 
 <details><summary>Verifier note</summary>
 
@@ -425,7 +425,7 @@ There is no search. The server stores ciphertext only, the agent persists no mes
 
 Add ChatAction::Search {channel, query, before?, page_budget} to the agent. It reads backward through read_chat_thread windows (verified, anchors updated), applies case-folded substring matching in memory, and returns hits (sequence, sender, send_time, snippet with match offsets) plus scanned_through so the desktop can continue. Cap each call at about 20 pages or 4 MiB, make it cancellable, and run it under the existing per-profile serialization. Cross-channel search iterates readable channels with a smaller per-channel budget. Phase 2, optional: an agent-owned index encrypted under the vault master key, following PendingChatStore, with per-channel coverage ranges, invalidated on key rotation and team removal.
 
-**Mockup:** [Find in conversation and message search](../mockups/chat-find-and-search.html)
+**Mockup:** [Chat find and search](../mockups/chat-find-and-search.html)
 
 <details><summary>Verifier note</summary>
 
@@ -456,7 +456,7 @@ The poll result is the Go shape {bumped, inbox_version}, and every inbox change 
 
 Behind a presence capability: (1) foksChatReadStates {channel} returns [(uid, read_through)] for current readers after require_read. Each user controls a share_read_state opt-in stored in rt_user_inboxes, off by default. (2) foksChatTyping {channel} records typing in an in-memory per-channel hub with about a 6 s TTL, rate-limited per user and never persisted. (3) foksChatPresencePoll {channel, since_epoch, timeout} long-polls that hub under the existing poll permit limit, and also returns read-state changes for the channel. The agent runs it only for the focused channel. Go clients and servers are unaffected.
 
-**Mockup:** [Extended chat preview: replies, files, channel settings, presence](../mockups/chat-capability-gated-extensions.html)
+**Mockup:** [Extended chat preview](../mockups/chat-capability-gated-extensions.html)
 
 <details><summary>Verifier note</summary>
 

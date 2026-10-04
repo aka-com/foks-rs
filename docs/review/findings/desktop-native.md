@@ -51,7 +51,7 @@ The app lock arms once at process start and afterwards locks only when the rende
 
 Add src/applock/triggers.rs and run the policy in Rust, since the renderer is treated as untrusted. (1) Idle: read OS idle time on a 30 s tick. On macOS use CGEventSourceSecondsSinceLastEventType. On Linux use org.freedesktop.ScreenSaver.GetSessionIdleTime, falling back to the logind Session IdleHint over the existing zbus dependency. (2) Events: on macOS, observe NSWorkspace willSleep and screensDidSleep and the com.apple.screenIsLocked distributed notification. On Linux, observe logind Manager.PrepareForSleep(true) and Session.Lock or LockedHint. (3) Optionally lock when the main window is hidden or minimized, using WindowEvent. Every trigger calls one shared lock_now(app) that performs exactly what lock_app does today (AppLock::lock, invalidate_catalog, web_admin::close_all, chat_local::conceal), then emits foks://app-locked with a reason to the main window. core:event:allow-listen already permits the renderer to receive it. Store the policy (timeout minutes, on_sleep, on_screen_lock, on_hide) device-locally next to chat-local/notifications.json. Add commands get_lock_policy and set_lock_policy; changing the policy requires require_unlocked. In errors.ts, route both 'app-locked' and the event to the existing lock screen. Add a unit test that drives the trigger through a fake clock and checks that the generation advances.
 
-**Mockup:** [Auto-lock and clipboard policy](../mockups/security-auto-lock.html)
+**Mockup:** [Auto-lock and clipboard](../mockups/security-auto-lock.html)
 
 <details><summary>Verifier note</summary>
 
@@ -180,7 +180,7 @@ Add platform/linux.rs implementing the same interface over zbus. available() che
 
 **Already tracked:** ISSUES.md line 186: 'non-macOS native notifications remain deferred'; this adds a concrete zbus design and the grouping/badge refinements
 
-**Mockup:** [Channel audience and alert settings](../mockups/chat-channel-info-and-alerts.html)
+**Mockup:** [Channel readers and alerts](../mockups/chat-channel-info-and-alerts.html)
 
 <details><summary>Verifier note</summary>
 

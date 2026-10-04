@@ -48,7 +48,7 @@ An OutgoingMessage carries a 9-value `phase` plus the flags observed, running, q
 
 In chat/send/outgoing.ts, model three orthogonal axes as discriminated unions. Delivery: {stage:'queued'|'saving'} | {stage:'preparing', ambiguous} | {stage:'prepared', op} | {stage:'uncertain', op} | {stage:'terminal', op}. Intent slot: 'none' | 'pending' | 'cleared' | {cleanupFailed}. Plus `observed: boolean`. Derive the display value with one pure `phaseOf(message)` and use it from OutgoingRow. Apply all changes through `transition(message, event)` with events saved, prepared(op), attempted(op), failed(error, stage), status(op), observed, revoked and intent-cleared. Give each drive() an attempt token and discard continuations whose token is stale. Add table-driven tests over (state, event) pairs, including a stale status reply that arrives after Retry.
 
-**Mockup:** [Delivery, sender identity and integrity states](../mockups/chat-delivery-and-integrity.html)
+**Mockup:** [Delivery and integrity](../mockups/chat-delivery-and-integrity.html)
 
 <details><summary>Verifier note</summary>
 
@@ -249,7 +249,7 @@ On each keystroke, setDraft re-encodes every draft of every team to enforce the 
 
 Keep drafts in a separate draft store inside the send service. Give it per-(store, channel) subscriptions, a per-store 'has draft' subscription for ChatScreen's channel list, and a total byte count maintained by delta, so setDraft encodes only the edited text. Do not route draft changes through publish(), so typing no longer re-arms the tick or notifies every subscriber. Expose selector hooks useChatDraft(store, channel) and useOutgoing(store, channel), each returning a per-key memoized snapshot that changes only when that channel's draft or outgoing messages change. Keep the global revision for operation and unsentCount changes. Extract the message list into a React.memo component whose props are the history window and the stable row inputs (actor, senderNames, newFrom). Add a render-count test to chat-composer.render.test.tsx showing that typing does not re-render the message list. Optionally, maintain retained and observation byte totals incrementally in canRetain and observeHistory.
 
-**Mockup:** [Composer: formatting, mentions, drafts, budget](../mockups/chat-composer.html)
+**Mockup:** [Chat composer refinements](../mockups/chat-composer.html)
 
 <details><summary>Verifier note</summary>
 
@@ -448,7 +448,7 @@ PendingRow chooses in the component which protocol action to send (attempt, reco
 
 Add retryOperation, checkOperation and cancelOperation(store, opId) to ChatSendService. They pick attempt or reconcile with the same predicate drive() uses, apply the status fallback reply to team.operations, and publish. Add a rows(store, channel) view model that combines OutgoingMessage and orphan TrackedOperation, with each row carrying actions: {retry?, check?, cancel?, restore?} computed in the service from a single operation and phase transition table. PendingRow and OutgoingRow then render those actions without choosing protocol verbs or recomputing availability. Drop the unused 'finalize' action from PendingRow.
 
-**Mockup:** [Delivery, sender identity and integrity states](../mockups/chat-delivery-and-integrity.html)
+**Mockup:** [Delivery and integrity](../mockups/chat-delivery-and-integrity.html)
 
 <details><summary>Verifier note</summary>
 

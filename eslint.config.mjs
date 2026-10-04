@@ -29,6 +29,14 @@ export default tseslint.config(
       sourceType: 'module',
     },
   },
+  {
+    // The review mockup kit is a classic browser script inlined into each page.
+    files: ['docs/review/mockups/_kit/kit.js'],
+    languageOptions: {
+      globals: globals.browser,
+      sourceType: 'script',
+    },
+  },
   ...tseslint.configs.recommendedTypeChecked.map((config) => ({
     ...config,
     files: ['apps/desktop/**/*.{ts,tsx}'],
