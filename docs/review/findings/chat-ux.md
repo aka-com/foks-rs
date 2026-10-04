@@ -152,7 +152,7 @@ The composer is a bare auto-growing textarea. Enter sends and Shift/Alt+Enter in
 - [`apps/desktop/src/chat/chat-thread.tsx:465`](../../../apps/desktop/src/chat/chat-thread.tsx#L465): meter rendered only when nearLimit (>75%) as '<n> KiB of 64 KiB'
 - [`apps/desktop/src/chat/send-service.ts:425`](../../../apps/desktop/src/chat/send-service.ts#L425): drafts(storeId) is an in-memory Map per team; setDraft at 439 has no persistence
 - [`apps/desktop/src/chat/outgoing-row.tsx:92`](../../../apps/desktop/src/chat/outgoing-row.tsx#L92): restoring an unsent message is an 'Edit' text button; service.restoreDraft exists (send-service.ts:1114)
-- [`apps/desktop/src/chat/message-text.tsx:88`](../../../apps/desktop/src/chat/message-text.tsx#L88): supported inline subset: `code`, **bold**, *italic*, [label](url); block: ``` fences, - / 1. lists, > quotes
+- [`apps/desktop/src/chat/message-text.tsx:88`](../../../apps/desktop/src/chat/message-text.tsx#L88): supported inline subset: `code`, **bold**, *italic*, `[label](url)`; block: ``` fences, - / 1. lists, > quotes
 
 **Recommendation**
 
@@ -323,11 +323,11 @@ Core claim holds. The chat code has no Alt+arrow channel navigation, no next-unr
 - Layers: desktop-ui, desktop-native
 - Verification: adjusted
 
-A message such as [https://bank.example/login](https://evil.example/) renders as 'https://bank.example/login', and clicking it opens evil.example through the host's open_chat_link with no confirmation and no title or status-bar hint of the real destination. Chat content comes from any team member, and a team member's device may be compromised. In an app whose purpose is protecting secrets, a label-versus-destination mismatch is a credible phishing vector. The scheme and credential checks in safeChatLink and safe_external_url do not address it.
+A message such as `[https://bank.example/login](https://evil.example/)` renders as `https://bank.example/login`, and clicking it opens evil.example through the host's open_chat_link with no confirmation and no title or status-bar hint of the real destination. Chat content comes from any team member, and a team member's device may be compromised. In an app whose purpose is protecting secrets, a label-versus-destination mismatch is a credible phishing vector. The scheme and credential checks in safeChatLink and safe_external_url do not address it.
 
 **Evidence**
 
-- [`apps/desktop/src/chat/message-text.tsx:102`](../../../apps/desktop/src/chat/message-text.tsx#L102): [label](url) renders token.slice(1, split) as the visible label with the URL hidden; the Link component (56-83) sets no title
+- [`apps/desktop/src/chat/message-text.tsx:102`](../../../apps/desktop/src/chat/message-text.tsx#L102): `[label](url)` renders token.slice(1, split) as the visible label with the URL hidden; the Link component (56-83) sets no title
 - [`apps/desktop/src-tauri/src/commands/chat.rs:340`](../../../apps/desktop/src-tauri/src/commands/chat.rs#L340): open_chat_link opens any http(s) URL via open/xdg-open after validation; no confirmation step
 
 **Recommendation**
@@ -424,11 +424,11 @@ Most of the finding holds. The only message action is 'Copy message' in a Contex
 - Layers: desktop-ui
 - Verification: confirmed
 
-The renderer links only [label](url) syntax, so the most common case, a pasted bare https URL, stays plain text (confirmed in the mock build). Blank lines are dropped (`else if (line)`), which collapses paragraphs into adjacent lines. Code fences render as unstyled monospace with a permanently visible 'Copy code' button and a status span. List bullets hang outside the text column. There is no visual treatment for @username, so later mention counting has nothing to build on.
+The renderer links only `[label](url)` syntax, so the most common case, a pasted bare https URL, stays plain text (confirmed in the mock build). Blank lines are dropped (`else if (line)`), which collapses paragraphs into adjacent lines. Code fences render as unstyled monospace with a permanently visible 'Copy code' button and a status span. List bullets hang outside the text column. There is no visual treatment for @username, so later mention counting has nothing to build on.
 
 **Evidence**
 
-- [`apps/desktop/src/chat/message-text.tsx:88`](../../../apps/desktop/src/chat/message-text.tsx#L88): inline pattern handles only `code`, **, *, [label](url); bare https://… is not matched
+- [`apps/desktop/src/chat/message-text.tsx:88`](../../../apps/desktop/src/chat/message-text.tsx#L88): inline pattern handles only `code`, **, *, `[label](url)`; bare https://… is not matched
 - [`apps/desktop/src/chat/message-text.tsx:177`](../../../apps/desktop/src/chat/message-text.tsx#L177): `else if (line)` skips empty lines, so paragraph spacing is lost
 - [`apps/desktop/src/chat/message-text.tsx:150`](../../../apps/desktop/src/chat/message-text.tsx#L150): each code block always renders a 'Copy code' Button and a role=status span
 - [`apps/desktop/src/screens/chat.css:1260`](../../../apps/desktop/src/screens/chat.css#L1260): .chat-message-text pre has no background, padding or max-height
@@ -443,7 +443,7 @@ Desktop-UI only, inside message-text.tsx and keeping its bounded, non-recursive 
 
 <details><summary>Verifier note</summary>
 
-Each claim was checked against the code. The inline pattern (message-text.tsx:88-89) matches only `code`, **bold**, *italic* and [label](url), so bare https URLs stay plain text. `else if (line)` at line 177 skips blank lines. Every block is a <p> with `margin: 2px 0 0` (chat.css:1014-1021), so 'a\nb' and 'a\n\nb' render the same. Each fenced block always renders a 'Copy code' Button plus a role=status span (Copy component, lines 37-52 and 150-156). `.chat-message-text pre` (chat.css:1260-1264) sets only max-width, overflow-x and white-space, with no background, padding or max-height. The universal reset `*{margin:0;padding:0}` (shell.css:2) removes list padding, so outside-positioned bullets hang left of the text column. No document records autolinking or the Markdown subset as a deliberate omission, and mentions are deferred only as a protocol feature. The recommendation fits the bounded, non-recursive renderer: bare URLs can pass through the existing safeChatLink, and @-highlighting is styling of Basic text.
+Each claim was checked against the code. The inline pattern (message-text.tsx:88-89) matches only `code`, **bold**, *italic* and `[label](url)`, so bare https URLs stay plain text. `else if (line)` at line 177 skips blank lines. Every block is a <p> with `margin: 2px 0 0` (chat.css:1014-1021), so 'a\nb' and 'a\n\nb' render the same. Each fenced block always renders a 'Copy code' Button plus a role=status span (Copy component, lines 37-52 and 150-156). `.chat-message-text pre` (chat.css:1260-1264) sets only max-width, overflow-x and white-space, with no background, padding or max-height. The universal reset `*{margin:0;padding:0}` (shell.css:2) removes list padding, so outside-positioned bullets hang left of the text column. No document records autolinking or the Markdown subset as a deliberate omission, and mentions are deferred only as a protocol feature. The recommendation fits the bounded, non-recursive renderer: bare URLs can pass through the existing safeChatLink, and @-highlighting is styling of Basic text.
 
 </details>
 
