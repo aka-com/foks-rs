@@ -15,9 +15,20 @@ independent release train.
   CI verifies that the tag and Cargo workspace version match.
 - Release jobs publish SHA-256 checksums and GitHub build-provenance
   attestations for both platform artifacts.
+- Release jobs start only after `.github/workflows/foks-dependencies.yml`
+  passes for the tagged commit: `cargo deny` checks advisories, licenses, bans
+  and sources against `deny.toml` for both Cargo lockfiles, and
+  `npm audit --audit-level=high` checks the full npm tree.
+- `foks-desktop` and `foks-agent` are built with `cargo auditable`
+  (`FOKS_AUDITABLE_BUILD=1`, see `scripts/foks-cargo.sh`), so each shipped
+  executable embeds its resolved dependency list.
+  `scripts/verify-auditable-binaries.sh` checks both executables in each
+  built bundle, and `cargo audit bin <executable>` checks a released binary
+  against advisories published after the release.
 
 The release pipeline must fail if a signing identity, notarization credential,
-managed agent, expected metadata file, or expected executable is missing.
+managed agent, expected metadata file, expected executable, or embedded
+dependency list is missing.
 Unsigned macOS artifacts must never be published.
 
 The application icons are placeholders until project-owned FOKS artwork is

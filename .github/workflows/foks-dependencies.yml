@@ -1,0 +1,94 @@
+name: FOKS dependency audit
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "fuzz/Cargo.lock"
+      - "deny.toml"
+      - "package.json"
+      - "package-lock.json"
+      - "**/go.mod"
+      - "**/go.sum"
+      - ".github/dependabot.yml"
+      - "scripts/foks-cargo.sh"
+      - "scripts/verify-auditable-binaries.sh"
+      - "scripts/test_dependency_audit.py"
+      - ".github/workflows/foks-dependencies.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "fuzz/Cargo.lock"
+      - "deny.toml"
+      - "package.json"
+      - "package-lock.json"
+      - "**/go.mod"
+      - "**/go.sum"
+      - ".github/dependabot.yml"
+      - "scripts/foks-cargo.sh"
+      - "scripts/verify-auditable-binaries.sh"
+      - "scripts/test_dependency_audit.py"
+      - ".github/workflows/foks-dependencies.yml"
+  # New advisories are published against unchanged lockfiles.
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+  # foks-desktop.yml runs this workflow before building release artifacts.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    name: Dependency policy coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test dependency policy coverage and release build scripts
+        run: python3 -m unittest discover -s scripts -p 'test_dependency_audit.py'
+
+  cargo-deny:
+    name: cargo-deny (${{ matrix.manifest }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every Cargo.lock in the repository; test_dependency_audit.py checks
+        # that this list stays complete.
+        manifest: [Cargo.toml, fuzz/Cargo.toml]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --version 0.20.2
+      - name: Check advisories, licenses, bans and sources
+        run: cargo deny --manifest-path "${{ matrix.manifest }}" --config deny.toml --locked check
+
+  npm-audit:
+    name: npm audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: .node-version
+      - name: Install pinned npm
+        run: npm install --global "$(node -p "require('./package.json').packageManager")"
+      # The full tree, development dependencies included: Vite, the Tauri CLI
+      # and the other build tools run in the release pipeline.
+      - name: Audit the locked dependency tree
+        run: npm audit --audit-level=high

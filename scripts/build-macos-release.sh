@@ -22,7 +22,7 @@ for variable in APPLE_SIGNING_IDENTITY APPLE_ID APPLE_TEAM_ID; do
   fi
 done
 
-for tool in cargo codesign hdiutil npm security spctl xcrun; do
+for tool in cargo cargo-auditable codesign hdiutil npm python3 rust-audit-info security spctl xcrun; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "build-macos-release: required tool is unavailable: $tool" >&2
     exit 1
@@ -56,6 +56,9 @@ rm -f -- "$output" "$pending"
 trap 'rm -f -- "$pending"' EXIT
 
 cd "$repository"
+# Release executables embed their dependency list for `cargo audit bin`;
+# scripts/foks-cargo.sh applies this to the agent and the application.
+export FOKS_AUDITABLE_BUILD=1
 npm run stage-agent
 (
   cd apps/desktop/src-tauri
@@ -64,6 +67,9 @@ npm run stage-agent
     --config tauri.bundle.macos.conf.json \
     -- --locked
 )
+scripts/verify-auditable-binaries.sh \
+  "$app/Contents/MacOS/foks-desktop" foks-desktop-app \
+  "$app/Contents/MacOS/foks-agent" foks-agent
 
 scripts/sign-macos-app.sh "$app"
 scripts/notarize-macos-app.sh "$app" "$pending"

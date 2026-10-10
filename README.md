@@ -67,6 +67,24 @@ npm run test:rust:scale   # production-size incremental history
 `cargo` builds and tests the Rust packages. npm drives Vite, TypeScript,
 ESLint, UI tests, and the Tauri CLI.
 
+Rust and npm dependencies are audited by
+`.github/workflows/foks-dependencies.yml` on pull requests that change them,
+weekly, and before desktop release builds. Dependabot proposes weekly Cargo,
+npm, Go module and GitHub Actions updates (`.github/dependabot.yml`). The same
+checks run locally with
+[`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) installed:
+
+```sh
+cargo deny --locked check    # advisories, licenses, bans, sources (deny.toml)
+cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check
+npm audit --audit-level=high # full npm tree, development tools included
+python3 -m unittest discover -s scripts -p 'test_dependency_audit.py'
+```
+
+An advisory that cannot be fixed by an update is added to the `ignore` list in
+`deny.toml` with a reason; a new license is added to its `allow` list only
+after review.
+
 - The complete desktop and release workflow and platform prerequisites are documented in
   [`apps/desktop/src-tauri/README.md`](apps/desktop/src-tauri/README.md).
 - Protocol and server validation live under [`tools/foks-server/`](tools/foks-server/)

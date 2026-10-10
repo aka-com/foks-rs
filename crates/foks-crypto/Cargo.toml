@@ -13,12 +13,13 @@ crypto_secretbox = { workspace = true }
 ed25519-dalek = { workspace = true }
 foks-proto = { workspace = true }
 foks-snowpack = { workspace = true }
-# FOKS v0.1.9 uses the digest-0.10 RustCrypto API.
 getrandom = { workspace = true }
 hmac = "0.12"
 ml-kem = { workspace = true }
 p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
 salsa20 = { workspace = true }
+# FOKS v0.1.9 primitives use the digest-0.10 RustCrypto API, as do hmac 0.12
+# and p256 0.13 above; the workspace sha2 is 0.11.
 sha2 = "0.10"
 sha3 = { workspace = true }
 thiserror = { workspace = true }

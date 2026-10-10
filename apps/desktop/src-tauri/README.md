@@ -51,6 +51,17 @@ builds only the application, signs it, and publishes the final DMG under
 validation succeed. Files under `target/release/bundle/dmg/` are ordinary
 unsigned development bundles.
 
+Release executables embed their dependency list for `cargo audit bin`.
+`tauri.conf.json` names `scripts/foks-cargo.sh` as the Tauri build runner, and
+`scripts/stage-foks-agent.sh` uses it for the agent; with
+`FOKS_AUDITABLE_BUILD=1` it runs `cargo auditable` in place of `cargo`.
+`npm run build:release` sets the variable itself and, after the build, runs
+`scripts/verify-auditable-binaries.sh` on both executables, so it also requires
+`python3`, `cargo-auditable` and `rust-audit-info`
+(`cargo install --locked cargo-auditable@0.7.7 rust-audit-info@0.5.4`, the
+versions CI installs). Without the
+variable, the bundle and development commands use plain `cargo`.
+
 Linux packaging requires `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
 `libpcsclite-dev`, and `librsvg2-bin`. See `linux/README.md` for the installed
 layout.

@@ -3,6 +3,7 @@
 node_modules/
 apps/desktop/src-tauri/binaries/
 dist/
+__pycache__/
 
 *.provisionprofile
 

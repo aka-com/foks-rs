@@ -10,6 +10,6 @@ if [[ -z "$target" ]]; then
 fi
 
 cd "$repository"
-cargo build --locked --release -p foks-agent --bin foks-agent
+scripts/foks-cargo.sh build --locked --release -p foks-agent --bin foks-agent
 mkdir -p apps/desktop/src-tauri/binaries
 cp target/release/foks-agent "apps/desktop/src-tauri/binaries/foks-agent-$target"

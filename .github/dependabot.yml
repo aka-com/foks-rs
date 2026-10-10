@@ -1,0 +1,73 @@
+# Weekly dependency update pull requests. scripts/test_dependency_audit.py
+# checks that every lockfile and module in the repository is listed here.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories:
+      - "/"
+      - "/fuzz"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      # Patch releases are semver-compatible for 0.x crates as well; minor and
+      # major updates arrive as individual pull requests. The exactly pinned
+      # crates also arrive individually, because each pin names the check its
+      # update needs (see the comments beside the pins);
+      # scripts/test_dependency_audit.py checks that every pin is listed.
+      cargo-patch:
+        patterns: ["*"]
+        exclude-patterns: ["libfuzzer-sys", "openidconnect", "rmcp", "rusqlite"]
+        update-types: ["patch"]
+    ignore:
+      # The Tauri CLI refuses to build when the tauri crate and the
+      # @tauri-apps/api package differ in major or minor version, so a Tauri
+      # minor or major update changes both ecosystems in one manual change.
+      - dependency-name: "tauri"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "tauri-build"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # A plugin minor release can require a newer tauri minor release.
+      - dependency-name: "tauri-plugin-*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      npm-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Updated together with the tauri crate; see the cargo entry above.
+      - dependency-name: "@tauri-apps/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: gomod
+    directories:
+      - "/tools/foks-protocol-sync"
+      - "/tools/foks-v019-oracle"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      gomod:
+        patterns: ["*"]
+    ignore:
+      # The compatibility oracle builds the Go FOKS v0.1.9 protocol code and
+      # its RPC codec at the versions that release requires. Updating them
+      # would test against a different Go implementation than v0.1.9.
+      - dependency-name: "github.com/foks-proj/go-foks"
+      - dependency-name: "github.com/foks-proj/go-snowpack-rpc"
+      - dependency-name: "github.com/keybase/go-codec"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns: ["*"]
