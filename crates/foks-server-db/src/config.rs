@@ -42,7 +42,8 @@ pub struct Config {
     pub maximum_kv_namespace_bytes: u64,
     pub maximum_kv_namespace_objects: u64,
     pub maximum_database_bytes: u64,
-    /// Total waitlist entries. A join for a new address is refused at this count.
+    /// Total waitlist entries. Every join is refused at this count, including
+    /// joins for listed addresses.
     pub maximum_waitlist_entries: u64,
     /// Age after which maintenance deletes a waitlist entry.
     pub waitlist_retention: Duration,

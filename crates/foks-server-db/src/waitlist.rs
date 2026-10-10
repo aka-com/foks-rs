@@ -41,10 +41,11 @@ impl Database {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let maximum = integer(self.config.maximum_waitlist_entries)?;
-        // The inner LIMIT bounds the scan by the cap, not by the table size.
+        // Triggers maintain this one-row count, so the check does not scan
+        // the table on an unauthenticated route.
         let count: i64 = transaction.query_row(
-            "SELECT count(*) FROM (SELECT 1 FROM waitlist_entries LIMIT ?1)",
-            [maximum],
+            "SELECT entries FROM waitlist_count WHERE singleton = 0",
+            [],
             |row| row.get(0),
         )?;
         if count >= maximum {

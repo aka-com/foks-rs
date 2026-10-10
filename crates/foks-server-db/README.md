@@ -35,9 +35,12 @@ identity challenges, and authorization-binding records. Users must relink under
 the new provider identity. Version 49 makes waitlist addresses unique under
 ASCII case folding: the upgrade keeps the earliest entry for each address,
 deletes later duplicates, replaces the `(email, created_at)` index with a
-unique `email COLLATE NOCASE` index, and adds a `created_at` index for
-retention. These changes and the version stamp commit together; any error leaves
-the previous schema and data intact. Index creation can take time and disk/WAL
+unique `email COLLATE NOCASE` index, adds a `created_at` index for
+retention, and creates the one-row `waitlist_count` table. The upgrade
+initialises that row from the deduplicated entries, insert and delete triggers
+keep it current, and the join cap check reads it instead of counting the table.
+These changes and the version stamp commit together; any error leaves the
+previous schema and data intact. Index creation can take time and disk/WAL
 space proportional to the existing tables, so allow for that work during a
 controlled writer restart and retain a backup. No upgrade runs inside recurring
 maintenance.

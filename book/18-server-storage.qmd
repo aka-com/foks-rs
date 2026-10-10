@@ -230,7 +230,7 @@ connection before use: a file with the wrong application ID is not a FOKS
 database. Readers require the current schema; the writer accepts explicitly
 supported prior schemas and migrates them before use.
 
-The schema itself is one concatenated string of 22 `.sql` files. A fresh
+The schema itself is one concatenated string of 23 `.sql` files. A fresh
 file (both pragmas zero) receives the whole schema inside one `BEGIN
 IMMEDIATE` transaction, with the version stamped last. A file at version
 43 through 48 is upgraded in one transaction as well. Two properties make
@@ -334,7 +334,9 @@ uploads older than one day, and waitlist entries older than the configured
 retention (180 days by default). Both use an index on `created_at`. The
 waitlist also has a row cap (10,000 by default) and one entry per address,
 so the unauthenticated `Reg.joinWaitList` route cannot grow the table
-without bound.
+without bound. Insert and delete triggers keep the entry count in the
+one-row `waitlist_count` table, so the cap check on each join reads one row
+in the writer transaction instead of counting the table.
 
 Some things are deliberately not swept. Key-value locks expire when the
 *next acquirer* finds them stale, matching the Go implementation, so there

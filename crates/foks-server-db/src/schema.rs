@@ -26,6 +26,7 @@ const SCHEMA: &str = concat!(
     include_str!("schema/realtime_invalidation.sql"),
     include_str!("schema/waitlist.sql"),
     include_str!("schema/waitlist_indexes.sql"),
+    include_str!("schema/waitlist_count.sql"),
     include_str!("schema/log_upload.sql"),
     include_str!("schema/expiry_indexes.sql"),
 );
@@ -111,7 +112,8 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
             }
             // Version 49 makes waitlist addresses unique under ASCII case
             // folding. The earliest entry for each address is kept and later
-            // duplicates are removed before the unique index is built.
+            // duplicates are removed before the unique index is built and the
+            // entry count is initialised.
             transaction.execute_batch(
                 "DELETE FROM waitlist_entries WHERE rowid IN (
                      SELECT entry FROM (
@@ -125,6 +127,7 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
                  DROP INDEX waitlist_entries_email_created;",
             )?;
             transaction.execute_batch(include_str!("schema/waitlist_indexes.sql"))?;
+            transaction.execute_batch(include_str!("schema/waitlist_count.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else {
             validate(application_id, version)?;

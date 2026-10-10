@@ -475,7 +475,7 @@ mod tests {
                 .execute_batch(&format!("DROP INDEX {index}"))
                 .unwrap();
         }
-        connection.execute_batch("DROP TRIGGER rt_membership_insert; DROP TRIGGER rt_membership_delete; DROP TRIGGER rt_membership_update; DROP TRIGGER rt_team_access_update; ALTER TABLE rt_user_inboxes DROP COLUMN reconcile_dirty; DROP INDEX waitlist_entries_email; DROP INDEX waitlist_entries_created; CREATE INDEX waitlist_entries_email_created ON waitlist_entries(email, created_at); PRAGMA user_version=43;").unwrap();
+        connection.execute_batch("DROP TRIGGER rt_membership_insert; DROP TRIGGER rt_membership_delete; DROP TRIGGER rt_membership_update; DROP TRIGGER rt_team_access_update; ALTER TABLE rt_user_inboxes DROP COLUMN reconcile_dirty; DROP TRIGGER waitlist_count_insert; DROP TRIGGER waitlist_count_delete; DROP TABLE waitlist_count; DROP INDEX waitlist_entries_email; DROP INDEX waitlist_entries_created; CREATE INDEX waitlist_entries_email_created ON waitlist_entries(email, created_at); PRAGMA user_version=43;").unwrap();
         let guard = DatabaseWriterGuard::acquire(&path).unwrap();
         assert!(Writer::start(path.clone(), Default::default(), 2).is_err());
         assert_eq!(

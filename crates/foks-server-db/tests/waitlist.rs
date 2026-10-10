@@ -178,6 +178,66 @@ fn maintenance_deletes_entries_older_than_the_retention_period() {
 }
 
 #[test]
+fn stored_entry_count_follows_joins_purges_and_maintenance() {
+    let mut store = common::TestDatabase::with_config(Config {
+        maximum_waitlist_entries: 3,
+        waitlist_retention: Duration::from_secs(10),
+        ..Config::default()
+    });
+    assert_eq!(stored_count(&store.path), 0);
+    for (fill, email, created_at) in [
+        (1, "a@example.com", 1_000_000),
+        (2, "b@example.com", 2_000_000),
+        (3, "A@EXAMPLE.COM", 2_000_000),
+        (4, "c@example.com", 3_000_000),
+    ] {
+        store
+            .database
+            .join_waitlist(&waitlist_id(fill), email, created_at)
+            .unwrap();
+    }
+    assert_eq!(stored_count(&store.path), 3);
+    // Refused and rejected joins leave the count unchanged.
+    assert!(store
+        .database
+        .join_waitlist(&waitlist_id(5), "d@example.com", 3_000_000)
+        .is_err());
+    assert!(store
+        .database
+        .join_waitlist(&waitlist_id(6), "invalid", 3_000_000)
+        .is_err());
+    assert_eq!(stored_count(&store.path), 3);
+    assert_eq!(
+        store
+            .database
+            .run_maintenance(11_000_000, 0)
+            .unwrap()
+            .waitlist_entries,
+        1
+    );
+    assert_eq!(stored_count(&store.path), 2);
+    store
+        .database
+        .purge_waitlist(WaitlistPurge::Email("B@example.com"))
+        .unwrap();
+    assert_eq!(stored_count(&store.path), 1);
+    store.database.purge_waitlist(WaitlistPurge::All).unwrap();
+    assert_eq!(stored_count(&store.path), 0);
+
+    // The cap check reads the stored count, not the table.
+    let connection = rusqlite::Connection::open(&store.path).unwrap();
+    connection
+        .execute("UPDATE waitlist_count SET entries = 3", [])
+        .unwrap();
+    assert!(matches!(
+        store
+            .database
+            .join_waitlist(&waitlist_id(7), "e@example.com", 4_000_000),
+        Err(Error::Capacity("waitlist"))
+    ));
+}
+
+#[test]
 fn zero_waitlist_limits_are_rejected() {
     let directory = tempfile::tempdir().unwrap();
     for config in [
@@ -195,6 +255,21 @@ fn zero_waitlist_limits_are_rejected() {
             Err(Error::Invalid("zero database capacity limit"))
         ));
     }
+}
+
+/// The trigger-maintained count, checked against the table it describes.
+fn stored_count(path: &std::path::Path) -> i64 {
+    let connection = rusqlite::Connection::open(path).unwrap();
+    let (stored, actual): (i64, i64) = connection
+        .query_row(
+            "SELECT (SELECT entries FROM waitlist_count),
+                    (SELECT count(*) FROM waitlist_entries)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored, actual);
+    stored
 }
 
 fn waitlist_id(fill: u8) -> [u8; 13] {

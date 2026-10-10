@@ -244,7 +244,7 @@ fn membership_rollback_and_foreign_parties_do_not_invalidate_or_create_inboxes()
 // Turn a test-only fresh database into the exact previous table layout.
 fn legacy(f: &mut Fixture) {
     f.db.connection.execute_batch("DROP INDEX names_reservation_expiry; DROP INDEX team_names_reservation_expiry; DROP INDEX recovery_challenges_cleanup; DROP INDEX team_view_tokens_expiry; DROP INDEX team_view_challenges_expiry; DROP INDEX team_admin_tokens_expiry; DROP INDEX log_sends_created_at;").unwrap();
-    f.db.connection.execute_batch("DROP TRIGGER rt_membership_insert; DROP TRIGGER rt_membership_delete; DROP TRIGGER rt_membership_update; DROP TRIGGER rt_team_access_update; ALTER TABLE rt_user_inboxes DROP COLUMN reconcile_dirty; DROP INDEX waitlist_entries_email; DROP INDEX waitlist_entries_created; CREATE INDEX waitlist_entries_email_created ON waitlist_entries(email, created_at); PRAGMA user_version=43;").unwrap();
+    f.db.connection.execute_batch("DROP TRIGGER rt_membership_insert; DROP TRIGGER rt_membership_delete; DROP TRIGGER rt_membership_update; DROP TRIGGER rt_team_access_update; ALTER TABLE rt_user_inboxes DROP COLUMN reconcile_dirty; DROP TRIGGER waitlist_count_insert; DROP TRIGGER waitlist_count_delete; DROP TABLE waitlist_count; DROP INDEX waitlist_entries_email; DROP INDEX waitlist_entries_created; CREATE INDEX waitlist_entries_email_created ON waitlist_entries(email, created_at); PRAGMA user_version=43;").unwrap();
 }
 #[test]
 fn migration_preserves_inbox_data_invalidates_legacy_state_and_readers_refuse_upgrade() {

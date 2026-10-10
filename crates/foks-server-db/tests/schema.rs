@@ -171,7 +171,10 @@ fn predecessor(connection: &Connection, version: i64) {
     if version <= 48 {
         connection
             .execute_batch(
-                "DROP INDEX waitlist_entries_email;
+                "DROP TRIGGER waitlist_count_insert;
+                 DROP TRIGGER waitlist_count_delete;
+                 DROP TABLE waitlist_count;
+                 DROP INDEX waitlist_entries_email;
                  DROP INDEX waitlist_entries_created;
                  CREATE INDEX waitlist_entries_email_created
                  ON waitlist_entries(email, created_at);",
@@ -203,6 +206,14 @@ fn writer_upgrades_supported_predecessors_and_preserves_data_and_index_definitio
             .collect::<Vec<_>>()
     };
     let expected = indexes(&reference);
+    let waitlist_count = |connection: &Connection| {
+        schema_objects(connection)
+            .into_iter()
+            .filter(|(_, name, _)| name.starts_with("waitlist_count"))
+            .collect::<Vec<_>>()
+    };
+    let expected_count = waitlist_count(&reference);
+    assert_eq!(expected_count.len(), 3);
     for version in [43, 44, 45, 46, 47, 48] {
         let test = common::TestDatabase::new();
         let path = test.path.clone();
@@ -227,6 +238,7 @@ fn writer_upgrades_supported_predecessors_and_preserves_data_and_index_definitio
         assert_eq!(schema_objects(&connection), before);
         let upgraded = Database::open(&path, Config::default()).unwrap();
         assert_eq!(indexes(&connection), expected);
+        assert_eq!(waitlist_count(&connection), expected_count);
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
@@ -355,6 +367,26 @@ fn version_49_upgrade_keeps_the_earliest_entry_per_address_and_sso_state() {
             [],
         )
         .is_err());
+    // The entry count starts from the deduplicated table and follows it.
+    let stored_count = || {
+        connection
+            .query_row("SELECT entries FROM waitlist_count", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(stored_count(), 2);
+    connection
+        .execute(
+            "INSERT INTO waitlist_entries VALUES(X'01000000000000000000000006','c@example.com',600)",
+            [],
+        )
+        .unwrap();
+    assert_eq!(stored_count(), 3);
+    connection
+        .execute("DELETE FROM waitlist_entries", [])
+        .unwrap();
+    assert_eq!(stored_count(), 0);
     // Version 48 already has the current SSO formats; only older files lose them.
     assert_eq!(
         connection

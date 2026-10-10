@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 use crate::{Error, Result};
 
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
-/// Each join counts entries up to the cap inside the writer transaction, so
-/// the cap bounds that work.
+/// Bounds the storage unauthenticated joins can occupy: an entry stores an
+/// address of up to 320 bytes in the table and again in its unique index. The
+/// cap check reads a trigger-maintained count, so its cost does not depend on
+/// this value.
 const MAXIMUM_ENTRIES_LIMIT: u64 = 1_000_000;
 
 /// The `[waitlist]` table of an installation configuration.
@@ -104,7 +106,7 @@ pub fn purge_entries(
         .purge_waitlist(selection)?)
 }
 
-pub fn entries_json(entries: &[foks_server_db::WaitlistEntry]) -> serde_json::Value {
+fn entries_json(entries: &[foks_server_db::WaitlistEntry]) -> serde_json::Value {
     serde_json::Value::Array(
         entries
             .iter()
