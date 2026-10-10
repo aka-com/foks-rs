@@ -821,6 +821,21 @@ it, a hint line offers only the markup the thread renders (`**bold**`,
 `*italics*`, `` `code` ``, `> quote`, `- list`, `[label](https://…)`); mentions
 are not among them.
 
+A channel with unread messages opens at the first of them, with the NEW
+divider 30% down the list and the ten messages before it above, rather than
+at the newest message. A message counts as read once its row has been at
+least half on screen, or has covered half the list, for half a second while
+the window has focus, so a channel left halfway stays unread from where the
+reader stopped. When more
+is unread than a page holds, the list ends in "Load newer messages", which
+also loads as it scrolls into view. While the first new message is below
+the list, a banner gives the unread count with Jump to first new and Mark as
+read, and Esc marks the channel read when the composer is empty. The jump
+control at the foot of a scrolled-up list counts the messages from others
+that arrived since the reader scrolled up ("2 new messages"), and reads
+"Jump to latest" otherwise. `book/20-desktop.qmd` describes the history
+reads behind this.
+
 Saved work that has not finished sits above the conversation in a bounded
 "Needs attention" section with the per-operation rows and their verbs; once the
 last of it is accounted for the section says "All caught up" rather than

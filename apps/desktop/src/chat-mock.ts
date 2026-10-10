@@ -140,7 +140,8 @@ export function mockChat(snapshot?: AgentSnapshot) {
         action.action === 'import-intent'
       ) {
         if (!(
-          action.action === 'import-intent' && completionMarkers.has(action.source)
+          action.action === 'import-intent' &&
+          completionMarkers.has(action.source)
         )) {
           if (
             saved &&
@@ -156,7 +157,8 @@ export function mockChat(snapshot?: AgentSnapshot) {
             submission: action.submission,
             text: action.text,
           });
-          if (action.action === 'import-intent') completionMarkers.add(action.source);
+          if (action.action === 'import-intent')
+            completionMarkers.add(action.source);
         }
       } else if (action.action === 'clear-intent') {
         if (saved && saved.submission !== action.submission)
@@ -186,11 +188,15 @@ export function mockChat(snapshot?: AgentSnapshot) {
       const newer = all.filter(
         (m) => after === undefined || BigInt(m.sequence) > BigInt(after),
       );
+      // As the agent reads it: `before` names the range of a page's width
+      // that ends one below it, whatever of that range exists.
       const rows = newer
         .filter(
           (m) =>
             action.before === null ||
-            BigInt(m.sequence) < BigInt(action.before),
+            (BigInt(m.sequence) < BigInt(action.before) &&
+              BigInt(m.sequence) >=
+                BigInt(action.before) - BigInt(CHAT_PAGE_ROWS)),
         )
         .slice(-CHAT_PAGE_ROWS);
       result = {
@@ -400,7 +406,10 @@ export function mockChat(snapshot?: AgentSnapshot) {
           ?.find((m) => m.id === op.id);
         if (message) {
           op.state = 'confirmed';
-          op.confirmation = { kind: 'message-sent', sequence: message.sequence };
+          op.confirmation = {
+            kind: 'message-sent',
+            sequence: message.sequence,
+          };
         } else if (
           op.kind === 'create-channel' &&
           team.channels.some((c) => c.id === op.channel)

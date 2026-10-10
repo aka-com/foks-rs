@@ -25,6 +25,7 @@ import {
 } from './client';
 import { useChatSends } from './send-provider';
 import type { HistoryBinding } from './history-cache';
+import type { HistoryPlacement } from './conversation-model';
 import { useChatInbox } from './inbox-provider';
 import type { Availability } from '../model';
 
@@ -227,7 +228,7 @@ export function useChatConversation(
     (
       result: Extract<ChatResult, { kind: 'history' }>,
       before: string | null,
-      replace?: boolean,
+      placement?: HistoryPlacement,
     ) => {
       const binding = historyBindings.current.get(result);
       if (
@@ -236,8 +237,14 @@ export function useChatConversation(
         !accessRef.current().available
       )
         throw cancelled();
-      service.histories.accept(binding, result, before, replace);
+      const accepted = service.histories.accept(
+        binding,
+        result,
+        before,
+        placement,
+      );
       sends.observeHistory(storeId, result.channel, result.messages);
+      return accepted;
     },
     [service, sends, storeId],
   );

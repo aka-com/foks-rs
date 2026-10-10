@@ -1,7 +1,15 @@
 import { MessageText } from './message-text';
 import type { Bridge } from '../bridge';
-import { Fragment, useEffect, useLayoutEffect, useRef } from 'react';
-import type { ReactNode, Ref } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import type { KeyboardEvent, ReactNode, Ref, RefObject } from 'react';
 import { Button, Chip, Icon } from '../components';
 import { ChatAlerts, failureAlert, type ChatAlert } from './chat-alerts';
 import type { ChatAction, ChatChannel, ChatReply } from '../chat-contract';
@@ -43,6 +51,8 @@ export function ChatThread({
   revision,
   position = null,
   readThrough,
+  pendingRead = null,
+  unread = null,
   markRead,
   acceptHistory,
   incrementalHistory = false,
@@ -87,13 +97,22 @@ export function ChatThread({
    * revision that did not move this asks the agent for nothing.
    */
   position?: string | null;
+  /** The channel's read pointer as the server holds it. */
   readThrough: string | null;
+  /**
+   * A read this device staged and the server has not confirmed. The unread
+   * count is measured from the further of the two, and the thread opens at
+   * the first message after it when `unread` is above zero.
+   */
+  pendingRead?: string | null;
+  /** The inbox's unread count for the channel, or `null` when it lists none. */
+  unread?: string | null;
   markRead: (channel: string, sequence: string) => Promise<void>;
   acceptHistory: (
     page: Extract<import('../chat-contract').ChatResult, { kind: 'history' }>,
     before: string | null,
-    replace?: boolean,
-  ) => void;
+    placement?: import('./conversation-model').HistoryPlacement,
+  ) => import('./conversation-model').HistoryWindow | void;
 }): ReactNode {
   const {
     draft,
@@ -117,10 +136,39 @@ export function ChatThread({
       .map((m) => `${m.id}:${phaseOf(m)}:${m.text?.length ?? 0}`),
     ...pending.map((op) => `${op.id}:${op.state}:${op.text?.length ?? 0}`),
   ].join('|');
-  const { scroller, atBottom, onScroll, capture } = useChatViewport(
-    history?.channel === channel.id ? history.messages : EMPTY_MESSAGES,
-    pendingKey,
+  // Read once: the thread opens at the first message that was unread when it
+  // mounted, and later reads move the divider, not the open position.
+  const readPoint =
+    readThrough !== null &&
+    pendingRead !== null &&
+    BigInt(pendingRead) > BigInt(readThrough)
+      ? pendingRead
+      : readThrough;
+  const [anchor] = useState(() =>
+    readPoint !== null && unread !== null && BigInt(unread) > 0n
+      ? readPoint
+      : null,
   );
+  const divider = useRef<HTMLDivElement>(null);
+  const newerEdge = useRef<HTMLDivElement>(null);
+  // The row an anchored open scrolls to: the NEW divider, else the first row
+  // after the read pointer, which the divider omits when it is your own.
+  const anchorRow = (): HTMLElement | null => {
+    if (divider.current) return divider.current;
+    const from = newFrom ?? anchor;
+    if (from === null) return null;
+    for (const row of scroller.current?.querySelectorAll<HTMLElement>(
+      '[data-sequence]',
+    ) ?? [])
+      if (BigInt(row.dataset.sequence ?? '0') > BigInt(from)) return row;
+    return null;
+  };
+  const { scroller, atBottom, onScroll, capture, release, reveal } =
+    useChatViewport(
+      history?.channel === channel.id ? history.messages : EMPTY_MESSAGES,
+      pendingKey,
+      anchorRow,
+    );
   const {
     messages,
     before,
@@ -130,7 +178,13 @@ export function ChatThread({
     busy,
     loaded,
     initialLoading,
+    detached,
+    anchoring,
     load,
+    loadNewer,
+    loadLatest,
+    reopen,
+    retry,
   } = useChatHistory(
     channel,
     request,
@@ -141,6 +195,7 @@ export function ChatThread({
     capture,
     incrementalHistory,
     position,
+    anchor,
   );
   const outgoingIds = new Set(
     outgoing.flatMap((m) => {
@@ -153,20 +208,150 @@ export function ChatThread({
     if (canSend && channel.readable && composer.current)
       autofocusComposer?.(composer.current);
   }, [autofocusComposer, canSend, channel.readable, composer]);
-  const { newFrom, readError } = useChatReadIntent(
+  // A placement waits for its page; a failed read brings none.
+  useEffect(() => {
+    if (failure) release();
+  }, [failure, release]);
+  const { newFrom, readError, markThrough, dismissNew } = useChatReadIntent(
     channel.id,
     messages,
     atBottom,
     readThrough,
     markRead,
-    true,
+    !anchoring,
+    scroller,
+    readPoint,
   );
+  // Arrivals are counted against the newest row held when the reader left
+  // the bottom of an attached window. A detached window counts none, since
+  // it takes no incremental reads.
+  const [arrivalBase, setArrivalBase] = useState<string | null>(null);
+  useEffect(() => {
+    if (atBottom || detached || anchoring) setArrivalBase(null);
+    else setArrivalBase((base) => base ?? messages.at(-1)?.sequence ?? '0');
+  }, [anchoring, atBottom, detached, messages]);
+  // Rows are sorted, so the count reads only the arrivals at the end.
+  let arrivals = 0;
+  if (arrivalBase !== null)
+    for (
+      let index = messages.length - 1;
+      index >= 0 && BigInt(messages[index].sequence) > BigInt(arrivalBase);
+      index--
+    )
+      if (actor === null || messages[index].sender !== actor) arrivals++;
   const jumpToLatest = () => {
+    // A detached window does not hold the newest row: read it.
+    if (detached) {
+      void loadLatest();
+      return;
+    }
     const element = scroller.current;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
     onScroll();
   };
+  // The banner stands in for the divider while the first new message is
+  // below the list or older than the rows it holds.
+  const unreadCount = unread === null ? 0 : Number(unread);
+  const [newBelow, setNewBelow] = useState(false);
+  const measureNew = useCallback(() => {
+    const element = scroller.current;
+    const row = divider.current;
+    setNewBelow(
+      Boolean(
+        element &&
+        row &&
+        row.getBoundingClientRect().top >
+          element.getBoundingClientRect().bottom,
+      ),
+    );
+  }, [scroller]);
+  useLayoutEffect(
+    () => measureNew(),
+    [measureNew, messages, newFrom, atBottom],
+  );
+  // Scrolling measures once per frame.
+  const measuring = useRef<number | null>(null);
+  const measureOnScroll = () => {
+    if (measuring.current !== null) return;
+    measuring.current = requestAnimationFrame(() => {
+      measuring.current = null;
+      measureNew();
+    });
+  };
+  useEffect(
+    () => () => {
+      if (measuring.current !== null) cancelAnimationFrame(measuring.current);
+    },
+    [],
+  );
+  const newUnloaded =
+    newFrom !== null &&
+    before !== null &&
+    messages.length > 0 &&
+    BigInt(messages[0].sequence) > BigInt(newFrom) + 1n;
+  const firstNew = useMemo(
+    () =>
+      newFrom === null || newUnloaded
+        ? undefined
+        : messages.find((m) => BigInt(m.sequence) > BigInt(newFrom)),
+    [messages, newFrom, newUnloaded],
+  );
+  const showBanner =
+    newFrom !== null && unreadCount > 0 && (newBelow || newUnloaded);
+  const jumpToNew = () => {
+    if (divider.current) reveal(divider.current);
+    else if (newFrom !== null) void reopen(newFrom);
+    scroller.current?.focus({ preventScroll: true });
+  };
+  // Marks through the newest message the inbox published, which a detached
+  // window has not loaded, and removes the divider for the rest of the visit.
+  // Without a published head, a detached window cannot state where the
+  // unread messages end, so its divider stays.
+  const markedAll = useRef<string | null>(null);
+  const markAll = () => {
+    const newest = position ?? messages.at(-1)?.sequence;
+    if (newest !== undefined && BigInt(newest) > 0n) {
+      markThrough(newest);
+      markedAll.current = newest;
+    }
+    if (position !== null || !detached) dismissNew();
+  };
+  // A message sent from a detached window belongs after rows it has not
+  // loaded, so sending reads the newest page first.
+  const sendLatest = () => {
+    if (send() && detached) void loadLatest();
+  };
+  const markOnEscape = (event: KeyboardEvent<HTMLElement>) => {
+    if (
+      event.key !== 'Escape' ||
+      event.defaultPrevented ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      // Ignore keys whose target is outside this element, such as portaled
+      // menus and dialogs.
+      !(event.target instanceof Node) ||
+      !event.currentTarget.contains(event.target) ||
+      draft !== '' ||
+      // Nothing to mark or dismiss, or already marked through the same
+      // message: leave Escape to the shell's handler.
+      (unreadCount === 0 && !divider.current) ||
+      markedAll.current === (position ?? messages.at(-1)?.sequence)
+    )
+      return;
+    event.preventDefault();
+    markAll();
+  };
+  const newerInView = useInView(newerEdge, scroller, detached, messages);
+  useEffect(() => {
+    if (newerInView && detached && !busy && !failure) void loadNewer();
+  }, [busy, detached, failure, loadNewer, newerInView]);
+  const newerCount =
+    detached && position !== null && messages.length > 0
+      ? Number(BigInt(position) - BigInt(messages.at(-1)!.sequence))
+      : 0;
   const title = channelTitle(channel);
   return (
     <>
@@ -198,7 +383,7 @@ export function ChatThread({
         alerts={[
           ...alerts,
           failureAlert(failure, teamName, [
-            { label: 'Retry', disabled: busy, run: () => void load() },
+            { label: 'Retry', disabled: busy, run: () => void retry() },
           ]),
           // A read mark the server refused for good: nothing to retry here,
           // the next mark clears it.
@@ -241,13 +426,35 @@ export function ChatThread({
         </div>
       ) : (
         <>
-          <div className="chat-messages-wrap">
+          <div className="chat-messages-wrap" onKeyDown={markOnEscape}>
+            {showBanner && (
+              <div
+                className="chat-new-banner"
+                role="group"
+                aria-label="New messages"
+              >
+                <span>
+                  <b>{plural(unreadCount, 'new message')}</b>
+                  {firstNew && ` since ${sinceTime(firstNew.insert_time)}`}
+                </span>
+                <Button size="sm" onClick={jumpToNew}>
+                  Jump to first new
+                </Button>
+                <Button size="sm" aria-keyshortcuts="Escape" onClick={markAll}>
+                  Mark as read <kbd aria-hidden="true">Esc</kbd>
+                </Button>
+              </div>
+            )}
             <div
               className="chat-messages"
               data-chat-channel={channel.id}
               data-chat-store={storeId}
               ref={scroller}
-              onScroll={onScroll}
+              onScroll={() => {
+                onScroll();
+                measureOnScroll();
+              }}
+              tabIndex={0}
               aria-label="Message history"
               aria-busy={busy}
             >
@@ -295,12 +502,15 @@ export function ChatThread({
                 )}
               {messages.map((m, index) => {
                 const own = actor !== null && m.sender === actor;
+                // The divider marks where the new messages begin, so it is
+                // not drawn over a window that starts after that.
                 const isNew =
                   newFrom !== null &&
                   !own &&
                   BigInt(m.sequence) > BigInt(newFrom) &&
-                  (index === 0 ||
-                    BigInt(messages[index - 1].sequence) <= BigInt(newFrom));
+                  (index === 0
+                    ? !newUnloaded
+                    : BigInt(messages[index - 1].sequence) <= BigInt(newFrom));
                 const avatarName = m.sender
                   ? (senderNames.get(m.sender) ?? shortId(m.sender))
                   : 'Team member';
@@ -328,6 +538,7 @@ export function ChatThread({
                         className="chat-divider"
                         role="separator"
                         aria-label="New messages"
+                        ref={divider}
                       >
                         <span>New</span>
                       </div>
@@ -337,6 +548,7 @@ export function ChatThread({
                         grouped ? 'chat-message grouped' : 'chat-message'
                       }
                       data-message={m.id}
+                      data-sequence={m.sequence}
                       title={grouped ? messageTime(m.insert_time) : undefined}
                     >
                       <AccountMark name={avatarName} className="chat-avatar" />
@@ -371,6 +583,23 @@ export function ChatThread({
                   </Fragment>
                 );
               })}
+              {detached && (
+                <div
+                  className="chat-history-edge chat-history-newer"
+                  ref={newerEdge}
+                >
+                  <Button
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => void loadNewer()}
+                  >
+                    Load newer messages
+                  </Button>
+                  {newerCount > 0 && (
+                    <small>{plural(newerCount, 'newer message')}</small>
+                  )}
+                </div>
+              )}
               {outgoing
                 .filter((m) => !m.observed)
                 .map((message, index) => (
@@ -409,16 +638,21 @@ export function ChatThread({
                   </article>
                 ))}
             </div>
-            {!atBottom && messages.length > 0 && (
+            {(!atBottom || detached) && messages.length > 0 && (
               <Button
-                variant="quiet"
                 size="sm"
                 icon="chevronDown"
-                className="chat-jump"
-                aria-label="Jump to latest"
+                className={arrivals ? 'chat-jump has-count' : 'chat-jump'}
+                aria-label={
+                  arrivals
+                    ? `${plural(arrivals, 'new message')}, jump to latest`
+                    : 'Jump to latest'
+                }
                 title="Jump to latest"
                 onClick={jumpToLatest}
-              />
+              >
+                {arrivals ? plural(arrivals, 'new message') : 'Jump to latest'}
+              </Button>
             )}
           </div>
           {channel.writable ? (
@@ -426,7 +660,7 @@ export function ChatThread({
               className="chat-composer"
               onSubmit={(e) => {
                 e.preventDefault();
-                void send();
+                sendLatest();
               }}
             >
               <textarea
@@ -437,6 +671,7 @@ export function ChatThread({
                 rows={1}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
+                  markOnEscape(e);
                   if (
                     e.key !== 'Enter' ||
                     e.nativeEvent.isComposing ||
@@ -455,7 +690,7 @@ export function ChatThread({
                     setDraft(field.value);
                   } else if (!e.shiftKey) {
                     e.preventDefault();
-                    void send();
+                    sendLatest();
                   }
                 }}
               />
@@ -489,6 +724,69 @@ export function ChatThread({
 }
 
 const EMPTY_MESSAGES: import('../chat-contract').ChatMessage[] = [];
+
+/** When the first new message arrived: the clock today, else the date too. */
+function sinceTime(milliseconds: string): string {
+  return messageDayKey(milliseconds) === messageDayKey(String(Date.now()))
+    ? messageClock(milliseconds)
+    : messageTime(milliseconds);
+}
+
+/**
+ * Whether `target` is within 120px of the list's visible area. Measured
+ * afresh whenever `key` changes, since rows added above or below move it.
+ * Always false without `IntersectionObserver`; the control it marks stays a
+ * button.
+ */
+function useInView(
+  target: RefObject<HTMLElement | null>,
+  root: RefObject<HTMLElement | null>,
+  mounted: boolean,
+  key: unknown,
+): boolean {
+  // The `key` under which the target was last reported in view: a report
+  // made before `key` changed is out of date, so it reads as not in view
+  // until the observer reports again.
+  const [inViewAt, setInViewAt] = useState<{ key: unknown } | null>(null);
+  const keyRef = useRef(key);
+  const observer = useRef<IntersectionObserver | null>(null);
+  useEffect(() => {
+    const element = target.current;
+    if (
+      !mounted ||
+      !element ||
+      !root.current ||
+      typeof IntersectionObserver === 'undefined'
+    )
+      return;
+    const current = new IntersectionObserver(
+      (entries) =>
+        setInViewAt(
+          entries.some((entry) => entry.isIntersecting)
+            ? { key: keyRef.current }
+            : null,
+        ),
+      { root: root.current, rootMargin: '120px 0px' },
+    );
+    observer.current = current;
+    current.observe(element);
+    return () => {
+      current.disconnect();
+      observer.current = null;
+      setInViewAt(null);
+    };
+  }, [mounted, root, target]);
+  // Observing again yields a fresh first report under the new key.
+  useEffect(() => {
+    keyRef.current = key;
+    const element = target.current;
+    if (!observer.current || !element) return;
+    observer.current.unobserve(element);
+    observer.current.observe(element);
+  }, [key, target]);
+  const inView = inViewAt !== null && inViewAt.key === key;
+  return inView;
+}
 
 function resizeComposer(element: HTMLTextAreaElement): void {
   // Reset first so deleting text or clearing a sent draft shrinks the field.

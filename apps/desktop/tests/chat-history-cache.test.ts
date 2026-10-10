@@ -286,13 +286,13 @@ test('incremental acceptance deduplicates sequences and gap replacement discards
     ['1', '2'],
   );
   assert.equal(cache.get(binding)?.before, null);
-  cache.accept(binding, page('a', '1', 'reset'), null, true);
+  cache.accept(binding, page('a', '1', 'reset'), null, { replace: true });
   assert.deepEqual(
     cache.get(binding)?.messages.map((m) => m.sequence),
     ['1'],
   );
   assert.equal(cache.get(binding)?.verification.size, 1);
-  cache.accept(binding, { ...page(), messages: [] }, null, true);
+  cache.accept(binding, { ...page(), messages: [] }, null, { replace: true });
   assert.equal(cache.get(binding)?.messages.length, 0);
 });
 

@@ -505,12 +505,12 @@ test('history revisions append incrementally, retain older rows, and replace gap
           { kind: 'history' }
         >,
         before: string | null,
-        replace?: boolean,
+        placement?: import('../src/chat/conversation-model').HistoryPlacement,
       ) => {
         setHeld(
           (previous) =>
             conversationResult(
-              { operations: [], history: replace ? null : previous },
+              { operations: [], history: placement?.replace ? null : previous },
               eventFromReply(
                 { action: 'history', channel: channelId, before },
                 page,
@@ -729,12 +729,12 @@ test('a tail costs one read per arrival, and a revision that moved no position c
           { kind: 'history' }
         >,
         before: string | null,
-        replace?: boolean,
+        placement?: import('../src/chat/conversation-model').HistoryPlacement,
       ) => {
         setHeld(
           (previous) =>
             conversationResult(
-              { operations: [], history: replace ? null : previous },
+              { operations: [], history: placement?.replace ? null : previous },
               eventFromReply(
                 { action: 'history', channel: channelId, before },
                 page,
@@ -821,4 +821,252 @@ test('a tail costs one read per arrival, and a revision that moved no position c
     before: null,
     after: '100',
   });
+});
+
+test('an unread channel opens at its first unread row and pages forward while detached', async () => {
+  const { conversationResult } = (await vite.ssrLoadModule(
+    '/src/chat/conversation-model.ts',
+  )) as typeof import('../src/chat/conversation-model');
+  const { eventFromReply } = (await vite.ssrLoadModule(
+    '/src/chat/conversation-events.ts',
+  )) as typeof import('../src/chat/conversation-events');
+  const channel: ChatChannel = {
+    id: channelId,
+    name: '',
+    description: null,
+    admin: false,
+    readable: true,
+    writable: true,
+    read_role: 'member',
+    write_role: 'member',
+  };
+  const calls: ChatAction[] = [];
+  let head = 120;
+  // Rows too large for one page make the agent halve the width, keeping the
+  // requested end.
+  let narrow = false;
+  // The agent's semantics: `before` reads the fifty sequences below it, and
+  // `after` reads up to fifty rows past it, reporting a gap when the head
+  // is further away or below the cursor.
+  const request = async (action: ChatAction): Promise<ChatReply> => {
+    assert.equal(action.action, 'history');
+    calls.push(action);
+    const rows: number[] = [];
+    let gap: boolean | undefined;
+    if (action.after !== undefined) {
+      const after = Number(action.after);
+      gap = head < after || head - after > 50;
+      for (let n = Math.max(after + 1, head - 49); n <= head; n++) rows.push(n);
+    } else {
+      const end = action.before === null ? head : Number(action.before) - 1;
+      for (
+        let n = Math.max(1, end - (narrow ? 24 : 49));
+        n <= Math.min(end, head);
+        n++
+      )
+        rows.push(n);
+    }
+    return {
+      scope: {} as ChatScope,
+      result: {
+        kind: 'history',
+        channel: action.channel,
+        messages: rows.map((n) => ({
+          id: `m${n}`,
+          sequence: String(n),
+          sender: null,
+          send_time: '1',
+          insert_time: '1',
+          content: { kind: 'unsupported' },
+        })),
+        before: rows.length && rows[0] > 1 ? String(rows[0]) : null,
+        missing_predecessors: [],
+        ...(gap === undefined ? {} : { gap }),
+      },
+    };
+  };
+  let current!: ReturnType<typeof HistoryHook>;
+  function History({
+    revision,
+    position,
+  }: {
+    revision: number;
+    position: string | null;
+  }) {
+    const [held, setHeld] = useState<
+      import('../src/chat/conversation-model').HistoryWindow | null
+    >(null);
+    const accept = useCallback(
+      (
+        page: Extract<
+          import('../src/chat-contract').ChatResult,
+          { kind: 'history' }
+        >,
+        before: string | null,
+        placement: import('../src/chat/conversation-model').HistoryPlacement = {},
+      ) => {
+        const event = eventFromReply(
+          { action: 'history', channel: channelId, before },
+          page,
+        );
+        assert.equal(event.kind, 'history');
+        if (event.kind !== 'history') return;
+        setHeld(
+          (previous) =>
+            conversationResult(
+              {
+                operations: [],
+                history: placement.replace ? null : previous,
+              },
+              {
+                ...event,
+                ...(placement.newer ? { newer: true as const } : {}),
+                ...(placement.detached === undefined
+                  ? {}
+                  : { detached: placement.detached }),
+              },
+            ).history,
+        );
+      },
+      [],
+    );
+    current = useChatHistory(
+      channel,
+      request,
+      revision,
+      accept,
+      held,
+      undefined,
+      undefined,
+      true,
+      position,
+      '60',
+    );
+    return null;
+  }
+  const sequences = () => current.messages.map((m) => Number(m.sequence));
+  const range = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  const view = ui.render(
+    createElement(History, { revision: 0, position: '120' }),
+  );
+  // Read through 60: ten read rows, then forty unread ones.
+  await ui.waitFor(() => assert.equal(current.messages.length, 50));
+  assert.deepEqual(calls, [
+    { action: 'history', channel: channelId, before: '101' },
+  ]);
+  assert.deepEqual(sequences(), range(51, 100));
+  assert.equal(current.detached, true);
+  assert.equal(current.before, '51');
+  // An arrival past a detached window reads nothing: an `after` read from
+  // its tail would report a gap for the distance alone.
+  head = 121;
+  view.rerender(createElement(History, { revision: 1, position: '121' }));
+  await ui.waitFor(() => assert.equal(current.busy, false));
+  assert.equal(calls.length, 1);
+  // Paging forward is an explicit range read past the tail, and the page
+  // that reaches the head attaches the window again.
+  await ui.act(async () => {
+    await current.loadNewer();
+  });
+  assert.deepEqual(calls.at(-1), {
+    action: 'history',
+    channel: channelId,
+    before: '151',
+  });
+  assert.deepEqual(sequences(), range(51, 121));
+  assert.equal(current.detached, false);
+  assert.equal(current.before, '51');
+  // Attached, arrivals are incremental again.
+  head = 122;
+  view.rerender(createElement(History, { revision: 2, position: '122' }));
+  await ui.waitFor(() => assert.equal(current.messages.length, 72));
+  assert.deepEqual(calls.at(-1), {
+    action: 'history',
+    channel: channelId,
+    before: null,
+    after: '121',
+  });
+  // Reopening at the read pointer detaches the window again, and a head the
+  // inbox publishes below its tail is a rollback: the gap the `after` read
+  // reports still replaces the window with the newest page.
+  await ui.act(async () => {
+    await current.reopen('60');
+  });
+  assert.deepEqual(sequences(), range(51, 100));
+  assert.equal(current.detached, true);
+  head = 40;
+  view.rerender(createElement(History, { revision: 3, position: '40' }));
+  await ui.waitFor(() => assert.deepEqual(sequences(), range(1, 40)));
+  assert.deepEqual(
+    calls.slice(-2).map((a) => (a.action === 'history' ? a.after : undefined)),
+    ['100', undefined],
+  );
+  assert.equal(current.detached, false);
+  // Jump to latest replaces a detached window with the newest page.
+  head = 140;
+  view.rerender(createElement(History, { revision: 4, position: '140' }));
+  await ui.waitFor(() =>
+    assert.equal(current.messages.at(-1)?.sequence, '140'),
+  );
+  await ui.act(async () => {
+    await current.reopen('60');
+  });
+  assert.equal(current.detached, true);
+  await ui.act(async () => {
+    await current.loadLatest();
+  });
+  assert.deepEqual(sequences(), range(91, 140));
+  assert.equal(current.detached, false);
+  // A narrowed range keeps its top, so the anchored page is filled from
+  // below until it holds the first unread row, and a newer page until it
+  // continues the tail: no row between is skipped.
+  narrow = true;
+  await ui.act(async () => {
+    await current.reopen('60');
+  });
+  assert.deepEqual(sequences(), range(51, 100));
+  assert.deepEqual(
+    calls.slice(-2).map((a) => (a.action === 'history' ? a.before : null)),
+    ['101', '76'],
+  );
+  await ui.act(async () => {
+    await current.loadNewer();
+  });
+  assert.deepEqual(sequences(), range(51, 140));
+  assert.deepEqual(
+    calls.slice(-2).map((a) => (a.action === 'history' ? a.before : null)),
+    ['151', '126'],
+  );
+  assert.equal(current.detached, false);
+  // A published head the history cannot reach: the forward read that adds
+  // no row attaches the window, so paging stops there.
+  view.rerender(createElement(History, { revision: 5, position: '200' }));
+  await ui.waitFor(() => assert.equal(current.busy, false));
+  await ui.act(async () => {
+    await current.reopen('60');
+  });
+  await ui.act(async () => {
+    await current.loadNewer();
+  });
+  assert.equal(current.detached, true);
+  await ui.act(async () => {
+    await current.loadNewer();
+  });
+  assert.deepEqual(sequences(), range(51, 140));
+  assert.equal(current.detached, false);
+  // A narrowed range can hold only sequences above the head and come back
+  // empty; the rows after the read pointer are then read directly.
+  head = 105;
+  view.rerender(createElement(History, { revision: 6, position: '105' }));
+  await ui.waitFor(() => assert.equal(current.busy, false));
+  await ui.act(async () => {
+    await current.reopen('100');
+  });
+  assert.deepEqual(sequences(), range(101, 105));
+  assert.equal(current.detached, false);
+  assert.deepEqual(calls.slice(-2), [
+    { action: 'history', channel: channelId, before: '141' },
+    { action: 'history', channel: channelId, before: null, after: '100' },
+  ]);
 });

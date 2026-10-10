@@ -1,7 +1,11 @@
 import type { ChatResult, ChatScope } from '../chat-contract';
 import { CHAT_HISTORY_BYTES, CHAT_HISTORY_ROWS } from '../chat-limits';
 import type { TeamInbox } from './inbox-service';
-import { conversationResult, type HistoryWindow } from './conversation-model';
+import {
+  conversationResult,
+  type HistoryPlacement,
+  type HistoryWindow,
+} from './conversation-model';
 import { eventFromReply } from './conversation-events';
 import { cancelled } from './errors';
 import { sameScope } from './scope';
@@ -144,23 +148,39 @@ export class ChatHistoryCache {
     binding: HistoryBinding,
     page: Extract<ChatResult, { kind: 'history' }>,
     before: string | null,
-    replace?: boolean,
-  ): void {
+    placement: HistoryPlacement = {},
+  ): HistoryWindow {
     if (!this.current(binding) || page.channel !== binding.channel)
       throw cancelled();
-    const event = eventFromReply(
+    const replied = eventFromReply(
       { action: 'history', channel: page.channel, before },
       page,
     );
+    const event =
+      replied.kind === 'history'
+        ? {
+            ...replied,
+            ...(placement.newer ? { newer: true as const } : {}),
+            ...(placement.detached === undefined
+              ? {}
+              : { detached: placement.detached }),
+          }
+        : replied;
     let result: HistoryWindow;
     try {
       result = conversationResult(
-        { operations: [], history: replace ? null : this.get(binding) },
+        {
+          operations: [],
+          history: placement.replace ? null : this.get(binding),
+        },
         event,
       ).history!;
     } catch (error) {
+      // A page at the newest end past the row limit starts the window over
+      // from that page; for an older page the limit error propagates to the
+      // thread.
       if (
-        before !== null ||
+        (before !== null && !placement.newer) ||
         (error as { code?: string } | null)?.code !== 'chat-limit'
       )
         throw error;
@@ -202,6 +222,7 @@ export class ChatHistoryCache {
       totalBytes -= entry.bytes;
     }
     this.publish();
+    return history;
   }
   clear(store?: string): void {
     if (store === undefined) {

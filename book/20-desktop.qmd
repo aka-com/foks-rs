@@ -314,6 +314,39 @@ the tail read is skipped if the published head is not beyond the newest
 held sequence, because the server would only confirm that nothing newer
 exists.
 
+A channel with unread messages opens at the first of them rather than at
+the newest page. The first request is a range read whose `before` cursor
+is the read pointer plus 41, so the page holds the last ten read rows and
+up to forty unread ones; the agent reads the range ending one below any
+cursor, and a range past the head returns the rows that exist. The NEW
+divider is scrolled to 30% of the list's height. When that page, or a
+later one, ends below the published head, the held window is *detached*:
+it takes no incremental `after` reads, because the gap such a read reports
+cannot tell truncation from a rollback, and it pages forward with range
+reads whose cursor is the held tail plus 51, behind a "Load newer
+messages" row that also loads when it scrolls into view. A page that
+reaches the head attaches the window again. The agent narrows a range that
+exceeds its page limits by keeping the requested end, so the view reads
+older pages below such a page until it holds the first unread row or
+continues the held tail, and reads the rows after that point with `after`
+when a range comes back empty. A detached window still reads `after` once
+the inbox publishes a head at or below its tail, so a rollback still
+replaces it with the newest page, and Jump to latest replaces it with the
+newest page directly.
+
+A message is marked read once its row has been at least half on screen, or
+has covered half the list, for 500 ms while the window has focus; an
+`IntersectionObserver` over the rows supplies the highest such sequence to
+`mark-read`. The server's read pointer only moves forward, so marking in
+steps is safe, and leaving a channel halfway keeps the rows below the last
+one seen unread. While the first new message is below the list, or older
+than the rows it holds, a banner states the unread count with Jump to
+first new and Mark as read; Esc does the same as Mark as read when the
+composer is empty. Marking all read marks through the published head and
+removes the divider for the rest of the visit. Scrolled up in an attached
+window, the jump control counts the messages from others that arrived
+since the reader left the bottom.
+
 The history cache is a least-recently-used map keyed by a binding of
 store, channel, scope, generation, and authority, bounded at 16 channels,
 1,000 rows, and 8 MiB. Reading an entry re-inserts it to refresh recency.

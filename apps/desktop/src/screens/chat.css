@@ -902,6 +902,14 @@
   font-size: 12px;
   color: var(--faint);
 }
+/* Below a detached window: the control that pages forward, and how far the
+   newest message is. */
+.chat-history-edge.chat-history-newer {
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
 .chat-messages-empty {
   text-align: center;
   padding-top: 24px;
@@ -1043,12 +1051,59 @@
 }
 .chat-jump {
   position: absolute;
+  z-index: 3;
   left: 50%;
   bottom: 12px;
   transform: translateX(-50%);
+  border-radius: var(--radius-pill);
   background: var(--main-surface);
   border: 1px solid var(--line);
   box-shadow: var(--shadow-menu);
+  color: var(--accent-ink);
+}
+/* The jump control counts what arrived since the reader scrolled up. */
+.chat-jump.has-count {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--ink-inverse);
+}
+.chat-jump.has-count:hover {
+  background: var(--accent-hover);
+}
+/* Pinned over the list while the first new message is below it or older
+   than the rows it holds. */
+.chat-new-banner {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(var(--accent-wash-2), var(--accent-wash-2)),
+    var(--main-surface);
+  box-shadow: var(--shadow-menu);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+.chat-new-banner > span {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.chat-new-banner b {
+  font-weight: 650;
+  color: var(--accent-ink);
+}
+.chat-new-banner kbd {
+  font-size: 12px;
+  color: var(--muted);
 }
 /* The text grows beside Send; the byte counter gets its own row. */
 .chat-composer {
@@ -1126,6 +1181,10 @@
 .chat-send:focus-visible {
   outline: 2px solid var(--accent-border);
   outline-offset: 1px;
+}
+.chat-messages:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
 }
 /* New-chat channel selection uses a two-column grid for team avatars and text. */
 .chat-pick .radio:has(.kico) {

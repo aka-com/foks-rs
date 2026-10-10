@@ -364,6 +364,8 @@ export function ChatScreen({
                 : null
             }
             readThrough={activeConversation?.read_through ?? null}
+            pendingRead={activeConversation?.pending_read ?? null}
+            unread={activeConversation?.unread ?? null}
             markRead={guardedMarkRead}
             history={history(channel.id)}
             incrementalHistory={

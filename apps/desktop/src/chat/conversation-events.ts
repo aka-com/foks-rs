@@ -21,6 +21,10 @@ export type ConversationEvent =
       before: string | null;
       requestBefore: string | null;
       incremental?: true;
+      /** A range read past the held tail, set by the caller that asked for it. */
+      newer?: true;
+      /** Whether the page leaves the window short of the published head. */
+      detached?: boolean;
       missing: boolean;
     }
   | {

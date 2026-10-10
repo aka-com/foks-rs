@@ -48,8 +48,9 @@ export function useChatComposer(
       setSendError(failure(error));
     }
   };
-  const send = () => {
-    if (!draft.trim()) return;
+  /** Returns whether the draft was submitted. */
+  const send = (): boolean => {
+    if (!draft.trim()) return false;
     setSendError('');
     // An acknowledged local intent survives navigation before preparation.
     // Once the agent has prepared it, its durable operation is recovered by
@@ -57,10 +58,11 @@ export function useChatComposer(
     // answers, the service retains the submission independently of this view.
     // A channel already saving a message queues this one instead of refusing
     // it, so the composer is ready for the next message immediately.
-    if (!service.canSubmit(storeId, channel.id)) return;
+    if (!service.canSubmit(storeId, channel.id)) return false;
     void service
       .submit(storeId, channel.id, draft)
       .catch((error) => setSendError(failure(error)));
+    return true;
   };
   // Read admission from the service when rendering and sending, so typing
   // registers neither a navigation guard nor a component-owned request.

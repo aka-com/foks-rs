@@ -6,6 +6,7 @@ import { installDom } from './lib/dom-harness';
 import { readSource } from './lib/source';
 import type { Location } from '../src/location';
 import type { Bridge } from '../src/bridge';
+import type { ChatAction } from '../src/chat-contract';
 installDom({
   url: 'http://localhost/',
   body: '<div id="root"></div><div id="overlays"></div>',
@@ -447,6 +448,9 @@ test('a read the server refused still invalidates the team', async () => {
   });
   const marks: string[] = [];
   const syncs: string[] = [];
+  // Counted when the refusal is thrown: the synchronization it causes can
+  // land before a poll observes the mark.
+  let settled = 0;
   try {
     await setup((base) => ({
       ...base,
@@ -454,6 +458,7 @@ test('a read the server refused still invalidates the team', async () => {
         if (action.action === 'sync-inbox') syncs.push(store);
         if (action.action === 'mark-read') {
           marks.push(action.sequence);
+          settled = syncs.length;
           throw {
             code: 'io',
             message: 'Connection lost.',
@@ -466,7 +471,6 @@ test('a read the server refused still invalidates the team', async () => {
       },
     }));
     await ui.waitFor(() => assert.equal(marks.length, 1));
-    const settled = syncs.length;
     await ui.waitFor(() => assert.ok(syncs.length > settled), {
       timeout: 4_000,
     });
@@ -868,6 +872,389 @@ test('scrolling away from the newest message displays a Jump to latest button', 
   );
 });
 
+/**
+ * An IntersectionObserver whose targets are on screen when `onScreen` says
+ * so; `'edge'` is a row twenty times the list's height whose edge is in
+ * view. Observing a target reports its state, as a browser's first callback
+ * does, and `refresh` reports every target whose state changed.
+ */
+class TestIntersectionObserver {
+  static onScreen: (element: Element) => boolean | 'edge' = () => false;
+  static observers = new Set<TestIntersectionObserver>();
+  private targets = new Map<Element, boolean | 'edge'>();
+  constructor(private callback: IntersectionObserverCallback) {
+    TestIntersectionObserver.observers.add(this);
+  }
+  observe(target: Element) {
+    this.targets.set(target, false);
+    queueMicrotask(() => this.report([target]));
+  }
+  unobserve(target: Element) {
+    this.targets.delete(target);
+  }
+  disconnect() {
+    this.targets.clear();
+    TestIntersectionObserver.observers.delete(this);
+  }
+  takeRecords() {
+    return [];
+  }
+  private report(targets: Element[]) {
+    const entries = targets
+      .filter((target) => this.targets.has(target))
+      .map((target) => {
+        const shown = TestIntersectionObserver.onScreen(target);
+        this.targets.set(target, shown);
+        return {
+          target,
+          isIntersecting: shown !== false,
+          intersectionRatio: shown === 'edge' ? 0.002 : shown ? 1 : 0,
+          intersectionRect: { height: shown === 'edge' ? 16 : shown ? 40 : 0 },
+          boundingClientRect: { height: shown === 'edge' ? 8_000 : 40 },
+          rootBounds: { height: 400 },
+        } as unknown as IntersectionObserverEntry;
+      });
+    if (entries.length)
+      this.callback(entries, this as unknown as IntersectionObserver);
+  }
+  static refresh() {
+    for (const observer of this.observers)
+      observer.report(
+        [...observer.targets.keys()].filter(
+          (target) => observer.targets.get(target) !== this.onScreen(target),
+        ),
+      );
+  }
+}
+/** Rows whose sequence is in `[from, to]` are on screen; nothing else is. */
+function showRows(from: number, to: number) {
+  TestIntersectionObserver.onScreen = (element) => {
+    const sequence = Number((element as HTMLElement).dataset.sequence ?? NaN);
+    return sequence >= from && sequence <= to;
+  };
+  TestIntersectionObserver.refresh();
+}
+async function withIntersectionObserver(run: () => Promise<void>) {
+  Object.defineProperty(globalThis, 'IntersectionObserver', {
+    configurable: true,
+    value: TestIntersectionObserver,
+  });
+  TestIntersectionObserver.onScreen = () => false;
+  try {
+    await run();
+  } finally {
+    delete (globalThis as { IntersectionObserver?: unknown })
+      .IntersectionObserver;
+    TestIntersectionObserver.observers.clear();
+  }
+}
+const sleep = (ms: number) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+/**
+ * The general channel holding `count` messages, all from another member
+ * unless listed in `own`, read through `read`. History follows the agent's
+ * range rules: `before` reads the fifty sequences below it and `after` up to
+ * fifty rows past it. `arrive` adds messages and wakes the inbox.
+ */
+async function busyChannel(count: number, read: number) {
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const other = FIXTURE.parties.find(
+    (party) => party.store === 'team:eng' && party.username,
+  )?.party_id_hex;
+  assert.ok(other);
+  const actor = '01' + 'ab'.repeat(32);
+  const id = 'ab'.repeat(16);
+  const state = { count, read, own: new Set<number>(), wakes: 1_000 };
+  const history: ChatAction[] = [];
+  const marks: string[] = [];
+  let base!: Bridge;
+  const message = (n: number) => ({
+    id: n.toString(16).padStart(32, '0'),
+    sequence: String(n),
+    sender: state.own.has(n) ? actor : other,
+    send_time: '1700000000000',
+    insert_time: '1700000000001',
+    content: { kind: 'text' as const, text: `Message ${n}` },
+  });
+  const override = (bridge: Bridge): Bridge => {
+    base = bridge;
+    return {
+      ...bridge,
+      chat: async (store, action, view) => {
+        if (action.action === 'mark-read') {
+          marks.push(action.sequence);
+          state.read = Math.max(state.read, Number(action.sequence));
+        }
+        const reply = await bridge.chat(store, action, view);
+        if (action.action === 'history' && reply.result.kind === 'history') {
+          history.push(action);
+          const rows: number[] = [];
+          let gap: boolean | undefined;
+          if (action.after !== undefined) {
+            const after = Number(action.after);
+            gap = state.count < after || state.count - after > 50;
+            for (
+              let n = Math.max(after + 1, state.count - 49);
+              n <= state.count;
+              n++
+            )
+              rows.push(n);
+          } else {
+            const end =
+              action.before === null ? state.count : Number(action.before) - 1;
+            for (
+              let n = Math.max(1, end - 49);
+              n <= Math.min(end, state.count);
+              n++
+            )
+              rows.push(n);
+          }
+          reply.result = {
+            kind: 'history',
+            channel: id,
+            messages: (action.after === undefined ? rows : rows.reverse()).map(
+              message,
+            ),
+            before:
+              rows.length && Math.min(...rows) > 1
+                ? String(Math.min(...rows))
+                : null,
+            missing_predecessors: [],
+            ...(gap === undefined ? {} : { gap }),
+          };
+        }
+        if (reply.result.kind === 'inbox')
+          reply.result.conversations = reply.result.conversations.map(
+            (conversation) => ({
+              ...conversation,
+              read_through: String(state.read),
+              pending_read: null,
+              unread: String(Math.max(0, state.count - state.read)),
+            }),
+          );
+        return reply;
+      },
+    };
+  };
+  const arrive = async (senders: ('other' | 'own')[]) => {
+    for (const sender of senders) {
+      state.count++;
+      if (sender === 'own') state.own.add(state.count);
+    }
+    // A read in the mock's own ledger moves the inbox version, which is
+    // what wakes the poll; the conversation it reports is the one above.
+    await base.chat('team:eng', {
+      action: 'mark-read',
+      channel: id,
+      sequence: String(state.wakes++),
+    });
+  };
+  return { override, history, marks, state, arrive };
+}
+
+test('an unread channel opens at its first unread message and marks only what was on screen', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => true,
+  });
+  const channel = await busyChannel(130, 10);
+  try {
+    await withIntersectionObserver(async () => {
+      await setup(channel.override, false);
+      await ui.screen.findByText('Message 50');
+      // 120 unread, more than a page: the first request ends ten rows above
+      // the first unread message, not at the newest one.
+      assert.deepEqual(channel.history[0], {
+        action: 'history',
+        channel: 'ab'.repeat(16),
+        before: '51',
+      });
+      assert.equal(ui.screen.queryByText('Message 51'), null);
+      const rows = [
+        ...document.querySelectorAll<HTMLElement>(
+          '.chat-divider, .chat-message',
+        ),
+      ];
+      const divider = rows.findIndex((row) =>
+        row.classList.contains('chat-divider'),
+      );
+      assert.equal(rows[divider + 1]?.dataset.sequence, '11');
+      // The window ends below the newest message.
+      ui.screen.getByRole('button', { name: 'Load newer messages' });
+      ui.screen.getByText('80 newer messages');
+      ui.screen.getByRole('button', { name: 'Jump to latest' });
+      // Nothing on screen yet, so nothing is read.
+      await sleep(700);
+      assert.deepEqual(channel.marks, []);
+      showRows(11, 20);
+      await ui.waitFor(() => assert.deepEqual(channel.marks, ['20']));
+      // A row that leaves the screen before the dwell is not read.
+      showRows(21, 30);
+      await sleep(200);
+      showRows(0, 0);
+      await sleep(600);
+      assert.deepEqual(channel.marks, ['20']);
+      // Without focus nothing is read, and focus resumes the dwell.
+      Object.defineProperty(document, 'hasFocus', {
+        configurable: true,
+        value: () => false,
+      });
+      showRows(31, 40);
+      await sleep(700);
+      assert.deepEqual(channel.marks, ['20']);
+      Object.defineProperty(document, 'hasFocus', {
+        configurable: true,
+        value: () => true,
+      });
+      window.dispatchEvent(new window.Event('focus'));
+      await ui.waitFor(() => assert.deepEqual(channel.marks, ['20', '40']));
+      // A row far taller than the list crosses no threshold as it scrolls
+      // through; it is measured on scroll once it covers half the list.
+      const tall = document.querySelector<HTMLElement>('[data-sequence="41"]');
+      assert.ok(tall);
+      TestIntersectionObserver.onScreen = (element) =>
+        element === tall ? 'edge' : false;
+      TestIntersectionObserver.refresh();
+      await sleep(700);
+      assert.deepEqual(channel.marks, ['20', '40']);
+      const scroller = ui.screen.getByLabelText('Message history');
+      scroller.getBoundingClientRect = () =>
+        ({ top: 0, bottom: 400, height: 400 }) as DOMRect;
+      tall.getBoundingClientRect = () =>
+        ({ top: -3_000, bottom: 5_000, height: 8_000 }) as DOMRect;
+      ui.fireEvent.scroll(scroller);
+      await ui.waitFor(() =>
+        assert.deepEqual(channel.marks, ['20', '40', '41']),
+      );
+      // Reaching the foot of the window pages forward until it holds the
+      // newest message, with explicit ranges rather than `after` reads.
+      TestIntersectionObserver.onScreen = (element) =>
+        element.classList.contains('chat-history-newer');
+      TestIntersectionObserver.refresh();
+      await ui.screen.findByText('Message 130');
+      // StrictMode mounts the thread twice, so the anchored read is repeated.
+      assert.deepEqual(
+        [
+          ...new Set(
+            channel.history.map((action) =>
+              action.action === 'history'
+                ? `${action.before}/${action.after}`
+                : '',
+            ),
+          ),
+        ],
+        ['51/undefined', '101/undefined', '151/undefined'],
+      );
+      await ui.waitFor(() =>
+        assert.equal(
+          ui.screen.queryByRole('button', { name: 'Load newer messages' }),
+          null,
+        ),
+      );
+    });
+  } finally {
+    Object.defineProperty(document, 'hasFocus', {
+      configurable: true,
+      value: () => false,
+    });
+  }
+});
+
+test('the jump control counts messages from others that arrived while scrolled up', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => false,
+  });
+  const channel = await busyChannel(5, 5);
+  await setup(channel.override, false);
+  await ui.screen.findByText('Message 5');
+  // Nothing unread: the channel opens at the newest page.
+  assert.equal(
+    channel.history[0]?.action === 'history' && channel.history[0].before,
+    null,
+  );
+  const scroller = ui.screen.getByLabelText('Message history');
+  Object.defineProperty(scroller, 'scrollHeight', {
+    configurable: true,
+    value: 1_000,
+  });
+  Object.defineProperty(scroller, 'clientHeight', {
+    configurable: true,
+    value: 100,
+  });
+  scroller.scrollTop = 0;
+  ui.fireEvent.scroll(scroller);
+  await ui.screen.findByRole('button', { name: 'Jump to latest' });
+  await channel.arrive(['other', 'own', 'other']);
+  await ui.screen.findByText('Message 8');
+  const pill = await ui.screen.findByRole('button', {
+    name: '2 new messages, jump to latest',
+  });
+  assert.equal(pill.textContent, '2 new messages');
+  ui.fireEvent.click(pill);
+  assert.equal(scroller.scrollTop, 1_000);
+  await ui.waitFor(() =>
+    assert.equal(
+      ui.screen.queryByRole('button', { name: /jump to latest/i }),
+      null,
+    ),
+  );
+});
+
+test('the new-messages banner and Esc mark the channel read through its newest message', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => false,
+  });
+  const channel = await busyChannel(30, 10);
+  await setup(channel.override, false);
+  await ui.screen.findByText('Message 30');
+  // Twenty unread fit the anchored page, so the window is not detached.
+  assert.equal(
+    channel.history[0]?.action === 'history' && channel.history[0].before,
+    '51',
+  );
+  assert.equal(
+    ui.screen.queryByRole('button', { name: 'Load newer messages' }),
+    null,
+  );
+  assert.equal(ui.screen.queryByRole('group', { name: 'New messages' }), null);
+  // Scrolled up, the divider is below the list.
+  const scroller = ui.screen.getByLabelText('Message history');
+  const divider = ui.screen.getByRole('separator', { name: 'New messages' });
+  scroller.getBoundingClientRect = () => ({ top: 0, bottom: 400 }) as DOMRect;
+  divider.getBoundingClientRect = () => ({ top: 500, bottom: 520 }) as DOMRect;
+  ui.fireEvent.scroll(scroller);
+  const banner = await ui.screen.findByRole('group', { name: 'New messages' });
+  assert.match(banner.textContent ?? '', /^20 new messages since /);
+  // Esc belongs to a draft in progress.
+  const composer = ui.screen.getByRole('textbox', { name: 'Message' });
+  ui.fireEvent.change(composer, { target: { value: 'half a thought' } });
+  ui.fireEvent.keyDown(composer, { key: 'Escape' });
+  await sleep(50);
+  assert.deepEqual(channel.marks, []);
+  ui.fireEvent.change(composer, { target: { value: '' } });
+  // Handled here, so the shell's own Escape does not also act on it.
+  assert.equal(ui.fireEvent.keyDown(scroller, { key: 'Escape' }), false);
+  await ui.waitFor(() => assert.deepEqual(channel.marks, ['30']));
+  await ui.waitFor(() =>
+    assert.equal(
+      ui.screen.queryByRole('separator', { name: 'New messages' }),
+      null,
+    ),
+  );
+  assert.equal(ui.screen.queryByRole('group', { name: 'New messages' }), null);
+  // With nothing unread and no divider, Escape is left to the shell.
+  await ui.waitFor(() =>
+    assert.equal(ui.fireEvent.keyDown(scroller, { key: 'Escape' }), true),
+  );
+  assert.deepEqual(channel.marks, ['30']);
+});
+
 for (const distinct of [false, true]) {
   test(`chat failures share an inset below the header and deduplicate causes, distinct=${distinct}`, async () => {
     let failing = false;
@@ -1148,6 +1535,11 @@ test('prepending older messages preserves scroll position', async () => {
     ...base,
     chat: async (store, action) => {
       const reply = await base.chat(store, action);
+      // Nothing unread, so the channel opens at its newest page.
+      if (reply.result.kind === 'inbox')
+        reply.result.conversations = reply.result.conversations.map(
+          (conversation) => ({ ...conversation, unread: '0' }),
+        );
       if (action.action === 'history' && reply.result.kind === 'history') {
         reply.result.messages =
           action.before === null

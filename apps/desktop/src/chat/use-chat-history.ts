@@ -8,10 +8,56 @@ import type {
   ChatReply,
   ChatResult,
 } from '../chat-contract';
-import type { HistoryWindow } from './conversation-model';
+import type { HistoryPlacement, HistoryWindow } from './conversation-model';
+import { CHAT_PAGE_ROWS } from '../chat-limits';
 import { diagnosticLog, hashId, outcomeForCode } from '../diagnostics/log';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
+
+/**
+ * What a history read is for. `tail` reads the newest page and `incremental`
+ * the rows after the held tail. `older` and `newer` page the held window at
+ * either end. `anchor` opens the window at the first message after the read
+ * pointer it is given, and `latest` replaces whatever is held with the newest
+ * page.
+ */
+export type HistoryLoad =
+  'tail' | 'incremental' | 'older' | 'newer' | 'anchor' | 'latest';
+
+/** Rows above the first unread message that an anchored open also loads. */
+export const ANCHOR_READ_ROWS = 10;
+
+/**
+ * The `before` cursor of the page that opens a channel read through
+ * `readThrough`: the last {@link ANCHOR_READ_ROWS} read rows, then the
+ * unread rows a page has room for. The agent reads the range that ends one
+ * below the cursor, and a range past the head returns the rows that exist.
+ */
+export function anchorBefore(readThrough: string): string {
+  return String(
+    BigInt(readThrough) + 1n + BigInt(CHAT_PAGE_ROWS - ANCHOR_READ_ROWS),
+  );
+}
+
+interface HistoryRead {
+  load: HistoryLoad;
+  cursor: string | null;
+}
+
+function lowest(messages: readonly ChatMessage[]): bigint | null {
+  return messages.reduce<bigint | null>(
+    (min, m) =>
+      min === null || BigInt(m.sequence) < min ? BigInt(m.sequence) : min,
+    null,
+  );
+}
+
+function newest(messages: readonly ChatMessage[], floor = 0n): bigint {
+  return messages.reduce(
+    (max, m) => (BigInt(m.sequence) > max ? BigInt(m.sequence) : max),
+    floor,
+  );
+}
 
 /** Loads verified pages and retains invalidations while a request is running. */
 export function useChatHistory(
@@ -21,11 +67,11 @@ export function useChatHistory(
   onAccepted?: (
     page: Extract<ChatResult, { kind: 'history' }>,
     before: string | null,
-    replace?: boolean,
-  ) => void,
+    placement?: HistoryPlacement,
+  ) => HistoryWindow | void,
   history?: HistoryWindow | null,
   onFatal?: (channel: string) => void,
-  onLoading?: (before: string | null) => void,
+  onLoading?: (load: HistoryLoad) => void,
   incrementalHistory = false,
   /**
    * The channel's newest position as the inbox last published it, or `null`
@@ -43,6 +89,13 @@ export function useChatHistory(
    * revisions it raises in that state instead.
    */
   position: string | null = null,
+  /**
+   * The read pointer to open the channel at, or `null` to open it at the
+   * newest page. Read once, when the thread mounts: the first load is then an
+   * `anchor` read that starts {@link ANCHOR_READ_ROWS} rows above the first
+   * unread message.
+   */
+  anchor: string | null = null,
 ) {
   const accepted = history?.channel === channel.id ? history : null;
   const messages = accepted?.messages ?? EMPTY_MESSAGES;
@@ -69,52 +122,100 @@ export function useChatHistory(
   // Read through a ref: a position in the load's dependencies would rebuild
   // the callback, and the mount effect depends on it, so every unread count
   // would reopen the thread with a full page.
-  // Named apart from the page-local `head` computed below, which is the
-  // newest sequence a reply carried rather than the one the inbox published.
+  // Named for what it is: the newest sequence the inbox published, not the
+  // newest one a reply carried.
   const publishedHead = useRef(position);
   publishedHead.current = position;
-  const load = useCallback(
-    async (older: string | null = null, incremental = false) => {
+  // Cleared once the anchored page is accepted, or when Jump to latest
+  // replaces it: a later run of the mount effect (a new request owner) then
+  // reads the tail, unless this mount detached the window.
+  const opening = useRef(anchor);
+  // Whether this mount accepted a page. A window detached by an earlier visit
+  // is replaced by the tail when the thread opens; one this mount detached is
+  // kept when the load is rebuilt.
+  const acceptedHere = useRef(false);
+  const [anchoring, setAnchoring] = useState(anchor !== null);
+  // The read that failed last, for Retry, and the read a rebuilt load
+  // cancelled, for the mount effect to repeat.
+  const failed = useRef<HistoryRead | null>(null);
+  const inFlight = useRef<HistoryRead | null>(null);
+  const read = useCallback(
+    async (load: HistoryLoad, cursor: string | null = null) => {
+      // Opening at the first unread message and jumping to the newest page
+      // replace the window, so they supersede a read in flight rather than
+      // wait for it.
+      if (load === 'anchor' || load === 'latest') {
+        generation.current++;
+        reading.current = false;
+        again.current = false;
+      }
+      if (load === 'latest') opening.current = null;
       if (reading.current) {
-        if (!older) again.current = true;
+        if (load === 'tail' || load === 'incremental') again.current = true;
         return;
       }
       const run = generation.current;
       const current = () => active.current && generation.current === run;
+      const held =
+        latest.current?.channel === channel.id ? latest.current : null;
+      const tail = held?.messages.at(-1)?.sequence;
+      if (load === 'incremental' && held?.detached) {
+        // A detached window ends below the published head, so an `after` read
+        // would always report a gap: truncation and rollback both look like
+        // that. It pages forward explicitly instead, and reads `after` again
+        // only once the inbox publishes a head at or below its tail, which is
+        // a rollback or the head it has already reached.
+        if (
+          publishedHead.current === null ||
+          BigInt(publishedHead.current) > BigInt(tail ?? '0')
+        )
+          return;
+      }
       const after =
-        incremental &&
-        incrementalHistory &&
-        !older &&
-        latest.current?.channel === channel.id
-          ? latest.current.messages.at(-1)?.sequence
-          : undefined;
+        load === 'incremental' && incrementalHistory && held ? tail : undefined;
       // Nothing sits beyond the held window: the revision that asked for this
       // read moved for something other than an arrival. A tail would ask the
       // server for rows after its own newest sequence and be told none exist.
       if (
         after !== undefined &&
+        !held?.detached &&
         publishedHead.current !== null &&
         BigInt(publishedHead.current) <= BigInt(after)
       )
         return;
+      let before: string | null = null;
+      if (load === 'older') before = cursor;
+      else if (load === 'anchor' && cursor !== null)
+        before = anchorBefore(cursor);
+      else if (load === 'newer') {
+        if (tail === undefined) return;
+        before = String(BigInt(tail) + 1n + BigInt(CHAT_PAGE_ROWS));
+      }
       reading.current = true;
+      inFlight.current = { load, cursor };
       setBusy(true);
+      // Read marking waits for the anchored page, as it does on open.
+      if (load === 'anchor') setAnchoring(true);
       setError(null);
-      onLoading?.(older);
+      onLoading?.(load);
       // The page load is timed under a hash of the channel, with the row
       // count: a thread open, and the reload each incoming message costs.
       const end = diagnosticLog.span('chat.history', {
         scope: `chan#${hashId(channel.id)}`,
-        attrs: { older: older !== null, incremental: after !== undefined },
+        attrs: {
+          older: load === 'older',
+          incremental: after !== undefined,
+          load,
+        },
       });
       try {
         let reply = await request({
           action: 'history',
           channel: channel.id,
-          before: older,
+          before,
           ...(after === undefined ? {} : { after }),
         });
-        let replace = false;
+        let replace = load === 'anchor' || load === 'latest';
         if (!current()) {
           end('cancelled');
           return;
@@ -131,6 +232,84 @@ export function useChatHistory(
             before: null,
           });
         }
+        // The agent narrows a range that exceeds its limits from the bottom
+        // and keeps the requested end. Older reads below the page fill what
+        // that left out, so an anchored window holds the first unread row and
+        // a newer page continues the held tail; otherwise the rows between
+        // would be skipped, and read once a later row is seen.
+        const floor =
+          load === 'anchor' && cursor !== null
+            ? BigInt(cursor)
+            : load === 'newer' && tail !== undefined
+              ? BigInt(tail)
+              : null;
+        if (floor !== null && reply.result.kind === 'history') {
+          let page = reply.result;
+          let low = lowest(page.messages);
+          while (page.before !== null && low !== null && low > floor + 1n) {
+            const more = await request({
+              action: 'history',
+              channel: channel.id,
+              before: String(low),
+            });
+            if (!current()) {
+              end('cancelled');
+              return;
+            }
+            const next =
+              more.result.kind === 'history'
+                ? lowest(more.result.messages)
+                : null;
+            if (more.result.kind !== 'history' || next === null || next >= low)
+              break;
+            page = {
+              ...page,
+              messages: [...more.result.messages, ...page.messages],
+              before: more.result.before,
+              missing_predecessors: [
+                ...more.result.missing_predecessors,
+                ...page.missing_predecessors,
+              ],
+            };
+            low = next;
+          }
+          reply = { ...reply, result: page };
+        }
+        // An empty range page: the head is below the range, or the agent
+        // narrowed it to sequences above the head. The rows after the floor
+        // are read directly instead, as an incremental read reads them, and a
+        // gap again means the newest page. This also ends forward paging
+        // toward a published head the history cannot reach.
+        let requested = before;
+        if (
+          floor !== null &&
+          reply.result.kind === 'history' &&
+          !reply.result.messages.length
+        ) {
+          requested = null;
+          reply = await request({
+            action: 'history',
+            channel: channel.id,
+            before: null,
+            ...(incrementalHistory ? { after: String(floor) } : {}),
+          });
+          if (!current()) {
+            end('cancelled');
+            return;
+          }
+          if (
+            !incrementalHistory ||
+            (reply.result.kind === 'history' && reply.result.gap !== false)
+          ) {
+            replace = true;
+            if (incrementalHistory)
+              reply = await request({
+                action: 'history',
+                channel: channel.id,
+                before: null,
+              });
+          }
+        }
         end('ok', {
           attrs: {
             rows:
@@ -142,34 +321,64 @@ export function useChatHistory(
         if (!current()) return;
         if (reply.result.kind === 'history') {
           const page = reply.result;
-          if (!older && (after === undefined || replace)) {
-            const head = page.messages.reduce(
-              (max, m) => (BigInt(m.sequence) > max ? BigInt(m.sequence) : max),
-              0n,
+          const kept = latest.current;
+          const keptTail = BigInt(kept?.messages.at(-1)?.sequence ?? '0');
+          if (before === null && (after === undefined || replace))
+            replace ||= newest(page.messages) < keptTail;
+          // A range read decides whether the window reaches the head: the
+          // published head says so when there is one. Without it, a page
+          // that ends short of the requested end ran out of rows, and one
+          // that reaches it may have more beyond.
+          let detached: boolean | undefined;
+          if (requested !== null && (load === 'anchor' || load === 'newer')) {
+            const reached = newest(
+              page.messages,
+              load === 'newer' ? keptTail : 0n,
             );
-            replace ||=
-              head < BigInt(latest.current?.messages.at(-1)?.sequence ?? '0');
+            detached =
+              publishedHead.current === null
+                ? reached >= BigInt(requested) - 1n
+                : BigInt(publishedHead.current) > reached;
           }
-          onAccepted?.(page, older, replace);
+          const stored = onAccepted?.(page, requested, {
+            replace,
+            ...(load === 'newer' ? { newer: true } : {}),
+            ...(detached === undefined ? {} : { detached }),
+          });
+          if (load === 'anchor') opening.current = null;
+          acceptedHere.current = true;
           // Acceptance publishes synchronously, but React may not render before a
-          // retained invalidation starts. Keep its next cursor current here too.
-          const held = replace ? [] : (latest.current?.messages ?? []);
+          // retained invalidation starts. Keep its next cursor current here too:
+          // the window the owner accepted, or the page merged into the held
+          // rows when the owner does not return one.
           const rows = new Map(
-            [...held, ...page.messages].map((m) => [m.sequence, m]),
+            [...(replace ? [] : (kept?.messages ?? [])), ...page.messages].map(
+              (m) => [m.sequence, m],
+            ),
           );
-          latest.current = {
+          latest.current = stored ?? {
             channel: channel.id,
             messages: [...rows.values()].sort((a, b) =>
               BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1,
             ),
-            before: page.before,
+            before: load === 'newer' && kept ? kept.before : page.before,
             verification: new Map(),
+            detached:
+              detached ??
+              (load === 'older' ? (kept?.detached ?? false) : false),
           };
         }
+        failed.current = null;
       } catch (e) {
         const code = normalizeCommandError(e).code;
         end(outcomeForCode(code), { code });
         if (current()) {
+          // An incremental read can be skipped by its own gates, so Retry
+          // reads the tail.
+          failed.current =
+            load === 'incremental'
+              ? { load: 'tail', cursor: null }
+              : { load, cursor };
           if (normalizeCommandError(e).code === 'chat-channel-integrity')
             onFatal?.(channel.id);
           setError(e);
@@ -177,10 +386,12 @@ export function useChatHistory(
       } finally {
         if (current()) {
           reading.current = false;
+          inFlight.current = null;
           setBusy(false);
+          if (load === 'anchor' || load === 'latest') setAnchoring(false);
           if (again.current) {
             again.current = false;
-            void load(null, true);
+            void read('incremental');
           }
         }
       }
@@ -195,21 +406,58 @@ export function useChatHistory(
       incrementalHistory,
     ],
   );
+  const load = useCallback(
+    (older: string | null = null, incremental = false) =>
+      read(older ? 'older' : incremental ? 'incremental' : 'tail', older),
+    [read],
+  );
+  /** Pages the window forward from its tail; see {@link HistoryLoad}. */
+  const loadNewer = useCallback(() => read('newer'), [read]);
+  /** Replaces the window with the newest page. */
+  const loadLatest = useCallback(() => read('latest'), [read]);
+  /** Reopens the window at the first message after `readThrough`. */
+  const reopen = useCallback(
+    (readThrough: string) => read('anchor', readThrough),
+    [read],
+  );
+  /** Repeats the read that failed last, or reads the tail. */
+  const retry = useCallback(() => {
+    const last = failed.current;
+    return last ? read(last.load, last.cursor) : read('tail');
+  }, [read]);
   useEffect(() => {
     generation.current++;
     reading.current = false;
     again.current = false;
     active.current = true;
-    if (channel.readable) void load();
+    const held = latest.current?.channel === channel.id ? latest.current : null;
+    const cancelled = inFlight.current;
+    inFlight.current = null;
+    if (channel.readable) {
+      if (opening.current !== null) void read('anchor', opening.current);
+      // A page read the rebuild cancelled is read again; a tail or
+      // incremental read is covered by the tail below.
+      else if (
+        cancelled &&
+        cancelled.load !== 'tail' &&
+        cancelled.load !== 'incremental'
+      )
+        void read(cancelled.load, cancelled.cursor);
+      // A window this mount detached stays where the reader left it and
+      // pages on demand: the newest page would not continue it, and would
+      // replace it. The read the rebuild cancelled no longer clears `busy`.
+      else if (held?.detached && acceptedHere.current) setBusy(false);
+      else void read('tail');
+    }
     return () => {
       active.current = false;
     };
-  }, [load, channel.readable]);
+  }, [read, channel.id, channel.readable]);
   useEffect(() => {
     if (revision === seenRevision.current) return;
     seenRevision.current = revision;
-    if (active.current && channel.readable) void load(null, true);
-  }, [channel.readable, load, revision]);
+    if (active.current && channel.readable) void read('incremental');
+  }, [channel.readable, read, revision]);
   return {
     messages,
     before,
@@ -220,6 +468,14 @@ export function useChatHistory(
     busy,
     loaded: accepted !== null,
     initialLoading: !accepted && !error,
+    /** The held window ends below the published head. */
+    detached: accepted?.detached ?? false,
+    /** The anchored first page has not been accepted or failed yet. */
+    anchoring: anchoring && channel.readable,
     load,
+    loadNewer,
+    loadLatest,
+    reopen,
+    retry,
   };
 }

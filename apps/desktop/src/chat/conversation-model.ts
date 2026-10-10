@@ -10,6 +10,25 @@ export interface HistoryWindow {
   messages: ChatMessage[];
   before: string | null;
   verification: ReadonlyMap<string, boolean>;
+  /**
+   * The newest held row is below the channel's published head: the window
+   * was opened at the first unread message, or paged forward, and has not
+   * reached the newest row. A detached window takes no incremental `after`
+   * reads; it pages forward with explicit range reads instead.
+   */
+  detached: boolean;
+}
+/** How an accepted history page relates to the window already held. */
+export interface HistoryPlacement {
+  /** Discard the held window: a reset, a rollback, or an anchored open. */
+  replace?: boolean;
+  /** The page is a range read past the held tail. */
+  newer?: boolean;
+  /**
+   * Whether the page leaves the window short of the published head. Omitted,
+   * an older page keeps the held flag and any other page clears it.
+   */
+  detached?: boolean;
 }
 export interface ConversationState {
   operations: TrackedOperation[];
@@ -54,7 +73,12 @@ export function conversationResult(
   }
   const previous =
     state.history?.channel === result.channel ? state.history : null;
-  const older = result.requestBefore;
+  // A newer page is a range read past the held tail. It extends the window at
+  // the newest end and keeps the older cursor. One that does not continue the
+  // held tail, because the agent narrowed the range or the server omitted
+  // rows, replaces the window, as a non-contiguous tail page does.
+  const newer = result.newer === true;
+  const older = newer ? null : result.requestBefore;
   const last = previous?.messages.at(-1);
   const incoming = [...result.messages].sort((a, b) =>
     BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1,
@@ -105,11 +129,15 @@ export function conversationResult(
       messages,
       verification,
       before:
-        result.incremental && previous
+        previous && (result.incremental || (newer && !reset))
           ? previous.before
           : reset || older || !previous?.before
             ? result.before
             : previous.before,
+      // A tail or incremental page reaches the head; an older page leaves
+      // the newest end where it was.
+      detached:
+        result.detached ?? (older ? (previous?.detached ?? false) : false),
     },
   };
 }
