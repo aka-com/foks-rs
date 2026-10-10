@@ -2,11 +2,11 @@ use std::io::Read as _;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Parser as _;
 use foks_server::keys::{read_root_key_file, read_secret_file};
-use foks_server::{SessionLimits, StandaloneConfig};
+use foks_server::{RunningStandaloneServer, SessionLimits, StandaloneConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
@@ -617,6 +617,27 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
     let root_key = read_root_key_file(&arguments.root_key_file)?;
     let probe_tls = probe_tls(&arguments)?;
     let mut signals = Signals::new([SIGINT, SIGTERM])?;
+    // A second registration, read only after a core thread exit, so that a
+    // stop request during that shutdown is never absorbed.
+    let shutdown_signals = Signals::new([SIGINT, SIGTERM])?;
+    let limits = SessionLimits {
+        worker_threads: arguments.worker_threads,
+        maximum_read_connections: arguments.maximum_read_connections,
+        maximum_active_connections: arguments.maximum_active_connections,
+        maximum_pending_connections: arguments.maximum_pending_connections,
+        maximum_in_flight_requests: arguments.maximum_in_flight_requests,
+        request_timeout: Duration::from_secs(arguments.request_timeout_seconds),
+        ..SessionLimits::default()
+    };
+    match foks_server::raise_descriptor_limit(&limits) {
+        Ok(limit) if !limit.sufficient() => eprintln!(
+            "FOKS server warning: the descriptor limit {} is below the {} descriptors the \
+             configured connection limits can use; raise LimitNOFILE or the hard RLIMIT_NOFILE",
+            limit.soft, limit.required,
+        ),
+        Ok(_) => {}
+        Err(error) => eprintln!("FOKS server warning: cannot raise the descriptor limit: {error}"),
+    }
     let now_microseconds =
         u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
     let server = foks_server::start_standalone(StandaloneConfig {
@@ -636,15 +657,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         management_address: arguments.management_address,
         probe_tls,
         database: foks_server_db::Config::default(),
-        limits: SessionLimits {
-            worker_threads: arguments.worker_threads,
-            maximum_read_connections: arguments.maximum_read_connections,
-            maximum_active_connections: arguments.maximum_active_connections,
-            maximum_pending_connections: arguments.maximum_pending_connections,
-            maximum_in_flight_requests: arguments.maximum_in_flight_requests,
-            request_timeout: std::time::Duration::from_secs(arguments.request_timeout_seconds),
-            ..SessionLimits::default()
-        },
+        limits,
         rate_limits: foks_server::RateLimitConfig {
             connection_burst: arguments.connection_rate_burst,
             connections_per_second: arguments.connections_per_second,
@@ -656,9 +669,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
             .automatic_backup_directory
             .map(|directory| foks_server::BackupSchedule {
                 directory,
-                interval: std::time::Duration::from_secs(
-                    arguments.automatic_backup_interval_seconds,
-                ),
+                interval: Duration::from_secs(arguments.automatic_backup_interval_seconds),
                 retain: arguments.automatic_backup_retain,
             }),
         clock: Arc::new(foks_server_db::SystemClock),
@@ -677,9 +688,58 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         addresses.authenticated,
         server.management_address(),
     );
+    // A core thread exit ends the wait as a signal would. The process then
+    // exits non-zero, so a service manager with Restart=on-failure starts a
+    // new one instead of keeping a process that no longer serves.
+    let wake = signals.handle();
+    server.on_fatal_exit(move |_| wake.close());
     let _ = signals.forever().next();
+    if let Some(thread) = server.fatal_thread() {
+        eprintln!(
+            "FOKS server stopping: the {} thread exited unexpectedly",
+            thread.label()
+        );
+        exit_after_fatal_thread(server, shutdown_signals, limits.request_timeout);
+    }
     server.shutdown()?;
     Ok(())
+}
+
+/// Time allowed for the shutdown that follows a core thread exit, beyond the
+/// request timeout that the RPC listener runtime waits for in-flight
+/// requests. It covers the bounded waits of the other threads, which run one
+/// after another.
+const FATAL_SHUTDOWN_MARGIN: Duration = Duration::from_secs(60);
+
+fn exit_after_fatal_thread(
+    server: RunningStandaloneServer,
+    mut signals: Signals,
+    request_timeout: Duration,
+) -> ! {
+    // Stop the threads that still run so that sessions end and the database
+    // closes in order, but never let a blocked thread keep the process alive.
+    // An interrupted SQLite write is recovered from the WAL on the next start.
+    let deadline = request_timeout.saturating_add(FATAL_SHUTDOWN_MARGIN);
+    std::thread::spawn(move || {
+        std::thread::sleep(deadline);
+        eprintln!(
+            "FOKS server shutdown did not finish within {} seconds",
+            deadline.as_secs()
+        );
+        std::process::exit(1);
+    });
+    // The closed iterator of the main wait would absorb a stop request, so a
+    // SIGINT or SIGTERM, including one already pending, now ends the process.
+    std::thread::spawn(move || {
+        if signals.forever().next().is_some() {
+            eprintln!("FOKS server shutdown interrupted by a signal");
+            std::process::exit(1);
+        }
+    });
+    if let Err(error) = server.shutdown() {
+        eprintln!("FOKS server shutdown after the thread exit failed: {error}");
+    }
+    std::process::exit(1);
 }
 
 fn backup(arguments: BackupArguments) -> Result<(), Box<dyn std::error::Error>> {

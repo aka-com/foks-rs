@@ -8,9 +8,11 @@
 
 mod auth;
 mod config;
+mod descriptors;
 mod diagnostics;
 mod entropy;
 mod error;
+mod fatal;
 mod fault;
 pub mod host;
 mod identity;
@@ -32,16 +34,20 @@ mod standalone;
 mod writer;
 
 pub use config::{Config, ReadDatabaseConfig, SessionLimits};
+#[cfg(unix)]
+pub use descriptors::raise_descriptor_limit;
+pub use descriptors::{descriptor_budget, DescriptorLimit};
 pub use diagnostics::{SessionDiagnostics, SessionErrorClass, StderrSessionDiagnostics};
 pub use entropy::{Entropy, OsEntropy};
 pub use error::{Error, Result};
+pub use fatal::CoreThread;
 #[doc(hidden)]
 pub use fault::{SessionFaultPoint, SessionFaults};
 pub use metrics::{
     CheckpointMetricsSnapshot, ExpiryKind, ExpiryMetricsSnapshot, FanoutMetricsSnapshot,
     RealtimeMetricsSnapshot, ReconcileMetricsSnapshot, ServerMetrics, ServerMetricsSnapshot,
 };
-pub use net::{start, RunningServer, ServerAddresses};
+pub use net::{start, AcceptErrorKind, RunningServer, ServerAddresses};
 pub use rate_limit::RateLimitConfig;
 pub use standalone::{
     backup_standalone_installation, restore_backup, start_standalone, BackupArtifacts,

@@ -242,6 +242,14 @@ impl InProcessServer {
         self.server().storage_report()
     }
 
+    pub fn fatal_thread(&self) -> Option<foks_server::CoreThread> {
+        self.server().fatal_thread()
+    }
+
+    pub fn on_fatal_exit(&self, observer: impl FnOnce(foks_server::CoreThread) + Send + 'static) {
+        self.server().on_fatal_exit(observer);
+    }
+
     pub fn shutdown(mut self) -> foks_server::Result<()> {
         self.shutdown_inner()
     }

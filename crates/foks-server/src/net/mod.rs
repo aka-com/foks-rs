@@ -1,6 +1,9 @@
+mod accept;
 mod listener;
 pub(crate) mod session;
 
+pub(crate) use accept::retry_accept;
+pub use accept::AcceptErrorKind;
 pub(crate) use listener::bind_addresses;
 pub use listener::{RunningServer, ServerAddresses};
 

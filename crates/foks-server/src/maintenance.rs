@@ -4,6 +4,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::diagnostics::operational::{checked, report as report_failure, Phase};
+use crate::fatal::{CoreThread, FatalSignal};
 use crate::{Error, Result, ServerMetrics, WriterHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -26,22 +27,27 @@ impl Maintenance {
         clock: Arc<dyn foks_server_db::Clock>,
         metrics: Arc<ServerMetrics>,
         admin: Option<Arc<crate::web_admin::WebAdminService>>,
+        fatal: FatalSignal,
     ) -> Self {
         let (stop, receiver) = mpsc::sync_channel(1);
-        let thread = thread::spawn(move || loop {
-            match receiver.recv_timeout(INTERVAL) {
-                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => {
-                    // Failures and committed reclamation counts are recorded by
-                    // the shared entry point; the next tick retries durable work.
-                    let _ = run(
-                        &writer,
-                        Arc::clone(&clock),
-                        Arc::clone(&metrics),
-                        admin.clone(),
-                    );
+        let thread = thread::spawn(move || {
+            let exit = fatal.exit_guard(CoreThread::Maintenance);
+            loop {
+                match receiver.recv_timeout(INTERVAL) {
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => {
+                        // Failures and committed reclamation counts are recorded by
+                        // the shared entry point; the next tick retries durable work.
+                        let _ = run(
+                            &writer,
+                            Arc::clone(&clock),
+                            Arc::clone(&metrics),
+                            admin.clone(),
+                        );
+                    }
                 }
             }
+            exit.end(true);
         });
         Self {
             stop,

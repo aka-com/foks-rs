@@ -9,6 +9,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
 
+use crate::fatal::{CoreThread, FatalSignal};
 use crate::{Error, Result, ServerMetrics, WriterHandle};
 
 const MAXIMUM_REQUEST_BYTES: usize = 8 * 1024;
@@ -25,6 +26,7 @@ pub(crate) struct ManagementServer {
 struct ManagementState {
     ready: Arc<AtomicBool>,
     service_live: Arc<AtomicBool>,
+    fatal: FatalSignal,
     writer: WriterHandle,
     readiness_in_flight: Arc<AtomicBool>,
     database_path: PathBuf,
@@ -38,6 +40,7 @@ impl ManagementServer {
         database_path: PathBuf,
         metrics: Arc<ServerMetrics>,
         service_live: Arc<AtomicBool>,
+        fatal: FatalSignal,
     ) -> Result<Self> {
         Self::validate_address(address)?;
         let listener = TcpListener::bind(address)?;
@@ -52,15 +55,22 @@ impl ManagementServer {
             .build()
             .map_err(Error::Io)?;
         let thread = thread::spawn(move || {
+            let exit = fatal.exit_guard(CoreThread::Management);
+            let stop_seen = receiver.clone();
             let result = runtime.block_on(run(
                 listener,
-                thread_ready,
-                service_live,
-                writer,
-                database_path,
-                metrics,
+                ManagementState {
+                    ready: thread_ready,
+                    service_live,
+                    fatal: fatal.clone(),
+                    writer,
+                    readiness_in_flight: Arc::new(AtomicBool::new(false)),
+                    database_path,
+                    metrics,
+                },
                 receiver,
             ));
+            exit.end(*stop_seen.borrow());
             runtime.shutdown_timeout(IO_TIMEOUT);
             result
         });
@@ -115,23 +125,12 @@ impl Drop for ManagementServer {
 
 async fn run(
     listener: TcpListener,
-    ready: Arc<AtomicBool>,
-    service_live: Arc<AtomicBool>,
-    writer: WriterHandle,
-    database_path: PathBuf,
-    metrics: Arc<ServerMetrics>,
+    state: ManagementState,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
     let listener = tokio::net::TcpListener::from_std(listener)?;
     let permits = Arc::new(Semaphore::new(MAXIMUM_CONNECTIONS));
-    let state = Arc::new(ManagementState {
-        ready,
-        service_live,
-        writer,
-        readiness_in_flight: Arc::new(AtomicBool::new(false)),
-        database_path,
-        metrics,
-    });
+    let state = Arc::new(state);
     let mut connections = JoinSet::new();
     loop {
         while let Some(joined) = connections.try_join_next() {
@@ -144,7 +143,13 @@ async fn run(
                 }
             }
             accepted = listener.accept() => {
-                let (stream, _) = accepted?;
+                let stream = match accepted {
+                    Ok((stream, _)) => stream,
+                    Err(error) => {
+                        crate::net::retry_accept(error, &state.metrics).await?;
+                        continue;
+                    }
+                };
                 let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
                     continue;
                 };
@@ -188,11 +193,12 @@ async fn handle(
         .next()
         .unwrap_or_default();
     let response = match first_line.strip_suffix(b"\r") {
-        Some(b"GET /healthz HTTP/1.1") => response(200, "text/plain", "ok\n".to_owned()),
+        Some(b"GET /healthz HTTP/1.1") => health(&state.fatal),
         Some(b"GET /readyz HTTP/1.1") => {
             if readiness(
                 Arc::clone(&state.ready),
                 Arc::clone(&state.service_live),
+                state.fatal.clone(),
                 state.writer.clone(),
                 Arc::clone(&state.readiness_in_flight),
             )
@@ -220,13 +226,31 @@ async fn handle(
     .await;
 }
 
+/// Liveness: fails once any core thread has exited unexpectedly, because the
+/// process then lacks a service it cannot restart in place. The `foks-server`
+/// binary exits in that state; this covers supervisors that probe first.
+fn health(fatal: &FatalSignal) -> Vec<u8> {
+    match fatal.exited() {
+        None => response(200, "text/plain", "ok\n".to_owned()),
+        Some(thread) => response(
+            503,
+            "text/plain",
+            format!("{} thread exited\n", thread.label()),
+        ),
+    }
+}
+
 async fn readiness(
     ready: Arc<AtomicBool>,
     service_live: Arc<AtomicBool>,
+    fatal: FatalSignal,
     writer: WriterHandle,
     in_flight: Arc<AtomicBool>,
 ) -> bool {
-    if !ready.load(Ordering::Acquire) || !service_live.load(Ordering::Acquire) {
+    if !ready.load(Ordering::Acquire)
+        || !service_live.load(Ordering::Acquire)
+        || fatal.exited().is_some()
+    {
         return false;
     }
     if in_flight
@@ -427,6 +451,15 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
             ),
         ] {
             let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
+        }
+        let _ = writeln!(output, "# TYPE foks_accept_errors_total counter");
+        for kind in crate::AcceptErrorKind::ALL {
+            let _ = writeln!(
+                output,
+                "foks_accept_errors_total{{kind=\"{}\"}} {}",
+                kind.label(),
+                metrics.accept_errors[kind as usize]
+            );
         }
     }
     expiry_prometheus(&mut output, &metrics.expiry);
@@ -633,6 +666,18 @@ mod tests {
     }
 
     #[test]
+    fn health_fails_after_a_core_thread_exit() {
+        let fatal = FatalSignal::default();
+        let healthy = String::from_utf8(health(&fatal)).unwrap();
+        assert!(healthy.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(healthy.ends_with("\r\n\r\nok\n"));
+        fatal.notify(CoreThread::Writer);
+        let failed = String::from_utf8(health(&fatal)).unwrap();
+        assert!(failed.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+        assert!(failed.ends_with("\r\n\r\nwriter thread exited\n"));
+    }
+
+    #[test]
     fn readiness_requires_storage_and_service_liveness() {
         let temporary = tempfile::tempdir().unwrap();
         let database_path = temporary.path().join("readiness.sqlite");
@@ -641,6 +686,7 @@ mod tests {
             crate::Writer::start(database_path, foks_server_db::Config::default(), 1).unwrap();
         let ready = Arc::new(AtomicBool::new(true));
         let service_live = Arc::new(AtomicBool::new(false));
+        let fatal = FatalSignal::default();
         let in_flight = Arc::new(AtomicBool::new(false));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -650,6 +696,7 @@ mod tests {
         assert!(!runtime.block_on(readiness(
             Arc::clone(&ready),
             Arc::clone(&service_live),
+            fatal.clone(),
             writer.handle(),
             Arc::clone(&in_flight),
         )));
@@ -657,11 +704,26 @@ mod tests {
         assert!(runtime.block_on(readiness(
             Arc::clone(&ready),
             Arc::clone(&service_live),
+            fatal.clone(),
+            writer.handle(),
+            Arc::clone(&in_flight),
+        )));
+        fatal.notify(CoreThread::Maintenance);
+        assert!(!runtime.block_on(readiness(
+            Arc::clone(&ready),
+            Arc::clone(&service_live),
+            fatal,
             writer.handle(),
             Arc::clone(&in_flight),
         )));
         service_live.store(false, Ordering::Release);
-        assert!(!runtime.block_on(readiness(ready, service_live, writer.handle(), in_flight,)));
+        assert!(!runtime.block_on(readiness(
+            ready,
+            service_live,
+            FatalSignal::default(),
+            writer.handle(),
+            in_flight,
+        )));
         writer.shutdown().unwrap();
     }
 
@@ -690,6 +752,7 @@ mod tests {
 
         let ready = Arc::new(AtomicBool::new(true));
         let service_live = Arc::new(AtomicBool::new(true));
+        let fatal = FatalSignal::default();
         let in_flight = Arc::new(AtomicBool::new(false));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -698,6 +761,7 @@ mod tests {
         assert!(!runtime.block_on(readiness(
             Arc::clone(&ready),
             Arc::clone(&service_live),
+            fatal.clone(),
             writer.handle(),
             Arc::clone(&in_flight),
         )));
@@ -709,6 +773,7 @@ mod tests {
             assert!(!runtime.block_on(readiness(
                 Arc::clone(&ready),
                 Arc::clone(&service_live),
+                fatal.clone(),
                 writer.handle(),
                 Arc::clone(&in_flight),
             )));

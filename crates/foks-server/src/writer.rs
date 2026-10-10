@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use foks_server_db::{Database, DatabasePathIdentity};
 
+use crate::fatal::{CoreThread, FatalSignal};
 use crate::{Error, Result};
 
 trait Task: Send {
@@ -133,6 +134,25 @@ impl Writer {
         database_config: foks_server_db::Config,
         maximum_pending: usize,
     ) -> Result<Self> {
+        Self::start_monitored(
+            database_path,
+            database_config,
+            maximum_pending,
+            FatalSignal::default(),
+        )
+    }
+
+    /// Starts the writer thread and reports a panic in any queued operation
+    /// to `fatal`. The thread does not continue after such a panic: unwinding
+    /// drops the operation's open rusqlite transaction, which rolls it back,
+    /// then the connection and the queue receiver, so queued and later calls
+    /// fail with `Error::WriterQueue`.
+    pub(crate) fn start_monitored(
+        database_path: PathBuf,
+        database_config: foks_server_db::Config,
+        maximum_pending: usize,
+        fatal: FatalSignal,
+    ) -> Result<Self> {
         if maximum_pending == 0 {
             return Err(Error::Config("zero writer queue limit"));
         }
@@ -148,7 +168,9 @@ impl Writer {
             match database {
                 Ok(mut database) => {
                     if startup_sender.send(Ok(())).is_ok() {
+                        let exit = fatal.exit_guard(CoreThread::Writer);
                         run(&mut database, &receiver);
+                        exit.end(true);
                     }
                 }
                 Err(error) => {
@@ -285,20 +307,19 @@ impl WriterHandle {
             return Err(Error::WriterQueue);
         }
         self.queue.pending.fetch_add(1, Ordering::AcqRel);
-        if self
-            .queue
-            .sender
-            .try_send(Message::Task(Box::new(Call {
-                operation,
-                response,
-                queued_at: Instant::now(),
-                timing: Arc::clone(&self.queue.timing),
-                reconciliation,
-            })))
-            .is_err()
-        {
+        if let Err(error) = self.queue.sender.try_send(Message::Task(Box::new(Call {
+            operation,
+            response,
+            queued_at: Instant::now(),
+            timing: Arc::clone(&self.queue.timing),
+            reconciliation,
+        }))) {
             self.queue.pending.fetch_sub(1, Ordering::AcqRel);
-            self.queue.rejected.fetch_add(1, Ordering::Relaxed);
+            // A disconnected queue means the writer thread has exited, which
+            // is reported as a fatal thread exit rather than as saturation.
+            if matches!(error, mpsc::TrySendError::Full(_)) {
+                self.queue.rejected.fetch_add(1, Ordering::Relaxed);
+            }
             return Err(Error::WriterQueue);
         }
         self.queue.accepted.fetch_add(1, Ordering::Relaxed);
@@ -499,6 +520,45 @@ mod tests {
         assert!(DatabaseWriterGuard::acquire(&path).is_err());
         writer.shutdown().unwrap();
         assert!(DatabaseWriterGuard::acquire(&path).is_ok());
+    }
+
+    #[test]
+    fn panicking_operation_stops_the_writer_and_reports_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let fatal = FatalSignal::default();
+        let writer = Writer::start_monitored(
+            temporary.path().join("foks-server.sqlite"),
+            foks_server_db::Config::default(),
+            2,
+            fatal.clone(),
+        )
+        .unwrap();
+        writer
+            .call(|database| {
+                database.reserve_name(b"committed", &[1; 17], 1, 1, 10_000_000)?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(fatal.exited(), None);
+        let panicked = writer.call::<_, ()>(|_| panic!("injected writer panic"));
+        assert!(matches!(panicked, Err(Error::WriterQueue)));
+        // The response channel closes while the thread unwinds, before the
+        // guard in its outer frame reports the exit.
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        while fatal.exited().is_none() {
+            assert!(Instant::now() < deadline, "writer panic was not reported");
+            thread::yield_now();
+        }
+        assert_eq!(fatal.exited(), Some(CoreThread::Writer));
+        // A later call either finds the queue disconnected or, if it was
+        // queued before the unwinding thread dropped its receiver, is dropped
+        // unanswered. Neither runs the operation.
+        assert!(matches!(
+            writer.call(|_| -> Result<()> { unreachable!("writer ran after a panic") }),
+            Err(Error::WriterQueue)
+        ));
+        assert_eq!(writer.handle().metrics().rejected, 0);
+        assert!(matches!(writer.shutdown(), Err(Error::Thread)));
     }
 
     #[test]

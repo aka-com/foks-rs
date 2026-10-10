@@ -151,8 +151,32 @@ authenticated transport. Readiness requires both completed startup and a
 bounded round trip through the SQLite writer. Metrics cover end-to-end request
 and actual handler duration (including work that outlives a client deadline),
 writer queue wait and execution duration, database and WAL bytes, backup
-duration, saturation, and backup outcomes. They use fixed, non-user-derived
-names and never export paths, identities, request values, or key material.
+duration, saturation, backup outcomes, and transient `accept()` failures. They
+use fixed, non-user-derived names and never export paths, identities, request
+values, or key material.
+
+`/healthz` returns 200 while every core thread runs: the three RPC listeners,
+the SQLite writer, the maintenance loop, the automatic backup scheduler, the
+management listener, and the administration and OIDC listeners when they are
+configured. None of them restarts in place. When one exits
+without a requested shutdown, for example because a writer operation panicked
+or an accept loop lost its listening socket, `/healthz` and `/readyz` return
+503 and `foks-server` shuts down the remaining threads and exits with status 1,
+so a service manager that restarts on failure starts a new process. The writer
+runs no further operations after a panic; queued and later writes fail, and
+most handlers report that as FOKS status 1012. Readiness turns 503 as soon as an RPC accept loop ends,
+without waiting for that listener's open sessions to finish.
+
+Every listener retries transient `accept()` failures (EMFILE, ENFILE, ENOBUFS,
+ENOMEM, ECONNABORTED, and other errors that leave the listening socket usable)
+after 50 ms, or at once for ECONNABORTED, which concerns only the aborted
+connection. Only errors that invalidate the listening socket end the accept
+loop. Retries are counted in `foks_accept_errors_total{kind}`. With every connection limit reached, the
+`serve-config` defaults can use up to an estimated 1,199 file descriptors,
+more than systemd's default soft `RLIMIT_NOFILE` of 1,024. `serve` and
+`serve-config` therefore raise the soft limit to the hard limit at startup and
+print a warning when it stays below the estimate; the example unit sets
+`LimitNOFILE=65536`.
 
 Connection and request token buckets are enforced per source IP with bounded
 tracking memory. CLI flags set their refill rates, bursts, and maximum tracked
