@@ -117,11 +117,11 @@ Verifying a page proceeds as follows:
 1. Reject duplicate IDs or sequences within the page, and pages whose
    sequences are not monotonic.
 2. Give each message a verdict: text, an unsupported kind, or
-   *unverifiable*. A message is unverifiable when its predecessor pointer
-   is half-set or points at or after the message itself, when its sender
-   is not a user or it carries further attribution, or when it does not
-   decrypt to UTF-8 text under the channel's read role and a key
-   generation the reader holds.
+   *unverifiable*. A message is unverifiable when its ID is all zero, when
+   its predecessor pointer is half-set or points at or after the message
+   itself, when its sender is not a user or it carries further
+   attribution, or when it does not decrypt to UTF-8 text under the
+   channel's read role and a key generation the reader holds.
 3. For each text message whose predecessor is neither in the page nor in
    the anchor table, fetch the predecessor by sequence and check that its
    ID is the one the message claims, whatever the predecessor's own
@@ -155,9 +155,18 @@ refuses a send whose ID is zero or already used, or whose pointer does not
 match its mapping, so there only a server can cause these failures. The Go
 v0.1.9 send path checks neither, so a member there can still stop a channel
 by reusing another message's ID or by authoring a text message whose
-pointer contradicts the mapping; the client cannot tell either from a substituted
-row. An all-zero ID cannot be named by a pointer, so a send chains to the
-row before such a row instead.
+pointer contradicts the mapping; the client cannot tell either from a
+substituted row. An all-zero ID cannot be named by a pointer, so a send
+chains to the row before such a row instead.
+
+A verdict for an unavailable key generation depends on the reader's team
+view at read time, so a later read that holds the generation can return the
+same row as text. The desktop accepts that change for a row whose ID,
+sequence, sender and times are unchanged, and treats any other change to a
+row it holds as a contradiction. The agent reports a non-user sender as no
+sender. The desktop keys a row with an all-zero ID by its sequence: such a
+row never becomes an anchor, so its ID is checked only against its own page
+and can recur on another page.
 
 ## Inbox versions
 

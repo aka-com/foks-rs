@@ -1259,6 +1259,14 @@ test('an unverifiable message renders as one placeholder row and leaves the chan
               ...row('3'),
               content: { kind: 'text' as const, text: 'After it' },
             },
+            // A team sender is withheld by the agent, and an all-zero ID is
+            // keyed by sequence when the reply is decoded.
+            {
+              ...row('4'),
+              id: 'zero:4',
+              sender: null,
+              content: { kind: 'unverifiable' as const },
+            },
           ];
           reply.result.before = null;
         }
@@ -1267,11 +1275,12 @@ test('an unverifiable message renders as one placeholder row and leaves the chan
     }),
     false,
   );
-  const placeholder = await ui.screen.findByText(
+  const placeholders = await ui.screen.findAllByText(
     'This message could not be decrypted or verified.',
   );
+  assert.equal(placeholders.length, 2);
   // The row draws its own header rather than continuing the sender's run.
-  const article = placeholder.closest('article');
+  const article = placeholders[0].closest('article');
   assert.ok(article);
   assert.equal(article.classList.contains('grouped'), false);
   assert.ok(ui.screen.getByText('Before it'));

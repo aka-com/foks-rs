@@ -446,11 +446,10 @@ one with a non-user sender, further attribution, invalid author metadata or an
 unavailable key generation, is reported as an unverifiable message rather than
 failing its page, and sends chain past it. Contradictions in the server's own
 sequence/ID mapping quarantine only that channel, while shared identity or inbox
-failures stop the shared owner. The Go
-inbox API can return an all-filtered page without a progress cursor; after the
-bounded larger-page retry, the client retains an incomplete cursor rather than
-claiming exact unread state. Ad-hoc-team chat and extended chat actions are not
-implemented.
+failures stop the shared owner. The Go inbox API can return an all-filtered page
+without a progress cursor; after the bounded larger-page retry, the client
+retains an incomplete cursor rather than claiming exact unread state.
+Ad-hoc-team chat and extended chat actions are not implemented.
 
 Username changes retain signed name history and bind durable attempts to an
 immutable UID and request. Resident bot credentials are imported into bounded

@@ -1953,6 +1953,113 @@ pub(crate) fn client_chat_continues_past_unverifiable_member_messages() {
         ),
         (7, 5)
     );
+
+    // A Go v0.1.9 host stores shapes that the Rust server refuses or that no
+    // FOKS-RS client sends, so the transport presents fresh rows that way:
+    // further attribution, a key generation the reader does not hold, another
+    // key role, an unencrypted wrapper, a predecessor pointer at the row
+    // itself, and a team sender. Each is one row's verdict; none fails the
+    // page, the inbox sync, the preview or a send.
+    struct GoShapes<'a> {
+        connection: &'a mut RealtimeConnection,
+        attribution: RtUserId,
+        team: RtPartyId,
+    }
+    impl ChatTransport for GoShapes<'_> {
+        fn request(&mut self, request: &Request) -> foks_client::Result<Response> {
+            let mut response = self.connection.call(request)?;
+            let reshape = |m: &mut RtMessage| match (m.sequence, &mut m.wrapper) {
+                (8, _) => m.metadata.further_user_attribution = Some(self.attribution.clone()),
+                (9, RtMessageWrapper::Encrypted(b)) => b.key.generation += 100,
+                (10, RtMessageWrapper::Encrypted(b)) => b.key.role = Role::OWNER,
+                (11, _) => m.wrapper = RtMessageWrapper::Plaintext(b"plain".to_vec()),
+                (12, _) => m.metadata.previous_sequence = m.sequence,
+                (13, _) => m.sender = Some(self.team.clone()),
+                _ => {}
+            };
+            match &mut response {
+                Response::Messages(page) => page.messages.iter_mut().for_each(reshape),
+                Response::Thread(page) => {
+                    for range in &mut page.ranges {
+                        range.messages.iter_mut().for_each(reshape);
+                    }
+                    page.sequences.iter_mut().for_each(reshape);
+                }
+                _ => {}
+            }
+            Ok(response)
+        }
+    }
+    for text in ["8", "9", "10", "11", "12", "13"] {
+        send(
+            &mut owner_chat,
+            &mut owner_rpc,
+            &mut protected,
+            channel,
+            text,
+        );
+    }
+    let mut member_rpc = member_chat.connection().unwrap();
+    let team = RtPartyId::new(created.team.clone()).unwrap();
+    let mut shapes = GoShapes {
+        connection: &mut member_rpc,
+        attribution: RtUserId::new(owner.credential.uid.clone()).unwrap(),
+        team: team.clone(),
+    };
+    let inbox = member_chat
+        .sync_inbox(&mut shapes, &mut member_soft)
+        .unwrap()
+        .inbox;
+    assert!(inbox.blocked_channels.is_empty());
+    let preview = inbox
+        .conversations
+        .iter()
+        .find(|c| c.channel.metadata.id == channel)
+        .and_then(|c| c.preview.as_ref())
+        .unwrap();
+    assert_eq!(preview.sender, Some(team));
+    assert!(matches!(
+        preview.content,
+        foks_client::ChatPreviewContent::Unverifiable {
+            reason: "unsupported message sender"
+        }
+    ));
+    let mut member_protected = client.open_protected_store().unwrap();
+    let op = member_chat
+        .prepare_send(
+            &mut shapes,
+            &mut member_protected,
+            channel,
+            "after Go shapes",
+        )
+        .unwrap();
+    member_chat
+        .attempt_operation(&mut shapes, &mut member_protected, &op.id)
+        .unwrap();
+    let recent = member_chat.read_recent(&mut shapes, channel, 7).unwrap();
+    assert!(recent.missing_predecessors.is_empty());
+    let verdicts: Vec<_> = recent
+        .messages
+        .iter()
+        .map(|row| match &row.content {
+            ChatContent::Text(text) => text.as_str().to_owned(),
+            ChatContent::Unverifiable { reason } => format!("unverifiable: {reason}"),
+            ChatContent::Unsupported(_) => "unsupported".to_owned(),
+        })
+        .collect();
+    assert_eq!(
+        verdicts,
+        [
+            "after Go shapes",
+            "unverifiable: unsupported message sender",
+            "unverifiable: invalid message metadata",
+            "unverifiable: unencrypted chat message",
+            "unverifiable: message read role mismatch",
+            "unverifiable: message key generation unavailable",
+            "unverifiable: unsupported message attribution",
+        ]
+    );
+    assert_eq!(recent.messages[0].message.metadata.previous_sequence, 13);
 }
 
 #[test]
