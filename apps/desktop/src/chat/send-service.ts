@@ -32,10 +32,11 @@ import { systemChatClock } from './inbox-service';
 import type { ChatClock, ChatInboxService } from './inbox-service';
 import {
   awaitingAccess,
+  copyOutgoing,
   intentHeld,
   newOutgoing,
   operationOf,
-  phaseOf,
+  outcomeUnknown,
   preparationAmbiguous,
   running,
   terminal,
@@ -227,7 +228,8 @@ export class ChatSendService {
       team.client.dispose();
       team.drafts.clear();
       team.observations.clear();
-      for (const message of team.messages) message.text = undefined;
+      for (const message of team.messages)
+        this.move(message, { type: 'retired' });
       team.messages.length = 0;
       team.operations.length = 0;
     }
@@ -333,7 +335,8 @@ export class ChatSendService {
           team.observations.clear();
           team.loaded.clear();
           team.loadErrors.clear();
-          for (const message of team.messages) message.text = undefined;
+          for (const message of team.messages)
+            this.move(message, { type: 'retired' });
           team.messages = [];
           team.operations = [];
           team.recovered = false;
@@ -438,7 +441,7 @@ export class ChatSendService {
   messages(storeId: string, channel?: string): readonly OutgoingMessage[] {
     return (this.teams.get(storeId)?.messages ?? [])
       .filter((m) => channel === undefined || m.channel === channel)
-      .map((m) => structuredClone(m));
+      .map(copyOutgoing);
   }
   operations(storeId: string): TrackedOperation[] {
     return this.teams.get(storeId)?.operations ?? [];
@@ -713,7 +716,10 @@ export class ChatSendService {
       team.operations = reconcileOperations(team.operations, event);
     }
     // The operations this reply reports. Requests on the chat lane run one at
-    // a time, so a report is never older than the state a message holds.
+    // a time and each reply reports the agent's state when its request ran,
+    // so a report is never older than the state a message holds, even when a
+    // foreground request overtook a background one. The transition still
+    // ignores a report that would reopen a terminal operation.
     const reported = new Map(
       (reply.result.kind === 'operation'
         ? [reply.result.operation]
@@ -1040,12 +1046,7 @@ export class ChatSendService {
   async restoreDraft(storeId: string, id: string): Promise<void> {
     const team = this.ensure(storeId);
     const message = team.messages.find((m) => m.id === id);
-    if (
-      !message ||
-      running(message) ||
-      phaseOf(message) === 'unconfirmed' ||
-      preparationAmbiguous(message)
-    )
+    if (!message || running(message) || outcomeUnknown(message))
       throw problem('Check the original message before editing it.');
     if (team.drafts.get(message.channel))
       throw problem(

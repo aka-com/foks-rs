@@ -4,9 +4,11 @@ import type { ChatOperation } from '../src/chat-contract';
 import {
   awaitingAccess,
   cleanupErrorOf,
+  copyOutgoing,
   intentHeld,
   newOutgoing,
   operationOf,
+  outcomeUnknown,
   phaseOf,
   preparationAmbiguous,
   running,
@@ -303,13 +305,28 @@ const table: [
     },
   ],
   [
-    // Recovery re-checks it once access returns, although it reads as
-    // unconfirmed rather than waiting.
+    // Check again cannot act while chat is unavailable, so the row says it is
+    // waiting; recovery checks it once access returns.
     'attempt failed + waiting',
     attemptFailed,
     { type: 'waiting' },
-    'unconfirmed',
+    'paused',
     (next) => assert.equal(awaitingAccess(next), true),
+  ],
+  [
+    'attempt failed with access changed + finished',
+    run(delivering, fail(1, true)),
+    { type: 'finished', token: 1 },
+    'paused',
+    // It reads as waiting, but is still checked rather than edited.
+    (next) => assert.equal(outcomeUnknown(next), true),
+  ],
+  [
+    // A drive checking the operation is running, so the row shows the check.
+    'unconfirmed and checking + revoked',
+    run(attemptFailed, { type: 'started', step: 'check' }),
+    { type: 'revoked' },
+    'unconfirmed',
   ],
   [
     'ambiguous with its copy cleared + queued',
@@ -319,6 +336,28 @@ const table: [
     (next) => assert.equal(preparationAmbiguous(next), true),
   ],
   ['confirmed + revoked', confirmed, { type: 'revoked' }, 'sent'],
+  [
+    'confirmed + status prepared',
+    confirmed,
+    { type: 'status', op: op('prepared') },
+    'sent',
+    // A terminal operation is never reopened by a report.
+    (next) => assert.equal(next, confirmed),
+  ],
+  [
+    // A status reply confirmed it while the drive's attempt was in flight.
+    'confirmed during delivery + attempted prepared',
+    run(delivering, { type: 'status', op: op('confirmed') }),
+    { type: 'attempted', token: 1, op: op('prepared') },
+    'sent',
+  ],
+  [
+    'submitting + retired',
+    submitting,
+    { type: 'retired' },
+    'preparing',
+    (next) => assert.equal(next.text, undefined),
+  ],
   [
     'observed + body',
     run(confirmed, { type: 'observed' }, { type: 'intent-cleared' }),
@@ -338,22 +377,20 @@ for (const [name, state, event, phase, check] of table)
     check?.(next);
   });
 
+// Each event carries the first drive's token, 1; the state is the second's.
 for (const event of [
-  { type: 'saving', token: 0 },
-  { type: 'saved', token: 0 },
-  { type: 'preparing', token: 0 },
-  { type: 'prepared', token: 0, op: op('prepared'), check: false },
-  { type: 'attempted', token: 0, op: op('confirmed') },
-  fail(0),
-  { type: 'finished', token: 0 },
-] as OutgoingEvent[])
+  { type: 'saving', token: 1 },
+  { type: 'saved', token: 1 },
+  { type: 'preparing', token: 1 },
+  { type: 'prepared', token: 1, op: op('prepared'), check: false },
+  { type: 'attempted', token: 1, op: op('confirmed') },
+  fail(1),
+  { type: 'finished', token: 1 },
+] satisfies OutgoingEvent[])
   test(`outgoing transition: a ${event.type} event from an earlier drive is discarded`, () => {
     const state = run(attemptFailed, { type: 'started', step: 'check' });
     assert.equal(state.attempt.token, 2);
-    assert.equal(
-      transition(state, { ...event, token: 1 } as OutgoingEvent),
-      state,
-    );
+    assert.equal(transition(state, event), state);
   });
 
 test('outgoing transition: a status reply after Retry does not end or redirect the Retry', () => {
@@ -375,4 +412,17 @@ test('outgoing transition: a status reply after Retry does not end or redirect t
   );
   assert.equal(running(message), false);
   assert.equal(phaseOf(message), 'sent');
+});
+
+test('outgoing copy shares no mutable state with the message', () => {
+  const message = run(attemptFailed, {
+    type: 'cleanup-failed',
+    error: 'Disk full',
+  });
+  const copy = copyOutgoing(message);
+  assert.deepEqual(copy, message);
+  assert.notEqual(copy.delivery, message.delivery);
+  assert.notEqual(operationOf(copy), operationOf(message));
+  assert.notEqual(copy.intent, message.intent);
+  assert.notEqual(copy.attempt, message.attempt);
 });

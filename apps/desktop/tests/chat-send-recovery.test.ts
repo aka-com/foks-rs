@@ -776,7 +776,11 @@ for (const failure of [
     try {
       await h.service.submit(STORE, h.channel, 'retried');
       const [failed] = h.service.messages(STORE, h.channel);
-      assert.equal(phaseOf(failed), 'unconfirmed');
+      // An access change reads as waiting until a drive can check it.
+      assert.equal(
+        phaseOf(failed),
+        failure.code === 'access-changed' ? 'paused' : 'unconfirmed',
+      );
       // The failed attempt's status lookup is queued on the chat lane; the
       // Retry's reconcile queues behind it, so the status reply lands while
       // the Retry is running.
@@ -801,6 +805,100 @@ for (const failure of [
     }
   });
 }
+
+test('a background status reply that lands after a foreground Retry has finished keeps the Retry result', async () => {
+  const gate = deferred();
+  const statusGate = deferred();
+  let hold: Promise<unknown> | undefined;
+  let saves = 0;
+  let attempts = 0;
+  let statusAnswered = false;
+  const h = await setup({
+    intent: async (action, run) => {
+      // The submit's save fails, so recovery drives the message later, at
+      // background priority.
+      if (action.action === 'save-intent' && saves++ === 0) throw unavailable;
+      return run();
+    },
+    chat: async (action, run) => {
+      if (action.action === 'submit-message')
+        return run({ ...action, action: 'prepare-message' });
+      if (action.action === 'attempt' && attempts++ === 0) {
+        // Occupy the chat lane before the failure, so the failed drive's
+        // status lookup and the Retry's reconcile both queue behind it.
+        hold = enqueueProfileWork(
+          h.bridge,
+          'acme',
+          () => gate.promise,
+          'test-hold',
+          'chat',
+        );
+        throw unavailable;
+      }
+      if (action.action === 'status') {
+        await statusGate.promise;
+        const reply = await run();
+        statusAnswered = true;
+        return reply;
+      }
+      if (action.action === 'reconcile')
+        return run({ ...action, action: 'attempt' });
+      return run();
+    },
+  });
+  let retrying: Promise<void> | undefined;
+  // Retry as soon as the row shows the failed attempt, before recovery's next
+  // job can look the operation up itself.
+  const stopListening = h.service.subscribe(() => {
+    const [message] = h.service.messages(STORE, h.channel);
+    if (
+      retrying === undefined &&
+      message &&
+      operationOf(message) &&
+      message.error &&
+      !running(message)
+    )
+      retrying = h.service.retry(STORE, message.id);
+  });
+  try {
+    await h.service.submit(STORE, h.channel, 'retried in the foreground');
+    const [unsaved] = h.service.messages(STORE, h.channel);
+    assert.equal(operationOf(unsaved), undefined);
+    assert.equal(unsaved.error, unavailable.message);
+    await h.clock.advance(1000);
+    for (let turn = 0; retrying === undefined && turn < 200; turn++)
+      await settle();
+    assert.ok(retrying, 'the background attempt did not fail');
+    assert.equal(count(h.calls, 'reconcile'), 0);
+    assert.equal(count(h.calls, 'status'), 0);
+    gate.resolve();
+    await retrying;
+    // The foreground reconcile overtook the background status lookup, and
+    // the Retry finished before that lookup's reply.
+    const reconciled = h.calls.findIndex((c) => c.action === 'reconcile');
+    const looked = h.calls.findIndex((c) => c.action === 'status');
+    assert.ok(reconciled >= 0 && looked > reconciled);
+    assert.equal(statusAnswered, false);
+    const retried = h.service.messages(STORE, h.channel)[0];
+    assert.equal(running(retried), false);
+    assert.equal(phaseOf(retried), 'sent');
+    assert.equal(retried.error, '');
+    statusGate.resolve();
+    await flush();
+    assert.equal(statusAnswered, true);
+    const after = h.service.messages(STORE, h.channel)[0];
+    assert.equal(operationOf(after)?.state, 'confirmed');
+    assert.equal(phaseOf(after), 'sent');
+    assert.equal(after.error, '');
+  } finally {
+    stopListening();
+    gate.resolve();
+    statusGate.resolve();
+    await hold;
+    await retrying;
+    h.service.stop();
+  }
+});
 
 test('observed history deduplicates delivery and leaves previously returned operation state unchanged', async () => {
   const h = await setup();

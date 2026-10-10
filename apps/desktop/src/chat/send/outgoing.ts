@@ -116,6 +116,11 @@ export type OutgoingEvent =
   | { type: 'observed' }
   /** The channel's access was withdrawn and its text with it. */
   | { type: 'revoked' }
+  /**
+   * The team was retired: the service stopped, or the team was removed,
+   * replaced or rejected. The message is discarded and its text with it.
+   */
+  | { type: 'retired' }
   /** Recovery read the operation's body back from the agent. */
   | { type: 'body'; text: string }
   | { type: 'intent-cleared' }
@@ -165,6 +170,19 @@ export function preparationAmbiguous(
 }
 
 /**
+ * The agent may already have sent the message, or may still send it: its
+ * operation's outcome is unknown, or a preparation may have reached the
+ * agent. Such a message is checked, never edited or submitted again.
+ */
+export function outcomeUnknown(
+  message: Pick<OutgoingMessage, 'delivery'>,
+): boolean {
+  return (
+    message.delivery.stage === 'uncertain' || preparationAmbiguous(message)
+  );
+}
+
+/**
  * Chat or the channel was unavailable to the newest drive and the message
  * may still change, so recovery drives it again once access returns.
  */
@@ -194,6 +212,42 @@ export function deliveryOf(op: ChatOperation): Delivery {
     : op.state === 'uncertain'
       ? { stage: 'uncertain', op }
       : { stage: 'prepared', op };
+}
+
+/**
+ * The delivery a report of `op` leaves. The agent does not change a terminal
+ * operation again, so a report that would reopen one is out of order and
+ * leaves the delivery as it is.
+ */
+function reported(delivery: Delivery, op: ChatOperation): Delivery {
+  return delivery.stage === 'terminal' && !terminal(op)
+    ? delivery
+    : deliveryOf(op);
+}
+
+/**
+ * A copy that shares nothing mutable with `message`, for callers outside the
+ * send service.
+ */
+export function copyOutgoing(message: OutgoingMessage): OutgoingMessage {
+  const op = operationOf(message);
+  return {
+    ...message,
+    delivery: op
+      ? ({
+          ...message.delivery,
+          op: {
+            ...op,
+            confirmation: op.confirmation ? { ...op.confirmation } : null,
+          },
+        } as Delivery)
+      : { ...message.delivery },
+    intent:
+      typeof message.intent === 'object'
+        ? { ...message.intent }
+        : message.intent,
+    attempt: { ...message.attempt },
+  };
 }
 
 export function newOutgoing(input: {
@@ -297,7 +351,7 @@ export function transition(
     case 'prepared':
       return {
         ...message,
-        delivery: deliveryOf(event.op),
+        delivery: reported(message.delivery, event.op),
         attempt: {
           ...message.attempt,
           step: event.check ? 'check' : 'deliver',
@@ -305,7 +359,11 @@ export function transition(
       };
     case 'attempted':
       // The attempt's reply supersedes an access change seen while it ran.
-      return { ...message, delivery: deliveryOf(event.op), stopped: null };
+      return {
+        ...message,
+        delivery: reported(message.delivery, event.op),
+        stopped: null,
+      };
     case 'failed': {
       if (!running(message)) return message;
       if (op)
@@ -332,13 +390,17 @@ export function transition(
     }
     case 'finished':
       return { ...message, attempt: { ...message.attempt, step: null } };
-    case 'status':
+    case 'status': {
       if (op && op.id !== event.op.id) return message;
+      const delivery = reported(message.delivery, event.op);
+      // A report that would reopen a terminal operation changes nothing.
+      if (delivery === message.delivery) return message;
       return {
         ...message,
-        delivery: deliveryOf(event.op),
+        delivery,
         ...(event.op.state === 'confirmed' ? { error: '' } : {}),
       };
+    }
     case 'observed':
       return {
         ...message,
@@ -348,6 +410,8 @@ export function transition(
     case 'revoked':
       if (message.text === undefined) return message;
       return { ...message, text: undefined, stopped: 'access' };
+    case 'retired':
+      return { ...message, text: undefined };
     case 'body':
       return message.observed ? message : { ...message, text: event.text };
     case 'intent-cleared':
@@ -380,6 +444,11 @@ export function phaseOf(message: OutgoingMessage): SendPhase {
       : delivery.op.state === 'cancelled'
         ? 'cancelled'
         : 'not-sent';
+  // Chat or the channel was unavailable to the newest drive and none is
+  // running, so a Retry or Check again cannot act until access returns; the
+  // row says so even when the operation's outcome is unknown. Recovery
+  // checks it once access returns.
+  if (message.stopped === 'access' && !running(message)) return 'paused';
   if (delivery.stage === 'uncertain') return 'unconfirmed';
   if (message.stopped === 'access') return 'paused';
   // A recorded failure is shown, not the step the drive failed at, even

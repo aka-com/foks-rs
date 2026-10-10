@@ -6,8 +6,8 @@ import type { ChatSendService } from './send-service';
 import {
   cleanupErrorOf,
   operationOf,
+  outcomeUnknown,
   phaseOf,
-  preparationAmbiguous,
   running,
   type OutgoingMessage,
   type SendPhase,
@@ -63,7 +63,7 @@ export function OutgoingRow({
   const editable =
     (phase === 'not-sent' || queued) &&
     !busy &&
-    !preparationAmbiguous(message) &&
+    !outcomeUnknown(message) &&
     message.text !== undefined;
   return (
     <article
@@ -121,7 +121,9 @@ export function OutgoingRow({
             {message.error && <span>{message.error}</span>}
             {retryable && (
               <Button size="sm" disabled={busy} onClick={() => void run(false)}>
-                {phase === 'unconfirmed' ? 'Check again' : 'Retry'}
+                {phase === 'unconfirmed' || outcomeUnknown(message)
+                  ? 'Check again'
+                  : 'Retry'}
               </Button>
             )}
             {cleanupError && (
