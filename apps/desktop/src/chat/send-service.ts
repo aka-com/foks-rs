@@ -14,7 +14,7 @@ import {
 } from '../chat-limits';
 import { chatAvailable, storeOf } from '../model';
 import type { AgentSnapshot } from '../model';
-import { failure, preparationCanChange, submissionId } from './actions';
+import { failure, submissionId } from './actions';
 import {
   chatClient,
   channelIntegrity,
@@ -30,6 +30,21 @@ import type { ChatIntentPersistence } from './intent';
 import { sameScope } from './scope';
 import { systemChatClock } from './inbox-service';
 import type { ChatClock, ChatInboxService } from './inbox-service';
+import {
+  awaitingAccess,
+  intentHeld,
+  newOutgoing,
+  operationOf,
+  phaseOf,
+  preparationAmbiguous,
+  running,
+  terminal,
+  transition,
+  unsent,
+  deliveryOf,
+  type OutgoingEvent,
+  type OutgoingMessage,
+} from './send/outgoing';
 
 type Inbox = Pick<
   ChatInboxService,
@@ -41,16 +56,6 @@ type Inbox = Pick<
   | 'handleError'
   | 'isChannelBlocked'
 >;
-export type SendPhase =
-  | 'queued'
-  | 'saving'
-  | 'preparing'
-  | 'sending'
-  | 'not-sent'
-  | 'unconfirmed'
-  | 'sent'
-  | 'cancelled'
-  | 'paused';
 /**
  * One step of one outgoing message, timed from the moment it was submitted:
  * its intent saved, its operation prepared, its attempt answered, the message
@@ -62,34 +67,6 @@ export interface ChatSendTiming {
   step: 'saved' | 'prepared' | 'attempted' | 'observed' | 'failed';
   milliseconds: number;
   code?: string;
-}
-export interface OutgoingMessage {
-  id: string;
-  channel: string;
-  submission: string;
-  text?: string;
-  phase: SendPhase;
-  operation?: ChatOperation;
-  observed: boolean;
-  running: boolean;
-  /**
-   * Waiting for the message ahead of it in this channel. A queued message is
-   * held in this session's memory alone: nothing has been written for it, so
-   * closing the window discards it.
-   */
-  queued: boolean;
-  /**
-   * Whether the agent has acknowledged a copy of this submission that
-   * outlives the window: its saved intent. A message that reached an
-   * `operation` is recorded by the agent itself and does not need this.
-   */
-  saved: boolean;
-  intentPending: boolean;
-  ambiguousPreparation: boolean;
-  automatic: boolean;
-  error: string;
-  cleanupError: string;
-  createdAt: number;
 }
 interface Team {
   storeId: string;
@@ -127,16 +104,6 @@ const localActions = new Set([
   'cancel',
   'finalize',
 ]);
-const terminal = (op: ChatOperation) =>
-  ['confirmed', 'cancelled', 'rejected'].includes(op.state);
-const phaseOf = (op: ChatOperation): SendPhase =>
-  op.state === 'confirmed'
-    ? 'sent'
-    : op.state === 'uncertain'
-      ? 'unconfirmed'
-      : op.state === 'cancelled'
-        ? 'cancelled'
-        : 'not-sent';
 /**
  * How long the tick waits while a team has work in hand. The tick itself
  * issues nothing; it lets each team's own two-second gate through.
@@ -212,6 +179,14 @@ export class ChatSendService {
         /* diagnostics are not authority */
       }
     }
+  }
+
+  /**
+   * The only place an outgoing message changes. The record keeps its
+   * identity, because a drive in flight holds it across its awaits.
+   */
+  private move(message: OutgoingMessage, event: OutgoingEvent) {
+    Object.assign(message, transition(message, event));
   }
 
   subscribe = (listener: () => void) => {
@@ -390,10 +365,10 @@ export class ChatSendService {
             // channel takes its text with the drafts. Nothing is left to send
             // or to recover, so the row goes rather than remaining as a
             // message that can never leave.
-            if (team.messages.some((m) => m.channel === channel && m.queued)) {
-              team.messages = team.messages.filter(
-                (m) => m.channel !== channel || !m.queued,
-              );
+            const queued = (m: OutgoingMessage) =>
+              m.channel === channel && m.delivery.stage === 'queued';
+            if (team.messages.some(queued)) {
+              team.messages = team.messages.filter((m) => !queued(m));
               changed = true;
             }
             for (const [id, observed] of team.observations)
@@ -402,8 +377,7 @@ export class ChatSendService {
               (m) => m.channel === channel,
             )) {
               if (message.text !== undefined) {
-                message.text = undefined;
-                message.phase = 'paused';
+                this.move(message, { type: 'revoked' });
                 changed = true;
               }
             }
@@ -464,15 +438,7 @@ export class ChatSendService {
   messages(storeId: string, channel?: string): readonly OutgoingMessage[] {
     return (this.teams.get(storeId)?.messages ?? [])
       .filter((m) => channel === undefined || m.channel === channel)
-      .map((m) => ({
-        ...m,
-        operation: m.operation
-          ? {
-              ...m.operation,
-              confirmation: m.operation.confirmation ? { ...m.operation.confirmation } : null,
-            }
-          : undefined,
-      }));
+      .map((m) => structuredClone(m));
   }
   operations(storeId: string): TrackedOperation[] {
     return this.teams.get(storeId)?.operations ?? [];
@@ -487,9 +453,7 @@ export class ChatSendService {
   unsentCount(): number {
     let count = 0;
     for (const team of this.teams.values())
-      for (const message of team.messages)
-        if (!message.operation && !message.saved && message.text !== undefined)
-          count++;
+      for (const message of team.messages) if (unsent(message)) count++;
     return count;
   }
   loadError(storeId: string, channel: string): string {
@@ -512,8 +476,9 @@ export class ChatSendService {
   }
   /** How many of this channel's submissions are waiting behind another. */
   private queueDepth(team: Team, channel: string): number {
-    return team.messages.filter((m) => m.channel === channel && m.queued)
-      .length;
+    return team.messages.filter(
+      (m) => m.channel === channel && m.delivery.stage === 'queued',
+    ).length;
   }
   /** Whether this channel's queue is at the depth the composer stops at. */
   queueFull(storeId: string, channel: string): boolean {
@@ -529,12 +494,11 @@ export class ChatSendService {
    * that can be holding it, wherever it sits in the list.
    */
   private admitted(team: Team, message: OutgoingMessage): boolean {
-    if (message.operation || message.intentPending) return true;
+    if (operationOf(message) || intentHeld(message)) return true;
     return (
       this.head(team, message.channel) === message &&
       !team.messages.some(
-        (m) =>
-          m !== message && m.channel === message.channel && m.intentPending,
+        (m) => m !== message && m.channel === message.channel && intentHeld(m),
       )
     );
   }
@@ -545,7 +509,7 @@ export class ChatSendService {
    */
   private head(team: Team, channel: string): OutgoingMessage | undefined {
     return team.messages.find(
-      (m) => m.channel === channel && !m.operation && m.text !== undefined,
+      (m) => m.channel === channel && !operationOf(m) && m.text !== undefined,
     );
   }
   /**
@@ -560,7 +524,7 @@ export class ChatSendService {
   ) {
     if (!this.current(team)) return;
     const next = this.head(team, channel);
-    if (!next?.queued || !this.admitted(team, next)) return;
+    if (next?.delivery.stage !== 'queued' || !this.admitted(team, next)) return;
     void this.drive(team, next, priority);
   }
   private persistence(
@@ -609,16 +573,18 @@ export class ChatSendService {
             throw problem(
               'Resolve pending messages before loading more saved messages.',
             );
-          const message = this.newMessage(
-            channel,
-            saved.text,
-            saved.submission,
-          );
           // It was read back out of the agent's own store, so it is saved and
-          // its copy there is this channel's until cleanup clears it.
-          message.saved = true;
-          message.intentPending = true;
-          message.ambiguousPreparation = true;
+          // its copy there is this channel's until cleanup clears it. Whether
+          // an earlier session submitted it is unknown, so it is prepared, not
+          // submitted again.
+          const message = newOutgoing({
+            channel,
+            submission: saved.submission,
+            text: saved.text,
+            createdAt: this.clock.now(),
+            delivery: { stage: 'preparing', ambiguous: true },
+            intent: 'pending',
+          });
           team.messages.push(message);
           void this.drive(team, message, priority);
         }
@@ -635,9 +601,7 @@ export class ChatSendService {
   }
   private canRetain(text: string): boolean {
     const messages = [...this.teams.values()].flatMap((team) =>
-      team.messages.filter(
-        (m) => !m.observed || m.intentPending || m.cleanupError,
-      ),
+      team.messages.filter((m) => !m.observed || intentHeld(m)),
     );
     return (
       messages.length < CHAT_PENDING_ROWS &&
@@ -648,31 +612,6 @@ export class ChatSendService {
         new TextEncoder().encode(text).length <=
         CHAT_HISTORY_BYTES
     );
-  }
-  private newMessage(
-    channel: string,
-    text: string,
-    submission = submissionId(),
-  ): OutgoingMessage {
-    return {
-      id: submission,
-      submission,
-      channel,
-      text,
-      phase: 'saving',
-      observed: false,
-      running: false,
-      queued: false,
-      saved: false,
-      // A fresh submission has nothing saved for it yet; `drive` records the
-      // save it is about to attempt before it can be acknowledged or lost.
-      intentPending: false,
-      ambiguousPreparation: false,
-      automatic: true,
-      error: '',
-      cleanupError: '',
-      createdAt: this.clock.now(),
-    };
   }
   async submit(storeId: string, channel: string, text: string): Promise<void> {
     const team = this.ensure(storeId);
@@ -689,14 +628,18 @@ export class ChatSendService {
       .get(storeId)
       ?.data?.channels.find((c) => c.id === channel)?.writable;
     if (!writable) throw problem('You cannot send messages to this channel.');
-    team.messages = team.messages.filter(
-      (m) => !m.observed || m.intentPending || m.cleanupError,
-    );
+    team.messages = team.messages.filter((m) => !m.observed || intentHeld(m));
     if (!this.canRetain(text))
       throw problem(
         'Resolve pending messages before sending more. Your draft is kept.',
       );
-    const message = this.newMessage(channel, text);
+    const submission = submissionId();
+    const message = newOutgoing({
+      channel,
+      submission,
+      text,
+      createdAt: this.clock.now(),
+    });
     team.messages.push(message);
     if (team.drafts.get(channel) === text) team.drafts.delete(channel);
     this.publish();
@@ -714,13 +657,14 @@ export class ChatSendService {
         (m) => m.submission === action.submission,
       );
       if (message) {
-        message.operation = reply.result.operation;
+        const id = reply.result.operation.id;
+        this.move(message, { type: 'status', op: reply.result.operation });
         const duplicate = team.messages.find(
-          (m) => m !== message && m.operation?.id === message.operation?.id,
+          (m) => m !== message && operationOf(m)?.id === id,
         );
-        message.observed ||= duplicate?.observed ?? false;
+        if (duplicate?.observed) this.move(message, { type: 'observed' });
         team.messages = team.messages.filter(
-          (m) => m === message || m.operation?.id !== message.operation?.id,
+          (m) => m === message || operationOf(m)?.id !== id,
         );
       }
     }
@@ -734,18 +678,21 @@ export class ChatSendService {
         (op) => op.id === result.operation,
       );
       const message = team.messages.find(
-        (m) => m.operation?.id === result.operation,
+        (m) => operationOf(m)?.id === result.operation,
       );
-      if (message && !message.observed) message.text = result.text;
-      else if (operation && !message)
-        team.messages.push({
-          ...this.newMessage(result.channel, result.text, operation.id),
-          submission: '',
-          operation,
-          phase: phaseOf(operation),
-          automatic: false,
-          intentPending: false,
-        });
+      if (message) this.move(message, { type: 'body', text: result.text });
+      else if (operation)
+        team.messages.push(
+          newOutgoing({
+            id: operation.id,
+            channel: result.channel,
+            submission: '',
+            text: result.text,
+            createdAt: this.clock.now(),
+            automatic: false,
+            delivery: deliveryOf(operation),
+          }),
+        );
     }
     if (reply.result.kind === 'cleanup-pending') {
       for (const operation of reply.result.operations) {
@@ -765,31 +712,34 @@ export class ChatSendService {
         event.discard = false;
       team.operations = reconcileOperations(team.operations, event);
     }
+    // The operations this reply reports. Requests on the chat lane run one at
+    // a time, so a report is never older than the state a message holds.
+    const reported = new Map(
+      (reply.result.kind === 'operation'
+        ? [reply.result.operation]
+        : reply.result.kind === 'pending' ||
+            reply.result.kind === 'cleanup-pending'
+          ? reply.result.operations
+          : []
+      ).map((op) => [op.id, op]),
+    );
     for (const message of team.messages) {
-      const op =
-        reply.result.kind === 'operation' &&
-        reply.result.operation.id === message.operation?.id
-          ? reply.result.operation
-          : team.operations.find((o) => o.id === message.operation?.id);
-      if (!op) continue;
-      message.operation = op;
-      const observed = team.observations.get(op.id);
+      const id = operationOf(message)?.id;
+      if (id === undefined) continue;
+      const op = reported.get(id);
+      if (op) this.move(message, { type: 'status', op });
+      const observed = team.observations.get(id);
       if (observed) this.observeMessage(team, message, observed);
-      message.observed ||= team.operations.some(
-        (entry) => entry.id === op.id && entry.observed,
-      );
-      if (message.observed) {
-        message.phase = 'sent';
-        if (!message.intentPending) message.text = undefined;
-      } else if (terminal(op) || op.state === 'uncertain') {
-        message.phase = phaseOf(op);
-        if (op.state === 'confirmed') message.error = '';
-      }
+      if (
+        !message.observed &&
+        team.operations.some((entry) => entry.id === id && entry.observed)
+      )
+        this.move(message, { type: 'observed' });
     }
     for (const [id, observed] of team.observations) {
       if (
         !team.messages.some(
-          (m) => m.channel === observed.channel && !m.operation,
+          (m) => m.channel === observed.channel && !operationOf(m),
         )
       )
         team.observations.delete(id);
@@ -917,16 +867,15 @@ export class ChatSendService {
     return work;
   }
   private async removeIntent(team: Team, message: OutgoingMessage) {
-    if (!message.intentPending) return;
+    if (!intentHeld(message)) return;
     const epoch = team.epoch;
     try {
       await this.persistence(team, message.channel).clear(message.submission);
       if (!this.current(team, epoch)) return;
-      message.intentPending = false;
-      message.cleanupError = '';
-      if (message.observed) message.text = undefined;
+      this.move(message, { type: 'intent-cleared' });
     } catch (error) {
-      if (this.current(team, epoch)) message.cleanupError = failure(error);
+      if (this.current(team, epoch))
+        this.move(message, { type: 'cleanup-failed', error: failure(error) });
     }
     if (this.current(team, epoch)) {
       this.publish();
@@ -942,42 +891,46 @@ export class ChatSendService {
   ) {
     const request = (action: ChatAction) =>
       this.request(team.storeId, action, priority);
-    if (message.running || !this.current(team)) return;
+    if (running(message) || !this.current(team)) return;
     if (
       // A message with no text and no operation can never be sent, so it is
       // neither queued nor something the queue waits behind; driving it
       // reports that below rather than leaving a row that reads as waiting.
-      (message.operation || message.text !== undefined) &&
+      (operationOf(message) || message.text !== undefined) &&
       !this.admitted(team, message)
     ) {
       // Behind another message in this channel. It waits rather than failing;
       // the channel's drain starts it as soon as the one ahead is out of the
       // way, so the messages reach the agent in the order they were sent in.
-      message.queued = true;
-      message.phase = 'queued';
-      message.error = '';
+      this.move(message, { type: 'queued' });
       this.publish();
       return;
     }
-    message.queued = false;
-    // It is no longer waiting, so no row reads as queued while its save is
-    // already being attempted.
-    if (message.phase === 'queued') message.phase = 'saving';
     if (!this.available(team) || !this.readable(team, message.channel)) {
-      message.phase = 'paused';
+      this.move(message, { type: 'waiting' });
       this.publish();
       return;
     }
     const epoch = team.epoch;
     const generation = this.generations.get(team.profile) ?? 0;
-    message.running = true;
-    message.error = '';
+    const checking = (op: ChatOperation) =>
+      message.observed ||
+      op.state === 'uncertain' ||
+      message.delivery.stage === 'uncertain' ||
+      team.operations.some((o) => o.id === op.id && o.statusUnknown);
+    const prepared = operationOf(message);
+    this.move(message, {
+      type: 'started',
+      step: !prepared ? 'save' : checking(prepared) ? 'check' : 'deliver',
+    });
+    // Every later event of this drive carries its token, so nothing this
+    // drive does after a newer one has started can change the message.
+    const token = message.attempt.token;
     this.publish();
     try {
-      if (!message.operation) {
+      if (!prepared) {
         if (message.text === undefined) throw cancelled();
-        message.phase = 'saving';
-        message.intentPending = true;
+        this.move(message, { type: 'saving', token });
         await this.persistence(team, message.channel, priority).save({
           submission: message.submission,
           text: message.text,
@@ -985,7 +938,7 @@ export class ChatSendService {
         if (!this.current(team, epoch)) return;
         // Acknowledged: the agent now holds a copy the next session recovers,
         // so closing the window no longer loses this submission.
-        message.saved = true;
+        this.move(message, { type: 'saved', token });
         if (generation !== (this.generations.get(team.profile) ?? 0))
           throw {
             code: 'access-changed',
@@ -995,12 +948,13 @@ export class ChatSendService {
             retryable: true,
           };
         this.report(team, message, 'saved');
-        message.phase = 'preparing';
-        this.publish();
-        const action = message.ambiguousPreparation
+        // A submit whose reply was lost may have reached the agent, so every
+        // later preparation of this submission only asks it to prepare.
+        const action = preparationAmbiguous(message)
           ? 'prepare-message'
           : 'submit-message';
-        if (action === 'submit-message') message.ambiguousPreparation = true;
+        this.move(message, { type: 'preparing', token });
+        this.publish();
         const reply = await request({
           action,
           submission: message.submission,
@@ -1009,29 +963,24 @@ export class ChatSendService {
         });
         if (!this.current(team, epoch)) return;
         if (reply.result.kind !== 'operation') throw integrity();
-        message.operation = reply.result.operation;
+        const op = reply.result.operation;
+        this.move(message, {
+          type: 'prepared',
+          token,
+          op,
+          check: checking(op),
+        });
         this.report(team, message, 'prepared');
       }
-      const op = message.operation;
-      const checking =
-        message.observed ||
-        message.phase === 'unconfirmed' ||
-        op.state === 'uncertain' ||
-        team.operations.some((o) => o.id === op.id && o.statusUnknown);
-      message.phase = message.observed
-        ? 'sent'
-        : checking
-          ? 'unconfirmed'
-          : op.state === 'prepared'
-            ? 'sending'
-            : phaseOf(op);
+      const op = operationOf(message)!;
       this.publish();
       // Admit delivery before asynchronous cleanup to the shared chat lane.
       // A slow clear acknowledgement must not hold up the send it follows.
       const delivery =
         op.state === 'prepared' || op.state === 'uncertain'
           ? request({
-              action: checking ? 'reconcile' : 'attempt',
+              action:
+                message.attempt.step === 'check' ? 'reconcile' : 'attempt',
               operation: op.id,
             })
           : undefined;
@@ -1039,9 +988,11 @@ export class ChatSendService {
       if (delivery) {
         const reply = await delivery;
         if (this.current(team, epoch) && reply.result.kind === 'operation') {
-          message.phase = message.observed
-            ? 'sent'
-            : phaseOf(reply.result.operation);
+          this.move(message, {
+            type: 'attempted',
+            token,
+            op: reply.result.operation,
+          });
           this.report(team, message, 'attempted');
         }
       }
@@ -1050,48 +1001,22 @@ export class ChatSendService {
       if (!this.current(team, epoch)) return;
       const typed = normalizeCommandError(error);
       this.report(team, message, 'failed', typed.code);
-      message.error = failure(error);
-      if (!message.operation) {
-        // Losing a local save acknowledgement cannot mean network delivery.
-        // Keep the same text and submission ID for an idempotent save retry.
-        const saveFailed = message.phase === 'saving';
-        if (!saveFailed) message.ambiguousPreparation ||= typed.ambiguous;
-        message.phase = message.ambiguousPreparation
-          ? 'unconfirmed'
-          : typed.code === 'access-changed'
-            ? 'paused'
-            : 'not-sent';
-        if (
-          !saveFailed &&
-          !message.ambiguousPreparation &&
-          preparationCanChange(error)
-        )
-          await this.clearIntent(team, message);
-      } else {
-        message.phase = message.observed ? 'sent' : 'unconfirmed';
-        void request({
-          action: 'status',
-          operation: message.operation.id,
-        })
-          .then((reply) => {
-            if (
-              this.current(team, epoch) &&
-              reply.result.kind === 'operation'
-            ) {
-              message.operation = reply.result.operation;
-              message.phase = message.observed
-                ? 'sent'
-                : typed.code === 'access-changed' &&
-                    reply.result.operation.state === 'prepared'
-                  ? 'paused'
-                  : phaseOf(reply.result.operation);
-              this.publish();
-            }
-          })
-          .catch(() => {});
-      }
+      // Nothing is cleared here. A failed save keeps the same text and
+      // submission ID for an idempotent save retry, and a failed preparation
+      // is ambiguous, so its saved copy stays until an operation is known.
+      this.move(message, {
+        type: 'failed',
+        token,
+        error: failure(error),
+        access: typed.code === 'access-changed',
+      });
+      const op = operationOf(message);
+      // The status reply is applied like any other operation report; this
+      // drive keeps no continuation that could outlive a later attempt.
+      if (op)
+        void request({ action: 'status', operation: op.id }).catch(() => {});
     } finally {
-      message.running = false;
+      this.move(message, { type: 'finished', token });
       if (this.current(team, epoch)) {
         this.publish();
         // Whatever this attempt ended as, the channel may have room for the
@@ -1103,12 +1028,13 @@ export class ChatSendService {
   async retry(storeId: string, id: string): Promise<void> {
     const team = this.ensure(storeId);
     const message = team.messages.find((m) => m.id === id);
-    if (!message || message.running) return;
-    if (message.operation?.state === 'confirmed') {
+    if (!message || running(message)) return;
+    const op = operationOf(message);
+    if (op?.state === 'confirmed') {
       await this.clearIntent(team, message);
       return;
     }
-    if (message.operation && terminal(message.operation)) return;
+    if (op && terminal(op)) return;
     await this.drive(team, message);
   }
   async restoreDraft(storeId: string, id: string): Promise<void> {
@@ -1116,24 +1042,26 @@ export class ChatSendService {
     const message = team.messages.find((m) => m.id === id);
     if (
       !message ||
-      message.running ||
-      message.phase === 'unconfirmed' ||
-      (message.ambiguousPreparation && !message.operation)
+      running(message) ||
+      phaseOf(message) === 'unconfirmed' ||
+      preparationAmbiguous(message)
     )
       throw problem('Check the original message before editing it.');
     if (team.drafts.get(message.channel))
       throw problem(
         'Your current draft is kept. Clear it before restoring this message.',
       );
-    if (message.operation?.state === 'prepared')
+    const prepared = operationOf(message);
+    if (prepared?.state === 'prepared')
       await this.request(storeId, {
         action: 'cancel',
-        operation: message.operation.id,
+        operation: prepared.id,
       });
-    if (message.operation && !terminal(message.operation))
+    const op = operationOf(message);
+    if (op && !terminal(op))
       throw problem('This message may already have been sent.');
     await this.clearIntent(team, message);
-    if (message.intentPending) return;
+    if (intentHeld(message)) return;
     if (message.text) this.setDraft(storeId, message.channel, message.text);
     team.messages = team.messages.filter((m) => m !== message);
     this.publish();
@@ -1154,9 +1082,7 @@ export class ChatSendService {
         'The sent message does not match verified history.',
       );
     if (!message.observed) this.report(team, message, 'observed');
-    message.observed = true;
-    message.phase = 'sent';
-    if (!message.intentPending) message.text = undefined;
+    this.move(message, { type: 'observed' });
     team.operations = observeMessages(team.operations, new Set([observed.id]));
   }
   observeHistory(
@@ -1167,7 +1093,7 @@ export class ChatSendService {
     const team = this.teams.get(storeId);
     if (!team || !this.current(team)) return;
     const ids = new Set(messages.map((m) => m.id));
-    if (team.messages.some((m) => m.channel === channel && !m.operation)) {
+    if (team.messages.some((m) => m.channel === channel && !operationOf(m))) {
       for (const message of messages)
         team.observations.set(message.id, {
           ...message,
@@ -1196,16 +1122,12 @@ export class ChatSendService {
       }
     }
     for (const message of team.messages) {
-      if (
-        message.channel !== channel ||
-        !message.operation ||
-        !ids.has(message.operation.id)
-      )
-        continue;
+      const op = operationOf(message);
+      if (message.channel !== channel || !op || !ids.has(op.id)) continue;
       this.observeMessage(
         team,
         message,
-        messages.find((m) => m.id === message.operation!.id)!,
+        messages.find((m) => m.id === op.id)!,
       );
     }
     team.operations = observeMessages(team.operations, ids);
@@ -1215,7 +1137,8 @@ export class ChatSendService {
     return (
       this.teams
         .get(storeId)
-        ?.messages.find((m) => m.operation?.id === operation)?.id ?? operation
+        ?.messages.find((m) => operationOf(m)?.id === operation)?.id ??
+      operation
     );
   }
   refresh(
@@ -1275,12 +1198,16 @@ export class ChatSendService {
       // A queue whose head settled between publications still has to move;
       // the drain is a no-op for a channel that is already working.
       for (const channel of new Set(
-        team.messages.filter((m) => m.queued).map((m) => m.channel),
+        team.messages
+          .filter((m) => m.delivery.stage === 'queued')
+          .map((m) => m.channel),
       ))
         this.drain(team, channel, priority);
       const jobs: { key: string; run: () => Promise<unknown> }[] = [];
       for (const op of team.operations) {
-        if (team.messages.some((m) => m.operation?.id === op.id && m.running))
+        if (
+          team.messages.some((m) => operationOf(m)?.id === op.id && running(m))
+        )
           continue;
         if (op.statusUnknown || op.state === 'uncertain')
           jobs.push({
@@ -1294,7 +1221,7 @@ export class ChatSendService {
                 operation: op.id,
               }),
           });
-        const message = team.messages.find((m) => m.operation?.id === op.id);
+        const message = team.messages.find((m) => operationOf(m)?.id === op.id);
         if (
           op.kind === 'send-message' &&
           !op.observed &&
@@ -1322,7 +1249,7 @@ export class ChatSendService {
             try {
               if (
                 op.state === 'rejected' &&
-                !team.messages.some((m) => m.operation?.id === op.id) &&
+                !team.messages.some((m) => operationOf(m)?.id === op.id) &&
                 this.available(team) &&
                 this.readable(team, op.channel)
               ) {
@@ -1346,20 +1273,20 @@ export class ChatSendService {
         });
       }
       for (const message of team.messages) {
-        if (message.running) continue;
-        if (message.operation && message.intentPending)
+        if (running(message)) continue;
+        if (operationOf(message) && intentHeld(message))
           jobs.push({
             key: `intent:${message.id}`,
             run: async () => {
               await this.clearIntent(team, message);
-              if (message.intentPending)
+              if (intentHeld(message))
                 throw new Error('Local intent cleanup is pending.');
             },
           });
         if (
           message.automatic &&
-          ((!message.operation && message.intentPending) ||
-            message.phase === 'paused') &&
+          ((!operationOf(message) && intentHeld(message)) ||
+            awaitingAccess(message)) &&
           this.available(team) &&
           this.readable(team, message.channel)
         ) {
@@ -1367,7 +1294,7 @@ export class ChatSendService {
             key: `send:${message.id}`,
             run: async () => {
               await this.drive(team, message, priority);
-              if (!message.operation)
+              if (!operationOf(message))
                 throw new Error('Preparation is still pending.');
             },
           });
@@ -1417,10 +1344,10 @@ export class ChatSendService {
       team.jobs ||
       team.messages.some(
         (m) =>
-          m.running ||
-          m.queued ||
-          m.intentPending ||
-          (m.automatic && m.phase === 'paused'),
+          running(m) ||
+          m.delivery.stage === 'queued' ||
+          intentHeld(m) ||
+          (m.automatic && awaitingAccess(m)),
       ) ||
       team.operations.some((op) => op.statusUnknown || op.state === 'uncertain')
     )

@@ -15,6 +15,14 @@ import { ChatSendService } from '../src/chat/send-service';
 import { chatIntentPersistence } from '../src/chat/intent';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
+import {
+  cleanupErrorOf,
+  intentHeld,
+  operationOf,
+  phaseOf,
+  preparationAmbiguous,
+  running,
+} from '../src/chat/send/outgoing';
 
 const STORE = 'team:eng';
 const unavailable = {
@@ -264,7 +272,7 @@ test('fresh message persists its intent before a single submit request', async (
       ['submit-message'],
     );
     assert.ok(order.indexOf('save-intent') < order.indexOf('submit-message'));
-    assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
+    assert.equal(phaseOf(h.service.messages(STORE, h.channel)[0]), 'sent');
     assert.equal(h.service.operations(STORE)[0].text, 'one request');
   } finally {
     h.service.stop();
@@ -292,7 +300,7 @@ for (const state of ['prepared', 'uncertain'] as const) {
       await h.service.submit(STORE, h.channel, 'retained body');
       const message = h.service.messages(STORE, h.channel)[0];
       assert.equal(
-        message.phase,
+        phaseOf(message),
         state === 'prepared' ? 'sent' : 'unconfirmed',
       );
       await h.service.retry(STORE, message.id);
@@ -337,7 +345,7 @@ test('lost legacy recovery preparation replies retain the original submit identi
     );
     assert.equal(count(h.calls, 'submit-message'), 1);
     assert.equal(count(h.calls, 'attempt'), 1);
-    assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
+    assert.equal(phaseOf(h.service.messages(STORE, h.channel)[0]), 'sent');
   } finally {
     h.service.stop();
   }
@@ -360,12 +368,12 @@ test('a lost submit reply after its uncertain checkpoint recovers without replay
   try {
     await h.service.submit(STORE, h.channel, 'checkpointed body');
     const original = h.service.messages(STORE, h.channel)[0];
-    assert.equal(original.intentPending, true);
+    assert.equal(intentHeld(original), true);
     await h.clock.advance(7000);
     const recovered = h.service.messages(STORE, h.channel)[0];
     assert.equal(recovered.id, original.id);
-    assert.equal(recovered.operation?.state, 'uncertain');
-    assert.equal(recovered.phase, 'unconfirmed');
+    assert.equal(operationOf(recovered)?.state, 'uncertain');
+    assert.equal(phaseOf(recovered), 'unconfirmed');
     assert.equal(recovered.text, 'checkpointed body');
     await h.service.retry(STORE, recovered.id);
     assert.equal(count(h.calls, 'submit-message'), 1);
@@ -399,7 +407,7 @@ for (const committed of [false, true]) {
       ).load();
       assert.ok(original);
       assert.equal(
-        h.service.messages(STORE, h.channel)[0].phase,
+        phaseOf(h.service.messages(STORE, h.channel)[0]),
         'unconfirmed',
       );
       // The composer stays open: another send would queue behind this one
@@ -412,8 +420,11 @@ for (const committed of [false, true]) {
       await settle();
       const restored = h.service.messages(STORE, h.channel)[0];
       assert.equal(restored.id, original.submission);
-      assert.equal(restored.ambiguousPreparation, true);
-      assert.equal(restored.phase, 'sent');
+      // Its ambiguity lasted until the agent prepared an operation for it,
+      // which it did through the prepare request asserted below.
+      assert.equal(preparationAmbiguous(restored), false);
+      assert.equal(operationOf(restored)?.state, 'confirmed');
+      assert.equal(phaseOf(restored), 'sent');
       assert.equal(count(h.calls, 'submit-message'), 1);
       assert.deepEqual(
         h.calls.find((call) => call.action === 'prepare-message'),
@@ -482,8 +493,8 @@ for (const boundary of [
       );
       if (boundary !== 'stopped') {
         const message = h.service.messages(STORE, h.channel)[0];
-        assert.equal(message.intentPending, true);
-        assert.notEqual(message.phase, 'sent');
+        assert.equal(intentHeld(message), true);
+        assert.notEqual(phaseOf(message), 'sent');
       }
     } finally {
       gate.resolve();
@@ -506,26 +517,26 @@ test('failed local intent deletion does not hide known delivery or admit another
     await h.service.submit(STORE, h.channel, 'delivered');
     await settle();
     const sent = h.service.messages(STORE, h.channel)[0];
-    assert.equal(sent.phase, 'sent');
-    assert.equal(sent.operation?.state, 'confirmed');
-    assert.equal(sent.intentPending, true);
-    assert.notEqual(sent.cleanupError, '');
+    assert.equal(phaseOf(sent), 'sent');
+    assert.equal(operationOf(sent)?.state, 'confirmed');
+    assert.equal(intentHeld(sent), true);
+    assert.notEqual(cleanupErrorOf(sent), '');
     // The next message is admitted and queued. Nothing is written for it
     // while the failed cleanup still leaves the delivered message's saved
     // copy in the channel's one slot.
     assert.equal(h.service.canSubmit(STORE, h.channel), true);
     await h.service.submit(STORE, h.channel, 'next draft');
-    assert.equal(h.service.messages(STORE, h.channel)[1].phase, 'queued');
+    assert.equal(phaseOf(h.service.messages(STORE, h.channel)[1]), 'queued');
     assert.equal(count(h.intentCalls, 'save-intent'), 1);
     assert.equal(count(h.calls, 'submit-message'), 1);
     failClear = false;
     await h.clock.advance(6000);
     await flush();
-    assert.equal(h.service.messages(STORE, h.channel)[0].intentPending, false);
+    assert.equal(intentHeld(h.service.messages(STORE, h.channel)[0]), false);
     // Cleanup succeeded, so the queued message takes the slot it waited for.
     assert.equal(count(h.intentCalls, 'save-intent'), 2);
     assert.equal(count(h.calls, 'submit-message'), 2);
-    assert.equal(h.service.messages(STORE, h.channel)[1].phase, 'sent');
+    assert.equal(phaseOf(h.service.messages(STORE, h.channel)[1]), 'sent');
   } finally {
     h.service.stop();
   }
@@ -546,11 +557,11 @@ test('delayed local intent deletion does not hold delivery completion and keeps 
       complete = true;
     });
     await settle();
-    assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
+    assert.equal(phaseOf(h.service.messages(STORE, h.channel)[0]), 'sent');
     assert.equal(complete, true);
     assert.equal(h.service.canSubmit(STORE, h.channel), true);
     await h.service.submit(STORE, h.channel, 'delivered second');
-    assert.equal(h.service.messages(STORE, h.channel)[1].phase, 'queued');
+    assert.equal(phaseOf(h.service.messages(STORE, h.channel)[1]), 'queued');
     await h.clock.advance(5000);
     // One cleanup is in flight and the queue has written nothing behind it.
     assert.equal(count(h.intentCalls, 'clear-intent'), 1);
@@ -559,7 +570,7 @@ test('delayed local intent deletion does not hold delivery completion and keeps 
     clearing.resolve();
     await flush();
     assert.equal(count(h.calls, 'submit-message'), 2);
-    assert.equal(h.service.messages(STORE, h.channel)[1].phase, 'sent');
+    assert.equal(phaseOf(h.service.messages(STORE, h.channel)[1]), 'sent');
   } finally {
     clearing.resolve();
     await sending;
@@ -586,7 +597,7 @@ test('repeated local intent cleanup failures use increasing automatic retry back
       times.length <= 8,
       `expected backoff, observed ${times.length} clear attempts in 30 seconds`,
     );
-    assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
+    assert.equal(phaseOf(h.service.messages(STORE, h.channel)[0]), 'sent');
     assert.equal(count(h.calls, 'submit-message'), 1);
   } finally {
     h.service.stop();
@@ -613,9 +624,9 @@ for (const committed of [false, true]) {
       try {
         await h.service.submit(STORE, h.channel, 'original');
         const message = h.service.messages(STORE, h.channel)[0];
-        assert.equal(message.phase, 'unconfirmed');
-        assert.equal(message.ambiguousPreparation, true);
-        assert.equal(message.intentPending, true);
+        assert.equal(phaseOf(message), 'unconfirmed');
+        assert.equal(preparationAmbiguous(message), true);
+        assert.equal(intentHeld(message), true);
         // Its saved copy is still the channel's; a further send would wait
         // for it in the queue rather than be refused.
         assert.equal(h.service.canSubmit(STORE, h.channel), true);
@@ -638,7 +649,7 @@ for (const committed of [false, true]) {
         });
         assert.equal(count(h.calls, 'submit-message'), 1);
         assert.equal(count(h.calls, 'attempt'), committed ? 0 : 1);
-        assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
+        assert.equal(phaseOf(h.service.messages(STORE, h.channel)[0]), 'sent');
         assert.equal(h.service.messages(STORE, h.channel)[0].id, message.id);
         assert.equal(h.service.draft(STORE, h.channel), 'new draft');
         const history = await h.base.chat(STORE, {
@@ -691,7 +702,7 @@ for (const mode of ['unknown', 'uncertain'] as const) {
       assert.equal(count(h.calls, 'submit-message'), 1);
       assert.equal(count(h.calls, 'prepare-message'), 0);
       assert.equal(count(h.calls, 'attempt'), 1);
-      assert.notEqual(h.service.messages(STORE, h.channel)[0].phase, 'sent');
+      assert.notEqual(phaseOf(h.service.messages(STORE, h.channel)[0]), 'sent');
       if (mode === 'uncertain') assert.ok(count(h.calls, 'reconcile') > 0);
     } finally {
       h.service.stop();
@@ -722,7 +733,10 @@ test('delayed local status recovery does not hold the primary submit completion'
     });
     await settle();
     assert.equal(statusStarted, true);
-    assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'unconfirmed');
+    assert.equal(
+      phaseOf(h.service.messages(STORE, h.channel)[0]),
+      'unconfirmed',
+    );
     assert.equal(
       complete,
       true,
@@ -734,6 +748,59 @@ test('delayed local status recovery does not hold the primary submit completion'
     h.service.stop();
   }
 });
+
+for (const failure of [
+  unavailable,
+  { ...unavailable, code: 'access-changed', message: 'Chat access changed.' },
+]) {
+  test(`a status reply for an attempt that failed with ${failure.code} does not overwrite a later Retry`, async () => {
+    const reconcile = deferred();
+    let attempts = 0;
+    let statuses = 0;
+    let reconciling = false;
+    const h = await setup({
+      chat: async (action, run) => {
+        if (action.action === 'submit-message')
+          return run({ ...action, action: 'prepare-message' });
+        if (action.action === 'attempt' && attempts++ === 0) throw failure;
+        if (action.action === 'status') statuses++;
+        if (action.action === 'reconcile') {
+          reconciling = true;
+          await reconcile.promise;
+          return run({ ...action, action: 'attempt' });
+        }
+        return run();
+      },
+    });
+    let retrying: Promise<void> | undefined;
+    try {
+      await h.service.submit(STORE, h.channel, 'retried');
+      const [failed] = h.service.messages(STORE, h.channel);
+      assert.equal(phaseOf(failed), 'unconfirmed');
+      // The failed attempt's status lookup is queued on the chat lane; the
+      // Retry's reconcile queues behind it, so the status reply lands while
+      // the Retry is running.
+      retrying = h.service.retry(STORE, failed.id);
+      while (!reconciling) await settle();
+      assert.equal(statuses, 1);
+      const during = h.service.messages(STORE, h.channel)[0];
+      assert.equal(running(during), true);
+      assert.equal(operationOf(during)?.state, 'prepared');
+      assert.equal(phaseOf(during), 'unconfirmed');
+      assert.equal(during.error, '');
+      reconcile.resolve();
+      await retrying;
+      const after = h.service.messages(STORE, h.channel)[0];
+      assert.equal(running(after), false);
+      assert.equal(phaseOf(after), 'sent');
+      assert.equal(after.error, '');
+    } finally {
+      reconcile.resolve();
+      await retrying;
+      h.service.stop();
+    }
+  });
+}
 
 test('observed history deduplicates delivery and leaves previously returned operation state unchanged', async () => {
   const h = await setup();
@@ -758,11 +825,12 @@ test('observed history deduplicates delivery and leaves previously returned oper
       0,
     );
     assert.equal(
-      h.service.operations(STORE).filter((op) => op.id === sent.operation!.id)
-        .length,
+      h.service
+        .operations(STORE)
+        .filter((op) => op.id === operationOf(sent)!.id).length,
       1,
     );
-    assert.equal(h.service.messageKey(STORE, sent.operation!.id), sent.id);
+    assert.equal(h.service.messageKey(STORE, operationOf(sent)!.id), sent.id);
     assert.equal(h.service.operations(STORE)[0].text, undefined);
     assert.equal(count(h.calls, 'submit-message'), 1);
   } finally {
@@ -841,7 +909,7 @@ for (const stage of ['saving', 'preparing'] as const) {
           assert.deepEqual(h.service.messages(STORE, h.channel), []);
         else
           assert.notEqual(
-            h.service.messages(STORE, h.channel)[0]?.phase,
+            phaseOf(h.service.messages(STORE, h.channel)[0]),
             'sent',
           );
       } finally {
@@ -1115,7 +1183,7 @@ test('verified history arriving before a submit reply is merged without another 
       h.service.messages(STORE, h.channel).filter((m) => !m.observed).length,
       0,
     );
-    assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
+    assert.equal(phaseOf(h.service.messages(STORE, h.channel)[0]), 'sent');
   } finally {
     gate.resolve();
     h.service.stop();
@@ -1226,7 +1294,7 @@ test('a revoked channel discards the queue that could never be sent', async () =
     const remaining = h.service.messages(STORE, h.channel);
     assert.equal(remaining.length, 1);
     assert.equal(remaining[0].text, undefined);
-    assert.equal(remaining[0].phase, 'paused');
+    assert.equal(phaseOf(remaining[0]), 'paused');
     assert.equal(h.service.unsentCount(), 0);
     assert.equal(h.service.canSubmit(STORE, h.channel), false);
   } finally {

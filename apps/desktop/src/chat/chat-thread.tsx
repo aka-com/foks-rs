@@ -10,6 +10,7 @@ import { AccountMark } from '../screens/account-switcher';
 import { TEXT_LIMIT_LABEL } from './use-chat-composer';
 import { useMessageComposer } from './use-message-composer';
 import { OutgoingRow } from './outgoing-row';
+import { operationOf, phaseOf } from './send/outgoing';
 import { useChatReadIntent } from './use-chat-read-intent';
 import { useChatViewport } from './use-chat-viewport';
 import { useChatHistory } from './use-chat-history';
@@ -113,7 +114,7 @@ export function ChatThread({
   const pendingKey = [
     ...outgoing
       .filter((m) => !m.observed)
-      .map((m) => `${m.id}:${m.phase}:${m.text?.length ?? 0}`),
+      .map((m) => `${m.id}:${phaseOf(m)}:${m.text?.length ?? 0}`),
     ...pending.map((op) => `${op.id}:${op.state}:${op.text?.length ?? 0}`),
   ].join('|');
   const { scroller, atBottom, onScroll, capture } = useChatViewport(
@@ -142,7 +143,10 @@ export function ChatThread({
     position,
   );
   const outgoingIds = new Set(
-    outgoing.flatMap((m) => (m.operation ? [m.operation.id] : [])),
+    outgoing.flatMap((m) => {
+      const op = operationOf(m);
+      return op ? [op.id] : [];
+    }),
   );
   const composer = useComposerSize(draft, channel.readable && channel.writable);
   useEffect(() => {

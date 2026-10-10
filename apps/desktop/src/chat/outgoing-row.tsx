@@ -2,12 +2,21 @@ import { useState } from 'react';
 import type { Bridge } from '../bridge';
 import { Button } from '../components';
 import { AccountMark } from '../screens/account-switcher';
-import type { ChatSendService, OutgoingMessage } from './send-service';
+import type { ChatSendService } from './send-service';
+import {
+  cleanupErrorOf,
+  operationOf,
+  phaseOf,
+  preparationAmbiguous,
+  running,
+  type OutgoingMessage,
+  type SendPhase,
+} from './send/outgoing';
 import { MessageText } from './message-text';
 import { failure } from './actions';
 import { messageTime, relativeMessageTime } from './presentation';
 
-const statusLabels: Partial<Record<OutgoingMessage['phase'], string>> = {
+const statusLabels: Partial<Record<SendPhase, string>> = {
   queued: 'Queued',
   'not-sent': 'Not sent',
   unconfirmed: 'Delivery unconfirmed',
@@ -39,24 +48,28 @@ export function OutgoingRow({
       setError(failure(cause));
     }
   };
-  const sent = message.phase === 'sent';
-  const sending = ['saving', 'preparing', 'sending'].includes(message.phase);
+  const phase = phaseOf(message);
+  const op = operationOf(message);
+  const busy = running(message);
+  const cleanupError = cleanupErrorOf(message);
+  const sent = phase === 'sent';
+  const sending = ['saving', 'preparing', 'sending'].includes(phase);
   // Waiting behind another message of this channel, and held in memory only.
-  const queued = message.phase === 'queued';
-  const statusLabel = statusLabels[message.phase];
+  const queued = phase === 'queued';
+  const statusLabel = statusLabels[phase];
   const retryable =
-    ['not-sent', 'unconfirmed', 'paused'].includes(message.phase) &&
-    !['rejected', 'cancelled'].includes(message.operation?.state ?? '');
+    ['not-sent', 'unconfirmed', 'paused'].includes(phase) &&
+    !['rejected', 'cancelled'].includes(op?.state ?? '');
   const editable =
-    (message.phase === 'not-sent' || queued) &&
-    !message.running &&
-    (!message.ambiguousPreparation || !!message.operation) &&
+    (phase === 'not-sent' || queued) &&
+    !busy &&
+    !preparationAmbiguous(message) &&
     message.text !== undefined;
   return (
     <article
       className={`chat-message chat-outgoing${grouped ? ' grouped' : ''}${sent ? ' sent' : ''}${sending ? ' sending' : ''}${queued ? ' queued' : ''}`}
       data-submission={message.submission}
-      data-operation={message.operation?.id}
+      data-operation={op?.id}
       title={grouped ? messageTime(String(message.createdAt)) : undefined}
     >
       <AccountMark name={avatarName} className="chat-avatar" />
@@ -103,27 +116,22 @@ export function OutgoingRow({
             <MessageText text={message.text} actions={bridge} />
           )}
         </div>
-        {!sending &&
-        (message.error || retryable || message.cleanupError || error) ? (
+        {!sending && (message.error || retryable || cleanupError || error) ? (
           <div className="chat-send-status">
             {message.error && <span>{message.error}</span>}
             {retryable && (
-              <Button
-                size="sm"
-                disabled={message.running}
-                onClick={() => void run(false)}
-              >
-                {message.phase === 'unconfirmed' ? 'Check again' : 'Retry'}
+              <Button size="sm" disabled={busy} onClick={() => void run(false)}>
+                {phase === 'unconfirmed' ? 'Check again' : 'Retry'}
               </Button>
             )}
-            {message.cleanupError && (
+            {cleanupError && (
               <>
                 <span role="status">
-                  Local message storage needs attention. {message.cleanupError}
+                  Local message storage needs attention. {cleanupError}
                 </span>
                 <Button
                   size="sm"
-                  disabled={message.running}
+                  disabled={busy}
                   onClick={() => void run(false)}
                 >
                   Retry local cleanup

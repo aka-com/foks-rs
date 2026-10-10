@@ -9,6 +9,7 @@ import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
 import type { ChatClock, TeamInbox } from '../src/chat/inbox-service';
+import { phaseOf } from '../src/chat/send/outgoing';
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -21,7 +22,7 @@ async function drained(h: { service: ChatSendService; channel: string }) {
   for (let turn = 0; turn < 200; turn++) {
     await settle();
     const messages = h.service.messages('team:eng', h.channel);
-    if (messages.every((m) => m.phase === 'sent')) return;
+    if (messages.every((m) => phaseOf(m) === 'sent')) return;
   }
   throw new Error('the send queue did not drain');
 }
@@ -182,7 +183,7 @@ test('a pending send releases its draft while delivery continues outside the con
     h.service.setDraft('team:eng', h.channel, 'next draft');
     gate.resolve();
     await sending;
-    assert.equal(h.service.messages('team:eng', h.channel)[0].phase, 'sent');
+    assert.equal(phaseOf(h.service.messages('team:eng', h.channel)[0]), 'sent');
     assert.equal(h.service.draft('team:eng', h.channel), 'next draft');
     assert.deepEqual(
       h.calls.map((a) => a.action),
@@ -207,10 +208,11 @@ test('a send while one is in flight queues rather than being refused', async () 
     assert.equal(h.service.canSubmit('team:eng', h.channel), true);
     await h.service.submit('team:eng', h.channel, 'second');
     await h.service.submit('team:eng', h.channel, 'third');
-    assert.deepEqual(
-      h.service.messages('team:eng', h.channel).map((m) => m.phase),
-      ['preparing', 'queued', 'queued'],
-    );
+    assert.deepEqual(h.service.messages('team:eng', h.channel).map(phaseOf), [
+      'preparing',
+      'queued',
+      'queued',
+    ]);
     // Nothing was saved for a queued message, so only the message being sent
     // has reached the agent.
     assert.deepEqual(
@@ -221,10 +223,11 @@ test('a send while one is in flight queues rather than being refused', async () 
     gate.resolve();
     await sending;
     await drained(h);
-    assert.deepEqual(
-      h.service.messages('team:eng', h.channel).map((m) => m.phase),
-      ['sent', 'sent', 'sent'],
-    );
+    assert.deepEqual(h.service.messages('team:eng', h.channel).map(phaseOf), [
+      'sent',
+      'sent',
+      'sent',
+    ]);
     // One message at a time, in the order they were sent in: the agent keeps
     // a single saved message per channel.
     assert.deepEqual(
@@ -277,7 +280,9 @@ test('the queue stops admitting sends at its depth and keeps the draft', async (
     );
     assert.equal(h.service.draft('team:eng', h.channel), 'over the limit');
     assert.equal(
-      h.service.messages('team:eng', h.channel).filter((m) => m.queued).length,
+      h.service
+        .messages('team:eng', h.channel)
+        .filter((m) => m.delivery.stage === 'queued').length,
       CHAT_QUEUE_ROWS,
     );
   } finally {
@@ -372,9 +377,9 @@ test('a failed save keeps the queue in order until its own retry succeeds', asyn
     await h.service.submit('team:eng', h.channel, 'first');
     await h.service.submit('team:eng', h.channel, 'second');
     const [first, second] = h.service.messages('team:eng', h.channel);
-    assert.equal(first.phase, 'not-sent');
+    assert.equal(phaseOf(first), 'not-sent');
     // The message behind a failure waits rather than overtaking it.
-    assert.equal(second.phase, 'queued');
+    assert.equal(phaseOf(second), 'queued');
     assert.deepEqual(
       h.calls.filter((a) => a.action === 'submit-message'),
       [],
@@ -439,7 +444,7 @@ test('a lost submit reply is not retried as a new send', async () => {
     const message = h.service.messages('team:eng', h.channel)[0];
     await h.service.retry('team:eng', message.id);
     assert.equal(attempts, 1);
-    assert.equal(h.service.messages('team:eng', h.channel)[0].phase, 'sent');
+    assert.equal(phaseOf(h.service.messages('team:eng', h.channel)[0]), 'sent');
   } finally {
     h.service.stop();
   }
@@ -531,7 +536,7 @@ test('a send brings the idle tick forward, and the tick goes quiet again after i
     await sending;
     await settle();
     assert.ok(recoveries(h.calls) >= 1, 'the tick did not come forward');
-    assert.equal(h.service.messages('team:eng', h.channel)[0].phase, 'sent');
+    assert.equal(phaseOf(h.service.messages('team:eng', h.channel)[0]), 'sent');
     await h.clock.advance(20_000);
     h.calls.length = 0;
     await h.clock.advance(120_000);
