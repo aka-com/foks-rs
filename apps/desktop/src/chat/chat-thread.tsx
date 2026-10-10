@@ -361,7 +361,9 @@ export function ChatThread({
                           <p className="chat-unsupported">
                             {m.content.kind === 'oversized'
                               ? 'This message exceeds the desktop display limit.'
-                              : 'This message type is not supported yet.'}
+                              : m.content.kind === 'unverifiable'
+                                ? 'This message could not be decrypted or verified.'
+                                : 'This message type is not supported yet.'}
                           </p>
                         )}
                       </div>

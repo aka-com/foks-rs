@@ -119,14 +119,16 @@ export interface ChatMessage {
   send_time: string;
   insert_time: string;
   content:
-    { kind: 'text'; text: string } | { kind: 'unsupported' | 'oversized' };
+    | { kind: 'text'; text: string }
+    | { kind: 'unsupported' | 'oversized' | 'unverifiable' };
 }
 export interface ChatPreview {
   sender: string | null;
   send_time: string;
   insert_time: string;
   content:
-    { kind: 'text'; text: string } | { kind: 'unsupported' | 'oversized' };
+    | { kind: 'text'; text: string }
+    | { kind: 'unsupported' | 'oversized' | 'unverifiable' };
 }
 export interface ChatConversation {
   channel: ChatChannel;
@@ -269,7 +271,9 @@ function content(value: unknown, maximum: number): ChatMessage['content'] {
   object(c, c.kind === 'text' ? ['kind', 'text'] : ['kind']);
   return c.kind === 'text'
     ? { kind: 'text', text: text(c.text, maximum) }
-    : c.kind === 'unsupported' || c.kind === 'oversized'
+    : c.kind === 'unsupported' ||
+        c.kind === 'oversized' ||
+        c.kind === 'unverifiable'
       ? { kind: c.kind }
       : fail();
 }

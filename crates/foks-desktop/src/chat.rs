@@ -29,7 +29,7 @@ fn valid_channel(channel: &ChatChannel) -> bool {
 fn valid_content(content: &ChatContent, maximum: usize) -> bool {
     match content {
         ChatContent::Text { text } => text.expose().len() <= maximum,
-        ChatContent::Unsupported | ChatContent::Oversized => true,
+        ChatContent::Unsupported | ChatContent::Oversized | ChatContent::Unverifiable => true,
     }
 }
 fn valid_preview(preview: &ChatPreview) -> bool {

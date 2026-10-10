@@ -78,6 +78,7 @@ fn preview(value: foks_client::ChatPreview) -> ChatPreview {
                 text: SecretString::new(preview_text(&text)),
             },
             foks_client::ChatPreviewContent::Unsupported(_) => ChatContent::Unsupported,
+            foks_client::ChatPreviewContent::Unverifiable { .. } => ChatContent::Unverifiable,
         },
     }
 }
@@ -270,7 +271,8 @@ fn bounded_preview(preview: foks_client::ChatPreview) -> foks_client::ChatPrevie
             content: foks_client::ChatPreviewContent::Text(Zeroizing::new(preview_text(&text))),
             ..preview
         },
-        foks_client::ChatPreviewContent::Unsupported(_) => preview,
+        foks_client::ChatPreviewContent::Unsupported(_)
+        | foks_client::ChatPreviewContent::Unverifiable { .. } => preview,
     }
 }
 
@@ -733,6 +735,9 @@ fn dispatch_with_page_rows(
                                 foks_client::ChatContent::Text(_) => ChatContent::Oversized,
                                 foks_client::ChatContent::Unsupported(_) => {
                                     ChatContent::Unsupported
+                                }
+                                foks_client::ChatContent::Unverifiable { .. } => {
+                                    ChatContent::Unverifiable
                                 }
                             },
                         })

@@ -116,27 +116,48 @@ Verifying a page proceeds as follows:
 
 1. Reject duplicate IDs or sequences within the page, and pages whose
    sequences are not monotonic.
-2. Decrypt each message under the channel's read role and key generation,
-   rejecting a predecessor pointer that is half-set or that points at or
-   after the message itself.
+2. Give each message a verdict: text, an unsupported kind, or
+   *unverifiable*. A message is unverifiable when its predecessor pointer
+   is half-set or points at or after the message itself, when its sender
+   is not a user or it carries further attribution, or when it does not
+   decrypt to UTF-8 text under the channel's read role and a key
+   generation the reader holds.
 3. For each text message whose predecessor is neither in the page nor in
    the anchor table, fetch the predecessor by sequence and check that its
-   ID is the one the message claims. A mismatch is a "predecessor
-   contradiction".
+   ID is the one the message claims, whatever the predecessor's own
+   verdict. A mismatch is a "predecessor contradiction".
 4. In one transaction, compare every observed `(sequence, ID, digest)` with
    what is already stored under both keys. If the server has changed the
    mapping for any sequence or any ID, the page is rejected as a conflict.
    Otherwise insert the new anchors and prune the oldest beyond the limit.
 
-Two details matter. Messages of kinds the client does not render still count
-as *observed*, so a server cannot hide a substitution behind an unsupported
-kind; only authenticated text messages become anchors. And predecessors that
-could not be fetched within the byte budget are reported to the caller as
-`missing_predecessors`, with the documented rule that missing predecessors
-are incomplete evidence, never a successful check. A bounded ledger cannot
-prove the whole history, but it makes any rewrite of the last 10,000
-messages of a channel a detectable contradiction, and it does so without
-storing any plaintext.
+Two details matter. Messages of kinds the client does not render, and
+unverifiable messages, still count as *observed*, so a server cannot hide a
+substitution behind them; only authenticated text messages become anchors.
+And predecessors that could not be fetched within the byte budget are
+reported to the caller as `missing_predecessors`, with the documented rule
+that missing predecessors are incomplete evidence, never a successful check.
+A bounded ledger cannot prove the whole history, but it makes any rewrite of
+the last 10,000 messages of a channel a detectable contradiction, and it
+does so without storing any plaintext.
+
+The verdicts exist because the server cannot inspect ciphertext: any member
+with write access can submit a Basic message that does not decrypt, and a Go
+v0.1.9 host also stores the author's ID and predecessor pointer without
+checking them. Such a row is shown as a placeholder while the rest of its
+page stays readable, and a new message chains to the latest row whatever
+its verdict, because the server checks only the `(sequence, ID)` mapping.
+Only contradictions in the server's mapping fail a page: the checks in
+steps 1 and 4, a missing sender or out-of-range sequence, and a
+predecessor contradiction. An inbox preview that fails this way stops that
+one channel and leaves the team's other channels synchronising. A Rust host
+refuses a send whose ID is zero or already used, or whose pointer does not
+match its mapping, so there only a server can cause these failures. The Go
+v0.1.9 send path checks neither, so a member there can still stop a channel
+by reusing another message's ID or by authoring a text message whose
+pointer contradicts the mapping; the client cannot tell either from a substituted
+row. An all-zero ID cannot be named by a pointer, so a send chains to the
+row before such a row instead.
 
 ## Inbox versions
 

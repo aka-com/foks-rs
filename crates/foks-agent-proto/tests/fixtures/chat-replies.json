@@ -170,6 +170,45 @@
       }
     },
     {
+      "name": "unverifiable placeholder",
+      "valid": true,
+      "action": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "sequence": "9007199254740993",
+              "sender": "01abababababababababababababababababababababababababababababababab",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
+              "content": {
+                "kind": "unverifiable"
+              }
+            }
+          ],
+          "before": "9007199254740993",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
       "name": "wrong account binding",
       "valid": false,
       "action": {

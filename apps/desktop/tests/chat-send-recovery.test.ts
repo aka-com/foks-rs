@@ -936,6 +936,41 @@ test('observed history deduplicates delivery and leaves previously returned oper
   }
 });
 
+test('an unverifiable row bearing a sent message ID is not evidence of delivery', async () => {
+  const h = await setup();
+  try {
+    await h.service.submit(STORE, h.channel, 'unverified text');
+    const reply = await h.base.chat(STORE, {
+      action: 'history',
+      channel: h.channel,
+      before: null,
+    });
+    if (reply.result.kind !== 'history') throw new Error('history expected');
+    h.service.observeHistory(
+      STORE,
+      h.channel,
+      reply.result.messages.map((m) => ({
+        ...m,
+        content: { kind: 'unverifiable' as const },
+      })),
+    );
+    assert.equal(
+      h.service.messages(STORE, h.channel).filter((message) => message.observed)
+        .length,
+      0,
+    );
+    h.service.observeHistory(STORE, h.channel, reply.result.messages);
+    assert.equal(
+      h.service
+        .messages(STORE, h.channel)
+        .filter((message) => !message.observed).length,
+      0,
+    );
+  } finally {
+    h.service.stop();
+  }
+});
+
 test('history observation does not mutate a previously returned outgoing message snapshot', async () => {
   const h = await setup();
   try {

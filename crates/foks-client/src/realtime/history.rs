@@ -10,9 +10,21 @@ use foks_rpc::{RealtimeRequest, RealtimeResponse};
 use std::collections::{BTreeMap, BTreeSet};
 use zeroize::Zeroizing;
 
+/// The verdict on one history row. Only `Text` is authenticated; the other
+/// verdicts describe a row whose sender, metadata and predecessor pointer are
+/// the server's unauthenticated claims.
 pub enum ChatContent {
     Text(Zeroizing<String>),
     Unsupported(RtMessageType),
+    /// Any channel writer can submit ciphertext the server cannot check, and
+    /// Go v0.1.9 hosts store author-chosen metadata unchecked, so a row this
+    /// client cannot open is a per-message verdict rather than a page failure:
+    /// decryption failure, non-UTF-8 text, another key role, an unavailable
+    /// key generation, a non-user sender, further attribution, or invalid
+    /// author metadata.
+    Unverifiable {
+        reason: &'static str,
+    },
 }
 pub struct ChatMessage {
     pub message: RtMessage,
@@ -187,8 +199,11 @@ impl ChatSession<'_> {
             }
             observed.push(anchor(&m)?);
             let content = self.open_message(md, &m)?;
+            // A predecessor check tests the server's (sequence, ID) mapping
+            // against an authenticated successor's pointer, so every row's
+            // mapping can settle it, whatever that row's own verdict.
+            known.insert(m.sequence, m.metadata.id.0);
             if matches!(content, ChatContent::Text(_)) {
-                known.insert(m.sequence, m.metadata.id.0);
                 anchors.push(anchor(&m)?);
             }
             messages.push(ChatMessage {
@@ -250,16 +265,16 @@ impl ChatSession<'_> {
                     encoded_bytes += size;
                 }
                 observed.push(anchor(&m)?);
-                if matches!(self.open_message(md, &m)?, ChatContent::Text(_)) {
-                    for row in &messages {
-                        if matches!(row.content, ChatContent::Text(_))
-                            && row.message.metadata.previous_sequence == m.sequence
-                            && row.message.metadata.previous_id != m.metadata.id
-                        {
-                            return Err(Error::ChatChannelIntegrity("predecessor contradiction"));
-                        }
+                for row in &messages {
+                    if matches!(row.content, ChatContent::Text(_))
+                        && row.message.metadata.previous_sequence == m.sequence
+                        && row.message.metadata.previous_id != m.metadata.id
+                    {
+                        return Err(Error::ChatChannelIntegrity("predecessor contradiction"));
                     }
-                    need.remove(&m.sequence);
+                }
+                need.remove(&m.sequence);
+                if matches!(self.open_message(md, &m)?, ChatContent::Text(_)) {
                     anchors.push(anchor(&m)?);
                 }
             }
@@ -277,45 +292,56 @@ impl ChatSession<'_> {
             missing_predecessors: need.into_iter().collect(),
         })
     }
+    /// Errors are reserved for facts the server itself assigns; everything a
+    /// channel writer chooses yields a per-message verdict.
     fn open_message(&self, md: &RtChannelMetadata, m: &RtMessage) -> Result<ChatContent> {
-        if m.sequence == 0
-            || m.sequence > i64::MAX as u64
-            || m.metadata.id.0 == [0; 16]
-            || m.metadata.previous_sequence >= m.sequence
-            || (m.metadata.previous_sequence == 0) != (m.metadata.previous_id.0 == [0; 16])
-        {
-            return Err(Error::ChatChannelIntegrity(
-                "invalid message sequence metadata",
-            ));
+        let unverifiable = |reason| Ok(ChatContent::Unverifiable { reason });
+        if m.sequence == 0 || m.sequence > i64::MAX as u64 {
+            return Err(Error::ChatChannelIntegrity("invalid message sequence"));
         }
         let sender = m
             .sender
             .as_ref()
             .ok_or(Error::ChatChannelIntegrity("message sender missing"))?;
+        // The ID and predecessor pointer are author-chosen; Go v0.1.9 hosts
+        // store them without checking.
+        if m.metadata.id.0 == [0; 16]
+            || m.metadata.previous_sequence >= m.sequence
+            || (m.metadata.previous_sequence == 0) != (m.metadata.previous_id.0 == [0; 16])
+        {
+            return unverifiable("invalid message metadata");
+        }
         if sender.entity().entity_type() != ENTITY_USER {
-            return Err(Error::ChatUnsupported("unsupported message sender"));
+            return unverifiable("unsupported message sender");
         }
         if m.metadata.kind != RtMessageType::Basic {
             return Ok(ChatContent::Unsupported(m.metadata.kind));
         }
         if m.metadata.further_user_attribution.is_some() {
-            return Err(Error::ChatUnsupported("unsupported message attribution"));
+            return unverifiable("unsupported message attribution");
         }
         let RtMessageWrapper::Encrypted(b) = &m.wrapper else {
-            return Err(Error::ChatChannelIntegrity("unencrypted chat message"));
+            return unverifiable("unencrypted chat message");
         };
         if b.key.role != md.roles.read {
-            return Err(Error::ChatChannelIntegrity("message read role mismatch"));
+            return unverifiable("message read role mismatch");
         }
-        let bytes = self
-            .keys(b.key)?
-            .open_basic_message(
-                &self.noncer(md.id, m.metadata.clone(), sender.entity().clone()),
-                &b.ciphertext,
-            )
-            .map_err(|_| Error::ChatChannelIntegrity("message authentication failed"))?;
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|_| Error::ChatChannelIntegrity("Basic text is not UTF-8"))?;
-        Ok(ChatContent::Text(Zeroizing::new(text.to_owned())))
+        let keys = match self.keys(b.key) {
+            Ok(keys) => keys,
+            Err(Error::ChatKeyUnavailable(_)) => {
+                return unverifiable("message key generation unavailable")
+            }
+            Err(error) => return Err(error),
+        };
+        let Ok(bytes) = keys.open_basic_message(
+            &self.noncer(md.id, m.metadata.clone(), sender.entity().clone()),
+            &b.ciphertext,
+        ) else {
+            return unverifiable("message authentication failed");
+        };
+        match std::str::from_utf8(&bytes) {
+            Ok(text) => Ok(ChatContent::Text(Zeroizing::new(text.to_owned()))),
+            Err(_) => unverifiable("Basic text is not UTF-8"),
+        }
     }
 }
