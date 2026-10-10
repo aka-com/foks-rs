@@ -817,11 +817,11 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         merkle_checkpoint::migrate(connection)?;
         return Ok(());
     }
-    if version == 39 {
+    if version == 39 || version == 40 {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 =
             transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version == 39 {
+        if version == 39 || version == 40 {
             let has_admission_floor: bool = transaction.query_row(
                 "SELECT EXISTS(
                     SELECT 1 FROM pragma_table_info('kv_adapter_clocks')
@@ -836,6 +836,7 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
                      RENAME COLUMN admission_floor TO validated_time_floor;",
                 )?;
             }
+            add_adapter_boot_id(&transaction)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         transaction.commit()?;
@@ -846,6 +847,25 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
             found: version,
             supported: SCHEMA_VERSION,
         });
+    }
+    Ok(())
+}
+
+/// Version 41 records the boot identity of the adapter clock anchor. Existing
+/// rows keep NULL, so their next restart applies the restart-gap rule once.
+fn add_adapter_boot_id(transaction: &Transaction<'_>) -> Result<()> {
+    let has_boot_id: bool = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM pragma_table_info('kv_adapter_clocks') WHERE name='boot_id'
+        )",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_boot_id {
+        transaction.execute_batch(
+            "ALTER TABLE kv_adapter_clocks
+             ADD COLUMN boot_id BLOB CHECK(boot_id IS NULL OR length(boot_id)=16);",
+        )?;
     }
     Ok(())
 }

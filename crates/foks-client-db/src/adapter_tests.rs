@@ -19,6 +19,7 @@ fn adapter_fixture_operation(byte: u8) -> MutationOperation {
 fn adapter_time(wall: u64, monotonic: u64) -> AdapterTimeSample {
     AdapterTimeSample {
         process_id: [7; 16],
+        boot_id: None,
         wall_seconds: wall,
         monotonic_seconds: monotonic,
     }
@@ -452,5 +453,121 @@ fn adapter_concurrent_admission_reserves_the_last_active_slot_once() {
             .unwrap()
             .len(),
         64
+    );
+}
+
+#[test]
+fn adapter_clock_boot_id_migration_matches_a_new_database() {
+    let (temp, mut db) = store();
+    db.accept_host_parts(snapshot().parts()).unwrap();
+    let op = adapter_fixture_operation(1);
+    db.check_adapter_admission(
+        &op.host_id,
+        &op.scope_id,
+        SubmissionHandle::new(200_000, [1; 16]),
+        adapter_time(200_000, 0),
+    )
+    .unwrap();
+    // Recreate the version 40 table shape, which had no boot identity.
+    db.connection
+        .execute_batch("ALTER TABLE kv_adapter_clocks DROP COLUMN boot_id; PRAGMA user_version=40;")
+        .unwrap();
+    drop(db);
+    let path = temp.path().join("hard.sqlite");
+    let mut db = HardStateStore::open(&path).unwrap();
+    let migrated = db
+        .adapter_clock(&op.host_id, &op.scope_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(migrated.boot_id, None);
+    assert_eq!(migrated.validated_time_floor, 200_000);
+    let restarted = AdapterTimeSample {
+        process_id: [8; 16],
+        boot_id: Some([5; 16]),
+        ..adapter_time(200_100, 50)
+    };
+    db.check_adapter_admission(
+        &op.host_id,
+        &op.scope_id,
+        SubmissionHandle::new(200_100, [2; 16]),
+        restarted,
+    )
+    .unwrap();
+    assert_eq!(
+        db.adapter_clock(&op.host_id, &op.scope_id)
+            .unwrap()
+            .unwrap()
+            .boot_id,
+        Some([5; 16])
+    );
+    db.checkpoint_for_snapshot().unwrap();
+    drop(db);
+    HardStateStore::inspect_existing(&path).unwrap();
+}
+
+#[test]
+fn adapter_restart_in_the_same_boot_measures_the_gap_with_the_boot_clock() {
+    let (_temp, mut db) = store();
+    db.accept_host_parts(snapshot().parts()).unwrap();
+    let op = adapter_fixture_operation(1);
+    let boot = |process: u8, boot: u8, wall: u64, monotonic: u64| AdapterTimeSample {
+        process_id: [process; 16],
+        boot_id: Some([boot; 16]),
+        wall_seconds: wall,
+        monotonic_seconds: monotonic,
+    };
+    db.check_adapter_admission(
+        &op.host_id,
+        &op.scope_id,
+        SubmissionHandle::new(200_000, [1; 16]),
+        boot(7, 1, 200_000, 1_000),
+    )
+    .unwrap();
+    // A weekend of sleep, then an agent restart in the same boot.
+    let later = 200_000 + 3 * 86_400;
+    let resumed = boot(8, 1, later, 1_000 + 3 * 86_400);
+    db.check_adapter_admission(
+        &op.host_id,
+        &op.scope_id,
+        SubmissionHandle::new(later, [2; 16]),
+        resumed,
+    )
+    .unwrap();
+    let clock = db
+        .adapter_clock(&op.host_id, &op.scope_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(clock.process_id, [8; 16]);
+    assert_eq!(
+        (clock.anchor_wall, clock.validated_time_floor),
+        (later, later)
+    );
+    // The same gap after a reboot still needs repair.
+    assert!(matches!(
+        db.check_adapter_admission(
+            &op.host_id,
+            &op.scope_id,
+            SubmissionHandle::new(later + 3 * 86_400, [3; 16]),
+            boot(9, 2, later + 3 * 86_400, 60),
+        ),
+        Err(Error::AdapterClockUntrusted)
+    ));
+    // Beyond the restart gap, a wall clock that disagrees with the boot clock
+    // is refused after restart.
+    let stepped = later + 2 * 86_400;
+    assert!(matches!(
+        db.check_adapter_admission(
+            &op.host_id,
+            &op.scope_id,
+            SubmissionHandle::new(stepped, [4; 16]),
+            boot(9, 1, stepped, 1_000 + 3 * 86_400 + 60),
+        ),
+        Err(Error::AdapterClockUntrusted)
+    ));
+    assert_eq!(
+        db.adapter_clock(&op.host_id, &op.scope_id)
+            .unwrap()
+            .unwrap(),
+        clock
     );
 }

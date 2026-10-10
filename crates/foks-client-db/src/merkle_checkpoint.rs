@@ -177,6 +177,7 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
              RENAME COLUMN admission_floor TO validated_time_floor;",
         )?;
     }
+    super::add_adapter_boot_id(&transaction)?;
     transaction.execute("UPDATE hard_state_metadata SET hard_state_revision=hard_state_revision+1, write_token=randomblob(16) WHERE singleton=1", [])?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;

@@ -111,9 +111,12 @@ return `not-recorded`; retired or stale unseen handles return `expired` and cann
 execute. A durable rejection watermark prevents clock correction from reopening
 expired handles. Expiry describes replay eligibility, not proof of an earlier write.
 
-Time uses a persisted anchor plus a process monotonic clock. A wall-clock jump over
-five minutes, or a restart more than 24 hours beyond the last trusted floor, blocks
-new admission and pruning with `clock-untrusted`. Retained status and recovery still
+Time uses a persisted anchor plus a monotonic clock that keeps counting during
+sleep (`CLOCK_BOOTTIME` on Linux, `CLOCK_MONOTONIC_RAW` on macOS). The anchor records
+the kernel boot identifier, so an agent restarted within the same boot checks the
+elapsed time across the restart. A wall-clock jump over five minutes within one
+process, or a restart more than 24 hours beyond the last trusted floor that the boot
+clock does not account for, blocks new admission and pruning with `clock-untrusted`. Retained status and recovery still
 work. First use establishes the anchor. Local clock repair requires two commands:
 
 ```sh
@@ -143,8 +146,8 @@ are reclaimed in bounded, restartable batches. Server maintenance metrics report
 failures, reclaimed bytes and deferred work. Pinned Go-host upload retention remains
 that host's responsibility; these changes add no remote FOKS methods.
 
-The current hard-state schema is 40 and the agent IPC protocol is 33. Opening a
-supported schema-38 or schema-39 database upgrades it to schema 40; other older
+The current hard-state schema is 41 and the agent IPC protocol is 33. Opening a
+supported schema-38, schema-39 or schema-40 database upgrades it to schema 41; other older
 development schemas are rejected. Upgrade the CLI and resident agent together,
 and restart the agent so their IPC versions match. This does not convert legacy
 submission IDs or make pending operations eligible for replay.
