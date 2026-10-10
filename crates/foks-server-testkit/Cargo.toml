@@ -47,5 +47,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# pidfd_getfd copies a listening socket out of a spawned foks-server.
+rustix = { workspace = true, features = ["net"] }
+
 [lints]
 workspace = true

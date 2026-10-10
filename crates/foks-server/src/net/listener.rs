@@ -580,7 +580,7 @@ mod tests {
         assert_eq!(admitted.try_recv().unwrap(), (8, 2, peer.ip()));
         let snapshot = harness.metrics.snapshot();
         assert_eq!(snapshot.connections_accepted, 2);
-        let mut expected = [0; 6];
+        let mut expected = [0; AcceptErrorKind::ALL.len()];
         expected[AcceptErrorKind::ProcessDescriptors as usize] = 2;
         expected[AcceptErrorKind::ConnectionAborted as usize] = 1;
         expected[AcceptErrorKind::Buffers as usize] = 1;

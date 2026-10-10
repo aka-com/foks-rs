@@ -24,19 +24,23 @@ pub enum AcceptErrorKind {
     Memory,
     /// ECONNABORTED: a queued connection was reset before accept() took it.
     ConnectionAborted,
-    /// Any other error code that does not invalidate the listening socket,
-    /// including the pending network errors that Linux accept() reports for
-    /// the new connection.
+    /// A network error already pending on the new connection, which Linux
+    /// accept() returns in place of that connection: ENETDOWN, EPROTO,
+    /// ENOPROTOOPT, EHOSTDOWN, ENONET, EHOSTUNREACH, EOPNOTSUPP or
+    /// ENETUNREACH. accept(2) directs TCP servers to retry these as EAGAIN.
+    PendingNetwork,
+    /// Any other error code that does not invalidate the listening socket.
     Other,
 }
 
 impl AcceptErrorKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ProcessDescriptors,
         Self::SystemDescriptors,
         Self::Buffers,
         Self::Memory,
         Self::ConnectionAborted,
+        Self::PendingNetwork,
         Self::Other,
     ];
 
@@ -47,16 +51,18 @@ impl AcceptErrorKind {
             Self::Buffers => "enobufs",
             Self::Memory => "enomem",
             Self::ConnectionAborted => "econnaborted",
+            Self::PendingNetwork => "network",
             Self::Other => "other",
         }
     }
 
-    /// ECONNABORTED concerns only the aborted connection, so the next queued
-    /// connection is accepted at once. Every other kind pauses, which also
-    /// bounds the retry rate for an unclassified error that persists.
+    /// ECONNABORTED and pending network errors concern only the connection
+    /// that accept() dequeued, so the next queued connection is accepted at
+    /// once. Every other kind pauses, which also bounds the retry rate for an
+    /// unclassified error that persists.
     fn retry_delay(self) -> Duration {
         match self {
-            Self::ConnectionAborted => Duration::ZERO,
+            Self::ConnectionAborted | Self::PendingNetwork => Duration::ZERO,
             _ => ACCEPT_RETRY_DELAY,
         }
     }
@@ -94,6 +100,17 @@ fn transient_accept_error(error: &std::io::Error) -> Option<AcceptErrorKind> {
             libc::ENOBUFS => AcceptErrorKind::Buffers,
             libc::ENOMEM => AcceptErrorKind::Memory,
             libc::ECONNABORTED => AcceptErrorKind::ConnectionAborted,
+            // Elsewhere these codes are not documented as belonging to the
+            // dequeued connection, so they keep the paused retry of `Other`.
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            libc::ENETDOWN
+            | libc::EPROTO
+            | libc::ENOPROTOOPT
+            | libc::EHOSTDOWN
+            | libc::ENONET
+            | libc::EHOSTUNREACH
+            | libc::EOPNOTSUPP
+            | libc::ENETUNREACH => AcceptErrorKind::PendingNetwork,
             _ => AcceptErrorKind::Other,
         })
     }
@@ -120,13 +137,28 @@ mod tests {
             (libc::ENOBUFS, AcceptErrorKind::Buffers),
             (libc::ENOMEM, AcceptErrorKind::Memory),
             (libc::ECONNABORTED, AcceptErrorKind::ConnectionAborted),
-            (libc::EPROTO, AcceptErrorKind::Other),
             (libc::ECONNRESET, AcceptErrorKind::Other),
             (libc::EPERM, AcceptErrorKind::Other),
         ] {
             assert_eq!(
                 transient_accept_error(&std::io::Error::from_raw_os_error(code)),
                 Some(kind)
+            );
+        }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        for code in [
+            libc::ENETDOWN,
+            libc::EPROTO,
+            libc::ENOPROTOOPT,
+            libc::EHOSTDOWN,
+            libc::ENONET,
+            libc::EHOSTUNREACH,
+            libc::EOPNOTSUPP,
+            libc::ENETUNREACH,
+        ] {
+            assert_eq!(
+                transient_accept_error(&std::io::Error::from_raw_os_error(code)),
+                Some(AcceptErrorKind::PendingNetwork)
             );
         }
         for code in [libc::EBADF, libc::EINVAL, libc::ENOTSOCK, libc::EFAULT] {
@@ -139,5 +171,18 @@ mod tests {
             transient_accept_error(&std::io::Error::other("not an OS error")),
             None
         );
+    }
+
+    #[test]
+    fn only_connection_scoped_errors_retry_without_a_pause() {
+        for kind in AcceptErrorKind::ALL {
+            let expected = match kind {
+                AcceptErrorKind::ConnectionAborted | AcceptErrorKind::PendingNetwork => {
+                    Duration::ZERO
+                }
+                _ => ACCEPT_RETRY_DELAY,
+            };
+            assert_eq!(kind.retry_delay(), expected, "{}", kind.label());
+        }
     }
 }
