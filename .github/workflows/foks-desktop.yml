@@ -50,7 +50,7 @@ jobs:
         run: cargo install --locked cargo-auditable@0.7.7 rust-audit-info@0.5.4
       - name: Assemble unsigned DMG
         env:
-          FOKS_AUDITABLE_BUILD: "1"
+          FOKS_AUDITABLE_BUILD: '1'
         run: npm run bundle:macos
       - name: Smoke test packaged production startup
         run: npm run test:foks-desktop:packaged
@@ -104,7 +104,7 @@ jobs:
         run: cargo install --locked cargo-auditable@0.7.7 rust-audit-info@0.5.4
       - name: Exercise the packaged production WebView
         env:
-          FOKS_AUDITABLE_BUILD: "1"
+          FOKS_AUDITABLE_BUILD: '1'
         run: |
           cargo install tauri-driver --locked --version 2.0.6
           CARGO_INCREMENTAL=0 cargo build --locked -j 2 -p foks-client-app --example webview_fixture
@@ -206,7 +206,7 @@ jobs:
         run: cargo install --locked cargo-auditable@0.7.7 rust-audit-info@0.5.4
       - name: Build Debian package
         env:
-          FOKS_AUDITABLE_BUILD: "1"
+          FOKS_AUDITABLE_BUILD: '1'
         run: npm run bundle:deb
       - name: Verify Debian contents and dependencies
         run: |

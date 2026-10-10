@@ -76,14 +76,18 @@ checks run locally with
 
 ```sh
 cargo deny --locked check    # advisories, licenses, bans, sources (deny.toml)
-cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check
+cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check \
+    --allow advisory-not-detected --allow unmatched-skip
 npm audit --audit-level=high # full npm tree, development tools included
 python3 -m unittest discover -s scripts -p 'test_dependency_audit.py'
 ```
 
 An advisory that cannot be fixed by an update is added to the `ignore` list in
 `deny.toml` with a reason; a new license is added to its `allow` list only
-after review.
+after review. Unmaintained advisories fail for transitive crates as well as
+direct dependencies, so a new one blocks release builds until the crate is
+replaced or the advisory is listed. The fuzz check allows two lints because the
+ignore and skip entries for root-only crates are unused in the fuzz graph.
 
 - The complete desktop and release workflow and platform prerequisites are documented in
   [`apps/desktop/src-tauri/README.md`](apps/desktop/src-tauri/README.md).

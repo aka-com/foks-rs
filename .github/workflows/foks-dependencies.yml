@@ -73,7 +73,17 @@ jobs:
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny --version 0.20.2
       - name: Check advisories, licenses, bans and sources
-        run: cargo deny --manifest-path "${{ matrix.manifest }}" --config deny.toml --locked check
+        env:
+          MANIFEST: ${{ matrix.manifest }}
+        # deny.toml serves both workspaces. Its ignore and skip entries for
+        # root-only crates are unused in the fuzz graph, so the fuzz check
+        # allows those two lints; the root check still reports stale entries.
+        run: |
+          lints=()
+          if [ "$MANIFEST" = fuzz/Cargo.toml ]; then
+            lints=(--allow advisory-not-detected --allow unmatched-skip)
+          fi
+          cargo deny --manifest-path "$MANIFEST" --config deny.toml --locked check "${lints[@]}"
 
   npm-audit:
     name: npm audit

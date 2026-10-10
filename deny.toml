@@ -3,7 +3,12 @@
 # dependency changes, weekly, and before desktop release builds:
 #
 #   cargo deny --locked check
-#   cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check
+#   cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check \
+#       --allow advisory-not-detected --allow unmatched-skip
+#
+# The ignore and skip entries for root-only crates are unused in the fuzz
+# graph, so the fuzz check allows those two lints; the root check still reports
+# stale entries.
 
 [graph]
 # Linux and macOS, the platforms FOKS supports. Dependencies used only on other
@@ -20,7 +25,13 @@ all-features = true
 
 [advisories]
 # Vulnerabilities always fail. Unsound and unmaintained advisories fail for
-# any crate in the graph unless they are listed below with a reason.
+# any crate in the graph unless they are listed below with a reason. For
+# unmaintained crates this is stricter than a warning: a new advisory against a
+# transitive crate that cannot be updated (for example in the Tauri or GTK 3
+# stack) blocks desktop release jobs until it is added to `ignore`. cargo-deny
+# 0.20 has no warning level for this check; `unmaintained = "workspace"` stops
+# reporting transitive crates, and `--warn unmaintained` also reports every
+# ignored advisory.
 unsound = "all"
 unmaintained = "all"
 yanked = "deny"
@@ -71,8 +82,8 @@ ignore = true
 multiple-versions = "warn"
 wildcards = "allow"
 # Known duplicates, kept out of the warning output so that a new duplicate
-# stands out. Remaining duplicates (syn, toml, hashbrown and others) come
-# from build tooling and platform crates and are reported as warnings.
+# stands out. Remaining duplicates (syn, toml, hashbrown, getrandom, base64,
+# thiserror and others) are reported as warnings.
 #
 # foks-crypto implements the FOKS v0.1.9 primitives with the previous RustCrypto
 # generation (digest 0.10, cipher 0.4, rand_core 0.6): ed25519-dalek 2, hmac
@@ -92,7 +103,7 @@ skip = [
     { crate = "inout@0.1", reason = "cipher 0.4" },
     { crate = "poly1305@0.8", reason = "crypto_secretbox 0.1" },
     { crate = "rand_core@0.6", reason = "elliptic-curve 0.13, rsa 0.9, argon2 0.5 (password-hash), yubikey 0.8" },
-    { crate = "sha2@0.10", reason = "foks-crypto, ed25519-dalek 2, p256 0.13, foks-oidc, foks-yubi, openidconnect 4.0.1, yubikey 0.8, secret-service 5, tauri-codegen, wry" },
+    { crate = "sha2@0.10", reason = "foks-crypto, ed25519-dalek 2, p256 0.13, foks-oidc, foks-snowpack, foks-yubi, openidconnect 4.0.1, yubikey 0.8, secret-service 5, tauri-codegen, wry" },
     { crate = "sha3@0.11", reason = "ml-kem 0.3.2" },
     { crate = "universal-hash@0.5", reason = "poly1305 0.8" },
 ]

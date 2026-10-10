@@ -18,7 +18,10 @@ independent release train.
 - Release jobs start only after `.github/workflows/foks-dependencies.yml`
   passes for the tagged commit: `cargo deny` checks advisories, licenses, bans
   and sources against `deny.toml` for both Cargo lockfiles, and
-  `npm audit --audit-level=high` checks the full npm tree.
+  `npm audit --audit-level=high` checks the full npm tree. `deny.toml` fails
+  on unmaintained advisories for every crate in the graph, not only direct
+  dependencies, so a new advisory against a crate that cannot be updated
+  blocks the release until it is added to the `ignore` list with a reason.
 - `foks-desktop` and `foks-agent` are built with `cargo auditable`
   (`FOKS_AUDITABLE_BUILD=1`, see `scripts/foks-cargo.sh`), so each shipped
   executable embeds its resolved dependency list.
