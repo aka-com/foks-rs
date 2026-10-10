@@ -294,9 +294,20 @@ fn serve_command(
         .arg("32")
         .arg("--maximum-pending-writes")
         .arg("16")
+        .arg("--maximum-waitlist-entries")
+        .arg(
+            environment
+                .inner
+                .database_config
+                .maximum_waitlist_entries
+                .to_string(),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if environment.inner.waitlist_enabled {
+        command.arg("--enable-waitlist");
+    }
     command
 }
 

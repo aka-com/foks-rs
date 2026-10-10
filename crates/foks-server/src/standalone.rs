@@ -40,6 +40,8 @@ pub struct StandaloneConfig {
     pub ttl_seconds: i64,
     pub now_microseconds: u64,
     pub maximum_pending_writes: usize,
+    /// Serves Reg.joinWaitList. Entry cap and retention are database limits.
+    pub waitlist_enabled: bool,
 }
 
 pub struct RunningStandaloneServer {
@@ -972,6 +974,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
             metrics: Arc::clone(&metrics),
             rate_limits: config.rate_limits,
             limits: rpc_limits,
+            waitlist_enabled: config.waitlist_enabled,
         },
         listeners,
         fatal.clone(),

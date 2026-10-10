@@ -2,14 +2,15 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use foks_server_db::InviteRegime;
-use foks_server_testkit::TestEnvironment;
+use foks_server_testkit::{TestEnvironment, TestProfile};
 
 #[test]
 fn official_go_client_completes_the_standalone_flow() {
     let Some(oracle) = std::env::var_os("FOKS_GO_ORACLE_DIR").map(PathBuf::from) else {
         return;
     };
-    let environment = TestEnvironment::new().unwrap();
+    // The Go flow calls Reg.joinWaitList, which a default host does not serve.
+    let environment = TestEnvironment::with_profile(TestProfile::Waitlist).unwrap();
     environment
         .set_invite_regime(InviteRegime::Optional)
         .unwrap();

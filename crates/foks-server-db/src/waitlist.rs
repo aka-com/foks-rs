@@ -1,21 +1,132 @@
-use rusqlite::params;
+use rusqlite::{params, Connection, OptionalExtension as _, TransactionBehavior};
 
-use crate::{Database, Error, Result};
+use crate::error::unsigned;
+use crate::{Database, Error, ReadDatabase, Result};
+
+const WAITLIST_ID_BYTES: usize = 13;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WaitlistEntry {
+    pub waitlist_id: [u8; WAITLIST_ID_BYTES],
+    pub email: String,
+    pub created_at: u64,
+}
+
+/// Selects the entries an operator purge deletes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WaitlistPurge<'a> {
+    All,
+    /// Entries whose `created_at` is earlier than this time, in microseconds.
+    CreatedBefore(u64),
+    /// The entry for this address, compared under ASCII case folding.
+    Email(&'a str),
+}
 
 impl Database {
-    pub fn join_waitlist(&mut self, id: &[u8; 13], email: &str, now: u64) -> Result<()> {
+    /// Returns the stored identifier for `email`: `id` when a new entry is
+    /// inserted, or the identifier of the existing entry when the address is
+    /// already listed under ASCII case folding. Every join is refused with
+    /// `Capacity` once the table holds `maximum_waitlist_entries` rows, so a
+    /// full table does not reveal which addresses it contains.
+    pub fn join_waitlist(
+        &mut self,
+        id: &[u8; WAITLIST_ID_BYTES],
+        email: &str,
+        now: u64,
+    ) -> Result<[u8; WAITLIST_ID_BYTES]> {
         if id[0] != 1 || !valid_email(email) {
             return Err(Error::Invalid("waitlist entry"));
         }
-        self.connection
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let maximum = integer(self.config.maximum_waitlist_entries)?;
+        // The inner LIMIT bounds the scan by the cap, not by the table size.
+        let count: i64 = transaction.query_row(
+            "SELECT count(*) FROM (SELECT 1 FROM waitlist_entries LIMIT ?1)",
+            [maximum],
+            |row| row.get(0),
+        )?;
+        if count >= maximum {
+            return Err(Error::Capacity("waitlist"));
+        }
+        let existing = transaction
+            .query_row(
+                "SELECT waitlist_id FROM waitlist_entries WHERE email = ?1 COLLATE NOCASE",
+                [email],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            return stored_id(existing);
+        }
+        transaction
             .execute(
                 "INSERT INTO waitlist_entries(waitlist_id, email, created_at)
                  VALUES (?1, ?2, ?3)",
                 params![id, email, integer(now)?],
             )
             .map_err(|error| map_duplicate(error, "waitlist entry"))?;
-        Ok(())
+        transaction.commit()?;
+        Ok(*id)
     }
+
+    /// Deletes the selected entries and returns the number deleted.
+    pub fn purge_waitlist(&mut self, selection: WaitlistPurge<'_>) -> Result<u64> {
+        let deleted = match selection {
+            WaitlistPurge::All => self
+                .connection
+                .execute("DELETE FROM waitlist_entries", [])?,
+            WaitlistPurge::CreatedBefore(before) => self.connection.execute(
+                "DELETE FROM waitlist_entries WHERE created_at < ?1",
+                [integer(before)?],
+            )?,
+            WaitlistPurge::Email(email) => self.connection.execute(
+                "DELETE FROM waitlist_entries WHERE email = ?1 COLLATE NOCASE",
+                [email],
+            )?,
+        };
+        u64::try_from(deleted).map_err(|_| Error::IntegerRange)
+    }
+
+    pub fn waitlist_entries(&self) -> Result<Vec<WaitlistEntry>> {
+        waitlist_entries(&self.connection)
+    }
+}
+
+impl ReadDatabase {
+    /// Every entry, oldest first.
+    pub fn waitlist_entries(&self) -> Result<Vec<WaitlistEntry>> {
+        waitlist_entries(&self.connection)
+    }
+}
+
+fn waitlist_entries(connection: &Connection) -> Result<Vec<WaitlistEntry>> {
+    let mut statement = connection.prepare(
+        "SELECT waitlist_id, email, created_at FROM waitlist_entries
+         ORDER BY created_at, rowid",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, Vec<u8>>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (id, email, created_at) = row?;
+        Ok(WaitlistEntry {
+            waitlist_id: stored_id(id)?,
+            email,
+            created_at: unsigned(created_at)?,
+        })
+    })
+    .collect()
+}
+
+fn stored_id(id: Vec<u8>) -> Result<[u8; WAITLIST_ID_BYTES]> {
+    id.try_into()
+        .map_err(|_| Error::Invalid("stored waitlist identifier"))
 }
 
 fn valid_email(email: &str) -> bool {

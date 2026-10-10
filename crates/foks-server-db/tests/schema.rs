@@ -119,6 +119,8 @@ const EXPIRY_INDEXES: [&str; 7] = [
     "log_sends_created_at",
 ];
 
+const WAITLIST_INDEXES: [&str; 2] = ["waitlist_entries_email", "waitlist_entries_created"];
+
 fn schema_objects(connection: &Connection) -> Vec<(String, String, Option<String>)> {
     connection
         .prepare("SELECT type,name,sql FROM sqlite_schema ORDER BY type,name")
@@ -130,7 +132,7 @@ fn schema_objects(connection: &Connection) -> Vec<(String, String, Option<String
 }
 
 fn predecessor(connection: &Connection, version: i64) {
-    assert!(matches!(version, 43..=47));
+    assert!(matches!(version, 43..=48));
     if version <= 44 {
         for name in EXPIRY_INDEXES {
             connection
@@ -166,6 +168,16 @@ fn predecessor(connection: &Connection, version: i64) {
             )
             .unwrap();
     }
+    if version <= 48 {
+        connection
+            .execute_batch(
+                "DROP INDEX waitlist_entries_email;
+                 DROP INDEX waitlist_entries_created;
+                 CREATE INDEX waitlist_entries_email_created
+                 ON waitlist_entries(email, created_at);",
+            )
+            .unwrap();
+    }
     connection
         .pragma_update(None, "user_version", version)
         .unwrap();
@@ -176,18 +188,22 @@ fn writer_upgrades_supported_predecessors_and_preserves_data_and_index_definitio
     let fresh = common::TestDatabase::new();
     let reference = Connection::open(&fresh.path).unwrap();
     let indexes = |connection: &Connection| {
-        EXPIRY_INDEXES.map(|name| {
-            connection
-                .query_row(
-                    "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1",
-                    [name],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap()
-        })
+        EXPIRY_INDEXES
+            .into_iter()
+            .chain(WAITLIST_INDEXES)
+            .map(|name| {
+                connection
+                    .query_row(
+                        "SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1",
+                        [name],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>()
     };
     let expected = indexes(&reference);
-    for version in [43, 44, 45, 46, 47] {
+    for version in [43, 44, 45, 46, 47, 48] {
         let test = common::TestDatabase::new();
         let path = test.path.clone();
         drop(test.database);
@@ -270,7 +286,7 @@ fn version_48_upgrade_expires_old_sso_envelopes_and_requires_relinking() {
          VALUES(zeroblob(33),X'010101010101010101010101010101010101010101010101010101010101010101',
              zeroblob(32),0,1,1,1000);",
     ).unwrap();
-    connection.pragma_update(None, "user_version", 47).unwrap();
+    predecessor(&connection, 47);
 
     drop(Database::open(&path, Config::default()).unwrap());
     for table in [
@@ -290,6 +306,61 @@ fn version_48_upgrade_expires_old_sso_envelopes_and_requires_relinking() {
         connection
             .query_row("SELECT count(*) FROM sso_policy", [], |row| row
                 .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn version_49_upgrade_keeps_the_earliest_entry_per_address_and_sso_state() {
+    let mut test = common::TestDatabase::new();
+    test.reserve(1_000_000);
+    test.commit(None).unwrap();
+    let path = test.path.clone();
+    drop(test.database);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .unwrap();
+    predecessor(&connection, 48);
+    connection.execute_batch(
+        "INSERT INTO waitlist_entries VALUES(X'01000000000000000000000001','a@example.com',300);
+         INSERT INTO waitlist_entries VALUES(X'01000000000000000000000002','A@EXAMPLE.COM',100);
+         INSERT INTO waitlist_entries VALUES(X'01000000000000000000000003','a@example.com',200);
+         INSERT INTO waitlist_entries VALUES(X'01000000000000000000000004','b@example.com',400);
+         INSERT INTO sso_identity_challenges(challenge,claim_hash,source_hash,expires_at_ms)
+         VALUES(zeroblob(32),zeroblob(32),zeroblob(32),1000);",
+    ).unwrap();
+
+    drop(Database::open(&path, Config::default()).unwrap());
+    let remaining = connection
+        .prepare("SELECT hex(waitlist_id),created_at FROM waitlist_entries ORDER BY created_at")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        remaining,
+        [
+            ("01000000000000000000000002".to_owned(), 100),
+            ("01000000000000000000000004".to_owned(), 400),
+        ]
+    );
+    assert!(connection
+        .execute(
+            "INSERT INTO waitlist_entries VALUES(X'01000000000000000000000005','B@example.com',500)",
+            [],
+        )
+        .is_err());
+    // Version 48 already has the current SSO formats; only older files lose them.
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM sso_identity_challenges", [], |row| {
+                row.get::<_, i64>(0)
+            })
             .unwrap(),
         1
     );

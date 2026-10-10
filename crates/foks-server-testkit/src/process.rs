@@ -70,6 +70,7 @@ impl InProcessServer {
             ttl_seconds: 60,
             now_microseconds: environment.inner.clock.now(),
             maximum_pending_writes: environment.inner.maximum_pending_writes,
+            waitlist_enabled: environment.inner.waitlist_enabled,
         });
         let server = match result {
             Ok(server) => server,
@@ -338,6 +339,7 @@ impl ProbeOverrideServer {
                 worker_threads: 4,
                 ..SessionLimits::default()
             },
+            waitlist_enabled: false,
         });
         let server = match result {
             Ok(server) => server,

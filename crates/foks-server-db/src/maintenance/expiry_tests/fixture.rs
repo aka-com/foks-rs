@@ -5,6 +5,8 @@ pub const NOW: u64 = 86_400_010_000;
 pub const USER: [u8; 33] = [1; 33];
 pub const TEAM: [u8; 33] = [2; 33];
 pub const HOST: [u8; 33] = [3; 33];
+/// Shorter than `NOW`, so the waitlist cutoff does not saturate at zero.
+pub const WAITLIST_RETENTION_MICROS: u64 = 43_200_000_000;
 const KEY: [u8; 16] = [4; 16];
 
 pub fn sql(value: u64) -> i64 {
@@ -21,6 +23,7 @@ pub fn cutoff(table: &str) -> u64 {
     match table {
         "sso_sessions" => NOW / 1000,
         "log_sends" => NOW.saturating_sub(86_400_000_000),
+        "waitlist_entries" => NOW - WAITLIST_RETENTION_MICROS,
         _ => NOW,
     }
 }
@@ -28,7 +31,7 @@ pub fn cutoff(table: &str) -> u64 {
 pub fn expiry_column(table: &str) -> &'static str {
     match table {
         "sso_sessions" => "expires_at_ms",
-        "log_sends" => "created_at",
+        "log_sends" | "waitlist_entries" => "created_at",
         _ => "expires_at",
     }
 }
@@ -40,7 +43,11 @@ pub struct Fixture {
 impl Fixture {
     pub fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(dir.path().join("expiry.sqlite"), Config::default()).unwrap();
+        let config = Config {
+            waitlist_retention: std::time::Duration::from_micros(WAITLIST_RETENTION_MICROS),
+            ..Config::default()
+        };
+        let db = Database::open(dir.path().join("expiry.sqlite"), config).unwrap();
         db.connection
             .pragma_update(None, "foreign_keys", true)
             .unwrap();
@@ -87,6 +94,7 @@ impl Fixture {
             "sso_sessions" => "INSERT INTO sso_sessions VALUES(?1,?2,zeroblob(32),?2,NULL,0,1,1,0,?3,zeroblob(57))",
             "request_receipts" => "INSERT INTO request_receipts VALUES(?1,zeroblob(32),x'00',0,?2)",
             "log_sends" => "INSERT INTO log_sends VALUES(?1,NULL,?2)",
+            "waitlist_entries" => "INSERT INTO waitlist_entries VALUES(?1,?2,?3)",
             _ => panic!("unknown expiry kind {table}"),
         };
         // One prepared statement per transaction, rather than preparing each row.
@@ -111,6 +119,11 @@ impl Fixture {
                 "sso_sessions" => statement.execute(params![HOST, id::<32>(i), expires]),
                 "request_receipts" => statement.execute(params![id::<16>(i), expires]),
                 "log_sends" => statement.execute(params![id::<17>(i), expires]),
+                "waitlist_entries" => statement.execute(params![
+                    id::<13>(i),
+                    format!("entry-{i}@example.com"),
+                    expires
+                ]),
                 _ => unreachable!(),
             }
             .unwrap();
@@ -130,6 +143,7 @@ impl Fixture {
             "sso_sessions" => ("session_hash", id::<32>(index).to_vec()),
             "request_receipts" => ("idempotency_key", id::<16>(index).to_vec()),
             "log_sends" => ("log_send_id", id::<17>(index).to_vec()),
+            "waitlist_entries" => ("waitlist_id", id::<13>(index).to_vec()),
             _ => ("token_hash", id::<32>(index).to_vec()),
         };
         self.db
@@ -169,7 +183,7 @@ impl Fixture {
     }
 }
 
-pub fn counts(report: MaintenanceReport) -> [(&'static str, u64); 9] {
+pub fn counts(report: MaintenanceReport) -> [(&'static str, u64); 10] {
     [
         ("sso_sessions", report.sso_sessions),
         ("names", report.reservations),
@@ -180,5 +194,6 @@ pub fn counts(report: MaintenanceReport) -> [(&'static str, u64); 9] {
         ("team_view_challenges", report.team_view_challenges),
         ("team_admin_tokens", report.team_admin_tokens),
         ("log_sends", report.log_sends),
+        ("waitlist_entries", report.waitlist_entries),
     ]
 }

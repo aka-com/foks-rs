@@ -96,6 +96,9 @@ impl Operations for ServerData {
     }
 
     fn join_waitlist(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
+        if !self.waitlist_enabled {
+            return Err(RpcStatus::Unsupported);
+        }
         crate::services::waitlist::join_waitlist(
             argument,
             self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,

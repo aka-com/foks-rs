@@ -31,6 +31,7 @@ pub mod rpc;
 mod services;
 pub mod sso;
 mod standalone;
+pub mod waitlist;
 mod writer;
 
 pub use config::{Config, ReadDatabaseConfig, SessionLimits};

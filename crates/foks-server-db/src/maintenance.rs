@@ -27,6 +27,7 @@ pub struct MaintenanceReport {
     pub upload_bytes: u64,
     pub upload_cleanup_deferred: bool,
     pub log_sends: u64,
+    pub waitlist_entries: u64,
     pub federation_user_permissions: u64,
     pub federation_team_permissions: u64,
 }
@@ -120,6 +121,15 @@ impl Database {
             expiry::LOG_SENDS.delete,
             [sql_integer(now.saturating_sub(24 * 60 * 60 * 1_000_000))?],
         )?;
+        let waitlist_retention =
+            u64::try_from(self.config.waitlist_retention.as_micros()).unwrap_or(u64::MAX);
+        // A clock earlier than one retention period has no expired entries.
+        let waitlist_entries = match now.checked_sub(waitlist_retention) {
+            Some(cutoff) => {
+                transaction.execute(expiry::WAITLIST_ENTRIES.delete, [sql_integer(cutoff)?])?
+            }
+            None => 0,
+        };
         // Active federation rows remain renewable after bearer expiry, and revoked
         // rows are retained as tombstones. Neither category is removed during routine
         // expiration sweeps.
@@ -145,6 +155,7 @@ impl Database {
             upload_bytes: uploads.bytes,
             upload_cleanup_deferred: uploads.deferred,
             log_sends: u64::try_from(log_sends).map_err(|_| Error::IntegerRange)?,
+            waitlist_entries: u64::try_from(waitlist_entries).map_err(|_| Error::IntegerRange)?,
             federation_user_permissions: u64::try_from(federation_user_permissions)
                 .map_err(|_| Error::IntegerRange)?,
             federation_team_permissions: u64::try_from(federation_team_permissions)

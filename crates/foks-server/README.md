@@ -60,6 +60,24 @@ susceptible to offline guessing after database disclosure and should be
 generated with adequate entropy. The operator CLI issues, lists, disables, and
 changes policy with `foks-server invite`; stop the serving process first.
 
+`Reg.joinWaitList` is unauthenticated and stores the submitted email address,
+so it is disabled by default and answers `Unsupported`, the status Go clients
+already receive from routes a host does not serve. Enable it with
+`enabled = true` in the `[waitlist]` table of `server.toml` (or
+`serve --enable-waitlist`). The table holds one entry per address, compared
+under ASCII case folding; a repeated join returns the stored identifier. The
+identifier grants nothing, and no route accepts it. Once `maximum_entries`
+(default 10,000, at most 1,000,000) is reached, every join answers
+`RateLimited`, including joins for listed addresses, so a full table does not
+reveal which addresses it holds. The cap is global: one client can fill it,
+after which the route refuses all joins until entries expire or the operator
+purges them. Maintenance deletes entries more than `retention_days` (default
+180) after their first join; a repeated join does not extend retention. The
+operator reads entries with `foks-server waitlist list`, writes them to a new
+owner-only JSON file with `waitlist export --output`, and deletes them with
+`waitlist purge --before-unix-seconds`, `--email` or `--all`. Listing and
+export read a snapshot; stop the serving process before a purge.
+
 Passphrases use the v0.1.9 V1 Argon2id parameters and PPE wire format. The
 server stores only the public verification key, salt, and encrypted SKMWK/PPE
 boxes; the raw passphrase stays in the client. Signup can establish generation
@@ -268,8 +286,9 @@ first and then independent KV namespaces; identity/name publication and the
 global Merkle log still require one leader or a consensus protocol.
 
 The in-process maintenance loop runs once per minute through the ordinary writer.
-It removes expired user/team reservations, idempotency records, recovery challenges, and
-team-view and TeamAdmin capabilities, then requests a PASSIVE WAL checkpoint.
+It removes expired user/team reservations, idempotency records, recovery challenges,
+team-view and TeamAdmin capabilities, log uploads older than a day, and waitlist entries
+older than the configured retention, then requests a PASSIVE WAL checkpoint.
 Manual online maintenance uses the same path. PASSIVE does not invoke SQLite's
 busy handler to wait for readers or writers, but its I/O still runs on the sole
 writer. The 60-second interval starts after the preceding pass ends. Explicit
@@ -390,7 +409,8 @@ Identity/team defaults also bound each user to 16 active devices and four
 backup credentials; each team to 64 members, 16 PTK role/visibility bands,
 4,096 links, and 1,024 boxes of each class per mutation; the installation to
 4,096 teams and pending team-name reservations; and team view/admin
-capabilities to 32 per member/team pair and 16,384 per class globally.
+capabilities to 32 per member/team pair and 16,384 per class globally. The
+waitlist holds at most 10,000 entries by default.
 Passphrase history is limited to 4,096 generations. Login state is limited to
 4,096 live challenges globally and eight per UID; five bad proofs within the
 default ten-minute window temporarily rate-limit that UID.
@@ -438,16 +458,16 @@ integrity-checked database, and exact declared key set, and requires empty
 destination paths.
 
 Restore and retention validation also accept the same prior schemas as server
-startup (43 through 47, upgraded to 48). They copy the database and any WAL into
+startup (43 through 48, upgraded to 49). They copy the database and any WAL into
 a private temporary directory, apply the normal transactional migrations,
 checkpoint, and validate that copy. Restore installs the migrated database;
 validation never opens or changes the original snapshot in SQLite. Retention
 can still remove validated snapshots according to its configured count.
 Unsupported schemas, failed migrations, incomplete key sets, and symlinked
 artifacts fail validation before a restore destination is created or retention
-deletes any snapshots. Restoring a prior schema invalidates its old SSO browser
-challenges, sessions, access state, and binding receipts, as normal startup
-migration does.
+deletes any snapshots. Restoring a schema older than 48 invalidates its old SSO
+browser challenges, sessions, access state, and binding receipts, as normal
+startup migration does.
 
 Provide temporary disk space for the database, optional WAL, and migration
 work. Each input file is limited to `maximum_database_bytes`; migration also
@@ -459,8 +479,8 @@ supported backup procedure.
 The SQLite snapshot includes names, invite policy/hash/redemption metadata,
 passphrase salts and encrypted PPE history, recovery credentials, user/team
 chains, current projections, encrypted PUK/PTK histories, capability policy
-state, encrypted federation bearer envelopes plus their hashes, and all
-user/team KV namespaces. Plaintext bearer tokens are never stored. Restored
+state, encrypted federation bearer envelopes plus their hashes, waitlist email
+addresses, and all user/team KV namespaces. Plaintext bearer tokens are never stored. Restored
 envelopes remain bound to their exact target/viewer/key generation and tokens
 still undergo foreground expiry and current-authority checks.
 

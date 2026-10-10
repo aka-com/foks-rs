@@ -74,8 +74,14 @@ statement!(
     "SELECT rowid FROM log_sends WHERE created_at <= ?1 LIMIT 128"
 );
 
+statement!(
+    WAITLIST_ENTRIES,
+    "waitlist_entries",
+    "SELECT rowid FROM waitlist_entries WHERE created_at <= ?1 LIMIT 128"
+);
+
 #[cfg(test)]
-pub(crate) const ALL: [ExpiryStatement; 9] = [
+pub(crate) const ALL: [ExpiryStatement; 10] = [
     SSO_SESSIONS,
     RESERVATIONS,
     TEAM_RESERVATIONS,
@@ -85,4 +91,5 @@ pub(crate) const ALL: [ExpiryStatement; 9] = [
     TEAM_VIEW_CHALLENGES,
     TEAM_ADMIN_TOKENS,
     LOG_SENDS,
+    WAITLIST_ENTRIES,
 ];

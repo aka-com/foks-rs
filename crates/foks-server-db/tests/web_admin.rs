@@ -434,3 +434,21 @@ fn general_expiry_maintenance_is_bounded_without_losing_remaining_work() {
         44
     );
 }
+#[test]
+fn operator_overview_counts_waitlist_entries() {
+    let mut f = fixture();
+    session(&mut f, true);
+    for (fill, email) in [(2, "a@example.com"), (3, "b@example.com")] {
+        let mut id = [fill; 13];
+        id[0] = 1;
+        f.database.join_waitlist(&id, email, now().utc_us).unwrap();
+    }
+    let read = ReadDatabase::open(&f.path, Default::default()).unwrap();
+    let (ctx, counts) = read
+        .snapshot()
+        .unwrap()
+        .web_overview(&[4; 32], now())
+        .unwrap();
+    assert!(ctx.operator);
+    assert_eq!(counts.unwrap().waitlist_entries, 2);
+}

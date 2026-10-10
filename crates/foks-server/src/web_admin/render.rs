@@ -48,7 +48,7 @@ pub(crate) fn overview(
         body.push_str(&format!("<h2>Host operator</h2><p>Host ID: <code>{}</code></p><p>Service ready · Software {} · Database schema {}</p><p>Manage host signup access, browser sessions and the local audit log using the links above.</p>",hex(&ctx.credential.host),env!("CARGO_PKG_VERSION"),foks_server_db::SCHEMA_VERSION));
     }
     if let Some(c) = counts {
-        body.push_str(&format!("<p>Accounts: {} · Host operators: {} · Signup invites: {} · Live browser sessions: {}</p>",c.accounts,c.operators,c.invites,c.sessions));
+        body.push_str(&format!("<p>Accounts: {} · Host operators: {} · Signup invites: {} · Live browser sessions: {} · Waitlist entries: {}</p>",c.accounts,c.operators,c.invites,c.sessions,c.waitlist_entries));
     }
     page("Host administration", &body)
 }

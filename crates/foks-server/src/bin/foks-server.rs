@@ -75,6 +75,8 @@ enum Command {
     Oidc(OidcCommand),
     #[command(subcommand)]
     Admin(AdminCommand),
+    #[command(subcommand)]
+    Waitlist(WaitlistCommand),
 }
 
 #[derive(clap::Subcommand)]
@@ -332,6 +334,13 @@ struct ServeArguments {
     automatic_backup_interval_seconds: u64,
     #[arg(long, default_value_t = 7)]
     automatic_backup_retain: usize,
+    /// Serves the unauthenticated Reg.joinWaitList route, which stores email addresses.
+    #[arg(long)]
+    enable_waitlist: bool,
+    #[arg(long, default_value_t = foks_server::waitlist::WaitlistConfig::default().maximum_entries)]
+    maximum_waitlist_entries: u64,
+    #[arg(long, default_value_t = foks_server::waitlist::WaitlistConfig::default().retention_days)]
+    waitlist_retention_days: u64,
 }
 
 #[derive(clap::Args)]
@@ -396,6 +405,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Invite(command) => invite_command(command),
         Command::Oidc(command) => oidc_command(command),
         Command::Admin(command) => admin_command(command),
+        Command::Waitlist(command) => waitlist_command(command),
     }
 }
 
@@ -550,6 +560,9 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         automatic_backup_directory: Some(config.backup_directory),
         automatic_backup_interval_seconds: config.backup_interval_seconds,
         automatic_backup_retain: config.backup_retain,
+        enable_waitlist: config.waitlist.enabled,
+        maximum_waitlist_entries: config.waitlist.maximum_entries,
+        waitlist_retention_days: config.waitlist.retention_days,
     })
 }
 
@@ -614,6 +627,12 @@ fn client_bootstrap(
 }
 
 fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
+    let waitlist = foks_server::waitlist::WaitlistConfig {
+        enabled: arguments.enable_waitlist,
+        maximum_entries: arguments.maximum_waitlist_entries,
+        retention_days: arguments.waitlist_retention_days,
+    };
+    waitlist.validate()?;
     let root_key = read_root_key_file(&arguments.root_key_file)?;
     let probe_tls = probe_tls(&arguments)?;
     let mut signals = Signals::new([SIGINT, SIGTERM])?;
@@ -656,7 +675,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         authenticated_address: arguments.authenticated_address,
         management_address: arguments.management_address,
         probe_tls,
-        database: foks_server_db::Config::default(),
+        database: waitlist.database_config(foks_server_db::Config::default()),
         limits,
         rate_limits: foks_server::RateLimitConfig {
             connection_burst: arguments.connection_rate_burst,
@@ -679,6 +698,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         ttl_seconds: arguments.ttl_seconds,
         now_microseconds,
         maximum_pending_writes: arguments.maximum_pending_writes,
+        waitlist_enabled: waitlist.enabled,
     })?;
     let addresses = server.addresses();
     eprintln!(
@@ -1007,5 +1027,100 @@ fn admin_command(command: AdminCommand) -> Result<(), Box<dyn std::error::Error>
         g.active,
         g.revision
     );
+    Ok(())
+}
+
+#[derive(clap::Subcommand)]
+enum WaitlistCommand {
+    /// Prints every waitlist entry, oldest first.
+    List {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Writes every waitlist entry as JSON to a new file readable only by its owner.
+    Export {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Deletes waitlist entries while the service is stopped.
+    Purge(WaitlistPurgeArguments),
+}
+
+#[derive(clap::Args)]
+struct WaitlistPurgeArguments {
+    #[arg(long)]
+    config: PathBuf,
+    #[command(flatten)]
+    selection: WaitlistPurgeSelection,
+}
+
+#[derive(clap::Args)]
+#[group(required = true, multiple = false)]
+struct WaitlistPurgeSelection {
+    /// Deletes entries created before this Unix time.
+    #[arg(long)]
+    before_unix_seconds: Option<u64>,
+    /// Deletes the entry for this address, compared under ASCII case folding.
+    #[arg(long)]
+    email: Option<String>,
+    /// Deletes every entry.
+    #[arg(long)]
+    all: bool,
+}
+
+fn waitlist_command(command: WaitlistCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        WaitlistCommand::List { config } => {
+            let config = foks_server::installation::load_config(config)?;
+            foks_server::installation::validate_artifacts(&config)?;
+            let entries = foks_server::waitlist::list_entries(
+                &config.database,
+                foks_server_db::Config::default(),
+            )?;
+            if entries.is_empty() {
+                println!("No waitlist entries.");
+            }
+            for entry in entries {
+                println!(
+                    "id={} email={} created_at={}",
+                    encode_hex(&entry.waitlist_id),
+                    entry.email,
+                    entry.created_at
+                );
+            }
+        }
+        WaitlistCommand::Export { config, output } => {
+            let config = foks_server::installation::load_config(config)?;
+            foks_server::installation::validate_artifacts(&config)?;
+            let count = foks_server::waitlist::export_entries(
+                &config.database,
+                foks_server_db::Config::default(),
+                &output,
+            )?;
+            println!("exported {count} waitlist entries to {}", output.display());
+        }
+        WaitlistCommand::Purge(arguments) => {
+            let config = foks_server::installation::load_config(arguments.config)?;
+            foks_server::installation::validate_artifacts(&config)?;
+            let selection = &arguments.selection;
+            let selection = match (selection.before_unix_seconds, &selection.email) {
+                (Some(seconds), _) => foks_server_db::WaitlistPurge::CreatedBefore(
+                    seconds
+                        .checked_mul(1_000_000)
+                        .ok_or("--before-unix-seconds exceeds the supported timestamp")?,
+                ),
+                (None, Some(email)) => foks_server_db::WaitlistPurge::Email(email),
+                (None, None) => foks_server_db::WaitlistPurge::All,
+            };
+            let deleted = foks_server::waitlist::purge_entries(
+                &config.database,
+                foks_server_db::Config::default(),
+                selection,
+            )?;
+            println!("deleted {deleted} waitlist entries");
+        }
+    }
     Ok(())
 }

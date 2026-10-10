@@ -619,8 +619,8 @@ mod tests {
     #[test]
     fn expiry_export_has_exact_fixed_labels_and_values() {
         let snapshot = crate::ExpiryMetricsSnapshot {
-            deleted_parent_rows: [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            empty_passes: [9, 8, 7, 6, 5, 4, 3, 2, 1],
+            deleted_parent_rows: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            empty_passes: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
         };
         let mut text = String::new();
         expiry_prometheus(&mut text, &snapshot);
@@ -634,8 +634,9 @@ mod tests {
             "sso_sessions",
             "log_sends",
             "request_receipts",
+            "waitlist_entries",
         ];
-        assert_eq!(text.lines().count(), 20);
+        assert_eq!(text.lines().count(), 22);
         for (index, label) in labels.iter().enumerate() {
             assert!(text.contains(&format!(
                 "foks_expiry_deleted_rows_total{{kind=\"{label}\"}} {}\n",
@@ -643,7 +644,7 @@ mod tests {
             )));
             assert!(text.contains(&format!(
                 "foks_expiry_empty_passes_total{{kind=\"{label}\"}} {}\n",
-                9 - index
+                10 - index
             )));
         }
         assert!(text.contains("# TYPE foks_expiry_deleted_rows_total counter\n"));

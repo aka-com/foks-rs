@@ -111,6 +111,7 @@ pub struct WebOverview {
     pub operators: u64,
     pub invites: u64,
     pub sessions: u64,
+    pub waitlist_entries: u64,
 }
 struct WebSessionAuthorization {
     id: [u8; 16],

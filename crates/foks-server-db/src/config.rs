@@ -42,6 +42,10 @@ pub struct Config {
     pub maximum_kv_namespace_bytes: u64,
     pub maximum_kv_namespace_objects: u64,
     pub maximum_database_bytes: u64,
+    /// Total waitlist entries. A join for a new address is refused at this count.
+    pub maximum_waitlist_entries: u64,
+    /// Age after which maintenance deletes a waitlist entry.
+    pub waitlist_retention: Duration,
 }
 
 impl Default for Config {
@@ -85,6 +89,8 @@ impl Default for Config {
             maximum_kv_namespace_bytes: 16 * 1024 * 1024 * 1024,
             maximum_kv_namespace_objects: 1_000_000,
             maximum_database_bytes: 64 * 1024 * 1024 * 1024,
+            maximum_waitlist_entries: 10_000,
+            waitlist_retention: Duration::from_secs(180 * 24 * 60 * 60),
         }
     }
 }

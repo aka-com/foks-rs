@@ -13,10 +13,11 @@ pub enum ExpiryKind {
     SsoSessions,
     LogSends,
     RequestIdempotencyRecords,
+    WaitlistEntries,
 }
 
 impl ExpiryKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Names,
         Self::TeamNames,
         Self::RecoveryChallenges,
@@ -26,6 +27,7 @@ impl ExpiryKind {
         Self::SsoSessions,
         Self::LogSends,
         Self::RequestIdempotencyRecords,
+        Self::WaitlistEntries,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -39,6 +41,7 @@ impl ExpiryKind {
             Self::SsoSessions => "sso_sessions",
             Self::LogSends => "log_sends",
             Self::RequestIdempotencyRecords => "request_receipts",
+            Self::WaitlistEntries => "waitlist_entries",
         }
     }
 
@@ -53,6 +56,7 @@ impl ExpiryKind {
             Self::SsoSessions => report.sso_sessions,
             Self::LogSends => report.log_sends,
             Self::RequestIdempotencyRecords => report.idempotency_records,
+            Self::WaitlistEntries => report.waitlist_entries,
         }
     }
 }
@@ -63,8 +67,8 @@ impl ExpiryKind {
 /// it does not imply that the table was empty.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ExpiryMetricsSnapshot {
-    pub deleted_parent_rows: [u64; 9],
-    pub empty_passes: [u64; 9],
+    pub deleted_parent_rows: [u64; 10],
+    pub empty_passes: [u64; 10],
 }
 
 #[derive(Default)]
@@ -112,18 +116,19 @@ mod tests {
             sso_sessions: 7,
             log_sends: 8,
             idempotency_records: 9,
+            waitlist_entries: 10,
             ..Default::default()
         });
         assert_eq!(
             metrics.snapshot().deleted_parent_rows,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
-        assert_eq!(metrics.snapshot().empty_passes, [0; 9]);
+        assert_eq!(metrics.snapshot().empty_passes, [0; 10]);
         metrics.committed(&Default::default());
         assert_eq!(
             metrics.snapshot().deleted_parent_rows,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
-        assert_eq!(metrics.snapshot().empty_passes, [1; 9]);
+        assert_eq!(metrics.snapshot().empty_passes, [1; 10]);
     }
 }

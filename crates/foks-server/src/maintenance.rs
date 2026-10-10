@@ -274,9 +274,9 @@ mod tests {
         assert_eq!(first.maintenance_successes, 0);
         assert_eq!(
             first.expiry.deleted_parent_rows,
-            [1, 0, 0, 0, 0, 0, 0, 0, 0]
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         );
-        assert_eq!(first.expiry.empty_passes, [0, 1, 1, 1, 1, 1, 1, 1, 1]);
+        assert_eq!(first.expiry.empty_passes, [0, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
         assert_eq!(first.reclaimed_uploads, 1);
         assert_eq!(first.reclaimed_upload_chunks, 1);
         assert_eq!(first.reclaimed_upload_bytes, 13);
@@ -294,11 +294,11 @@ mod tests {
         assert_eq!(metrics.snapshot().reclaimed_uploads, 1);
         assert_eq!(
             metrics.snapshot().expiry.deleted_parent_rows,
-            [1, 0, 0, 0, 0, 0, 0, 0, 0]
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         );
         assert_eq!(
             metrics.snapshot().expiry.empty_passes,
-            [1, 2, 2, 2, 2, 2, 2, 2, 2]
+            [1, 2, 2, 2, 2, 2, 2, 2, 2, 2]
         );
         let remaining: i64 = rusqlite::Connection::open(&path)
             .unwrap()
@@ -361,9 +361,12 @@ mod tests {
         let succeeded = metrics.snapshot();
         assert_eq!(
             succeeded.expiry.deleted_parent_rows,
-            [1, 0, 0, 0, 0, 0, 0, 1, 0]
+            [1, 0, 0, 0, 0, 0, 0, 1, 0, 0]
         );
-        assert_eq!(succeeded.expiry.empty_passes, [0, 1, 1, 1, 1, 1, 1, 0, 1]);
+        assert_eq!(
+            succeeded.expiry.empty_passes,
+            [0, 1, 1, 1, 1, 1, 1, 0, 1, 1]
+        );
         assert_eq!(succeeded.maintenance_successes, 1);
         assert_eq!(succeeded.checkpoint.attempts, 1);
         writer.shutdown().unwrap();
