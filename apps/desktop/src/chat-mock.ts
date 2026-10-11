@@ -9,8 +9,24 @@ import type {
   ChatReply,
   ChatResult,
 } from './chat-contract';
-/** In-memory demo only; native chat never writes browser storage. */
-export function mockChat(snapshot?: AgentSnapshot) {
+import {
+  chatMockSeed,
+  MOCK_CHAT_ACTOR,
+  MOCK_CHAT_HOST,
+  type ChatMockScenario,
+  type ChatMockSeed,
+} from './chat-mock-scenarios';
+/** A stored submission's input, which a repeated prepare must match. */
+const messageInput = (submission: string, channel: string, text: string) =>
+  JSON.stringify({ action: 'prepare-message', submission, channel, text });
+/**
+ * In-memory demo only; native chat never writes browser storage. Each team
+ * starts in the state `scenario` seeds (`chat-mock-scenarios.ts`).
+ */
+export function mockChat(
+  snapshot?: AgentSnapshot,
+  scenario: ChatMockScenario = 'default',
+) {
   const accounts = new Map<
     string,
     { version: bigint; waiters: Set<() => void>; polling: boolean }
@@ -36,10 +52,10 @@ export function mockChat(snapshot?: AgentSnapshot) {
       messages: Map<string, ChatMessage[]>;
       operations: Map<string, ChatOperation>;
       submissions: Map<string, { input: string; op: ChatOperation }>;
-      inboxVersion: bigint;
       versions: Map<string, bigint>;
       reads: Map<string, bigint>;
       waiters: Set<() => void>;
+      seed: ChatMockSeed;
     }
   >();
   const intents = new Map<string, { submission: string; text: string }>();
@@ -53,47 +69,40 @@ export function mockChat(snapshot?: AgentSnapshot) {
     const { account, store } = accountFor(storeId);
     let team = teams.get(storeId);
     if (!team) {
-      const id = 'ab'.repeat(16);
+      const seed = chatMockSeed(scenario, snapshot, storeId);
+      // Each conversation has its own inbox version, none past the head.
+      const versions = new Map(
+        seed.channels.map((c, i) => [c.id, account.version + BigInt(i)]),
+      );
+      if (seed.channels.length > 1) {
+        account.version += BigInt(seed.channels.length - 1);
+        for (const wake of account.waiters) wake();
+        account.waiters.clear();
+      }
       team = {
-        channels: [
-          {
-            id,
-            name: '',
-            description: 'A place for the whole team.',
-            admin: false,
-            readable: true,
-            writable: true,
-            read_role: 'Member (0)',
-            write_role: 'Member (0)',
-          },
-        ],
-        messages: new Map([
-          [
-            id,
-            [
-              {
-                id: 'cd'.repeat(16),
-                sequence: '1',
-                sender: null,
-                send_time: '1700000000000',
-                insert_time: '1700000000001',
-                content: { kind: 'text', text: 'Team chat is ready.' },
-              },
-            ],
-          ],
-        ]),
-        operations: new Map(),
-        submissions: new Map(),
-        inboxVersion: 1n,
-        versions: new Map([[id, 1n]]),
-        reads: new Map([[id, 0n]]),
+        channels: seed.channels,
+        messages: seed.messages,
+        operations: new Map(
+          seed.operations.map(({ operation }) => [operation.id, operation]),
+        ),
+        submissions: new Map(
+          seed.operations.map(({ operation, submission, text }) => [
+            submission,
+            {
+              input: messageInput(submission, operation.channel, text),
+              op: operation,
+            },
+          ]),
+        ),
+        versions,
+        reads: seed.reads,
         waiters: new Set(),
+        seed,
       };
       teams.set(storeId, team);
     }
     const bump = (channel: string) => {
       account.version += 1n;
-      team.inboxVersion = account.version;
       team.versions.set(channel, account.version);
       for (const wake of account.waiters) wake();
       account.waiters.clear();
@@ -101,11 +110,11 @@ export function mockChat(snapshot?: AgentSnapshot) {
     const sendMessage = (op: ChatOperation, text: string) => {
       op.state = 'uncertain';
       const rows = team.messages.get(op.channel) ?? [];
-      const sequence = String(rows.length + 1);
+      const sequence = String(BigInt(rows.at(-1)?.sequence ?? '0') + 1n);
       rows.push({
         id: op.id,
         sequence,
-        sender: '01' + 'ab'.repeat(32),
+        sender: MOCK_CHAT_ACTOR,
         send_time: String(Date.now()),
         insert_time: String(Date.now()),
         content: { kind: 'text', text },
@@ -123,11 +132,19 @@ export function mockChat(snapshot?: AgentSnapshot) {
       action.action === 'clear-intent' ||
       action.action === 'import-intent'
     ) {
-      if (
-        action.host !== '02' + 'ab'.repeat(32) ||
-        action.actor !== '01' + 'ab'.repeat(32)
-      )
+      if (action.host !== MOCK_CHAT_HOST || action.actor !== MOCK_CHAT_ACTOR)
         throw new Error('Saved message scope changed.');
+      if (
+        action.action === 'load-intent' &&
+        team.seed.intentFailures.has(action.channel)
+      )
+        throw {
+          code: 'chat-key-unavailable',
+          message: 'The key for saved messages in this channel is unavailable.',
+          fatal: false,
+          retryable: false,
+          ambiguous: false,
+        };
       const key = JSON.stringify([
         storeId,
         action.host,
@@ -212,28 +229,34 @@ export function mockChat(snapshot?: AgentSnapshot) {
         messages: after === undefined ? rows : [...rows].reverse(),
         before:
           rows.length && rows[0].sequence !== '1' ? rows[0].sequence : null,
-        missing_predecessors: [],
+        missing_predecessors: [
+          ...new Set(
+            rows.flatMap((m) => team.seed.missingPredecessors.get(m.id) ?? []),
+          ),
+        ],
       };
     } else if (action.action === 'inbox' || action.action === 'sync-inbox') {
+      const blockedChannels = team.channels
+        .map((c) => c.id)
+        .filter(
+          (id) =>
+            team.seed.blocked.has(id) ||
+            (action.action === 'sync-inbox' &&
+              action.blocked_channels?.includes(id)),
+        );
       result = {
         kind: 'inbox',
         channels: [...team.channels],
         read_retry_pending: false,
         previews_incomplete: false,
-        blocked_channels:
-          action.action === 'sync-inbox'
-            ? (action.blocked_channels ?? []).filter((id) =>
-                team.channels.some((c) => c.id === id),
-              )
-            : [],
-        cursor: String(account.version),
+        blocked_channels: blockedChannels,
+        // A degraded projection's cursor stops short of the head.
+        cursor: String(account.version - (team.seed.degraded ? 1n : 0n)),
         head: String(account.version),
-        degraded: false,
+        degraded: team.seed.degraded,
         conversations: team.channels.map((channel) => {
           const rows = team.messages.get(channel.id) ?? [];
-          const blocked =
-            action.action === 'sync-inbox' &&
-            action.blocked_channels?.includes(channel.id);
+          const blocked = blockedChannels.includes(channel.id);
           const last = rows.at(-1);
           const readThrough = team.reads.get(channel.id) ?? 0n;
           const lastSequence = last ? BigInt(last.sequence) : 0n;
@@ -245,8 +268,8 @@ export function mockChat(snapshot?: AgentSnapshot) {
             unread: String(
               lastSequence > readThrough ? lastSequence - readThrough : 0n,
             ),
-            hidden: false,
-            muted: false,
+            hidden: team.seed.hidden.has(channel.id),
+            muted: team.seed.muted.has(channel.id),
             preview:
               last && !blocked
                 ? {
@@ -340,16 +363,10 @@ export function mockChat(snapshot?: AgentSnapshot) {
       action.action === 'submit-message'
     ) {
       const old = team.submissions.get(action.submission);
-      const input = JSON.stringify(
+      const input =
         action.action === 'prepare-channel'
-          ? action
-          : {
-              action: 'prepare-message',
-              submission: action.submission,
-              channel: action.channel,
-              text: action.text,
-            },
-      );
+          ? JSON.stringify(action)
+          : messageInput(action.submission, action.channel, action.text);
       if (old && old.input !== input)
         throw { code: 'conflict', message: 'Submission changed.' };
       const id = old?.op.id ?? (++counter).toString(16).padStart(32, '0');
@@ -422,6 +439,21 @@ export function mockChat(snapshot?: AgentSnapshot) {
           (s) => s.op === op,
         )!.input;
         const submitted = JSON.parse(input) as ChatAction;
+        // As the agent does, a host rejection is recorded in the ledger
+        // before anything is applied, and the attempt fails; a later status
+        // read reports the code.
+        const rejection = team.seed.rejections.get(op.id);
+        if (rejection !== undefined) {
+          op.state = 'rejected';
+          op.rejection_code = rejection;
+          throw {
+            code: 'operation-failed',
+            message: `The server rejected this message (status ${rejection}).`,
+            fatal: false,
+            retryable: false,
+            ambiguous: false,
+          };
+        }
         if (submitted.action === 'prepare-channel') {
           op.confirmation = { kind: 'channel-created' };
           team.channels.push({
@@ -458,8 +490,8 @@ export function mockChat(snapshot?: AgentSnapshot) {
           team_id:
             store?.kind === 'team' ? store.team_id_hex : '03' + 'ab'.repeat(32),
         },
-        host: '02' + 'ab'.repeat(32),
-        actor: '01' + 'ab'.repeat(32),
+        host: MOCK_CHAT_HOST,
+        actor: MOCK_CHAT_ACTOR,
       },
       result,
     };

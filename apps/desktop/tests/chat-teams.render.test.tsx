@@ -2549,7 +2549,7 @@ test('channel rows carry the last message and its time until previews are turned
   await ui.waitFor(() =>
     assert.equal(preview('#alpha'), 'Team member: in alpha'),
   );
-  assert.equal(preview('#general'), 'Team member: Team chat is ready.');
+  assert.equal(preview('#general'), 'sam: Team chat is ready.');
   // A channel the inbox states nothing has been said in says so.
   assert.equal(preview('#quiet'), 'No messages yet');
   const alpha = channelRow('#alpha', 'Household');

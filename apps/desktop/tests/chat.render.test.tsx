@@ -276,7 +276,9 @@ test('renders channel descriptions, message timestamps, and channel rows with th
     [...document.querySelectorAll('.chat-channel-preview')].map(
       (row) => row.textContent,
     ),
-    ['Team member: Team chat is ready.'],
+    // The seed message is from the team's Owner: history rows always have a
+    // sender.
+    ['sam.ortiz: Team chat is ready.'],
   );
   assert.equal(ui.screen.getAllByText('Team chat is ready.').length, 1);
   const time = document.querySelector<HTMLTimeElement>('.chat-message time');
@@ -287,6 +289,111 @@ test('renders channel descriptions, message timestamps, and channel rows with th
   assert.match(time?.textContent ?? '', /^\d{1,2}:\d{2}(\s?(AM|PM))?$/i);
   assert.doesNotMatch(time?.textContent ?? '', /2023/);
   assert.ok(document.querySelector('.chat-daysep')?.textContent);
+});
+
+/** Renders the chat with the mock seeded by a `chat-scenario` URL parameter. */
+async function withScenario(
+  scenario: string,
+  run: () => Promise<void>,
+  navigate = false,
+) {
+  window.history.replaceState(null, '', `/?chat-scenario=${scenario}`);
+  try {
+    await setup(undefined, false, () => {}, true, navigate);
+    await run();
+  } finally {
+    window.history.replaceState(null, '', '/');
+  }
+}
+
+test('the busy mock scenario shows several channels, a long unread run and grouped authors', async () => {
+  await withScenario('busy', async () => {
+    await ui.waitFor(() =>
+      assert.deepEqual(
+        [...document.querySelectorAll('.chat-channel .n')].map(
+          (row) => row.textContent,
+        ),
+        ['general', 'deploys', 'incidents', 'random'],
+      ),
+    );
+    ui.screen.getByLabelText('42 unread');
+    // The anchored open starts at the first unread row, below the divider.
+    await ui.screen.findByRole('separator', { name: 'New messages' });
+    const authors = new Set(
+      [...document.querySelectorAll('.chat-message .chat-sender')].map(
+        (who) => who.textContent,
+      ),
+    );
+    assert.ok(authors.has('You'));
+    assert.ok(authors.has('priya.n'));
+    assert.ok(
+      document.querySelectorAll('.chat-message.grouped').length > 0,
+      'consecutive rows from one author are grouped',
+    );
+  });
+});
+
+test('the integrity mock scenario shows degraded, stopped, muted and hidden states', async () => {
+  await withScenario(
+    'integrity',
+    async () => {
+      await ui.screen.findByText(/Some inbox changes could not be listed/);
+      await ui.waitFor(() =>
+        assert.deepEqual(
+          [...document.querySelectorAll('.chat-channel small')].map(
+            (caption) => caption.textContent,
+          ),
+          [' · Channel stopped', ' · Muted', ' · Hidden'],
+        ),
+      );
+      ui.fireEvent.click(
+        document.querySelector<HTMLElement>(
+          `[data-chat-channel="${'b1'.repeat(16)}"]`,
+        )!,
+      );
+      await ui.screen.findByText(/incomplete verification/);
+      ui.fireEvent.click(
+        document.querySelector<HTMLElement>(
+          `[data-chat-channel="${'b2'.repeat(16)}"]`,
+        )!,
+      );
+      await ui.screen.findByRole('heading', { name: 'Channel stopped' });
+    },
+    true,
+  );
+});
+
+test('the failures mock scenario shows ledger operations and a saved-message load error', async () => {
+  await withScenario(
+    'failures',
+    async () => {
+      await ui.screen.findByText('Rotating the staging certificates tonight.');
+      await ui.screen.findByText('Can someone confirm the 2.4 tag?');
+      await ui.screen.findByText(/Delivery unconfirmed/);
+      const rejected = (
+        await ui.screen.findByText('Incident summary for this morning.')
+      ).closest<HTMLElement>('article')!;
+      ui.fireEvent.click(
+        ui.within(rejected).getByRole('button', { name: 'Retry' }),
+      );
+      await ui.screen.findByText(
+        'The server rejected this message (status 12006).',
+      );
+      await ui.waitFor(() =>
+        assert.equal(
+          ui.within(rejected).queryByRole('button', { name: 'Retry' }),
+          null,
+        ),
+      );
+      ui.fireEvent.click(
+        document.querySelector<HTMLElement>(
+          `[data-chat-channel="${'b1'.repeat(16)}"]`,
+        )!,
+      );
+      await ui.screen.findByText('Saved messages could not be loaded.');
+    },
+    true,
+  );
 });
 
 for (const incremental of [false, true])

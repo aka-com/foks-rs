@@ -214,6 +214,21 @@ are decisions, not details:
   VITE_FOKS_MOCK=1 npm run dev:frontend
   ```
 
+  The mock chat (`src/chat-mock.ts`) seeds each team from
+  `src/chat-mock-scenarios.ts`. By default a team has one unnamed channel
+  holding one message from another roster member, the Owner unless the local
+  account owns the team, or from the local account when it is the only member.
+  The mock-only `chat-scenario=` parameter selects another seed: `busy` (four
+  channels, one admin-only, and 120 messages in #general with 42 unread, from
+  roster members, the local account and one UID absent from the roster),
+  `failures` (unsent and unconfirmed ledger operations, one whose attempt the
+  host rejects with status 12006, and a channel whose saved message cannot be
+  loaded) or `integrity` (a page with missing predecessors, a degraded inbox,
+  and a stopped, a muted and a hidden channel). For example,
+  `?state=chat&store=team%3Ahousehold&chat-scenario=busy` opens Household, the
+  team whose fixture server offers chat. Render and unit tests import the same
+  seeds and IDs.
+
   `src/mock-bridge.ts` uses `src/fixture.ts` with no network or timers;
   it loads only the app's versioned nonsecret first-run checkpoint so a mocked
   quit/resume walk includes completed setup facts. It is

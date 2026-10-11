@@ -3,6 +3,7 @@
 import { notificationKey } from './chat/local-contract';
 import { mockInvitations } from './invitation-mock';
 import { mockChat } from './chat-mock';
+import { chatMockScenario } from './chat-mock-scenarios';
 import type {
   Bridge,
   CatalogDto,
@@ -429,7 +430,14 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       blockedProfiles: [],
     };
   };
-  const chat = mockChat(snapshot);
+  // `?chat-scenario=busy` (or `failures`, `integrity`) seeds the chat with
+  // that scenario instead of one channel holding one message.
+  const chat = mockChat(
+    snapshot,
+    typeof window === 'undefined'
+      ? 'default'
+      : chatMockScenario(window.location?.search ?? ''),
+  );
   const describeServerStatus: Bridge['describeServerStatus'] = async (
     profile,
   ) => {
