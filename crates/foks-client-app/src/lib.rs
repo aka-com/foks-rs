@@ -21,8 +21,9 @@ pub use auth_cache::{
 mod adapter_clock;
 pub use adapter_clock::{
     AdapterClock, AdapterClockAdmission, AdapterClockPreview, AdapterClockRepair,
-    AdapterClockStatus, SystemAdapterClock,
+    AdapterClockStatus, SystemAdapterClock, ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS,
 };
+pub use foks_client_db::AdapterTimeSample;
 pub use foks_proto::SubmissionHandle;
 mod federation;
 pub mod portability;
@@ -116,6 +117,10 @@ pub enum Error {
     InvalidKvPath(&'static str),
     #[error("FOKS KV item changed since it was read")]
     KvConflict,
+    /// A confirmed adapter clock repair time was too far from the clock
+    /// sampled when the repair would be written; nothing was changed.
+    #[error("the confirmed time must be within one minute of this computer's clock; preview the current time again, then confirm it")]
+    AdapterClockConfirmationStale,
     /// The passphrase offered as the account's current one did not match, so
     /// the rotation it was guarding was never submitted.
     #[error("FOKS current passphrase is not correct")]

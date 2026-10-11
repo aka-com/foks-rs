@@ -44,7 +44,11 @@ impl AgentBackend {
             return Err("agent changed submission identity".into());
         }
         if prepared.status != DataWriteStatus::Prepared {
-            return write_tool_result(prepared, spec.kind);
+            // A handle issued before the rejection watermark returns `expired`
+            // rather than `clock-untrusted`, including the one minted above
+            // while a trusted clock is still behind that watermark.
+            let pause = self.expiry_pause(&prepared, cancelled);
+            return write_tool_result(prepared, spec.kind, pause);
         }
         if cancelled.is_cancelled() {
             return Err(format!("cancelled; prepared submission_id={id}"));
@@ -96,17 +100,32 @@ impl AgentBackend {
         if result.submission_id != id {
             return Err("agent changed submission identity".into());
         }
-        write_tool_result(result, spec.kind)
+        let pause = self.expiry_pause(&result, cancelled);
+        write_tool_result(result, spec.kind, pause)
+    }
+
+    /// The clock pause behind an `expired` outcome, if any. While admission is
+    /// paused or behind the watermark, a newly issued handle cannot execute
+    /// either, so the result explains the pause instead of suggesting one.
+    fn expiry_pause(
+        &self,
+        result: &foks_agent_proto::data::DataWriteOutcome,
+        cancelled: &CancellationToken,
+    ) -> Option<ClockPause> {
+        (result.status == foks_agent_proto::data::DataWriteStatus::Expired)
+            .then(|| self.clock_pause(cancelled))
+            .flatten()
     }
 }
 
 fn write_tool_result(
     result: foks_agent_proto::data::DataWriteOutcome,
     kind: foks_agent_proto::data::DataWriteKind,
+    pause: Option<ClockPause>,
 ) -> Result<CallToolResult, String> {
     let committed = result.status == foks_agent_proto::data::DataWriteStatus::Committed;
     let node_id = result.node_id.clone();
-    let mut response = write_result(result)?;
+    let mut response = write_result(result, pause)?;
     if committed {
         let text = if kind == foks_agent_proto::data::DataWriteKind::Mkdir {
             match node_id {
@@ -156,18 +175,34 @@ pub(super) fn write_spec(
     })
 }
 
+/// Renders a write outcome. With `pause`, the result also carries
+/// `writes_paused`, `writes_resume_at` when the clock is behind the watermark,
+/// and the pause explanation, which replaces the advice to issue a new handle.
 pub(super) fn write_result(
     result: foks_agent_proto::data::DataWriteOutcome,
+    pause: Option<ClockPause>,
 ) -> Result<CallToolResult, String> {
-    let value = serde_json::to_value(&result).map_err(|_| "invalid write outcome")?;
+    let mut value = serde_json::to_value(&result).map_err(|_| "invalid write outcome")?;
     use foks_agent_proto::data::DataWriteStatus;
     let guidance=match result.status {
+        DataWriteStatus::Expired if pause.is_some() => " This handle cannot execute.",
         DataWriteStatus::Expired => " This handle cannot execute; a new explicit write needs a newly issued handle.",
         DataWriteStatus::Rejected => " This handle cannot execute; correct the request before making a new explicit write with a new handle.",
         DataWriteStatus::SubmissionUnknown => " Inspect status; do not repeat this write with a new handle.",
         _ => "",
     };
+    if let (Some(pause), serde_json::Value::Object(fields)) = (pause, &mut value) {
+        fields.insert("writes_paused".into(), serde_json::Value::Bool(true));
+        if let ClockPause::Behind(resumes) = pause {
+            fields.insert("writes_resume_at".into(), resumes.into());
+        }
+    }
     let mut response = text_result(format!("{value}{guidance}"));
+    if let Some(pause) = pause {
+        response
+            .content
+            .push(rmcp::model::ContentBlock::text(pause.explanation()));
+    }
     response.structured_content = Some(value);
     response.is_error = Some(matches!(
         result.status,
@@ -217,5 +252,45 @@ mod tests {
         );
         assert!(behind.contains("until Unix time 1700086400"), "{behind}");
         assert!(!behind.contains("retention reanchor"), "{behind}");
+    }
+
+    #[test]
+    fn expired_writes_behind_the_watermark_report_the_pause_instead_of_a_new_handle() {
+        use super::super::ClockPause;
+        use foks_agent_proto::data::{DataWriteOutcome, DataWriteStatus};
+        let expired = || DataWriteOutcome {
+            submission_id: "handle".into(),
+            status: DataWriteStatus::Expired,
+            partial: false,
+            node_id: None,
+        };
+        let text = |response: &CallToolResult| {
+            response
+                .content
+                .iter()
+                .filter_map(|block| block.as_text().map(|text| text.text.clone()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let unpaused = write_result(expired(), None).unwrap();
+        assert!(text(&unpaused).contains("newly issued handle"));
+        assert!(unpaused.structured_content.as_ref().unwrap()["writes_paused"].is_null());
+        // A trusted clock behind the watermark expires the handle MCP just
+        // issued, so another new handle would expire too.
+        let behind = write_result(expired(), Some(ClockPause::Behind(1_700_086_400))).unwrap();
+        assert_eq!(behind.is_error, Some(true));
+        let explained = text(&behind);
+        assert!(!explained.contains("newly issued handle"), "{explained}");
+        assert!(
+            explained.contains("until Unix time 1700086400"),
+            "{explained}"
+        );
+        let fields = behind.structured_content.unwrap();
+        assert_eq!(fields["status"], "expired");
+        assert_eq!(fields["writes_paused"], true);
+        assert_eq!(fields["writes_resume_at"], 1_700_086_400);
+        let untrusted = write_result(expired(), Some(ClockPause::Untrusted)).unwrap();
+        assert!(text(&untrusted).contains("foks-rs retention reanchor"));
+        assert!(untrusted.structured_content.unwrap()["writes_resume_at"].is_null());
     }
 }

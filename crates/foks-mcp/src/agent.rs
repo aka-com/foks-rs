@@ -463,21 +463,7 @@ impl Backend for AgentBackend {
                 if result.submission_id != args.submission_id {
                     return Err("agent changed submission identity".into());
                 }
-                let mut response = write_result(result)?;
-                if let Some(pause) = pause {
-                    if let Some(serde_json::Value::Object(fields)) =
-                        &mut response.structured_content
-                    {
-                        fields.insert("writes_paused".into(), serde_json::Value::Bool(true));
-                        if let ClockPause::Behind(resumes) = pause {
-                            fields.insert("writes_resume_at".into(), resumes.into());
-                        }
-                    }
-                    response
-                        .content
-                        .push(rmcp::model::ContentBlock::text(pause.explanation()));
-                }
-                Ok(response)
+                write_result(result, pause)
             }
             Invocation::Pending(_) => {
                 let result: Vec<foks_agent_proto::data::DataWriteOutcome> = call(

@@ -428,7 +428,20 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let session = ProfileSession::open(&ProfileRegistry::open(&state).unwrap(), "local").unwrap();
+    // The repair confirms only a time near the clock it samples, so this
+    // session's clock reads the earlier time.
+    struct WallClock(u64);
+    impl foks_client_app::AdapterClock for WallClock {
+        fn sample(&self) -> foks_client_app::Result<foks_client_app::AdapterTimeSample> {
+            Ok(foks_client_app::AdapterTimeSample {
+                wall_seconds: self.0,
+                ..foks_client_app::SystemAdapterClock.sample()?
+            })
+        }
+    }
+    let session = ProfileSession::open(&ProfileRegistry::open(&state).unwrap(), "local")
+        .unwrap()
+        .with_adapter_clock(std::sync::Arc::new(WallClock(now - 90_000)));
     credentials
         .with_checked_session(&session, |session| {
             let master = credentials.master_key()?;

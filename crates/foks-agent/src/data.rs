@@ -149,15 +149,11 @@ pub(super) fn bind_account(
     })
 }
 
-/// How far a confirmed repair time may be from the computer's clock. The
-/// repair pairs the confirmed wall time with this process's monotonic reading
-/// at confirmation, so any difference is lost from the admission skew that
-/// later writes may use; one minute leaves most of the five.
-const CONFIRM_SKEW_SECONDS: u64 = 60;
-
 /// Refuses a repair time that would leave writes paused after a reported
 /// success. A preview only displays the time and may be up to the admission
-/// skew away; a confirmation must be fresh.
+/// skew away; a confirmation must be fresh. This runs before the profile lock
+/// and the identity check; the repair repeats the confirmation bound against
+/// the clock sample it writes.
 fn check_repair_time(
     action: &foks_agent_proto::data::AdapterClockRepairAction,
     now: u64,
@@ -173,7 +169,7 @@ fn check_repair_time(
             ))
         }
         AdapterClockRepairAction::Confirm { unix_seconds, .. }
-            if unix_seconds.abs_diff(now) > CONFIRM_SKEW_SECONDS =>
+            if unix_seconds.abs_diff(now) > foks_client_app::ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS =>
         {
             Err(AgentRequestError(
                 "the confirmed time must be within one minute of this computer's clock; \

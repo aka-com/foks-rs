@@ -149,6 +149,12 @@ pub use foks_agent_proto::data::{
     AdapterClockAdmission, AdapterClockPreview, AdapterClockRepair, AdapterClockStatus,
 };
 
+/// How far a confirmed repair time may be from the wall time sampled when the
+/// repair is written. The repair pairs the confirmed time with the monotonic
+/// reading of that sample, so any difference is lost from the admission skew
+/// that later writes may use; one minute leaves most of the five.
+pub const ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS: u64 = 60;
+
 impl crate::CheckedProfileSession<'_> {
     /// Reports whether data-write admission for `alias` would accept new
     /// handles now. Reads only local state: it neither anchors nor advances
@@ -236,7 +242,10 @@ impl crate::CheckedProfileSession<'_> {
 
     /// The agent exposes this to the CLI and the desktop, never to MCP tools.
     /// The caller publishes the returned audit result after the checked-session
-    /// boundary has checkpointed.
+    /// boundary has checkpointed. `proposed` must be within
+    /// [`ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS`] of the wall time sampled here,
+    /// after the identity check, so the time that check takes counts against
+    /// the confirmation rather than the admission skew.
     pub fn reanchor_adapter_clock(
         &self,
         alias: &str,
@@ -255,6 +264,9 @@ impl crate::CheckedProfileSession<'_> {
             .adapter_clock(host.as_bytes(), user.as_bytes())?
             .ok_or(foks_client_db::Error::AdapterIdentityConflict)?;
         let sample = self.adapter_clock.sample()?;
+        if proposed.abs_diff(sample.wall_seconds) > ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS {
+            return Err(Error::AdapterClockConfirmationStale);
+        }
         let updated = hard.reanchor_adapter_clock(
             host.as_bytes(),
             user.as_bytes(),
@@ -402,14 +414,15 @@ mod tests {
                 ..s.adapter_clock.sample()?
             };
             hard.reanchor_adapter_clock(host.as_bytes(), user.as_bytes(), &old, ahead)?;
-            assert!(hard
-                .check_adapter_admission(
+            assert!(matches!(
+                hard.check_adapter_admission(
                     host.as_bytes(),
                     user.as_bytes(),
                     SubmissionHandle::new(now, [9; 16]),
                     ahead,
-                )
-                .is_err());
+                ),
+                Err(foks_client_db::Error::AdapterExpired)
+            ));
             Ok(())
         });
         let preview = f.run(|s, v, _| s.adapter_clock_preview("owner", now, v));
@@ -417,6 +430,91 @@ mod tests {
         let behind = f.run(|s, v, _| s.adapter_clock_status("owner", v));
         assert_eq!(behind.admission, AdapterClockAdmission::Behind);
         assert_eq!(behind.reject_issued_before, Some(now + 86_400));
+        // A write with a handle issued at the current time is below the
+        // watermark, so it returns `expired` rather than `clock-untrusted`.
+        let fresh = f.run(|s, v, m| {
+            let issued = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            s.prepare_data_write(
+                "owner",
+                SubmissionHandle::new(issued, [10; 16]),
+                DataWriteSpec {
+                    kind: DataWriteKind::Mkdir,
+                    path: "/behind".into(),
+                    destination: None,
+                    team_selector: None,
+                    overwrite: false,
+                    mkdir_p: false,
+                    recursive: false,
+                    body_length: 0,
+                    body_hash: foks_crypto::kv_adapter_body_hash(&[]),
+                },
+                v,
+                m,
+            )
+        });
+        assert_eq!(fresh.status, DataWriteStatus::Expired);
+        assert_eq!(admission(&f), AdapterClockAdmission::Behind);
+    }
+
+    /// The system clock with its wall time replaced, as a computer whose
+    /// clock reads `wall` would sample it.
+    struct WallClock(u64);
+    impl AdapterClock for WallClock {
+        fn sample(&self) -> Result<AdapterTimeSample> {
+            Ok(AdapterTimeSample {
+                wall_seconds: self.0,
+                ..SystemAdapterClock.sample()?
+            })
+        }
+    }
+
+    #[test]
+    fn repair_refuses_a_time_that_drifted_from_the_clock_it_writes() {
+        let f = crate::test_support::AccountFixture::start();
+        f.run(|s, v, m| {
+            s.create_account(
+                "owner",
+                "clockdrift",
+                "device",
+                "owner@example.test",
+                "",
+                None,
+                v,
+                m,
+            )?;
+            Ok(())
+        });
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        f.run(|s, v, _| {
+            let (host, user) = s.data_identity("owner", v)?;
+            let mut hard = foks_client_db::HardStateStore::open(&s.paths.hard_database)?;
+            hard.check_adapter_admission(
+                entity_id_from_hex(&host)?.as_bytes(),
+                entity_id_from_hex(&user)?.as_bytes(),
+                SubmissionHandle::new(now, [8; 16]),
+                s.adapter_clock.sample()?,
+            )?;
+            Ok(())
+        });
+        // The preview digest matches, but the clock read when the repair is
+        // written is more than a minute past the confirmed time.
+        let preview = f.run(|s, v, _| s.adapter_clock_preview("owner", now, v));
+        let refused = f.run_with_clock(std::sync::Arc::new(WallClock(now + 61)), |s, v, _| {
+            Ok(s.reanchor_adapter_clock("owner", now, &preview.confirmation_digest, v))
+        });
+        assert!(matches!(refused, Err(Error::AdapterClockConfirmationStale)));
+        let unchanged = f.run(|s, v, _| s.adapter_clock_preview("owner", now, v));
+        assert_eq!(unchanged, preview);
+        let repaired = f.run_with_clock(std::sync::Arc::new(WallClock(now + 60)), |s, v, _| {
+            s.reanchor_adapter_clock("owner", now, &preview.confirmation_digest, v)
+        });
+        assert_eq!(repaired.resulting_floor, now);
     }
 
     #[test]
@@ -459,14 +557,16 @@ mod tests {
             s.rollback_checkpoint()
         });
         assert!(before.verify_descends_from(&expired).is_err());
+        // The repair runs on a computer whose clock reads the proposed time.
+        let earlier = || std::sync::Arc::new(WallClock(now - 100_000));
         let preview = f.run(|s, v, _| s.adapter_clock_preview("owner", now - 100_000, v));
-        f.run(|s, v, _| {
+        f.run_with_clock(earlier(), |s, v, _| {
             assert!(s
                 .reanchor_adapter_clock("owner", now - 100_001, &preview.confirmation_digest, v)
                 .is_err());
             Ok(())
         });
-        let repaired = f.run(|s, v, _| {
+        let repaired = f.run_with_clock(earlier(), |s, v, _| {
             s.reanchor_adapter_clock("owner", now - 100_000, &preview.confirmation_digest, v)
         });
         assert_eq!(

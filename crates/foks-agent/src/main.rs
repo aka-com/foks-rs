@@ -1912,6 +1912,9 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
             foks_client_app::Error::BotToken => {
                 return Response::error(id, ErrorCode::BotToken, "Invalid bot token.")
             }
+            foks_client_app::Error::AdapterClockConfirmationStale => {
+                return Response::error(id, ErrorCode::InvalidRequest, error.to_string())
+            }
             foks_client_app::Error::CapabilityDenied(capability) => {
                 let capability = serde_json::to_value(capability)
                     .ok()

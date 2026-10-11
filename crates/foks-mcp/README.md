@@ -118,12 +118,17 @@ checks the elapsed time across the restart. A wall-clock jump over five minutes
 within one process, or a restart more than 24 hours beyond the last trusted floor
 that the boot clock does not account for, blocks new admission and pruning with
 `clock-untrusted`. A trusted clock that is still behind the irreversible
-watermark also refuses new handles with `clock-untrusted` until it reaches the
-watermark; this happens only after an earlier clock ran more than 24 hours
-ahead, and no repair shortens it. Retained status and recovery still work. While
-admission is refused, `foks_status` adds `"writes_paused": true` to its result,
-with `"writes_resume_at"` (Unix seconds) in the watermark case, and explains
-what lifts the pause; `clock-untrusted` refusals carry the same explanation.
+watermark also refuses new writes until it reaches the watermark; this happens
+only after an earlier clock ran more than 24 hours ahead, and no repair
+shortens it. A handle issued at the current time is then older than the
+watermark, so the write returns `expired`; only a handle issued up to five
+minutes ahead, at or past the watermark, is refused with `clock-untrusted`.
+Retained status and recovery still work. While admission is refused,
+`foks_status` adds `"writes_paused": true` to its result, with
+`"writes_resume_at"` (Unix seconds) in the watermark case, and explains what
+lifts the pause; `clock-untrusted` refusals carry the same explanation, and an
+`expired` write result carries the same fields and explanation in place of the
+advice to issue a new handle.
 The agent reads this clock status from local state only. First use establishes
 the anchor.
 

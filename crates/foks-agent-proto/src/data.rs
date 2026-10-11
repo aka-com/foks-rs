@@ -210,9 +210,11 @@ pub enum AdapterClockAdmission {
     /// re-anchors the clock at a confirmed time.
     Paused,
     /// The clock is trusted but behind `reject_issued_before`, a watermark
-    /// committed while an earlier clock ran ahead. New writes fail with
-    /// `clock-untrusted` until the clock reaches it; a repair cannot bring
-    /// that forward, because it only accepts the computer's current time.
+    /// committed while an earlier clock ran ahead. New writes are refused
+    /// until the clock reaches it: a handle issued at the current time is
+    /// below the watermark and returns `expired`, and a future handle at or
+    /// past it fails with `clock-untrusted`. A repair cannot bring the
+    /// watermark forward, because it only accepts the computer's current time.
     Behind,
 }
 

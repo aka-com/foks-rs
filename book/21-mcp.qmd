@@ -210,12 +210,15 @@ settings, or with the two-step `foks-rs retention reanchor` command. Both
 send the agent a preview, which returns a digest of the displayed clock
 state, and then a confirmation carrying that digest. The agent pairs the
 confirmed time with its own monotonic reading at confirmation, so it
-accepts a confirmation only within one minute of its clock; a staler time
-would consume the skew that later writes rely on. The repair keeps the
+accepts a confirmation only within one minute of the wall time read with
+that monotonic reading; a staler time would consume the skew that later
+writes rely on. The repair keeps the
 rejection watermark, so a clock that had run more than a day ahead leaves
 new writes refused, even after a repair, until the corrected clock reaches
-that watermark; status reports this case separately, with the time writes
-resume.
+that watermark. A handle issued at the current time is then older than the
+watermark, so such a write returns `expired`, not `clock-untrusted`; status
+and the expired write result both report this case separately, with the
+time writes resume.
 
 Cancellation is honored but does not undo remote work; a cancelled request
 answers "check mutation status before retrying." An interrupted upload may
