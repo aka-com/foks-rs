@@ -956,7 +956,9 @@ const sleep = (ms: number) =>
  * The general channel holding `count` messages, all from another member
  * unless listed in `own`, read through `read`. History follows the agent's
  * range rules: `before` reads the fifty sequences below it and `after` up to
- * fifty rows past it. `arrive` adds messages and wakes the inbox.
+ * fifty rows past it. Setting `state.span` narrows `before` reads to that
+ * many sequences, as the agent narrows a range over its limits. `arrive` adds
+ * messages and wakes the inbox.
  */
 async function busyChannel(count: number, read: number) {
   const { FIXTURE } = (await vite.ssrLoadModule(
@@ -968,7 +970,13 @@ async function busyChannel(count: number, read: number) {
   assert.ok(other);
   const actor = '01' + 'ab'.repeat(32);
   const id = 'ab'.repeat(16);
-  const state = { count, read, own: new Set<number>(), wakes: 1_000 };
+  const state = {
+    count,
+    read,
+    own: new Set<number>(),
+    wakes: 1_000,
+    span: 50,
+  };
   const history: ChatAction[] = [];
   const marks: string[] = [];
   let base!: Bridge;
@@ -1007,7 +1015,7 @@ async function busyChannel(count: number, read: number) {
             const end =
               action.before === null ? state.count : Number(action.before) - 1;
             for (
-              let n = Math.max(1, end - 49);
+              let n = Math.max(1, end - state.span + 1);
               n <= Math.min(end, state.count);
               n++
             )
@@ -1164,6 +1172,69 @@ test('an unread channel opens at its first unread message and marks only what wa
   }
 });
 
+test('an anchored open and forward pages fill ranges the agent narrowed', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => false,
+  });
+  const channel = await busyChannel(130, 10);
+  channel.state.span = 25;
+  await withIntersectionObserver(async () => {
+    await setup(channel.override, false);
+    // The anchored range comes back as rows 26 to 50, and the read below it
+    // fills the rest, so the page is accepted as one through the owner.
+    await ui.screen.findByText('Message 11');
+    assert.equal(ui.screen.queryByText(/Conversation closed/), null);
+    const rows = [
+      ...document.querySelectorAll<HTMLElement>('.chat-divider, .chat-message'),
+    ];
+    const divider = rows.findIndex((row) =>
+      row.classList.contains('chat-divider'),
+    );
+    assert.equal(rows[divider + 1]?.dataset.sequence, '11');
+    assert.equal(rows.at(-1)?.dataset.sequence, '50');
+    // Each forward page is filled down to the held tail; the last attaches
+    // the window, and focus on its button moves to the list.
+    const scroller = ui.screen.getByLabelText('Message history');
+    const newer = ui.screen.getByRole('button', {
+      name: 'Load newer messages',
+    });
+    newer.focus();
+    ui.fireEvent.click(newer);
+    await ui.screen.findByText('Message 100');
+    ui.screen.getByText('Message 51');
+    await ui.waitFor(() =>
+      assert.equal(
+        ui.screen
+          .getByRole('button', { name: 'Load newer messages' })
+          .getAttribute('aria-busy'),
+        null,
+      ),
+    );
+    assert.equal(document.activeElement, newer);
+    ui.fireEvent.click(newer);
+    await ui.screen.findByText('Message 130');
+    ui.screen.getByText('Message 101');
+    await ui.waitFor(() =>
+      assert.equal(
+        ui.screen.queryByRole('button', { name: 'Load newer messages' }),
+        null,
+      ),
+    );
+    assert.equal(document.activeElement, scroller);
+    assert.deepEqual(
+      [
+        ...new Set(
+          channel.history.map((action) =>
+            action.action === 'history' ? action.before : '',
+          ),
+        ),
+      ],
+      ['51', '26', '101', '76', '151', '126'],
+    );
+  });
+});
+
 test('the jump control counts messages from others that arrived while scrolled up', async () => {
   Object.defineProperty(document, 'hasFocus', {
     configurable: true,
@@ -1205,55 +1276,83 @@ test('the jump control counts messages from others that arrived while scrolled u
   );
 });
 
-test('the new-messages banner and Esc mark the channel read through its newest message', async () => {
-  Object.defineProperty(document, 'hasFocus', {
-    configurable: true,
-    value: () => false,
-  });
-  const channel = await busyChannel(30, 10);
-  await setup(channel.override, false);
-  await ui.screen.findByText('Message 30');
-  // Twenty unread fit the anchored page, so the window is not detached.
-  assert.equal(
-    channel.history[0]?.action === 'history' && channel.history[0].before,
-    '51',
-  );
-  assert.equal(
-    ui.screen.queryByRole('button', { name: 'Load newer messages' }),
-    null,
-  );
-  assert.equal(ui.screen.queryByRole('group', { name: 'New messages' }), null);
-  // Scrolled up, the divider is below the list.
-  const scroller = ui.screen.getByLabelText('Message history');
-  const divider = ui.screen.getByRole('separator', { name: 'New messages' });
-  scroller.getBoundingClientRect = () => ({ top: 0, bottom: 400 }) as DOMRect;
-  divider.getBoundingClientRect = () => ({ top: 500, bottom: 520 }) as DOMRect;
-  ui.fireEvent.scroll(scroller);
-  const banner = await ui.screen.findByRole('group', { name: 'New messages' });
-  assert.match(banner.textContent ?? '', /^20 new messages since /);
-  // Esc belongs to a draft in progress.
-  const composer = ui.screen.getByRole('textbox', { name: 'Message' });
-  ui.fireEvent.change(composer, { target: { value: 'half a thought' } });
-  ui.fireEvent.keyDown(composer, { key: 'Escape' });
-  await sleep(50);
-  assert.deepEqual(channel.marks, []);
-  ui.fireEvent.change(composer, { target: { value: '' } });
-  // Handled here, so the shell's own Escape does not also act on it.
-  assert.equal(ui.fireEvent.keyDown(scroller, { key: 'Escape' }), false);
-  await ui.waitFor(() => assert.deepEqual(channel.marks, ['30']));
-  await ui.waitFor(() =>
+for (const via of ['Esc', 'Mark as read'] as const) {
+  test(`the new-messages banner and ${via} mark the channel read through its newest message`, async () => {
+    Object.defineProperty(document, 'hasFocus', {
+      configurable: true,
+      value: () => false,
+    });
+    const channel = await busyChannel(30, 10);
+    await setup(channel.override, false);
+    await ui.screen.findByText('Message 30');
+    // Twenty unread fit the anchored page, so the window is not detached.
     assert.equal(
-      ui.screen.queryByRole('separator', { name: 'New messages' }),
+      channel.history[0]?.action === 'history' && channel.history[0].before,
+      '51',
+    );
+    assert.equal(
+      ui.screen.queryByRole('button', { name: 'Load newer messages' }),
       null,
-    ),
-  );
-  assert.equal(ui.screen.queryByRole('group', { name: 'New messages' }), null);
-  // With nothing unread and no divider, Escape is left to the shell.
-  await ui.waitFor(() =>
-    assert.equal(ui.fireEvent.keyDown(scroller, { key: 'Escape' }), true),
-  );
-  assert.deepEqual(channel.marks, ['30']);
-});
+    );
+    assert.equal(
+      ui.screen.queryByRole('group', { name: 'New messages' }),
+      null,
+    );
+    // Scrolled up, the divider is below the list.
+    const scroller = ui.screen.getByLabelText('Message history');
+    const divider = ui.screen.getByRole('separator', { name: 'New messages' });
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 400 }) as DOMRect;
+    divider.getBoundingClientRect = () =>
+      ({ top: 500, bottom: 520 }) as DOMRect;
+    ui.fireEvent.scroll(scroller);
+    const banner = await ui.screen.findByRole('group', {
+      name: 'New messages',
+    });
+    assert.match(banner.textContent ?? '', /^20 new messages since /);
+    if (via === 'Mark as read') {
+      // The button unmounts with the banner, and focus moves to the list.
+      const mark = ui
+        .within(banner)
+        .getByRole('button', { name: /Mark as read/ });
+      mark.focus();
+      ui.fireEvent.click(mark);
+      await ui.waitFor(() => assert.deepEqual(channel.marks, ['30']));
+      await ui.waitFor(() =>
+        assert.equal(
+          ui.screen.queryByRole('group', { name: 'New messages' }),
+          null,
+        ),
+      );
+      assert.equal(document.activeElement, scroller);
+      return;
+    }
+    // Esc belongs to a draft in progress.
+    const composer = ui.screen.getByRole('textbox', { name: 'Message' });
+    ui.fireEvent.change(composer, { target: { value: 'half a thought' } });
+    ui.fireEvent.keyDown(composer, { key: 'Escape' });
+    await sleep(50);
+    assert.deepEqual(channel.marks, []);
+    ui.fireEvent.change(composer, { target: { value: '' } });
+    // Handled here, so the shell's own Escape does not also act on it.
+    assert.equal(ui.fireEvent.keyDown(scroller, { key: 'Escape' }), false);
+    await ui.waitFor(() => assert.deepEqual(channel.marks, ['30']));
+    await ui.waitFor(() =>
+      assert.equal(
+        ui.screen.queryByRole('separator', { name: 'New messages' }),
+        null,
+      ),
+    );
+    assert.equal(
+      ui.screen.queryByRole('group', { name: 'New messages' }),
+      null,
+    );
+    // With nothing unread and no divider, Escape is left to the shell.
+    await ui.waitFor(() =>
+      assert.equal(ui.fireEvent.keyDown(scroller, { key: 'Escape' }), true),
+    );
+    assert.deepEqual(channel.marks, ['30']);
+  });
+}
 
 for (const distinct of [false, true]) {
   test(`chat failures share an inset below the header and deduplicate causes, distinct=${distinct}`, async () => {

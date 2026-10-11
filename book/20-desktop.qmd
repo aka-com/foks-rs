@@ -329,10 +329,12 @@ reaches the head attaches the window again. The agent narrows a range that
 exceeds its page limits by keeping the requested end, so the view reads
 older pages below such a page until it holds the first unread row or
 continues the held tail, and reads the rows after that point with `after`
-when a range comes back empty. A detached window still reads `after` once
-the inbox publishes a head at or below its tail, so a rollback still
-replaces it with the newest page, and Jump to latest replaces it with the
-newest page directly.
+when a range comes back empty. The pages are merged into one, which the
+conversation owner accepts only when every reply it was built from carries
+the same current history binding and every row came from one of them. A
+detached window still reads `after` once the inbox publishes a head at or
+below its tail, so a rollback still replaces it with the newest page, and
+Jump to latest replaces it with the newest page directly.
 
 A message is marked read once its row has been at least half on screen, or
 has covered half the list, for 500 ms while the window has focus; an
@@ -343,9 +345,11 @@ one seen unread. While the first new message is below the list, or older
 than the rows it holds, a banner states the unread count with Jump to
 first new and Mark as read; Esc does the same as Mark as read when the
 composer is empty. Marking all read marks through the published head and
-removes the divider for the rest of the visit. Scrolled up in an attached
-window, the jump control counts the messages from others that arrived
-since the reader left the bottom.
+removes the divider for the rest of the visit. When the banner, the "Load
+newer messages" row or the jump control unmounts with focus inside it,
+focus moves to the message list. Scrolled up in an attached window, the
+jump control counts the messages from others that arrived since the reader
+left the bottom.
 
 The history cache is a least-recently-used map keyed by a binding of
 store, channel, scope, generation, and authority, bounded at 16 channels,

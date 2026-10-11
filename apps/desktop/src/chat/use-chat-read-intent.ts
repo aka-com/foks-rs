@@ -101,7 +101,10 @@ export function useChatReadIntent(
         if (markingThrough.current === sequence) markingThrough.current = '0';
       });
   }, []);
-  /** Records `sequence` as seen and sends the mark, when `enabled` is true and the window has focus. */
+  /**
+   * Records `sequence` as seen and sends the mark, when `enabled` is true and
+   * the window has focus.
+   */
   const saw = useCallback(
     (sequence: string) => {
       if (!live.current.enabled || !focusedWindow()) return;
@@ -118,9 +121,9 @@ export function useChatReadIntent(
     const root = scroller?.current;
     if (!root || typeof IntersectionObserver === 'undefined') return;
     // Rows on screen, with the time each began its dwell, or `null` once it
-    // has been read, or while `enabled` is false or the window lacks focus. One timer serves the
-    // earliest deadline, so rows that came on screen together are read with
-    // one mark.
+    // has been read, or while `enabled` is false or the window lacks focus.
+    // One timer serves the earliest deadline, so rows that came on screen
+    // together are read with one mark.
     const visible = new Map<HTMLElement, number | null>();
     const observed = new Set<HTMLElement>();
     let timer: ReturnType<typeof setTimeout> | undefined;

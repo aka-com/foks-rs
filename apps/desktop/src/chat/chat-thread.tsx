@@ -112,6 +112,7 @@ export function ChatThread({
     page: Extract<import('../chat-contract').ChatResult, { kind: 'history' }>,
     before: string | null,
     placement?: import('./conversation-model').HistoryPlacement,
+    sources?: readonly import('../chat-contract').ChatResult[],
   ) => import('./conversation-model').HistoryWindow | void;
 }): ReactNode {
   const {
@@ -299,6 +300,16 @@ export function ChatThread({
   );
   const showBanner =
     newFrom !== null && unreadCount > 0 && (newBelow || newUnloaded);
+  // The banner, the newer edge and the jump button unmount once their action
+  // completes. Focus inside one when it goes moves to the list rather than
+  // to the document body. The ref cleanup runs before React removes the node.
+  const returnFocus = useCallback(
+    (node: HTMLElement | null) => () => {
+      if (node?.contains(document.activeElement))
+        scroller.current?.focus({ preventScroll: true });
+    },
+    [scroller],
+  );
   const jumpToNew = () => {
     if (divider.current) reveal(divider.current);
     else if (newFrom !== null) void reopen(newFrom);
@@ -430,6 +441,7 @@ export function ChatThread({
             {showBanner && (
               <div
                 className="chat-new-banner"
+                ref={returnFocus}
                 role="group"
                 aria-label="New messages"
               >
@@ -588,10 +600,14 @@ export function ChatThread({
                   className="chat-history-edge chat-history-newer"
                   ref={newerEdge}
                 >
+                  {/* Marked busy rather than disabled while a page loads, so
+                      focus stays on it until the page attaches the window. */}
                   <Button
                     size="sm"
-                    disabled={busy}
-                    onClick={() => void loadNewer()}
+                    busy={busy}
+                    aria-disabled={busy || undefined}
+                    ref={returnFocus}
+                    onClick={busy ? undefined : () => void loadNewer()}
                   >
                     Load newer messages
                   </Button>
@@ -649,6 +665,7 @@ export function ChatThread({
                     : 'Jump to latest'
                 }
                 title="Jump to latest"
+                ref={returnFocus}
                 onClick={jumpToLatest}
               >
                 {arrivals ? plural(arrivals, 'new message') : 'Jump to latest'}

@@ -229,8 +229,26 @@ export function useChatConversation(
       result: Extract<ChatResult, { kind: 'history' }>,
       before: string | null,
       placement?: HistoryPlacement,
+      sources?: readonly ChatResult[],
     ) => {
-      const binding = historyBindings.current.get(result);
+      // A page merged from narrowed reads is a new object: it is accepted
+      // under its replies' binding when they all share one, and when its
+      // rows, cursor and missing predecessors all came from them.
+      let binding = historyBindings.current.get(result);
+      if (sources?.length) {
+        const pages = sources.filter((s) => s.kind === 'history');
+        const bound = sources.map((s) => historyBindings.current.get(s));
+        const rows = new Set(pages.flatMap((s) => s.messages));
+        const missing = new Set(pages.flatMap((s) => s.missing_predecessors));
+        binding =
+          pages.length === sources.length &&
+          bound.every((b) => b === bound[0]) &&
+          pages.some((s) => s.before === result.before) &&
+          result.messages.every((m) => rows.has(m)) &&
+          result.missing_predecessors.every((m) => missing.has(m))
+            ? bound[0]
+            : undefined;
+      }
       if (
         !binding ||
         binding.generation !== accessGenerationRef.current ||

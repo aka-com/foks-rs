@@ -64,10 +64,17 @@ export function useChatHistory(
   channel: ChatChannel,
   request: (action: ChatAction) => Promise<ChatReply>,
   revision = 0,
+  /**
+   * Accepts a page. A page merged from several replies, when the agent
+   * narrowed a range, arrives with the replies' results in `sources`, so the
+   * owner can check each of them rather than the merged object it never
+   * returned.
+   */
   onAccepted?: (
     page: Extract<ChatResult, { kind: 'history' }>,
     before: string | null,
     placement?: HistoryPlacement,
+    sources?: readonly ChatResult[],
   ) => HistoryWindow | void,
   history?: HistoryWindow | null,
   onFatal?: (channel: string) => void,
@@ -243,6 +250,7 @@ export function useChatHistory(
             : load === 'newer' && tail !== undefined
               ? BigInt(tail)
               : null;
+        let sources: ChatResult[] | undefined;
         if (floor !== null && reply.result.kind === 'history') {
           let page = reply.result;
           let low = lowest(page.messages);
@@ -262,6 +270,7 @@ export function useChatHistory(
                 : null;
             if (more.result.kind !== 'history' || next === null || next >= low)
               break;
+            sources = [...(sources ?? [reply.result]), more.result];
             page = {
               ...page,
               messages: [...more.result.messages, ...page.messages],
@@ -287,6 +296,7 @@ export function useChatHistory(
           !reply.result.messages.length
         ) {
           requested = null;
+          sources = undefined;
           reply = await request({
             action: 'history',
             channel: channel.id,
@@ -340,11 +350,16 @@ export function useChatHistory(
                 ? reached >= BigInt(requested) - 1n
                 : BigInt(publishedHead.current) > reached;
           }
-          const stored = onAccepted?.(page, requested, {
-            replace,
-            ...(load === 'newer' ? { newer: true } : {}),
-            ...(detached === undefined ? {} : { detached }),
-          });
+          const stored = onAccepted?.(
+            page,
+            requested,
+            {
+              replace,
+              ...(load === 'newer' ? { newer: true } : {}),
+              ...(detached === undefined ? {} : { detached }),
+            },
+            sources,
+          );
           if (load === 'anchor') opening.current = null;
           acceptedHere.current = true;
           // Acceptance publishes synchronously, but React may not render before a
