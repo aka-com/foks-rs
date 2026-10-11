@@ -404,6 +404,7 @@ export function PhraseSheet({
           phrase={phrase}
           positions={positions}
           unlocks="Save recovery phrase"
+          reveal="Back"
           onMatched={setWritten}
         />
       ) : phrase ? (

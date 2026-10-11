@@ -1,7 +1,8 @@
 /**
  * Testing a written recovery phrase from Devices: the row's last-tested chip,
  * the 17-field sheet with per-token checks and completion, each answer the
- * agent can give, the overdue reminder, and the recall step that replaces the
+ * agent can give, including revoked keys, a match local storage refuses, the
+ * overdue reminder, and the recall step that replaces the
  * "I have written down these words" checkbox when a phrase is created there.
  */
 
@@ -257,6 +258,101 @@ test('a matching copy records the test on this device and clears the fields', as
     rendered.queryByRole('group', { name: 'Recovery phrase not tested' }),
     null,
   );
+});
+
+test('a match that local storage refuses is not reported as recorded', async () => {
+  const rendered = await renderDevices();
+  const { dialog, fields } = await openTest(rendered);
+  const first = fields[0];
+  assert.ok(first);
+  paste(first, PHRASE);
+  const prototype = Object.getPrototypeOf(window.localStorage) as Storage;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'setItem');
+  assert.ok(descriptor);
+  prototype.setItem = () => {
+    throw new Error('Storage is full');
+  };
+  try {
+    await submit(dialog);
+  } finally {
+    Object.defineProperty(prototype, 'setItem', descriptor);
+  }
+  assert.ok(
+    await ui
+      .within(dialog)
+      .findByText('Matches recovery phrase paper-backup (orbit 4071)'),
+  );
+  assert.equal(ui.within(dialog).queryByText('Today, on this device'), null);
+  assert.ok(ui.within(dialog).getByText('Not recorded'));
+  assert.ok(
+    ui.within(dialog).getByText(/could not store the time of this test/),
+  );
+  assert.equal(window.localStorage.getItem('foks.recoveryPhraseTests'), null);
+});
+
+/** The mock bridge, answering every check for a revoked backup key. */
+function revokedBridge(bridge: Bridge): Bridge {
+  return {
+    ...bridge,
+    verifyRecoveryPhrase: async (store, phrase) => ({
+      ...(await bridge.verifyRecoveryPhrase(store, phrase)),
+      revoked: true,
+      backupAlias: null,
+    }),
+  };
+}
+
+test('a revoked match is reported, not recorded, and can be followed by another test', async () => {
+  const rendered = await renderDevices(revokedBridge);
+  const { dialog, fields } = await openTest(rendered);
+  const first = fields[0];
+  assert.ok(first);
+  paste(first, PHRASE);
+  await submit(dialog);
+  assert.ok(
+    await ui
+      .within(dialog)
+      .findByText('This is recovery phrase orbit 4071, which was revoked'),
+  );
+  assert.ok(ui.within(dialog).getByText('Revoked'));
+  assert.ok(ui.within(dialog).getByText(/Destroy this copy/));
+  assert.equal(ui.within(dialog).queryByRole('button', { name: 'Done' }), null);
+  assert.ok(ui.within(dialog).getByRole('button', { name: 'Close' }));
+  assert.equal(window.localStorage.getItem('foks.recoveryPhraseTests'), null);
+
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Test another phrase' }),
+    );
+    await new Promise((resolve) => queueMicrotask(() => resolve(undefined)));
+  });
+  const again = [
+    ...dialog.querySelectorAll<HTMLInputElement>('.phrase-test-grid input'),
+  ];
+  assert.equal(again.length, 17);
+  assert.ok(again.every((field) => field.value === ''));
+  assert.equal(document.activeElement, again[0]);
+});
+
+test('a near miss of a revoked phrase says a corrected copy cannot recover the account', async () => {
+  const rendered = await renderDevices(revokedBridge);
+  const { dialog, fields } = await openTest(rendered);
+  const tokens = PHRASE.split(' ');
+  tokens[4] = 'cage';
+  paste(fields[0], tokens.join(' '));
+  await submit(dialog);
+  assert.ok(
+    await ui
+      .within(dialog)
+      .findByText('This phrase starts like orbit 4071 but does not match it'),
+  );
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByText(/even a corrected copy cannot recover this account/),
+  );
+  assert.ok(ui.within(dialog).getByRole('button', { name: 'Edit phrase' }));
+  assert.equal(window.localStorage.getItem('foks.recoveryPhraseTests'), null);
 });
 
 test('a near miss names the phrase and keeps the fields for editing', async () => {

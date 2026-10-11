@@ -23,6 +23,8 @@ export interface RecallCheckProps {
   positions: readonly number[];
   /** The control the check unlocks, named in its status line. */
   unlocks: string;
+  /** The control that shows the phrase again, named in the intro. */
+  reveal: string;
   onMatched: (matched: boolean) => void;
 }
 
@@ -30,6 +32,7 @@ export function RecallCheck({
   phrase,
   positions,
   unlocks,
+  reveal,
   onMatched,
 }: RecallCheckProps): ReactNode {
   const id = useId();
@@ -67,7 +70,7 @@ export function RecallCheck({
     <>
       <p id={`${id}-intro`}>
         Type these from what you wrote down, not from memory. The phrase stays
-        hidden while you check; Back shows it again.
+        hidden while you check; select <b>{reveal}</b> to see it again.
       </p>
       <div
         className="inset recall-check"

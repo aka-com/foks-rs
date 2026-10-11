@@ -80,6 +80,7 @@ export function RecoveryStep({
         phrase={recoveryPhrase}
         positions={positions}
         unlocks={checkpoint.managedLocal ? 'Start using FOKS' : 'Done'}
+        reveal={checkpoint.managedLocal ? 'Show the phrase again' : 'Back'}
         onMatched={setPhraseWritten}
       />
     ) : null;

@@ -136,7 +136,7 @@ test('a phrase is never tested, then current, then overdue until snoozed or test
   assert.deepEqual(status(), { state: 'never', snoozed: false });
   assert.ok(recoveryPhraseTestDue(status()));
 
-  recordRecoveryPhraseTest(KEY, now);
+  assert.equal(recordRecoveryPhraseTest(KEY, now), true);
   assert.deepEqual(status(), { state: 'current', testedAt: now });
   assert.ok(!recoveryPhraseTestDue(status()));
   // The record is per backup key.

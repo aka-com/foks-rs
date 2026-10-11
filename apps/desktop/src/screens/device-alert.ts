@@ -16,14 +16,15 @@ import {
 import type { recoveryPhraseTests } from '../recovery-phrase-tests';
 
 export interface DeviceAlertSnapshot {
-  recoveryPhrases: ReadonlyMap<StoreRef, boolean>;
-  /** Each account's recovery-phrase enrollments, as the keys list answered. */
+  /**
+   * Each account's recovery-phrase enrollments, as the keys list answered; an
+   * empty list means the account has none.
+   */
   phraseLists: ReadonlyMap<StoreRef, readonly BackupEnrollment[]>;
   offers: ReadonlySet<StoreRef>;
 }
 
 const EMPTY: DeviceAlertSnapshot = {
-  recoveryPhrases: new Map(),
   phraseLists: new Map(),
   offers: new Set(),
 };
@@ -50,10 +51,8 @@ export class DeviceAlertRegistry {
     store: StoreRef,
     backups: readonly BackupEnrollment[],
   ): void {
-    const hasRecoveryPhrase = backups.length > 0;
     const listed = this.snapshot.phraseLists.get(store);
     if (
-      this.snapshot.recoveryPhrases.get(store) === hasRecoveryPhrase &&
       listed !== undefined &&
       listed.length === backups.length &&
       listed.every(
@@ -63,25 +62,17 @@ export class DeviceAlertRegistry {
       )
     )
       return;
-    const recoveryPhrases = new Map(this.snapshot.recoveryPhrases);
-    recoveryPhrases.set(store, hasRecoveryPhrase);
     const phraseLists = new Map(this.snapshot.phraseLists);
     phraseLists.set(store, [...backups]);
-    this.snapshot = { ...this.snapshot, recoveryPhrases, phraseLists };
+    this.snapshot = { ...this.snapshot, phraseLists };
     this.publish();
   }
 
   forgetRecoveryPhrase(store: StoreRef): void {
-    if (
-      !this.snapshot.recoveryPhrases.has(store) &&
-      !this.snapshot.phraseLists.has(store)
-    )
-      return;
-    const recoveryPhrases = new Map(this.snapshot.recoveryPhrases);
-    recoveryPhrases.delete(store);
+    if (!this.snapshot.phraseLists.has(store)) return;
     const phraseLists = new Map(this.snapshot.phraseLists);
     phraseLists.delete(store);
-    this.snapshot = { ...this.snapshot, recoveryPhrases, phraseLists };
+    this.snapshot = { ...this.snapshot, phraseLists };
     this.publish();
   }
 
@@ -131,8 +122,9 @@ export function devicesAlertSummary(
   const phrases: string[] = [];
   for (const store of accountStores(snapshot)) {
     if (state.offers.has(store.id)) offer = true;
-    if (state.recoveryPhrases.get(store.id) === false) missingKey = true;
-    for (const backup of state.phraseLists.get(store.id) ?? []) {
+    const backups = state.phraseLists.get(store.id);
+    if (backups?.length === 0) missingKey = true;
+    for (const backup of backups ?? []) {
       const status = recoveryPhraseTestStatus(tests, backup.backupId, now);
       if (!recoveryPhraseTestDue(status)) continue;
       phrases.push(

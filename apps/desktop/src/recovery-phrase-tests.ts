@@ -63,12 +63,14 @@ function parse(raw: string | null): Stored {
   }
 }
 
-function writeAll(value: Stored): void {
+/** Whether the records were stored; blocked or full storage refuses them. */
+function writeAll(value: Stored): boolean {
   try {
-    if (typeof window !== 'undefined')
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    if (typeof window === 'undefined') return false;
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    return true;
   } catch {
-    return;
+    return false;
   }
 }
 
@@ -95,19 +97,24 @@ export function subscribeRecoveryPhraseTests(listener: () => void): () => void {
 function update(
   backupId: string,
   change: (record: RecoveryPhraseTestRecord) => RecoveryPhraseTestRecord,
-): void {
+): boolean {
   const all = { ...recoveryPhraseTests() };
   all[backupId] = change(all[backupId] ?? {});
-  writeAll(all);
+  const stored = writeAll(all);
   for (const listener of listeners) listener();
+  return stored;
 }
 
-/** Records that a typed copy matched this backup key; clears any snooze. */
+/**
+ * Records that a typed copy matched this backup key; clears any snooze.
+ * Returns whether the record was stored, so a caller does not report a test
+ * that the next read will not find.
+ */
 export function recordRecoveryPhraseTest(
   backupId: string,
   at = Date.now(),
-): void {
-  update(backupId, () => ({ testedAt: at }));
+): boolean {
+  return update(backupId, () => ({ testedAt: at }));
 }
 
 /** Hides this phrase's reminder for {@link RECOVERY_SNOOZE_DAYS}. */

@@ -176,7 +176,7 @@ test('an ungranted device capability does not invent a missing backup key', asyn
   assert.equal(
     deviceAlertRegistry(observed)
       .getSnapshot()
-      .recoveryPhrases.has('acct:personal'),
+      .phraseLists.has('acct:personal'),
     false,
   );
   assert.equal(

@@ -1717,28 +1717,6 @@
   }
 }
 
-.check {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  font-size: 13.5px;
-}
-
-.check .bx {
-  display: grid;
-  place-items: center;
-  width: 17px;
-  height: 17px;
-  border: 1px solid var(--line-field);
-  border-radius: 4px;
-}
-
-.check.on .bx {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--main-surface);
-}
-
 .first-run-main .checklist .fr {
   align-items: center;
 }

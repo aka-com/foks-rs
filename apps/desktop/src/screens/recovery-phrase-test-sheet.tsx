@@ -89,6 +89,8 @@ export function RecoveryPhraseTestSheet({
   // The first two tokens of the copy last tested, for a result that names
   // them; they are the phrase's public name, not secret material.
   const [testedName, setTestedName] = useState('');
+  // Whether a match's time reached local storage on this device.
+  const [recorded, setRecorded] = useState(false);
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
   useSheetGuard(
     busy
@@ -228,7 +230,7 @@ export function RecoveryPhraseTestSheet({
       setTestedName(name);
       setResult(check);
       if (check.matchedBackupId && !check.revoked) {
-        recordRecoveryPhraseTest(check.matchedBackupId);
+        setRecorded(recordRecoveryPhraseTest(check.matchedBackupId));
         // A matched copy has done its job; nothing typed is kept.
         setTokens(EMPTY);
         setLeft(new Set());
@@ -322,6 +324,7 @@ export function RecoveryPhraseTestSheet({
         <RecoveryPhraseResult
           check={result}
           testedName={testedName}
+          recorded={recorded}
           username={username}
           backups={backups}
         />
@@ -457,11 +460,14 @@ export function RecoveryPhraseTestSheet({
 function RecoveryPhraseResult({
   check,
   testedName,
+  recorded,
   username,
   backups,
 }: {
   check: RecoveryPhraseCheck;
   testedName: string;
+  /** Whether a match's time was stored on this device. */
+  recorded: boolean;
   username: string;
   backups: readonly BackupEnrollment[];
 }): ReactNode {
@@ -480,11 +486,16 @@ function RecoveryPhraseResult({
           </div>
           <div className="fr">
             <span className="k">Last tested</span>
-            <span className="v">Today, on this device</span>
+            <span className="v">
+              {recorded ? 'Today, on this device' : 'Not recorded'}
+            </span>
           </div>
         </div>
         <p className="phrase-test-hint">
           The phrase you typed has been cleared.
+          {recorded
+            ? ''
+            : ' This device could not store the time of this test, so Devices still shows the previous result.'}
         </p>
       </>
     );

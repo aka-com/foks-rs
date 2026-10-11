@@ -457,6 +457,40 @@ test('the recovery phrase is saved only after three tokens match the written cop
   assert.deepEqual(committed, [phrase]);
 });
 
+test('the local recovery step names its own control for showing the phrase again', async () => {
+  const h = await harness();
+  const { phrase } = await h.bridge.prepareOwnerBackup('personal', 'a', 'b');
+  const rendered = h.render(h.checkpoint);
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
+  );
+  const check = await rendered.view.findByRole('button', {
+    name: 'Check your copy',
+  });
+  await ui.waitFor(() =>
+    assert.equal((check as HTMLButtonElement).disabled, false),
+  );
+  ui.fireEvent.click(check);
+  // The pane's own Back leaves the step, so the intro names the link instead.
+  assert.equal(rendered.view.queryByText(/select Back/), null);
+  const intro = rendered.view.getByText(/The phrase stays hidden/);
+  assert.match(
+    intro.textContent ?? '',
+    /select Show the phrase again to see it again/,
+  );
+  const start = rendered.view.getByRole('button', { name: 'Start using FOKS' });
+  assert.equal((start as HTMLButtonElement).disabled, true);
+  fillRecall(document.body, phrase);
+  assert.equal((start as HTMLButtonElement).disabled, false);
+
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Show the phrase again' }),
+  );
+  assert.ok(document.querySelector('.words'));
+  assert.equal(document.querySelector('.recall-check'), null);
+  assert.equal((start as HTMLButtonElement).disabled, true);
+});
+
 test('multiple groups refresh the catalog and preserve a selected unavailable vault across restart', async () => {
   const h = await harness();
   const groups = ['one', 'two'].map((alias, index) => ({
