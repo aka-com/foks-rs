@@ -151,15 +151,17 @@ pub use foks_agent_proto::data::{
 
 impl crate::CheckedProfileSession<'_> {
     /// Reports whether data-write admission for `alias` would accept new
-    /// handles now. Reads only; it neither anchors nor advances the clock.
+    /// handles now. Reads only local state: it neither anchors nor advances
+    /// the clock, and it takes the account identity from the pinned host and
+    /// the stored credential, as [`Self::check_data_identity`] does, rather
+    /// than authenticating to the server.
     pub fn adapter_clock_status(
         &self,
         alias: &str,
         vault: &mut crate::AccountVault<'_>,
     ) -> Result<AdapterClockStatus> {
-        let (host_id, user_id) = self.data_identity(alias, vault)?;
-        let host = crate::entity_id_from_hex(&host_id)?;
-        let user = crate::entity_id_from_hex(&user_id)?;
+        let user = vault.account(alias)?.credential.uid.clone();
+        let host = self.pinned_host()?.host_id().clone();
         let hard = foks_client_db::HardStateStore::open(&self.paths.hard_database)?;
         let state = hard.adapter_clock(host.as_bytes(), user.as_bytes())?;
         let sample = self.adapter_clock.sample();
@@ -169,14 +171,20 @@ impl crate::CheckedProfileSession<'_> {
             .as_secs();
         let admission = match (&state, sample) {
             (None, Ok(_)) => AdapterClockAdmission::Unanchored,
-            (Some(_), Ok(sample))
-                if hard.adapter_clock_admits(host.as_bytes(), user.as_bytes(), sample)? =>
-            {
-                AdapterClockAdmission::Trusted
+            (Some(_), Ok(sample)) => {
+                match hard.validated_adapter_clock(host.as_bytes(), user.as_bytes(), sample)? {
+                    None => AdapterClockAdmission::Paused,
+                    Some(next) if next.validated_time_floor < next.reject_issued_before => {
+                        AdapterClockAdmission::Behind
+                    }
+                    Some(_) => AdapterClockAdmission::Trusted,
+                }
             }
-            _ => AdapterClockAdmission::Paused,
+            (_, Err(_)) => AdapterClockAdmission::Paused,
         };
         Ok(AdapterClockStatus {
+            host_id: crate::hex(host.as_bytes()),
+            user_id: crate::hex(user.as_bytes()),
             admission,
             local_time,
             validated_time_floor: state.as_ref().map(|state| state.validated_time_floor),
@@ -372,9 +380,43 @@ mod tests {
         let paused = f.run(|s, v, _| s.adapter_clock_status("owner", v));
         assert_eq!(paused.admission, AdapterClockAdmission::Paused);
         assert_eq!(paused.validated_time_floor, Some(now - 3_600));
+        // The status names the account from local state alone, and it is the
+        // identity the authenticated scope reports.
+        let identity = f.run(|s, v, _| s.data_identity("owner", v));
+        assert_eq!((paused.host_id, paused.user_id), identity);
         let preview = f.run(|s, v, _| s.adapter_clock_preview("owner", now, v));
         f.run(|s, v, _| s.reanchor_adapter_clock("owner", now, &preview.confirmation_digest, v));
         assert_eq!(admission(&f), AdapterClockAdmission::Trusted);
+        // A clock that ran two days ahead expired an unseen handle and left a
+        // watermark a day past the real time. Confirming the current time
+        // restores trust, but new handles wait for the watermark.
+        f.run(|s, v, _| {
+            let (host, user) = s.data_identity("owner", v)?;
+            let (host, user) = (entity_id_from_hex(&host)?, entity_id_from_hex(&user)?);
+            let mut hard = foks_client_db::HardStateStore::open(&s.paths.hard_database)?;
+            let old = hard
+                .adapter_clock(host.as_bytes(), user.as_bytes())?
+                .unwrap();
+            let ahead = AdapterTimeSample {
+                wall_seconds: now + 172_800,
+                ..s.adapter_clock.sample()?
+            };
+            hard.reanchor_adapter_clock(host.as_bytes(), user.as_bytes(), &old, ahead)?;
+            assert!(hard
+                .check_adapter_admission(
+                    host.as_bytes(),
+                    user.as_bytes(),
+                    SubmissionHandle::new(now, [9; 16]),
+                    ahead,
+                )
+                .is_err());
+            Ok(())
+        });
+        let preview = f.run(|s, v, _| s.adapter_clock_preview("owner", now, v));
+        f.run(|s, v, _| s.reanchor_adapter_clock("owner", now, &preview.confirmation_digest, v));
+        let behind = f.run(|s, v, _| s.adapter_clock_status("owner", v));
+        assert_eq!(behind.admission, AdapterClockAdmission::Behind);
+        assert_eq!(behind.reject_issued_before, Some(now + 86_400));
     }
 
     #[test]

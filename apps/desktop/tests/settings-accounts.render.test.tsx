@@ -1407,7 +1407,7 @@ test('a paused adapter clock shows its band until the computer’s time is confi
         adapterClock: async (profile, account, confirm) => {
           calls.push([profile, account, confirm]);
           if (confirm) admission = 'trusted';
-          return { admission, localTime: 1_700_000_000 };
+          return { admission, localTime: 1_700_000_000, resumesAt: null };
         },
       }),
     },
@@ -1438,10 +1438,54 @@ test('a paused adapter clock shows its band until the computer’s time is confi
   );
 });
 
+test('a clock behind its watermark names when writes resume and offers no confirmation', async () => {
+  const calls: boolean[] = [];
+  const resumesAt = 1_700_086_400;
+  const { rendered } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    undefined,
+    {
+      decorate: (bridge) => ({
+        ...bridge,
+        adapterClock: async (_profile, _account, confirm) => {
+          calls.push(confirm);
+          return {
+            admission: 'behind' as const,
+            localTime: 1_700_000_000,
+            resumesAt,
+          };
+        },
+      }),
+    },
+  );
+  await ui.act(async () => {
+    await Promise.resolve();
+  });
+  const resumes = new Date(resumesAt * 1_000).toLocaleString();
+  const band = rendered.getByRole('group', {
+    name: `Assistant writes paused until ${resumes}.`,
+  });
+  assert.match(
+    band.textContent ?? '',
+    /confirming the time does not change this/,
+  );
+  assert.equal(rendered.queryByRole('button', { name: 'Confirm time' }), null);
+  assert.deepEqual(calls, [false]);
+});
+
 test('a trusted or unreadable adapter clock draws no band', async () => {
   for (const adapterClock of [
-    async () => ({ admission: 'trusted' as const, localTime: 1 }),
-    async () => ({ admission: 'unanchored' as const, localTime: 1 }),
+    async () => ({
+      admission: 'trusted' as const,
+      localTime: 1,
+      resumesAt: null,
+    }),
+    async () => ({
+      admission: 'unanchored' as const,
+      localTime: 1,
+      resumesAt: null,
+    }),
     async () => {
       throw new Error('agent unavailable');
     },

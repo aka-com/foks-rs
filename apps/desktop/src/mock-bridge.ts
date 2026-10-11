@@ -1106,6 +1106,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       return {
         admission: 'trusted',
         localTime: Math.floor(Date.now() / 1_000),
+        resumesAt: null,
       };
     },
     sso: async (profile, accountAlias, action) => {

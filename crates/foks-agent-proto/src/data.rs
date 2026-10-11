@@ -209,11 +209,21 @@ pub enum AdapterClockAdmission {
     /// New writes and pruning fail with `clock-untrusted` until a repair
     /// re-anchors the clock at a confirmed time.
     Paused,
+    /// The clock is trusted but behind `reject_issued_before`, a watermark
+    /// committed while an earlier clock ran ahead. New writes fail with
+    /// `clock-untrusted` until the clock reaches it; a repair cannot bring
+    /// that forward, because it only accepts the computer's current time.
+    Behind,
 }
 
+/// Read from local state only, so a status check never waits on the server.
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdapterClockStatus {
+    /// The account the status describes, as in [`DataScope`], so a caller
+    /// bound to one identity can detect that the alias now names another.
+    pub host_id: String,
+    pub user_id: String,
     pub admission: AdapterClockAdmission,
     /// The computer's wall time when the agent checked, in Unix seconds.
     pub local_time: u64,

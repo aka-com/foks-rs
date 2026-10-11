@@ -150,6 +150,19 @@ fn adapter_unseen_expiry_is_irreversible_without_any_pruned_rows() {
     assert_eq!(clock.reject_issued_before, 300_000 - MAX_NEW_SUBMISSION_AGE_SECONDS);
     db.reanchor_adapter_clock(&op.host_id, &op.scope_id, &clock, adapter_time(100_000, 0))
         .unwrap();
+    // The repaired clock validates, but its floor stays behind the watermark,
+    // so a status read can tell this apart from an untrusted clock.
+    let validated = db
+        .validated_adapter_clock(&op.host_id, &op.scope_id, adapter_time(100_010, 10))
+        .unwrap()
+        .unwrap();
+    assert_eq!(validated.validated_time_floor, 100_010);
+    assert_eq!(validated.reject_issued_before, clock.reject_issued_before);
+    assert_eq!(
+        db.validated_adapter_clock(&op.host_id, &op.scope_id, adapter_time(103_600, 10))
+            .unwrap(),
+        None
+    );
     assert!(matches!(
         db.record_adapter_submission(handle, &op, adapter_time(100_000, 0)),
         Err(Error::AdapterExpired)

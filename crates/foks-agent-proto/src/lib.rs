@@ -1311,12 +1311,14 @@ mod tests {
         )
         .is_err());
         let status: data::AdapterClockStatus = serde_json::from_value(serde_json::json!({
-            "admission": "paused",
+            "host_id": "01",
+            "user_id": "02",
+            "admission": "behind",
             "local_time": 1_700_000_000u64,
             "validated_time_floor": 1_699_990_000u64,
-            "reject_issued_before": 0,
+            "reject_issued_before": 1_700_003_600u64,
         }))
         .unwrap();
-        assert_eq!(status.admission, data::AdapterClockAdmission::Paused);
+        assert_eq!(status.admission, data::AdapterClockAdmission::Behind);
     }
 }

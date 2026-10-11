@@ -9,11 +9,14 @@ import { Band } from './notice';
 import { Button } from './button';
 
 /**
- * Drawn only while the agent reports the account's adapter clock as paused:
- * its stored anchor disagrees with this computer's clock beyond what elapsed
- * time explains. Confirming re-anchors the clock at the computer's current
- * time; MCP tools cannot do this themselves. A failed status read draws
- * nothing, because the band is advisory and writes report their own refusal.
+ * Drawn only while the agent reports that the account's adapter clock refuses
+ * new writes. When paused, its stored anchor disagrees with this computer's
+ * clock beyond what elapsed time explains; confirming re-anchors the clock at
+ * the computer's current time, which MCP tools cannot do themselves. When
+ * behind, the clock is trusted but has not reached a watermark committed
+ * while an earlier clock ran ahead; only waiting resumes writes, so the band
+ * offers no action. A failed status read draws nothing, because the band is
+ * advisory and writes report their own refusal.
  */
 export function AssistantClockBand({
   bridge,
@@ -43,6 +46,16 @@ export function AssistantClockBand({
       current = false;
     };
   }, [bridge, profile, account]);
+  if (clock?.admission === 'behind' && clock.resumesAt !== null) {
+    const resumes = new Date(clock.resumesAt * 1_000).toLocaleString();
+    return (
+      <Band label={`Assistant writes paused until ${resumes}.`}>
+        While this computer’s clock ran ahead, earlier assistant writes to this
+        account were permanently expired. MCP assistants can write again when
+        the clock reaches {resumes}; confirming the time does not change this.
+      </Band>
+    );
+  }
   if (clock?.admission !== 'paused') return null;
   const confirm = async () => {
     if (busy) return;

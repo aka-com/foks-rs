@@ -117,13 +117,20 @@ records the kernel boot identifier, so an agent restarted within the same boot
 checks the elapsed time across the restart. A wall-clock jump over five minutes
 within one process, or a restart more than 24 hours beyond the last trusted floor
 that the boot clock does not account for, blocks new admission and pruning with
-`clock-untrusted`. Retained status and recovery still work, and while admission is
-paused `foks_status` adds `"writes_paused": true` and a repair instruction to its
-result. First use establishes the anchor.
+`clock-untrusted`. A trusted clock that is still behind the irreversible
+watermark also refuses new handles with `clock-untrusted` until it reaches the
+watermark; this happens only after an earlier clock ran more than 24 hours
+ahead, and no repair shortens it. Retained status and recovery still work. While
+admission is refused, `foks_status` adds `"writes_paused": true` to its result,
+with `"writes_resume_at"` (Unix seconds) in the watermark case, and explains
+what lifts the pause; `clock-untrusted` refusals carry the same explanation.
+The agent reads this clock status from local state only. First use establishes
+the anchor.
 
 Repair runs in the resident agent and is not an MCP tool: a person confirms the
-time in the desktop app's account settings or with two CLI commands, which start
-the agent if needed:
+time in the desktop app's account settings or with the CLI, which starts the
+agent if needed. `retention clock-status` reports the account's admission;
+`retention reanchor` previews the current time and then confirms it:
 
 ```sh
 foks-rs --state-dir /absolute/client/state retention clock-status \
@@ -137,12 +144,15 @@ foks-rs --state-dir /absolute/client/state retention reanchor \
 
 The preview proposes the current time unless `--unix-seconds` names one; the
 confirmation repeats the preview's `proposed_wall` and `confirmation_digest`. The
-agent anchors the repaired clock to its own monotonic clock, so it refuses a
-proposed time more than five minutes from the computer's clock: correct the
-system clock first if it is wrong. Repair preserves the irreversible watermark and
-performs no admission or pruning. The restriction to the CLI and the desktop
-applies to the MCP tool list; the agent socket accepts the repair from any
-process of the same user, which can run the CLI anyway.
+agent pairs the confirmed time with its own monotonic clock at confirmation, so
+any difference from the computer's clock reduces the five-minute skew that later
+writes may use. It refuses a preview more than five minutes from the computer's
+clock and a confirmation more than one minute from it: confirm within a minute of
+the preview, or preview again, and correct the system clock first if it is wrong.
+Repair preserves the irreversible watermark and performs no admission or pruning.
+The restriction to the CLI and the desktop applies to the MCP tool list; the
+agent socket accepts the repair from any process of the same user, which can run
+the CLI anyway.
 `retention status` reports redacted resident maintenance counters. Maintenance runs
 at agent startup and every minute on an independent single-flight lane, rotating
 profiles and skipping busy profile locks without making network requests.
@@ -162,10 +172,10 @@ failures, reclaimed bytes and deferred work. Pinned Go-host upload retention rem
 that host's responsibility; these changes add no remote FOKS methods.
 
 The current hard-state schema is 41 and the agent IPC protocol is 34. Opening a
-supported schema-38, schema-39 or schema-40 database upgrades it to schema 41; other older
-development schemas are rejected. Upgrade the CLI and resident agent together,
-and restart the agent so their IPC versions match. This does not convert legacy
-submission IDs or make pending operations eligible for replay.
+supported schema-38, schema-39 or schema-40 database upgrades it to schema 41;
+other older development schemas are rejected. Upgrade the CLI and resident agent
+together, and restart the agent so their IPC versions match. This does not
+convert legacy submission IDs or make pending operations eligible for replay.
 
 The server advertises MCP 2025-11-25 and negotiates 2025-06-18, 2025-03-26 and
 2024-11-05 through the official pinned Rust SDK. The ten upstream tool names and

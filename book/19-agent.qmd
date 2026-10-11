@@ -154,10 +154,10 @@ two SQLite databases with different application IDs, schemas, and rules.
 | | Hard state | Soft state |
 |---|---|---|
 | Application ID | `0x464f4b53` ("FOKS") | `0x464b5653` ("FKVS") |
-| Schema version | 40 | 6 |
+| Schema version | 41 | 6 |
 | Holds | verified public bytes, monotonic pins, crash-recovery journals, the submission ledger | decrypted KV projections, chat inbox rows, known stores, discovery hints |
 | Contains secrets | no | yes (plaintext cache) |
-| On schema mismatch | migrate supported versions 38/39 to 40; refuse other versions | refuse and name the recovery path: delete and rebuild |
+| On schema mismatch | migrate supported versions 38 through 40 to 41; refuse other versions | refuse and name the recovery path: delete and rebuild |
 | Losing it | a security event | a re-download |
 
 **Hard state** is evidence: signed chain links, Merkle roots, the exact

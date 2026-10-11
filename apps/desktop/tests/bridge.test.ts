@@ -3323,20 +3323,25 @@ test('mock catalogs retain empty folder identities through a rename', async () =
   );
 });
 
-test('adapter clock status decodes only its own two fields', async () => {
+test('adapter clock status decodes only its own three fields', async () => {
   const { decodeAdapterClock } = await import('../src/adapter-clock-contract');
-  assert.deepEqual(
-    decodeAdapterClock({ admission: 'paused', localTime: 1_700_000_000 }),
-    { admission: 'paused', localTime: 1_700_000_000 },
-  );
+  for (const status of [
+    { admission: 'paused', localTime: 1_700_000_000, resumesAt: null },
+    { admission: 'behind', localTime: 1_700_000_000, resumesAt: 1_700_086_400 },
+  ])
+    assert.deepEqual(decodeAdapterClock(status), status);
   for (const value of [
     null,
     [],
-    { admission: 'open', localTime: 1 },
-    { admission: 'paused', localTime: -1 },
-    { admission: 'paused', localTime: 1.5 },
-    { admission: 'paused' },
-    { admission: 'paused', localTime: 1, digest: 'ab' },
+    { admission: 'open', localTime: 1, resumesAt: null },
+    { admission: 'paused', localTime: -1, resumesAt: null },
+    { admission: 'paused', localTime: 1.5, resumesAt: null },
+    { admission: 'paused', resumesAt: null },
+    { admission: 'paused', localTime: 1 },
+    { admission: 'paused', localTime: 1, resumesAt: 2 },
+    { admission: 'behind', localTime: 1, resumesAt: null },
+    { admission: 'behind', localTime: 1, resumesAt: -2 },
+    { admission: 'paused', localTime: 1, resumesAt: null, digest: 'ab' },
   ])
     assert.throws(() => decodeAdapterClock(value), JSON.stringify(value));
   const bridge = mockBridge(FIXTURE);

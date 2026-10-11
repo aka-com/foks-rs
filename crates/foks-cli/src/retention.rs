@@ -19,12 +19,14 @@ pub enum RetentionCommand {
         profile: String,
         #[arg(long)]
         account_alias: String,
-        /// The time to confirm; the agent refuses one more than five minutes
-        /// from its own clock. Defaults to now for a preview.
+        /// The time to confirm. The agent refuses a preview more than five
+        /// minutes from its own clock and a confirmation more than one minute
+        /// from it. Defaults to now for a preview.
         #[arg(long)]
         unix_seconds: Option<u64>,
         /// Exact digest printed by the preview, with the preview's
-        /// `proposed_wall` as `--unix-seconds`.
+        /// `proposed_wall` as `--unix-seconds`. Confirm within one minute of
+        /// the preview; after that, preview again.
         #[arg(long, requires = "unix_seconds")]
         confirm_digest: Option<String>,
     },

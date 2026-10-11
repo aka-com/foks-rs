@@ -469,7 +469,10 @@ reports that the account's adapter clock refuses new MCP writes (its anchor
 disagrees with the computer's clock beyond the elapsed time it measured), the
 page draws "Assistant writes paused: confirm this computer's time." with the
 computer's current time and a Confirm time action; the native side re-anchors
-the clock at the time it reads itself, so the renderer never supplies one. An account's mark is the
+the clock at the time it reads itself, so the renderer never supplies one.
+When the clock is trusted but behind a watermark left by an earlier clock that
+ran ahead, the band instead names the time writes resume and offers no action,
+because confirming the time cannot bring it forward. An account's mark is the
 initial of the username, over a color derived from it, on the account band
 and in the switcher: those surfaces name the account by the username the
 server knows it by, while a store elsewhere keeps its `GroupMark`. There is no

@@ -37,7 +37,7 @@ impl AgentBackend {
         .map_err(|error| {
             format!(
                 "{}; submission_id={id}; inspect foks_pending or foks_status before another write",
-                super::with_clock_guidance(error, false)
+                self.explain_clock_refusal(error, cancelled)
             )
         })?;
         if prepared.submission_id != id {
@@ -76,7 +76,7 @@ impl AgentBackend {
                 ResponseResult::Error { code, .. } => {
                     return Err(format!(
                         "{}; inspect submission_id={id}",
-                        error_code_name(code)
+                        self.explain_clock_refusal(error_code_name(code), cancelled)
                     ))
                 }
             }
@@ -86,7 +86,12 @@ impl AgentBackend {
                 Operation::ExecuteDataWrite { submission },
                 cancelled,
             )
-            .map_err(|error| format!("{error}; submission_id={id}"))?
+            .map_err(|error| {
+                format!(
+                    "{}; submission_id={id}",
+                    self.explain_clock_refusal(error, cancelled)
+                )
+            })?
         };
         if result.submission_id != id {
             return Err("agent changed submission identity".into());
@@ -190,22 +195,27 @@ mod tests {
 
     #[test]
     fn clock_refusals_explain_the_pause_and_the_repair_outside_mcp() {
-        let refused = super::super::with_clock_guidance(
+        use super::super::{with_clock_guidance, ClockPause, CLOCK_PAUSED};
+        let refused = with_clock_guidance(
             format!(
                 "{}: adapter clock is untrusted",
                 error_code_name(foks_agent_proto::ErrorCode::ClockUntrusted)
             ),
-            false,
+            Some(ClockPause::Untrusted),
         );
-        assert!(refused.ends_with(super::super::CLOCK_PAUSED), "{refused}");
+        assert!(refused.ends_with(CLOCK_PAUSED), "{refused}");
         assert!(refused.contains("foks-rs retention reanchor"));
         assert_eq!(
-            super::super::with_clock_guidance("retention-full: full".into(), false),
+            with_clock_guidance("retention-full: full".into(), None),
             "retention-full: full"
         );
-        assert!(
-            super::super::with_clock_guidance("profile-busy: busy".into(), true)
-                .ends_with(super::super::CLOCK_PAUSED)
+        // Behind the watermark, a repair cannot help, so the explanation
+        // names the time instead of the repair.
+        let behind = with_clock_guidance(
+            "clock-untrusted: adapter clock is untrusted".into(),
+            Some(ClockPause::Behind(1_700_086_400)),
         );
+        assert!(behind.contains("until Unix time 1700086400"), "{behind}");
+        assert!(!behind.contains("retention reanchor"), "{behind}");
     }
 }

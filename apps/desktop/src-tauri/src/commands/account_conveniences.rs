@@ -227,6 +227,20 @@ pub struct AdapterClockDto {
     pub admission: foks_agent_proto::data::AdapterClockAdmission,
     /// The computer's wall time when the agent checked, in Unix seconds.
     pub local_time: u64,
+    /// When admission is `behind`, the Unix time at which writes resume.
+    pub resumes_at: Option<u64>,
+}
+
+impl From<foks_agent_proto::data::AdapterClockStatus> for AdapterClockDto {
+    fn from(status: foks_agent_proto::data::AdapterClockStatus) -> Self {
+        Self {
+            admission: status.admission,
+            local_time: status.local_time,
+            resumes_at: (status.admission == foks_agent_proto::data::AdapterClockAdmission::Behind)
+                .then_some(status.reject_issued_before)
+                .flatten(),
+        }
+    }
 }
 
 fn adapter_clock_status(
@@ -319,10 +333,7 @@ pub async fn adapter_clock_request(
                 })
                 .map_err(AgentError::from_desktop)?,
         )?;
-        Ok::<_, AgentError>(AdapterClockDto {
-            admission: status.admission,
-            local_time: status.local_time,
-        })
+        Ok::<_, AgentError>(AdapterClockDto::from(status))
     })
     .await
     .map_err(|_| {
@@ -379,18 +390,25 @@ mod adapter_clock_tests {
     #[test]
     fn status_serializes_for_the_renderer() {
         let status = adapter_clock_status(serde_json::json!({
+            "host_id": "01", "user_id": "02",
             "admission": "paused", "local_time": 100,
-            "validated_time_floor": 90, "reject_issued_before": null,
+            "validated_time_floor": 90, "reject_issued_before": 50,
         }))
         .unwrap();
         assert_eq!(status.admission, AdapterClockAdmission::Paused);
         assert_eq!(
-            serde_json::to_value(AdapterClockDto {
-                admission: status.admission,
-                local_time: status.local_time,
-            })
-            .unwrap(),
-            serde_json::json!({"admission": "paused", "localTime": 100})
+            serde_json::to_value(AdapterClockDto::from(status)).unwrap(),
+            serde_json::json!({"admission": "paused", "localTime": 100, "resumesAt": null})
+        );
+        let behind = adapter_clock_status(serde_json::json!({
+            "host_id": "01", "user_id": "02",
+            "admission": "behind", "local_time": 100,
+            "validated_time_floor": 100, "reject_issued_before": 3_700,
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(AdapterClockDto::from(behind)).unwrap(),
+            serde_json::json!({"admission": "behind", "localTime": 100, "resumesAt": 3_700})
         );
         assert!(adapter_clock_status(serde_json::json!({"admission": "open"})).is_err());
     }

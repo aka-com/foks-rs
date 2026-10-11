@@ -201,14 +201,21 @@ with the same clock however long it was. A wall-clock jump of more than
 five minutes within one process, or a restart more than 24 hours past the
 last trusted floor that the boot clock does not account for, blocks new
 admission with `clock-untrusted` while status and recovery continue to
-work, and `foks_status` reports that writes are paused. The repair is
-deliberately not an MCP tool, so an assistant cannot vouch for the clock it
-is being judged by: a person confirms the computer's current time in the
-desktop app's account settings, or with the two-step `foks-rs retention
-reanchor` command. Both send the agent a preview, which returns a digest
-of the displayed clock state, and then a confirmation carrying that
-digest; the agent re-anchors to its own monotonic clock and keeps the
-rejection watermark.
+work, and `foks_status` reports that writes are paused. The agent reads
+that status from local state, without contacting the server, so the check
+stays available offline. The repair is deliberately not an MCP tool, so an
+assistant cannot vouch for the clock it is being judged by: a person
+confirms the computer's current time in the desktop app's account
+settings, or with the two-step `foks-rs retention reanchor` command. Both
+send the agent a preview, which returns a digest of the displayed clock
+state, and then a confirmation carrying that digest. The agent pairs the
+confirmed time with its own monotonic reading at confirmation, so it
+accepts a confirmation only within one minute of its clock; a staler time
+would consume the skew that later writes rely on. The repair keeps the
+rejection watermark, so a clock that had run more than a day ahead leaves
+new writes refused, even after a repair, until the corrected clock reaches
+that watermark; status reports this case separately, with the time writes
+resume.
 
 Cancellation is honored but does not undo remote work; a cancelled request
 answers "check mutation status before retrying." An interrupted upload may

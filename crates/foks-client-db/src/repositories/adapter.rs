@@ -157,18 +157,21 @@ impl HardStateStore {
         clock::read(&self.connection, host, user)
     }
 
-    /// Whether admission would accept new handles at `sample`, without writing.
-    /// An account with no anchor admits: its first admission establishes one.
-    pub fn adapter_clock_admits(
+    /// The clock state admission would hold at `sample`, without writing, or
+    /// `None` when admission would refuse the sample as untrusted. An account
+    /// with no anchor validates: its first admission establishes one. A
+    /// validated floor below `reject_issued_before` still refuses new handles
+    /// until the clock reaches that watermark.
+    pub fn validated_adapter_clock(
         &self,
         host: &[u8],
         user: &[u8],
         sample: AdapterTimeSample,
-    ) -> Result<bool> {
+    ) -> Result<Option<AdapterClockState>> {
         let old = clock::read(&self.connection, host, user)?;
         match clock::validate(old.as_ref(), sample) {
-            Ok(state) => Ok(state.validated_time_floor >= state.reject_issued_before),
-            Err(Error::AdapterClockUntrusted) => Ok(false),
+            Ok(state) => Ok(Some(state)),
+            Err(Error::AdapterClockUntrusted) => Ok(None),
             Err(error) => Err(error),
         }
     }
