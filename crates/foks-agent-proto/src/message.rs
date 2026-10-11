@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 33;
+pub const PROTOCOL_VERSION: u32 = 34;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -564,6 +564,18 @@ pub enum Operation {
         profile: String,
         account_alias: String,
     },
+    /// Whether the account's adapter clock admits new assistant data writes.
+    AdapterClockStatus {
+        profile: String,
+        account_alias: String,
+    },
+    /// Re-anchors the account's adapter clock at a confirmed wall time. The
+    /// MCP adapter never sends this; the CLI and the desktop do.
+    RepairAdapterClock {
+        profile: String,
+        account_alias: String,
+        action: crate::data::AdapterClockRepairAction,
+    },
     ReadData {
         scope: crate::data::DataScope,
         query: crate::data::DataRead,
@@ -1100,6 +1112,8 @@ impl Operation {
             Self::DataWriteStatus { .. } => "DataWriteStatus",
             Self::PendingDataWrites { .. } => "PendingDataWrites",
             Self::BindDataAccount { .. } => "BindDataAccount",
+            Self::AdapterClockStatus { .. } => "AdapterClockStatus",
+            Self::RepairAdapterClock { .. } => "RepairAdapterClock",
             Self::ReadData { .. } => "ReadData",
             Self::Chat { action, .. } => action.operation_name(),
             Self::Ping => "Ping",
@@ -1246,6 +1260,12 @@ impl Operation {
         if let Self::Chat { action, .. } = self {
             return action.is_mutation();
         }
+        if let Self::RepairAdapterClock { action, .. } = self {
+            return matches!(
+                action,
+                crate::data::AdapterClockRepairAction::Confirm { .. }
+            );
+        }
         !matches!(
             self,
             Self::Ping
@@ -1253,6 +1273,7 @@ impl Operation {
                 | Self::RetentionStatus
                 | Self::DiscoverGoProfiles
                 | Self::BindDataAccount { .. }
+                | Self::AdapterClockStatus { .. }
                 | Self::ReadData { .. }
                 | Self::DataWriteStatus { .. }
                 | Self::PendingDataWrites { .. }
@@ -1375,6 +1396,11 @@ impl std::fmt::Debug for Operation {
                 .field("token", &"<redacted>")
                 .finish(),
             Self::BindDataAccount { .. } => formatter.write_str("BindDataAccount"),
+            Self::AdapterClockStatus { .. } => formatter.write_str("AdapterClockStatus"),
+            Self::RepairAdapterClock { action, .. } => formatter
+                .debug_struct("RepairAdapterClock")
+                .field("action", action)
+                .finish_non_exhaustive(),
             Self::ReadData { .. } => formatter.write_str("ReadData"),
             Self::PrepareDataWrite { .. } => formatter.write_str("PrepareDataWrite"),
             Self::ExecuteDataWrite { .. } => formatter.write_str("ExecuteDataWrite"),

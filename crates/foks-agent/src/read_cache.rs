@@ -510,6 +510,11 @@ pub(crate) fn operation_leaves_retained_material(operation: &Operation) -> bool 
         | Operation::YubiPinStatus { .. }
         | Operation::PendingDataWrites { .. }
         | Operation::DataWriteStatus { .. }
+        | Operation::AdapterClockStatus { .. }
+        | Operation::RepairAdapterClock {
+            action: foks_agent_proto::data::AdapterClockRepairAction::Preview { .. },
+            ..
+        }
         | Operation::DescribeServerStatus { .. }
         | Operation::DescribeResetHardState { .. } => true,
         // Reachability and host reconciliation. Both may pin a host on first

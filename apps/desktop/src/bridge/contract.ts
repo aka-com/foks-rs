@@ -12,6 +12,7 @@ import type { BotAction, BotReply } from '../bot-contract';
 import type { ChatAction, ChatReply } from '../chat-contract';
 import type { LocalAction, LocalSession } from '../chat/local-contract';
 import type { InvitationAction, InvitationReply } from '../invitation-contract';
+import type { AdapterClock } from '../adapter-clock-contract';
 import type { RenameAction, RenameProgress } from '../rename-contract';
 import type { SsoAction, SsoProgress } from '../sso-contract';
 import type {
@@ -126,6 +127,13 @@ export interface Bridge {
     accountAlias: string,
     action: RenameAction | null,
   ): Promise<RenameProgress[]>;
+  /** Reads the account's MCP write admission or, with `confirm`, re-anchors
+   *  it at the computer's current time, which the native side reads itself. */
+  adapterClock(
+    profile: string,
+    accountAlias: string,
+    confirm: boolean,
+  ): Promise<AdapterClock>;
   sso(
     profile: string,
     accountAlias: string,

@@ -464,7 +464,12 @@ becomes Link existing account. First run's Sign up with SSO
 shares the flow and the browser step; it opens on where to keep the keys
 (this computer or a security key) and ends with Finish sign-up. If
 account access is suspended, username changes are disabled with an explanatory
-reason while the remaining recovery actions stay available. An account's mark is the
+reason while the remaining recovery actions stay available. When the agent
+reports that the account's adapter clock refuses new MCP writes (its anchor
+disagrees with the computer's clock beyond the elapsed time it measured), the
+page draws "Assistant writes paused: confirm this computer's time." with the
+computer's current time and a Confirm time action; the native side re-anchors
+the clock at the time it reads itself, so the renderer never supplies one. An account's mark is the
 initial of the username, over a color derived from it, on the account band
 and in the switcher: those surfaces name the account by the username the
 server knows it by, while a store elsewhere keeps its `GroupMark`. There is no

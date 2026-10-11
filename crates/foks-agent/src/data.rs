@@ -149,6 +149,60 @@ pub(super) fn bind_account(
     })
 }
 
+/// Status reads the clock state without anchoring it. A repair runs only when
+/// the CLI or the desktop sends it; the MCP adapter has no tool that does, but
+/// the agent socket does not tell the callers apart. The repair re-anchors at
+/// this process's own monotonic clock, so a proposed time more than the
+/// admission skew from the computer's clock would leave writes paused after a
+/// reported success; it is refused instead. A repair can therefore only accept
+/// the computer's current time.
+pub(super) fn adapter_clock(
+    state_dir: &Path,
+    registry: &ProfileRegistry,
+    profile: String,
+    account_alias: String,
+    repair: Option<foks_agent_proto::data::AdapterClockRepairAction>,
+    timeout: Duration,
+    cancellation: CancellationToken,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    use foks_agent_proto::data::AdapterClockRepairAction;
+    if let Some(
+        AdapterClockRepairAction::Preview { unix_seconds }
+        | AdapterClockRepairAction::Confirm { unix_seconds, .. },
+    ) = &repair
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| Box::new(AgentRequestError("this computer's clock is before 1970")))?
+            .as_secs();
+        if unix_seconds.abs_diff(now) > foks_client_db::ADAPTER_CLOCK_SKEW_SECONDS {
+            return Err(Box::new(AgentRequestError(
+                "the proposed time must be within five minutes of this computer's clock; \
+                 correct the system clock, then confirm its current time",
+            )));
+        }
+    }
+    let session =
+        crate::read_cache::open_profile_session(registry, &profile, timeout, cancellation)?;
+    with_vault(state_dir, &session, |session, vault| {
+        Ok(match repair {
+            None => serde_json::to_value(session.adapter_clock_status(&account_alias, vault)?)?,
+            Some(AdapterClockRepairAction::Preview { unix_seconds }) => serde_json::to_value(
+                session.adapter_clock_preview(&account_alias, unix_seconds, vault)?,
+            )?,
+            Some(AdapterClockRepairAction::Confirm {
+                unix_seconds,
+                confirmation_digest,
+            }) => serde_json::to_value(session.reanchor_adapter_clock(
+                &account_alias,
+                unix_seconds,
+                &confirmation_digest,
+                vault,
+            )?)?,
+        })
+    })
+}
+
 pub(super) fn read(
     state_dir: &Path,
     registry: &ProfileRegistry,

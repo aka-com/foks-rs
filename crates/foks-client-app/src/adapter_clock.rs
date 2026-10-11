@@ -145,25 +145,45 @@ fn parse_uuid(text: &str) -> Option<[u8; 16]> {
     (id != [0; 16]).then_some(id)
 }
 
-#[derive(Debug, serde::Serialize)]
-pub struct AdapterClockPreview {
-    pub host_id: String,
-    pub user_id: String,
-    pub anchor_wall: u64,
-    pub validated_time_floor: u64,
-    pub reject_issued_before: u64,
-    pub proposed_wall: u64,
-    pub confirmation_digest: String,
-}
-
-#[derive(Debug, serde::Serialize)]
-pub struct AdapterClockRepair {
-    pub preview: AdapterClockPreview,
-    pub resulting_floor: u64,
-    pub checkpoint_digest: String,
-}
+pub use foks_agent_proto::data::{
+    AdapterClockAdmission, AdapterClockPreview, AdapterClockRepair, AdapterClockStatus,
+};
 
 impl crate::CheckedProfileSession<'_> {
+    /// Reports whether data-write admission for `alias` would accept new
+    /// handles now. Reads only; it neither anchors nor advances the clock.
+    pub fn adapter_clock_status(
+        &self,
+        alias: &str,
+        vault: &mut crate::AccountVault<'_>,
+    ) -> Result<AdapterClockStatus> {
+        let (host_id, user_id) = self.data_identity(alias, vault)?;
+        let host = crate::entity_id_from_hex(&host_id)?;
+        let user = crate::entity_id_from_hex(&user_id)?;
+        let hard = foks_client_db::HardStateStore::open(&self.paths.hard_database)?;
+        let state = hard.adapter_clock(host.as_bytes(), user.as_bytes())?;
+        let sample = self.adapter_clock.sample();
+        let local_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| untrusted())?
+            .as_secs();
+        let admission = match (&state, sample) {
+            (None, Ok(_)) => AdapterClockAdmission::Unanchored,
+            (Some(_), Ok(sample))
+                if hard.adapter_clock_admits(host.as_bytes(), user.as_bytes(), sample)? =>
+            {
+                AdapterClockAdmission::Trusted
+            }
+            _ => AdapterClockAdmission::Paused,
+        };
+        Ok(AdapterClockStatus {
+            admission,
+            local_time,
+            validated_time_floor: state.as_ref().map(|state| state.validated_time_floor),
+            reject_issued_before: state.as_ref().map(|state| state.reject_issued_before),
+        })
+    }
+
     pub fn adapter_clock_preview(
         &self,
         alias: &str,
@@ -206,8 +226,9 @@ impl crate::CheckedProfileSession<'_> {
         })
     }
 
-    /// Only the local CLI exposes this operation. The caller publishes the
-    /// returned audit result after the checked-session boundary has checkpointed.
+    /// The agent exposes this to the CLI and the desktop, never to MCP tools.
+    /// The caller publishes the returned audit result after the checked-session
+    /// boundary has checkpointed.
     pub fn reanchor_adapter_clock(
         &self,
         alias: &str,
@@ -291,6 +312,71 @@ mod tests {
             assert!(first.boot_id.is_some());
         }
     }
+    #[test]
+    fn status_reports_a_paused_clock_until_repair_confirms_the_current_time() {
+        let f = crate::test_support::AccountFixture::start();
+        f.run(|s, v, m| {
+            s.create_account(
+                "owner",
+                "clockstatus",
+                "device",
+                "owner@example.test",
+                "",
+                None,
+                v,
+                m,
+            )?;
+            Ok(())
+        });
+        let admission = |f: &crate::test_support::AccountFixture| {
+            f.run(|s, v, _| Ok(s.adapter_clock_status("owner", v)?.admission))
+        };
+        assert_eq!(admission(&f), AdapterClockAdmission::Unanchored);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        f.run(|s, v, _| {
+            let (host, user) = s.data_identity("owner", v)?;
+            let (host, user) = (entity_id_from_hex(&host)?, entity_id_from_hex(&user)?);
+            let mut hard = foks_client_db::HardStateStore::open(&s.paths.hard_database)?;
+            hard.check_adapter_admission(
+                host.as_bytes(),
+                user.as_bytes(),
+                SubmissionHandle::new(now, [8; 16]),
+                s.adapter_clock.sample()?,
+            )?;
+            Ok(())
+        });
+        assert_eq!(admission(&f), AdapterClockAdmission::Trusted);
+        // An anchor an hour behind this process's own monotonic reading is
+        // what a wall-clock jump within one process leaves behind.
+        f.run(|s, v, _| {
+            let (host, user) = s.data_identity("owner", v)?;
+            let (host, user) = (entity_id_from_hex(&host)?, entity_id_from_hex(&user)?);
+            let mut hard = foks_client_db::HardStateStore::open(&s.paths.hard_database)?;
+            let old = hard
+                .adapter_clock(host.as_bytes(), user.as_bytes())?
+                .unwrap();
+            hard.reanchor_adapter_clock(
+                host.as_bytes(),
+                user.as_bytes(),
+                &old,
+                AdapterTimeSample {
+                    wall_seconds: now - 3_600,
+                    ..s.adapter_clock.sample()?
+                },
+            )?;
+            Ok(())
+        });
+        let paused = f.run(|s, v, _| s.adapter_clock_status("owner", v));
+        assert_eq!(paused.admission, AdapterClockAdmission::Paused);
+        assert_eq!(paused.validated_time_floor, Some(now - 3_600));
+        let preview = f.run(|s, v, _| s.adapter_clock_preview("owner", now, v));
+        f.run(|s, v, _| s.reanchor_adapter_clock("owner", now, &preview.confirmation_digest, v));
+        assert_eq!(admission(&f), AdapterClockAdmission::Trusted);
+    }
+
     #[test]
     fn repair_requires_current_preview_and_cannot_reverse_checkpointed_expiry() {
         let f = crate::test_support::AccountFixture::start();

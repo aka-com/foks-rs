@@ -296,6 +296,14 @@ fn mutating_operations_never_serve_reads() {
             },
             pin: None,
         },
+        Operation::RepairAdapterClock {
+            profile: "local".to_owned(),
+            account_alias: "owner".to_owned(),
+            action: foks_agent_proto::data::AdapterClockRepairAction::Confirm {
+                unix_seconds: 1,
+                confirmation_digest: "ab".repeat(32),
+            },
+        },
         Operation::RemoveProfile {
             name: "local".to_owned(),
         },
@@ -354,6 +362,15 @@ fn reads_of_devices_keys_and_rosters_leave_retained_material_in_place() {
         },
         Operation::DescribeResetHardState {
             profile: "local".to_owned(),
+        },
+        Operation::AdapterClockStatus {
+            profile: "local".to_owned(),
+            account_alias: "owner".to_owned(),
+        },
+        Operation::RepairAdapterClock {
+            profile: "local".to_owned(),
+            account_alias: "owner".to_owned(),
+            action: foks_agent_proto::data::AdapterClockRepairAction::Preview { unix_seconds: 1 },
         },
         Operation::Probe {
             profile: "local".to_owned(),

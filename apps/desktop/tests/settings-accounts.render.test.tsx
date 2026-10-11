@@ -1393,3 +1393,72 @@ test('Account waits for its team count while the team inventory is incomplete', 
   assert.ok(rendered.getByText('Loading teams…'));
   assert.equal(rendered.queryByText('0 teams'), null);
 });
+
+test('a paused adapter clock shows its band until the computer’s time is confirmed', async () => {
+  const calls: [string, string, boolean][] = [];
+  let admission: 'paused' | 'trusted' = 'paused';
+  const { rendered } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    undefined,
+    {
+      decorate: (bridge) => ({
+        ...bridge,
+        adapterClock: async (profile, account, confirm) => {
+          calls.push([profile, account, confirm]);
+          if (confirm) admission = 'trusted';
+          return { admission, localTime: 1_700_000_000 };
+        },
+      }),
+    },
+  );
+  await ui.act(async () => {
+    await Promise.resolve();
+  });
+  const band = rendered.getByRole('group', {
+    name: 'Assistant writes paused: confirm this computer’s time.',
+  });
+  assert.match(
+    band.textContent ?? '',
+    /MCP assistants cannot write to this account/,
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Confirm time' }));
+    await Promise.resolve();
+  });
+  assert.deepEqual(calls, [
+    ['personal', 'personal', false],
+    ['personal', 'personal', true],
+  ]);
+  assert.equal(
+    rendered.queryByRole('group', {
+      name: 'Assistant writes paused: confirm this computer’s time.',
+    }),
+    null,
+  );
+});
+
+test('a trusted or unreadable adapter clock draws no band', async () => {
+  for (const adapterClock of [
+    async () => ({ admission: 'trusted' as const, localTime: 1 }),
+    async () => ({ admission: 'unanchored' as const, localTime: 1 }),
+    async () => {
+      throw new Error('agent unavailable');
+    },
+  ]) {
+    const { rendered } = await renderPeople(
+      await fixture(),
+      'acct:personal',
+      undefined,
+      { decorate: (bridge) => ({ ...bridge, adapterClock }) },
+    );
+    await ui.act(async () => {
+      await Promise.resolve();
+    });
+    assert.equal(
+      rendered.queryByRole('button', { name: 'Confirm time' }),
+      null,
+    );
+    ui.cleanup();
+  }
+});

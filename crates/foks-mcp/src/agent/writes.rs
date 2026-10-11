@@ -36,7 +36,8 @@ impl AgentBackend {
         )
         .map_err(|error| {
             format!(
-                "{error}; submission_id={id}; inspect foks_pending or foks_status before another write"
+                "{}; submission_id={id}; inspect foks_pending or foks_status before another write",
+                super::with_clock_guidance(error, false)
             )
         })?;
         if prepared.submission_id != id {
@@ -184,6 +185,27 @@ mod tests {
         assert_eq!(
             error_code_name(foks_agent_proto::ErrorCode::ClockUntrusted),
             "clock-untrusted"
+        );
+    }
+
+    #[test]
+    fn clock_refusals_explain_the_pause_and_the_repair_outside_mcp() {
+        let refused = super::super::with_clock_guidance(
+            format!(
+                "{}: adapter clock is untrusted",
+                error_code_name(foks_agent_proto::ErrorCode::ClockUntrusted)
+            ),
+            false,
+        );
+        assert!(refused.ends_with(super::super::CLOCK_PAUSED), "{refused}");
+        assert!(refused.contains("foks-rs retention reanchor"));
+        assert_eq!(
+            super::super::with_clock_guidance("retention-full: full".into(), false),
+            "retention-full: full"
+        );
+        assert!(
+            super::super::with_clock_guidance("profile-busy: busy".into(), true)
+                .ends_with(super::super::CLOCK_PAUSED)
         );
     }
 }

@@ -36,6 +36,7 @@ import { useTabSheetState } from '../navigation-guard';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AdminPanel } from '../components/admin-panel';
+import { AssistantClockBand } from '../components/assistant-clock-band';
 import { BotPanel } from '../components/bot-panel';
 import { RenamePanel } from '../components/rename-panel';
 import { RenameBanner, RenameUnlockSheet } from '../components/rename-banner';
@@ -563,7 +564,16 @@ export function AccountSection({
           ) : selected ? (
             <>
               <AccountPanel
-                notices={noticesAndUnpairedServers}
+                notices={
+                  <>
+                    {noticesAndUnpairedServers}
+                    <AssistantClockBand
+                      bridge={bridge}
+                      profile={selected.server}
+                      account={selected.account}
+                    />
+                  </>
+                }
                 freshness={freshness}
                 onRetry={retryMetadata}
                 snapshot={snapshot}

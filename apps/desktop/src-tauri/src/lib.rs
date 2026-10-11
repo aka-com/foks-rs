@@ -222,6 +222,7 @@ pub fn run() {
             commands::sso::sso_request,
             commands::account_conveniences::rename_account_request,
             commands::account_conveniences::set_local_account_alias,
+            commands::account_conveniences::adapter_clock_request,
             commands::invitations::invitation_request,
             commands::bot::bot_account_request,
             commands::web_admin::configure_web_admin,

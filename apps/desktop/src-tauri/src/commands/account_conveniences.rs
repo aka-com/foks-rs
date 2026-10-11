@@ -219,3 +219,179 @@ mod local_alias_tests {
         assert!(local_alias_response(bad, &account, "Office", "store".into()).is_err());
     }
 }
+
+/// Whether the account's adapter clock admits new MCP data writes.
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterClockDto {
+    pub admission: foks_agent_proto::data::AdapterClockAdmission,
+    /// The computer's wall time when the agent checked, in Unix seconds.
+    pub local_time: u64,
+}
+
+fn adapter_clock_status(
+    value: serde_json::Value,
+) -> Result<foks_agent_proto::data::AdapterClockStatus, AgentError> {
+    serde_json::from_value(value).map_err(|_| invalid_response("Invalid adapter clock status."))
+}
+
+/// Checks that the agent previewed and re-anchored exactly the time this
+/// process proposed, and that the confirmation carried the preview's digest.
+fn adapter_clock_repaired(
+    preview: serde_json::Value,
+    repair: impl FnOnce(String) -> Result<serde_json::Value, AgentError>,
+    proposed: u64,
+) -> Result<(), AgentError> {
+    let preview: foks_agent_proto::data::AdapterClockPreview = serde_json::from_value(preview)
+        .map_err(|_| invalid_response("Invalid adapter clock preview."))?;
+    if preview.proposed_wall != proposed {
+        return Err(invalid_response("Adapter clock preview changed the time."));
+    }
+    let repaired: foks_agent_proto::data::AdapterClockRepair =
+        serde_json::from_value(repair(preview.confirmation_digest.clone())?)
+            .map_err(|_| invalid_response("Invalid adapter clock repair."))?;
+    if repaired.preview != preview || repaired.resulting_floor != proposed {
+        return Err(invalid_response(
+            "Adapter clock repair does not match its preview.",
+        ));
+    }
+    Ok(())
+}
+
+/// Reads the adapter clock or, with `confirm`, re-anchors it at this
+/// computer's current time. The renderer never supplies the time: the person
+/// confirms that the clock this process reads is correct.
+#[tauri::command]
+pub async fn adapter_clock_request(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    profile: String,
+    account_alias: String,
+    confirm: bool,
+) -> Result<AdapterClockDto, AgentError> {
+    use foks_agent_proto::data::AdapterClockRepairAction;
+    require_main_window(&webview)?;
+    let generation = crate::applock::unlocked_generation(webview.app_handle())?;
+    if !valid_local_name(&profile) || !valid_local_name(&account_alias) {
+        return Err(invalid_request("Invalid adapter clock request."));
+    }
+    let state = state.for_profile(&profile)?;
+    let _mutation = if confirm {
+        Some(state.begin_mutation()?)
+    } else {
+        None
+    };
+    let transport = state.agent.transport();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        super::servers::require_transport_profile(transport.as_ref(), &profile)?;
+        if confirm {
+            let proposed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| invalid_request("This computer's clock is before 1970."))?
+                .as_secs();
+            let repair = |action| {
+                transport
+                    .call(Operation::RepairAdapterClock {
+                        profile: profile.clone(),
+                        account_alias: account_alias.clone(),
+                        action,
+                    })
+                    .map_err(AgentError::from_desktop)
+            };
+            adapter_clock_repaired(
+                repair(AdapterClockRepairAction::Preview {
+                    unix_seconds: proposed,
+                })?,
+                |confirmation_digest| {
+                    repair(AdapterClockRepairAction::Confirm {
+                        unix_seconds: proposed,
+                        confirmation_digest,
+                    })
+                },
+                proposed,
+            )?;
+        }
+        let status = adapter_clock_status(
+            transport
+                .call(Operation::AdapterClockStatus {
+                    profile,
+                    account_alias,
+                })
+                .map_err(AgentError::from_desktop)?,
+        )?;
+        Ok::<_, AgentError>(AdapterClockDto {
+            admission: status.admission,
+            local_time: status.local_time,
+        })
+    })
+    .await
+    .map_err(|_| {
+        if confirm {
+            super::execution::ambiguous_worker_failure(
+                &state,
+                "Clock confirmation interrupted; check the account again.",
+            )
+        } else {
+            invalid_request("Clock check interrupted. Check the account again.")
+        }
+    })?
+    .map_err(|error| {
+        if confirm {
+            super::execution::observe_mutation_error(&state, error)
+        } else {
+            error
+        }
+    });
+    crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
+    result
+}
+
+#[cfg(test)]
+mod adapter_clock_tests {
+    use super::*;
+    use foks_agent_proto::data::AdapterClockAdmission;
+
+    fn preview(proposed: u64) -> serde_json::Value {
+        serde_json::json!({
+            "host_id": "01", "user_id": "02", "anchor_wall": 10,
+            "validated_time_floor": 10, "reject_issued_before": 0,
+            "proposed_wall": proposed, "confirmation_digest": "ab".repeat(32),
+        })
+    }
+
+    #[test]
+    fn repair_confirms_only_the_previewed_digest_and_time() {
+        let confirm = |digest: String, floor: u64| {
+            assert_eq!(digest, "ab".repeat(32));
+            Ok(serde_json::json!({
+                "preview": preview(100), "resulting_floor": floor,
+                "checkpoint_digest": "cd".repeat(32),
+            }))
+        };
+        assert!(adapter_clock_repaired(preview(100), |d| confirm(d, 100), 100).is_ok());
+        assert!(adapter_clock_repaired(preview(100), |d| confirm(d, 99), 100).is_err());
+        assert!(adapter_clock_repaired(preview(99), |_| unreachable!(), 100).is_err());
+        let mut extra = preview(100);
+        extra["pin"] = serde_json::json!("secret");
+        assert!(adapter_clock_repaired(extra, |_| unreachable!(), 100).is_err());
+    }
+
+    #[test]
+    fn status_serializes_for_the_renderer() {
+        let status = adapter_clock_status(serde_json::json!({
+            "admission": "paused", "local_time": 100,
+            "validated_time_floor": 90, "reject_issued_before": null,
+        }))
+        .unwrap();
+        assert_eq!(status.admission, AdapterClockAdmission::Paused);
+        assert_eq!(
+            serde_json::to_value(AdapterClockDto {
+                admission: status.admission,
+                local_time: status.local_time,
+            })
+            .unwrap(),
+            serde_json::json!({"admission": "paused", "localTime": 100})
+        );
+        assert!(adapter_clock_status(serde_json::json!({"admission": "open"})).is_err());
+    }
+}

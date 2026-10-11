@@ -659,7 +659,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 33);
+        assert_eq!(PROTOCOL_VERSION, 34);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -676,7 +676,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 33);
+        assert_eq!(PROTOCOL_VERSION, 34);
         let request = Request::new(
             20,
             Operation::Chat {
@@ -1266,5 +1266,57 @@ mod tests {
                 assert!(!debug.contains(secret));
             }
         }
+    }
+
+    #[test]
+    fn adapter_clock_repair_is_a_v34_mutation_and_status_is_not() {
+        assert_eq!(PROTOCOL_VERSION, 34);
+        let status = Operation::AdapterClockStatus {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+        };
+        assert!(!status.is_mutation());
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            serde_json::json!({
+                "operation": "adapter-clock-status",
+                "profile": "local",
+                "account_alias": "owner",
+            })
+        );
+        let repair = Operation::RepairAdapterClock {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            action: data::AdapterClockRepairAction::Confirm {
+                unix_seconds: 1_700_000_000,
+                confirmation_digest: "ab".repeat(32),
+            },
+        };
+        assert!(repair.is_mutation());
+        assert!(!Operation::RepairAdapterClock {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            action: data::AdapterClockRepairAction::Preview {
+                unix_seconds: 1_700_000_000,
+            },
+        }
+        .is_mutation());
+        let encoded = serde_json::to_value(&repair).unwrap();
+        assert_eq!(encoded["operation"], "repair-adapter-clock");
+        assert_eq!(encoded["action"]["step"], "confirm");
+        let request = Request::new(21, repair);
+        assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        assert!(serde_json::from_value::<data::AdapterClockRepairAction>(
+            serde_json::json!({"step": "preview", "unix_seconds": 1, "extra": 1})
+        )
+        .is_err());
+        let status: data::AdapterClockStatus = serde_json::from_value(serde_json::json!({
+            "admission": "paused",
+            "local_time": 1_700_000_000u64,
+            "validated_time_floor": 1_699_990_000u64,
+            "reject_issued_before": 0,
+        }))
+        .unwrap();
+        assert_eq!(status.admission, data::AdapterClockAdmission::Paused);
     }
 }

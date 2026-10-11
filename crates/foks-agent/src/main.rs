@@ -135,9 +135,9 @@ impl ConnectionCapacity {
             | Operation::Ping
             | Operation::AgentStatus
             | Operation::RetentionStatus => self.local.clone(),
-            Operation::DataWriteStatus { .. } | Operation::PendingDataWrites { .. } => {
-                self.recovery.clone()
-            }
+            Operation::DataWriteStatus { .. }
+            | Operation::PendingDataWrites { .. }
+            | Operation::AdapterClockStatus { .. } => self.recovery.clone(),
             _ => self.blocking.clone(),
         }
     }
@@ -3246,6 +3246,11 @@ fn operation_is_noninteractive(operation: &Operation) -> bool {
         | Operation::ReadKvChunk { .. }
         | Operation::ReadData { .. }
         | Operation::BindDataAccount { .. }
+        | Operation::AdapterClockStatus { .. }
+        | Operation::RepairAdapterClock {
+            action: foks_agent_proto::data::AdapterClockRepairAction::Preview { .. },
+            ..
+        }
         | Operation::ListTeams { .. }
         | Operation::ListTeamDetails { .. }
         | Operation::ListTeamMembers { .. }
@@ -3398,6 +3403,31 @@ fn dispatch_result_inner(
         Operation::ReadData { scope, query } => {
             data::read(state_dir, &registry, scope, query, timeout, cancellation)
         }
+        Operation::AdapterClockStatus {
+            profile,
+            account_alias,
+        } => data::adapter_clock(
+            state_dir,
+            &registry,
+            profile,
+            account_alias,
+            None,
+            timeout,
+            cancellation,
+        ),
+        Operation::RepairAdapterClock {
+            profile,
+            account_alias,
+            action,
+        } => data::adapter_clock(
+            state_dir,
+            &registry,
+            profile,
+            account_alias,
+            Some(action),
+            timeout,
+            cancellation,
+        ),
         Operation::RetentionStatus => Ok(retention::snapshot()),
         Operation::Ping => Ok(serde_json::json!({ "ready": true })),
         Operation::AgentStatus => Ok(serde_json::to_value(if ready {
@@ -7575,6 +7605,17 @@ mod tests {
                 profile: profile.clone(),
                 account_alias: "owner".into(),
             },
+            Operation::AdapterClockStatus {
+                profile: profile.clone(),
+                account_alias: "owner".into(),
+            },
+            Operation::RepairAdapterClock {
+                profile: profile.clone(),
+                account_alias: "owner".into(),
+                action: foks_agent_proto::data::AdapterClockRepairAction::Preview {
+                    unix_seconds: 1,
+                },
+            },
             Operation::ReadData {
                 scope: data_scope.clone(),
                 query: foks_agent_proto::data::DataRead::Catalog,
@@ -8013,6 +8054,34 @@ mod tests {
             .worker_pool(&Operation::ListProfiles)
             .try_acquire_owned()
             .is_ok());
+    }
+
+    #[test]
+    fn adapter_clock_status_shares_the_recovery_lane_with_submission_status() {
+        let capacity = ConnectionCapacity {
+            recovery: Arc::new(Semaphore::new(1)),
+            blocking: Arc::new(Semaphore::new(1)),
+            local: Arc::new(Semaphore::new(1)),
+            chat_polling: Arc::new(Semaphore::new(1)),
+            active_chat_polls: Arc::new(Mutex::new(Default::default())),
+        };
+        let status = Operation::AdapterClockStatus {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+        };
+        let repair = Operation::RepairAdapterClock {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            action: foks_agent_proto::data::AdapterClockRepairAction::Preview { unix_seconds: 1 },
+        };
+        assert!(Arc::ptr_eq(
+            &capacity.worker_pool(&status),
+            &capacity.recovery
+        ));
+        assert!(Arc::ptr_eq(
+            &capacity.worker_pool(&repair),
+            &capacity.blocking
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]

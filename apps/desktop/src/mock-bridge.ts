@@ -1095,6 +1095,19 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         row.state = 'complete';
       return [{ ...row }];
     },
+    // Development data has no agent clock to disagree with.
+    adapterClock: async (profile, accountAlias) => {
+      if (
+        !accounts.some(
+          (entry) => entry.server === profile && entry.alias === accountAlias,
+        )
+      )
+        throw new Error('Account not found.');
+      return {
+        admission: 'trusted',
+        localTime: Math.floor(Date.now() / 1_000),
+      };
+    },
     sso: async (profile, accountAlias, action) => {
       const key = `${profile}/${accountAlias}`;
       const begins =

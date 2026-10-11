@@ -47,7 +47,8 @@ use thiserror::Error;
 pub use foks_proto::SubmissionHandle;
 pub use repositories::adapter::{
     adapter_handle_hash, AdapterClockState, AdapterLedgerState, AdapterSubmission,
-    AdapterTimeSample, MAX_NEW_SUBMISSION_AGE_SECONDS, TERMINAL_RETENTION_SECONDS,
+    AdapterTimeSample, ADAPTER_CLOCK_SKEW_SECONDS, MAX_NEW_SUBMISSION_AGE_SECONDS,
+    TERMINAL_RETENTION_SECONDS,
 };
 use schema::{APPLICATION_ID, INITIAL as SCHEMA, VERSION as SCHEMA_VERSION};
 

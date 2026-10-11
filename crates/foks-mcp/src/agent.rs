@@ -448,7 +448,7 @@ impl Backend for AgentBackend {
                 cancelled,
             ),
             Invocation::Status(args) => {
-                let result: foks_agent_proto::data::DataWriteOutcome = call(
+                let result: Result<foks_agent_proto::data::DataWriteOutcome, String> = call(
                     &self.client,
                     Operation::DataWriteStatus {
                         submission: foks_agent_proto::data::DataSubmission {
@@ -457,11 +457,24 @@ impl Backend for AgentBackend {
                         },
                     },
                     cancelled,
-                )?;
+                );
+                let paused = self.writes_paused(cancelled);
+                let result = result.map_err(|error| with_clock_guidance(error, paused))?;
                 if result.submission_id != args.submission_id {
                     return Err("agent changed submission identity".into());
                 }
-                write_result(result)
+                let mut response = write_result(result)?;
+                if paused {
+                    if let Some(serde_json::Value::Object(fields)) =
+                        &mut response.structured_content
+                    {
+                        fields.insert("writes_paused".into(), serde_json::Value::Bool(true));
+                    }
+                    response
+                        .content
+                        .push(rmcp::model::ContentBlock::text(CLOCK_PAUSED));
+                }
+                Ok(response)
             }
             Invocation::Pending(_) => {
                 let result: Vec<foks_agent_proto::data::DataWriteOutcome> = call(
@@ -479,6 +492,44 @@ impl Backend for AgentBackend {
                 ))
             }
         }
+    }
+}
+
+/// Reported while the agent's adapter clock refuses new writes. The repair is
+/// deliberately not an MCP tool: a person confirms the time outside the
+/// assistant session.
+pub(crate) const CLOCK_PAUSED: &str = "New writes are paused because this \
+computer's wall clock disagrees with the agent's monotonic clock by more than \
+five minutes, or the agent restarted more than 24 hours after the last trusted \
+time without a boot clock that measured the gap. A person must confirm the time \
+in the FOKS desktop app (Settings, Account) or with `foks-rs retention \
+reanchor`; status and recovery of existing submissions still work.";
+
+/// Appends the pause explanation to a `clock-untrusted` refusal, or to any
+/// error while the agent reports the clock as paused.
+pub(crate) fn with_clock_guidance(error: String, paused: bool) -> String {
+    if paused || error.starts_with("clock-untrusted") {
+        format!("{error}; {CLOCK_PAUSED}")
+    } else {
+        error
+    }
+}
+
+impl AgentBackend {
+    /// Whether the agent reports that the bound account's clock refuses new
+    /// writes. A failed status read reports no pause.
+    fn writes_paused(&self, cancelled: &CancellationToken) -> bool {
+        matches!(
+            call::<foks_agent_proto::data::AdapterClockStatus>(
+                &self.client,
+                Operation::AdapterClockStatus {
+                    profile: self.account.profile.clone(),
+                    account_alias: self.account.account_alias.clone(),
+                },
+                cancelled,
+            ),
+            Ok(status) if status.admission == foks_agent_proto::data::AdapterClockAdmission::Paused
+        )
     }
 }
 

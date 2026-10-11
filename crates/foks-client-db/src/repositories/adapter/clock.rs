@@ -5,7 +5,8 @@ use crate::{Error, Result};
 
 pub const MAX_NEW_SUBMISSION_AGE_SECONDS: u64 = 24 * 60 * 60;
 pub const TERMINAL_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
-const SKEW_SECONDS: u64 = 5 * 60;
+/// How far wall time may differ from the anchor plus monotonic elapsed time.
+pub const SKEW_SECONDS: u64 = 5 * 60;
 const RESTART_GAP_SECONDS: u64 = 24 * 60 * 60;
 
 /// Supplied by the application clock. The random process identity changes at

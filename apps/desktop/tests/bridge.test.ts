@@ -3322,3 +3322,27 @@ test('mock catalogs retain empty folder identities through a rename', async () =
     (error: unknown) => normalizeCommandError(error).code === 'invalid-request',
   );
 });
+
+test('adapter clock status decodes only its own two fields', async () => {
+  const { decodeAdapterClock } = await import('../src/adapter-clock-contract');
+  assert.deepEqual(
+    decodeAdapterClock({ admission: 'paused', localTime: 1_700_000_000 }),
+    { admission: 'paused', localTime: 1_700_000_000 },
+  );
+  for (const value of [
+    null,
+    [],
+    { admission: 'open', localTime: 1 },
+    { admission: 'paused', localTime: -1 },
+    { admission: 'paused', localTime: 1.5 },
+    { admission: 'paused' },
+    { admission: 'paused', localTime: 1, digest: 'ab' },
+  ])
+    assert.throws(() => decodeAdapterClock(value), JSON.stringify(value));
+  const bridge = mockBridge(FIXTURE);
+  assert.equal(
+    (await bridge.adapterClock('personal', 'personal', false)).admission,
+    'trusted',
+  );
+  await assert.rejects(() => bridge.adapterClock('personal', 'missing', true));
+});

@@ -100,6 +100,8 @@ pub(crate) fn operation_scope(operation: &Operation) -> Scope {
         | RenameAccount { profile, .. }
         | Sso { profile, .. }
         | BindDataAccount { profile, .. }
+        | AdapterClockStatus { profile, .. }
+        | RepairAdapterClock { profile, .. }
         | DescribeResetHardState { profile }
         | Probe { profile }
         | ListKnownStores { profile }

@@ -20,7 +20,8 @@ pub use auth_cache::{
 };
 mod adapter_clock;
 pub use adapter_clock::{
-    AdapterClock, AdapterClockPreview, AdapterClockRepair, SystemAdapterClock,
+    AdapterClock, AdapterClockAdmission, AdapterClockPreview, AdapterClockRepair,
+    AdapterClockStatus, SystemAdapterClock,
 };
 pub use foks_proto::SubmissionHandle;
 mod federation;

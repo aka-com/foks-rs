@@ -112,22 +112,37 @@ execute. A durable rejection watermark prevents clock correction from reopening
 expired handles. Expiry describes replay eligibility, not proof of an earlier write.
 
 Time uses a persisted anchor plus a monotonic clock that keeps counting during
-sleep (`CLOCK_BOOTTIME` on Linux, `CLOCK_MONOTONIC_RAW` on macOS). The anchor records
-the kernel boot identifier, so an agent restarted within the same boot checks the
-elapsed time across the restart. A wall-clock jump over five minutes within one
-process, or a restart more than 24 hours beyond the last trusted floor that the boot
-clock does not account for, blocks new admission and pruning with `clock-untrusted`. Retained status and recovery still
-work. First use establishes the anchor. Local clock repair requires two commands:
+sleep (`CLOCK_BOOTTIME` on Linux, `CLOCK_MONOTONIC_RAW` on macOS). The anchor
+records the kernel boot identifier, so an agent restarted within the same boot
+checks the elapsed time across the restart. A wall-clock jump over five minutes
+within one process, or a restart more than 24 hours beyond the last trusted floor
+that the boot clock does not account for, blocks new admission and pruning with
+`clock-untrusted`. Retained status and recovery still work, and while admission is
+paused `foks_status` adds `"writes_paused": true` and a repair instruction to its
+result. First use establishes the anchor.
+
+Repair runs in the resident agent and is not an MCP tool: a person confirms the
+time in the desktop app's account settings or with two CLI commands, which start
+the agent if needed:
 
 ```sh
+foks-rs --state-dir /absolute/client/state retention clock-status \
+  --profile local --account-alias personal
 foks-rs --state-dir /absolute/client/state retention reanchor \
-  --profile local --account-alias personal --unix-seconds <correct-unix-seconds>
+  --profile local --account-alias personal
 foks-rs --state-dir /absolute/client/state retention reanchor \
-  --profile local --account-alias personal --unix-seconds <same-value> \
-  --confirm-digest <digest-from-preview>
+  --profile local --account-alias personal --unix-seconds <proposed_wall> \
+  --confirm-digest <confirmation_digest>
 ```
 
-Repair preserves the irreversible watermark and performs no admission or pruning.
+The preview proposes the current time unless `--unix-seconds` names one; the
+confirmation repeats the preview's `proposed_wall` and `confirmation_digest`. The
+agent anchors the repaired clock to its own monotonic clock, so it refuses a
+proposed time more than five minutes from the computer's clock: correct the
+system clock first if it is wrong. Repair preserves the irreversible watermark and
+performs no admission or pruning. The restriction to the CLI and the desktop
+applies to the MCP tool list; the agent socket accepts the repair from any
+process of the same user, which can run the CLI anyway.
 `retention status` reports redacted resident maintenance counters. Maintenance runs
 at agent startup and every minute on an independent single-flight lane, rotating
 profiles and skipping busy profile locks without making network requests.
@@ -146,7 +161,7 @@ are reclaimed in bounded, restartable batches. Server maintenance metrics report
 failures, reclaimed bytes and deferred work. Pinned Go-host upload retention remains
 that host's responsibility; these changes add no remote FOKS methods.
 
-The current hard-state schema is 41 and the agent IPC protocol is 33. Opening a
+The current hard-state schema is 41 and the agent IPC protocol is 34. Opening a
 supported schema-38, schema-39 or schema-40 database upgrades it to schema 41; other older
 development schemas are rejected. Upgrade the CLI and resident agent together,
 and restart the agent so their IPC versions match. This does not convert legacy

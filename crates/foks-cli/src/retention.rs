@@ -1,62 +1,82 @@
-use foks_client_app::{ProfileRegistry, ProfileSession};
+use foks_agent_proto::{data::AdapterClockRepairAction, Operation, ResponseResult};
 use std::path::Path;
 
 #[derive(clap::Subcommand)]
 pub enum RetentionCommand {
     /// Read redacted resident maintenance counters.
     Status,
-    /// Preview or explicitly re-anchor local adapter time without pruning or writing remotely.
+    /// Report whether the account's adapter clock admits new MCP writes.
+    ClockStatus {
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        account_alias: String,
+    },
+    /// Preview or explicitly re-anchor local adapter time at this computer's
+    /// current time, without pruning or writing remotely.
     Reanchor {
         #[arg(long)]
         profile: String,
         #[arg(long)]
         account_alias: String,
+        /// The time to confirm; the agent refuses one more than five minutes
+        /// from its own clock. Defaults to now for a preview.
         #[arg(long)]
-        unix_seconds: u64,
-        /// Exact digest printed by the preview for these time values.
-        #[arg(long)]
+        unix_seconds: Option<u64>,
+        /// Exact digest printed by the preview, with the preview's
+        /// `proposed_wall` as `--unix-seconds`.
+        #[arg(long, requires = "unix_seconds")]
         confirm_digest: Option<String>,
     },
 }
 
+/// Every retention command runs in the resident agent, which samples the same
+/// adapter clock that later admits writes.
 pub fn run(state: &Path, command: RetentionCommand) -> Result<(), Box<dyn std::error::Error>> {
-    let RetentionCommand::Reanchor {
-        profile,
-        account_alias,
-        unix_seconds,
-        confirm_digest,
-    } = command
-    else {
-        let reply = foks_agent_client::AgentClient::new(state.join("foks-rs.sock"))
-            .call(foks_agent_proto::Operation::RetentionStatus)?;
-        return match reply.result {
-            foks_agent_proto::ResponseResult::Success { value } => {
-                println!("{}", serde_json::to_string_pretty(&value)?);
-                Ok(())
+    let operation = match command {
+        RetentionCommand::Status => Operation::RetentionStatus,
+        RetentionCommand::ClockStatus {
+            profile,
+            account_alias,
+        } => {
+            super::mcp::ensure_agent(state)?;
+            Operation::AdapterClockStatus {
+                profile,
+                account_alias,
             }
-            foks_agent_proto::ResponseResult::Error { code, message, .. } => {
-                Err(format!("{code:?}: {message}").into())
+        }
+        RetentionCommand::Reanchor {
+            profile,
+            account_alias,
+            unix_seconds,
+            confirm_digest,
+        } => {
+            let unix_seconds = match unix_seconds {
+                Some(seconds) => seconds,
+                None => std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs(),
+            };
+            super::mcp::ensure_agent(state)?;
+            Operation::RepairAdapterClock {
+                profile,
+                account_alias,
+                action: match confirm_digest {
+                    Some(confirmation_digest) => AdapterClockRepairAction::Confirm {
+                        unix_seconds,
+                        confirmation_digest,
+                    },
+                    None => AdapterClockRepairAction::Preview { unix_seconds },
+                },
             }
-        };
+        }
     };
-    let registry = ProfileRegistry::open(state)?;
-    let session = ProfileSession::open(&registry, &profile)?;
-    // Output follows checkpoint publication, including error paths.
-    let result = super::with_vault(state, &session, |checked, vault, _| {
-        Ok(match confirm_digest {
-            Some(ref digest) => serde_json::to_value(checked.reanchor_adapter_clock(
-                &account_alias,
-                unix_seconds,
-                digest,
-                vault,
-            )?)?,
-            None => serde_json::to_value(checked.adapter_clock_preview(
-                &account_alias,
-                unix_seconds,
-                vault,
-            )?)?,
-        })
-    })?;
-    println!("{}", serde_json::to_string_pretty(&result)?);
-    Ok(())
+    let reply = foks_agent_client::AgentClient::new(state.join("foks-rs.sock")).call(operation)?;
+    match reply.result {
+        ResponseResult::Success { value } => {
+            println!("{}", serde_json::to_string_pretty(&value)?);
+            Ok(())
+        }
+        ResponseResult::Error { code, message, .. } => Err(format!("{code:?}: {message}").into()),
+    }
 }

@@ -389,6 +389,108 @@ fn independent_stdio_client_reads_through_real_agent_and_keeps_agent_after_eof()
     };
     assert!(value["attempts"].is_u64());
     assert!(value["inventory_saturated"].is_u64());
+    // A clock anchored more than a day in the past, by a process the agent
+    // cannot measure, pauses new writes until a person confirms the current
+    // time. foks_status reports the pause, and only the CLI and the desktop,
+    // through the agent, repair it.
+    let clock_admission = || {
+        let reply = foks_agent_client::AgentClient::new(state.join("foks-rs.sock"))
+            .call(foks_agent_proto::Operation::AdapterClockStatus {
+                profile: "local".into(),
+                account_alias: "owner".into(),
+            })
+            .unwrap();
+        let foks_agent_proto::ResponseResult::Success { value } = reply.result else {
+            panic!("adapter clock status failed");
+        };
+        value["admission"].as_str().unwrap().to_owned()
+    };
+    let reanchor = |unix_seconds: Option<u64>, digest: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_foks-rs"));
+        command.arg("--state-dir").arg(&state).args([
+            "retention",
+            "reanchor",
+            "--profile",
+            "local",
+            "--account-alias",
+            "owner",
+        ]);
+        if let Some(seconds) = unix_seconds {
+            command.args(["--unix-seconds", &seconds.to_string()]);
+        }
+        if let Some(digest) = digest {
+            command.args(["--confirm-digest", digest]);
+        }
+        command.output().unwrap()
+    };
+    assert_eq!(clock_admission(), "trusted");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let session = ProfileSession::open(&ProfileRegistry::open(&state).unwrap(), "local").unwrap();
+    credentials
+        .with_checked_session(&session, |session| {
+            let master = credentials.master_key()?;
+            let mut store = EncryptedFileSecretStore::open(
+                &session.paths().credential_store,
+                derive_vault_key(&master),
+            )?;
+            let mut vault = AccountVault::new(&mut store);
+            let preview = session.adapter_clock_preview("owner", now - 90_000, &mut vault)?;
+            session.reanchor_adapter_clock(
+                "owner",
+                now - 90_000,
+                &preview.confirmation_digest,
+                &mut vault,
+            )?;
+            Ok::<_, foks_client_app::Error>(())
+        })
+        .unwrap();
+    drop(session);
+    assert_eq!(clock_admission(), "paused");
+    let paused = writes.call("foks_status", json!({"submission_id":id}));
+    assert_eq!(
+        paused["result"]["structuredContent"]["status"], "committed",
+        "{paused}"
+    );
+    assert_eq!(
+        paused["result"]["structuredContent"]["writes_paused"], true,
+        "{paused}"
+    );
+    let unseen = foks_agent_proto::data::SubmissionHandle::new(now, [0x83; 16]).to_string();
+    let refused = writes.call(
+        "put",
+        json!({"path":"/paused","content":"x","submission_id":unseen}),
+    );
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    let refusal = refused["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(refusal.contains("clock-untrusted"), "{refusal}");
+    assert!(refusal.contains("foks-rs retention reanchor"), "{refusal}");
+    // The agent refuses a repair away from its own clock, which would leave
+    // writes paused after a reported success.
+    let distant = reanchor(Some(now - 3_600), None);
+    assert!(!distant.status.success(), "{distant:?}");
+    let preview = reanchor(None, None);
+    assert!(preview.status.success(), "{preview:?}");
+    let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
+    let proposed = preview["proposed_wall"].as_u64().unwrap();
+    let repaired = reanchor(
+        Some(proposed),
+        Some(preview["confirmation_digest"].as_str().unwrap()),
+    );
+    assert!(repaired.status.success(), "{repaired:?}");
+    let repaired: Value = serde_json::from_slice(&repaired.stdout).unwrap();
+    assert_eq!(repaired["resulting_floor"], proposed);
+    assert_eq!(clock_admission(), "trusted");
+    let resumed = writes.call(
+        "put",
+        json!({"path":"/paused","content":"x","submission_id":unseen}),
+    );
+    assert_eq!(
+        resumed["result"]["structuredContent"]["status"], "committed",
+        "{resumed}"
+    );
     if let (Some(environment), Some(server)) = (&environment, &_server) {
         // A 300 KiB put is a large file whose only (final) chunk is carried in
         // UploadInit. Drop that response after commit, before namespace linking.

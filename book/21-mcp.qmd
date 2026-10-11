@@ -201,7 +201,14 @@ with the same clock however long it was. A wall-clock jump of more than
 five minutes within one process, or a restart more than 24 hours past the
 last trusted floor that the boot clock does not account for, blocks new
 admission with `clock-untrusted` while status and recovery continue to
-work; an operator repairs the anchor with an explicit two-step command.
+work, and `foks_status` reports that writes are paused. The repair is
+deliberately not an MCP tool, so an assistant cannot vouch for the clock it
+is being judged by: a person confirms the computer's current time in the
+desktop app's account settings, or with the two-step `foks-rs retention
+reanchor` command. Both send the agent a preview, which returns a digest
+of the displayed clock state, and then a confirmation carrying that
+digest; the agent re-anchors to its own monotonic clock and keeps the
+rejection watermark.
 
 Cancellation is honored but does not undo remote work; a cancelled request
 answers "check mutation status before retrying." An interrupted upload may
@@ -217,7 +224,7 @@ The server advertises MCP revision 2025-11-25 and negotiates 2025-06-18,
 exact version. Advertising the newest and accepting older revisions lets
 an assistant host that has not yet updated continue to work.
 
-The local agent IPC is separate: its current version is 32. Upgrade the CLI
+The local agent IPC is separate: its current version is 34. Upgrade the CLI
 and resident agent together and restart the agent to avoid a version mismatch.
 The hard-state database uses schema 41 and migrates supported schemas 38
 through 40; other development schemas are refused. These upgrades do not turn an

@@ -198,3 +198,61 @@ pub struct DataStat {
     pub size: Option<u64>,
     pub target: Option<String>,
 }
+
+/// Whether the adapter clock admits new assistant data writes for one account.
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AdapterClockAdmission {
+    /// No admission has anchored the clock yet; the first one will.
+    Unanchored,
+    Trusted,
+    /// New writes and pruning fail with `clock-untrusted` until a repair
+    /// re-anchors the clock at a confirmed time.
+    Paused,
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterClockStatus {
+    pub admission: AdapterClockAdmission,
+    /// The computer's wall time when the agent checked, in Unix seconds.
+    pub local_time: u64,
+    /// The latest wall time admission accepted; absent until anchored.
+    pub validated_time_floor: Option<u64>,
+    /// Handles issued before this time can never execute.
+    pub reject_issued_before: Option<u64>,
+}
+
+/// A two-step repair: the preview returns a digest of the displayed clock
+/// state and the proposed time, and only that digest confirms.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "step", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum AdapterClockRepairAction {
+    Preview {
+        unix_seconds: u64,
+    },
+    Confirm {
+        unix_seconds: u64,
+        confirmation_digest: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterClockPreview {
+    pub host_id: String,
+    pub user_id: String,
+    pub anchor_wall: u64,
+    pub validated_time_floor: u64,
+    pub reject_issued_before: u64,
+    pub proposed_wall: u64,
+    pub confirmation_digest: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterClockRepair {
+    pub preview: AdapterClockPreview,
+    pub resulting_floor: u64,
+    pub checkpoint_digest: String,
+}
