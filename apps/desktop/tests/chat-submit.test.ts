@@ -93,6 +93,52 @@ for (const state of [
   });
 }
 
+test('updateOperation rejects outcomes the decoder would refuse', async () => {
+  const chat = mockChat();
+  const prepared = await chat('team', { ...input, action: 'prepare-message' });
+  if (prepared.result.kind !== 'operation')
+    throw new Error('operation expected');
+  const id = prepared.result.operation.id;
+  for (const change of [
+    { state: 'confirmed' as const },
+    { state: 'rejected' as const },
+    { rejection_code: 1 },
+    {
+      state: 'confirmed' as const,
+      confirmation: { kind: 'message-sent' as const, sequence: '0' },
+    },
+    // A message operation is confirmed only by a sent message.
+    {
+      state: 'confirmed' as const,
+      confirmation: { kind: 'channel-created' as const },
+    },
+  ])
+    assert.throws(() => chat.updateOperation('team', id, change));
+  // A channel operation is confirmed only by a created channel.
+  const channelOp = await chat('team', {
+    action: 'prepare-channel',
+    submission: 'c'.repeat(32),
+    name: 'deploys',
+    description: 'Deploy notes.',
+    admin: false,
+  });
+  if (channelOp.result.kind !== 'operation')
+    throw new Error('operation expected');
+  const channelOpId = channelOp.result.operation.id;
+  assert.throws(() =>
+    chat.updateOperation('team', channelOpId, {
+      state: 'confirmed',
+      confirmation: { kind: 'message-sent', sequence: '2' },
+    }),
+  );
+  const pending = await chat('team', { action: 'pending' });
+  assert.deepEqual(
+    pending.result.kind === 'pending' &&
+      pending.result.operations.map((op) => op.state),
+    ['prepared', 'prepared'],
+  );
+});
+
 for (const first of ['prepare-message', 'submit-message'] as const) {
   test(`${first} fingerprint rejects changed body and channel for either action`, async () => {
     const chat = mockChat();

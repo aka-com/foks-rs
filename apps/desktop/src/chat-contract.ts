@@ -325,6 +325,8 @@ function operation(value: unknown): ChatOperation {
     return fail();
   return op;
 }
+/** Decodes an operation as a reply carries it. */
+export const decodeChatOperation = operation;
 function operationConfirmation(value: unknown): ChatOperation['confirmation'] {
   if (value === null) return null;
   if (typeof value !== 'object' || !value) return fail();
@@ -348,7 +350,8 @@ export interface ChatTeamRef {
   teamAlias: string;
   teamId: string;
 }
-export function decodeChatScope(value: unknown, storeId: string): ChatScope {
+/** The team a native chat store ID encodes. */
+function storeTeam(storeId: string): ChatTeamRef {
   let expected: Record<string, unknown>;
   try {
     expected = object(JSON.parse(storeId));
@@ -356,7 +359,10 @@ export function decodeChatScope(value: unknown, storeId: string): ChatScope {
     return fail();
   }
   if (expected.kind !== 'team') return fail();
-  return decodeChatScopeFor(value, expected as unknown as ChatTeamRef);
+  return expected as unknown as ChatTeamRef;
+}
+export function decodeChatScope(value: unknown, storeId: string): ChatScope {
+  return decodeChatScopeFor(value, storeTeam(storeId));
 }
 /** Decodes a reply scope that must name `team`. */
 export function decodeChatScopeFor(
@@ -394,8 +400,16 @@ export function decodeChatReply(
   storeId: string,
   action: ChatAction,
 ): ChatReply {
+  return decodeChatReplyFor(value, storeTeam(storeId), action);
+}
+/** Decodes a reply to `action` whose scope must name `team`. */
+export function decodeChatReplyFor(
+  value: unknown,
+  team: ChatTeamRef,
+  action: ChatAction,
+): ChatReply {
   const v = object(value, ['scope', 'result']);
-  const scope = decodeChatScope(v.scope, storeId);
+  const scope = decodeChatScopeFor(v.scope, team);
   return { scope, result: decodeChatResult(v.result, scope, action) };
 }
 /**

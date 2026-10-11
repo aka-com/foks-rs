@@ -5,24 +5,61 @@ import {
   decodeLocalSession,
   notificationKey,
 } from '../src/chat/local-contract';
-import type { ChatMessage, ChatScope } from '../src/chat-contract';
-const scope: ChatScope = {
-  host: 'host',
-  actor: 'actor',
-  store: { profile: 'p', account_alias: 'a', team_alias: 't', team_id: 'team' },
+import type { ChatMessage, ChatScope, ChatTeamRef } from '../src/chat-contract';
+import { decodedChatBridge } from './lib/decoded-chat-bridge';
+// Consumer fakes reply through the native decoder, so every ID has the form
+// the agent reports.
+const ACTOR = '01' + 'aa'.repeat(32);
+const OTHER = '01' + 'bb'.repeat(32);
+const CHANNEL = 'cd'.repeat(16);
+const team: ChatTeamRef = {
+  profile: 'p',
+  accountAlias: 'a',
+  teamAlias: 't',
+  teamId: '03' + 'ab'.repeat(32),
 };
-const message = (id: number, sender: string | null = 'other'): ChatMessage => ({
-  id: String(id),
-  sequence: String(id),
+const scope: ChatScope = {
+  host: '02' + 'ab'.repeat(32),
+  actor: ACTOR,
+  store: {
+    profile: team.profile,
+    account_alias: team.accountAlias,
+    team_alias: team.teamAlias,
+    team_id: team.teamId,
+  },
+};
+const message = (
+  sequence: number,
+  sender: string | null = OTHER,
+): ChatMessage => ({
+  id: sequence.toString(16).padStart(32, '0'),
+  sequence: String(sequence),
   sender,
   send_time: '1',
   insert_time: '1',
   content: { kind: 'text', text: 'hello' },
 });
+/**
+ * A history result for at most `CHAT_PAGE_ROWS` rows: those below `before`,
+ * with `before` naming the lowest returned sequence unless that is 1.
+ */
+const page = (channel: string, rows: ChatMessage[], before: string | null) => {
+  const messages = rows.filter(
+    (m) => before === null || BigInt(m.sequence) < BigInt(before),
+  );
+  const lowest = Math.min(...messages.map((m) => Number(m.sequence)));
+  return {
+    kind: 'history',
+    channel,
+    messages,
+    before: messages.length && lowest > 1 ? String(lowest) : null,
+    missing_predecessors: [],
+  };
+};
 test('notification candidates exclude baseline, own, unknown, duplicate and visible messages', () => {
   const rows = [
     message(1),
-    message(2, 'actor'),
+    message(2, ACTOR),
     message(3, null),
     message(4),
     message(5),
@@ -30,7 +67,9 @@ test('notification candidates exclude baseline, own, unknown, duplicate and visi
     message(6),
   ];
   assert.deepEqual(
-    incoming(rows, 1n, 5n, 'actor', (id) => id === '4').map((m) => m.id),
+    incoming(rows, 1n, 5n, ACTOR, (id) => id === message(4).id).map(
+      (m) => m.sequence,
+    ),
     ['5'],
   );
   assert.equal(notificationText([], true).length, 0);
@@ -81,12 +120,35 @@ test('local settings decoder rejects invalid persisted identities and invalid fl
   );
 });
 
+test('consumer fakes reject a notification page the agent could not send', async () => {
+  const reply = (text: string) => ({
+    scope,
+    result: page(
+      CHANNEL,
+      [{ ...message(2), content: { kind: 'text', text } }],
+      null,
+    ),
+  });
+  let next = reply('x'.repeat(256));
+  const bridge = decodedChatBridge({ chat: async () => next }, team);
+  const read = () =>
+    bridge.chat('team:eng', {
+      action: 'notification-history',
+      channel: CHANNEL,
+      before: null,
+    });
+  await read();
+  // The agent cuts each notification text to 256 characters.
+  next = reply('x'.repeat(257));
+  await assert.rejects(read(), { code: 'chat-integrity' });
+});
+
 test('consumer baselines verified history, filters own messages and never writes read state', async () => {
   const { installDom } = await import('./lib/dom-harness');
   installDom({ url: 'http://localhost/', body: '<div></div>' });
   const { NotificationConsumer } =
     await import('../src/chat/notification-consumer');
-  const channel = { id: 'c', readable: true };
+  const channel = { id: CHANNEL, readable: true };
   let revision = 1;
   let rows = [message(10)];
   let historyCalls = 0;
@@ -109,7 +171,7 @@ test('consumer baselines verified history, filters own messages and never writes
             note: '',
             scope,
             revision,
-            channelRevisions: new Map([['c', revision]]),
+            channelRevisions: new Map([[CHANNEL, revision]]),
             blockedChannels: new Set(),
             data: {
               channels: [channel],
@@ -121,26 +183,23 @@ test('consumer baselines verified history, filters own messages and never writes
         ],
       ]),
   };
-  const bridge = {
-    chat: async (_store: string, action: { action: string }) => {
-      assert.equal(action.action, 'notification-history');
-      historyCalls++;
-      return {
-        scope,
-        result: {
-          kind: 'history',
-          channel: 'c',
-          messages: rows,
-          before: null,
-          missing_predecessors: [],
-        },
-      };
+  const bridge = decodedChatBridge(
+    {
+      chat: async (
+        _store: string,
+        action: { action: string; before: string | null },
+      ) => {
+        assert.equal(action.action, 'notification-history');
+        historyCalls++;
+        return { scope, result: page(CHANNEL, rows, action.before) };
+      },
+      cancelChat: async () => {},
+      chatLocal: async (action: unknown) => {
+        alerts.push(action);
+      },
     },
-    cancelChat: async () => {},
-    chatLocal: async (action: unknown) => {
-      alerts.push(action);
-    },
-  };
+    team,
+  );
   const consumer = new NotificationConsumer(
     bridge as unknown as import('../src/bridge').Bridge,
     service as unknown as import('../src/chat/inbox-service').ChatInboxService,
@@ -159,7 +218,7 @@ test('consumer baselines verified history, filters own messages and never writes
   try {
     await until(() => historyCalls === 1);
     assert.equal(alerts.length, 0);
-    rows = [message(12), message(11, 'actor'), message(10)];
+    rows = [message(12), message(11, ACTOR), message(10)];
     revision++;
     for (const fn of listeners) fn();
     await until(() => alerts.length === 1);
@@ -177,7 +236,7 @@ test('consumer advances budgeted passes beyond 64 channels despite an always-fai
   const { NotificationConsumer } =
     await import('../src/chat/notification-consumer');
   const channels = Array.from({ length: 70 }, (_, i) => ({
-    id: String(i),
+    id: (i + 1).toString(16).padStart(32, 'c'),
     readable: true,
   }));
   const checked = new Set<string>();
@@ -203,37 +262,38 @@ test('consumer advances budgeted passes beyond 64 channels despite an always-fai
         ],
       ]),
   };
-  const bridge = {
-    chat: async (
-      _store: string,
-      action: { action: string; channel: string },
-    ) => {
-      assert.equal(action.action, 'notification-history');
-      checked.add(action.channel);
-      if (action.channel === '0')
-        throw {
-          code: 'offline',
-          message: 'offline',
-          fatal: false,
-          retryable: true,
-          ambiguous: false,
+  const bridge = decodedChatBridge(
+    {
+      chat: async (
+        _store: string,
+        action: { action: string; channel: string; before: string | null },
+      ) => {
+        assert.equal(action.action, 'notification-history');
+        checked.add(action.channel);
+        if (action.channel === channels[0].id)
+          throw {
+            code: 'offline',
+            message: 'offline',
+            fatal: false,
+            retryable: true,
+            ambiguous: false,
+          };
+        return {
+          scope,
+          result: page(
+            action.channel,
+            Array.from({ length: 50 }, (_, i) => message(50 - i)),
+            action.before,
+          ),
         };
-      return {
-        scope,
-        result: {
-          kind: 'history',
-          channel: action.channel,
-          messages: Array.from({ length: 50 }, (_, i) => message(50 - i)),
-          before: null,
-          missing_predecessors: [],
-        },
-      };
+      },
+      cancelChat: async () => {},
+      chatLocal: async () => {
+        assert.fail('Baseline must not alert');
+      },
     },
-    cancelChat: async () => {},
-    chatLocal: async () => {
-      assert.fail('Baseline must not alert');
-    },
-  };
+    team,
+  );
   const consumer = new NotificationConsumer(
     bridge as unknown as import('../src/bridge').Bridge,
     service as unknown as import('../src/chat/inbox-service').ChatInboxService,
@@ -284,26 +344,29 @@ test('closing consumer during history discards late authorized plaintext', async
             note: '',
             scope,
             revision: 1,
-            channelRevisions: new Map([['c', 1]]),
+            channelRevisions: new Map([[CHANNEL, 1]]),
             blockedChannels: new Set(),
             data: {
-              channels: [{ id: 'c', readable: true }],
+              channels: [{ id: CHANNEL, readable: true }],
               conversations: [],
             },
           },
         ],
       ]),
   };
-  const bridge = {
-    chat: () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-    cancelChat: async () => {},
-    chatLocal: async () => {
-      alerts++;
+  const bridge = decodedChatBridge(
+    {
+      chat: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      cancelChat: async () => {},
+      chatLocal: async () => {
+        alerts++;
+      },
     },
-  };
+    team,
+  );
   const consumer = new NotificationConsumer(
     bridge as unknown as import('../src/bridge').Bridge,
     service as unknown as import('../src/chat/inbox-service').ChatInboxService,
@@ -319,16 +382,7 @@ test('closing consumer during history discards late authorized plaintext', async
       await new Promise((r) => setTimeout(r, 20));
     assert.ok(finish);
     consumer.stop();
-    finish({
-      scope,
-      result: {
-        kind: 'history',
-        channel: 'c',
-        messages: [message(1)],
-        before: null,
-        missing_predecessors: [],
-      },
-    });
+    finish({ scope, result: page(CHANNEL, [message(1)], null) });
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(alerts, 0);
   } finally {
@@ -361,34 +415,28 @@ test('activating a notification opens the Chat tab on that team and channel', as
     available: true,
     settings: { enabled: true, previews: false, overrides: {} },
   };
-  const activation = { storeId: 'team:eng', channel: 'cd'.repeat(16), scope };
+  const activation = { storeId: 'team:eng', channel: CHANNEL, scope };
   let taken = false;
   const navigations: unknown[] = [];
-  const bridge = {
-    chatLocal: async (action: { action: string }) => {
-      if (action.action !== 'take-activation') return session;
-      const once = taken ? undefined : activation;
-      taken = true;
-      return { ...session, activation: once };
+  const bridge = decodedChatBridge(
+    {
+      chatLocal: async (action: { action: string }) => {
+        if (action.action !== 'take-activation') return session;
+        const once = taken ? undefined : activation;
+        taken = true;
+        return { ...session, activation: once };
+      },
+      onChatNotification: async () => () => {},
+      // The history read is the proof the activation still resolves; only
+      // its scope decides whether the navigation happens.
+      chat: async (_store: string, action: { action: string }) => {
+        assert.equal(action.action, 'history');
+        return { scope, result: page(activation.channel, [], null) };
+      },
+      cancelChat: async () => {},
     },
-    onChatNotification: async () => () => {},
-    // The history read is the proof the activation still resolves; only its
-    // scope decides whether the navigation happens.
-    chat: async (_store: string, action: { action: string }) => {
-      assert.equal(action.action, 'history');
-      return {
-        scope,
-        result: {
-          kind: 'history',
-          channel: activation.channel,
-          messages: [],
-          before: null,
-          missing_predecessors: [],
-        },
-      };
-    },
-    cancelChat: async () => {},
-  };
+    team,
+  );
   const service = {
     handleError: () => false,
     openChannel: () => undefined,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   decodeChatReply,
+  decodeChatReplyFor,
   decodeChatResult,
   decodeChatScopeFor,
   sequence,
@@ -109,6 +110,14 @@ test('the scope check and the result decoder apply separately to a named team', 
     scope: resolved,
     result,
   });
+  assert.deepEqual(decodeChatReplyFor({ scope, result }, team, action), {
+    scope: resolved,
+    result,
+  });
+  for (const reply of [null, { scope, result, extra: 1 }, { scope }])
+    assert.throws(() => decodeChatReplyFor(reply, team, action), {
+      code: 'chat-integrity',
+    });
   for (const changed of [
     { profile: 'other' },
     { accountAlias: 'other' },

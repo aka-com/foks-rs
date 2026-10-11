@@ -2,8 +2,8 @@ import type { AgentSnapshot } from './model';
 import { cancelled } from './chat/client';
 import { CHAT_PAGE_ROWS, CHAT_SNIPPET_BYTES } from './chat-limits';
 import {
-  decodeChatResult,
-  decodeChatScopeFor,
+  decodeChatOperation,
+  decodeChatReplyFor,
   type ChatAction,
   type ChatChannel,
   type ChatMessage,
@@ -36,8 +36,9 @@ function mockChatTeam(
   };
 }
 /**
- * A preview's text as the agent reports it: the first line, cut to
- * `CHAT_SNIPPET_BYTES` UTF-8 bytes on a character boundary with an ellipsis.
+ * A preview's text as the agent reports it: the first line, whole when it
+ * fits in `CHAT_SNIPPET_BYTES` UTF-8 bytes, otherwise cut on a character
+ * boundary to leave room for an ellipsis.
  */
 function previewText(text: string): string {
   const line = text.split(/[\r\n]/, 1)[0];
@@ -45,15 +46,15 @@ function previewText(text: string): string {
     const point = c.codePointAt(0)!;
     return point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
   };
-  // The ellipsis takes three bytes.
-  let bytes = 3;
+  let bytes = 0;
   let cut = '';
   for (const c of line) {
     bytes += utf8(c);
-    if (bytes > CHAT_SNIPPET_BYTES) break;
-    cut += c;
+    if (bytes > CHAT_SNIPPET_BYTES) return `${cut}…`;
+    // The ellipsis takes three bytes.
+    if (bytes <= CHAT_SNIPPET_BYTES - 3) cut += c;
   }
-  return cut.length === line.length ? line : `${cut}…`;
+  return line;
 }
 /** A stored submission's input, which a repeated prepare must match. */
 const messageInput = (submission: string, channel: string, text: string) =>
@@ -527,7 +528,7 @@ export function mockChat(
     }
     // As the native bridge does, every reply passes the IPC decoder, here on
     // a copy serialized as IPC would carry it.
-    const reply = JSON.parse(
+    const reply: unknown = JSON.parse(
       JSON.stringify({
         scope: {
           store: {
@@ -541,9 +542,8 @@ export function mockChat(
         },
         result,
       }),
-    ) as { scope: unknown; result: unknown };
-    const scope = decodeChatScopeFor(reply.scope, ref);
-    return { scope, result: decodeChatResult(reply.result, scope, action) };
+    );
+    return decodeChatReplyFor(reply, ref, action);
   };
   return Object.assign(chat, {
     cancel: async (view: string) => {
@@ -563,13 +563,12 @@ export function mockChat(
     ) => {
       const op = teams.get(storeId)?.operations.get(id);
       if (!op) throw new Error('No such mock chat operation.');
-      const next = { ...op, ...change };
-      // The pairings the decoder checks on every reply naming the operation.
-      if (
-        (next.state === 'confirmed') !== (next.confirmation !== null) ||
-        (next.state === 'rejected') !== (next.rejection_code !== null)
-      )
-        throw new Error('The operation outcome does not match its state.');
+      // The decoder checks the operation on every reply naming it.
+      try {
+        decodeChatOperation(JSON.parse(JSON.stringify({ ...op, ...change })));
+      } catch {
+        throw new Error('The chat decoder refuses this operation outcome.');
+      }
       Object.assign(op, change);
     },
   });

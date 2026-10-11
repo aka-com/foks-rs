@@ -323,13 +323,29 @@ test('a scripted session on a fixture store ID decodes as the agent would reply'
     channel: MOCK_CHAT_GENERAL,
     text: `${long}\nsecond line`,
   });
-  const second = await call({ action: 'sync-inbox', blocked_channels: [] });
-  if (second.result.kind !== 'inbox') throw new Error('inbox expected');
-  const preview = second.result.conversations[0].preview?.content;
-  assert.deepEqual(preview, {
-    kind: 'text',
-    text: `${'\u{1F600}'.repeat(127)}…`,
-  });
+  const preview = async () => {
+    const reply = await call({ action: 'sync-inbox', blocked_channels: [] });
+    if (reply.result.kind !== 'inbox') throw new Error('inbox expected');
+    const content = reply.result.conversations[0].preview?.content;
+    return content?.kind === 'text' ? content.text : content?.kind;
+  };
+  assert.equal(await preview(), `${'\u{1F600}'.repeat(127)}…`);
+  // A first line within the snippet bound is reported whole; one byte more
+  // and it is cut to leave room for the three-byte ellipsis.
+  for (const [index, [line, expected]] of [
+    ['x'.repeat(512), 'x'.repeat(512)],
+    [`${'x'.repeat(508)}\u{1F600}`, `${'x'.repeat(508)}\u{1F600}`],
+    ['x'.repeat(513), `${'x'.repeat(509)}…`],
+    [`${'x'.repeat(509)}\u{1F600}`, `${'x'.repeat(509)}…`],
+  ].entries()) {
+    await call({
+      action: 'submit-message',
+      submission: String(index + 4).repeat(32),
+      channel: MOCK_CHAT_GENERAL,
+      text: line,
+    });
+    assert.equal(await preview(), expected);
+  }
   const incremental = await call({
     action: 'history',
     channel: MOCK_CHAT_GENERAL,
@@ -384,6 +400,15 @@ test('a scripted session on a fixture store ID decodes as the agent would reply'
   });
   if (pending.result.kind !== 'operation')
     throw new Error('operation expected');
+  const body = await call({
+    action: 'operation-body',
+    operation: pending.result.operation.id,
+    channel: MOCK_CHAT_GENERAL,
+  });
+  assert.equal(
+    body.result.kind === 'operation-body' && body.result.text,
+    'held',
+  );
   // A reply is a decoded copy: changing it does not change the mock's ledger.
   pending.result.operation.state = 'cancelled';
   const listed = await call({ action: 'pending' });
@@ -397,4 +422,24 @@ test('a scripted session on a fixture store ID decodes as the agent would reply'
     (await call({ action: 'cleanup-pending' })).result.kind,
     'cleanup-pending',
   );
+  // Paging back from the first page's `before` reaches the rows just below it.
+  const busy = mockChat(FIXTURE, 'busy');
+  const latest = await busy('team:eng', {
+    action: 'history',
+    channel: MOCK_CHAT_GENERAL,
+    before: null,
+  });
+  if (latest.result.kind !== 'history') throw new Error('history expected');
+  const older = await busy('team:eng', {
+    action: 'history',
+    channel: MOCK_CHAT_GENERAL,
+    before: latest.result.before,
+  });
+  if (older.result.kind !== 'history') throw new Error('history expected');
+  assert.equal(
+    older.result.messages.at(-1)?.sequence,
+    String(Number(latest.result.before) - 1),
+  );
+  const lowest = older.result.messages[0].sequence;
+  assert.equal(older.result.before, lowest === '1' ? null : lowest);
 });
