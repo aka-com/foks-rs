@@ -138,9 +138,11 @@ export function mockChat(
         action.action === 'load-intent' &&
         team.seed.intentFailures.has(action.channel)
       )
+        // The agent's catch-all reply when its saved-message store is invalid.
         throw {
-          code: 'chat-key-unavailable',
-          message: 'The key for saved messages in this channel is unavailable.',
+          code: 'operation-failed',
+          message:
+            'FOKS application configuration is invalid: saved chat state is invalid',
           fatal: false,
           retryable: false,
           ambiguous: false,

@@ -38,7 +38,10 @@ export const MOCK_CHAT_ARCHIVE = 'b4'.repeat(16);
 export const MOCK_CHAT_PREPARED = 'f1'.repeat(16);
 export const MOCK_CHAT_UNCERTAIN = 'f2'.repeat(16);
 export const MOCK_CHAT_REJECTED = 'f3'.repeat(16);
-/** The code a v0.1.9 host reports for a rejected send. */
+/**
+ * The message-order status a v0.1.9 host returns when it rejects a send; the
+ * client records it, like five other statuses, as a definite rejection.
+ */
 export const MOCK_CHAT_REJECTION_CODE = 12006;
 
 /** A scenario's initial state for one team. */
@@ -54,12 +57,20 @@ export interface ChatMockSeed {
   rejections: Map<string, number>;
   hidden: Set<string>;
   muted: Set<string>;
-  /** Channels the inbox reports stopped. */
+  /**
+   * Channels the inbox reports stopped. The agent only echoes channels the
+   * desktop asked it to block, so this is a mock shortcut for a channel the
+   * desktop stopped earlier.
+   */
   blocked: Set<string>;
   /** Per message ID, the predecessor sequences a page holding it reports. */
   missingPredecessors: Map<string, string[]>;
   degraded: boolean;
-  /** Channels whose saved-message load fails. */
+  /**
+   * Channels whose saved-message load fails. The agent keeps every channel's
+   * saved messages in one local store, so in production every channel fails
+   * together; the mock confines the failure to the listed channels.
+   */
   intentFailures: Set<string>;
 }
 
@@ -220,13 +231,16 @@ function seed(): ChatMockSeed {
 const generalChannel = () =>
   channel(MOCK_CHAT_GENERAL, '', 'A place for the whole team.');
 
-/** The general channel, holding one message. */
+/**
+ * The general channel, holding one message, unread unless the local account
+ * sent it: the agent advances the read pointer over the local account's sends.
+ */
 function general(state: ChatMockSeed, sender: string) {
   state.channels.push(generalChannel());
   state.messages.set(MOCK_CHAT_GENERAL, [
     message('cd'.repeat(16), 1, sender, BASE_TIME, 'Team chat is ready.'),
   ]);
-  state.reads.set(MOCK_CHAT_GENERAL, 0n);
+  state.reads.set(MOCK_CHAT_GENERAL, sender === MOCK_CHAT_ACTOR ? 1n : 0n);
 }
 
 /** A seeded channel and its messages, read through `read`. */

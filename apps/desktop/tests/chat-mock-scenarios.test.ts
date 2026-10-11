@@ -115,6 +115,13 @@ test('default: the seed message is from the team Owner', async () => {
   });
   if (bare.result.kind !== 'history') throw new Error('history expected');
   assert.equal(bare.result.messages[0].sender, MOCK_CHAT_ACTOR);
+  // The agent advances the read pointer over the local account's own send.
+  const bareInbox = await mockChat()('team', {
+    action: 'sync-inbox',
+    blocked_channels: [],
+  });
+  if (bareInbox.result.kind !== 'inbox') throw new Error('inbox expected');
+  assert.equal(bareInbox.result.conversations[0].unread, '0');
 });
 
 test('busy: four channels, a long unread run and a departed sender', async () => {
@@ -221,7 +228,7 @@ test('failures: unsent and unconfirmed operations, a rejection and an intent loa
   });
   await assert.rejects(
     chat({ action: 'load-intent', ...target, channel: MOCK_CHAT_DEPLOYS }),
-    { code: 'chat-key-unavailable' },
+    { code: 'operation-failed' },
   );
 });
 

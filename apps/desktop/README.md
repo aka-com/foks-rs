@@ -222,9 +222,10 @@ are decisions, not details:
   channels, one admin-only, and 120 messages in #general with 42 unread, from
   roster members, the local account and one UID absent from the roster),
   `failures` (unsent and unconfirmed ledger operations, one whose attempt the
-  host rejects with status 12006, and a channel whose saved message cannot be
-  loaded) or `integrity` (a page with missing predecessors, a degraded inbox,
-  and a stopped, a muted and a hidden channel). For example,
+  host rejects with status 12006, and a channel whose saved messages cannot be
+  loaded because the local saved-message store is invalid) or `integrity` (a
+  page with missing predecessors, a degraded inbox, and a stopped, a muted and
+  a hidden channel). For example,
   `?state=chat&store=team%3Ahousehold&chat-scenario=busy` opens Household, the
   team whose fixture server offers chat. Render and unit tests import the same
   seeds and IDs.
