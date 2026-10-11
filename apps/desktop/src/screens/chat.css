@@ -1464,6 +1464,9 @@
   color: var(--amber-ink);
   font-weight: 600;
 }
+.chat-link-hosts {
+  overflow-wrap: anywhere;
+}
 .chat-link-destination {
   display: flex;
   flex-direction: column;

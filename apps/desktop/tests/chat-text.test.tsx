@@ -89,11 +89,16 @@ test('a link label naming another host is marked and its destination host shown'
   assert.match(html, /Link text names a different host: /);
   assert.match(
     html,
-    /<span class="chat-link-host mismatch">\(evil\.example\)<\/span>/,
+    /<bdi dir="ltr" class="chat-link-host mismatch">\(evil\.example\)<\/bdi>/,
   );
   assert.deepEqual(
     chatLinkDisplay('https://bank.example/login', 'https://evil.example/'),
-    { host: 'evil.example', showHost: true, mismatchedHost: 'bank.example' },
+    {
+      label: 'https://bank.example/login',
+      host: 'evil.example',
+      showHost: true,
+      mismatchedHost: 'bank.example',
+    },
   );
 });
 
@@ -116,7 +121,7 @@ test('a plain-word label shows the destination host without a warning', () => {
   assert.match(html, /title="https:\/\/docs\.example\/notes"/);
   assert.match(
     html,
-    />here<\/bdi><\/a><span class="chat-link-host">\(docs\.example\)<\/span>/,
+    />here<\/bdi><\/a><bdi dir="ltr" class="chat-link-host">\(docs\.example\)<\/bdi>/,
   );
   assert.doesNotMatch(html, /chat-link-mismatch|different host/);
 });
@@ -167,9 +172,38 @@ test('label hosts are read from words that read as URLs or host names', () => {
     ['Go to bank.example', ['bank.example']],
     ['https://bank.example (official)', ['bank.example']],
     ['bank.example or other.example', ['bank.example', 'other.example']],
-    // Format characters do not hide a host name.
+    // Invisible characters do not hide a host name: format characters, and
+    // default ignorable marks such as U+034F COMBINING GRAPHEME JOINER and the
+    // variation selectors.
     ['bank\u200b.example', ['bank.example']],
     ['\u202ebank.example/login', ['bank.example']],
+    ['bank.\u034fexample/login', ['bank.example']],
+    ['bank\u034f.example', ['bank.example']],
+    ['bank.\ufe0fexample', ['bank.example']],
+    ['Sign in at bank.\ufe00example', ['bank.example']],
+    ['bank.\u{e0100}example', ['bank.example']],
+    ['bank.\u180bexample', ['bank.example']],
+    ['https://bank.\u034fexample/login', ['bank.example']],
+    // A combining mark neither ends a host name nor hides one.
+    ['bank.ex\u0301ample', ['bank.xn--example-uge']],
+    ['bank.e\u0301xample', ['bank.xn--xample-9ua']],
+    // The URL parser rejects a label that starts with a mark, so that name
+    // is kept as written and matches no destination.
+    ['bank.\u0301example', ['bank.\u0301example']],
+    // Other forms of the full stop separate labels; other forms of `/`, `?`
+    // and `#` border a name but do not end the authority.
+    ['bank\u2024example', ['bank.example']],
+    ['bank\ufe52example', ['bank.example']],
+    ['bank\uff0eexample', ['bank.example']],
+    ['Login\uff0fbank.example', ['bank.example']],
+    ['x\uff1fbank.example', ['bank.example']],
+    ['x\uff03bank.example', ['bank.example']],
+    // A Hangul filler is drawn as a blank, so it is not removed.
+    ['secure-login\u3164paypal.com', ['secure-login\u3164paypal.com']],
+    [
+      '\uff42\uff41\uff4e\uff4b\uff0e\uff45\uff58\uff41\uff4d\uff50\uff4c\uff45',
+      ['bank.example'],
+    ],
     // A dotted name on either side of an @ is read; a plain name before it is
     // a user name.
     ['https://bank.example@evil.example/', ['bank.example', 'evil.example']],
@@ -202,6 +236,20 @@ test('label hosts are read from words that read as URLs or host names', () => {
     ['https:/bank.example', ['bank.example']],
     ['https:\\\\bank.example', ['bank.example']],
     ['https://intranet', ['intranet']],
+    ['https://127.1', ['127.0.0.1']],
+    ['https://a.b', ['a.b']],
+    ['https://\u0301', []],
+    // A host before a scheme is read first.
+    ['paypal.com/x:/evil.example', ['paypal.com', 'evil.example']],
+    ['paypal.com:/evil.example', ['paypal.com', 'evil.example']],
+    ['paypal.com.js:/evil.example', ['paypal.com.js', 'evil.example']],
+    // A keycap borders a name; an enclosing mark inside a name does not.
+    ['1\ufe0f\u20e3bank.example', ['bank.example']],
+    ['1\u20e3bank.example', ['bank.example']],
+    ['bank.e\u20e3xample', ['bank.xn--example-ef8c']],
+    // A name longer than the longest accepted link is reported shortened.
+    [`${'a'.repeat(300)}.example`, [`${'a'.repeat(300)}.example`]],
+    [`${'a'.repeat(2048)}.example`, [`${'a'.repeat(253)}\u2026`]],
     // A host after many words is still read.
     [`${'word '.repeat(100)}bank.example`, ['bank.example']],
     ['here', []],
@@ -217,10 +265,28 @@ test('label hosts are read from words that read as URLs or host names', () => {
 });
 
 test('a label host is compared with the destination up to one leading www.', () => {
+  // A host written with a Hangul filler is not the host without it.
+  assert.equal(
+    chatLinkDisplay(
+      'secure-login\u3164paypal.com',
+      'https://secure-loginpaypal.com/',
+    ).mismatchedHost,
+    'secure-login\u3164paypal.com',
+  );
+  for (const [label, href] of [
+    ['https://127.1', 'https://127.0.0.1/'],
+    ['https://a.b', 'https://a.b/'],
+  ])
+    assert.equal(chatLinkDisplay(label, href).mismatchedHost, null, label);
   // Same host, different path: the suffix is shown but nothing is flagged.
   assert.deepEqual(
     chatLinkDisplay('https://bank.example/login', 'https://bank.example/home'),
-    { host: 'bank.example', showHost: true, mismatchedHost: null },
+    {
+      label: 'https://bank.example/login',
+      host: 'bank.example',
+      showHost: true,
+      mismatchedHost: null,
+    },
   );
   for (const [label, href] of [
     ['www.bank.example', 'https://bank.example/'],
@@ -250,11 +316,70 @@ test('a label host is compared with the destination up to one leading www.', () 
 });
 
 test('a link label is isolated from the bidirectional context of the text after it', () => {
-  const html = messageMarkup('[x\u202e](https://evil.example/) after');
+  const html = messageMarkup(
+    '[\u05e9\u05dc\u05d5\u05dd](https://evil.example/) after',
+  );
   assert.match(
     html,
-    /<bdi>x\u202e<\/bdi><\/a><span class="chat-link-host">\(evil\.example\)<\/span>/,
+    /<bdi>\u05e9\u05dc\u05d5\u05dd<\/bdi><\/a><bdi dir="ltr" class="chat-link-host">\(evil\.example\)<\/bdi>/,
   );
+});
+
+test('a link label is drawn without the bidirectional controls it was compared without', () => {
+  // U+202E would draw `bank.ac` as `bank.ca`, and `elpmaxe.knab` as
+  // `bank.example`; drawn without it, the label reads as compared.
+  assert.deepEqual(chatLinkDisplay('bank.\u202eac', 'https://bank.ac/'), {
+    label: 'bank.ac',
+    host: 'bank.ac',
+    showHost: true,
+    mismatchedHost: null,
+  });
+  assert.deepEqual(
+    chatLinkDisplay('https://\u202eelpmaxe.knab', 'https://elpmaxe.knab/'),
+    {
+      label: 'https://elpmaxe.knab',
+      host: 'elpmaxe.knab',
+      showHost: false,
+      mismatchedHost: null,
+    },
+  );
+  assert.equal(
+    chatLinkDisplay(
+      '\u2067x\u200e\u200f\u061c\u202a\u2069',
+      'https://a.example/',
+    ).label,
+    'x',
+  );
+  const html = messageMarkup('[bank.\u202eac](https://bank.ac/) after');
+  assert.match(html, /<bdi>bank\.ac<\/bdi>/);
+  assert.doesNotMatch(html, /\u202e/);
+  // Other invisible characters do not reorder text and are drawn as sent.
+  assert.equal(
+    chatLinkDisplay('bank\u200b.example', 'https://bank.example/').label,
+    'bank\u200b.example',
+  );
+});
+
+test('reading the hosts of a long label takes linear time', () => {
+  // Labels of one character, with no final label to end a match, and a word
+  // without a scheme separator, were each quadratic for a pattern retried at
+  // every position. 64K characters is the longest text MessageText formats.
+  for (const label of [
+    'a.'.repeat(32000),
+    'a'.repeat(64000),
+    `${'a'.repeat(64000)}.bb`,
+    `https://${'a.'.repeat(32000)}`,
+    `${'a:'.repeat(32000)}//bank.example`,
+    `a.bb${'\u0301'.repeat(32000)}${'\u0316'.repeat(32000)}`,
+  ]) {
+    const started = performance.now();
+    labelHosts(label);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 1000, `${label.slice(0, 8)}… took ${elapsed} ms`);
+  }
+  const started = performance.now();
+  messageMarkup(`[${'a.'.repeat(32000)}](https://evil.example/)`);
+  assert.ok(performance.now() - started < 1000);
 });
 
 test('oversized line sets fall back to literal source', () => {

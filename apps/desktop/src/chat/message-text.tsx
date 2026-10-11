@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { Button } from '../components/button';
@@ -68,22 +68,59 @@ export function linkHost(href: string): string {
   }
 }
 
+// The full stops the URL parser maps to `.` in a host (U+3002, U+FF0E and
+// U+FF61), and U+FE52 SMALL FULL STOP and U+2024 ONE DOT LEADER, whose
+// compatibility mapping is `.`.
+const STOPS = '.\\u3002\\uff0e\\uff61\\ufe52\\u2024';
+// Letters, combining marks, digits and hyphens.
+const LABEL_CHARS = '\\p{L}\\p{M}\\p{N}\\-';
+const SEPARATOR = new RegExp(`[${STOPS}]`, 'u');
+// Maximal runs of label characters and full stops; each is read once, so the
+// cost of reading a label is linear in its length.
+const NAME_RUN = new RegExp(`[${LABEL_CHARS}${STOPS}]+`, 'gu');
+// The name at the start of an authority, dotted or not.
+const LEADING_NAME = new RegExp(
+  `^[\\p{L}\\p{N}\\-][${LABEL_CHARS}]*(?:[${STOPS}][${LABEL_CHARS}]+)*`,
+  'u',
+);
+const MARKS = /\p{M}/gu;
+// A keycap emoji (`1️⃣`), whose U+20E3 would otherwise join the digit to the
+// name after it. Read as a space; variation selectors are already removed.
+const KEYCAP = /[\d#*]\u20e3/gu;
+// A last label: two or more characters starting with a letter (`example`, an
+// IDN label in Unicode or `xn--` form), tested with combining marks removed.
+const LAST_LABEL = /^\p{L}[\p{L}\p{N}-]+$/u;
+const IPV4_PART = /^\d{1,3}$/;
+// A name longer than this many UTF-16 code units, the longest link
+// `safeChatLink` accepts, is reported shortened rather than passed to the URL
+// parser, whose normalization takes quadratic time on a long run of combining
+// marks. Even after the parser's mappings, such a name is longer than 253
+// characters, the longest DNS name, so it names no host a link can reach.
+const MAX_NAME = 2048;
+const SHORTENED_NAME = 253;
+// The end of an authority.
+const AUTHORITY_END = /[/?#\\]/u;
+// Characters that draw nothing: format characters (Unicode category Cf, such
+// as U+200B ZERO WIDTH SPACE and bidirectional controls) and the other default
+// ignorable code points (U+034F COMBINING GRAPHEME JOINER, variation
+// selectors, U+180B..U+180D, U+17B4 and U+17B5). The Hangul fillers are
+// default ignorable letters that many fonts draw as a blank, so they are kept.
+const INVISIBLE = /(?!\p{L})[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
+// The bidirectional formatting characters: U+061C, U+200E, U+200F,
+// U+202A..U+202E and U+2066..U+2069.
+const BIDI_CONTROL = /\p{Bidi_Control}/gu;
 // A scheme as browsers accept it before a host: `https://`, and also
-// `https:/` and `https:\\`.
-const SCHEME = /[a-z][a-z\d+.-]*:[/\\]+/iu;
-// A dotted name whose last label is two or more characters starting with a
-// letter (`bank.example`, an IDN in Unicode or `xn--` form), or a dotted-quad
-// IPv4 address, not preceded or followed by a letter, digit or hyphen. Any
-// other character may border it, so quotes, brackets, `'s`, dashes and
-// ellipses around a host do not hide it. Version numbers such as `1.5` and
-// `v1.2.3`, and abbreviations such as `e.g`, do not match. The extra
-// separators are the full stops the URL parser maps to `.`.
-const DOTTED_HOST =
-  /(?<![\p{L}\p{N}-])(?:(?:[\p{L}\p{N}-]+[.\u3002\uff0e\uff61])+\p{L}[\p{L}\p{N}-]+|\d{1,3}(?:\.\d{1,3}){3})(?![\p{L}\p{N}-])/gu;
+// `https:/` and `https:\\`. A match can start only where a run of scheme
+// characters starts, and the part before its first letter holds no letter, so
+// a long word without a colon is scanned once rather than from every position.
+const SCHEME = /(?<![a-z\d+.-])[\d+.-]*[a-z][a-z\d+.-]*:[/\\]+/iu;
 // Final labels that make a bare name such as `index.html` or `Node.js` read
 // as a file or product name rather than a host. Extensions that are also
 // top-level domains (md, py, rs, sh, zip, mov and others) are left out, so
-// `docs.rs` and `README.md` are compared as hosts.
+// `docs.rs` and `README.md` are compared as hosts. The rule applies to the
+// whole name, so `vite.config.ts` is not read as a host, and neither is
+// `paypal.com.js`; the destination host shown after the link still names
+// where it opens.
 const FILE_EXTENSIONS = new Set(
   (
     'cjs conf cpp css csv gif gz htm html ini jpeg jpg js json jsx kt lock ' +
@@ -103,51 +140,114 @@ function normalHost(host: string): string {
   }
 }
 
+/** A name read from a label, as its labels, in the same form as `linkHost`. */
+function hostName(labels: string[]): string {
+  const name = labels.join('.');
+  if (name.length <= MAX_NAME) return normalHost(name);
+  const shown = [...name.slice(0, 2 * SHORTENED_NAME)].slice(0, SHORTENED_NAME);
+  return `${shown.join('').toLowerCase()}…`;
+}
+
+/**
+ * The dotted names in one run of consecutive non-empty labels: the labels up
+ * to the last one shaped like a final label (`bank.example`), then any four
+ * one- to three-digit labels (an IPv4 address) after it. Version numbers such
+ * as `1.5` and `v1.2.3`, and abbreviations such as `e.g`, name nothing.
+ */
+function labelRunNames(labels: string[]): string[][] {
+  const names: string[][] = [];
+  let last = 0;
+  for (let i = 1; i < labels.length; i++)
+    if (LAST_LABEL.test(labels[i].replace(MARKS, ''))) last = i;
+  let i = 0;
+  if (last) {
+    names.push(labels.slice(0, last + 1));
+    i = last + 1;
+  }
+  while (i + 4 <= labels.length) {
+    let parts = 0;
+    while (parts < 4 && IPV4_PART.test(labels[i + parts])) parts++;
+    if (parts === 4) {
+      names.push(labels.slice(i, i + 4));
+      i += 4;
+    } else i++;
+  }
+  return names;
+}
+
+/**
+ * The dotted names in `text`, each as its labels. A name is bordered by any
+ * character other than a letter, combining mark, digit, hyphen or full stop,
+ * so quotes, brackets, `'s`, dashes and ellipses around a host do not hide it.
+ * An empty label (a leading, trailing or doubled full stop) also ends a name.
+ */
+function dottedNames(text: string): string[][] {
+  const names: string[][] = [];
+  for (const [run] of text.matchAll(NAME_RUN)) {
+    let labels: string[] = [];
+    for (const label of [...run.split(SEPARATOR), '']) {
+      if (label) labels.push(label);
+      else {
+        names.push(...labelRunNames(labels));
+        labels = [];
+      }
+    }
+  }
+  return names;
+}
+
 /**
  * The hosts one whitespace-separated word of a label names. After a scheme,
- * that is every dotted name in the authority (both sides of an `@`, since a
+ * that is every host named before the scheme (`paypal.com/x:/evil.example`),
+ * then every dotted name in the authority (both sides of an `@`, since a
  * reader may take either for the host), or the name after the last `@` when
  * the authority has no dotted name.
  * Without a scheme, it is every dotted name before the first `/`, `\`, `?` or
- * `#`, except a path-less file or product name.
+ * `#`, except a file or product name in a word that is nothing else.
  */
-function wordHosts(word: string): string[] {
+function wordHosts(word: string, wholeWord = true): string[] {
   const scheme = SCHEME.exec(word);
-  const rest = scheme ? word.slice(scheme.index + scheme[0].length) : word;
-  const authority = rest.split(/[/?#\\]/u, 1)[0];
-  const hosts: string[] = [];
-  for (const [name] of authority.matchAll(DOTTED_HOST)) {
-    const last = name.slice(name.search(/[^.\u3002\uff0e\uff61]+$/u));
-    if (
-      !scheme &&
-      rest === authority &&
-      FILE_EXTENSIONS.has(last.toLowerCase())
-    )
-      continue;
-    hosts.push(normalHost(name));
+  if (!scheme) {
+    const authority = word.split(AUTHORITY_END, 1)[0];
+    return dottedNames(authority)
+      .filter(
+        (labels) =>
+          !wholeWord ||
+          authority !== word ||
+          !FILE_EXTENSIONS.has(labels[labels.length - 1].toLowerCase()),
+      )
+      .map(hostName);
   }
-  if (scheme) {
-    // A scheme URL names a host even without a dot, as in `https://intranet`.
-    const named = /^[\p{L}\p{N}-]+/u.exec(
+  const authority = word
+    .slice(scheme.index + scheme[0].length)
+    .split(AUTHORITY_END, 1)[0];
+  const hosts = dottedNames(authority).map(hostName);
+  if (!hosts.length) {
+    // A scheme URL names a host even without a dotted name, as in
+    // `https://intranet` or `https://127.1`.
+    const named = LEADING_NAME.exec(
       authority.slice(authority.lastIndexOf('@') + 1),
     );
-    if (named && !hosts.length) hosts.push(normalHost(named[0]));
+    if (named) hosts.push(hostName(named[0].split(SEPARATOR)));
   }
-  return hosts;
+  // The text before the scheme's `:` holds no scheme, since this one is the
+  // leftmost, and is followed by the rest of the URL.
+  const before = word.slice(0, scheme.index + scheme[0].indexOf(':'));
+  return [...wordHosts(before, false), ...hosts];
 }
 
 /**
  * The hosts a link label names, in the same form as `linkHost`, from every
  * word that reads as a URL (`scheme://…`) or contains a host name
  * (`bank.example/login`, `"bank.example"`). A label such as "here" names
- * none. Invisible format characters (Unicode category Cf, such as U+200B ZERO
- * WIDTH SPACE or bidirectional overrides) are removed first, so they cannot
- * split a host name out of the match. The whole label is read; its length is
- * bounded by the message limits `MessageText` applies.
+ * none. Invisible characters are removed first, so they cannot split a host
+ * name out of the match. The whole label is read, in time linear in its
+ * length.
  */
 export function labelHosts(label: string): string[] {
   const hosts = new Set<string>();
-  for (const word of label.replace(/\p{Cf}/gu, '').split(/\s+/u))
+  const text = label.replace(INVISIBLE, '').replace(KEYCAP, ' ');
+  for (const word of text.split(/\s+/u))
     for (const host of wordHosts(word)) hosts.add(host);
   return [...hosts];
 }
@@ -158,6 +258,12 @@ function sameHost(a: string, b: string): boolean {
 }
 
 export interface ChatLinkDisplay {
+  /**
+   * The label as drawn: without bidirectional formatting characters, which
+   * would make the order the reader sees differ from the order `labelHosts`
+   * reads (`bank.\u202Eac` displays as `bank.ca`).
+   */
+  label: string;
   /** The destination host, from `linkHost`. */
   host: string;
   /** False only when the label is the destination URL itself. */
@@ -172,8 +278,10 @@ export interface ChatLinkDisplay {
 /** How a `[label](url)` link is drawn; `href` is a `safeChatLink` result. */
 export function chatLinkDisplay(label: string, href: string): ChatLinkDisplay {
   const host = linkHost(href);
-  const text = label.trim();
+  const drawn = label.replace(BIDI_CONTROL, '');
+  const text = drawn.trim();
   return {
+    label: drawn,
     host,
     showHost: text !== href && `${text}/` !== href,
     mismatchedHost:
@@ -227,7 +335,7 @@ function LinkCheck({
         </>
       }
     >
-      <p id={descriptionId}>
+      <p id={descriptionId} className="chat-link-hosts">
         The link text names <b>{namedHost}</b>, but the link opens <b>{host}</b>
         .
       </p>
@@ -251,7 +359,12 @@ function Link({
   const [error, setError] = useState('');
   const [checking, setChecking] = useState(false);
   const toasts = useOptionalToast();
-  const { host, showHost, mismatchedHost } = chatLinkDisplay(label, url);
+  const {
+    label: drawn,
+    host,
+    showHost,
+    mismatchedHost,
+  } = useMemo(() => chatLinkDisplay(label, url), [label, url]);
   const open = () => {
     void actions
       .openChatLink(url)
@@ -278,18 +391,21 @@ function Link({
             </span>
           </>
         )}
-        {/* Isolated so a bidirectional override in the label cannot reorder
-            the host shown after the link. */}
-        <bdi>{label}</bdi>
+        {/* Isolated so right-to-left text in the label cannot reorder the
+            host shown after the link. */}
+        <bdi>{drawn}</bdi>
       </a>
       {showHost && (
-        <span
+        // Isolated left to right, so a bidirectional control in the message
+        // text before the link cannot reverse the host.
+        <bdi
+          dir="ltr"
           className={
             mismatchedHost ? 'chat-link-host mismatch' : 'chat-link-host'
           }
         >
           ({host})
-        </span>
+        </bdi>
       )}
       {error && <span role="alert">{error}</span>}
       {checking && mismatchedHost && (

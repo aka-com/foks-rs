@@ -131,15 +131,18 @@ test('a mismatched link opens Check this link with Cancel focused, and Cancel op
   assert.equal(document.activeElement, spoof, 'focus returns to the link');
 });
 
-test('Escape dismisses Check this link without opening', async () => {
+test('Escape dismisses Check this link without opening and returns focus to the link', async () => {
   const { opened } = mount();
-  ui.fireEvent.click(link(/bank\.example/));
+  const spoof = link(/bank\.example/);
+  spoof.focus();
+  ui.fireEvent.click(spoof);
   const sheet = dialog();
   assert.ok(sheet);
   ui.fireEvent.keyDown(sheet, { key: 'Escape' });
   await settle();
   assert.equal(dialog(), null);
   assert.equal(opened.length, 0);
+  assert.equal(document.activeElement, spoof, 'focus returns to the link');
 });
 
 test('Open anyway opens the destination, not the label', async () => {
