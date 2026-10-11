@@ -341,7 +341,28 @@ function operationConfirmation(value: unknown): ChatOperation['confirmation'] {
   }
   return fail();
 }
+/** The team a native chat store ID encodes, which a reply's scope must name. */
+export interface ChatTeamRef {
+  profile: string;
+  accountAlias: string;
+  teamAlias: string;
+  teamId: string;
+}
 export function decodeChatScope(value: unknown, storeId: string): ChatScope {
+  let expected: Record<string, unknown>;
+  try {
+    expected = object(JSON.parse(storeId));
+  } catch {
+    return fail();
+  }
+  if (expected.kind !== 'team') return fail();
+  return decodeChatScopeFor(value, expected as unknown as ChatTeamRef);
+}
+/** Decodes a reply scope that must name `team`. */
+export function decodeChatScopeFor(
+  value: unknown,
+  team: ChatTeamRef,
+): ChatScope {
   const scope = object(value, ['store', 'host', 'actor']);
   const store = object(scope.store, [
     'profile',
@@ -349,18 +370,11 @@ export function decodeChatScope(value: unknown, storeId: string): ChatScope {
     'team_alias',
     'team_id',
   ]);
-  let expected: Record<string, unknown>;
-  try {
-    expected = object(JSON.parse(storeId));
-  } catch {
-    return fail();
-  }
   if (
-    expected.kind !== 'team' ||
-    expected.profile !== store.profile ||
-    expected.accountAlias !== store.account_alias ||
-    expected.teamAlias !== store.team_alias ||
-    expected.teamId !== store.team_id
+    team.profile !== store.profile ||
+    team.accountAlias !== store.account_alias ||
+    team.teamAlias !== store.team_alias ||
+    team.teamId !== store.team_id
   )
     return fail();
   const resolved: ChatScope = {
@@ -381,8 +395,19 @@ export function decodeChatReply(
   action: ChatAction,
 ): ChatReply {
   const v = object(value, ['scope', 'result']);
-  const resolved = decodeChatScope(v.scope, storeId);
-  const r = object(v.result);
+  const scope = decodeChatScope(v.scope, storeId);
+  return { scope, result: decodeChatResult(v.result, scope, action) };
+}
+/**
+ * Decodes the result of `action` within a scope already decoded for the
+ * requested store.
+ */
+export function decodeChatResult(
+  value: unknown,
+  resolved: ChatScope,
+  action: ChatAction,
+): ChatResult {
+  const r = object(value);
   let result: ChatResult;
   if (
     r.kind === 'intent' &&
@@ -697,5 +722,5 @@ export function decodeChatReply(
       return fail();
     result = { kind: r.kind, operations };
   } else return fail();
-  return { scope: resolved, result };
+  return result;
 }

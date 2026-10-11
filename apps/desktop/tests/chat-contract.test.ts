@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decodeChatReply, sequence } from '../src/chat-contract';
+import {
+  decodeChatReply,
+  decodeChatResult,
+  decodeChatScopeFor,
+  sequence,
+} from '../src/chat-contract';
 import {
   CHAT_DESCRIPTION_MAX_CHARS,
   CHAT_DESCRIPTION_MIN_CHARS,
@@ -81,6 +86,41 @@ test('submit operation replies bind the message kind and channel strictly', () =
       storeId,
       action,
     ),
+  );
+});
+test('the scope check and the result decoder apply separately to a named team', () => {
+  const team = {
+    profile: store.profile,
+    accountAlias: store.account_alias,
+    teamAlias: store.team_alias,
+    teamId: store.team_id,
+  };
+  const scope = {
+    store,
+    host: '02' + 'ab'.repeat(32),
+    actor: '01' + 'ab'.repeat(32),
+  };
+  const action = { action: 'pending' as const };
+  const result = { kind: 'pending', operations: [] };
+  const resolved = decodeChatScopeFor(scope, team);
+  assert.deepEqual(resolved, scope);
+  assert.deepEqual(decodeChatResult(result, resolved, action), result);
+  assert.deepEqual(decodeChatReply({ scope, result }, storeId, action), {
+    scope: resolved,
+    result,
+  });
+  for (const changed of [
+    { profile: 'other' },
+    { accountAlias: 'other' },
+    { teamAlias: 'other' },
+    { teamId: '03' + 'cd'.repeat(32) },
+  ])
+    assert.throws(() => decodeChatScopeFor(scope, { ...team, ...changed }), {
+      code: 'chat-integrity',
+    });
+  assert.throws(
+    () => decodeChatResult({ kind: 'channels' }, resolved, action),
+    { code: 'chat-integrity' },
   );
 });
 test('chat navigation round trips and clears vault-only state', () => {

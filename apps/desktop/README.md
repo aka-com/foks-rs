@@ -228,7 +228,12 @@ are decisions, not details:
   a hidden channel). For example,
   `?state=chat&store=team%3Ahousehold&chat-scenario=busy` opens Household, the
   team whose fixture server offers chat. Render and unit tests import the same
-  seeds and IDs.
+  seeds and IDs. Every mock chat reply passes the same decoder
+  (`decodeChatResult` in `src/chat-contract.ts`) that checks native replies;
+  its scope check compares against the team the fixture store ID stands for,
+  since fixture IDs such as `team:eng` are not the native JSON store
+  references. As the agent does, the mock cuts notification history text to
+  256 characters and inbox previews to the first line within 512 bytes.
 
   `src/mock-bridge.ts` uses `src/fixture.ts` with no network or timers;
   it loads only the app's versioned nonsecret first-run checkpoint so a mocked

@@ -1,13 +1,16 @@
 import type { AgentSnapshot } from './model';
 import { cancelled } from './chat/client';
-import { CHAT_PAGE_ROWS } from './chat-limits';
-import type {
-  ChatAction,
-  ChatChannel,
-  ChatMessage,
-  ChatOperation,
-  ChatReply,
-  ChatResult,
+import { CHAT_PAGE_ROWS, CHAT_SNIPPET_BYTES } from './chat-limits';
+import {
+  decodeChatResult,
+  decodeChatScopeFor,
+  type ChatAction,
+  type ChatChannel,
+  type ChatMessage,
+  type ChatOperation,
+  type ChatReply,
+  type ChatResult,
+  type ChatTeamRef,
 } from './chat-contract';
 import {
   chatMockSeed,
@@ -16,6 +19,42 @@ import {
   type ChatMockScenario,
   type ChatMockSeed,
 } from './chat-mock-scenarios';
+/**
+ * The team a mock store ID such as `team:eng` stands for: the fields the
+ * native store ID would encode, which the reply scope names.
+ */
+function mockChatTeam(
+  snapshot: AgentSnapshot | undefined,
+  storeId: string,
+): ChatTeamRef {
+  const store = snapshot?.stores.find((s) => s.id === storeId);
+  return {
+    profile: store?.server ?? 'demo',
+    accountAlias: store?.account ?? 'me',
+    teamAlias: store?.kind === 'team' ? store.alias : storeId,
+    teamId: store?.kind === 'team' ? store.team_id_hex : '03' + 'ab'.repeat(32),
+  };
+}
+/**
+ * A preview's text as the agent reports it: the first line, cut to
+ * `CHAT_SNIPPET_BYTES` UTF-8 bytes on a character boundary with an ellipsis.
+ */
+function previewText(text: string): string {
+  const line = text.split(/[\r\n]/, 1)[0];
+  const utf8 = (c: string) => {
+    const point = c.codePointAt(0)!;
+    return point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+  };
+  // The ellipsis takes three bytes.
+  let bytes = 3;
+  let cut = '';
+  for (const c of line) {
+    bytes += utf8(c);
+    if (bytes > CHAT_SNIPPET_BYTES) break;
+    cut += c;
+  }
+  return cut.length === line.length ? line : `${cut}…`;
+}
 /** A stored submission's input, which a repeated prepare must match. */
 const messageInput = (submission: string, channel: string, text: string) =>
   JSON.stringify({ action: 'prepare-message', submission, channel, text });
@@ -32,18 +71,14 @@ export function mockChat(
     { version: bigint; waiters: Set<() => void>; polling: boolean }
   >();
   const views = new Map<string, Set<() => void>>();
-  const accountFor = (storeId: string) => {
-    const store = snapshot?.stores.find((s) => s.id === storeId);
-    const key = JSON.stringify([
-      store?.server ?? 'demo',
-      store?.account ?? 'me',
-    ]);
+  const accountFor = ({ profile, accountAlias }: ChatTeamRef) => {
+    const key = JSON.stringify([profile, accountAlias]);
     let account = accounts.get(key);
     if (!account) {
       account = { version: 1n, waiters: new Set(), polling: false };
       accounts.set(key, account);
     }
-    return { account, store };
+    return account;
   };
   const teams = new Map<
     string,
@@ -66,7 +101,8 @@ export function mockChat(
     action: ChatAction,
     viewId = '',
   ): Promise<ChatReply> => {
-    const { account, store } = accountFor(storeId);
+    const ref = mockChatTeam(snapshot, storeId);
+    const account = accountFor(ref);
     let team = teams.get(storeId);
     if (!team) {
       const seed = chatMockSeed(scenario, snapshot, storeId);
@@ -228,7 +264,18 @@ export function mockChat(
                 BigInt(all.at(-1)?.sequence ?? '0') < BigInt(after),
             }),
         channel: action.channel,
-        messages: after === undefined ? rows : [...rows].reverse(),
+        // The agent cuts each notification text to 256 characters.
+        messages: (after === undefined ? rows : [...rows].reverse()).map((m) =>
+          action.action === 'notification-history' && m.content.kind === 'text'
+            ? {
+                ...m,
+                content: {
+                  kind: 'text',
+                  text: Array.from(m.content.text).slice(0, 256).join(''),
+                },
+              }
+            : m,
+        ),
         before:
           rows.length && rows[0].sequence !== '1' ? rows[0].sequence : null,
         missing_predecessors: [
@@ -280,12 +327,7 @@ export function mockChat(
                     insert_time: last.insert_time,
                     content:
                       last.content.kind === 'text'
-                        ? {
-                            kind: 'text',
-                            text: last.content.text
-                              .split(/[\r\n]/, 1)[0]
-                              .slice(0, 512),
-                          }
+                        ? { kind: 'text', text: previewText(last.content.text) }
                         : last.content,
                   }
                 : null,
@@ -483,24 +525,61 @@ export function mockChat(
       }
       result = { kind: 'operation', operation: { ...op } };
     }
-    return {
-      scope: {
-        store: {
-          profile: store?.server ?? 'demo',
-          account_alias: store?.account ?? 'me',
-          team_alias: store?.kind === 'team' ? store.alias : storeId,
-          team_id:
-            store?.kind === 'team' ? store.team_id_hex : '03' + 'ab'.repeat(32),
+    // As the native bridge does, every reply passes the IPC decoder, here on
+    // a copy serialized as IPC would carry it.
+    const reply = JSON.parse(
+      JSON.stringify({
+        scope: {
+          store: {
+            profile: ref.profile,
+            account_alias: ref.accountAlias,
+            team_alias: ref.teamAlias,
+            team_id: ref.teamId,
+          },
+          host: MOCK_CHAT_HOST,
+          actor: MOCK_CHAT_ACTOR,
         },
-        host: MOCK_CHAT_HOST,
-        actor: MOCK_CHAT_ACTOR,
-      },
-      result,
-    };
+        result,
+      }),
+    ) as { scope: unknown; result: unknown };
+    const scope = decodeChatScopeFor(reply.scope, ref);
+    return { scope, result: decodeChatResult(reply.result, scope, action) };
   };
   return Object.assign(chat, {
     cancel: async (view: string) => {
       for (const cancel of [...(views.get(view) ?? [])]) cancel();
     },
+    /**
+     * Sets a stored ledger operation's outcome, for a test that needs a state
+     * the mock reaches no other way. Replies are decoded copies, so changing
+     * one leaves the mock's state as it was.
+     */
+    updateOperation: (
+      storeId: string,
+      id: string,
+      change: Partial<
+        Pick<ChatOperation, 'state' | 'confirmation' | 'rejection_code'>
+      >,
+    ) => {
+      const op = teams.get(storeId)?.operations.get(id);
+      if (!op) throw new Error('No such mock chat operation.');
+      const next = { ...op, ...change };
+      // The pairings the decoder checks on every reply naming the operation.
+      if (
+        (next.state === 'confirmed') !== (next.confirmation !== null) ||
+        (next.state === 'rejected') !== (next.rejection_code !== null)
+      )
+        throw new Error('The operation outcome does not match its state.');
+      Object.assign(op, change);
+    },
   });
+}
+/** A mock chat, which the mock bridge also exposes as its `chat`. */
+export type MockChat = ReturnType<typeof mockChat>;
+/** The mock chat behind a bridge's `chat`, which must be the mock bridge's. */
+export function mockChatOf(bridge: { chat: unknown }): MockChat {
+  const chat = bridge.chat;
+  if (typeof chat !== 'function' || !('updateOperation' in chat))
+    throw new Error('The bridge chat is not the mock chat.');
+  return chat as MockChat;
 }

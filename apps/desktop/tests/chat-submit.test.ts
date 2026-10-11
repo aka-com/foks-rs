@@ -54,12 +54,19 @@ for (const state of [
       throw new Error('operation expected');
     const pending = await chat('team', { action: 'pending' });
     if (pending.result.kind !== 'pending') throw new Error('pending expected');
-    const operation = pending.result.operations[0];
-    operation.state = state;
-    operation.confirmation =
-      state === 'confirmed' ? { kind: 'message-sent', sequence: '2' } : null;
-    operation.rejection_code = state === 'rejected' ? 1 : null;
-    const before: ChatOperation = structuredClone(operation);
+    const change = {
+      state,
+      confirmation:
+        state === 'confirmed'
+          ? { kind: 'message-sent' as const, sequence: '2' }
+          : null,
+      rejection_code: state === 'rejected' ? 1 : null,
+    };
+    const before: ChatOperation = {
+      ...pending.result.operations[0],
+      ...change,
+    };
+    chat.updateOperation('team', before.id, change);
     const repeated = await chat('team', input);
     assert.deepEqual(repeated.result, { kind: 'operation', operation: before });
     assert.deepEqual(

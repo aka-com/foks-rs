@@ -270,3 +270,131 @@ test('integrity: missing predecessors, a degraded inbox, and stopped, muted and 
     '9',
   );
 });
+
+test('a scripted session on a fixture store ID decodes as the agent would reply', async () => {
+  // The fixture ID is not a native JSON store reference; mock replies are
+  // decoded against the team it stands for.
+  const chat = mockChat(FIXTURE);
+  const call = (action: ChatAction) => chat('team:eng', action);
+  const text = (reply: ChatReply) =>
+    reply.result.kind === 'history'
+      ? reply.result.messages.map((m) =>
+          m.content.kind === 'text' ? m.content.text : m.content.kind,
+        )
+      : [];
+  const first = await call({ action: 'sync-inbox', blocked_channels: [] });
+  assert.equal(first.scope.store.team_alias, eng.alias);
+  assert.equal(first.scope.store.team_id, eng.team_id_hex);
+  if (first.result.kind !== 'inbox') throw new Error('inbox expected');
+  // A long line of four-byte characters: the inbox preview is cut on a
+  // character boundary within the snippet bound, and notification history
+  // to 256 characters, as the agent cuts them.
+  const long = '\u{1F600}'.repeat(300);
+  for (const [index, body] of [long, 'x'.repeat(300)].entries())
+    await call({
+      action: 'submit-message',
+      submission: String(index + 1).repeat(32),
+      channel: MOCK_CHAT_GENERAL,
+      text: body,
+    });
+  assert.deepEqual(
+    text(
+      await call({
+        action: 'notification-history',
+        channel: MOCK_CHAT_GENERAL,
+        before: null,
+      }),
+    ).slice(-2),
+    ['\u{1F600}'.repeat(256), 'x'.repeat(256)],
+  );
+  assert.deepEqual(
+    text(
+      await call({
+        action: 'history',
+        channel: MOCK_CHAT_GENERAL,
+        before: null,
+      }),
+    ).slice(-2),
+    [long, 'x'.repeat(300)],
+  );
+  await call({
+    action: 'submit-message',
+    submission: '3'.repeat(32),
+    channel: MOCK_CHAT_GENERAL,
+    text: `${long}\nsecond line`,
+  });
+  const second = await call({ action: 'sync-inbox', blocked_channels: [] });
+  if (second.result.kind !== 'inbox') throw new Error('inbox expected');
+  const preview = second.result.conversations[0].preview?.content;
+  assert.deepEqual(preview, {
+    kind: 'text',
+    text: `${'\u{1F600}'.repeat(127)}…`,
+  });
+  const incremental = await call({
+    action: 'history',
+    channel: MOCK_CHAT_GENERAL,
+    before: null,
+    after: '2',
+  });
+  assert.equal(
+    incremental.result.kind === 'history' && incremental.result.gap,
+    false,
+  );
+  assert.equal(
+    (
+      await call({
+        action: 'poll-inbox',
+        since: first.result.head,
+        timeout_milliseconds: 0,
+      })
+    ).result.kind,
+    'poll',
+  );
+  assert.equal(
+    (
+      await call({
+        action: 'mark-read',
+        channel: MOCK_CHAT_GENERAL,
+        sequence: '4',
+      })
+    ).result.kind,
+    'read',
+  );
+  const created = await call({
+    action: 'prepare-channel',
+    submission: 'c'.repeat(32),
+    name: 'deploys',
+    description: 'Deploy notes.',
+    admin: false,
+  });
+  if (created.result.kind !== 'operation')
+    throw new Error('operation expected');
+  const id = created.result.operation.id;
+  await call({ action: 'attempt', operation: id });
+  const channels = await call({ action: 'channels' });
+  assert.equal(
+    channels.result.kind === 'channels' && channels.result.channels.length,
+    2,
+  );
+  const pending = await call({
+    action: 'prepare-message',
+    submission: 'd'.repeat(32),
+    channel: MOCK_CHAT_GENERAL,
+    text: 'held',
+  });
+  if (pending.result.kind !== 'operation')
+    throw new Error('operation expected');
+  // A reply is a decoded copy: changing it does not change the mock's ledger.
+  pending.result.operation.state = 'cancelled';
+  const listed = await call({ action: 'pending' });
+  assert.deepEqual(
+    listed.result.kind === 'pending' &&
+      listed.result.operations.map((op) => op.state),
+    ['prepared'],
+  );
+  await call({ action: 'cancel', operation: pending.result.operation.id });
+  assert.equal(
+    (await call({ action: 'cleanup-pending' })).result.kind,
+    'cleanup-pending',
+  );
+});

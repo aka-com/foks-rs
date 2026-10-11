@@ -15,6 +15,7 @@ import { ChatSendService } from '../src/chat/send-service';
 import { chatIntentPersistence } from '../src/chat/intent';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
+import { mockChatOf } from '../src/chat-mock';
 import {
   cleanupErrorOf,
   intentHeld,
@@ -285,12 +286,12 @@ for (const state of ['prepared', 'uncertain'] as const) {
       chat: async (action, run) => {
         if (action.action === 'submit-message') {
           const reply = await run({ ...action, action: 'prepare-message' });
-          const pending = await h.base.chat(STORE, { action: 'pending' });
-          if (pending.result.kind !== 'pending')
-            throw new Error('pending expected');
-          pending.result.operations[0].state = state;
-          if (reply.result.kind === 'operation')
-            reply.result.operation.state = state;
+          if (reply.result.kind !== 'operation')
+            throw new Error('operation expected');
+          mockChatOf(h.base).updateOperation(STORE, reply.result.operation.id, {
+            state,
+          });
+          reply.result.operation.state = state;
           return reply;
         }
         return run();
@@ -355,11 +356,12 @@ test('a lost submit reply after its uncertain checkpoint recovers without replay
   const h = await setup({
     chat: async (action, run) => {
       if (action.action === 'submit-message') {
-        await run({ ...action, action: 'prepare-message' });
-        const pending = await h.base.chat(STORE, { action: 'pending' });
-        if (pending.result.kind !== 'pending')
-          throw new Error('pending expected');
-        pending.result.operations[0].state = 'uncertain';
+        const reply = await run({ ...action, action: 'prepare-message' });
+        if (reply.result.kind !== 'operation')
+          throw new Error('operation expected');
+        mockChatOf(h.base).updateOperation(STORE, reply.result.operation.id, {
+          state: 'uncertain',
+        });
         throw lostReply;
       }
       return run();
