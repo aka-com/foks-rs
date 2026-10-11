@@ -1201,6 +1201,18 @@
     "alreadyAbsent": false,
     "removedLocalEnrollment": true
   },
+  "recoveryPhraseCheck": {
+    "matchedBackupId": "101010101010101010101010101010101010101010101010101010101010101010",
+    "matchedName": "cage 32",
+    "revoked": false,
+    "backupAlias": "paper"
+  },
+  "recoveryPhraseNearMiss": {
+    "matchedBackupId": null,
+    "matchedName": "cage 32",
+    "revoked": false,
+    "backupAlias": "paper"
+  },
   "passphraseReport": {
     "generation": 2,
     "stretchVersion": "v1",

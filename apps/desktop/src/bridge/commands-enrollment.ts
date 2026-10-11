@@ -3,6 +3,7 @@ import {
   decodeAccountDevices,
   decodeBackupEnrollments,
   decodeRecoveryPhrase,
+  decodeRecoveryPhraseCheck,
   decodeBackupRevocation,
   decodeDeviceProvision,
   decodeDeviceRemoval,
@@ -34,6 +35,7 @@ export const enrollmentCommands: Pick<
   | 'removeAccountDevice'
   | 'listBackupEnrollments'
   | 'revokeOwnerBackup'
+  | 'verifyRecoveryPhrase'
   | 'startDevicePairing'
   | 'resumeDevicePairingOffer'
   | 'finishDevicePairing'
@@ -177,6 +179,12 @@ export const enrollmentCommands: Pick<
           );
         return revoked;
       },
+    ),
+  verifyRecoveryPhrase: (accountStoreId, phrase) =>
+    checked(
+      'verify_recovery_phrase',
+      { accountStoreId, phrase },
+      decodeRecoveryPhraseCheck,
     ),
   startDevicePairing: (accountStoreId) =>
     checkedMutation(

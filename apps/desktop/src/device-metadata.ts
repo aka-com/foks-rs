@@ -227,10 +227,7 @@ export class DeviceMetadata {
             )
               ready++;
             if (state?.data && !state.error && !state.data.backupsUnavailable)
-              this.alerts.reportRecoveryPhrase(
-                store.id,
-                state.data.backups.length > 0,
-              );
+              this.alerts.reportRecoveryPhrase(store.id, state.data.backups);
             else this.alerts.forgetRecoveryPhrase(store.id);
           }
           const states = entries.map((entry) => entry.query.getSnapshot());

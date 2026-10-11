@@ -50,6 +50,8 @@
       "deviceRemoval",
       "backupEnrollment",
       "backupRevocation",
+      "recoveryPhraseCheck",
+      "recoveryPhraseNearMiss",
       "passphraseReport"
     ],
     "servers": [
@@ -111,6 +113,7 @@
     "DeviceRemovalDto": ["deviceRemoval"],
     "BackupEnrollment": ["backupEnrollment"],
     "BackupRevocation": ["backupRevocation"],
+    "RecoveryPhraseCheck": ["recoveryPhraseCheck", "recoveryPhraseNearMiss"],
     "PassphraseReport": ["passphraseReport"],
     "CheckedProfileResponse": ["checkedProfile"],
     "Configured server metadata / ServerDto": ["configuredServer"],

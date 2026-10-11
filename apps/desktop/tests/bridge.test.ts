@@ -19,6 +19,7 @@ import {
   decodeAccountDevices,
   decodeBackupEnrollments,
   decodeBackupRevocation,
+  decodeRecoveryPhraseCheck,
   decodePairingOffer,
   decodeDeviceProvision,
   decodeDeviceRemoval,
@@ -548,6 +549,34 @@ test('decoders successfully parse the full wire contract golden fixture', async 
   assert.equal(
     decodeBackupRevocation(fixture.backupRevocation).userChainSequence,
     16,
+  );
+  const backupId = `10${'10'.repeat(32)}`;
+  assert.deepEqual(decodeRecoveryPhraseCheck(fixture.recoveryPhraseCheck), {
+    matchedBackupId: backupId,
+    matchedName: 'cage 32',
+    revoked: false,
+    backupAlias: 'paper',
+  });
+  assert.equal(
+    decodeRecoveryPhraseCheck(fixture.recoveryPhraseNearMiss).matchedBackupId,
+    null,
+  );
+  // Revocation or an alias needs a named key.
+  assert.throws(() =>
+    decodeRecoveryPhraseCheck({
+      matchedBackupId: null,
+      matchedName: null,
+      revoked: true,
+      backupAlias: null,
+    }),
+  );
+  assert.throws(() =>
+    decodeRecoveryPhraseCheck({
+      matchedBackupId: '04'.repeat(33),
+      matchedName: 'cage 32',
+      revoked: false,
+      backupAlias: 'paper',
+    }),
   );
   assert.equal(
     decodePairingOffer(fixture.pairingOffer).accountAlias,

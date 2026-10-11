@@ -29,9 +29,11 @@ import type { WorkflowOperation } from '../model/workflow-availability';
  * same commands behind it.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
+import { recallPositions } from '../recovery-phrase';
+import { RecallCheck } from './recovery-phrase-recall';
 import {
   removeDevice,
   revokeRecoveryPhrase,
@@ -269,9 +271,12 @@ export function PhraseSheet({
   );
   const [phrase, setPhrase] = useState<string | null>(() => seedPhrase ?? null);
   const [alias, setAlias] = useState('paper-backup');
+  // Whether the recall check matched the written copy; it gates the save.
   const [written, setWritten] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState(false);
   const words = phrase?.split(/\s+/) ?? [];
+  const positions = useMemo(() => (phrase ? recallPositions() : []), [phrase]);
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -282,27 +287,55 @@ export function PhraseSheet({
   const discard = (): void => {
     setPhrase(null);
     setWritten(false);
+    setChecking(false);
     onClose();
   };
   // Navigation requires saving or explicitly dismissing the displayed key.
   useSheetGuard(
     phrase
-      ? { verdict: 'refuse', reason: 'Save or dismiss the recovery phrase first.' }
+      ? {
+          verdict: 'refuse',
+          reason: 'Save or dismiss the recovery phrase first.',
+        }
       : busy
-        ? { verdict: 'refuse', reason: 'Wait for the recovery phrase to finish.' }
+        ? {
+            verdict: 'refuse',
+            reason: 'Wait for the recovery phrase to finish.',
+          }
         : null,
   );
   return (
     <DeviceSheetFrame
-      title={phrase ? 'Save recovery phrase' : 'Create recovery phrase'}
+      title={
+        phrase && checking
+          ? 'Check your copy'
+          : phrase
+            ? 'Save recovery phrase'
+            : 'Create recovery phrase'
+      }
       onClose={discard}
       dismissible={!busy}
       footer={
         <>
-          {phrase ? (
+          {phrase && !checking ? (
             <>
               <Button disabled={busy} onClick={discard}>
                 Cancel
+              </Button>
+              <Button variant="primary" onClick={() => setChecking(true)}>
+                Next
+              </Button>
+            </>
+          ) : phrase ? (
+            <>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setWritten(false);
+                  setChecking(false);
+                }}
+              >
+                Back
               </Button>
               <Button
                 variant="primary"
@@ -312,6 +345,8 @@ export function PhraseSheet({
                   setBusy(true);
                   const once = phrase;
                   setPhrase(null);
+                  setChecking(false);
+                  setWritten(false);
                   void controller
                     .run(
                       () =>
@@ -319,7 +354,8 @@ export function PhraseSheet({
                           bridge.commitOwnerBackup(
                             profile,
                             accountAlias,
-                            alias,
+                            // The name the phrase was prepared under.
+                            alias.trim(),
                             once,
                           ),
                         ),
@@ -363,11 +399,18 @@ export function PhraseSheet({
         </>
       }
     >
-      {phrase ? (
+      {phrase && checking ? (
+        <RecallCheck
+          phrase={phrase}
+          positions={positions}
+          unlocks="Save recovery phrase"
+          onMatched={setWritten}
+        />
+      ) : phrase ? (
         <>
           <p>
-            Write these {words.length} words down now. The phrase cannot be
-            shown again after you close this.
+            Write these {words.length} words and numbers down now, in order. The
+            phrase cannot be shown again after you close this.
           </p>
           <div className="words">
             {words.map((word, index) => (
@@ -377,18 +420,17 @@ export function PhraseSheet({
               </span>
             ))}
           </div>
-          <label className="checkline">
-            <input
-              type="checkbox"
-              checked={written}
-              onChange={(event) => setWritten(event.target.checked)}
-            />
-            I have written down these words
-          </label>
+          <p className="recall-hint">
+            Next, you will type three of these from your written copy.
+          </p>
         </>
       ) : (
         <Inset>
-          <Field label="Recovery phrase name" value={alias} onChange={setAlias} />
+          <Field
+            label="Recovery phrase name"
+            value={alias}
+            onChange={setAlias}
+          />
         </Inset>
       )}
     </DeviceSheetFrame>
@@ -1467,7 +1509,13 @@ export function RevokeBackupSheet({
               void controller
                 .run(
                   () =>
-                    revokeRecoveryPhrase(bridge, access, store, backup, confirmation),
+                    revokeRecoveryPhrase(
+                      bridge,
+                      access,
+                      store,
+                      backup,
+                      confirmation,
+                    ),
                   onDone,
                   onError,
                 )
@@ -1480,8 +1528,8 @@ export function RevokeBackupSheet({
       }
     >
       <p>
-        This recovery phrase can no longer recover the account, and the account keys
-        are rotated. Type its name to confirm.
+        This recovery phrase can no longer recover the account, and the account
+        keys are rotated. Type its name to confirm.
       </p>
       <Inset>
         <InsetRow label="Confirm">

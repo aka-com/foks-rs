@@ -5,7 +5,7 @@ use crate::agent::{
 use crate::applock::LockStateDto;
 use crate::commands::accounts::{
     backup_enrollment_dtos, device_dtos, device_removal_response, AccountDto, BackupEnrollmentDto,
-    DeviceDto, DeviceRemovalDto, PassphraseReportDto, RecoveryPhraseDto,
+    DeviceDto, DeviceRemovalDto, PassphraseReportDto, RecoveryPhraseCheckDto, RecoveryPhraseDto,
 };
 use crate::commands::application::{AgentStatusDto, AppInfo};
 use crate::commands::enrollment::{
@@ -1005,6 +1005,24 @@ fn wire_contract_fixture_matches_serialized_shapes() {
     assert_eq!(
         serde_json::to_value(provision).unwrap(),
         fixture["deviceProvision"]
+    );
+    let check = RecoveryPhraseCheckDto {
+        matched_backup_id: Some("10".repeat(33)),
+        matched_name: Some("cage 32".to_owned()),
+        revoked: false,
+        backup_alias: Some("paper".to_owned()),
+    };
+    assert_eq!(
+        serde_json::to_value(&check).unwrap(),
+        fixture["recoveryPhraseCheck"]
+    );
+    assert_eq!(
+        serde_json::to_value(RecoveryPhraseCheckDto {
+            matched_backup_id: None,
+            ..check
+        })
+        .unwrap(),
+        fixture["recoveryPhraseNearMiss"]
     );
     let passphrase = PassphraseReportDto {
         generation: 2,

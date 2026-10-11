@@ -115,6 +115,7 @@ test('metadata resource services do not call secret-bearing or mutation bridge A
     'editTextItem',
     'prepareOwnerBackup',
     'commitOwnerBackup',
+    'verifyRecoveryPhrase',
     'runYubi',
     'setPassphrase',
     'changePassphrase',

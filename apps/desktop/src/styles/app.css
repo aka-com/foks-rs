@@ -868,25 +868,236 @@
   line-height: 1.5;
 }
 
-.local-confirm {
-  display: flex;
-  gap: 9px;
-  align-items: flex-start;
-  margin-top: 14px;
-  color: var(--ink-2);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.local-confirm input {
-  margin-top: 3px;
-}
-
 .local-quiet-link {
   display: block;
   color: var(--muted);
   font-size: 12.5px;
   font-weight: 500;
+}
+
+/* Recovery phrase checks: the recall step when a phrase is created, and the
+   17-field test sheet on Devices. */
+.recall-check {
+  margin: 10px 0 8px;
+}
+
+.recall-check .fr {
+  display: grid;
+  grid-template-columns: minmax(96px, 140px) minmax(0, 1fr);
+  gap: 4px 12px;
+  align-items: center;
+}
+
+.recall-check .fr .k small {
+  display: block;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.recall-check .fr .v {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.recall-check .fr input {
+  min-width: 0;
+  max-width: 180px;
+  font-family: var(--mono);
+}
+
+.recall-check .fr.bad input {
+  border-color: var(--danger-border);
+}
+
+.recall-ok {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--ok-ink);
+  font-size: 12.5px;
+}
+
+.recall-error,
+.phrase-test-error {
+  color: var(--danger-ink);
+  font-size: 12px;
+}
+
+.recall-error {
+  grid-column: 2;
+}
+
+.recall-error:empty,
+.phrase-test-error:empty {
+  display: none;
+}
+
+.recall-status,
+.recall-hint,
+.phrase-test-hint,
+.phrase-test-count {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.phrase-test-count {
+  margin-right: auto;
+}
+
+.phrase-test-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.phrase-test-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.phrase-test-box {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.phrase-test-cell.bad .phrase-test-box {
+  border-color: var(--danger-border);
+}
+
+.phrase-test-cell.good .phrase-test-box {
+  border-color: var(--ok-border);
+}
+
+.phrase-test-cell:focus-within .phrase-test-box {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.phrase-test-position {
+  width: 18px;
+  color: var(--faint);
+  font-size: 12px;
+  text-align: right;
+}
+
+.phrase-test-box input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 0;
+  border: 0;
+  background: transparent;
+  font: 13.5px var(--mono);
+}
+
+.phrase-test-box input:focus {
+  outline: none;
+}
+
+.phrase-test-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 2;
+  min-width: 100%;
+  margin: 2px 0 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  list-style: none;
+  font: 13px var(--mono);
+}
+
+.phrase-test-suggestions li {
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.phrase-test-suggestions li.on {
+  background: var(--accent-wash-2);
+  color: var(--accent-ink);
+}
+
+.phrase-test-result {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--amber-border);
+  border-radius: 10px;
+  background: var(--amber-wash);
+  color: var(--amber-ink);
+}
+
+.phrase-test-result.ok {
+  border-color: var(--ok-border);
+  background: var(--ok-wash);
+  color: var(--ok-ink);
+}
+
+.phrase-test-result.stop {
+  border-color: var(--danger-border);
+  background: var(--danger-wash);
+  color: var(--danger-text);
+}
+
+.phrase-test-result h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.phrase-test-result p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.phrase-test-facts {
+  margin-bottom: 10px;
+}
+
+.phrase-test-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.phrase-test-strip li {
+  display: grid;
+  width: 26px;
+  height: 22px;
+  place-items: center;
+  border-radius: 4px;
+  background: var(--amber-wash);
+  color: var(--amber-ink);
+  font-size: 12px;
+}
+
+.phrase-test-strip li.ok {
+  background: var(--ok-wash);
+  color: var(--ok-ink);
+}
+
+@media (max-width: 560px) {
+  .phrase-test-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .local-other-protection {

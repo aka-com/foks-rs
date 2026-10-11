@@ -73,9 +73,25 @@ round-tripping random secrets and by comparing against a fixture produced by
 the Go implementation. A typo that produces a valid word or in-range number
 is *not* detected at parse time; it is detected when the resulting key fails
 to open anything. For the pairing code, which is confirmed interactively
-within seconds, that is acceptable. For the recovery kit, such a typo is
-discovered only at recovery time, when the reconstructed key fails to open
+within seconds, that is acceptable. For the recovery kit, such a typo would
+be discovered only at recovery time, when the reconstructed key fails to open
 the parcel addressed to the real backup key.
+
+The client therefore checks a written copy before it is needed. The agent
+operation `VerifyRecoveryPhrase` (and `foks-rs recovery verify`) parses the
+typed phrase, derives the backup key's entity ID, and compares it with the
+backup keys in the account's user chain, replayed from local hard state. It
+sends nothing to the server and writes nothing. The answer is a match, a
+match with a key that has since been revoked, or no match. A phrase that
+does not match but whose first word and number equal an enrolled key's
+public name (below) is a near miss: the copy belongs to that key and differs
+from it somewhere in tokens 3 to 17. The key comparison cannot narrow the
+position further. Before it enrolls a new kit, the desktop asks for three
+tokens back from the written copy and compares them with the phrase it holds
+in memory; that partial check is not recorded as a test. The full check is
+offered from each recovery phrase on its Devices page, which reminds the
+user when a phrase has never been tested on that device or was last tested
+more than 180 days ago.
 
 ## The recovery kit
 

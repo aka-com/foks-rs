@@ -40,6 +40,7 @@ import type {
 import type {
   AccountDevice,
   BackupEnrollment,
+  RecoveryPhraseCheck,
   RecoveryPhraseResponse,
   BackupRevocation,
   DeviceProvision,
@@ -340,6 +341,14 @@ export interface Bridge {
     backup: BackupEnrollment,
     confirmation: string,
   ): Promise<BackupRevocation>;
+  /**
+   * Compares a typed recovery phrase with the account's backup keys. The agent
+   * answers from this device's verified state and sends nothing to the server.
+   */
+  verifyRecoveryPhrase(
+    accountStoreId: StoreRef,
+    phrase: string,
+  ): Promise<RecoveryPhraseCheck>;
   startDevicePairing(accountStoreId: StoreRef): Promise<PairingOffer>;
   resumeDevicePairingOffer(accountStoreId: StoreRef): Promise<PairingOffer>;
   finishDevicePairing(accountStoreId: StoreRef): Promise<DeviceProvision>;

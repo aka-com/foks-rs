@@ -1,6 +1,6 @@
 use crate::commands::accounts::{
     account_sync_response, backup_commit_response, backup_revocation_response, passphrase_response,
-    recovery_phrase_response,
+    recovery_phrase_check_response, recovery_phrase_response,
 };
 use crate::commands::enrollment::{
     device_provision_response, execute_initialization_recovery, go_profile_discovery_response,
@@ -484,6 +484,82 @@ fn every_first_run_mutation_success_is_shape_and_request_bound() {
         .code,
         "invalid-response"
     );
+
+    let check = |value: serde_json::Value| recovery_phrase_check_response(value, "personal");
+    let matched = check(serde_json::json!({
+        "account_alias": "personal",
+        "matched_backup_id_hex": "10".repeat(33),
+        "matched_name": "cage 32",
+        "revoked": true,
+        "backup_alias": null,
+        "user_chain_sequence": 7
+    }))
+    .unwrap();
+    assert_eq!(matched.matched_backup_id, Some("10".repeat(33)));
+    assert!(matched.revoked);
+    let near_miss = check(serde_json::json!({
+        "account_alias": "personal",
+        "matched_backup_id_hex": null,
+        "matched_name": "cage 32",
+        "revoked": false,
+        "backup_alias": "paper",
+        "user_chain_sequence": 7
+    }))
+    .unwrap();
+    assert_eq!(near_miss.matched_backup_id, None);
+    assert_eq!(near_miss.backup_alias.as_deref(), Some("paper"));
+    assert_eq!(
+        check(serde_json::json!({
+            "account_alias": "personal",
+            "matched_backup_id_hex": null,
+            "matched_name": null,
+            "revoked": false,
+            "backup_alias": null,
+            "user_chain_sequence": 7
+        }))
+        .unwrap(),
+        crate::commands::accounts::RecoveryPhraseCheckDto {
+            matched_backup_id: None,
+            matched_name: None,
+            revoked: false,
+            backup_alias: None,
+        }
+    );
+    for malformed in [
+        // Another account's answer.
+        serde_json::json!({
+            "account_alias": "work", "matched_backup_id_hex": null, "matched_name": null,
+            "revoked": false, "backup_alias": null, "user_chain_sequence": 7
+        }),
+        // A device key is not a backup key.
+        serde_json::json!({
+            "account_alias": "personal", "matched_backup_id_hex": "04".repeat(33),
+            "matched_name": null, "revoked": false, "backup_alias": null,
+            "user_chain_sequence": 7
+        }),
+        // Revocation or an alias without a named key.
+        serde_json::json!({
+            "account_alias": "personal", "matched_backup_id_hex": null, "matched_name": null,
+            "revoked": true, "backup_alias": null, "user_chain_sequence": 7
+        }),
+        serde_json::json!({
+            "account_alias": "personal", "matched_backup_id_hex": null, "matched_name": null,
+            "revoked": false, "backup_alias": "paper", "user_chain_sequence": 7
+        }),
+        serde_json::json!({
+            "account_alias": "personal", "matched_backup_id_hex": null,
+            "matched_name": "cage\n32", "revoked": false, "backup_alias": null,
+            "user_chain_sequence": 7
+        }),
+        // An echoed phrase is an unknown field.
+        serde_json::json!({
+            "account_alias": "personal", "matched_backup_id_hex": null, "matched_name": null,
+            "revoked": false, "backup_alias": null, "user_chain_sequence": 7,
+            "phrase": "cage 32"
+        }),
+    ] {
+        assert_eq!(check(malformed).unwrap_err().code, "invalid-response");
+    }
 
     let backup_id = "10".repeat(33);
     assert!(backup_revocation_response(

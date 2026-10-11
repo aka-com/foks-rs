@@ -40,6 +40,9 @@ export type AppLifecycleRequest = 'restart' | 'quit';
 
 export const mockAppLifecycleRequests: AppLifecycleRequest[] = [];
 
+/** The personal account's one recovery phrase: the key the fixture phrase derives. */
+const FIXTURE_BACKUP_ID = `10${'4'.repeat(64)}`;
+
 export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   let connectionLoss =
     typeof window !== 'undefined' &&
@@ -193,8 +196,9 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         epoch: 4821,
       },
     },
+    // HESP shape: nine BIP-39 words alternating with eight numbers.
     recoveryPhrase:
-      'orbit velvet lantern cactus mirror harbor pistol thumb copper fossil meadow rotate silent wagon bright ladder ivory',
+      'orbit 4071 velvet 128 cactus 16 mirror 2077 harbor 64 pistol 7310 thumb 512 copper 3306 ivory',
   };
   let appLocked = false;
   const notificationSettings = {
@@ -309,7 +313,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
             {
               backupAlias: 'paper-backup',
               accountAlias: store.account,
-              backupId: `10${'4'.repeat(64)}`,
+              backupId: FIXTURE_BACKUP_ID,
             },
           ]
         : [],
@@ -1358,6 +1362,38 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     },
     listBackupEnrollments: async (accountStoreId) =>
       (backupRows.get(accountStoreId) ?? []).map((entry) => ({ ...entry })),
+    // The fixture phrase derives the personal account's one backup key, and
+    // a copy that keeps its first word and number is a near miss of it.
+    verifyRecoveryPhrase: async (accountStoreId, phrase) => {
+      const store = accountStore(accountStoreId);
+      if (!store)
+        throw failure('store-not-found', 'That account is not available.');
+      const typed = phrase.trim().split(/\s+/);
+      const fixture = firstRunFixture.recoveryPhrase.split(' ');
+      if (typed.length !== 17)
+        throw failure(
+          'invalid-request',
+          `A recovery phrase has 17 words and numbers; this one has ${typed.length}.`,
+        );
+      const row = (backupRows.get(accountStoreId) ?? []).find(
+        (entry) => entry.backupId === FIXTURE_BACKUP_ID,
+      );
+      const name = `${fixture[0]} ${fixture[1]}`;
+      if (!row || typed[0] !== fixture[0] || typed[1] !== fixture[1])
+        return {
+          matchedBackupId: null,
+          matchedName: null,
+          revoked: false,
+          backupAlias: null,
+        };
+      return {
+        matchedBackupId:
+          typed.join(' ') === fixture.join(' ') ? FIXTURE_BACKUP_ID : null,
+        matchedName: name,
+        revoked: false,
+        backupAlias: row.backupAlias,
+      };
+    },
     revokeOwnerBackup: async (accountStoreId, backup, confirmation) => {
       if (confirmation !== backup.backupAlias)
         throw failure(

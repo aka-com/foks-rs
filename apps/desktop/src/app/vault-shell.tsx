@@ -49,6 +49,10 @@ import {
   deviceAlertRegistry,
   devicesAlertSummary,
 } from '../screens/device-alert';
+import {
+  recoveryPhraseTests,
+  subscribeRecoveryPhraseTests,
+} from '../recovery-phrase-tests';
 import { DetailsPanel } from '../screens/details-panel';
 import { FirstRunExperience } from '../screens/first-run-screen';
 import { unroutedNotices } from '../screens/account-section';
@@ -449,6 +453,12 @@ export function VaultShell({
     deviceAlertRegistry(bridge).subscribe,
     deviceAlertRegistry(bridge).getSnapshot,
   );
+  // When each recovery phrase was last tested on this device: an untested or
+  // overdue phrase is one of the Devices dot's reasons.
+  const phraseTests = useSyncExternalStore(
+    subscribeRecoveryPhraseTests,
+    recoveryPhraseTests,
+  );
   const appRef = useRef<HTMLDivElement>(null);
   const portalRoot = useMemo(
     () =>
@@ -601,7 +611,11 @@ export function VaultShell({
               blocked={chrome.blocked}
               collapsed={sideCollapsed}
               onToggleCollapsed={toggleSidebar}
-              devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
+              devicesAlert={devicesAlertSummary(
+                shown,
+                deviceAlerts,
+                phraseTests,
+              )}
             />
           ) : (
             <>
@@ -611,7 +625,11 @@ export function VaultShell({
                 account={locations.getAccount()}
                 attention={unroutedNotices(shown).length}
                 teamRequests={teamRequestsBadge(shown, teamRequestCounts)}
-                devicesAlert={devicesAlertSummary(shown, deviceAlerts)}
+                devicesAlert={devicesAlertSummary(
+                  shown,
+                  deviceAlerts,
+                  phraseTests,
+                )}
                 settingsAlert={settingsAlertSummary(shown)}
                 onTabNavigate={(tab) => locations.navigateTab(tab)}
                 onNavigate={(location) => {

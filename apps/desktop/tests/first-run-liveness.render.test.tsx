@@ -30,6 +30,45 @@ test.after(async () => {
   await vite.close();
 });
 
+/**
+ * Types the recall check's three tokens from `phrase`, changing the token at
+ * `wrong` (a position the check asked for) to something else.
+ */
+function fillRecall(
+  scope: HTMLElement,
+  phrase: string,
+  wrong?: number,
+): number[] {
+  const tokens = phrase.split(' ');
+  const asked: number[] = [];
+  for (const input of scope.querySelectorAll<HTMLInputElement>(
+    '.recall-check input',
+  )) {
+    const label = input.labels?.[0]?.textContent ?? '';
+    const position = Number(/position (\d+)/.exec(label)?.[1]);
+    asked.push(position);
+    const token = tokens[position - 1] ?? '';
+    ui.fireEvent.change(input, {
+      target: {
+        value:
+          position === wrong ? (/^\d+$/.test(token) ? '8191' : 'zoo') : token,
+      },
+    });
+  }
+  return asked;
+}
+
+/** The sheet's Next, once the prepared phrase is shown and Next is enabled. */
+async function enabledNext(
+  view: import('@testing-library/react').RenderResult,
+): Promise<HTMLElement> {
+  const next = await view.findByRole('button', { name: 'Next' });
+  await ui.waitFor(() =>
+    assert.equal((next as HTMLButtonElement).disabled, false),
+  );
+  return next;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -330,6 +369,7 @@ test('phrase preparation has an accessible back action outside the disabled cont
 test('recovery phrase commit shows a saving label while waiting for confirmation', async () => {
   const h = await harness();
   const commit = deferred<Awaited<ReturnType<Bridge['commitOwnerBackup']>>>();
+  const { phrase } = await h.bridge.prepareOwnerBackup('personal', 'a', 'b');
   const rendered = h.render(
     { ...h.checkpoint, managedLocal: false },
     {
@@ -341,11 +381,8 @@ test('recovery phrase commit shows a saving label while waiting for confirmation
       name: 'Generate a recovery phrase',
     }),
   );
-  ui.fireEvent.click(
-    await rendered.view.findByRole('button', {
-      name: 'I have written this down',
-    }),
-  );
+  ui.fireEvent.click(await enabledNext(rendered.view));
+  fillRecall(rendered.view.getByRole('dialog'), phrase);
   ui.fireEvent.click(rendered.view.getByRole('button', { name: 'Done' }));
   const saving = await rendered.view.findByRole('button', {
     name: 'Saving...',
@@ -355,6 +392,69 @@ test('recovery phrase commit shows a saving label while waiting for confirmation
   await rendered.view.findByRole('button', {
     name: 'Generate a recovery phrase',
   });
+  // Three tokens are not a test of the whole copy; Devices still asks for one.
+  assert.equal(window.localStorage.getItem('foks.recoveryPhraseTests'), null);
+});
+
+test('the recovery phrase is saved only after three tokens match the written copy', async () => {
+  const h = await harness();
+  const committed: string[] = [];
+  const { phrase } = await h.bridge.prepareOwnerBackup('personal', 'a', 'b');
+  const rendered = h.render(
+    { ...h.checkpoint, managedLocal: false },
+    {
+      bridge: {
+        ...h.bridge,
+        commitOwnerBackup: async (profile, account, alias, value) => {
+          committed.push(value);
+          return h.bridge.commitOwnerBackup(profile, account, alias, value);
+        },
+      },
+    },
+  );
+  ui.fireEvent.click(
+    rendered.view.getByRole('button', { name: 'Generate a recovery phrase' }),
+  );
+  ui.fireEvent.click(await enabledNext(rendered.view));
+  const dialog = rendered.view.getByRole('dialog');
+  // The phrase is hidden while its copy is checked.
+  assert.equal(dialog.querySelector('.words'), null);
+  assert.ok(ui.within(dialog).getByText('Step 2 of 2'));
+  const done = ui.within(dialog).getByRole('button', { name: 'Done' });
+  assert.equal((done as HTMLButtonElement).disabled, true);
+
+  const asked = fillRecall(dialog, phrase);
+  assert.equal(asked.length, 3);
+  assert.equal(new Set(asked).size, 3);
+  // At least one word (odd position) and one number (even position).
+  assert.ok(asked.some((position) => position % 2 === 1));
+  assert.ok(asked.some((position) => position % 2 === 0));
+  assert.equal((done as HTMLButtonElement).disabled, false);
+
+  const wrong = asked[1] ?? 0;
+  fillRecall(dialog, phrase, wrong);
+  assert.equal((done as HTMLButtonElement).disabled, true);
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByText(new RegExp(`Compare position ${wrong} on your copy`)),
+  );
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByText('One entry does not match. Fix it to continue.'),
+  );
+
+  // Back shows the phrase again, and the check starts over.
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Back' }));
+  assert.ok(dialog.querySelector('.words'));
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Next' }));
+  fillRecall(dialog, phrase);
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Done' }));
+  await rendered.view.findByRole('button', {
+    name: 'Generate a recovery phrase',
+  });
+  assert.deepEqual(committed, [phrase]);
 });
 
 test('multiple groups refresh the catalog and preserve a selected unavailable vault across restart', async () => {
@@ -661,17 +761,14 @@ test('focus loss conceals a prepared recovery phrase without closing its sheet',
   );
   await rendered.view.findByText('KEPT_SECRET');
   const dialog = rendered.view.getByRole('dialog');
-  const written = rendered.view.getByRole('button', {
-    name: 'I have written this down',
-  });
-  ui.fireEvent.click(written);
+  const next = rendered.view.getByRole('button', { name: 'Next' });
 
   ui.fireEvent(window, new Event('blur'));
 
   assert.equal(rendered.view.getByRole('dialog'), dialog);
   assert.equal(rendered.view.queryByText('KEPT_SECRET'), null);
   assert.ok(rendered.view.getByLabelText('Recovery phrase hidden'));
-  assert.ok(written.classList.contains('on'));
+  assert.equal(rendered.view.getByRole('button', { name: 'Next' }), next);
   ui.fireEvent.click(
     rendered.view.getByRole('button', { name: 'Show recovery phrase' }),
   );
