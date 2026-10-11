@@ -287,6 +287,9 @@ pub struct AgentHandle {
     /// taken over yet. Open by default so tests and the smoke test are
     /// unaffected.
     startup_gate: Arc<StartupGate>,
+    /// The agent's answer to the most recent successful Hello: its versions
+    /// and the capabilities the status DTO reports.
+    last_hello: Mutex<Option<foks_agent_proto::HelloReply>>,
     #[cfg(test)]
     managed_endpoint_override: bool,
 }
@@ -338,6 +341,7 @@ impl AgentHandle {
             maintenance_process: Arc::new(NativeMaintenanceProcess),
             maintenance_readiness: Arc::new(safe_selected_root),
             startup_gate,
+            last_hello: Mutex::new(None),
             #[cfg(test)]
             managed_endpoint_override: false,
         }

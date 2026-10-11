@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 34;
+pub const PROTOCOL_VERSION: u32 = 35;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -446,19 +446,13 @@ pub enum AgentStatus {
         /// omitted when empty for wire compatibility with older agents.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         timers: Vec<TimerStatus>,
-        /// History accepts an exclusive `after` cursor. Older agents reject unknown fields.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        history_after: Option<bool>,
     },
 }
 
 impl AgentStatus {
     /// Constructs ready status without background-loop timings.
     pub fn ready() -> Self {
-        Self::Ready {
-            timers: Vec::new(),
-            history_after: None,
-        }
+        Self::Ready { timers: Vec::new() }
     }
 
     pub fn is_ready(&self) -> bool {
@@ -2326,6 +2320,22 @@ impl Response {
         Self::error_with_fields(None, code, message, ErrorFields::default())
     }
 
+    /// The agent's frozen refusal of a frame of another version, naming the
+    /// versions it accepts. See [`crate::hello`].
+    pub fn version_mismatch(id: Option<u64>) -> Self {
+        let supported = crate::SUPPORTED_PROTOCOL_VERSIONS;
+        Self::error_with_fields(
+            id,
+            ErrorCode::VersionMismatch,
+            "unsupported protocol version",
+            ErrorFields {
+                minimum_protocol: Some(supported.minimum),
+                maximum_protocol: Some(supported.maximum),
+                ..ErrorFields::default()
+            },
+        )
+    }
+
     pub fn error_with_fields(
         id: Option<u64>,
         code: ErrorCode,
@@ -2453,6 +2463,12 @@ pub struct ErrorFields {
     pub found_schema: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supported_schema: Option<u32>,
+    /// The agent protocol versions the agent accepts, set on
+    /// `version-mismatch`. These two keys are frozen; see [`crate::hello`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_protocol: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_protocol: Option<u32>,
 }
 
 impl ErrorFields {
@@ -2463,6 +2479,8 @@ impl ErrorFields {
             && self.reason.is_none()
             && self.found_schema.is_none()
             && self.supported_schema.is_none()
+            && self.minimum_protocol.is_none()
+            && self.maximum_protocol.is_none()
     }
 
     fn bounded(mut self) -> Self {
@@ -2605,7 +2623,6 @@ mod tests {
         assert!(AgentStatus::ready().is_ready());
         assert!(AgentStatus::ready().timers().is_empty());
         let reported = AgentStatus::Ready {
-            history_after: None,
             timers: vec![TimerStatus {
                 name: "scheduler".to_owned(),
                 started_at_ms: Some(1_700_000_000_000),

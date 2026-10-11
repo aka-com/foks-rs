@@ -396,7 +396,7 @@ pub async fn initialize_client_state(
             format!("The initialization worker stopped before reporting its outcome: {error}"),
         )
     })??;
-    Ok(status.into())
+    Ok(AgentStatusDto::from_agent(status, &state.agent))
 }
 
 fn read_agent_status(

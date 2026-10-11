@@ -11,13 +11,19 @@ pub mod bot;
 pub mod chat;
 pub mod data;
 mod frame;
+pub mod hello;
 pub mod invitations;
 mod message;
 pub mod sso;
 
 pub use frame::{
-    decode_request, decode_response, decode_upload_frame, encode, request_id, Error, Result,
-    FRAME_ENVELOPE_RESERVE_BYTES, MAXIMUM_KV_PAYLOAD_BYTES, MAXIMUM_MESSAGE_BYTES,
+    decode_hello, decode_hello_response, decode_request, decode_response, decode_upload_frame,
+    encode, request_id, Error, HelloResponse, Result, FRAME_ENVELOPE_RESERVE_BYTES,
+    MAXIMUM_KV_PAYLOAD_BYTES, MAXIMUM_MESSAGE_BYTES,
+};
+pub use hello::{
+    HelloReply, HelloRequest, Peer, ProtocolRange, MAXIMUM_HELLO_CAPABILITIES,
+    MAXIMUM_HELLO_FIELD_BYTES, SUPPORTED_PROTOCOL_VERSIONS,
 };
 pub use message::{
     AccountStoreRef, AccountSummary, AgentStatus, BackupEnrollmentSummary, CompatibilityFailure,
@@ -659,7 +665,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 34);
+        const { assert!(PROTOCOL_VERSION >= 29) };
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -676,7 +682,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 34);
+        const { assert!(PROTOCOL_VERSION >= 29) };
         let request = Request::new(
             20,
             Operation::Chat {
@@ -1270,7 +1276,7 @@ mod tests {
 
     #[test]
     fn adapter_clock_repair_is_a_v34_mutation_and_status_is_not() {
-        assert_eq!(PROTOCOL_VERSION, 34);
+        const { assert!(PROTOCOL_VERSION >= 34) };
         let status = Operation::AdapterClockStatus {
             profile: "local".into(),
             account_alias: "owner".into(),

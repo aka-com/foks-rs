@@ -1034,6 +1034,51 @@ fn apply_hosted_lease_if_idle(
     apply_hosted_lease(state_dir, profile, bytes).map(Some)
 }
 
+/// Capabilities this agent advertises in its Hello reply.
+#[cfg(unix)]
+const HELLO_CAPABILITIES: &[&str] = &[foks_agent_proto::hello::capability::HISTORY_AFTER];
+
+/// Answers a frame that is not a request of this version: a Hello, of any
+/// version, gets the agent's versions and capabilities; any other frame of
+/// another version gets the frozen version-mismatch refusal; the rest are
+/// invalid requests. None of these runs an operation.
+#[cfg(unix)]
+fn undecoded_frame_response(frame: &[u8], error: foks_agent_proto::Error) -> Response {
+    let id = foks_agent_proto::request_id(frame);
+    match foks_agent_proto::decode_hello(frame) {
+        Ok(Some(hello)) => {
+            let reply = foks_agent_proto::HelloReply::new(
+                foks_agent_proto::Peer::new("foks-agent", env!("CARGO_PKG_VERSION")),
+                HELLO_CAPABILITIES,
+            );
+            match serde_json::to_value(reply) {
+                Ok(value) => Response::success(hello.id, value),
+                Err(error) => Response::error_with_fields(
+                    Some(hello.id),
+                    ErrorCode::OperationFailed,
+                    error.to_string(),
+                    ErrorFields::default(),
+                ),
+            }
+        }
+        Ok(None) if matches!(error, foks_agent_proto::Error::Version) => {
+            Response::version_mismatch(id)
+        }
+        Ok(None) => Response::error_with_fields(
+            id,
+            ErrorCode::InvalidRequest,
+            error.to_string(),
+            ErrorFields::default(),
+        ),
+        Err(hello_error) => Response::error_with_fields(
+            id,
+            ErrorCode::InvalidRequest,
+            hello_error.to_string(),
+            ErrorFields::default(),
+        ),
+    }
+}
+
 #[cfg(unix)]
 async fn handle_connection(
     mut stream: tokio::net::UnixStream,
@@ -1052,31 +1097,10 @@ async fn handle_connection(
         };
         let request = match foks_agent_proto::decode_request(&frame) {
             Ok(request) => request,
-            Err(foks_agent_proto::Error::Version) => {
-                let id = foks_agent_proto::request_id(&frame);
-                write_response(
-                    &mut stream,
-                    &Response::error_with_fields(
-                        id,
-                        ErrorCode::VersionMismatch,
-                        "unsupported protocol version",
-                        ErrorFields::default(),
-                    ),
-                    timeout,
-                )
-                .await?;
-                continue;
-            }
             Err(error) => {
-                let id = foks_agent_proto::request_id(&frame);
                 write_response(
                     &mut stream,
-                    &Response::error_with_fields(
-                        id,
-                        ErrorCode::InvalidRequest,
-                        error.to_string(),
-                        ErrorFields::default(),
-                    ),
+                    &undecoded_frame_response(&frame, error),
                     timeout,
                 )
                 .await?;
@@ -3437,7 +3461,6 @@ fn dispatch_result_inner(
             // Include background-loop timings in the existing agent-status response
             // for diagnostic correlation with requests.
             AgentStatus::Ready {
-                history_after: Some(true),
                 timers: timers::timers().snapshot(timers::now_milliseconds()),
             }
         } else {
@@ -9010,6 +9033,90 @@ mod tests {
         assert!(
             elapsed + Duration::from_millis(100) <= timeout,
             "the answer left at {elapsed:?}, too late for a client that waits {timeout:?}"
+        );
+    }
+
+    /// A Hello is answered whatever its version and before the agent is
+    /// initialized, and a request of another version gets the refusal that
+    /// names the versions the agent accepts.
+    #[tokio::test]
+    async fn hello_and_version_refusals_are_answered_before_version_checks() {
+        let temporary = tempfile::tempdir().unwrap();
+        let capacity = ConnectionCapacity {
+            recovery: Arc::new(Semaphore::new(1)),
+            blocking: Arc::new(Semaphore::new(1)),
+            local: Arc::new(Semaphore::new(1)),
+            chat_polling: Arc::new(Semaphore::new(1)),
+            active_chat_polls: Arc::new(Mutex::new(std::collections::HashSet::new())),
+        };
+        let active = Arc::new(Semaphore::new(1));
+        let permit = active.clone().acquire_owned().await.unwrap();
+        let (mut client, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let server = tokio::spawn(handle_connection(
+            server_stream,
+            temporary.path().to_path_buf(),
+            capacity,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+            permit,
+        ));
+        async fn exchange(
+            client: &mut tokio::net::UnixStream,
+            value: serde_json::Value,
+        ) -> Zeroizing<Vec<u8>> {
+            let frame = foks_agent_proto::encode(&value).unwrap();
+            client.write_all(&frame).await.unwrap();
+            read_frame(client).await.unwrap().unwrap()
+        }
+        let future_hello = serde_json::json!({
+            "version": foks_agent_proto::PROTOCOL_VERSION + 1,
+            "id": 11,
+            "operation": {
+                "operation": "hello",
+                "client": { "kind": "foks-cli", "version": "9.0.0" },
+                "accept": {
+                    "minimum": foks_agent_proto::PROTOCOL_VERSION + 1,
+                    "maximum": foks_agent_proto::PROTOCOL_VERSION + 1,
+                },
+                "future_field": true,
+            }
+        });
+        let reply = exchange(&mut client, future_hello).await;
+        let hello = foks_agent_proto::decode_hello_response(&reply).unwrap();
+        assert_eq!(hello.id, Some(11));
+        assert_eq!(hello.reply.protocol, foks_agent_proto::PROTOCOL_VERSION);
+        assert_eq!(
+            hello.reply.supported,
+            foks_agent_proto::SUPPORTED_PROTOCOL_VERSIONS
+        );
+        assert_eq!(hello.reply.agent.kind, "foks-agent");
+        assert!(hello
+            .reply
+            .has_capability(foks_agent_proto::hello::capability::HISTORY_AFTER));
+
+        let mut older = serde_json::to_value(Request::new(
+            12,
+            Operation::SetLocalAccountAlias {
+                profile: "p".to_owned(),
+                account_alias: "a".to_owned(),
+                label: "l".to_owned(),
+            },
+        ))
+        .unwrap();
+        older["version"] = serde_json::json!(foks_agent_proto::PROTOCOL_VERSION - 1);
+        let reply = exchange(&mut client, older).await;
+        server.abort();
+        let response = foks_agent_proto::decode_response(&reply).unwrap();
+        assert_eq!(response.id, Some(12));
+        assert!(
+            matches!(
+                response.result,
+                ResponseResult::Error { code: ErrorCode::VersionMismatch, ref fields, .. }
+                if fields.minimum_protocol == Some(foks_agent_proto::PROTOCOL_VERSION)
+                    && fields.maximum_protocol == Some(foks_agent_proto::PROTOCOL_VERSION)
+            ),
+            "the client saw {:?}",
+            response.result
         );
     }
 

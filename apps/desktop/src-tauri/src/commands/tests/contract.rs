@@ -149,20 +149,20 @@ fn shared_agent_lifecycle_contract_matches_native_dtos() {
         [
             (
                 "ready",
-                AgentStatusDto::from(foks_agent_proto::AgentStatus::ready()),
+                AgentStatusDto::new(foks_agent_proto::AgentStatus::ready(), false),
             ),
             (
                 "readyWithHistory",
-                AgentStatusDto::from(foks_agent_proto::AgentStatus::Ready {
-                    timers: vec![],
-                    history_after: Some(true),
-                }),
+                AgentStatusDto::new(foks_agent_proto::AgentStatus::ready(), true),
             ),
             (
                 "bootstrap",
-                AgentStatusDto::from(foks_agent_proto::AgentStatus::Bootstrap {
-                    step: "unlock".to_owned(),
-                }),
+                AgentStatusDto::new(
+                    foks_agent_proto::AgentStatus::Bootstrap {
+                        step: "unlock".to_owned(),
+                    },
+                    false,
+                ),
             ),
         ],
     );

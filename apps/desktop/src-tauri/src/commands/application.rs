@@ -1,8 +1,9 @@
 //! Agent connectivity and desktop application information.
 
-use crate::agent::{success_value, AgentError};
+use crate::agent::{success_value, AgentError, AgentHandle};
 use crate::commands::context::AppState;
 use crate::commands::validation::require_main_window;
+use foks_agent_proto::hello::capability::HISTORY_AFTER;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Emitter as _, Manager as _, State};
@@ -17,13 +18,15 @@ pub struct AgentStatusDto {
     pub history_after: Option<bool>,
 }
 
-impl From<foks_agent_proto::AgentStatus> for AgentStatusDto {
-    fn from(status: foks_agent_proto::AgentStatus) -> Self {
+impl AgentStatusDto {
+    /// `history_after` is whether the agent's Hello advertised
+    /// [`HISTORY_AFTER`]; it is reported only for a ready agent.
+    pub fn new(status: foks_agent_proto::AgentStatus, history_after: bool) -> Self {
         match status {
-            foks_agent_proto::AgentStatus::Ready { history_after, .. } => Self {
+            foks_agent_proto::AgentStatus::Ready { .. } => Self {
                 state: "ready".to_owned(),
                 step: None,
-                history_after,
+                history_after: history_after.then_some(true),
             },
             foks_agent_proto::AgentStatus::Bootstrap { step } => Self {
                 state: "bootstrap".to_owned(),
@@ -31,6 +34,11 @@ impl From<foks_agent_proto::AgentStatus> for AgentStatusDto {
                 history_after: None,
             },
         }
+    }
+
+    /// The status, with the capabilities the agent's last Hello advertised.
+    pub fn from_agent(status: foks_agent_proto::AgentStatus, agent: &AgentHandle) -> Self {
+        Self::new(status, agent.advertises(HISTORY_AFTER))
     }
 }
 
@@ -53,6 +61,7 @@ pub async fn agent_status(
     state: State<'_, AppState>,
 ) -> Result<AgentStatusDto, AgentError> {
     require_main_window(&webview)?;
+    state.agent.ensure_hello().await?;
     let value = success_value(
         state
             .agent
@@ -68,7 +77,7 @@ pub async fn agent_status(
     // The reply carries the agent's background loops. Recording them here is
     // what puts them in a readout beside the requests they competed with.
     state.agent.note_agent_timers(&status);
-    Ok(AgentStatusDto::from(status))
+    Ok(AgentStatusDto::from_agent(status, &state.agent))
 }
 
 #[tauri::command]
@@ -89,7 +98,7 @@ pub async fn auto_recover_agent(
     crate::applock::require_unlocked_generation(webview.app_handle(), access)?;
     let value = success_value(response)?;
     let status = serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
-        .map(AgentStatusDto::from)
+        .map(|status| AgentStatusDto::from_agent(status, &state.agent))
         .map_err(|error| {
             AgentError::new("protocol", format!("Invalid agent status: {error}"), false)
         })?;
@@ -121,7 +130,7 @@ pub async fn retry_agent_connection(
     })??;
     let value = success_value(response)?;
     serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
-        .map(AgentStatusDto::from)
+        .map(|status| AgentStatusDto::from_agent(status, &state.agent))
         .map_err(|error| {
             AgentError::unknown(format!(
                 "Failed to parse background service status: {error}"
@@ -280,18 +289,25 @@ mod tests {
 
     #[test]
     fn forwards_incremental_history_only_when_advertised_by_the_agent() {
-        let legacy = AgentStatusDto::from(foks_agent_proto::AgentStatus::ready());
+        let legacy = AgentStatusDto::new(foks_agent_proto::AgentStatus::ready(), false);
         assert_eq!(
             serde_json::to_value(legacy).unwrap(),
             serde_json::json!({"state":"ready"})
         );
-        let capable = AgentStatusDto::from(foks_agent_proto::AgentStatus::Ready {
-            timers: vec![],
-            history_after: Some(true),
-        });
+        let capable = AgentStatusDto::new(foks_agent_proto::AgentStatus::ready(), true);
         assert_eq!(
             serde_json::to_value(capable).unwrap(),
             serde_json::json!({"state":"ready", "historyAfter":true})
+        );
+        let bootstrap = AgentStatusDto::new(
+            foks_agent_proto::AgentStatus::Bootstrap {
+                step: "initialize-state".to_owned(),
+            },
+            true,
+        );
+        assert_eq!(
+            serde_json::to_value(bootstrap).unwrap(),
+            serde_json::json!({"state":"bootstrap", "step":"initialize-state"})
         );
     }
 }

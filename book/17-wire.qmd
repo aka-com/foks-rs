@@ -346,7 +346,7 @@ canonicality.
 | Maximum message | 1 MiB |
 | Envelope reserve | 32 KiB |
 | Maximum KV payload per frame | 700 KiB |
-| Protocol version | 30 |
+| Protocol version | 35 |
 
 Byte payloads are carried as base64 strings rather than JSON integer arrays.
 The module documentation works out why: a uniformly random byte costs about
@@ -358,6 +358,17 @@ base64 ratio, the maximum payload per frame is derived as 700 KiB, and a
 test confirms the worst-case envelope still fits. A request that asks for
 more is refused as invalid; nothing is ever truncated. Every message carries
 a version and a correlation ID, and a response binds to its request's ID.
+
+A message must carry exactly the version its reader was built for, because
+responses are not shaped per version and many of their types reject unknown
+fields. Two shapes are frozen so that a reader of one version can still
+diagnose a peer of another: a Hello, which the agent answers before checking
+the version with its own version, the range it accepts and a list of
+capabilities; and the agent's `version-mismatch` refusal, which names the same
+range. Later versions may add fields to these two shapes but never remove or
+retype one. The agent refuses a message of another version before decoding
+its operation, so a client reports a refused mutation as not run rather than
+as an unknown outcome.
 Frames are held in zeroizing buffers. Chapter 19 covers the security checks
 on the socket itself: ownership, permissions, and peer credentials.
 
@@ -374,7 +385,7 @@ on the socket itself: ownership, permissions, and peer credentials.
 - `foks-server`: `pki/host_tls.rs` (the two CAs and listener configurations),
   `auth/principal.rs` (certificate-to-credential binding), `net/session.rs`
   (certificate issuance, asynchronous frame reading, memory permits).
-- `foks-agent-proto`: `frame.rs`, `base64_bytes.rs`, `message.rs`.
+- `foks-agent-proto`: `frame.rs`, `hello.rs`, `base64_bytes.rs`, `message.rs`.
 - `tools/foks-protocol-sync`: `internal/extract/extract.go`
   (`bindingUsesDataWrap`).
 
