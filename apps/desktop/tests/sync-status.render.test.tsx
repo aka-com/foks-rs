@@ -319,12 +319,12 @@ test('Chat with no team that has chat offers a team and disables the field', () 
   const field = document.querySelector<HTMLInputElement>('.topsearch input');
   assert.ok(field);
   assert.equal(field.disabled, true);
-  assert.equal(ui.screen.queryByRole('button', { name: 'New chat' }), null);
+  assert.equal(ui.screen.queryByRole('button', { name: 'New channel' }), null);
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New team' }));
   assert.deepEqual(navigations, [{ kind: 'teams', open: 'create' }]);
 });
 
-test('Chat with teams keeps New chat and a live field', () => {
+test('Chat with teams keeps New channel and a live field', () => {
   const background = { current: null } as { current: HTMLElement | null };
   ui.render(
     createElement(
@@ -349,7 +349,7 @@ test('Chat with teams keeps New chat and a live field', () => {
   const field = document.querySelector<HTMLInputElement>('.topsearch input');
   assert.ok(field);
   assert.equal(field.disabled, false);
-  assert.ok(ui.screen.getByRole('button', { name: 'New chat' }));
+  assert.ok(ui.screen.getByRole('button', { name: 'New channel' }));
 });
 
 for (const location of [

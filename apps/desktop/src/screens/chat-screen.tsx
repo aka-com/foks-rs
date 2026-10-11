@@ -61,7 +61,7 @@ export function ChatScreen({
   onToggleInfo?: () => void;
   /** The ⓘ toggle, so the tab can hand focus back when the panel closes. */
   infoRef?: Ref<HTMLButtonElement>;
-  /** Opens the tab's New chat sheet on this team. */
+  /** Opens the tab's Create channel sheet on this team. */
   onNewChat?: () => void;
 }): ReactNode {
   const { service: sends } = useChatSends();

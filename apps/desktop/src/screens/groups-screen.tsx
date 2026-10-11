@@ -1222,9 +1222,9 @@ export function GroupSettingsScreen({
     false,
     (value) => value,
   );
-  // A New chat sheet whose submission is unresolved cannot be dismissed, and a
-  // store switch must not take it away either: a submission has to be settled
-  // where it was made.
+  // A Create channel sheet whose submission is unresolved cannot be dismissed,
+  // and a store switch must not take it away either: a submission has to be
+  // settled where it was made.
   const channelUnresolved = useRef(false);
   // One clock for this render, the way the Chat tab reads its own: a cache
   // would freeze the availability decision at the moment the tab mounted, so
@@ -1415,7 +1415,7 @@ export function GroupSettingsScreen({
   ].filter(Boolean);
   // The channels this group's inbox entry holds, or `undefined` while the
   // service has not answered for it. A hidden conversation is listed on the
-  // tab but not counted on the strip, the way New chat counts.
+  // tab but not counted on the strip, the way the Create channel sheet counts.
   const channelEntry = inbox.get(store.id);
   const channelCount = channelEntry?.data
     ? listChannels(
@@ -1841,8 +1841,8 @@ export function GroupSettingsScreen({
               onMutationError={onMutationError}
             />
           ) : null}
-          {/* Creating a channel is the New chat sheet's own create step, aimed
-              at this group: one preparation, recovered where it was made. */}
+          {/* Creating a channel is the Create channel sheet, aimed at this
+              group: one preparation, recovered where it was made. */}
           {addingChannel ? (
             <NewChatSheet
               snapshot={snapshot}

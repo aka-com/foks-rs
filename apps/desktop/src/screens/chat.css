@@ -44,6 +44,46 @@
 .chat-inbox-label .right {
   margin-left: auto;
   display: flex;
+  align-items: center;
+  gap: 2px;
+}
+/* The sort and display control: names the current order and opens its menu. */
+.chat-inbox-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 5px 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.chat-inbox-sort:hover,
+.chat-inbox-sort[aria-expanded='true'] {
+  background: var(--hover);
+  color: var(--ink);
+}
+.chat-inbox-sort:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+.chat-sort-menu {
+  min-width: 240px;
+}
+/* The check marks the chosen order and the previews switch; the glyph keeps
+   its place on the others so the labels stay aligned. */
+.chat-sort-menu [aria-checked='false'] > .ic {
+  visibility: hidden;
+}
+.chat-sort-menu [aria-checked='true'] > .ic {
+  color: var(--accent-ink);
 }
 .chat-inbox-add {
   width: 18px;
@@ -276,9 +316,74 @@
   font-weight: 400;
   color: var(--faint);
 }
+/* A channel row with previews: the name, its glyphs and the last message's
+   time, then the last message and the unread count. */
+.chat-channel.two {
+  height: auto;
+  min-height: 44px;
+  align-items: flex-start;
+  padding-top: 5px;
+  padding-bottom: 6px;
+}
+.chat-channel.two .hash {
+  line-height: 19px;
+}
+.chat-channel-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.chat-channel-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 19px;
+}
+.chat-channel-head time {
+  flex: none;
+  margin-left: auto;
+  padding-left: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chat-channel-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 18px;
+}
+.chat-channel-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 17px;
+  color: var(--muted);
+}
+/* An unread channel's preview and time read a step stronger, like its name. */
+.chat-channel.unread .chat-channel-preview,
+.chat-channel.unread .chat-channel-head time {
+  color: var(--ink-3);
+}
+.chat-channel.on .chat-channel-preview,
+.chat-channel.on .chat-channel-head time {
+  color: var(--accent-ink);
+}
 /* Hidden or muted channels shown in the column as dimmed rows. */
 .chat-channel.hidden .t,
-.chat-channel.muted .t {
+.chat-channel.muted .t,
+.chat-channel.hidden .chat-channel-preview,
+.chat-channel.muted .chat-channel-preview {
   opacity: 0.6;
 }
 .chat-channel .lock {

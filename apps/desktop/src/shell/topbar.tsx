@@ -182,7 +182,7 @@ export interface TopbarProps {
   onNew?: (kind: Exclude<KindFilter, 'All'>) => void;
   /** Why New cannot act here, as its tooltip; null when it can. */
   newBlocked?: string | null;
-  /** Chat: opens the New chat sheet. */
+  /** Chat: opens the Create channel sheet on the open team. */
   onNewChat?: () => void;
   /**
    * Chat: how many teams have chat. With none there is no conversation to
@@ -647,7 +647,7 @@ export function Topbar({
           disabled={blocked}
           onClick={onNewChat}
         >
-          New chat
+          New channel
         </Button>
       ) : null}
       {onRefresh && syncService && snapshot ? (

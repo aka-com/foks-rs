@@ -7,7 +7,6 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { normalizeCommandError } from '../bridge';
-import { diagnosticLog, hashId, outcomeForCode } from '../diagnostics/log';
 import type { Bridge, CommandError } from '../bridge';
 import type {
   ChatAction,
@@ -24,6 +23,7 @@ import {
   type ChatWorkPriority,
 } from './client';
 import { useChatSends } from './send-provider';
+import { markChannelRead } from './mark-read';
 import type { HistoryBinding } from './history-cache';
 import type { HistoryPlacement } from './conversation-model';
 import { useChatInbox } from './inbox-provider';
@@ -189,28 +189,9 @@ export function useChatConversation(
     },
     [sends, service, storeId],
   );
-  // A confirmed read is applied to the projection rather than resynchronized
-  // into it: the reply states the pointer the server accepted, and the
-  // contract has already checked that it names this request's channel and
-  // sequence. A read that did not land leaves the local pointer unproven, so
-  // that path invalidates and lets the next synchronization state it.
   const markRead = useCallback(
-    async (channel: string, sequence: string) => {
-      const end = diagnosticLog.span('chat.read', {
-        scope: `store#${hashId(storeId)}`,
-      });
-      try {
-        const reply = await request({ action: 'mark-read', channel, sequence });
-        if (reply.result.kind !== 'read') throw integrity();
-        service.applyRead(storeId, reply.result.channel, reply.result.sequence);
-        end('ok');
-      } catch (error) {
-        const code = normalizeCommandError(error).code;
-        end(outcomeForCode(code), { code });
-        service.invalidate(storeId);
-        throw error;
-      }
-    },
+    (channel: string, sequence: string) =>
+      markChannelRead(request, service, storeId, channel, sequence),
     [request, service, storeId],
   );
   const setOpenChannel = useCallback(

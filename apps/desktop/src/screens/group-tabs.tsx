@@ -198,8 +198,9 @@ export function ChannelsTab({
               option.conversation && BigInt(option.conversation.unread) > 0n
                 ? option.conversation.unread
                 : null;
-            // When the channel was last active, as the inbox row draws it: the
-            // same stamp the Chat column reads, in the same words.
+            // When the channel was last active: the time of the message the
+            // inbox previews, through the same `previewTime` the Chat column
+            // draws beside a channel's last message.
             const preview = option.conversation?.preview;
             const when = preview ? previewTime(preview.insert_time, now) : '';
             return (

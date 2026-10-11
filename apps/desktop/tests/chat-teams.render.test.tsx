@@ -62,7 +62,12 @@ test.before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
 });
-test.afterEach(() => ui.cleanup());
+test.afterEach(() => {
+  ui.cleanup();
+  // Folds, the channel order and the previews switch are stored preferences;
+  // each test starts from their defaults.
+  window.localStorage.clear();
+});
 test.after(async () => {
   await vite.close();
 });
@@ -181,6 +186,18 @@ async function mount(
   }
   ui.render(createElement(Host));
   return journal;
+}
+
+/**
+ * The column's section labels, by their text alone: the controls a label
+ * carries on its right (the sort trigger, the "+") are not part of its name.
+ */
+function sectionLabels(): string[] {
+  return [...document.querySelectorAll('.sec')].map((node) => {
+    const copy = node.cloneNode(true) as Element;
+    copy.querySelector('.right')?.remove();
+    return copy.textContent ?? '';
+  });
 }
 
 /** Every heading that names a team, the dimmed "Chat unavailable" ones included. */
@@ -574,9 +591,7 @@ test('a team whose server offers no chat sits under No chat with the reason', as
       '',
     /^Chat is not enabled on /,
   );
-  const labels = [...document.querySelectorAll('.sec')].map(
-    (node) => node.textContent,
-  );
+  const labels = sectionLabels();
   assert.ok(labels.includes('Teams'));
   assert.ok(labels.includes('Chat unavailable'));
 });
@@ -1626,12 +1641,17 @@ test('a team switch closes the sheet and keeps unresolved creation recoverable',
   await ui.screen.findByText('Preparation reply lost');
   ui.fireEvent.click(general('Engineering'));
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
+  // The sheet opens on the open team, Engineering, so the submission saved
+  // for it is recovered at once rather than listed for a click.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
-  ui.fireEvent.click(
-    await ui.screen.findByRole('button', { name: /Engineering · #design/ }),
+  assert.ok(await ui.screen.findByRole('dialog', { name: 'Create channel' }));
+  assert.ok(
+    await ui.screen.findByRole('button', { name: 'Retry channel creation' }),
   );
-  assert.ok(ui.screen.getByRole('dialog', { name: 'Create channel' }));
-  assert.ok(ui.screen.getByRole('button', { name: 'Retry channel creation' }));
+  assert.equal(
+    ui.screen.queryByRole('button', { name: /Engineering · #design/ }),
+    null,
+  );
 });
 
 test('changing channels abandons the initiating sheet without redirecting when creation finishes', async () => {
@@ -1889,12 +1909,7 @@ test('every team is a heading under one Teams label, whatever its channel count'
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
   // Both teams have the general channel alone; each is still a heading with
   // that one channel under it, and there is one label over them all.
-  await ui.waitFor(() =>
-    assert.deepEqual(
-      [...document.querySelectorAll('.sec')].map((node) => node.textContent),
-      ['Teams'],
-    ),
-  );
+  await ui.waitFor(() => assert.deepEqual(sectionLabels(), ['Teams']));
   assert.deepEqual(teamChannels('Engineering'), ['#general']);
   assert.deepEqual(teamChannels('Household'), ['#general']);
   ui.cleanup();
@@ -1908,10 +1923,7 @@ test('every team is a heading under one Teams label, whatever its channel count'
   await ui.waitFor(() =>
     assert.deepEqual(teamChannels('Household'), ['#general', '#chores']),
   );
-  assert.deepEqual(
-    [...document.querySelectorAll('.sec')].map((node) => node.textContent),
-    ['Teams'],
-  );
+  assert.deepEqual(sectionLabels(), ['Teams']);
   assert.ok(head('Engineering').classList.contains('chat-team-head'));
   assert.ok(head('Household').classList.contains('chat-team-head'));
 });
@@ -2122,8 +2134,8 @@ test('clicking a team heading folds it, keeps its unread total, and excludes a m
   await ui.waitFor(() =>
     assert.deepEqual(teamChannels('Household'), [
       '#general',
-      '#chores',
       '#archive',
+      '#chores',
     ]),
   );
   // The heading itself is the fold control: no twist, and the row points at
@@ -2162,8 +2174,8 @@ test('clicking a team heading folds it, keeps its unread total, and excludes a m
   await ui.waitFor(() =>
     assert.deepEqual(teamChannels('Household'), [
       '#general',
-      '#chores',
       '#archive',
+      '#chores',
     ]),
   );
 });
@@ -2267,22 +2279,18 @@ test('sidebar context menus distinguish background, teams, and channels', async 
       .within(menu)
       .getAllByRole('menuitem')
       .map((item) => item.textContent),
+    // Only actions that can apply are listed: renaming and deleting a channel
+    // are not offered until channel management ships. The mock's general
+    // channel has unread messages, so Mark as read is offered.
     [
       'Open channel',
-      'Edit channel',
-      'Delete channel',
+      'Mark as read',
       'Channel info',
       'Add FOKS user…',
       'Add FOKS team…',
       'Invite new user…',
     ],
   );
-  for (const name of ['Edit channel', 'Delete channel']) {
-    const item = ui.within(menu).getByRole('menuitem', { name });
-    assert.equal(item.getAttribute('aria-disabled'), 'true');
-    ui.fireEvent.click(item);
-    assert.ok(ui.screen.getByRole('menu'));
-  }
   ui.fireEvent.click(
     ui.within(menu).getByRole('menuitem', { name: 'Open channel' }),
   );
@@ -2312,7 +2320,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
     });
   }
   ui.fireEvent.contextMenu(document.querySelector('.chat-inbox-scroll')!);
-  assert.ok(ui.screen.getByRole('menuitem', { name: 'Create channel' }));
+  assert.ok(ui.screen.getByRole('menuitem', { name: 'New channel' }));
   ui.fireEvent.keyDown(document, { key: 'Escape' });
   assert.equal(ui.screen.queryByRole('menu'), null);
 });
@@ -2345,7 +2353,7 @@ test('channel context menu disables opening a channel without read permission', 
   ui.fireEvent.pointerDown(document.body);
   assert.equal(ui.screen.queryByRole('menu'), null);
   ui.fireEvent.contextMenu(document.querySelector('.chat-inbox-scroll')!);
-  const create = ui.screen.getByRole('menuitem', { name: 'Create channel' });
+  const create = ui.screen.getByRole('menuitem', { name: 'New channel' });
   assert.equal(create.getAttribute('aria-disabled'), null);
   ui.fireEvent.click(create);
   assert.equal(ui.screen.queryByRole('menu'), null);
@@ -2405,4 +2413,273 @@ test('Chat waits for team inventory after servers and accounts have arrived', as
   assert.ok(ui.screen.getByRole('status', { name: 'Loading conversations' }));
   assert.ok(ui.screen.getByText('Loading teams…'));
   assert.equal(ui.screen.queryByText('No teams yet'), null);
+});
+
+/**
+ * Household with channels whose last messages arrived at known times, listed
+ * the way the agent lists them: newest inbox version first.
+ */
+function withActivity(base: Bridge): Bridge {
+  return withInbox(
+    withChannels(base, 'team:household', [
+      { id: '11'.repeat(16), name: 'zeta' },
+      { id: '22'.repeat(16), name: 'alpha' },
+      { id: '33'.repeat(16), name: 'quiet' },
+    ]),
+    'team:household',
+    (inbox) => {
+      const at: Record<string, string> = {
+        zeta: '1750000000000',
+        alpha: '1800000000000',
+      };
+      inbox.conversations = inbox.conversations
+        .map((conversation, index) => ({
+          ...conversation,
+          inbox_version: String(index + 1),
+          preview:
+            conversation.channel.name in at
+              ? {
+                  sender: null,
+                  send_time: at[conversation.channel.name],
+                  insert_time: at[conversation.channel.name],
+                  content: {
+                    kind: 'text' as const,
+                    text: `in ${conversation.channel.name}`,
+                  },
+                }
+              : conversation.preview,
+          read_through:
+            conversation.channel.name in at ? '1' : conversation.read_through,
+        }))
+        .sort((a, b) => Number(b.inbox_version) - Number(a.inbox_version));
+    },
+  );
+}
+
+test('channels keep one order, the general channel first and then A to Z', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, withActivity);
+  // The agent's order is zeta, alpha, quiet, general: newest version first.
+  // The column does not follow it, so reading a channel, which raises its
+  // version, cannot move it.
+  await ui.waitFor(() =>
+    assert.deepEqual(teamChannels('Household'), [
+      '#general',
+      '#alpha',
+      '#quiet',
+      '#zeta',
+    ]),
+  );
+});
+
+test('the sort menu orders channels by recent activity and the column remembers it', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, withActivity);
+  await ui.waitFor(() => assert.equal(teamChannels('Household').length, 4));
+  const trigger = ui.screen.getByRole('button', {
+    name: 'Sort and display, alphabetical',
+  });
+  assert.equal(trigger.textContent, 'A–Z');
+  ui.fireEvent.click(trigger);
+  const menu = ui.screen.getByRole('menu', { name: 'Sort and display' });
+  const alphabetical = ui.within(menu).getByRole('menuitemradio', {
+    name: /^Alphabetical/,
+  });
+  assert.equal(alphabetical.getAttribute('aria-checked'), 'true');
+  ui.fireEvent.click(
+    ui.within(menu).getByRole('menuitemradio', { name: /^Recent activity/ }),
+  );
+  // Choosing keeps the menu open, so the two orders can be compared.
+  assert.ok(ui.screen.getByRole('menu', { name: 'Sort and display' }));
+  assert.equal(alphabetical.getAttribute('aria-checked'), 'false');
+  // Newest message first; a channel with no message follows by name.
+  await ui.waitFor(() =>
+    assert.deepEqual(teamChannels('Household'), [
+      '#alpha',
+      '#zeta',
+      '#general',
+      '#quiet',
+    ]),
+  );
+  ui.fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(ui.screen.queryByRole('menu'), null);
+  assert.equal(
+    trigger.getAttribute('aria-label'),
+    'Sort and display, recent activity',
+  );
+  assert.equal(trigger.textContent, 'Recent');
+  // The order is a stored preference: the column mounts with it again.
+  ui.cleanup();
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, withActivity);
+  await ui.waitFor(() =>
+    assert.deepEqual(teamChannels('Household'), [
+      '#alpha',
+      '#zeta',
+      '#general',
+      '#quiet',
+    ]),
+  );
+});
+
+test('channel rows carry the last message and its time until previews are turned off', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, withActivity);
+  const preview = (name: string) =>
+    channelRow(name, 'Household').querySelector('.chat-channel-preview')
+      ?.textContent;
+  await ui.waitFor(() =>
+    assert.equal(preview('#alpha'), 'Team member: in alpha'),
+  );
+  assert.equal(preview('#general'), 'Team member: Team chat is ready.');
+  // A channel the inbox states nothing has been said in says so.
+  assert.equal(preview('#quiet'), 'No messages yet');
+  const alpha = channelRow('#alpha', 'Household');
+  const time = alpha.querySelector('time');
+  assert.ok(time?.textContent);
+  assert.equal(
+    time.getAttribute('datetime'),
+    new Date(1800000000000).toISOString(),
+  );
+  assert.match(
+    alpha.getAttribute('aria-label') ?? '',
+    /^#alpha, Team member: in alpha, /,
+  );
+  assert.equal(channelRow('#quiet', 'Household').querySelector('time'), null);
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: /^Sort and display/ }),
+  );
+  const previews = ui.screen.getByRole('menuitemcheckbox', {
+    name: /^Show previews/,
+  });
+  assert.equal(previews.getAttribute('aria-checked'), 'true');
+  ui.fireEvent.click(previews);
+  assert.equal(previews.getAttribute('aria-checked'), 'false');
+  await ui.waitFor(() => assert.equal(preview('#alpha'), undefined));
+  assert.equal(document.querySelector('.chat-channel.two'), null);
+  assert.equal(channelRow('#alpha', 'Household').querySelector('time'), null);
+  assert.equal(
+    channelRow('#alpha', 'Household').getAttribute('aria-label'),
+    '#alpha',
+  );
+  ui.cleanup();
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, withActivity);
+  await ui.waitFor(() => assert.equal(teamChannels('Household').length, 4));
+  assert.equal(document.querySelector('.chat-channel-preview'), null);
+});
+
+test('a folded team stays folded when the column mounts again', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', { name: 'Collapse Household' }),
+  );
+  await ui.waitFor(() => assert.deepEqual(teamChannels('Household'), []));
+  ui.cleanup();
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
+  assert.ok(await ui.screen.findByRole('button', { name: 'Expand Household' }));
+  assert.deepEqual(teamChannels('Household'), []);
+  assert.deepEqual(teamChannels('Engineering'), ['#general']);
+  // Unfolding is stored the same way.
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Expand Household' }),
+  );
+  ui.cleanup();
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
+  await ui.waitFor(() =>
+    assert.deepEqual(teamChannels('Household'), ['#general']),
+  );
+});
+
+test('Mark as read moves the read pointer to the newest message and clears the count', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const reads: { store: string; channel: string; sequence: string }[] = [];
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      if (action.action === 'mark-read')
+        reads.push({
+          store,
+          channel: action.channel,
+          sequence: action.sequence,
+        });
+      return base.chat(store, action, view);
+    },
+  }));
+  // Booleans rather than elements: a failed comparison inspects its operands,
+  // and inspecting a jsdom element walks the whole document.
+  const unread = () =>
+    general('Household').querySelector('.chat-unread') !== null;
+  await ui.waitFor(() => assert.equal(unread(), true));
+  const row = general('Household');
+  ui.fireEvent.contextMenu(row);
+  const menu = ui.screen.getByRole('menu', { name: 'Chat sidebar actions' });
+  ui.fireEvent.click(
+    ui.within(menu).getByRole('menuitem', { name: 'Mark as read' }),
+  );
+  assert.equal(ui.screen.queryByRole('menu'), null);
+  await ui.waitFor(() => assert.equal(unread(), false));
+  assert.deepEqual(reads, [
+    {
+      store: 'team:household',
+      channel: row.dataset.chatChannel,
+      sequence: '1',
+    },
+  ]);
+  // With nothing unread, the item is not offered.
+  ui.fireEvent.contextMenu(general('Household'));
+  assert.equal(
+    ui.screen.queryByRole('menuitem', { name: 'Mark as read' }),
+    null,
+  );
+  assert.ok(ui.screen.getByRole('menuitem', { name: 'Open channel' }));
+});
+
+test('New channel opens the Create channel sheet on the open team', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  await mount(snapshot, { kind: 'chat', ref: 'team:household' });
+  await ui.waitFor(() => assert.ok(heads().length));
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
+  await ui.screen.findByRole('dialog', { name: 'Create channel' });
+  assert.match(
+    ui.screen.getByRole('button', { name: 'Team' }).textContent ?? '',
+    /Household/,
+  );
+});
+
+test('the Create channel sheet selects the only team with chat when no team is open', async () => {
+  const snapshot = await snapshotWithChat(['personal']);
+  const { NewChatSheet } = await vite.ssrLoadModule(
+    '/src/screens/chat-new.tsx',
+  );
+  const { ChatInboxProvider } = await vite.ssrLoadModule(
+    '/src/chat/inbox-provider.tsx',
+  );
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const bridge = mockBridge(snapshot);
+  ui.render(
+    createElement(OverlayProvider, {
+      backgroundRef: { current: null },
+      portalRoot: document.getElementById('overlays')!,
+      children: createElement(ChatInboxProvider, {
+        bridge,
+        snapshot,
+        children: createElement(NewChatSheet, {
+          bridge,
+          snapshot,
+          onClose: () => {},
+          onOpen: () => {},
+        }),
+      }),
+    }),
+  );
+  await ui.screen.findByRole('dialog', { name: 'Create channel' });
+  assert.match(
+    ui.screen.getByRole('button', { name: 'Team' }).textContent ?? '',
+    /Household/,
+  );
 });

@@ -253,7 +253,7 @@ test('the composer exposes only supported actions', async () => {
   assert.equal(ui.screen.queryByText('@user'), null);
 });
 
-test('renders channel descriptions, message timestamps, and channel rows without message previews', async () => {
+test('renders channel descriptions, message timestamps, and channel rows with their last message', async () => {
   await setup();
   // The header shows the description instead of the team and member count.
   await ui.waitFor(() =>
@@ -264,18 +264,21 @@ test('renders channel descriptions, message timestamps, and channel rows without
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
   await ui.screen.findAllByText('A place for the whole team.');
-  // A channel row is its name and its unread count: the inbox column carries
-  // no preview line, so the message text is drawn once, in the conversation.
+  // A channel row is its name, its last message and that message's time, and
+  // its unread count; the message itself is drawn once, in the conversation.
   assert.deepEqual(
     [...document.querySelectorAll('.chat-channel .n')].map(
       (row) => row.textContent,
     ),
     ['general'],
   );
-  assert.equal(
-    ui.screen.queryByText('Team member: Team chat is ready.', { exact: true }),
-    null,
+  assert.deepEqual(
+    [...document.querySelectorAll('.chat-channel-preview')].map(
+      (row) => row.textContent,
+    ),
+    ['Team member: Team chat is ready.'],
   );
+  assert.equal(ui.screen.getAllByText('Team chat is ready.').length, 1);
   const time = document.querySelector<HTMLTimeElement>('.chat-message time');
   assert.equal(time?.dateTime, '2023-11-14T22:13:20.001Z');
   assert.match(time?.title ?? '', /Message #1/);
@@ -667,14 +670,11 @@ test('ambiguous channel preparation keeps its submission after the sheet closes'
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Close' }));
   assert.equal(ui.screen.queryByRole('dialog'), null);
+  // The sheet opens on the open team, Engineering, so the submission saved
+  // for it is recovered at once rather than listed for a click.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   ui.fireEvent.click(
-    await ui.screen.findByRole('button', {
-      name: /Engineering · #recoverable/,
-    }),
-  );
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', { name: 'Retry channel creation' }),
+    await ui.screen.findByRole('button', { name: 'Retry channel creation' }),
   );
   await ui.screen.findByRole('button', { name: /#recoverable/ });
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));

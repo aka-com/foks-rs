@@ -41,7 +41,7 @@ import {
 } from './chat-teams';
 
 /**
- * Wires the window header's "New chat" button to the active Chat tab.
+ * Wires the window header's "New channel" button to the active Chat tab.
  *
  * Because the header renders outside the Chat tab, it delegates channel creation
  * to the active tab. When ChatTab is mounted, this opens the channel creation
@@ -73,7 +73,7 @@ export interface ChatTabProps {
   /**
    * The shell's access generation per server. The tab resolves which team it
    * opens, so it is the only place that knows which server's generation guards
-   * the conversation and the New chat sheet.
+   * the conversation and the Create channel sheet.
    */
   accessGenerations?: ReadonlyMap<string, number>;
 }
@@ -124,12 +124,14 @@ export function ChatTab({
     setNewChat(null);
     setSubmittedSheet(null);
   };
-  // The column's "+" opens the creation form with no team chosen: it belongs
-  // to the column rather than to any one team's row.
+  // Every entry point — the header's button, the column's "+" and the empty
+  // conversation's button — opens the creation form on the open team, the
+  // one a new channel most likely belongs to. With no team open the sheet
+  // selects the only team with chat, if there is one.
   const openNewChat = () =>
-    setNewChat({ originRef: ref, originChannel: location.channel });
-  // The header's "New chat" button reaches the mounted tab through this, and
-  // reaches nothing once the tab unmounts.
+    setNewChat({ team: ref, originRef: ref, originChannel: location.channel });
+  // The header's "New channel" button reaches the mounted tab through this,
+  // and reaches nothing once the tab unmounts.
   useEffect(() => {
     newChatRequest = openNewChat;
     return () => {
@@ -160,8 +162,9 @@ export function ChatTab({
       { force: true, replace: true },
     );
   }, [location.ref, location.channel, openingRef, openingChannel, onNavigate]);
-  // A New chat belongs to the location it was opened in: a team or channel
-  // switch closes its view rather than rebinding it to the location arriving.
+  // A Create channel sheet belongs to the location it was opened in: a team or
+  // channel switch closes its view rather than rebinding it to the location
+  // arriving.
   // Unsubmitted rail-tab state restores on return; submitted work continues
   // in the controller without restoring an automatic redirect.
   const priorTeam = useRef(ref);
@@ -241,8 +244,6 @@ export function ChatTab({
           onNavigate({ kind: 'chat', ref: next, channel: channelId });
           setInfo(true);
         }}
-        // The column's button opens the creation form with no team chosen:
-        // it belongs to the column rather than to any one team's row.
         onNewChat={openNewChat}
         onTeams={(next) => onNavigate({ kind: 'teams', ref: next })}
         onAddPeople={(next, intent) =>
@@ -287,13 +288,7 @@ export function ChatTab({
             infoOpen={info}
             onToggleInfo={() => setInfo((shown) => !shown)}
             infoRef={infoToggle}
-            onNewChat={() =>
-              setNewChat({
-                team: ref,
-                originRef: ref,
-                originChannel: location.channel,
-              })
-            }
+            onNewChat={openNewChat}
           />
         ) : catalogLoading && teamReadiness === 'unavailable' ? (
           <CollectionStatus state={teamReadiness} label="teams" />

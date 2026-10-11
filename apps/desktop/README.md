@@ -35,11 +35,11 @@ implemented as a tablist. Arrow keys select adjacent tabs, and the selected tab
 labels the panel below it. Channels reads the same per-group inbox entry as the
 rail and Chat column, so its count and rows use the same data. Each channel row
 displays the name, description or access summary, last activity, unread count,
-and Open in Chat. Add channel opens the New chat sheet at the create step and
-shows Cancel instead of Back because team selection was skipped. Hidden
-conversations remain listed but are excluded from the unread count, matching
-New chat. If the server does not support chat, the page displays an explanation
-instead of a list. If access lapses while the tab is open, it displays the same
+and Open in Chat, in the Chat column's default order: the general channel
+first, then A to Z. Add channel opens the Create channel sheet with this group
+selected. Hidden conversations remain listed but are excluded from the unread
+count, matching the Create channel sheet. If the server does not support chat,
+the page displays an explanation instead of a list. If access lapses while the tab is open, it displays the same
 condition as the store access view, evaluated with the shell's current clock.
 If synchronization completes with unfinished work, the page displays a note
 above the loaded rows. Files links to the group vault without duplicating the
@@ -287,7 +287,7 @@ authenticated in the catalog.
 | `src/app-root.tsx`         | App shell: window, rail, screen, details panel, deep links.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `src/components/`          | Components: Button, Chip, Tag, Badge, KindIcon, Inset, SectionLabel, Notice, Band, SegmentedControl, SplitButton, MenuButton, SearchField.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `src/shell/`               | Window chrome: `sidebar.tsx` (the rail), `topbar.tsx` (the crumbs, the back chevron and the shell's own controls), `page-header.tsx`, `search-palette.tsx` (⌘K), `toolbar.tsx`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx` (the group page, its Members and Settings tabs and the add/role/remove/create sheets), `group-tabs.tsx` (the Channels and Files tabs and the unfinished-group page), `group-model.ts` (the permission rules and reasons the Teams list and the group page share), `group-mark.tsx` (the one mark a group carries everywhere), `invite-sheet.tsx` (the per-account invitation), `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx` (`ServersSection`, the server list Settings draws, and one server's page), `settings-screen.tsx` (the Settings tab and its sub-navigation), `devices-screen.tsx` (one account's Macs and device keys, recovery phrases and security key enrollments, and one key's own page), `device-sheets.tsx` (the sheets Devices and Settings share), `device-model.ts` (the four per-account key calls and the one row model Accounts and Devices share), `account-switcher.tsx` (the switcher Accounts, Devices and Settings share), `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `account-section.tsx` (Settings › Account: the attention list and the account profile: teams, devices, keys and the account rows), `files-screen.tsx` (the roots page), `teams-screen.tsx`, `chat-tab.tsx` (the Chat tab: the inbox column, the open conversation and the info panel), `chat-teams.tsx` (the cross-team inbox column), `chat-new.tsx` (the two-step New chat sheet), `chat-screen.tsx` (one team's conversation), `chat-info.tsx` (the channel info panel), `scope.ts` (what is listed, in what order). |
+| `src/screens/`             | Screens: `items-screen.tsx` (list, cards, notices, empties), `groups-screen.tsx` (the group page, its Members and Settings tabs and the add/role/remove/create sheets), `group-tabs.tsx` (the Channels and Files tabs and the unfinished-group page), `group-model.ts` (the permission rules and reasons the Teams list and the group page share), `group-mark.tsx` (the one mark a group carries everywhere), `invite-sheet.tsx` (the per-account invitation), `store-access.tsx` (the shared unavailable-store takeover and All items summaries), `first-run-screen.tsx`, `servers-screen.tsx` (`ServersSection`, the server list Settings draws, and one server's page), `settings-screen.tsx` (the Settings tab and its sub-navigation), `devices-screen.tsx` (one account's Macs and device keys, recovery phrases and security key enrollments, and one key's own page), `device-sheets.tsx` (the sheets Devices and Settings share), `device-model.ts` (the four per-account key calls and the one row model Accounts and Devices share), `account-switcher.tsx` (the switcher Accounts, Devices and Settings share), `details-panel.tsx`, `write-workflows.tsx`, `edit-value.ts`, `account-section.tsx` (Settings › Account: the attention list and the account profile: teams, devices, keys and the account rows), `files-screen.tsx` (the roots page), `teams-screen.tsx`, `chat-tab.tsx` (the Chat tab: the inbox column, the open conversation and the info panel), `chat-teams.tsx` (the cross-team inbox column), `chat-new.tsx` (the Create channel sheet), `chat-screen.tsx` (one team's conversation), `chat-info.tsx` (the channel info panel), `scope.ts` (what is listed, in what order). |
 | `src/bridge.ts`            | The typed `Bridge` interface and the Tauri implementation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `src/mock-bridge.ts`       | The same interface, using the fixture.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `src/fixture.ts`           | The stable desktop fixture, as typed data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -691,22 +691,59 @@ chat.
 panel — so a team switch replaces only the conversation, and exactly one
 `useChatConversation` is mounted at a time. The column (`chat-teams.tsx`) is
 the whole inbox: every named team whose server offers chat is listed at once,
-under one "Conversations" label, in the shell's navigation order, ensuring
-consistent team ordering across Files, Teams, and Chat for spatial
-predictability. A team whose channels are the general channel alone is a single row —
-its mark, its name, the last message ("You: …", "sam.ortiz: …", else "No
-messages yet"), when that message arrived and its unread badge. That row is the
-channel's row, so the count it is bold for, the badge's muted styling and the
-caption beside it ("Muted", "Hidden", "Restricted", "Channel stopped") are the
-ones the channel would have drawn. Teams with custom channels render as a group
-heading with nested channels. Each channel carries its own unread count and, for
-an admins-only channel, a lock; nothing folds away, so a heading selects nothing
-and its gear, which opens that team's group settings, is the one control it
-carries. The team's name is a heading of level 3 and its channels are a `group`
-labeled by it. The open channel's row carries `aria-current="page"`, from the
-first render that resolves it: the column and the pane resolve the open channel
-through the same `openChannel` helper, so neither marks a row the other did not
-mount.
+under one "Teams" label, in the shell's navigation order, ensuring consistent
+team ordering across Files, Teams, and Chat for spatial predictability. Every
+team is a heading — its mark, its name, its server and its member count — over
+its channels, and the whole heading is the control that folds them: it carries
+`aria-expanded` and `aria-controls`, and the channels are a `group` labeled by
+the team. Folded, the heading carries the total unread count of the channels
+it hides, leaving out hidden and muted ones as the rail's count does. A search
+unfolds every team while it runs and leaves the folds as they were.
+
+Each team's channels keep one order, built by `listChannels`: the general
+channel first, then A to Z, with hidden conversations last, dimmed and marked
+"Hidden". The order never follows the agent's, which is by inbox version: the
+server issues a new version when the reader's own read pointer rises, so
+reading a channel would move it above channels that still have unread
+messages. The control beside the "Teams" label names the current order ("A–Z"
+or "Recent") and opens Sort channels: Alphabetical, or Recent activity, which
+puts the channel whose last message arrived most recently first (by the
+server's insertion time of the message the inbox previews), the channels with
+no message after those A to Z, and hidden conversations last. Reading moves
+nothing in either order; a new message, or the reader's own send, moves its
+channel up under Recent activity. The same menu carries Show previews. With it
+on, the default, a channel row has two lines: the name, a lock for an
+admins-only channel and the last message's time (`previewTime`: the clock time
+today, the weekday within the past week, the date before that), then the last
+message (`previewLine`: "You: …", "sam.ortiz: …", "Team member: …" for a
+message with no sender, "Unverifiable message" with no claimed sender) and the
+unread count. A channel the inbox states nothing has been said in reads "No
+messages yet"; a missing preview alone does not, since a stopped channel's
+preview is withheld and a synchronization can leave one unavailable. With it
+off, rows are one line: the name, the lock and the count, and only the lone
+general channel of a team nothing has been said in reads "No messages yet",
+beside its name. A channel with
+unread messages is drawn with a bolder name and a stronger preview. The
+caption beside a name says why a channel is quiet ("Restricted", "Hidden",
+"Muted", "Channel stopped") through the same `channelMeta` the group page's
+channel list uses. The fold of each team, the order and the
+previews switch are display preferences that `src/sidebar-prefs.ts` stores in
+guarded `localStorage`, so the column returns as it was left; the fold set
+keeps a short hash of each team's store reference rather than the reference,
+which names the local profile and aliases, and keeps at most 256 entries. The
+open channel's row carries `aria-current="page"`, from the first render that
+resolves it: the column and the pane resolve the open channel through the same
+`openChannel` helper, so neither marks a row the other did not mount.
+
+A channel's context menu offers Open channel; Mark as read, while the channel
+has unread messages, which issues `mark-read` through the send service's
+request path at the newest position the inbox states (`lastPosition`) and
+applies the confirmed pointer the way the open conversation does; and Channel
+info. Renaming and deleting channels are not offered until channel management
+ships. Copying a link to a channel is not offered either: the app registers no
+URL scheme, and an in-app location names local store references that mean
+nothing on another installation. A team's menu offers Go to team and the
+add-people actions; the column's background offers New channel.
 
 Every row is built from `useSidebarInbox()` — the `TeamInbox` projections
 `ChatInboxService` already keeps and polls for each eligible team, the same
@@ -722,42 +759,44 @@ whose inbox failed — nothing arrived, or it is unavailable or blocked — carr
 that error, except for the open team, whose pane already states the error and
 carries the retry, so its row says only "Channels unavailable". A
 synchronization that succeeded but could not finish everything ("Read status
-will retry.", "Some previews are unavailable.") is not a failure: the row keeps
-its preview and its time, and says what is incomplete in a caption under them. A
+will retry.", "Some previews are unavailable.") is not a failure: the channel
+rows keep their previews and times, and the team's heading says what is
+incomplete in a caption. A
 heading draws a badge only for what its channels cannot already say — a state
 rather than a count, so "…", "!", "3+" and "5·" appear there and a bare number
 does not. A hidden conversation keeps its channel listed, marked "Hidden",
 dimmed and placed last, rather than being dropped, which used to make a team
-whose only conversation was hidden claim it had no channels. Named teams whose server
-offers no chat sit dimmed at the foot under "No chat" with the reason; shares
-are not listed. Unread counts are the rail's orange (`--unread`) wherever they
-appear.
+whose only conversation was hidden claim it had no channels. Named teams whose
+server offers no chat sit dimmed at the foot under "Chat unavailable" with the
+reason; shares are not listed. Unread counts are the rail's orange
+(`--unread`) wherever they appear.
 
-The column's search field filters teams and channels by name across the whole
-column — a team match keeps all of that team's channels, a channel match keeps
-its team's heading and that channel — and says when nothing matches.
-The input is a `type="search"` field with its own accessible name rather than a
-wrapper `<label>`. Search match counts are announced via a visually hidden
-`role="status"` element so screen reader users are notified when the team list
-filters. It searches the "No chat" teams too, so it is live whenever the column
-lists anything, not only when a team has chat. There is
-no message-content search: the agent has no message index, so the conversation
-header's search button focuses this field rather than promising one.
+The window header's search field, scoped to the Chat tab, filters teams and
+channels by name across the whole column — a team match keeps all of that
+team's channels, a channel match keeps its team's heading and that channel —
+and says when nothing matches. The input is a `type="search"` field with its
+own accessible name rather than a wrapper `<label>`. Search match counts are
+announced via a visually hidden `role="status"` element so screen reader users
+are notified when the team list filters. It searches the "Chat unavailable"
+teams too, so it is live whenever the column lists anything, not only when a
+team has chat. There is no message-content search: the agent has no message
+index, so the conversation header's search button focuses this field rather
+than promising one.
 
-New chat (`chat-new.tsx`) opens from the column's header as a two-step sheet:
-step one picks a team, with a team that cannot chat listed inert and carrying
-its reason rather than hidden; step two picks one of that team's channels or
-creates one. A channel says the same thing about itself here as in the column —
-"Channel stopped", "Restricted", "Hidden", "Muted", through the same
-`channelMeta` — and the team's count line counts the channels it offers, so a
-hidden conversation is listed without being counted. Neither step is answerable
-until that team's channel list has
-arrived — an empty name is the general channel, and whether the team already has
-one is the difference between creating it and being refused — so Continue and
-Create wait on it behind a "Loading channels…" row. A team that loses chat while
-step two is open disables both, with the reason in the body. A step change moves
-focus to the new step's first control, and the create form is a step of its own:
-it takes focus to the name field, and Back takes it to the step it returns to.
+New channel opens the Create channel sheet (`chat-new.tsx`). Every entry
+point carries that name — the topbar's New channel button, the column's "+"
+and its background menu, and the empty conversation's button — and each opens
+the sheet on the open team; with no team open, the only team with chat is
+selected, and otherwise the selector reads "Choose a team". The sheet is one
+form: the team selector, the channel name and the description share one field
+group, and the dialog places focus in the name field. A team that cannot chat
+is listed in the selector inert, carrying its reason rather than hidden, and
+each team's detail line counts the channels it offers, so a hidden
+conversation is not counted. Create waits until the chosen team's channel
+list has arrived — an empty name is the general channel, and whether the team
+already has one is the difference between creating it and being refused —
+behind a "Loading channels…" line. A team that loses chat while the sheet is
+open disables Create, with the reason in the body.
 
 Creating is `prepare-channel` then `attempt` on a client of its own, keyed by
 one durable submission identifier, so a lost reply is recovered rather than

@@ -1,5 +1,7 @@
 import { partiesOf, shortId } from '../model';
 import type { AgentSnapshot, StoreRef } from '../model';
+import type { ChannelSort } from '../sidebar-prefs';
+import { lastPosition } from './snapshots';
 import type {
   ChatChannel,
   ChatConversation,
@@ -143,16 +145,27 @@ export interface ListedChannel {
 }
 
 /**
- * One team's channels: every conversation that is listed, then the channels
- * that have no conversation yet, then the hidden conversations. The column
+ * One team's channels, in a fixed order: the visible channels, whether or not
+ * they have a conversation yet, then the hidden conversations. The column
  * counts this list and the conversation opens from it, so both see the same
  * channels. Hidden conversations remain in the list, dimmed and marked
  * Hidden, so a team with only a hidden conversation does not appear to have no
  * channels. They are placed last, leaving the first visible channel first.
+ *
+ * Within each part, `alphabetical` puts the general channel first and the rest
+ * A to Z; `recent` puts the channel with the newest message first, by the
+ * server's insertion time of the message the inbox previews, and the channels
+ * with no preview after those, A to Z. A channel whose preview is withheld or
+ * unavailable sorts with those, since the inbox carries no other time for its
+ * last message. Neither reads the agent's order, which is the inbox version:
+ * the server issues a new version when the reader's own read pointer rises,
+ * so reading a channel would move it above channels that still have unread
+ * messages.
  */
 export function listChannels(
   channels: readonly ChatChannel[],
   conversations: readonly ChatConversation[],
+  order: ChannelSort = 'alphabetical',
 ): ListedChannel[] {
   const current = new Map(channels.map((channel) => [channel.id, channel]));
   const known = new Set(
@@ -162,13 +175,51 @@ export function listChannels(
     channel: current.get(conversation.channel.id) ?? conversation.channel,
     conversation,
   });
+  const compare = order === 'recent' ? byRecentActivity : byName;
   return [
-    ...conversations.filter((conversation) => !conversation.hidden).map(listed),
-    ...channels
-      .filter((channel) => !known.has(channel.id))
-      .map((channel) => ({ channel, conversation: undefined })),
-    ...conversations.filter((conversation) => conversation.hidden).map(listed),
+    ...[
+      ...conversations
+        .filter((conversation) => !conversation.hidden)
+        .map(listed),
+      ...channels
+        .filter((channel) => !known.has(channel.id))
+        .map((channel) => ({ channel, conversation: undefined })),
+    ].sort(compare),
+    ...conversations
+      .filter((conversation) => conversation.hidden)
+      .map(listed)
+      .sort(compare),
   ];
+}
+
+/** The general channel, then A to Z; the channel id breaks a tie. */
+function byName(a: ListedChannel, b: ListedChannel): number {
+  if (!a.channel.name !== !b.channel.name) return a.channel.name ? 1 : -1;
+  const names = channelLabel(a.channel).localeCompare(channelLabel(b.channel));
+  if (names) return names;
+  return a.channel.id < b.channel.id ? -1 : a.channel.id > b.channel.id ? 1 : 0;
+}
+
+/** The newest previewed message first, then the channels with none by name. */
+function byRecentActivity(a: ListedChannel, b: ListedChannel): number {
+  const first = a.conversation?.preview?.insert_time;
+  const second = b.conversation?.preview?.insert_time;
+  if (first !== undefined && second !== undefined) {
+    const difference = BigInt(second) - BigInt(first);
+    if (difference) return difference > 0n ? 1 : -1;
+  } else if (first !== undefined || second !== undefined)
+    return first !== undefined ? -1 : 1;
+  return byName(a, b);
+}
+
+/**
+ * Whether the inbox states that nothing has been said in a channel: it has no
+ * conversation, or its conversation's newest position is zero. A missing
+ * preview alone does not say so, because a preview can be withheld from a
+ * stopped channel or be unavailable from a synchronization.
+ */
+export function neverMessaged(listed: ListedChannel): boolean {
+  return !listed.conversation || lastPosition(listed.conversation) === 0n;
 }
 
 const NOTHING_BLOCKED: ReadonlySet<string> = new Set();
@@ -226,7 +277,10 @@ export function accessSummary(channel: ChatChannel): string {
 
 /**
  * Formats an inbox preview as the sender display name followed by the
- * truncated message text. An empty string means there is no preview.
+ * message text, which the agent has already cut to its first line. The
+ * reader's own messages read "You". An unverifiable message is named without
+ * a sender, because its sender is an unauthenticated server claim. An empty
+ * string means there is no preview.
  */
 export function previewLine(
   conversation: ChatConversation | undefined,
@@ -235,6 +289,7 @@ export function previewLine(
 ): string {
   const preview = conversation?.preview;
   if (!preview) return '';
+  if (preview.content.kind === 'unverifiable') return 'Unverifiable message';
   const sender =
     actor !== null && preview.sender === actor
       ? 'You'
@@ -244,8 +299,8 @@ export function previewLine(
   const text =
     preview.content.kind === 'text'
       ? preview.content.text
-      : preview.content.kind === 'unverifiable'
-        ? 'Unverifiable message'
+      : preview.content.kind === 'oversized'
+        ? 'Message too large to display'
         : 'Unsupported message';
   return `${sender}: ${text}`;
 }

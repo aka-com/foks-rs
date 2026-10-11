@@ -132,9 +132,16 @@ export function NewChatSheet({
     null,
   );
   const restored = saved?.team === team ? saved : null;
-  const [chosen, setChosen] = useState<StoreRef | undefined>(
-    restored?.chosen ?? team,
-  );
+  // With no team to open on, the only team with chat is the one a channel can
+  // be created in, so it starts selected rather than behind "Choose a team".
+  const [chosen, setChosen] = useState<StoreRef | undefined>(() => {
+    const candidates = chatTeams(snapshot);
+    return (
+      restored?.chosen ??
+      team ??
+      (candidates.length === 1 ? candidates[0].id : undefined)
+    );
+  });
   const [name, setName] = useState(fieldText(restored?.name ?? ''));
   const [description, setDescription] = useState(
     fieldText(restored?.description ?? ''),

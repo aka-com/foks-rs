@@ -384,7 +384,7 @@ export class ChatInboxService {
    * so tests can control this decision.
    *
    * A team is eligible when `chatAvailable` returns true, matching the Chat
-   * tab, team column, and New chat sheet.
+   * tab, team column, and Create channel sheet.
    */
   updateStores(
     agentSnapshot: AgentSnapshot,

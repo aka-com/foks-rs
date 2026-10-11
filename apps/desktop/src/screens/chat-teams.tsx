@@ -5,9 +5,11 @@ import { CollectionStatus } from '../components/collection-status';
  *
  * Displays the Chat tab inbox sidebar containing all teams and their channels.
  *
- * Each team header expands and collapses its channel list; collapse state is
- * tracked in component state by team ID. When collapsed, the team header shows
- * the aggregate unread count for its channels.
+ * Each team header expands and collapses its channel list. The folded teams,
+ * the channel order and whether rows carry previews are display preferences
+ * stored through `sidebar-prefs.ts`, so the column returns as it was left.
+ * When collapsed, the team header shows the aggregate unread count for its
+ * channels.
  *
  * Team and channel data are supplied by `useChatInbox()`. If a team's channels
  * fail to load, an inline error with a retry button is shown in place of the
@@ -19,7 +21,9 @@ import { CollectionStatus } from '../components/collection-status';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon, MenuItem, SectionLabel } from '../components';
-import { ContextMenu, Menu } from '/kit/overlay-primitives';
+import { ContextMenu, Menu, Popover } from '/kit/overlay-primitives';
+import { useOptionalToast } from '/kit/toasts';
+import { normalizeCommandError } from '../bridge';
 import { useChannelCreation } from '../chat/channel-creation-provider';
 import {
   chatAvailable,
@@ -43,11 +47,28 @@ import {
   channelMeta,
   channelTitle,
   listChannels,
+  messageDate,
+  neverMessaged,
+  partyNames,
+  previewLine,
+  previewTime,
 } from '../chat/presentation';
 import type { ListedChannel } from '../chat/presentation';
 import { useChatInbox } from '../chat/inbox-provider';
 import type { TeamInbox } from '../chat/inbox-service';
+import { useChatSendService } from '../chat/send-provider';
+import { markChannelRead } from '../chat/mark-read';
+import { lastPosition } from '../chat/snapshots';
 import { teamUnread } from '../chat/unread';
+import {
+  rememberChannelPreviews,
+  rememberChannelSort,
+  rememberTeamFolded,
+  storedChannelPreviews,
+  storedChannelSort,
+  storedFoldedTeams,
+} from '../sidebar-prefs';
+import type { ChannelSort } from '../sidebar-prefs';
 import { GroupMark } from './group-mark';
 import { manageReason } from './group-model';
 
@@ -213,6 +234,10 @@ interface TeamRow {
   /** Team subtitle showing server host and member count (if known). */
   caption: string;
   server: string;
+  /** The team's people by party identifier, so a preview's sender is a name. */
+  names: ReadonlyMap<string, string>;
+  /** The reader's own party identifier, so their messages preview as "You". */
+  actor: string | null;
 }
 
 /** A badge that is a bare number, as opposed to "…", "!", "3+" or "3·". */
@@ -227,6 +252,7 @@ function teamRow(
   options: AvailabilityOptions,
   /** The team whose conversation is mounted beside the column. */
   open: boolean,
+  sort: ChannelSort,
 ): TeamRow {
   const entry = inbox.get(store.id);
   const reachable = chatAvailable(snapshot, store, options);
@@ -267,7 +293,7 @@ function teamRow(
     status: unavailable || failure || (loading ? 'Loading channels…' : ''),
     note: !failed && reachable && entry?.data ? entry.error || entry.note : '',
     channels: entry?.data
-      ? listChannels(entry.data.channels, entry.data.conversations)
+      ? listChannels(entry.data.channels, entry.data.conversations, sort)
       : undefined,
     badge: reachable ? unread : { label: '!', description: unavailable },
     caption:
@@ -275,6 +301,8 @@ function teamRow(
         ? server
         : `${server} · ${plural(members, 'member')}`,
     server,
+    names: partyNames(snapshot, store.id),
+    actor: entry?.scope?.actor ?? null,
   };
 }
 
@@ -323,6 +351,8 @@ export function ChatTeamColumn({
   query: search = '',
 }: ChatTeamColumnProps): ReactNode {
   const { service, snapshot: inbox } = useChatInbox();
+  const sends = useChatSendService();
+  const toasts = useOptionalToast();
   const { controller } = useChannelCreation();
   const [context, setContext] = useState<{
     x: number;
@@ -331,19 +361,30 @@ export function ChatTeamColumn({
     channel?: string;
   } | null>(null);
 
-  // Which teams have their channel list folded away, by team id.
-  // This is local to the column and does not persist: a team reopens expanded
-  // the next time the column mounts.
-  const [collapsedTeams, setCollapsedTeams] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  // Which teams have their channel list folded away, by team id: what the
+  // reader folded or unfolded since the column mounted, over what was stored
+  // when it mounted. Teams arrive after the column does, so the stored set is
+  // consulted per team rather than copied into state once.
+  const [storedFold] = useState(storedFoldedTeams);
+  const [folds, setFolds] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
   );
-  const toggleCollapsed = (id: string) =>
-    setCollapsedTeams((prior) => {
-      const next = new Set(prior);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const collapsedTeam = (id: string) => folds.get(id) ?? storedFold(id);
+  const toggleCollapsed = (id: string) => {
+    const folded = !collapsedTeam(id);
+    setFolds((prior) => new Map(prior).set(id, folded));
+    rememberTeamFolded(id, folded);
+  };
+  const [sort, setSort] = useState(storedChannelSort);
+  const [previews, setPreviews] = useState(storedChannelPreviews);
+  const chooseSort = (next: ChannelSort) => {
+    setSort(next);
+    rememberChannelSort(next);
+  };
+  const showPreviews = (shown: boolean) => {
+    setPreviews(shown);
+    rememberChannelPreviews(shown);
+  };
   // The column searches names, not messages: the agent has no message index,
   // so a query that matched text would be a promise the client cannot keep.
   const filter = search;
@@ -370,10 +411,13 @@ export function ChatTeamColumn({
       teams: listedTeams,
       withoutChat: noChatTeams(snapshot),
       rows: listedTeams.map((store) =>
-        teamRow(snapshot, inbox, store, options, store.id === selected),
+        teamRow(snapshot, inbox, store, options, store.id === selected, sort),
       ),
     };
-  }, [snapshot, inbox, second, agentReady, catalogReady, selected]);
+  }, [snapshot, inbox, second, agentReady, catalogReady, selected, sort]);
+  // Preview times are stated against the tab's clock when it supplies one,
+  // the clock the rest of the column reads.
+  const now = second === undefined ? Date.now() : second * 1000;
   const dimmed = withoutChat.filter(
     (store) => !query || store.name.toLowerCase().includes(query),
   );
@@ -399,6 +443,29 @@ export function ChatTeamColumn({
           contextRow.entry?.blockedChannels.has(contextChannel.channel.id)
         ? 'You do not have access to this channel.'
         : undefined;
+  // Mark as read is offered while the channel has unread messages, and moves
+  // the read pointer to the newest position the inbox states, the one the
+  // unread count is counted up to.
+  const contextUnread = channelCount(contextChannel);
+  const markContextRead = () => {
+    const conversation = contextChannel?.conversation;
+    const team = contextRow?.store.id;
+    if (!conversation || !team) return;
+    const title = channelTitle(conversation.channel);
+    markChannelRead(
+      (action) => sends.request(team, action),
+      service,
+      team,
+      conversation.channel.id,
+      String(lastPosition(conversation)),
+    ).catch((cause: unknown) => {
+      const error = normalizeCommandError(cause);
+      if (error.code === 'cancelled') return;
+      toasts?.show(`${title} was not marked as read. ${error.message}`, {
+        tone: 'warning',
+      });
+    });
+  };
   const createReason = !controller
     ? 'Channel creation is unavailable in this window.'
     : !rows.some(
@@ -434,7 +501,9 @@ export function ChatTeamColumn({
         // matched inside a collapsed team has to be seen to explain why its
         // team matched at all. The fold itself is untouched underneath, and
         // returns as soon as the query is cleared.
-        collapsed={query ? false : collapsedTeams.has(row.store.id)}
+        collapsed={query ? false : collapsedTeam(row.store.id)}
+        previews={previews}
+        now={now}
         onToggleCollapse={() => toggleCollapsed(row.store.id)}
         onOpen={onOpen}
         // Retrying one team reloads that team alone: every other team's
@@ -499,15 +568,23 @@ export function ChatTeamColumn({
           <SectionLabel
             className="chat-inbox-label"
             action={
-              <button
-                type="button"
-                className="chat-inbox-add"
-                aria-label="New channel"
-                title="New channel"
-                onClick={onNewChat}
-              >
-                <Icon name="plus" size={14} />
-              </button>
+              <>
+                <ColumnDisplayMenu
+                  sort={sort}
+                  previews={previews}
+                  onSort={chooseSort}
+                  onPreviews={showPreviews}
+                />
+                <button
+                  type="button"
+                  className="chat-inbox-add"
+                  aria-label="New channel"
+                  title="New channel"
+                  onClick={onNewChat}
+                >
+                  <Icon name="plus" size={14} />
+                </button>
+              </>
             }
           >
             Teams
@@ -586,19 +663,21 @@ export function ChatTeamColumn({
                 >
                   Open channel
                 </MenuItem>
-                <MenuItem
-                  icon="pencil"
-                  reason="Editing channels is not implemented."
-                >
-                  Edit channel
-                </MenuItem>
-                <MenuItem
-                  icon="trash"
-                  danger
-                  reason="Deleting channels is not implemented."
-                >
-                  Delete channel
-                </MenuItem>
+                {/* Renaming and deleting channels are not offered until
+                    channel management ships; an item that can never apply
+                    is not listed. */}
+                {contextUnread && (
+                  <MenuItem
+                    icon="circleCheck"
+                    reason={openReason}
+                    onClick={() => {
+                      closeContext();
+                      markContextRead();
+                    }}
+                  >
+                    Mark as read
+                  </MenuItem>
+                )}
                 <MenuItem
                   icon="info"
                   reason={
@@ -640,7 +719,7 @@ export function ChatTeamColumn({
                   onNewChat();
                 }}
               >
-                Create channel
+                New channel
               </MenuItem>
             )}
             {context.team && onAddPeople ? (
@@ -693,6 +772,103 @@ function channelUnreadTotal(channels: readonly ListedChannel[]): number {
   }, 0);
 }
 
+/**
+ * The column's sort and display control, beside its "+": the trigger names
+ * the current order and opens a menu of the two orders and the previews
+ * switch. Choosing keeps the menu open, so the orders can be compared; Escape
+ * or a click outside closes it and returns focus to the trigger.
+ */
+function ColumnDisplayMenu({
+  sort,
+  previews,
+  onSort,
+  onPreviews,
+}: {
+  sort: ChannelSort;
+  previews: boolean;
+  onSort: (sort: ChannelSort) => void;
+  onPreviews: (shown: boolean) => void;
+}): ReactNode {
+  const anchorRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
+  const choices = [
+    ['alphabetical', 'Alphabetical', '#general first, then A to Z'],
+    ['recent', 'Recent activity', 'Newest message first'],
+  ] as const;
+  return (
+    <>
+      <button
+        type="button"
+        ref={anchorRef}
+        className="chat-inbox-sort"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Sort and display, ${sort === 'recent' ? 'recent activity' : 'alphabetical'}`}
+        title="Sort and display"
+        onClick={() => setOpen((was) => !was)}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowDown' || open) return;
+          event.preventDefault();
+          setOpen(true);
+        }}
+      >
+        <span>{sort === 'recent' ? 'Recent' : 'A–Z'}</span>
+        <Icon name="chevronDown" size={13} />
+      </button>
+      {open && (
+        <Popover
+          anchorRef={anchorRef}
+          className="menu-portal"
+          align="end"
+          gap={4}
+          onClose={close}
+        >
+          <Menu
+            className="menu chat-sort-menu"
+            anchorRef={anchorRef}
+            onClose={close}
+            aria-label="Sort and display"
+            initialFocus="first"
+          >
+            <div className="cap" role="presentation">
+              Sort channels
+            </div>
+            {choices.map(([value, title, detail]) => (
+              <button
+                type="button"
+                key={value}
+                role="menuitemradio"
+                aria-checked={sort === value}
+                onClick={() => onSort(value)}
+              >
+                <Icon name="check" />
+                <span className="menu-choice">
+                  {title}
+                  <small>{detail}</small>
+                </span>
+              </button>
+            ))}
+            <div className="menu-separator" role="separator" />
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={previews}
+              onClick={() => onPreviews(!previews)}
+            >
+              <Icon name="check" />
+              <span className="menu-choice">
+                Show previews
+                <small>Last message and time under each channel</small>
+              </span>
+            </button>
+          </Menu>
+        </Popover>
+      )}
+    </>
+  );
+}
+
 /** A team: a heading that folds its channels, and the channels under it. */
 function TeamHeading({
   row,
@@ -700,6 +876,8 @@ function TeamHeading({
   selected,
   activeChannel,
   collapsed,
+  previews,
+  now,
   onToggleCollapse,
   onOpen,
   onRetry,
@@ -709,8 +887,12 @@ function TeamHeading({
   /** The team whose conversation is mounted beside the column. */
   selected?: StoreRef;
   activeChannel?: string;
-  /** The channel list is folded away; local to the column, keyed by team id. */
+  /** The channel list is folded away; stored by the column, keyed by team id. */
   collapsed: boolean;
+  /** Each channel row carries its last message and that message's time. */
+  previews: boolean;
+  /** The clock preview times are stated against, in milliseconds. */
+  now: number;
   onToggleCollapse: () => void;
   onOpen: (ref: StoreRef, channel?: string) => void;
   /** Reloads the channel list for this team. */
@@ -912,14 +1094,61 @@ function TeamHeading({
             const active = channel.id === activeChannel;
             const count = channelCount(listedChannel);
             const meta = channelMeta(listedChannel, row.entry?.blockedChannels);
-            // A channel row is its name. The one thing it adds is why it is
-            // quiet — restricted, hidden, muted, stopped — or, for the lone
-            // general channel of a team that has never been used, that nothing
-            // has been said in it yet.
+            const stopped = row.entry?.blockedChannels.has(channel.id) ?? false;
+            // A channel row is its name and why it is quiet — restricted,
+            // hidden, muted, stopped. With previews on, a second line carries
+            // the last message and the first line its time; a channel the
+            // inbox states nothing has been said in says so there. A missing
+            // preview alone is not taken to mean that, since a stopped
+            // channel's preview is withheld and a synchronization can leave
+            // one unavailable. With previews off, only the lone general
+            // channel of a team that has never been used says so, beside
+            // its name.
             const preview = conversation?.preview;
+            const silent =
+              channel.readable && !stopped && neverMessaged(listedChannel);
+            const line =
+              previews && channel.readable && !stopped
+                ? previewLine(conversation, row.actor, row.names) ||
+                  (silent ? 'No messages yet' : '')
+                : '';
+            const when =
+              previews && preview && channel.readable && !stopped
+                ? previewTime(preview.insert_time, now)
+                : '';
             const caption =
               meta ||
-              (listedChannel === lone && !preview ? 'No messages yet' : '');
+              (!previews && listedChannel === lone && silent
+                ? 'No messages yet'
+                : '');
+            const name = caption
+              ? `${channelTitle(channel)} · ${caption}`
+              : channelTitle(channel);
+            const lock = channel.admin && (
+              <span
+                className="lock"
+                title="Admins and owners only"
+                aria-label="Admins and owners only"
+              >
+                <Icon name="key" size={13} />
+              </span>
+            );
+            const badge = count && row.reachable && (
+              <span
+                className={
+                  conversation?.muted ? 'chat-unread muted' : 'chat-unread'
+                }
+                aria-label={`${count} unread`}
+              >
+                {count}
+              </span>
+            );
+            const label = (
+              <span className="t">
+                <span className="n">{channelLabel(channel)}</span>
+                {caption && <small> · {caption}</small>}
+              </span>
+            );
             return (
               <button
                 type="button"
@@ -927,6 +1156,7 @@ function TeamHeading({
                 data-chat-channel={channel.id}
                 className={[
                   'chat-channel',
+                  previews ? 'two' : '',
                   active ? 'on' : '',
                   count ? 'unread' : '',
                   conversation?.hidden ? 'hidden' : '',
@@ -940,12 +1170,9 @@ function TeamHeading({
                 aria-current={active ? 'page' : undefined}
                 // The "#" is drawn as its own faint glyph, so the row states
                 // its own name rather than leaving a reader to assemble
-                // "#" and "general" out of two elements.
-                aria-label={
-                  caption
-                    ? `${channelTitle(channel)} · ${caption}`
-                    : channelTitle(channel)
-                }
+                // "#" and "general" out of two elements. The preview and its
+                // time follow the name, as they are drawn.
+                aria-label={[name, line, when].filter(Boolean).join(', ')}
                 // A channel of an unreachable team opens the locked pane, which
                 // states the reason. Disabling it would be the one row in the
                 // column that answers nothing: the team's own row is clickable
@@ -955,28 +1182,32 @@ function TeamHeading({
                 <span className="hash" aria-hidden="true">
                   #
                 </span>
-                <span className="t">
-                  <span className="n">{channelLabel(channel)}</span>
-                  {caption && <small> · {caption}</small>}
-                </span>
-                {channel.admin && (
-                  <span
-                    className="lock"
-                    title="Admins and owners only"
-                    aria-label="Admins and owners only"
-                  >
-                    <Icon name="key" size={13} />
+                {previews ? (
+                  <span className="chat-channel-body">
+                    <span className="chat-channel-head">
+                      {label}
+                      {lock}
+                      {when && (
+                        <time
+                          dateTime={messageDate(
+                            preview!.insert_time,
+                          )?.toISOString()}
+                        >
+                          {when}
+                        </time>
+                      )}
+                    </span>
+                    <span className="chat-channel-foot">
+                      <span className="chat-channel-preview">{line}</span>
+                      {badge}
+                    </span>
                   </span>
-                )}
-                {count && row.reachable && (
-                  <span
-                    className={
-                      conversation?.muted ? 'chat-unread muted' : 'chat-unread'
-                    }
-                    aria-label={`${count} unread`}
-                  >
-                    {count}
-                  </span>
+                ) : (
+                  <>
+                    {label}
+                    {lock}
+                    {badge}
+                  </>
                 )}
               </button>
             );

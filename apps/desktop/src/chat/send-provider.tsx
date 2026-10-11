@@ -103,3 +103,13 @@ export function useChatSends() {
   );
   return { service, revision };
 }
+/**
+ * The send service for a caller that only issues requests through it. Unlike
+ * `useChatSends` it does not subscribe, so the caller does not re-render on
+ * each publication, which includes every change to a composer's draft.
+ */
+export function useChatSendService(): ChatSendService {
+  const service = useContext(Context);
+  if (!service) throw new Error('Chat requires the unlocked send provider.');
+  return service;
+}
