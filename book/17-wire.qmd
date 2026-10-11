@@ -369,6 +369,7 @@ range. Later versions may add fields to these two shapes but never remove or
 retype one. The agent refuses a message of another version before decoding
 its operation, so a client reports a refused mutation as not run rather than
 as an unknown outcome.
+
 Frames are held in zeroizing buffers. Chapter 19 covers the security checks
 on the socket itself: ownership, permissions, and peer credentials.
 

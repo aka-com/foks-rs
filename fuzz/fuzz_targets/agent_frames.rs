@@ -18,6 +18,19 @@ fn inspect(bytes: &[u8]) {
             Err(error) => assert!(matches!(error, frame::Error::TooLarge)),
         }
     }
+    // The agent tries every frame decode_request rejects as a Hello, of any
+    // version, so this parser sees unauthenticated input too.
+    if let Ok(Some(hello)) = frame::decode_hello(bytes) {
+        match frame::encode(&hello) {
+            Ok(canonical) => assert_eq!(frame::decode_hello(&canonical).unwrap(), Some(hello)),
+            Err(error) => assert!(matches!(error, frame::Error::TooLarge)),
+        }
+    }
+    // Client-side decoders of the frozen refusal envelope and Hello reply.
+    let _ = frame::decode_response(bytes);
+    if let Ok(response) = frame::decode_hello_response(bytes) {
+        let _ = response.reply.require_compatible();
+    }
 }
 
 fuzz_target!(|input: &[u8]| {

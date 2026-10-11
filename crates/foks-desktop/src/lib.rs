@@ -412,10 +412,19 @@ pub fn agent_client_error(error: impl std::borrow::Borrow<foks_agent_client::Err
         },
         // The agent refused the request before decoding it, so this is
         // definite even for a mutation.
-        Error::Protocol(mismatch @ foks_agent_proto::Error::VersionMismatch { .. }) => {
+        Error::Protocol(foks_agent_proto::Error::VersionMismatch { agent, supported }) => {
+            let accepted = match supported {
+                Some(range) if *range != foks_agent_proto::ProtocolRange::exactly(*agent) => {
+                    format!(" (accepted: {range})")
+                }
+                _ => String::new(),
+            };
             AgentError::Protocol {
                 code: ErrorCode::VersionMismatch,
-                message: format!("desktop and agent protocol versions do not match: {mismatch}"),
+                message: format!(
+                    "desktop protocol version {} does not match agent protocol version {agent}{accepted}",
+                    foks_agent_proto::PROTOCOL_VERSION
+                ),
                 fields: Box::default(),
             }
         }
@@ -4228,7 +4237,13 @@ mod tests {
         else {
             panic!("unexpected mapping {refused:?}");
         };
-        assert!(message.contains("agent protocol version 34"), "{message}");
+        assert_eq!(
+            *message,
+            format!(
+                "desktop protocol version {} does not match agent protocol version 34",
+                foks_agent_proto::PROTOCOL_VERSION
+            )
+        );
     }
 
     #[test]

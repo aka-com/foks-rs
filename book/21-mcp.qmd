@@ -240,7 +240,11 @@ Before it starts the MCP server, the CLI exchanges the version-independent
 Hello ([Chapter 17](17-wire.qmd)). If a resident agent of another version
 answers, the error names both versions and the remedy, stopping that agent;
 the CLI does not start a second agent, which could not take the running
-agent's lock. A tool call that an agent of another version refuses is
+agent's lock. An agent that accepts the connection but does not report its
+status, because it answers `busy`, misses the CLI's 250 ms deadline on the
+Hello or the status request, or drops the connection, is probed again until
+two seconds have passed and then reported as busy, again without starting a
+second agent. A tool call that an agent of another version refuses is
 reported as not run.
 The hard-state database uses schema 41 and migrates supported schemas 38
 through 40; other development schemas are refused. These upgrades do not turn an
