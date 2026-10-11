@@ -31,10 +31,11 @@ pub use message::{
     GoProfileCandidate, GoProfileDiscovery, KnownStoreSummary, KvChunkResult, KvEntryMetadata,
     KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadFrame, KvUploadHeader,
     KvUploadPayload, Operation, PendingOperationKind, PendingOperationSummary, ProfileOverview,
-    ProfileProtocol, ProfileTrust, Request, ResetArtifactKind, ResetArtifactSummary,
-    ResetStatePreview, Response, ResponseResult, ResponseTiming, SecretString,
-    ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef,
-    TeamSummary, TimerStatus, YubiFederationUnlockInput, YubiRetryConfiguration, PROTOCOL_VERSION,
+    ProfileProtocol, ProfileTrust, RecoveryPhraseCheck, Request, ResetArtifactKind,
+    ResetArtifactSummary, ResetStatePreview, Response, ResponseResult, ResponseTiming,
+    SecretString, ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole,
+    TeamStoreRef, TeamSummary, TimerStatus, YubiFederationUnlockInput, YubiRetryConfiguration,
+    PROTOCOL_VERSION,
 };
 
 #[cfg(test)]

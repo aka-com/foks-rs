@@ -128,6 +128,17 @@ To exercise the lifecycle on a disposable local test server, run
 `recovery revoke PROFILE --account-alias ACCOUNT_ALIAS BACKUP_ALIAS BACKUP_ID`; backup enrollment
 JSON includes `backup_id_hex` so cleanup never guesses a credential identity.
 
+`recovery verify PROFILE --account-alias ACCOUNT_ALIAS --phrase-file PATH`
+checks a written-down recovery phrase before it is needed. It derives the
+phrase's backup key and compares it with the backup keys in the account's user
+chain as last verified on this device, without contacting the server, and
+reports a match, a match with a revoked key, or no match. HESP phrases have no
+checksum, so a mistyped dictionary word is otherwise found only during
+recovery. When the first word and number equal an enrolled key's public name
+but the key differs, the report names that key and the difference lies in
+tokens 3 to 17. The phrase file has the same permission and size rules as
+`recovery recover`.
+
 Organization enrollment and reauthentication use `foks-rs sso`. See the
 [OIDC client flow and operator guide](../foks-server/OIDC.md).
 

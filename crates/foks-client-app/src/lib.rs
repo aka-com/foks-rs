@@ -261,7 +261,7 @@ pub use account::{
     derive_mutation_key, derive_vault_key, AccountVault, BackupEnrollmentReport,
     BackupEnrollmentSummary, BackupRevocationReport, DeviceProvisionReport, DeviceRevocationReport,
     DeviceSummary, KexAcceptanceInput, KexOfferReport, LoadedAccount, PassphraseReport,
-    PassphraseStatus, SyncReport,
+    PassphraseStatus, RecoveryPhraseCheck, SyncReport,
 };
 use checkpoint::RollbackHostCheckpoint;
 #[cfg(test)]

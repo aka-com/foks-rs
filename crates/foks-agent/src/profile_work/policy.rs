@@ -119,6 +119,7 @@ pub(crate) fn operation_scope(operation: &Operation) -> Scope {
         | PrepareOwnerBackup { profile, .. }
         | CommitOwnerBackup { profile, .. }
         | RevokeOwnerBackup { profile, .. }
+        | VerifyRecoveryPhrase { profile, .. }
         | RecoverOwnerAccount { profile, .. }
         | ResumeOwnerRecovery { profile, .. }
         | PassphraseStatus { profile, .. }

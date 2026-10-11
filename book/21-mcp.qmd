@@ -234,7 +234,7 @@ The server advertises MCP revision 2025-11-25 and negotiates 2025-06-18,
 exact version. Advertising the newest and accepting older revisions lets
 an assistant host that has not yet updated continue to work.
 
-The local agent IPC is separate: its current version is 35. Upgrade the CLI
+The local agent IPC is separate: its current version is 36. Upgrade the CLI
 and resident agent together and restart the agent to avoid a version mismatch.
 Before it starts the MCP server, the CLI exchanges the version-independent
 Hello ([Chapter 17](17-wire.qmd)). If a resident agent of another version

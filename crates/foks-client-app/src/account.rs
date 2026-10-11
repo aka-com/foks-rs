@@ -928,6 +928,96 @@ impl CheckedProfileSession<'_> {
         })
     }
 
+    /// Checks a written-down recovery phrase against the backup keys in the
+    /// account's verified user chain, as last pinned in local hard state.
+    ///
+    /// This replays the stored transcript and derives the phrase's backup key
+    /// locally; it sends nothing to the server and writes no state, so unlike
+    /// enrollment it needs no server capability grant. A backup key enrolled
+    /// from another device since this device last synchronized is therefore
+    /// reported as unmatched until the account is synchronized.
+    pub fn verify_recovery_phrase(
+        &self,
+        account_alias: &str,
+        phrase: Zeroizing<String>,
+        vault: &mut AccountVault<'_>,
+    ) -> Result<RecoveryPhraseCheck> {
+        let loaded = vault.account(account_alias)?;
+        let backup = BackupKey::from_phrase(&phrase)?;
+        drop(phrase);
+        let backup_id = backup.public_material()?.id;
+        let public_name = backup.device_name();
+        drop(backup);
+        let host = self.pinned_host()?;
+        let verified = self
+            .client
+            .pinned_user(&host, &loaded.credential.uid)?
+            .ok_or(Error::InvalidAccount(
+                "account has no verified user chain on this device; synchronize it first",
+            ))?;
+        let current = |id: &[u8]| {
+            verified
+                .devices()
+                .iter()
+                .any(|device| device.id.as_bytes() == id)
+        };
+        // Every backup key the chain has disclosed a name for, revoked or not.
+        // Backup provisioning always commits the phrase's public name, so this
+        // also covers the derived key when the chain holds it.
+        let named = verified
+            .device_display_names()
+            .filter(|(id, _)| id.first() == Some(&foks_proto::ENTITY_BACKUP_KEY))
+            .collect::<Vec<_>>();
+        // Only `UserBinding` means the chain never provisioned a key; any
+        // other failure reading the stored evidence is an error, not a
+        // mismatch.
+        let provisioned = |id: &foks_proto::EntityId| match verified.device_history(id) {
+            Ok(_) => Ok(true),
+            Err(foks_verify::Error::UserBinding) => Ok(false),
+            Err(error) => Err(Error::from(error)),
+        };
+        let (matched_backup_id_hex, named_id, matched_name) =
+            if let Some((id, name)) = named.iter().find(|(id, _)| *id == backup_id.as_bytes()) {
+                (Some(hex(id)), Some(id.to_vec()), Some((*name).to_owned()))
+            } else if provisioned(&backup_id)? {
+                // Provisioned without a disclosed name; still the same key.
+                (
+                    Some(hex(backup_id.as_bytes())),
+                    Some(backup_id.as_bytes().to_vec()),
+                    None,
+                )
+            } else {
+                // A near miss: prefer a current key when two share the name.
+                let mut candidates = named
+                    .iter()
+                    .filter(|(_, name)| *name == public_name)
+                    .collect::<Vec<_>>();
+                candidates.sort_by_key(|(id, _)| !current(id));
+                match candidates.first() {
+                    Some((id, name)) => (None, Some(id.to_vec()), Some((*name).to_owned())),
+                    None => (None, None, None),
+                }
+            };
+        let revoked = named_id.as_deref().is_some_and(|id| !current(id));
+        let named_hex = named_id.as_deref().map(hex);
+        let backup_alias = match named_hex {
+            Some(named_hex) => vault
+                .backup_enrollments(account_alias)?
+                .into_iter()
+                .find(|summary| summary.backup_id_hex == named_hex)
+                .map(|summary| summary.backup_alias),
+            None => None,
+        };
+        Ok(RecoveryPhraseCheck {
+            account_alias: account_alias.to_owned(),
+            matched_backup_id_hex,
+            matched_name,
+            revoked,
+            backup_alias,
+            user_chain_sequence: verified.chain_seqno(),
+        })
+    }
+
     pub fn recover_owner_account(
         &self,
         target_alias: &str,
@@ -1209,6 +1299,25 @@ pub struct BackupRevocationReport {
     pub user_chain_sequence: u64,
     pub already_absent: bool,
     pub removed_local_enrollment: bool,
+}
+
+/// What a recovery phrase corresponds to in an account's verified user chain.
+///
+/// `matched_backup_id_hex` is set when the phrase derives a backup key the
+/// chain has provisioned. Without one, `matched_name` may still name a backup
+/// key whose public name (the phrase's first word and number) equals the
+/// typed phrase's: the copy belongs to that key and differs from it in tokens
+/// 3 to 17. `revoked` and `backup_alias` describe whichever key is named.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RecoveryPhraseCheck {
+    pub account_alias: String,
+    pub matched_backup_id_hex: Option<String>,
+    pub matched_name: Option<String>,
+    pub revoked: bool,
+    /// The local enrollment alias of the named key, when this device holds one.
+    pub backup_alias: Option<String>,
+    /// The user-chain sequence the comparison read from local hard state.
+    pub user_chain_sequence: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2433,6 +2542,158 @@ mod tests {
                 assert!(repeated.already_absent);
                 assert!(repeated.removed_local_enrollment);
                 assert_eq!(repeated.user_chain_sequence, reconciled.user_chain_sequence);
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn recovery_phrase_check_reads_only_the_pinned_user_chain() {
+        let environment = TestEnvironment::new().unwrap();
+        let server = environment.start_server().unwrap();
+        let addresses = environment.addresses().unwrap();
+        let state = environment.client_path("backup-check", "state").unwrap();
+        let root = environment
+            .client_path("backup-check", "probe-root.der")
+            .unwrap();
+        environment.write_probe_root(&root).unwrap();
+        let credentials =
+            ClientCredentials::initialize(&state, CredentialBackend::PrivateFile).unwrap();
+        let master = credentials.master_key().unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(Profile {
+                name: "local".to_owned(),
+                label: None,
+                probe: format!("localhost:{}", addresses.probe.port()),
+                protocol: ProtocolPolicy::V019,
+                trust: TrustRoot::CertificateDer { path: root },
+            })
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        let (kept, revoked, kept_id, revoked_id) = credentials
+            .with_checked_session(&session, |session| {
+                session.probe_and_pin()?;
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                session.create_account(
+                    "personal",
+                    "checkowner",
+                    "owner laptop",
+                    "",
+                    "",
+                    None,
+                    &mut vault,
+                    &master,
+                )?;
+                let mut enroll = |alias: &str| -> Result<(Zeroizing<String>, String)> {
+                    let phrase = session
+                        .prepare_owner_backup("personal", alias, &mut vault)?
+                        .expose_joined();
+                    let report = session.commit_owner_backup(
+                        "personal",
+                        alias,
+                        Zeroizing::new(phrase.as_str().to_owned()),
+                        &mut vault,
+                    )?;
+                    Ok((phrase, report.backup_id_hex))
+                };
+                let (kept, kept_id) = enroll("paper")?;
+                let (revoked, revoked_id) = enroll("drawer")?;
+                session.revoke_owner_backup(
+                    "personal",
+                    "drawer",
+                    &revoked_id,
+                    &mut vault,
+                    &master,
+                )?;
+                Ok::<_, Error>((kept, revoked, kept_id, revoked_id))
+            })
+            .unwrap();
+
+        // Every check below runs with the server stopped.
+        drop(server);
+        credentials
+            .with_checked_session(&session, |session| {
+                let mut store = EncryptedFileSecretStore::open(
+                    &session.paths().credential_store,
+                    derive_vault_key(&master),
+                )?;
+                let mut vault = AccountVault::new(&mut store);
+                let check = |phrase: &str, vault: &mut AccountVault<'_>| {
+                    session.verify_recovery_phrase(
+                        "personal",
+                        Zeroizing::new(phrase.to_owned()),
+                        vault,
+                    )
+                };
+                let public_name = |phrase: &str| {
+                    phrase
+                        .split_whitespace()
+                        .take(2)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+
+                let matched = check(&kept, &mut vault)?;
+                assert_eq!(matched.matched_backup_id_hex.as_deref(), Some(&*kept_id));
+                assert_eq!(matched.matched_name, Some(public_name(&kept)));
+                assert_eq!(matched.backup_alias.as_deref(), Some("paper"));
+                assert!(!matched.revoked);
+
+                // Extra whitespace parses to the same key.
+                let spaced = format!("  {}  ", kept.replacen(' ', "   ", 3));
+                assert_eq!(
+                    check(&spaced, &mut vault)?.matched_backup_id_hex,
+                    matched.matched_backup_id_hex
+                );
+
+                let old = check(&revoked, &mut vault)?;
+                assert_eq!(old.matched_backup_id_hex.as_deref(), Some(&*revoked_id));
+                assert_eq!(old.matched_name, Some(public_name(&revoked)));
+                assert!(old.revoked);
+                // Revocation removed the local enrollment record.
+                assert_eq!(old.backup_alias, None);
+
+                // One in-dictionary substitution after the public name.
+                let mut tokens = kept.split_whitespace().collect::<Vec<_>>();
+                tokens[4] = if tokens[4] == "abandon" {
+                    "ability"
+                } else {
+                    "abandon"
+                };
+                let near = check(&tokens.join(" "), &mut vault)?;
+                assert_eq!(near.matched_backup_id_hex, None);
+                assert_eq!(near.matched_name, Some(public_name(&kept)));
+                assert_eq!(near.backup_alias.as_deref(), Some("paper"));
+                assert!(!near.revoked);
+
+                let unrelated = BackupKey::generate()?.phrase().expose_joined();
+                let missing = check(&unrelated, &mut vault)?;
+                assert_eq!(missing.matched_backup_id_hex, None);
+                assert_eq!(missing.matched_name, None);
+                assert_eq!(missing.backup_alias, None);
+                assert!(!missing.revoked);
+                assert_eq!(missing.user_chain_sequence, matched.user_chain_sequence);
+
+                tokens[4] = "notaword";
+                assert!(matches!(
+                    check(&tokens.join(" "), &mut vault),
+                    Err(Error::Backup(foks_crypto::RecoveryPhraseError::Word {
+                        index: 2
+                    }))
+                ));
+                assert!(matches!(
+                    session.verify_recovery_phrase(
+                        "missing",
+                        Zeroizing::new(kept.as_str().to_owned()),
+                        &mut vault,
+                    ),
+                    Err(Error::AccountMissing)
+                ));
                 Ok::<_, Error>(())
             })
             .unwrap();

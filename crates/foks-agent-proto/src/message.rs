@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 35;
+pub const PROTOCOL_VERSION: u32 = 36;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -252,6 +252,25 @@ pub struct BackupEnrollmentSummary {
     pub backup_alias: String,
     pub account_alias: String,
     pub backup_id_hex: String,
+}
+
+/// The answer to [`Operation::VerifyRecoveryPhrase`].
+///
+/// `matched_backup_id_hex` names the backup key the phrase derives when the
+/// account's verified user chain holds it. Without a match, `matched_name`
+/// may still name a backup key whose public name (the phrase's first word and
+/// number) the typed phrase shares, so the copy differs from that key's
+/// phrase in tokens 3 to 17. `revoked` and `backup_alias` describe whichever
+/// key is named.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryPhraseCheck {
+    pub account_alias: String,
+    pub matched_backup_id_hex: Option<String>,
+    pub matched_name: Option<String>,
+    pub revoked: bool,
+    pub backup_alias: Option<String>,
+    pub user_chain_sequence: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -697,6 +716,14 @@ pub enum Operation {
         backup_alias: String,
         backup_id: String,
     },
+    /// Compares a written-down recovery phrase with the backup keys in the
+    /// account's user chain as last verified on this device. Local only: it
+    /// contacts no server and writes no state.
+    VerifyRecoveryPhrase {
+        profile: String,
+        account_alias: String,
+        phrase: SecretString,
+    },
     RecoverOwnerAccount {
         profile: String,
         target_alias: String,
@@ -1141,6 +1168,7 @@ impl Operation {
             Self::PrepareOwnerBackup { .. } => "PrepareOwnerBackup",
             Self::CommitOwnerBackup { .. } => "CommitOwnerBackup",
             Self::RevokeOwnerBackup { .. } => "RevokeOwnerBackup",
+            Self::VerifyRecoveryPhrase { .. } => "VerifyRecoveryPhrase",
             Self::RecoverOwnerAccount { .. } => "RecoverOwnerAccount",
             Self::ResumeOwnerRecovery { .. } => "ResumeOwnerRecovery",
             Self::PassphraseStatus { .. } => "PassphraseStatus",
@@ -1281,6 +1309,7 @@ impl Operation {
                 | Self::ListPendingOperations { .. }
                 | Self::ListDevices { .. }
                 | Self::ListBackupEnrollments { .. }
+                | Self::VerifyRecoveryPhrase { .. }
                 | Self::DescribeServerStatus { .. }
                 | Self::PassphraseStatus { .. }
                 | Self::VerifyPassphrase { .. }
@@ -1534,6 +1563,16 @@ impl std::fmt::Debug for Operation {
                 .field("account_alias", account_alias)
                 .field("backup_alias", backup_alias)
                 .field("backup_id", backup_id)
+                .finish(),
+            Self::VerifyRecoveryPhrase {
+                profile,
+                account_alias,
+                phrase: _,
+            } => formatter
+                .debug_struct("VerifyRecoveryPhrase")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
+                .field("phrase", &"<redacted>")
                 .finish(),
             Self::RecoverOwnerAccount {
                 profile,
@@ -2892,6 +2931,47 @@ mod tests {
                 "profile": "work",
                 "account_alias": "personal"
             })
+        );
+
+        let verify = Operation::VerifyRecoveryPhrase {
+            profile: "work".to_owned(),
+            account_alias: "personal".to_owned(),
+            phrase: SecretString::new("never print this written copy"),
+        };
+        assert!(!verify.is_mutation());
+        assert_eq!(verify.name(), "VerifyRecoveryPhrase");
+        assert!(!format!("{verify:?}").contains("written copy"));
+        assert_eq!(
+            serde_json::to_value(&verify).unwrap(),
+            serde_json::json!({
+                "operation": "verify-recovery-phrase",
+                "profile": "work",
+                "account_alias": "personal",
+                "phrase": "never print this written copy"
+            })
+        );
+        let near_miss: RecoveryPhraseCheck = serde_json::from_value(serde_json::json!({
+            "account_alias": "personal",
+            "matched_backup_id_hex": null,
+            "matched_name": "cage 32",
+            "revoked": false,
+            "backup_alias": "paper",
+            "user_chain_sequence": 4
+        }))
+        .unwrap();
+        assert_eq!(near_miss.matched_backup_id_hex, None);
+        assert_eq!(near_miss.matched_name.as_deref(), Some("cage 32"));
+        assert!(
+            serde_json::from_value::<RecoveryPhraseCheck>(serde_json::json!({
+                "account_alias": "personal",
+                "matched_backup_id_hex": null,
+                "matched_name": null,
+                "revoked": false,
+                "backup_alias": null,
+                "user_chain_sequence": 4,
+                "phrase": "echoed"
+            }))
+            .is_err()
         );
 
         let status = Operation::DescribeServerStatus {

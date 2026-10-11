@@ -504,6 +504,7 @@ pub(crate) fn operation_leaves_retained_material(operation: &Operation) -> bool 
         | Operation::ListAccountRenames { .. }
         | Operation::ListDevices { .. }
         | Operation::ListBackupEnrollments { .. }
+        | Operation::VerifyRecoveryPhrase { .. }
         | Operation::ListTeams { .. }
         | Operation::ListYubiCards { .. }
         | Operation::ListYubiAccounts { .. }

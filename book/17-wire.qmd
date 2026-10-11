@@ -346,7 +346,7 @@ canonicality.
 | Maximum message | 1 MiB |
 | Envelope reserve | 32 KiB |
 | Maximum KV payload per frame | 700 KiB |
-| Protocol version | 35 |
+| Protocol version | 36 |
 
 Byte payloads are carried as base64 strings rather than JSON integer arrays.
 The module documentation works out why: a uniformly random byte costs about

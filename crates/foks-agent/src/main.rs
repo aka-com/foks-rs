@@ -31,11 +31,12 @@ use foks_agent_proto::{
     KvChunkResult, KvEntryMetadata, KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef,
     KvUploadHeader, Operation, PendingOperationKind as WirePendingOperationKind,
     PendingOperationSummary as WirePendingOperationSummary, ProfileOverview, ProfileProtocol,
-    ProfileTrust, Request, ResetArtifactKind as WireResetArtifactKind,
-    ResetArtifactSummary as WireResetArtifactSummary, ResetStatePreview as WireResetStatePreview,
-    Response, ResponseResult, ResponseTiming, ServerStatusSnapshot as WireServerStatusSnapshot,
-    StoredHostStatus as WireStoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef,
-    TeamSummary as WireTeamSummary, MAXIMUM_MESSAGE_BYTES,
+    ProfileTrust, RecoveryPhraseCheck as WireRecoveryPhraseCheck, Request,
+    ResetArtifactKind as WireResetArtifactKind, ResetArtifactSummary as WireResetArtifactSummary,
+    ResetStatePreview as WireResetStatePreview, Response, ResponseResult, ResponseTiming,
+    ServerStatusSnapshot as WireServerStatusSnapshot, StoredHostStatus as WireStoredHostStatus,
+    TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef, TeamSummary as WireTeamSummary,
+    MAXIMUM_MESSAGE_BYTES,
 };
 use foks_client_app::{
     derive_vault_key, AccountVault, CancellationToken, Capability, CheckedProfileSession,
@@ -2248,6 +2249,14 @@ fn client_error_response(
             }
     } else if let Some(error) = candidate.downcast_ref::<foks_client_app::Error>() {
         match error {
+                // Only a phrase that does not parse is the caller's to fix;
+                // entropy and derivation failures fall through.
+                foks_client_app::Error::Backup(
+                    reason @ (foks_crypto::RecoveryPhraseError::TokenCount { .. }
+                    | foks_crypto::RecoveryPhraseError::Word { .. }
+                    | foks_crypto::RecoveryPhraseError::Number { .. }
+                    | foks_crypto::RecoveryPhraseError::NumberRange { .. }),
+                ) => (ErrorCode::InvalidRequest, recovery_phrase_sentence(reason)),
                 foks_client_app::Error::InvalidAccount("host does not require SSO") => (
                     ErrorCode::InvalidRequest,
                     SSO_UNAVAILABLE_MESSAGE.to_owned(),
@@ -4165,6 +4174,29 @@ fn dispatch_result_inner(
                     vault,
                     master,
                 )?)?)
+            })
+        }
+        Operation::VerifyRecoveryPhrase {
+            profile,
+            account_alias,
+            phrase,
+        } => {
+            let session =
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                let check = session.verify_recovery_phrase(
+                    &account_alias,
+                    Zeroizing::new(phrase.expose().to_owned()),
+                    vault,
+                )?;
+                Ok(serde_json::to_value(WireRecoveryPhraseCheck {
+                    account_alias: check.account_alias,
+                    matched_backup_id_hex: check.matched_backup_id_hex,
+                    matched_name: check.matched_name,
+                    revoked: check.revoked,
+                    backup_alias: check.backup_alias,
+                    user_chain_sequence: check.user_chain_sequence,
+                })?)
             })
         }
         Operation::RecoverOwnerAccount {
@@ -7368,7 +7400,7 @@ mod tests {
                     profile: "local".to_owned(),
                     account_alias: "personal".to_owned(),
                     backup_alias: "paper".to_owned(),
-                    phrase: foks_agent_proto::SecretString::new(phrase),
+                    phrase: foks_agent_proto::SecretString::new(phrase.clone()),
                 },
             ),
         );
@@ -7378,6 +7410,42 @@ mod tests {
             }
             _ => panic!("unexpected backup commit response: {committed:?}"),
         };
+        let verify = |id, phrase: &str| {
+            dispatch(
+                &state,
+                Request::new(
+                    id,
+                    Operation::VerifyRecoveryPhrase {
+                        profile: "local".to_owned(),
+                        account_alias: "personal".to_owned(),
+                        phrase: foks_agent_proto::SecretString::new(phrase),
+                    },
+                ),
+            )
+        };
+        let public_name = phrase
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let tested = verify(200, &phrase);
+        assert!(!format!("{tested:?}").contains(&phrase));
+        let foks_agent_proto::ResponseResult::Success { value } = tested.result else {
+            panic!("unexpected recovery phrase check: {tested:?}");
+        };
+        let check: WireRecoveryPhraseCheck = serde_json::from_value(value).unwrap();
+        assert_eq!(check.matched_backup_id_hex.as_deref(), Some(&*backup_id));
+        assert_eq!(check.matched_name.as_deref(), Some(&*public_name));
+        assert_eq!(check.backup_alias.as_deref(), Some("paper"));
+        assert!(!check.revoked);
+        let mut misspelled = phrase.split_whitespace().collect::<Vec<_>>();
+        misspelled[2] = "notaword";
+        let refused = verify(201, &misspelled.join(" "));
+        assert!(matches!(
+            refused.result,
+            foks_agent_proto::ResponseResult::Error { code: ErrorCode::InvalidRequest, ref message, .. }
+                if message == "Word 2 of the recovery phrase is not a recognized word. Check its spelling."
+        ));
         let revoked = dispatch(
             &state,
             Request::new(
@@ -7397,6 +7465,14 @@ mod tests {
                     && value["backup_id_hex"] == backup_id
                     && value["removed_local_enrollment"] == true
         ));
+        let tested = verify(202, &phrase);
+        let foks_agent_proto::ResponseResult::Success { value } = tested.result else {
+            panic!("unexpected recovery phrase check: {tested:?}");
+        };
+        let check: WireRecoveryPhraseCheck = serde_json::from_value(value).unwrap();
+        assert_eq!(check.matched_backup_id_hex.as_deref(), Some(&*backup_id));
+        assert_eq!(check.backup_alias, None);
+        assert!(check.revoked);
         let listed = dispatch(
             &state,
             Request::new(
