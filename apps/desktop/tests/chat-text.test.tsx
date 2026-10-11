@@ -6,6 +6,8 @@ import { createServer, type ViteDevServer } from 'vite';
 let vite: ViteDevServer;
 let MessageText: typeof import('../src/chat/message-text').MessageText;
 let safeChatLink: typeof import('../src/chat/message-text').safeChatLink;
+let labelHosts: typeof import('../src/chat/message-text').labelHosts;
+let chatLinkDisplay: typeof import('../src/chat/message-text').chatLinkDisplay;
 let relativeMessageTime: typeof import('../src/chat/presentation').relativeMessageTime;
 let ToastProvider: typeof import('../kit/toasts').ToastProvider;
 let ToastController: typeof import('../kit/toasts').ToastController;
@@ -15,9 +17,8 @@ test.before(async () => {
     appType: 'custom',
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
-  ({ MessageText, safeChatLink } = await vite.ssrLoadModule(
-    '/src/chat/message-text.tsx',
-  ));
+  ({ MessageText, safeChatLink, labelHosts, chatLinkDisplay } =
+    await vite.ssrLoadModule('/src/chat/message-text.tsx'));
   ({ relativeMessageTime } = await vite.ssrLoadModule(
     '/src/chat/presentation.ts',
   ));
@@ -77,6 +78,185 @@ test('unsafe and disguised links remain inert', () => {
     assert.equal(safeChatLink(value), null);
   assert.equal(safeChatLink('https://example.com/a'), 'https://example.com/a');
 });
+test('a link label naming another host is marked and its destination host shown', () => {
+  const html = messageMarkup(
+    'Sign in at [https://bank.example/login](https://evil.example/)',
+  );
+  assert.match(
+    html,
+    /<a href="https:\/\/evil\.example\/" title="https:\/\/evil\.example\/" class="chat-link-mismatch"/,
+  );
+  assert.match(html, /Link text names a different host: /);
+  assert.match(
+    html,
+    /<span class="chat-link-host mismatch">\(evil\.example\)<\/span>/,
+  );
+  assert.deepEqual(
+    chatLinkDisplay('https://bank.example/login', 'https://evil.example/'),
+    { host: 'evil.example', showHost: true, mismatchedHost: 'bank.example' },
+  );
+});
+
+test('a link label that is the destination URL carries no host suffix or warning', () => {
+  for (const text of [
+    '[https://example.com/a](https://example.com/a)',
+    '[https://example.com](https://example.com)',
+  ]) {
+    const html = messageMarkup(text);
+    assert.match(
+      html,
+      /<a href="https:\/\/example\.com\/a?" title="https:\/\/example\.com\/a?" rel=/,
+    );
+    assert.doesNotMatch(html, /chat-link-host|chat-link-mismatch/);
+  }
+});
+
+test('a plain-word label shows the destination host without a warning', () => {
+  const html = messageMarkup('Notes are [here](https://docs.example/notes).');
+  assert.match(html, /title="https:\/\/docs\.example\/notes"/);
+  assert.match(
+    html,
+    />here<\/bdi><\/a><span class="chat-link-host">\(docs\.example\)<\/span>/,
+  );
+  assert.doesNotMatch(html, /chat-link-mismatch|different host/);
+});
+
+test('an internationalized destination host is shown in its xn-- form', () => {
+  // U+0430 CYRILLIC SMALL LETTER A in place of the Latin a.
+  const html = messageMarkup('[here](https://\u0430pple.example/)');
+  assert.match(html, /href="https:\/\/xn--pple-43d\.example\/"/);
+  assert.match(html, /\(xn--pple-43d\.example\)/);
+  assert.doesNotMatch(html, /chat-link-mismatch/);
+  // A Unicode label for an ASCII host, and the reverse, are mismatches.
+  assert.equal(
+    chatLinkDisplay('b\u0430nk.example', 'https://bank.example/')
+      .mismatchedHost,
+    'xn--bnk-6cd.example',
+  );
+  assert.equal(
+    chatLinkDisplay('bank.example', 'https://xn--bnk-6cd.example/')
+      .mismatchedHost,
+    'bank.example',
+  );
+  // The same IDN written in Unicode in both places is not.
+  assert.equal(
+    chatLinkDisplay(
+      'https://b\u0430nk.example',
+      safeChatLink('https://b\u0430nk.example')!,
+    ).mismatchedHost,
+    null,
+  );
+});
+
+test('label hosts are read from words that read as URLs or host names', () => {
+  const cases: [string, string[]][] = [
+    ['https://Bank.Example/login', ['bank.example']],
+    ['ftp://files.example', ['files.example']],
+    ['bank.example', ['bank.example']],
+    [' www.bank.example/login?x=1 ', ['www.bank.example']],
+    ['bank.example.', ['bank.example']],
+    ['bank.example:8443/x', ['bank.example']],
+    ['192.0.2.7', ['192.0.2.7']],
+    ['bank\u3002example', ['bank.example']],
+    // Quotes, brackets, punctuation and surrounding words.
+    ['<https://bank.example>', ['bank.example']],
+    ['"bank.example"', ['bank.example']],
+    ['(bank.example)', ['bank.example']],
+    ['`bank.example`', ['bank.example']],
+    ['bank.example,', ['bank.example']],
+    ['Go to bank.example', ['bank.example']],
+    ['https://bank.example (official)', ['bank.example']],
+    ['bank.example or other.example', ['bank.example', 'other.example']],
+    // Format characters do not hide a host name.
+    ['bank\u200b.example', ['bank.example']],
+    ['\u202ebank.example/login', ['bank.example']],
+    // A dotted name on either side of an @ is read; a plain name before it is
+    // a user name.
+    ['https://bank.example@evil.example/', ['bank.example', 'evil.example']],
+    ['bank.example@evil.example', ['bank.example', 'evil.example']],
+    ['https://user@bank.example', ['bank.example']],
+    ['alice@bank.example', ['bank.example']],
+    // A file or product name reads as a host only with a scheme, path, port
+    // or www. prefix.
+    ['index.html', []],
+    ['Node.js', []],
+    ['config.yaml', []],
+    ['https://index.html', ['index.html']],
+    ['index.html/x', ['index.html']],
+    // Extensions that are also top-level domains are compared as hosts.
+    ['README.md', ['readme.md']],
+    ['docs.rs', ['docs.rs']],
+    ['security.center@bank.example', ['security.center', 'bank.example']],
+    // Non-ASCII punctuation and suffixes around a host.
+    ["bank.example's portal", ['bank.example']],
+    ['bank.example\u2019s', ['bank.example']],
+    ['\u201cbank.example\u201d', ['bank.example']],
+    ['\u00abbank.example\u00bb', ['bank.example']],
+    ['\u300cbank.example\u300d', ['bank.example']],
+    ['{bank.example}', ['bank.example']],
+    ['*bank.example*', ['bank.example']],
+    ['_bank.example_', ['bank.example']],
+    ['bank.example\u2014now', ['bank.example']],
+    ['bank.example\u2026', ['bank.example']],
+    // Schemes browsers accept with one slash or with backslashes.
+    ['https:/bank.example', ['bank.example']],
+    ['https:\\\\bank.example', ['bank.example']],
+    ['https://intranet', ['intranet']],
+    // A host after many words is still read.
+    [`${'word '.repeat(100)}bank.example`, ['bank.example']],
+    ['here', []],
+    ['the docs', []],
+    ['1.5', []],
+    ['v1.2.3', []],
+    ['e.g', []],
+    ['i.e.', []],
+    ['', []],
+  ];
+  for (const [label, hosts] of cases)
+    assert.deepEqual(labelHosts(label), hosts, label);
+});
+
+test('a label host is compared with the destination up to one leading www.', () => {
+  // Same host, different path: the suffix is shown but nothing is flagged.
+  assert.deepEqual(
+    chatLinkDisplay('https://bank.example/login', 'https://bank.example/home'),
+    { host: 'bank.example', showHost: true, mismatchedHost: null },
+  );
+  for (const [label, href] of [
+    ['www.bank.example', 'https://bank.example/'],
+    ['bank.example', 'https://www.bank.example/'],
+  ])
+    assert.equal(chatLinkDisplay(label, href).mismatchedHost, null, label);
+  assert.equal(
+    chatLinkDisplay('www.bank.example', 'https://login.bank.example/')
+      .mismatchedHost,
+    'www.bank.example',
+  );
+  // Any word naming another host is enough.
+  assert.equal(
+    chatLinkDisplay('bank.example, not evil.example', 'https://evil.example/')
+      .mismatchedHost,
+    'bank.example',
+  );
+  assert.equal(
+    chatLinkDisplay('index.html', 'https://github.com/x/y').mismatchedHost,
+    null,
+  );
+  assert.equal(
+    chatLinkDisplay('security.center@bank.example', 'https://security.center/')
+      .mismatchedHost,
+    'bank.example',
+  );
+});
+
+test('a link label is isolated from the bidirectional context of the text after it', () => {
+  const html = messageMarkup('[x\u202e](https://evil.example/) after');
+  assert.match(
+    html,
+    /<bdi>x\u202e<\/bdi><\/a><span class="chat-link-host">\(evil\.example\)<\/span>/,
+  );
+});
+
 test('oversized line sets fall back to literal source', () => {
   const text = '**x**\n'.repeat(513);
   const html = messageMarkup(text);

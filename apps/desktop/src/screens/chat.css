@@ -1434,6 +1434,54 @@
 .chat-message-text [role='status'] {
   margin-inline: 8px;
 }
+.chat-message-text a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-border);
+  text-underline-offset: 2px;
+}
+.chat-message-text a:hover {
+  text-decoration-color: currentColor;
+}
+.chat-message-text a.chat-link-mismatch {
+  color: var(--ink-2);
+  text-decoration: underline wavy var(--amber-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.chat-message-text a.chat-link-mismatch .ic {
+  margin-right: 3px;
+  color: var(--amber-strong);
+  vertical-align: -2px;
+}
+.chat-link-host {
+  margin-left: 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.chat-link-host.mismatch {
+  color: var(--amber-ink);
+  font-weight: 600;
+}
+.chat-link-destination {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.chat-link-destination small {
+  color: var(--muted);
+}
+.chat-link-destination code {
+  font: 12.5px/1.45 var(--mono);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
 
 .chat-local-settings {
   flex: none;

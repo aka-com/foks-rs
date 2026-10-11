@@ -76,12 +76,18 @@ export interface SheetDialogProps extends Omit<SheetProps, 'titleId'> {
   onClose?: () => void;
   /** False while a write is in flight, so a click outside cannot abandon it. */
   dismissible?: boolean;
+  /**
+   * The id of the element whose text states what the sheet asks, for the
+   * dialog's `aria-describedby`, so a screen reader announces it with the title.
+   */
+  describedBy?: string;
 }
 
 export function SheetDialog({
   danger = false,
   onClose,
   dismissible = true,
+  describedBy,
   ...sheet
 }: SheetDialogProps): ReactNode {
   const titleId = useId();
@@ -89,7 +95,12 @@ export function SheetDialog({
   const panel = <Sheet {...sheet} titleId={titleId} />;
   if (!onClose) {
     return (
-      <Dialog className="backdrop" role={role} titleId={titleId}>
+      <Dialog
+        className="backdrop"
+        role={role}
+        titleId={titleId}
+        aria-describedby={describedBy}
+      >
         {panel}
       </Dialog>
     );
@@ -99,6 +110,7 @@ export function SheetDialog({
       className="backdrop"
       role={role}
       titleId={titleId}
+      aria-describedby={describedBy}
       onDismiss={onClose}
       dismissible={dismissible}
     >

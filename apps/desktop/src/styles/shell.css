@@ -420,6 +420,7 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .kico.account{border-radius:50%}
 .kico.Password{background:var(--c-password)}.kico.Document{background:var(--c-file)}
 .kico.danger{background:var(--danger-wash);color:var(--danger-ink)}.kico.danger .ic{color:var(--danger-ink)}
+.kico.warning{background:var(--amber-wash);color:var(--amber-strong)}.kico.warning .ic{color:var(--amber-strong)}
 
 /* Notices, cards, and content panes */
 .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:90px 20px 0;color:var(--muted)}
