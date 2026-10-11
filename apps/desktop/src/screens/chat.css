@@ -894,17 +894,17 @@
 .chat-outgoing.queued .chat-message-text {
   opacity: 0.65;
 }
-.chat-outgoing.grouped .chat-outgoing-content {
+.chat-outgoing.grouped .chat-message-content {
   display: grid;
   grid-template-columns: minmax(0, max-content) auto;
   align-items: baseline;
   gap: 0 10px;
 }
-.chat-outgoing.grouped .chat-outgoing-content > header {
+.chat-outgoing.grouped .chat-message-content > header {
   grid-column: 2;
   grid-row: 1;
 }
-.chat-outgoing.grouped .chat-outgoing-content > .chat-message-text {
+.chat-outgoing.grouped .chat-message-content > .chat-message-text {
   grid-column: 1;
   grid-row: 1;
 }

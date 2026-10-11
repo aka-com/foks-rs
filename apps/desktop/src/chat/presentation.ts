@@ -411,14 +411,12 @@ export function messageDay(
 }
 
 /**
- * How old a message is, as a bare duration: "5 min", "2 hours", "3 days".
+ * How old a message is: "5 min ago", "2 hours ago", "3 days ago".
  *
- * The age sits beside the message it belongs to, so the "ago" that a relative
- * formatter adds says nothing the column does not. Minutes are abbreviated
- * because they are the case that recurs on every row of a live conversation;
- * the larger units are spelled out. A timestamp in the future, which only a
- * clock disagreement produces, keeps its direction rather than reading as an
- * age.
+ * Every row draws its time with {@link messageClock}; the age is stated only
+ * in a tooltip beside the absolute time. Minutes are abbreviated and the
+ * larger units spelled out. A timestamp in the future, which only a clock
+ * disagreement produces, keeps its direction rather than reading as an age.
  */
 export function relativeMessageTime(
   milliseconds: string,
@@ -440,5 +438,5 @@ export function relativeMessageTime(
   const [unit, size] = units.find(([, size]) => absolute >= size) ?? units[5];
   const count = Math.round(absolute / size);
   const age = `${count} ${unit === 'min' || count === 1 ? unit : `${unit}s`}`;
-  return difference > 0 ? `in ${age}` : age;
+  return difference > 0 ? `in ${age}` : `${age} ago`;
 }

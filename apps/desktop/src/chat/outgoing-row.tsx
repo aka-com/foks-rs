@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import type { Bridge } from '../bridge';
 import { Button } from '../components';
-import { AccountMark } from '../screens/account-switcher';
-import type { ChatSendService } from './send-service';
+import { useChatConversationContext } from './conversation-provider';
+import { MessageRow } from './message-row';
+import { useChatSendService } from './send-provider';
 import {
   cleanupErrorOf,
   operationOf,
@@ -27,17 +27,13 @@ export function OutgoingRow({
   message,
   grouped = false,
   avatarName,
-  storeId,
-  service,
-  bridge,
 }: {
   message: OutgoingMessage;
   grouped?: boolean;
   avatarName: string;
-  storeId: string;
-  service: ChatSendService;
-  bridge: Bridge;
 }) {
+  const { bridge, storeId } = useChatConversationContext();
+  const service = useChatSendService();
   const [error, setError] = useState('');
   const run = async (edit: boolean) => {
     setError('');
@@ -65,36 +61,34 @@ export function OutgoingRow({
     !busy &&
     !outcomeUnknown(message) &&
     message.text !== undefined;
+  const createdAt = String(message.createdAt);
   return (
-    <article
-      className={`chat-message chat-outgoing${grouped ? ' grouped' : ''}${sent ? ' sent' : ''}${sending ? ' sending' : ''}${queued ? ' queued' : ''}`}
-      data-submission={message.submission}
-      data-operation={op?.id}
-      title={grouped ? messageTime(String(message.createdAt)) : undefined}
-    >
-      <AccountMark name={avatarName} className="chat-avatar" />
-      <div className="chat-message-body">
-        <div className="chat-outgoing-content">
-          <header>
-            <span className={grouped ? 'offscreen' : 'chat-sender you'}>
-              You
-            </span>
-            {sending ? (
-              <span
-                className="chat-send-spinner"
-                role="status"
-                aria-label="Sending"
-              />
-            ) : (
-              <time
-                className={grouped ? 'offscreen' : undefined}
-                dateTime={new Date(message.createdAt).toISOString()}
-                title={messageTime(String(message.createdAt))}
-              >
-                {relativeMessageTime(String(message.createdAt))}
-              </time>
-            )}
-            {!sending && statusLabel && (
+    <MessageRow
+      className={`chat-outgoing${sent ? ' sent' : ''}${sending ? ' sending' : ''}${queued ? ' queued' : ''}`}
+      grouped={grouped}
+      avatarName={avatarName}
+      author="You"
+      own
+      at={createdAt}
+      timeTitle={
+        sending
+          ? null
+          : `${messageTime(createdAt)} · ${relativeMessageTime(createdAt)}`
+      }
+      attributes={{
+        'data-submission': message.submission,
+        'data-operation': op?.id,
+      }}
+      status={
+        sending ? (
+          <span
+            className="chat-send-spinner"
+            role="status"
+            aria-label="Sending"
+          />
+        ) : (
+          <>
+            {statusLabel && (
               <span
                 className={queued ? 'offscreen' : 'chat-send-state'}
                 role="status"
@@ -102,7 +96,7 @@ export function OutgoingRow({
                 {statusLabel}
               </span>
             )}
-            {!sending && editable && (
+            {editable && (
               <button
                 type="button"
                 className="chat-edit-link"
@@ -111,12 +105,11 @@ export function OutgoingRow({
                 Edit
               </button>
             )}
-          </header>
-          {message.text !== undefined && (
-            <MessageText text={message.text} actions={bridge} />
-          )}
-        </div>
-        {!sending && (message.error || retryable || cleanupError || error) ? (
+          </>
+        )
+      }
+      footer={
+        !sending && (message.error || retryable || cleanupError || error) ? (
           <div className="chat-send-status">
             {message.error && <span>{message.error}</span>}
             {retryable && (
@@ -142,8 +135,12 @@ export function OutgoingRow({
             )}
             {error && <span role="alert">{error}</span>}
           </div>
-        ) : null}
-      </div>
-    </article>
+        ) : null
+      }
+    >
+      {message.text !== undefined && (
+        <MessageText text={message.text} actions={bridge} />
+      )}
+    </MessageRow>
   );
 }

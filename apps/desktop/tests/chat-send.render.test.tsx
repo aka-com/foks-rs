@@ -345,7 +345,18 @@ test('confirmation replaces the spinner with a timestamp independently of a stal
       assert.ok(row);
       return row;
     });
-    assert.ok(confirmed.querySelector('time'));
+    // An outgoing row draws its time with the same absolute clock as a
+    // history row; the age is only in the tooltip.
+    const clock = confirmed.querySelector(
+      '.chat-message-content > header time',
+    );
+    assert.ok(clock instanceof HTMLElement);
+    assert.notEqual(clock.textContent, 'just now');
+    assert.match(clock.textContent ?? '', /\d:\d\d/);
+    assert.match(clock.title, / · (just now|\d+ min ago)$/);
+    const held = document.querySelector('.chat-message[data-message]');
+    assert.ok(held);
+    assert.ok(held.querySelector('.chat-message-content > header time'));
     assert.equal(
       ui.within(confirmed).queryByRole('status', { name: 'Sending' }),
       null,

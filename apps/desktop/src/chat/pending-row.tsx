@@ -4,6 +4,7 @@ import { Button } from '../components';
 import type { ChatAction, ChatOperation, ChatReply } from '../chat-contract';
 import { shortId } from '../model';
 import { failure } from './actions';
+import type { TrackedOperation } from './operations';
 const PENDING_STATE: Record<ChatOperation['state'], string> = {
   prepared: 'Not sent',
   uncertain: 'Delivery unconfirmed',
@@ -35,7 +36,7 @@ export function PendingRow({
   request,
   onChange,
 }: {
-  operation: import('./operations').TrackedOperation;
+  operation: TrackedOperation;
   channelName: string | undefined;
   request: (a: ChatAction) => Promise<ChatReply>;
   onChange: () => void;

@@ -1,4 +1,5 @@
 import { ChatThread } from '../chat/chat-thread';
+import { ChatConversationProvider } from '../chat/conversation-provider';
 import { useComposerAutofocus } from '../chat/use-composer-autofocus';
 import { ChatAlerts, failureAlert, type ChatAlert } from '../chat/chat-alerts';
 import { PendingRow } from '../chat/pending-row';
@@ -8,7 +9,7 @@ import {
   openChannel,
   partyNames,
 } from '../chat/presentation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { Button, Icon, Notice, SectionLabel } from '../components';
 import type { Bridge } from '../bridge';
@@ -143,14 +144,19 @@ export function ChatScreen({
     for (const id of [...drafts.keys()]) if (!live.has(id)) drafts.delete(id);
   }, [channelIds, drafts, channelsKnown]);
   const storeId = store?.id ?? '';
-  const senderNames = partyNames(agentSnapshot, storeId);
   // Resolve our own identity from the account even before the roster arrives.
-  const ownAccount = agentSnapshot.accounts.find(
+  const ownName = agentSnapshot.accounts.find(
     (account) =>
       account.server === store?.server &&
       account.alias === (scope?.store.account_alias ?? store?.account),
-  );
-  if (actor && ownAccount) senderNames.set(actor, ownAccount.username);
+  )?.username;
+  // Built once per snapshot, so the conversation provider's value stays the
+  // same across renders that change nothing it carries.
+  const senderNames = useMemo(() => {
+    const names = partyNames(agentSnapshot, storeId);
+    if (actor && ownName) names.set(actor, ownName);
+    return names;
+  }, [agentSnapshot, storeId, actor, ownName]);
   // The roster the team page already loads, read here rather than fetched
   // again. A team whose roster has not arrived yet has no parties on this
   // store id, which is indistinguishable from an empty team — but a real team
@@ -334,53 +340,56 @@ export function ChatScreen({
             </p>
           </div>
         ) : channel ? (
-          <ChatThread
-            autofocusComposer={autofocusComposer}
-            alerts={alerts}
+          <ChatConversationProvider
             bridge={bridge}
             storeId={storeId}
-            key={`${channel.id}:${channel.readable}`}
-            channel={channel}
-            teamName={store?.name}
-            memberCount={memberCount}
-            onInfo={onToggleInfo}
-            infoOpen={infoOpen}
-            infoRef={infoRef}
             actor={actor}
             scope={scope}
             senderNames={senderNames}
             request={guardedRequest}
             refreshPending={guardedRefreshPending}
-            revision={channelRevisions?.get(channel.id) ?? 0}
-            // A degraded projection cannot state this channel's newest
-            // position: its conversation rows stop advancing while the host
-            // cannot report what changed, so gating the tail on them would
-            // hold the open thread at whatever it last read. Withholding the
-            // position is what keeps the open channel refreshing there; the
-            // rate limit on the degraded invalidation bounds what that costs.
-            position={
-              activeConversation && !degraded
-                ? String(lastPosition(activeConversation))
-                : null
-            }
-            readThrough={activeConversation?.read_through ?? null}
-            pendingRead={activeConversation?.pending_read ?? null}
-            unread={activeConversation?.unread ?? null}
             markRead={guardedMarkRead}
-            history={history(channel.id)}
-            incrementalHistory={
-              agentSnapshot.agent.state === 'ready' &&
-              agentSnapshot.agent.historyAfter === true
-            }
             acceptHistory={acceptHistory}
             blockHistory={blockHistory}
-            pending={pending.filter(
-              (op) =>
-                op.kind !== 'create-channel' &&
-                !op.observed &&
-                op.channel === channel.id,
-            )}
-          />
+          >
+            <ChatThread
+              autofocusComposer={autofocusComposer}
+              alerts={alerts}
+              key={`${channel.id}:${channel.readable}`}
+              channel={channel}
+              teamName={store?.name}
+              memberCount={memberCount}
+              onInfo={onToggleInfo}
+              infoOpen={infoOpen}
+              infoRef={infoRef}
+              revision={channelRevisions?.get(channel.id) ?? 0}
+              // A degraded projection cannot state this channel's newest
+              // position: its conversation rows stop advancing while the host
+              // cannot report what changed, so gating the tail on them would
+              // hold the open thread at whatever it last read. Withholding the
+              // position is what keeps the open channel refreshing there; the
+              // rate limit on the degraded invalidation bounds what that costs.
+              position={
+                activeConversation && !degraded
+                  ? String(lastPosition(activeConversation))
+                  : null
+              }
+              readThrough={activeConversation?.read_through ?? null}
+              pendingRead={activeConversation?.pending_read ?? null}
+              unread={activeConversation?.unread ?? null}
+              history={history(channel.id)}
+              incrementalHistory={
+                agentSnapshot.agent.state === 'ready' &&
+                agentSnapshot.agent.historyAfter === true
+              }
+              pending={pending.filter(
+                (op) =>
+                  op.kind !== 'create-channel' &&
+                  !op.observed &&
+                  op.channel === channel.id,
+              )}
+            />
+          </ChatConversationProvider>
         ) : error ? (
           // The channel list could not be read, so there is nothing to say
           // about any one channel or about there being none: the failure is
