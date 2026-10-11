@@ -21,7 +21,12 @@ import { CollectionStatus } from '../components/collection-status';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon, MenuItem, SectionLabel } from '../components';
-import { ContextMenu, Menu, Popover } from '/kit/overlay-primitives';
+import {
+  anyDialogOpen,
+  ContextMenu,
+  Menu,
+  Popover,
+} from '/kit/overlay-primitives';
 import { useOptionalToast } from '/kit/toasts';
 import { normalizeCommandError } from '../bridge';
 import { useChannelCreation } from '../chat/channel-creation-provider';
@@ -443,10 +448,12 @@ export function ChatTeamColumn({
           contextRow.entry?.blockedChannels.has(contextChannel.channel.id)
         ? 'You do not have access to this channel.'
         : undefined;
-  // Mark as read is offered while the channel has unread messages, and moves
-  // the read pointer to the newest position the inbox states, the one the
-  // unread count is counted up to.
-  const contextUnread = channelCount(contextChannel);
+  // Mark as read is offered while the channel's row draws an unread count —
+  // a channel of an unreachable team draws none — and moves the read pointer
+  // to the newest position the inbox states, the one the count is counted up
+  // to.
+  const contextUnread =
+    contextRow?.reachable === true && channelCount(contextChannel);
   const markContextRead = () => {
     const conversation = contextChannel?.conversation;
     const team = contextRow?.store.id;
@@ -479,6 +486,43 @@ export function ChatTeamColumn({
       ? 'No team with channel creation access is currently available.'
       : undefined;
   const closeContext = () => setContext(null);
+  // The row the menu was opened from: the focused element for the keyboard,
+  // the channel row or team heading under the pointer. Dismissing the menu
+  // returns focus there rather than to the document body.
+  const contextAnchor = useRef<HTMLElement | null>(null);
+  const dismissContext = () => {
+    setContext(null);
+    const anchor = contextAnchor.current;
+    if (anchor?.isConnected && !anyDialogOpen())
+      anchor.focus({ preventScroll: true });
+  };
+  // Opens the menu for what `target` sits in: a channel row, a team, or the
+  // column itself. A target inside an open menu opens nothing.
+  const showContext = (
+    target: EventTarget,
+    x: number,
+    y: number,
+    keyboard: boolean,
+  ): boolean => {
+    if (!(target instanceof Element) || target.closest('[role="menu"]'))
+      return false;
+    const channel = target.closest<HTMLElement>('[data-chat-channel]');
+    const team = target.closest<HTMLElement>('[data-chat-team]');
+    if (keyboard && !team) return false;
+    contextAnchor.current =
+      keyboard && target instanceof HTMLElement
+        ? target
+        : (channel ??
+          team?.querySelector<HTMLElement>('button.chat-team-head') ??
+          null);
+    setContext({
+      x,
+      y,
+      team: team?.dataset.chatTeam,
+      channel: channel?.dataset.chatChannel,
+    });
+    return true;
+  };
   let listed = 0;
   const teamRows: ReactNode[] = [];
   rows.forEach((row) => {
@@ -518,22 +562,23 @@ export function ChatTeamColumn({
       className="chat-inbox"
       aria-label="Chat inbox"
       onContextMenu={(event) => {
+        if (showContext(event.target, event.clientX, event.clientY, false))
+          event.preventDefault();
+      }}
+      // The keyboard opens the same menu from a focused channel row or team
+      // heading, with the ContextMenu key or Shift+F10, at the row's corner.
+      onKeyDown={(event) => {
         if (
-          !(event.target instanceof Element) ||
-          event.target.closest('[role="menu"]')
+          event.key !== 'ContextMenu' &&
+          !(event.key === 'F10' && event.shiftKey)
         )
           return;
+        if (!(event.target instanceof HTMLElement)) return;
+        const bounds = event.target.getBoundingClientRect();
+        if (!showContext(event.target, bounds.left, bounds.bottom, true))
+          return;
         event.preventDefault();
-        const channel = event.target.closest<HTMLElement>(
-          '[data-chat-channel]',
-        );
-        const team = event.target.closest<HTMLElement>('[data-chat-team]');
-        setContext({
-          x: event.clientX,
-          y: event.clientY,
-          team: team?.dataset.chatTeam,
-          channel: channel?.dataset.chatChannel,
-        });
+        event.stopPropagation();
       }}
     >
       {/* Screen reader status announcement for search filtering results.
@@ -643,13 +688,13 @@ export function ChatTeamColumn({
         <ContextMenu
           point={context}
           className="menu-portal"
-          onClose={closeContext}
+          onClose={dismissContext}
         >
           <Menu
             className="menu"
             aria-label="Chat sidebar actions"
             initialFocus="first"
-            onClose={closeContext}
+            onClose={dismissContext}
           >
             {context.channel ? (
               <>
@@ -670,8 +715,10 @@ export function ChatTeamColumn({
                   <MenuItem
                     icon="circleCheck"
                     reason={openReason}
+                    // Marking leaves the reader in the column, so focus
+                    // returns to the row as it does on dismissal.
                     onClick={() => {
-                      closeContext();
+                      dismissContext();
                       markContextRead();
                     }}
                   >
@@ -804,7 +851,9 @@ function ColumnDisplayMenu({
         className="chat-inbox-sort"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Sort and display, ${sort === 'recent' ? 'recent activity' : 'alphabetical'}`}
+        // The name contains what the trigger shows, so a voice command
+        // that speaks the visible label finds it.
+        aria-label={`Sort and display, ${sort === 'recent' ? 'Recent activity' : 'A–Z (alphabetical)'}`}
         title="Sort and display"
         onClick={() => setOpen((was) => !was)}
         onKeyDown={(event) => {
@@ -972,6 +1021,9 @@ function TeamHeading({
             onOpen(row.store.id);
             return;
           }
+          // A team with one channel opens it as well. The click is still the
+          // fold control its name states, so the fold toggles and is stored
+          // as any other.
           onToggleCollapse();
           if (row.channels?.length === 1) {
             onOpen(row.store.id, row.channels[0].channel.id);

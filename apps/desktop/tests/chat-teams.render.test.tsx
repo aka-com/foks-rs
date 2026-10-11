@@ -1,7 +1,7 @@
 /**
  * The Chat tab's inbox column: which teams it lists, what a team heading and
  * its channel rows carry, how a heading folds its channels, how search narrows
- * the column, what New chat offers, and what the tab shows when no team has
+ * the column, what New channel offers, and what the tab shows when no team has
  * chat.
  */
 
@@ -676,6 +676,16 @@ test('a channel row of a team that went out of reach opens the locked pane', asy
     channel: '33'.repeat(16),
   });
   await ui.screen.findByRole('heading', { name: 'Engineering chat is locked' });
+  // The channel has unread messages, but its row draws no count while its
+  // team is out of reach, so its menu does not offer to mark them read.
+  assert.ok(general('Engineering').classList.contains('unread'));
+  assert.equal(general('Engineering').querySelector('.chat-unread'), null);
+  ui.fireEvent.contextMenu(general('Engineering'));
+  assert.ok(ui.screen.getByRole('menuitem', { name: 'Open channel' }));
+  assert.equal(
+    ui.screen.queryByRole('menuitem', { name: 'Mark as read' }),
+    null,
+  );
 });
 
 test('with no team at all the tab offers team creation', async () => {
@@ -879,7 +889,7 @@ test('the rail returns to the chat the tab last had open', async () => {
   await ui.waitFor(() => assert.deepEqual(railChat(), { kind: 'chat' }));
 });
 
-test('New chat opens creation directly and the team selector states unavailable reasons', async () => {
+test('New channel opens creation directly and the team selector states unavailable reasons', async () => {
   const snapshot = await snapshotWithChat(['personal']);
   const journal = await mount(snapshot, { kind: 'chat' });
   await ui.waitFor(() => assert.ok(heads().length));
@@ -911,7 +921,7 @@ test('New chat opens creation directly and the team selector states unavailable 
   assert.equal(journal.length, navigations);
 });
 
-test('New chat creates a channel, refusing a name the agent would refuse', async () => {
+test('New channel creates a channel, refusing a name the agent would refuse', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   const journal = await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
   await ui.waitFor(() => assert.ok(heads().length));
@@ -1325,7 +1335,10 @@ test('the saved-creation check is announced while it runs and offered again once
   await ui.waitFor(() => assert.equal(create().disabled, false));
 });
 
-/** New chat → a team → Create a channel, the way the column offers it. */
+/**
+ * New channel, then a team in the sheet's selector, the way the column offers
+ * it.
+ */
 async function openCreateForm(team: RegExp): Promise<HTMLElement> {
   ui.fireEvent.click(
     ui.screen.getAllByRole('button', { name: 'New channel' })[0],
@@ -1425,7 +1438,7 @@ test('newer messages in other teams do not switch away from the active conversat
   assert.equal(general('Engineering').getAttribute('aria-current'), 'page');
 });
 
-test('New chat waits for a team’s channels before either step can be answered', async () => {
+test('New channel waits for a team’s channels before either step can be answered', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   const held = { current: null as null | (() => void) };
   let release = () => {};
@@ -1495,7 +1508,7 @@ test('a team that goes out of reach while step two is open refuses it and says w
   );
 });
 
-test('New chat focuses the name directly and Cancel closes it without a preceding step', async () => {
+test('New channel focuses the name directly and Cancel closes it without a preceding step', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
   await ui.waitFor(() => assert.ok(heads().length));
@@ -1517,7 +1530,7 @@ test('New chat focuses the name directly and Cancel closes it without a precedin
   await ui.waitFor(() => assert.equal(ui.screen.queryByRole('dialog'), null));
 });
 
-test('New chat refuses what the agent would refuse, by the button and by Enter', async () => {
+test('New channel refuses what the agent would refuse, by the button and by Enter', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   const prepared: string[] = [];
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) => ({
@@ -1568,7 +1581,7 @@ test('New chat refuses what the agent would refuse, by the button and by Enter',
   await ui.waitFor(() => assert.equal(create().disabled, false));
 });
 
-test('New chat counts visible channels in its team selector without listing conversations', async () => {
+test('New channel counts visible channels in its team selector without listing conversations', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) =>
     withChannels(base, 'team:household', [
@@ -1626,8 +1639,8 @@ test('a team switch closes the sheet and keeps unresolved creation recoverable',
     },
   }));
   await ui.waitFor(() => assert.ok(heads().length));
-  // A half-finished New chat belongs to the team it was opened in: a switch
-  // closes it rather than rebinding it to the team that arrives.
+  // A half-finished Create channel sheet belongs to the team it was opened
+  // in: a switch closes it rather than rebinding it to the team that arrives.
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'New channel' }));
   await ui.screen.findByRole('dialog', { name: 'Create channel' });
   ui.fireEvent.click(general('Household'));
@@ -2476,8 +2489,9 @@ test('the sort menu orders channels by recent activity and the column remembers 
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, withActivity);
   await ui.waitFor(() => assert.equal(teamChannels('Household').length, 4));
+  // The trigger's name contains the label it shows.
   const trigger = ui.screen.getByRole('button', {
-    name: 'Sort and display, alphabetical',
+    name: 'Sort and display, A–Z (alphabetical)',
   });
   assert.equal(trigger.textContent, 'A–Z');
   ui.fireEvent.click(trigger);
@@ -2505,9 +2519,14 @@ test('the sort menu orders channels by recent activity and the column remembers 
   assert.equal(ui.screen.queryByRole('menu'), null);
   assert.equal(
     trigger.getAttribute('aria-label'),
-    'Sort and display, recent activity',
+    'Sort and display, Recent activity',
   );
   assert.equal(trigger.textContent, 'Recent');
+  // Arrow Down on the trigger opens the menu as a click does.
+  ui.fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  assert.ok(ui.screen.getByRole('menu', { name: 'Sort and display' }));
+  ui.fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(ui.screen.queryByRole('menu'), null);
   // The order is a stored preference: the column mounts with it again.
   ui.cleanup();
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, withActivity);
@@ -2632,6 +2651,87 @@ test('Mark as read moves the read pointer to the newest message and clears the c
     null,
   );
   assert.ok(ui.screen.getByRole('menuitem', { name: 'Open channel' }));
+});
+
+for (const cancelled of [false, true]) {
+  test(`a Mark as read the agent ${cancelled ? 'cancels is not reported' : 'refuses is reported'} and the count stays`, async () => {
+    const snapshot = await snapshotWithChat(['personal', 'acme']);
+    let refused = 0;
+    let syncsAfterRefusal = 0;
+    await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        if (store === 'team:household' && action.action === 'sync-inbox')
+          syncsAfterRefusal += refused;
+        if (action.action === 'mark-read') {
+          refused += 1;
+          throw {
+            code: cancelled ? 'cancelled' : 'io',
+            message: 'The read pointer could not be written.',
+            fatal: false,
+            retryable: true,
+            ambiguous: false,
+          };
+        }
+        return base.chat(store, action, view);
+      },
+    }));
+    const unread = () =>
+      general('Household').querySelector('.chat-unread') !== null;
+    await ui.waitFor(() => assert.equal(unread(), true));
+    ui.fireEvent.contextMenu(general('Household'));
+    ui.fireEvent.click(
+      ui.screen.getByRole('menuitem', { name: 'Mark as read' }),
+    );
+    // A read that did not land is not applied: the team is synchronized
+    // again, and the count the agent still reports stays.
+    await ui.waitFor(() => assert.ok(syncsAfterRefusal > 0));
+    await ui.waitFor(() => assert.equal(unread(), true));
+    assert.equal(refused, 1);
+    const toasts = () =>
+      [...document.querySelectorAll('.toast-message')].map(
+        (node) => node.textContent,
+      );
+    if (cancelled) {
+      assert.deepEqual(toasts(), []);
+    } else {
+      await ui.waitFor(() =>
+        assert.deepEqual(toasts(), [
+          '#general was not marked as read. The read pointer could not be written.',
+        ]),
+      );
+      assert.equal(
+        document.querySelector('.toast')?.getAttribute('data-toast-tone'),
+        'warning',
+      );
+    }
+  });
+}
+
+test('the channel menu opens from the keyboard and returns focus to its row', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' });
+  await ui.waitFor(() => assert.ok(general('Household')));
+  const row = general('Household');
+  row.focus();
+  ui.fireEvent.keyDown(row, { key: 'F10', shiftKey: true });
+  const menu = ui.screen.getByRole('menu', { name: 'Chat sidebar actions' });
+  assert.ok(ui.within(menu).getByRole('menuitem', { name: 'Open channel' }));
+  ui.fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(ui.screen.queryByRole('menu'), null);
+  assert.equal(document.activeElement === row, true);
+  // The ContextMenu key on a team heading opens that team's menu.
+  const heading = head('Household');
+  heading.focus();
+  ui.fireEvent.keyDown(heading, { key: 'ContextMenu' });
+  assert.ok(ui.screen.getByRole('menuitem', { name: 'Go to team' }));
+  ui.fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(document.activeElement === heading, true);
+  // Shift+F10 elsewhere in the column, such as on the sort trigger, opens
+  // nothing.
+  const sort = ui.screen.getByRole('button', { name: /^Sort and display/ });
+  ui.fireEvent.keyDown(sort, { key: 'F10', shiftKey: true });
+  assert.equal(ui.screen.queryByRole('menu'), null);
 });
 
 test('New channel opens the Create channel sheet on the open team', async () => {

@@ -136,8 +136,8 @@ async function teamBadge(team: string): Promise<HTMLElement> {
   });
 }
 /**
- * The create-a-channel form, reached the way the tab offers it: New chat, the
- * team, then Create a channel.
+ * The create-a-channel form, reached the way the tab offers it: New channel,
+ * then the team in the sheet's selector.
  */
 async function openChannelSheet() {
   ui.fireEvent.click(

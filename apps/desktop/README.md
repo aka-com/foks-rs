@@ -39,14 +39,14 @@ and Open in Chat, in the Chat column's default order: the general channel
 first, then A to Z. Add channel opens the Create channel sheet with this group
 selected. Hidden conversations remain listed but are excluded from the unread
 count, matching the Create channel sheet. If the server does not support chat,
-the page displays an explanation instead of a list. If access lapses while the tab is open, it displays the same
-condition as the store access view, evaluated with the shell's current clock.
-If synchronization completes with unfinished work, the page displays a note
-above the loaded rows. Files links to the group vault without duplicating the
-file browser; the row displays a folder mark, the vault name, the catalog item
-count, and Open in Files. Both tabs are addressable as `tab=channels` and
-`tab=files`. Arrow-key navigation replaces the current location rather than
-adding a history entry.
+the page displays an explanation instead of a list. If access lapses while the
+tab is open, it displays the same condition as the store access view, evaluated
+with the shell's current clock. If synchronization completes with unfinished
+work, the page displays a note above the loaded rows. Files links to the group
+vault without duplicating the file browser; the row displays a folder mark, the
+vault name, the catalog item count, and Open in Files. Both tabs are
+addressable as `tab=channels` and `tab=files`. Arrow-key navigation replaces
+the current location rather than adding a history entry.
 Members splits the one roster into Accounts, Machines and Groups on other
 servers: a row carries the name, a "you" chip, the kind of party as its only
 second line, and one role chip with the visibility band inside it ("Member
@@ -294,7 +294,7 @@ authenticated in the catalog.
 | `src/model/`               | The pure model — roles, kinds, readers, format, lease. TypeScript only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `src/location.ts`          | `Location`, `Selection`, `transition`, the `?state=` codec, the store.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `src/first-run-state.ts`   | Pure versioned resumable setup state and its explicit nonsecret checkpoint codec.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `src/sidebar-prefs.ts`     | The rail's stored width: the `sideCollapsed` `localStorage` key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `src/sidebar-prefs.ts`     | The rail's width and the Chat column's display preferences: the `sideCollapsed`, `chatChannelSort`, `chatPreviews` and `chatFoldedTeams` `localStorage` keys.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `src/icons.ts`             | The mock's 47 icons as structured data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `src/components/icon.tsx`  | `<Icon name size />`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `src/styles/shell.css`     | `wave6/shell.css` copied in full, minus the shared tokens.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -696,54 +696,58 @@ team ordering across Files, Teams, and Chat for spatial predictability. Every
 team is a heading — its mark, its name, its server and its member count — over
 its channels, and the whole heading is the control that folds them: it carries
 `aria-expanded` and `aria-controls`, and the channels are a `group` labeled by
-the team. Folded, the heading carries the total unread count of the channels
-it hides, leaving out hidden and muted ones as the rail's count does. A search
-unfolds every team while it runs and leaves the folds as they were.
+the team. Folded, the heading carries the total unread count of the channels it
+hides, leaving out hidden and muted ones as the rail's count does. A search
+unfolds every team while it runs and leaves the folds as they were. A heading
+click on a team with a single channel also opens that channel; the click still
+folds or unfolds the team, and that fold is stored like any other.
 
 Each team's channels keep one order, built by `listChannels`: the general
 channel first, then A to Z, with hidden conversations last, dimmed and marked
 "Hidden". The order never follows the agent's, which is by inbox version: the
 server issues a new version when the reader's own read pointer rises, so
-reading a channel would move it above channels that still have unread
-messages. The control beside the "Teams" label names the current order ("A–Z"
-or "Recent") and opens Sort channels: Alphabetical, or Recent activity, which
-puts the channel whose last message arrived most recently first (by the
-server's insertion time of the message the inbox previews), the channels with
-no message after those A to Z, and hidden conversations last. Reading moves
-nothing in either order; a new message, or the reader's own send, moves its
-channel up under Recent activity. The same menu carries Show previews. With it
-on, the default, a channel row has two lines: the name, a lock for an
-admins-only channel and the last message's time (`previewTime`: the clock time
-today, the weekday within the past week, the date before that), then the last
-message (`previewLine`: "You: …", "sam.ortiz: …", "Team member: …" for a
-message with no sender, "Unverifiable message" with no claimed sender) and the
-unread count. A channel the inbox states nothing has been said in reads "No
-messages yet"; a missing preview alone does not, since a stopped channel's
-preview is withheld and a synchronization can leave one unavailable. With it
-off, rows are one line: the name, the lock and the count, and only the lone
-general channel of a team nothing has been said in reads "No messages yet",
-beside its name. A channel with
-unread messages is drawn with a bolder name and a stronger preview. The
-caption beside a name says why a channel is quiet ("Restricted", "Hidden",
-"Muted", "Channel stopped") through the same `channelMeta` the group page's
-channel list uses. The fold of each team, the order and the
-previews switch are display preferences that `src/sidebar-prefs.ts` stores in
-guarded `localStorage`, so the column returns as it was left; the fold set
-keeps a short hash of each team's store reference rather than the reference,
-which names the local profile and aliases, and keeps at most 256 entries. The
-open channel's row carries `aria-current="page"`, from the first render that
+reading a channel would move it above channels that still have unread messages.
+The control beside the "Teams" label names the current order ("A–Z" or
+"Recent") and opens Sort channels: Alphabetical, or Recent activity, which puts
+the channel whose last message arrived most recently first (by the server's
+insertion time of the message the inbox previews), the channels with no message
+after those A to Z, and hidden conversations last. Reading moves nothing in
+either order; a new message, or the reader's own send, moves its channel up
+under Recent activity. The same menu carries Show previews. With it on, the
+default, a channel row has two lines: the name, a lock for an admins-only
+channel and the last message's time (`previewTime`: the clock time today, the
+weekday within the past week, the date before that), then the last message
+(`previewLine`: "You: …", "sam.ortiz: …", "Team member: …" for a message with
+no sender, "Unverifiable message" with no claimed sender) and the unread count.
+A channel the inbox states nothing has been said in reads "No messages yet"; a
+missing preview alone does not, since a stopped channel's preview is withheld
+and a synchronization can leave one unavailable. With it off, rows are one
+line: the name, the lock and the count, and only the lone general channel of a
+team nothing has been said in reads "No messages yet", beside its name. A
+channel with unread messages is drawn with a bolder name and a stronger
+preview. The caption beside a name says why a channel is quiet ("Restricted",
+"Hidden", "Muted", "Channel stopped") through the same `channelMeta` the group
+page's channel list uses. The fold of each team, the order and the previews
+switch are display preferences that `src/sidebar-prefs.ts` stores in guarded
+`localStorage`, so the column returns as it was left; the fold set keeps a
+short hash of each team's store reference rather than the reference, which
+names the local profile and aliases, and keeps at most 256 entries. The open
+channel's row carries `aria-current="page"`, from the first render that
 resolves it: the column and the pane resolve the open channel through the same
 `openChannel` helper, so neither marks a row the other did not mount.
 
-A channel's context menu offers Open channel; Mark as read, while the channel
-has unread messages, which issues `mark-read` through the send service's
-request path at the newest position the inbox states (`lastPosition`) and
-applies the confirmed pointer the way the open conversation does; and Channel
-info. Renaming and deleting channels are not offered until channel management
-ships. Copying a link to a channel is not offered either: the app registers no
-URL scheme, and an in-app location names local store references that mean
-nothing on another installation. A team's menu offers Go to team and the
-add-people actions; the column's background offers New channel.
+A channel's context menu offers Open channel; Mark as read, while the channel's
+row draws an unread count (a channel of an unreachable team draws none), which
+issues `mark-read` through the send service's request path at the newest
+position the inbox states (`lastPosition`) and applies the confirmed pointer
+the way the open conversation does; and Channel info. Renaming and deleting
+channels are not offered until channel management ships. Copying a link to a
+channel is not offered either: the app registers no URL scheme, and an in-app
+location names local store references that mean nothing on another
+installation. A team's menu offers Go to team and the add-people actions; the
+column's background offers New channel. The menu opens at the pointer, or at a
+focused channel row or team heading with the ContextMenu key or Shift+F10;
+dismissing it, or marking a channel read, returns focus to that row.
 
 Every row is built from `useSidebarInbox()` — the `TeamInbox` projections
 `ChatInboxService` already keeps and polls for each eligible team, the same
@@ -753,23 +757,21 @@ count is interpolated into a row; the states `teamUnread` also reports ("…",
 "!", "3+") stay in the badge and its description. A team this Mac cannot reach
 right now states its own reason ("Check-in expired") in place of the preview
 and carries "!" instead of a count; its rows are dimmed but remain clickable,
-opening the pane that displays the
-lock reason so the user can see why the team is unavailable. A team
-whose inbox failed — nothing arrived, or it is unavailable or blocked — carries
-that error, except for the open team, whose pane already states the error and
-carries the retry, so its row says only "Channels unavailable". A
-synchronization that succeeded but could not finish everything ("Read status
-will retry.", "Some previews are unavailable.") is not a failure: the channel
-rows keep their previews and times, and the team's heading says what is
-incomplete in a caption. A
-heading draws a badge only for what its channels cannot already say — a state
-rather than a count, so "…", "!", "3+" and "5·" appear there and a bare number
-does not. A hidden conversation keeps its channel listed, marked "Hidden",
-dimmed and placed last, rather than being dropped, which used to make a team
-whose only conversation was hidden claim it had no channels. Named teams whose
-server offers no chat sit dimmed at the foot under "Chat unavailable" with the
-reason; shares are not listed. Unread counts are the rail's orange
-(`--unread`) wherever they appear.
+opening the pane that displays the lock reason so the user can see why the team
+is unavailable. A team whose inbox failed — nothing arrived, or it is
+unavailable or blocked — carries that error, except for the open team, whose
+pane already states the error and carries the retry, so its row says only
+"Channels unavailable". A synchronization that succeeded but could not finish
+everything ("Read status will retry.", "Some previews are unavailable.") is not
+a failure: the channel rows keep their previews and times, and the team's
+heading says what is incomplete in a caption. A heading draws a badge only for
+what its channels cannot already say — a state rather than a count, so "…",
+"!", "3+" and "5·" appear there and a bare number does not. A hidden
+conversation keeps its channel listed, marked "Hidden", dimmed and placed last,
+rather than being dropped, which used to make a team whose only conversation
+was hidden claim it had no channels. Named teams whose server offers no chat
+sit dimmed at the foot under "Chat unavailable" with the reason; shares are not
+listed. Unread counts are the rail's orange (`--unread`) wherever they appear.
 
 The window header's search field, scoped to the Chat tab, filters teams and
 channels by name across the whole column — a team match keeps all of that

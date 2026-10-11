@@ -162,7 +162,7 @@ async function form(team: TeamStore) {
   );
 }
 
-test('New chat opens one grouped creation form with a styled team selector', async () => {
+test('New channel opens one grouped creation form with a styled team selector', async () => {
   const { opened } = await mount();
   assert.equal(
     ui.screen.queryByRole('searchbox', { name: 'Search conversations' }),

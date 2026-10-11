@@ -1,7 +1,7 @@
 /**
  * The navigation guards the chat workflows answer with: the composer's unsent
- * message, the New chat sheet's half-finished channel, and the one move the
- * tab makes on its own behalf.
+ * message, the Create channel sheet's half-finished channel, and the one move
+ * the tab makes on its own behalf.
  *
  * The host is the shell's wiring in miniature — a real `LocationStore`, the
  * prompter that turns a `prompt` verdict into the confirmation, and the
@@ -621,7 +621,7 @@ test('a message being sent is neither prompted about nor refused', async () => {
   );
 });
 
-test('an untouched New chat sheet does not prompt', async () => {
+test('an untouched Create channel sheet does not prompt', async () => {
   const { store, refusals } = await setup();
   await openChannelSheet();
   await leave(store);
