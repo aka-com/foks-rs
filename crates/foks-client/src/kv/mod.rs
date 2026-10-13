@@ -9,6 +9,7 @@ use foks_rpc::KvAuth;
 use self::rpc::KvConnection;
 use crate::{FoksClient, PinnedHost, ProtectedMutationStore};
 
+mod login;
 #[cfg(test)]
 mod path_tests;
 mod rpc;
@@ -22,6 +23,7 @@ mod write;
 pub(crate) const MAX_KV_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 pub(crate) const MAX_KV_UPLOAD_CHUNK: usize = 4 * 1024 * 1024;
 
+pub use login::{login_field, small_file_shape, LoginField};
 pub use sync::kv_path_version_vector;
 
 #[cfg(test)]

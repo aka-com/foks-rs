@@ -57,6 +57,7 @@ fn catalog_activity_and_profile_health_gate_group_writes() {
                 size: Some(1),
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
+                shape: None,
             },
         }],
         ..Default::default()
@@ -91,6 +92,7 @@ fn catalog_activity_and_profile_health_gate_group_writes() {
                 size: Some(1),
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
+                shape: None,
             },
         }],
         ..Default::default()

@@ -143,8 +143,7 @@ const RAW: AgentSnapshot = {
       version: 9,
       read: 'Owner',
       write: 'Owner',
-      value:
-        'username: satoshi\npassword: ••••••••••••\nurl: https://github.com/login',
+      shape: 'login',
     },
     {
       store: 'acct:personal',
@@ -155,7 +154,7 @@ const RAW: AgentSnapshot = {
       version: 2,
       read: 'Owner',
       write: 'Owner',
-      value: 'user: satoshi@fastmail.com\npassword: ••••••••••',
+      shape: 'login',
     },
     {
       store: 'acct:personal',
@@ -166,7 +165,7 @@ const RAW: AgentSnapshot = {
       version: 3,
       read: 'Owner',
       write: 'Owner',
-      value: 'postgres://service:••••••••@db.internal/prod',
+      shape: 'other',
     },
     {
       store: 'acct:personal',
@@ -207,7 +206,7 @@ const RAW: AgentSnapshot = {
       version: 4,
       read: 'Owner',
       write: 'Owner',
-      value: 'sk-ant-••••••••••••••••',
+      shape: 'other',
     },
     {
       store: 'team:eng',
@@ -218,7 +217,7 @@ const RAW: AgentSnapshot = {
       version: 12,
       read: 'Admin',
       write: 'Owner',
-      value: 'foks_team_token_••••••••',
+      shape: 'other',
     },
     {
       store: 'team:eng',
@@ -229,7 +228,7 @@ const RAW: AgentSnapshot = {
       version: 3,
       read: 'Member · visibility 0',
       write: 'Admin',
-      value: 'foks_team_token_••••••••',
+      shape: 'other',
     },
     {
       store: 'team:eng',
@@ -260,7 +259,7 @@ const RAW: AgentSnapshot = {
       version: 4,
       read: 'Member · visibility 0',
       write: 'Admin',
-      value: 'ssid: Satoshi-Guest\npassword: ••••••••',
+      shape: 'login',
     },
     {
       store: 'team:household',
@@ -281,7 +280,7 @@ const RAW: AgentSnapshot = {
       version: 1,
       read: 'Member · visibility 0',
       write: 'Admin',
-      value: 'user: family@example.net\npassword: ••••••••',
+      shape: 'login',
     },
   ],
   parties: [
@@ -460,19 +459,24 @@ const RAW: AgentSnapshot = {
   ],
   observedExpiredLeases: [],
   /**
-   * An illustrative extension: plaintext representing
-   * what `ReadKv` returns after Show. The items themselves stay masked.
+   * An illustrative extension: the stored text `ReadKv` returns for each
+   * Secret, which the mock bridge reads, copies and classifies the way the
+   * agent and host do. Items carry only the metadata a listing reports.
    */
   plaintext: {
-    'acct:personal|/logins/github.com': 'hx7-Qm2!vTe9-pale-orbit',
-    'acct:personal|/logins/fastmail.com': 'kettle-91-Lumen-tide',
+    'acct:personal|/logins/github.com':
+      'username: satoshi\npassword: hx7-Qm2!vTe9-pale-orbit\nurl: https://github.com/login',
+    'acct:personal|/logins/fastmail.com':
+      'user: satoshi@fastmail.com\npassword: kettle-91-Lumen-tide',
     'acct:personal|/env/prod/DATABASE_URL':
       'postgres://service:o4Kq9wLm2x@db.internal/prod',
     'acct:personal|/agents/anthropic-api-key': 'sk-ant-api03-Rf2xQ7bTn41La9mZ4',
     'team:eng|/deploy/production-token': 'foks_team_token_7f31ac09',
     'team:eng|/deploy/staging-token': 'foks_team_token_02be44d1',
-    'team:household|/wifi/guest-password': 'sunny-kettle-42',
-    'team:household|/streaming/netflix': 'popcorn-Sofa-77',
+    'team:household|/wifi/guest-password':
+      'ssid: Satoshi-Guest\npassword: sunny-kettle-42',
+    'team:household|/streaming/netflix':
+      'user: family@example.net\npassword: popcorn-Sofa-77',
   },
 };
 

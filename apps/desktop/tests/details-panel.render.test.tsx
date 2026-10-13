@@ -611,7 +611,8 @@ test('a login edits in structured fields and serializes through the existing dra
   };
   const r = ui.render(p.draw());
 
-  assert.ok(r.getByText('••••••••••••'));
+  // User name, Password and Website, each masked until shown.
+  assert.equal(r.getAllByText('••••••••••••').length, 3);
   ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
   const password = await r.findByLabelText('Password');
   const username = r.getByLabelText('User name');
@@ -989,4 +990,132 @@ test('outside clicks close details while clicks inside and dialog interactions d
   dialog.remove();
   pointer(document.body);
   assert.equal(closed, 1);
+});
+
+test('a login lists each field masked and shows only the field asked for', async () => {
+  let reads = 0;
+  const p = await setup(undefined, (item) => item.path === '/logins/github.com');
+  const read = p.bridge.readItem;
+  p.props.bridge = {
+    ...p.props.bridge,
+    readItem: async (request) => {
+      reads++;
+      return read(request);
+    },
+  };
+  const r = ui.render(p.draw());
+  assert.equal(r.getAllByText('••••••••••••').length, 3);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show user name' }));
+  await r.findByText('satoshi');
+  // The password and website stay masked although the text was read.
+  assert.equal(r.getAllByText('••••••••••••').length, 2);
+  assert.equal(r.queryByText('hx7-Qm2!vTe9-pale-orbit'), null);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show password' }));
+  assert.ok(r.getByText('hx7-Qm2!vTe9-pale-orbit'));
+  assert.equal(reads, 1);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Hide user name' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Hide password' }));
+  assert.equal(r.getAllByText('••••••••••••').length, 3);
+  // Hiding the last shown field drops the text; a later Show reads again.
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show website' }));
+  await r.findByText('https://github.com/login');
+  assert.equal(reads, 2);
+});
+
+test('login copies put only the chosen field on the clipboard', async () => {
+  const p = await setup(undefined, (item) => item.path === '/logins/github.com');
+  const { mockCopies } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const before = mockCopies.length;
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Copy user name' }));
+  await ui.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /User name copied/),
+  );
+  // The main action and the row button both copy the password alone.
+  ui.fireEvent.click(r.getAllByRole('button', { name: 'Copy password' })[0]);
+  ui.fireEvent.click(r.getAllByRole('button', { name: 'Copy password' })[1]);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Copy website' }));
+  await ui.waitFor(() => assert.equal(mockCopies.length - before, 4));
+  assert.deepEqual(
+    mockCopies.slice(before).map(({ field, text }) => [field, text]),
+    [
+      ['username', 'satoshi'],
+      ['password', 'hx7-Qm2!vTe9-pale-orbit'],
+      ['password', 'hx7-Qm2!vTe9-pale-orbit'],
+      ['url', 'https://github.com/login'],
+    ],
+  );
+  assert.match(document.body.textContent ?? '', /Password copied/);
+});
+
+test('a field the login lacks is reported, not copied, and reads as not set', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/fastmail.com',
+  );
+  const { mockCopies } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const before = mockCopies.length;
+  const handled: unknown[] = [];
+  p.props.onCommandError = (error) => {
+    handled.push(error);
+  };
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Copy website' }));
+  await ui.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /This item has no website\./),
+  );
+  assert.equal(mockCopies.length, before);
+  assert.equal(handled.length, 0);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show website' }));
+  await r.findByText('Not set');
+  const copy = r.getByRole('button', { name: 'Copy website' });
+  assert.equal((copy as HTMLButtonElement).disabled, true);
+  assert.equal(copy.getAttribute('title'), 'No website saved');
+});
+
+test('a login saved outside /logins/ is a Password by its listed shape', async () => {
+  const p = await setup();
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const login = {
+    ...p.subject,
+    path: '/env/prod/grafana',
+    direntId: '0000000000000000000000000000001f',
+    shape: 'login' as const,
+  };
+  const snapshot = {
+    ...p.props.snapshot,
+    items: [...p.props.snapshot.items, login],
+    plaintext: {
+      ...p.props.snapshot.plaintext,
+      [`${login.store}|${login.path}`]:
+        'user: admin\npassword: graf-77\nurl: https://grafana.internal',
+    },
+  };
+  let saved = '';
+  p.props.snapshot = snapshot;
+  p.props.bridge = {
+    ...mockBridge(snapshot),
+    editTextItem: async (request) => {
+      saved = request.value;
+      return { applied: true };
+    },
+  };
+  p.props.selection = { store: login.store, path: login.path };
+  const r = ui.render(p.draw());
+  assert.ok(r.getAllByRole('button', { name: 'Copy password' }).length);
+  assert.equal(r.queryByRole('button', { name: 'Copy' }), null);
+  // The structured editor covers it as it covers a login under /logins/.
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const username = await r.findByLabelText('User name');
+  assert.equal((username as HTMLInputElement).value, 'admin');
+  ui.fireEvent.change(username, { target: { value: 'grafana-admin' } });
+  ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
+  await ui.waitFor(() => assert.match(saved, /^user: grafana-admin$/m));
+  assert.match(saved, /^password: graf-77$/m);
 });

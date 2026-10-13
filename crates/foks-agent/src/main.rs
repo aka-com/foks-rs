@@ -2798,6 +2798,7 @@ fn paginate_catalog(
             size: entry.size,
             read_role: catalog_role(entry.read_role),
             write_role: catalog_role(entry.write_role),
+            shape: entry.shape,
         };
         let mut measured = CountingWriter(0);
         serde_json::to_writer(&mut measured, &entry)?;
@@ -9232,6 +9233,7 @@ mod tests {
                     size: None,
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
+                    shape: None,
                 })
                 .collect(),
         }
@@ -9372,6 +9374,35 @@ mod tests {
     }
 
     #[test]
+    fn fresh_and_retained_pages_carry_each_entry_shape() {
+        use foks_agent_proto::KvEntryShape;
+
+        let cache = Mutex::new(CatalogCache::default());
+        let store = catalog_store("personal");
+        let mut report = catalog_report(7, 3);
+        report.entries[0].shape = Some(KvEntryShape::Login);
+        report.entries[1].shape = Some(KvEntryShape::Other);
+        let shapes = |page: &KvPage| {
+            page.entries
+                .iter()
+                .map(|entry| entry.shape)
+                .collect::<Vec<_>>()
+        };
+        let first = paginate_fresh_catalog_in(&cache, report, store.clone(), None, 2).unwrap();
+        assert_eq!(
+            shapes(&first),
+            [Some(KvEntryShape::Login), Some(KvEntryShape::Other)]
+        );
+        let retained = paginate_cached_catalog_in(&cache, &store, None, 3)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            shapes(&retained),
+            [Some(KvEntryShape::Login), Some(KvEntryShape::Other), None]
+        );
+    }
+
+    #[test]
     fn a_write_through_this_agent_drops_every_retained_catalog() {
         let cache = Mutex::new(CatalogCache::default());
         let store = catalog_store("personal");
@@ -9423,6 +9454,7 @@ mod tests {
                     size: None,
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
+                    shape: None,
                 })
                 .collect(),
         };
@@ -9505,6 +9537,7 @@ mod tests {
                     size: None,
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
+                    shape: None,
                 })
                 .collect(),
         };
@@ -9627,6 +9660,7 @@ mod tests {
                     size: None,
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
+                    shape: None,
                 })
                 .collect(),
         };

@@ -1037,6 +1037,7 @@ impl FoksClient {
                                 content: None,
                                 symlink: None,
                                 large_file_size: None,
+                                small_file_shape: None,
                             };
                             match entry.value.node_type()? {
                                 KvNodeType::Directory => {
@@ -1084,6 +1085,11 @@ impl FoksClient {
                                             "small-file plaintext type mismatch",
                                         ));
                                     };
+                                    // The catalog's only view of the contents is
+                                    // whether they are a login; no field value
+                                    // leaves this scope.
+                                    projected.small_file_shape =
+                                        Some(super::small_file_shape(&content));
                                     if mode == KvSyncMode::Content {
                                         total_inline_content_bytes = total_inline_content_bytes
                                             .checked_add(content.len())
@@ -1693,7 +1699,7 @@ mod cached_node_tests {
     //! Verifies that repeated metadata synchronization reuses projected large-file
     //! and symlink ciphertext while preserving decoding and authentication checks.
 
-    use foks_client_db::SoftStateStore;
+    use foks_client_db::{KvSmallFileShape, SoftStateStore};
     use foks_crypto::{derive_kv_keys, seal_kv_dirent_name};
     use foks_proto::{
         EntityId, KvDirectory, KvDirent, KvLargeFileMetadata, KvSmallFileBox, Role,
@@ -1846,6 +1852,18 @@ mod cached_node_tests {
             node
         }
 
+        fn small_file(&mut self, name: &str, content: &[u8]) -> KvNodeId {
+            let node = self.node_id(KvNodeType::SmallFile);
+            let boxed = derive_kv_keys(&self.seed)
+                .unwrap()
+                .seal_small_file(node, self.key, KvSmallFilePlaintext::File(content.to_vec()))
+                .unwrap();
+            self.nodes
+                .insert(node.0, KvNode::SmallFile(boxed).encoded().unwrap());
+            self.link(name, node);
+            node
+        }
+
         fn serve(&self, fetched: &mut Vec<[u8; 17]>, request: &KvRequest) -> Result<Vec<u8>> {
             match request {
                 KvRequest::Root => Ok(self.root.encoded().to_vec()),
@@ -1952,6 +1970,39 @@ mod cached_node_tests {
             .entries
             .iter()
             .all(|entry| entry.node_bytes.is_some()));
+    }
+
+    #[test]
+    fn metadata_reports_whether_a_small_file_is_a_login_and_keeps_no_plaintext() {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, host) = pinned(&directory);
+        let soft = directory.path().join("soft.sqlite3");
+        let mut remote = DroppedFiles::new(party_for(&host));
+        remote.small_file("github.com", b"user: satoshi\npassword: hx7\nurl: ");
+        remote.small_file("DATABASE_URL", b"postgres://service:o4Kq@db.internal/prod");
+        remote.large_file_with_size("scan.pdf", Some(3));
+        remote.symlink("latest", "/scan.pdf");
+
+        let (result, _) = metadata_pass(&client, &host, &remote, &soft);
+        let projections = result.unwrap();
+        let shapes = projections[0]
+            .entries
+            .iter()
+            .map(|entry| (entry.name.as_slice(), entry.small_file_shape))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shapes,
+            vec![
+                (&b"DATABASE_URL"[..], Some(KvSmallFileShape::Other)),
+                (&b"github.com"[..], Some(KvSmallFileShape::Login)),
+                (&b"latest"[..], None),
+                (&b"scan.pdf"[..], None),
+            ]
+        );
+        assert!(projections[0]
+            .entries
+            .iter()
+            .all(|entry| entry.content.is_none() && entry.symlink.is_none()));
     }
 
     #[test]

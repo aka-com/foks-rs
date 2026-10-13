@@ -3134,6 +3134,7 @@ mod tests {
                             size: None,
                             read_role: foks_agent_proto::KvRole::Owner,
                             write_role: foks_agent_proto::KvRole::Owner,
+                            shape: None,
                         }],
                         next_cursor: next_cursor.map(str::to_owned),
                     })
@@ -3491,6 +3492,7 @@ mod tests {
                             size: None,
                             read_role: KvRole::Owner,
                             write_role: KvRole::Owner,
+                            shape: None,
                         }],
                         next_cursor: next_cursor.map(str::to_owned),
                     })
@@ -3577,6 +3579,7 @@ mod tests {
                     size: None,
                     read_role: KvRole::Owner,
                     write_role: KvRole::Owner,
+                    shape: None,
                 }],
                 next_cursor: (page < 3).then(|| format!("cursor-{page}")),
             })
@@ -3635,6 +3638,7 @@ mod tests {
                         size: None,
                         read_role: KvRole::Owner,
                         write_role: KvRole::Owner,
+                        shape: None,
                     }],
                     next_cursor: Some("stale-cursor".to_owned()),
                 })
@@ -3654,6 +3658,7 @@ mod tests {
                         size: None,
                         read_role: KvRole::Owner,
                         write_role: KvRole::Owner,
+                        shape: None,
                     }],
                     next_cursor: Some("fresh-cursor".to_owned()),
                 })
@@ -3668,6 +3673,7 @@ mod tests {
                         size: None,
                         read_role: KvRole::Owner,
                         write_role: KvRole::Owner,
+                        shape: None,
                     }],
                     next_cursor: None,
                 })
@@ -3939,6 +3945,7 @@ mod tests {
                 size: None,
                 read_role: KvRole::Member { visibility: 2 },
                 write_role: KvRole::Admin,
+                shape: None,
             },
         };
         let transport = LargeReadTransport {
@@ -3973,6 +3980,7 @@ mod tests {
                 size: None,
                 read_role: KvRole::Member { visibility: 2 },
                 write_role: KvRole::Admin,
+                shape: None,
             },
         }
     }
@@ -4043,6 +4051,7 @@ mod tests {
                 size: None,
                 read_role: KvRole::Member { visibility: -1 },
                 write_role: KvRole::Admin,
+                shape: None,
             },
         };
         assert!(matches!(

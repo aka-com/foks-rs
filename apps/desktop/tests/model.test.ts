@@ -26,6 +26,8 @@ import {
   itemKey,
   kindOf,
   leaseLapsed,
+  loginField,
+  loginLines,
   nameOf,
   parseRole,
   partiesOf,
@@ -38,6 +40,7 @@ import {
   serverDisplayLabel,
   serverDisplayLabelForStore,
   safestRemovalTarget,
+  shapeOf,
   storeReadable,
   storeAvailability,
   storeAttentionState,
@@ -285,21 +288,27 @@ test('partyName falls back from username to team name and identifier', () => {
 
 /* ------------------------------------------------------------------ kinds -- */
 
-test('kindOf classifies Secret items as Password or Resource based on path and content', () => {
-  // Under /logins/ — a Password regardless of how its value is parsed.
+test('kindOf classifies a Secret by its listed shape, then by its folder', () => {
+  // The fixture's logins carry the shape a listing reports.
+  for (const key of [
+    'acct:personal|/logins/github.com',
+    'team:household|/streaming/netflix',
+    'team:household|/wifi/guest-password',
+  ])
+    assert.equal(kindOf(item(FIXTURE, key)), 'Password', key);
+  // A login saved while another folder was selected is still a Password.
   assert.equal(
-    kindOf(item(FIXTURE, 'acct:personal|/logins/github.com')),
+    kindOf({ kind: 'Secret', path: '/work/github.com', shape: 'login' }),
     'Password',
   );
-  // A `password:` line makes a Password anywhere.
+  // A listed shape decides even under /logins/.
   assert.equal(
-    kindOf(item(FIXTURE, 'team:household|/streaming/netflix')),
-    'Password',
+    kindOf({ kind: 'Secret', path: '/logins/raw-token', shape: 'other' }),
+    'Document',
   );
-  assert.equal(
-    kindOf(item(FIXTURE, 'team:household|/wifi/guest-password')),
-    'Password',
-  );
+  // Only an item no listing classified falls back to its folder.
+  assert.equal(kindOf({ kind: 'Secret', path: '/logins/old' }), 'Password');
+  assert.equal(kindOf({ kind: 'Secret', path: '/work/old' }), 'Document');
   // Any other Secret is a Document, wherever it is filed.
   assert.equal(
     kindOf(item(FIXTURE, 'acct:personal|/env/prod/DATABASE_URL')),
@@ -309,20 +318,49 @@ test('kindOf classifies Secret items as Password or Resource based on path and c
     kindOf(item(FIXTURE, 'acct:personal|/agents/anthropic-api-key')),
     'Document',
   );
-  assert.equal(
-    kindOf({
-      kind: 'Secret',
-      path: '/documents/readme.txt',
-      value: 'plain UTF-8 text',
-    }),
-    'Document',
-  );
-  // So is every File node.
+  // So is every File node, whatever its shape field says.
   assert.equal(
     kindOf(item(FIXTURE, 'acct:personal|/documents/passport-scan.pdf')),
     'Document',
   );
+  assert.equal(
+    kindOf({ kind: 'File', path: '/logins/scan.pdf', shape: 'login' }),
+    'Document',
+  );
   assert.equal(kindOf(item(FIXTURE, 'acct:personal|/ssh')), 'Folder');
+});
+
+test('fixture shapes are the shapes the listing computes from their text', () => {
+  for (const candidate of FIXTURE.items.filter(
+    (entry) => entry.kind === 'Secret',
+  )) {
+    const key = `${candidate.store}|${candidate.path}`;
+    assert.equal(candidate.shape, shapeOf(FIXTURE.plaintext[key] ?? ''), key);
+  }
+});
+
+test('login fields follow the host parser: aliases, trimming, first line wins', () => {
+  const stored =
+    'user: satoshi\r\n password : hx7:Qm2 \nurl: \nusername: second';
+  assert.equal(loginField(stored, 'username'), 'satoshi');
+  // Only the first colon separates the key.
+  assert.equal(loginField(stored, 'password'), 'hx7:Qm2');
+  // An empty value is absent, as `field-missing` reports it.
+  assert.equal(loginField(stored, 'url'), null);
+  assert.equal(loginField('website: https://a.example', 'url'), 'https://a.example');
+  assert.equal(shapeOf(stored), 'login');
+  assert.equal(shapeOf('user: a\npassword: \nurl: '), 'login');
+  for (const text of [
+    'postgres://service:o4Kq@db.internal/prod',
+    'passwords: plural is a different key',
+    'Password: keys are matched exactly',
+    '',
+  ])
+    assert.equal(shapeOf(text), 'other', text);
+  assert.deepEqual(loginLines('ssid: Guest\nfree text'), [
+    { key: 'ssid', value: 'Guest' },
+    { key: null, value: 'free text' },
+  ]);
 });
 
 test('isLogin returns true only for items under /logins/', () => {

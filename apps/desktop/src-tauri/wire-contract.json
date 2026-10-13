@@ -1001,7 +1001,8 @@
         },
         "write": {
           "role": "Admin"
-        }
+        },
+        "shape": "other"
       }
     ],
     "failures": [

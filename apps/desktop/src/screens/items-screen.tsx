@@ -65,10 +65,16 @@ import type {
   SortDirection,
 } from '../location';
 import { normalizeCommandError } from '../bridge';
-import type { Bridge } from '../bridge';
+import type { Bridge, ItemField } from '../bridge';
 import { useFileDrop } from '../file-drop';
 import { fileDropPath, writeBlockReason } from './write-workflows';
 import type { NewKind } from './write-workflows';
+import {
+  COPIED,
+  copyActions,
+  copyItem,
+  missingFieldMessage,
+} from './item-copy';
 import {
   ALL_ITEMS,
   folderAt,
@@ -181,7 +187,7 @@ interface RowProps {
   /** A store that can be read but not written: rows are drawn back. */
   readOnly: boolean;
   onSelect: () => void;
-  onCopy: (item: Item) => void;
+  onCopy: (item: Item, field: ItemField) => void;
   onReveal: (item: Item) => void;
   onDownload: (item: Item) => void;
   onDelete: (item: Item) => void;
@@ -224,6 +230,7 @@ function Row({
   const writeProblem = menuPoint
     ? itemActionProblem(snapshot, item, true, accessNow())
     : undefined;
+  const copies = copyActions(item);
   const choose =
     (run: () => void): (() => void) =>
     () => {
@@ -236,6 +243,7 @@ function Row({
     run: (item: Item) => void,
   ): ReactNode => (
     <button
+      key={label}
       type="button"
       title={label}
       aria-label={`${label} ${name}`}
@@ -315,7 +323,11 @@ function Row({
         <span className="acts">
           {item.kind !== 'File' ? (
             <>
-              {action('Copy', 'copy', onCopy)}
+              {copies.map(({ field, label }) =>
+                action(label, field === 'username' ? 'user' : 'copy', () =>
+                  onCopy(item, field),
+                ),
+              )}
               {action('Reveal', 'eye', onReveal)}
             </>
           ) : (
@@ -349,13 +361,16 @@ function Row({
               </MenuItem>
             ) : (
               <>
-                <MenuItem
-                  icon="copy"
-                  reason={readProblem}
-                  onClick={choose(() => onCopy(item))}
-                >
-                  Copy
-                </MenuItem>
+                {copies.map(({ field, label }) => (
+                  <MenuItem
+                    key={field}
+                    icon={field === 'username' ? 'user' : 'copy'}
+                    reason={readProblem}
+                    onClick={choose(() => onCopy(item, field))}
+                  >
+                    {label}
+                  </MenuItem>
+                ))}
                 <MenuItem
                   icon="eye"
                   reason={readProblem}
@@ -1031,14 +1046,15 @@ export function ItemsScreen({
     toasts.show(problem, { tone: 'warning' });
     return false;
   };
-  const copyItem = (item: Item): void => {
+  const copyItemField = (item: Item, field: ItemField): void => {
     if (!allowAction(item)) return;
-    void bridge.copyItemValue(request(item)).then(
-      () =>
-        toasts.show(
-          `${kindOf(item) === 'Password' ? 'Password' : 'Value'} copied`,
-        ),
-      (error: unknown) => onCommandError(error, item),
+    void copyItem(bridge, item, field).then(
+      () => toasts.show(COPIED[field]),
+      (error: unknown) => {
+        const missing = missingFieldMessage(error);
+        if (missing) toasts.show(missing, { tone: 'warning' });
+        else onCommandError(error, item);
+      },
     );
   };
   const revealItem = (item: Item): void => {
@@ -1083,7 +1099,7 @@ export function ItemsScreen({
       }
       readOnly={readOnly}
       onSelect={() => locations.select({ store: item.store, path: item.path })}
-      onCopy={copyItem}
+      onCopy={copyItemField}
       onReveal={revealItem}
       onDownload={downloadItem}
       onMove={

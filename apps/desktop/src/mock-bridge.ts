@@ -7,6 +7,7 @@ import type {
   Bridge,
   CatalogDto,
   DownloadResponse,
+  ItemField,
   ItemRequest,
   KvRoleInput,
   ReadItemResponse,
@@ -16,6 +17,7 @@ import { FIXTURE } from './fixture';
 import type { RenameProgress } from './rename-contract';
 import { storeReadable } from './model/lease';
 import { parseRole, roleRank, visibilityOf } from './model/roles';
+import { loginField, shapeOf } from './model/login';
 import { itemKey } from './model/types';
 import type { RoleWire, Store, AgentSnapshot } from './model/types';
 import {
@@ -39,6 +41,23 @@ export class VersionMismatchError extends Error {
 export type AppLifecycleRequest = 'restart' | 'quit';
 
 export const mockAppLifecycleRequests: AppLifecycleRequest[] = [];
+
+/** One clipboard write a mock bridge made, with the text the host would copy. */
+export interface MockCopy {
+  store: string;
+  path: string;
+  field: ItemField;
+  text: string;
+}
+
+/** Every item copy made through a mock bridge, oldest first. */
+export const mockCopies: MockCopy[] = [];
+
+const FIELD_NAMES: Readonly<Record<Exclude<ItemField, 'value'>, string>> = {
+  password: 'password',
+  username: 'user name',
+  url: 'website',
+};
 
 /** The personal account's one recovery phrase: the key the fixture phrase derives. */
 const FIXTURE_BACKUP_ID = `10${'4'.repeat(64)}`;
@@ -69,7 +88,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       itemKey(item),
       item.kind === 'Link'
         ? (item.target ?? '')
-        : (snapshot.plaintext[itemKey(item)] ?? item.value ?? ''),
+        : (snapshot.plaintext[itemKey(item)] ?? ''),
     ]),
   );
   const select = (request: ItemRequest) => {
@@ -428,6 +447,11 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           direntId: item.direntId,
           read: roleDto(item.read),
           write: roleDto(item.write),
+          // The agent's listing classifies each small file from its
+          // plaintext; the mock does the same from the text it serves.
+          ...(item.kind === 'Secret'
+            ? { shape: shapeOf(contents.get(itemKey(item)) ?? '') }
+            : {}),
         })),
       failures: [],
       blockedProfiles: [],
@@ -603,8 +627,26 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       });
     },
     copyItemValue: (request) => {
-      select(request);
+      const item = select(request);
+      mockCopies.push({
+        store: item.store,
+        path: item.path,
+        field: 'value',
+        text: contents.get(itemKey(item)) ?? '',
+      });
       return Promise.resolve({ ok: true });
+    },
+    copyItemField: async ({ field, ...request }) => {
+      const item = select(request);
+      const stored = contents.get(itemKey(item)) ?? '';
+      const text = field === 'value' ? stored : loginField(stored, field);
+      if (text === null)
+        throw failure(
+          'field-missing',
+          `This item has no ${FIELD_NAMES[field as keyof typeof FIELD_NAMES]}.`,
+        );
+      mockCopies.push({ store: item.store, path: item.path, field, text });
+      return { ok: true };
     },
     copyItemPath: (request) => {
       select(request);
@@ -625,7 +667,6 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         size: value.length,
         version: 1,
         ...roles,
-        value,
       });
       contents.set(`${storeId}|${path}`, value);
       return { applied: true };
@@ -673,7 +714,6 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         ...item,
         version: version + 1,
         size: value.length,
-        value,
       };
       contents.set(`${storeId}|${path}`, value);
       return { applied: true };

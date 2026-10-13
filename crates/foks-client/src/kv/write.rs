@@ -1480,6 +1480,7 @@ mod outbox_tests {
                 content: None,
                 symlink: None,
                 large_file_size: None,
+                small_file_shape: None,
             }],
         }];
         // Both mutation closures reuse this original binding after a stale-CAS

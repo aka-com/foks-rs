@@ -30,7 +30,8 @@ pub use repositories::chat::{
 
 pub use soft::{
     ChatInboxEntry, ChatInboxScope, ChatInboxState, KnownStore, KnownTeamStore,
-    KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry, SoftStateStore, MAX_DISCOVERY_HINTS,
+    KvDirectoryProjection, KvLargeFileStage, KvProjectedEntry, KvSmallFileShape, SoftStateStore,
+    MAX_DISCOVERY_HINTS,
 };
 
 use foks_proto::ServiceType;

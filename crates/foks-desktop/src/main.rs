@@ -1260,6 +1260,7 @@ fn catalog_item(
             size: None,
             read_role: roles.read_role,
             write_role: roles.write_role,
+            shape: None,
         },
     }
 }
