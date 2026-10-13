@@ -8,7 +8,7 @@ import type {
   ChatReply,
   ChatResult,
 } from '../chat-contract';
-import type { HistoryPlacement, HistoryWindow } from './conversation-model';
+import type { AcceptHistory, HistoryWindow } from './conversation-model';
 import { CHAT_PAGE_ROWS } from '../chat-limits';
 import { diagnosticLog, hashId, outcomeForCode } from '../diagnostics/log';
 
@@ -70,12 +70,7 @@ export function useChatHistory(
    * owner can check each of them rather than the merged object it never
    * returned.
    */
-  onAccepted?: (
-    page: Extract<ChatResult, { kind: 'history' }>,
-    before: string | null,
-    placement?: HistoryPlacement,
-    sources?: readonly ChatResult[],
-  ) => HistoryWindow | void,
+  onAccepted?: AcceptHistory,
   history?: HistoryWindow | null,
   onFatal?: (channel: string) => void,
   onLoading?: (load: HistoryLoad) => void,

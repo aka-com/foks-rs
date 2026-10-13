@@ -1,24 +1,8 @@
 import { createContext, useContext, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
-import type {
-  ChatAction,
-  ChatReply,
-  ChatResult,
-  ChatScope,
-} from '../chat-contract';
-import type { HistoryPlacement, HistoryWindow } from './conversation-model';
-
-/**
- * Accepts a verified history page into the team's history cache. A page
- * merged from several replies carries the replies' results in `sources`.
- */
-export type AcceptHistory = (
-  page: Extract<ChatResult, { kind: 'history' }>,
-  before: string | null,
-  placement?: HistoryPlacement,
-  sources?: readonly ChatResult[],
-) => HistoryWindow | void;
+import type { ChatAction, ChatReply, ChatScope } from '../chat-contract';
+import type { AcceptHistory } from './conversation-model';
 
 /**
  * What every channel of one team's conversation shares: the team, the

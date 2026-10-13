@@ -1,10 +1,10 @@
 import type { ChatMessage } from '../chat-contract';
-import { shortId } from '../model';
 import type { TrackedOperation } from './operations';
 import {
   continuesMessageGroup,
   messageDay,
   messageDayKey,
+  senderName,
 } from './presentation';
 import { operationOf, type OutgoingMessage } from './send/outgoing';
 
@@ -13,8 +13,9 @@ import { operationOf, type OutgoingMessage } from './send/outgoing';
  * a `day` separator above the first message of each local day, the `new`
  * divider above the first unread message, and the `message` rows. The rows
  * this device has not seen in history follow them: the `outgoing` messages
- * the send service holds, then the tracked `operation`s no outgoing message
- * stands for.
+ * the send service holds, with a `day` separator where an outgoing message's
+ * local day differs from the row above it, then the tracked `operation`s no
+ * outgoing message stands for.
  */
 export type ThreadRow =
   | { kind: 'day'; key: string; label: string }
@@ -56,14 +57,6 @@ export interface ThreadRowOptions {
   keyOf?: (message: ChatMessage) => string;
   /** The current time, which the day separators are labelled against. */
   now?: number;
-}
-
-/** The name a sender reads as: the roster's name, else a shortened id. */
-export function senderName(
-  sender: string | null,
-  names: ReadonlyMap<string, string>,
-): string {
-  return sender ? (names.get(sender) ?? shortId(sender)) : 'Team member';
 }
 
 /**
@@ -139,17 +132,32 @@ export function threadRows(
       grouped: !isNew && !newDay && continuesMessageGroup(previous, message),
     });
   });
+  // An unsent row draws its clock time, so it takes a day separator when
+  // its local day differs from the row above it.
+  let lastDay = messages.length
+    ? messageDayKey(messages[messages.length - 1].insert_time)
+    : '';
   const unsent = outgoing.filter((message) => !message.observed);
   const ownName = senderName(actor, names);
-  unsent.forEach((message, index) =>
+  unsent.forEach((message, index) => {
+    const createdAt = String(message.createdAt);
+    const day = messageDayKey(createdAt);
+    const newDay = Boolean(day) && day !== lastDay;
+    if (newDay)
+      rows.push({
+        kind: 'day',
+        key: `day:outgoing:${message.id}`,
+        label: messageDay(createdAt, now),
+      });
+    if (day) lastDay = day;
     rows.push({
       kind: 'outgoing',
       key: `outgoing:${message.id}`,
       message,
       avatarName: ownName,
-      grouped: index > 0,
-    }),
-  );
+      grouped: index > 0 && !newDay,
+    });
+  });
   // An operation an outgoing message carries is drawn by that message's row.
   const carried = new Set(
     outgoing.flatMap((message) => {

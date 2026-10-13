@@ -1,4 +1,4 @@
-import type { ChatMessage } from '../chat-contract';
+import type { ChatMessage, ChatResult } from '../chat-contract';
 import type { ConversationEvent } from './conversation-events';
 import { CHAT_HISTORY_BYTES, CHAT_HISTORY_ROWS } from '../chat-limits';
 import { channelIntegrity } from './errors';
@@ -30,6 +30,16 @@ export interface HistoryPlacement {
    */
   detached?: boolean;
 }
+/**
+ * Accepts a verified history page into the team's history cache. A page
+ * merged from several replies carries the replies' results in `sources`.
+ */
+export type AcceptHistory = (
+  page: Extract<ChatResult, { kind: 'history' }>,
+  before: string | null,
+  placement?: HistoryPlacement,
+  sources?: readonly ChatResult[],
+) => HistoryWindow | void;
 export interface ConversationState {
   operations: TrackedOperation[];
   history: HistoryWindow | null;

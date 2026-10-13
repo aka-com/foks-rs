@@ -138,6 +138,14 @@ export function partyNames(
   );
 }
 
+/** The name a sender reads as: the roster's name, else a shortened id. */
+export function senderName(
+  sender: string | null,
+  names?: ReadonlyMap<string, string>,
+): string {
+  return sender ? (names?.get(sender) ?? shortId(sender)) : 'Team member';
+}
+
 /** A channel of the open team, as the column and the conversation list it. */
 export interface ListedChannel {
   channel: ChatChannel;
@@ -293,9 +301,7 @@ export function previewLine(
   const sender =
     actor !== null && preview.sender === actor
       ? 'You'
-      : preview.sender
-        ? (names?.get(preview.sender) ?? shortId(preview.sender))
-        : 'Team member';
+      : senderName(preview.sender, names);
   const text =
     preview.content.kind === 'text'
       ? preview.content.text

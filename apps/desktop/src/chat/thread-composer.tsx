@@ -5,8 +5,8 @@ import { TEXT_LIMIT_LABEL } from './use-chat-composer';
 
 /**
  * The message field and Send button of a channel the reader can write to.
- * Enter sends, Shift+Enter and Alt+Enter insert a line break, and a key the
- * field does not handle goes to `onKeyDown` first.
+ * Every key goes to `onKeyDown` first; then Enter sends, and Shift+Enter or
+ * Alt+Enter inserts a line break.
  */
 export function Composer({
   placeholder,

@@ -3,9 +3,9 @@ import test from 'node:test';
 import type { ChatMessage, ChatOperation } from '../src/chat-contract';
 import { newOutgoing } from '../src/chat/send/outgoing';
 import type { TrackedOperation } from '../src/chat/operations';
+import { senderName } from '../src/chat/presentation';
 import {
   newMessagesUnloaded,
-  senderName,
   threadRows,
   type ThreadRow,
 } from '../src/chat/thread-rows';
@@ -183,6 +183,49 @@ test('unsent rows follow history; an operation an outgoing message carries is no
   );
   const outgoing = rows.find((row) => row.kind === 'outgoing');
   assert.equal(outgoing?.kind === 'outgoing' && outgoing.avatarName, 'alice');
+});
+
+test('an unsent row from a later local day than the row above it takes a day separator', () => {
+  const earlier = newOutgoing({
+    channel: 'c',
+    submission: 's1',
+    createdAt: noon + 60_000,
+    delivery: { stage: 'queued' },
+  });
+  const later = newOutgoing({
+    channel: 'c',
+    submission: 's2',
+    createdAt: nextDay,
+    delivery: { stage: 'queued' },
+  });
+  const again = newOutgoing({
+    channel: 'c',
+    submission: 's3',
+    createdAt: nextDay + 60_000,
+    delivery: { stage: 'queued' },
+  });
+  const rows = threadRows([message(1, noon)], [earlier, later, again], [], {
+    actor: alice,
+    newFrom: null,
+    names,
+    now,
+  });
+  assert.deepEqual(shape(rows), [
+    'day Yesterday',
+    '1 You',
+    'outgoing s1',
+    'day Today',
+    'outgoing s2',
+    'outgoing s3 grouped',
+  ]);
+  assert.equal(rows[3].key, 'day:outgoing:s2');
+  // With no history loaded, the first unsent row carries its own day.
+  assert.deepEqual(
+    shape(
+      threadRows([], [later], [], { actor: alice, newFrom: null, names, now }),
+    ),
+    ['day Today', 'outgoing s2'],
+  );
 });
 
 test('a sender off the roster reads as a shortened id, and a missing one as a team member', () => {
