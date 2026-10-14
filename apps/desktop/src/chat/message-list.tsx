@@ -172,13 +172,36 @@ export function MessageList({
     () => measureNew(),
     [measureNew, messages, newFrom, atBottom],
   );
-  // The first row on screen, which takes the tab stop while the list is
-  // scrolled up, so Tab into the list does not scroll to the newest row.
-  const [screenRow, setScreenRow] = useState<string | null>(null);
-  const measureScreenRow = useCallback(() => {
+  // One row is current, and it is the list's tab stop with its links and its
+  // toolbar: the row focus last entered, while focus stays in the list and
+  // the row is drawn; otherwise, while the list is away from its bottom, the
+  // first row on screen, which focus reaches without scrolling the list;
+  // otherwise the newest row. Other rows are reached with the arrow keys, by
+  // pointer, or by focus entering the row, so a Tab across the list does not
+  // stop at every message.
+  const [focusedRow, setFocusedRow] = useState<string | null>(null);
+  const [tabStop] = useState(() => rowTabStop(setFocusedRow));
+  // What the current row is chosen from, as of the last render. A scroll
+  // frame reads it and sets the current row without drawing the list again.
+  const tabStopInputs = useRef<{
+    focusedRow: string | null;
+    atBottom: boolean;
+    rows: readonly string[];
+  }>({ focusedRow: null, atBottom: true, rows: [] });
+  const updateCurrentRow = useCallback(() => {
+    const { focusedRow, atBottom, rows } = tabStopInputs.current;
+    if (focusedRow !== null && rows.includes(focusedRow)) {
+      tabStop.set(focusedRow);
+      return;
+    }
     const element = scroller.current;
-    setScreenRow(element ? rowOnScreen(element) : null);
-  }, [scroller]);
+    const screenRow = !atBottom && element ? rowOnScreen(element) : null;
+    tabStop.set(
+      screenRow !== null && rows.includes(screenRow)
+        ? screenRow
+        : (rows.at(-1) ?? null),
+    );
+  }, [scroller, tabStop]);
   // Scrolling measures once per frame.
   const measuring = useRef<number | null>(null);
   const measureOnScroll = () => {
@@ -186,7 +209,7 @@ export function MessageList({
     measuring.current = requestAnimationFrame(() => {
       measuring.current = null;
       measureNew();
-      measureScreenRow();
+      updateCurrentRow();
     });
   };
   useEffect(
@@ -238,14 +261,6 @@ export function MessageList({
       : 0;
   // The rows this device has not seen in history follow the newer edge.
   const { held, unsent } = splitThreadRows(rows);
-  // One row is current, and it is the list's tab stop with its links and its
-  // toolbar: the row focus last entered, while focus stays in the list and
-  // the row is drawn; otherwise, while the list is away from its bottom, the
-  // first row on screen, which focus reaches without scrolling the list;
-  // otherwise the newest row. Other rows are reached with the arrow keys, by
-  // pointer, or by focus entering the row, so a Tab across the list does not
-  // stop at every message.
-  const [focusedRow, setFocusedRow] = useState<string | null>(null);
   // The claim lasts while focus is in the list or in a menu or popover
   // (`.menu-portal`) a row opened; focus anywhere else, or on no element,
   // ends it. `focusin` also covers focus that moves on after the focused
@@ -279,20 +294,14 @@ export function MessageList({
   // Measured again when the rows drawn change, since rows added or removed
   // move the ones on screen.
   const rowKeys = messageRows.join(' ');
-  useLayoutEffect(
-    () => measureScreenRow(),
-    [measureScreenRow, rowKeys, atBottom],
-  );
-  const currentRow =
-    focusedRow !== null && messageRows.includes(focusedRow)
-      ? focusedRow
-      : !atBottom && screenRow !== null && messageRows.includes(screenRow)
-        ? screenRow
-        : (messageRows.at(-1) ?? null);
-  const rowTabStop = useMemo<RowTabStop>(
-    () => ({ current: currentRow, claim: setFocusedRow }),
-    [currentRow],
-  );
+  useLayoutEffect(() => {
+    tabStopInputs.current = {
+      focusedRow,
+      atBottom,
+      rows: rowKeys ? rowKeys.split(' ') : [],
+    };
+    updateCurrentRow();
+  }, [updateCurrentRow, focusedRow, atBottom, rowKeys]);
   // Keys on a focused row itself; keys in its links, toolbar and buttons are
   // theirs. A key at either end of the rows is left to the list, which
   // scrolls.
@@ -408,7 +417,7 @@ export function MessageList({
         onKeyDown={onRowKey}
         // The current row is the list's tab stop; the list itself is one only
         // while it draws no row, and takes focus when a control in it goes.
-        tabIndex={currentRow === null ? 0 : -1}
+        tabIndex={messageRows.length === 0 ? 0 : -1}
         aria-label="Message history"
         aria-busy={busy}
       >
@@ -462,7 +471,7 @@ export function MessageList({
             </div>
           </div>
         )}
-        <RowTabStopContext.Provider value={rowTabStop}>
+        <RowTabStopContext.Provider value={tabStop}>
           {held.map(draw)}
         </RowTabStopContext.Provider>
         {detached && (
@@ -483,7 +492,7 @@ export function MessageList({
             )}
           </div>
         )}
-        <RowTabStopContext.Provider value={rowTabStop}>
+        <RowTabStopContext.Provider value={tabStop}>
           {unsent.map(draw)}
         </RowTabStopContext.Provider>
       </div>
@@ -583,6 +592,32 @@ function rowOnScreen(root: HTMLElement): string | null {
   if (spanning && spanning.height > 0 && spanning.bottom > top)
     return rows[low - 1].dataset.row ?? null;
   return null;
+}
+
+/**
+ * A {@link RowTabStop} whose current row the list sets with `set`. Rows are
+ * notified only when the key changes.
+ */
+function rowTabStop(
+  claim: (rowKey: string) => void,
+): RowTabStop & { set: (rowKey: string | null) => void } {
+  let current: string | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    current: () => current,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    claim,
+    set: (rowKey) => {
+      if (rowKey === current) return;
+      current = rowKey;
+      listeners.forEach((listener) => listener());
+    },
+  };
 }
 
 /** When the first new message arrived: the clock today, else the date too. */

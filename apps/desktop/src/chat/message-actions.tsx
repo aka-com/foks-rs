@@ -5,6 +5,7 @@ import {
   useId,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import type {
   FocusEvent,
@@ -69,12 +70,20 @@ export interface MessageActionOptions {
  * when focus enters it. Other rows are reached with the arrow keys, Home and
  * End from a focused row, by pointer, or by focus entering them. Without a
  * provider every row is current.
+ *
+ * The current row changes as the list scrolls, so rows read it as an external
+ * store: a change draws again only the rows that become or stop being
+ * current, not every row the list holds.
  */
 export interface RowTabStop {
-  current: string | null;
+  /** The current row's key, or `null` while the list draws no row. */
+  current: () => string | null;
+  /** Calls `listener` whenever `current` changes; returns the unsubscribe. */
+  subscribe: (listener: () => void) => () => void;
   claim: (rowKey: string) => void;
 }
 export const RowTabStopContext = createContext<RowTabStop | null>(null);
+const subscribeNone = () => () => {};
 
 // A quote carries the first lines of a message, each cut at a word boundary
 // near this many characters, so a long message is not pasted back whole.
@@ -162,7 +171,10 @@ export function useMessageActions(
 } {
   const toasts = useOptionalToast();
   const stop = useContext(RowTabStopContext);
-  const tabbable = !stop || rowKey === undefined || stop.current === rowKey;
+  const tabbable = useSyncExternalStore(
+    stop?.subscribe ?? subscribeNone,
+    () => !stop || rowKey === undefined || stop.current() === rowKey,
+  );
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   // The toolbar is one tab stop; the arrow keys move between its buttons.

@@ -795,9 +795,9 @@ column. Alt+Shift+Up and Alt+Shift+Down open the previous and next channel
 with an unread count that the team's badge counts, so muted and hidden
 channels are skipped; that search includes the channels of folded teams and
 unfolds the team it opens a channel in, wraps around the column, and a toast
-says so when no other channel has unread messages. Alt+Left and Alt+Right stay back and
-forward. In the composer the keys move the caret unless it is on the draft's
-first line (Up) or last line (Down), since macOS moves the caret to a
+says so when no other channel has unread messages. Alt+Left and Alt+Right stay
+back and forward. In the composer the keys move the caret unless it is on the
+draft's first line (Up) or last line (Down), since macOS moves the caret to a
 paragraph boundary with Option+Up/Down. The keys do nothing while a dialog is
 open, as the rail's Ctrl+Tab does.
 
@@ -989,17 +989,17 @@ focused. Other links open directly. The check runs in the renderer only:
 `open_chat_link` receives the URL and never the label, so it validates the URL
 but cannot compare the two.
 
-The message list is one tab stop: its current row, which is the row focus
-last entered while focus stays in the list or in a menu or popover a row
-opened; otherwise, while the list is scrolled away from its bottom, the first
-row on screen, so Tab into the list keeps the reading position; and otherwise
-the newest row. The current row is followed in tab order
-by its links and code-block buttons and then its toolbar; other rows' links
-leave the tab order until their row is current. On a focused row, Up and Down
-move to the previous and next row, Home and End to the first and last row the
-list holds, Enter opens the row's actions as a menu, and Esc moves focus to
-the composer. The list itself takes focus only while it draws no row, or when
-a control in it goes away.
+The message list is one tab stop: its current row, which is the row focus last
+entered while focus stays in the list or in a menu or popover a row opened;
+otherwise, while the list is scrolled away from its bottom, the first row on
+screen, so Tab into the list keeps the reading position; and otherwise the
+newest row. The current row is followed in tab order by its links and
+code-block buttons and then its toolbar; other rows' links leave the tab order
+until their row is current. On a focused row, Up and Down move to the previous
+and next row, Home and End to the first and last row the list holds, Enter
+opens the row's actions as a menu, and Esc moves focus to the composer. The
+list itself takes focus only while it draws no row, or when a control in it
+goes away.
 
 Each message row carries its actions (`message-actions.tsx`) in a toolbar over
 its top corner, shown while the row is hovered or holds focus, and named after
