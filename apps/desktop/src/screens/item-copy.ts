@@ -127,7 +127,8 @@ export interface AnnouncedCopy {
  * A row's, the details panel's or the palette's Copy: refuses with the
  * access `problem` as a warning when there is one, copies the field, and
  * names in a toast what was copied and when the clipboard is cleared, or
- * which field the item lacks.
+ * which field the item lacks. The copy toast closes by the time the host
+ * clears the clipboard, even while it is hovered or focused.
  */
 export async function copyAndAnnounce({
   bridge,
@@ -142,7 +143,13 @@ export async function copyAndAnnounce({
     return;
   }
   try {
-    toasts.show(copiedMessage(field, await copyItem(bridge, item, field)));
+    // Read before the copy, so the toast closes no later than the host's
+    // clear, which a hold on the toast does not delay.
+    const copiedAt = Date.now();
+    const response = await copyItem(bridge, item, field);
+    toasts.show(copiedMessage(field, response), {
+      expiresAt: copiedAt + response.clearAfterSeconds * 1_000,
+    });
   } catch (error) {
     const missing = missingFieldMessage(error);
     if (missing) toasts.show(missing, { tone: 'warning' });

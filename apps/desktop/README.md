@@ -334,7 +334,8 @@ the other facts needed by the Phase 2 shell; `read_item`,
 `{ok, clearAfterSeconds}`: the seconds after which the host clears the
 clipboard if it still holds the copied value (`AUTO_CLEAR_SECONDS` in
 `src-tauri/src/clipboard.rs`: 15 on Linux, 30 elsewhere), which the copy toast
-states, for example "Password copied · clears in 30 s". `tests/bridge.test.ts`
+states, for example "Password copied · clears in 30 s", and closes by then.
+`tests/bridge.test.ts`
 pins the decoder side and the Rust command tests pin serialization so a drift
 fails on one side or the other. `tests/command-contract.test.ts` checks the
 command name and argument keys of every native call in `src/` against
@@ -1198,15 +1199,21 @@ behind. Reach it as `/kit/*` (a Vite alias and a tsconfig path). Application-spe
 `src/` to keep application logic separate from reusable UI components.
 
 `toasts.tsx` appends information toasts to a `role="status"` polite live
-region and warnings to a `role="alert"` assertive one. Both regions stay
+region and warnings to a `role="alert"` assertive one, so warnings are drawn
+below information toasts whichever was shown first. Both regions stay
 mounted while empty, because screen readers, VoiceOver in WebKit in
-particular, can skip a live region inserted together with its text. A toast
+particular, can skip a live region inserted together with its text. A
+repeated message replaces its toast's text node, so it is announced again
+and its countdown starts over. A toast
 is a warning only when its caller passes `tone: 'warning'`. A toast without a
 caller-given `durationMs` stays for its reading time (one second plus 60 ms a
 character), at least 4 s, 8 s for a warning, and at most 20 s; an actionable
 toast without one stays until it is dismissed. The countdown holds while the
 pointer is over the toast, while focus is inside it and while the window is
-hidden, and a released toast stays at least one more second. Render tests
+hidden, and a released toast stays at least one more second. A caller's
+`expiresAt` ends the toast even while it is held: the Move to Trash toast
+closes when ⌘Z stops undoing, and a copy toast by the time the host clears
+the clipboard. Render tests
 that look for a page's own status or alert exclude `#toasts` or require text,
 since the empty regions match a role query; jsdom reports `document.hidden`
 as true, so toasts in render tests do not time out unless a test sets it.

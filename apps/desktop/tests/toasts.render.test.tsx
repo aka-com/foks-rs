@@ -210,12 +210,12 @@ test('the countdown holds while a toast is hovered, holds focus or the window is
   ui.act(() => {
     controller.show('Copied');
   });
-  clock.advance(3_000);
+  clock.advance(1_000);
   ui.fireEvent.mouseEnter(toast());
   clock.advance(60_000);
   assert.equal(shown(), 'Copied');
   ui.fireEvent.mouseLeave(toast());
-  clock.advance(999);
+  clock.advance(MIN_INFO_DURATION_MS - 1_000 - 1);
   assert.equal(shown(), 'Copied');
   clock.advance(1 + EXIT_MS);
   assert.equal(shown(), '');
@@ -232,7 +232,9 @@ test('the countdown holds while a toast is hovered, holds focus or the window is
   ui.act(() => {
     (document.activeElement as HTMLElement).blur();
   });
-  clock.advance(MIN_INFO_DURATION_MS + EXIT_MS);
+  clock.advance(MIN_INFO_DURATION_MS - 1);
+  assert.equal(shown(), 'Moved');
+  clock.advance(1 + EXIT_MS);
   assert.equal(shown(), '');
 
   // A hidden window: nothing counts down until it is shown again.
@@ -252,6 +254,92 @@ test('the countdown holds while a toast is hovered, holds focus or the window is
   clock.advance(MIN_INFO_DURATION_MS - 1);
   assert.equal(shown(), 'Synced');
   clock.advance(1 + EXIT_MS);
+  assert.equal(shown(), '');
+});
+
+test('a repeated message restarts the full duration and is announced again', (t) => {
+  const clock = fakeClock(t);
+  Object.defineProperty(document, 'hidden', {
+    configurable: true,
+    get: () => false,
+  });
+  t.after(() => {
+    delete (document as { hidden?: boolean }).hidden;
+  });
+  const controller = new ToastController();
+  const rendered = ui.render(
+    createElement(ToastProvider, { controller, children: null }),
+  );
+  const { polite } = regions(rendered.container);
+  ui.act(() => {
+    controller.show('Copied');
+  });
+  const first = polite.querySelector('.toast-message');
+  clock.advance(3_000);
+  ui.act(() => {
+    controller.show('Copied');
+  });
+  assert.deepEqual(messages(polite), ['Copied']);
+  // The text is added to the region again rather than left unchanged.
+  assert.notEqual(polite.querySelector('.toast-message'), first);
+  clock.advance(MIN_INFO_DURATION_MS - 1);
+  assert.deepEqual(messages(polite), ['Copied']);
+  clock.advance(1 + EXIT_MS);
+  assert.deepEqual(messages(polite), []);
+});
+
+test('a hold does not keep a toast past the deadline its caller gives', (t) => {
+  const clock = fakeClock(t);
+  let hidden = false;
+  Object.defineProperty(document, 'hidden', {
+    configurable: true,
+    get: () => hidden,
+  });
+  t.after(() => {
+    delete (document as { hidden?: boolean }).hidden;
+  });
+  const controller = new ToastController();
+  const rendered = ui.render(
+    createElement(ToastProvider, { controller, children: null }),
+  );
+  const shown = () =>
+    messages(rendered.container.querySelector('#toasts')!).join();
+  const toast = () => rendered.container.querySelector<HTMLElement>('.toast')!;
+
+  // Hovered: the toast closes at its deadline, after its reading time.
+  ui.act(() => {
+    controller.show('Password copied · clears in 15 s', {
+      expiresAt: Date.now() + 15_000,
+    });
+  });
+  ui.fireEvent.mouseEnter(toast());
+  clock.advance(15_000 - 1);
+  assert.equal(shown(), 'Password copied · clears in 15 s');
+  clock.advance(1 + EXIT_MS);
+  assert.equal(shown(), '');
+
+  // Not held: the shorter reading time still applies.
+  ui.act(() => {
+    controller.show('Password copied · clears in 15 s', {
+      expiresAt: Date.now() + 15_000,
+    });
+  });
+  clock.advance(MIN_INFO_DURATION_MS + EXIT_MS);
+  assert.equal(shown(), '');
+
+  // A hidden window: an Undo toast still closes when its Undo expires.
+  hidden = true;
+  ui.act(() => {
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  ui.act(() => {
+    controller.show('Moved notes to Trash', {
+      action: { label: 'Undo', onAction: () => undefined },
+      durationMs: 8_000,
+      expiresAt: Date.now() + 8_000,
+    });
+  });
+  clock.advance(8_000 + EXIT_MS);
   assert.equal(shown(), '');
 });
 

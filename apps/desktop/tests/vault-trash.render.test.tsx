@@ -167,6 +167,41 @@ test('⌘Z undoes the last move to Trash while its toast is offered', async () =
   assert.deepEqual(await paths(), before);
 });
 
+test('the Undo toast closes when ⌘Z stops undoing, even while it is hovered', async (t) => {
+  // jsdom reports a hidden window, which would hold the toast as well.
+  Object.defineProperty(document, 'hidden', {
+    configurable: true,
+    get: () => false,
+  });
+  t.after(() => {
+    delete (document as { hidden?: boolean }).hidden;
+  });
+  const { rendered, paths } = await mount();
+  await trashGithub(rendered);
+  const toast = [...document.querySelectorAll<HTMLElement>('.toast')].find(
+    (element) => /Moved github\.com to Trash/.test(element.textContent ?? ''),
+  );
+  assert.ok(toast);
+  ui.fireEvent.mouseEnter(toast);
+  // The pointer stays on the toast past the eight seconds of Undo.
+  const later = Date.now() + 9_000;
+  t.mock.method(Date, 'now', () => later);
+  ui.fireEvent.mouseLeave(toast);
+  ui.fireEvent.mouseEnter(toast);
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(document.body, { key: 'z', metaKey: true });
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      [...document.querySelectorAll('.toast-action')].some(
+        (button) => button.textContent === 'Undo',
+      ),
+      false,
+    ),
+  );
+  assert.ok(!(await paths()).includes(PATH));
+});
+
 test('the Trash view restores, offers a copy for an occupied path, and deletes permanently', async () => {
   const { rendered, store, base, paths } = await mount();
   await trashGithub(rendered);

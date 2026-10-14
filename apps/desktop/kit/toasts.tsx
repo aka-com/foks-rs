@@ -17,8 +17,8 @@ export const MIN_WARNING_DURATION_MS = 8_000;
 /** The longest time a toast without a caller-given duration stays. */
 export const MAX_DURATION_MS = 20_000;
 /**
- * Reading time per character: about 1,000 characters a minute, or 200
- * words of five letters and a space. One further second is allowed for
+ * Reading time per character: about 1,000 characters a minute, or roughly
+ * 170 words of five letters and a space. One further second is allowed for
  * noticing the toast.
  */
 const READING_MS_PER_CHARACTER = 60;
@@ -39,6 +39,13 @@ export interface ToastOptions {
   action?: ToastAction;
   dedupeKey?: string;
   durationMs?: number;
+  /**
+   * When the toast closes, in `Date.now()` milliseconds, even while it is
+   * held by the pointer, focus or a hidden window. A caller whose message
+   * stops being true at a fixed time, such as an Undo that expires or a
+   * clipboard the host clears, sets it.
+   */
+  expiresAt?: number;
   tone?: 'info' | 'warning';
 }
 
@@ -72,7 +79,7 @@ function toastTone(request: ToastOptions): ToastRecord['tone'] {
  * reading time, at least {@link MIN_INFO_DURATION_MS} or, for a warning,
  * {@link MIN_WARNING_DURATION_MS}, and at most {@link MAX_DURATION_MS}. Time
  * while the toast is hovered, holds focus or the window is hidden does not
- * count.
+ * count, up to the caller's `expiresAt`.
  */
 export function toastDurationMs(
   message: string,
@@ -232,9 +239,20 @@ function ToastItem({
       left.revision = entry.revision;
       left.ms = duration;
     }
-    const ms = left.ms;
-    if (held || ms === null) return;
     const startedAt = Date.now();
+    const counting = held ? null : left.ms;
+    // A hold does not keep the toast past its caller's deadline.
+    const deadline =
+      entry.expiresAt === undefined
+        ? null
+        : Math.max(0, entry.expiresAt - startedAt);
+    const ms =
+      counting === null
+        ? deadline
+        : deadline === null
+          ? counting
+          : Math.min(counting, deadline);
+    if (ms === null) return;
     const hideTimer = window.setTimeout(() => setVisible(false), ms);
     const removeTimer = window.setTimeout(
       () => dismiss(entry.id),
@@ -243,12 +261,14 @@ function ToastItem({
     return () => {
       window.clearTimeout(hideTimer);
       window.clearTimeout(removeTimer);
-      // A toast held while it fades out comes back, and one released stays
-      // long enough to be read again.
-      left.ms = Math.max(RESUME_MIN_MS, ms - (Date.now() - startedAt));
-      setVisible(true);
+      const elapsed = Date.now() - startedAt;
+      // A toast released stays long enough to be read again, and one held
+      // while it fades out comes back unless its deadline has passed.
+      if (counting !== null)
+        left.ms = Math.max(RESUME_MIN_MS, counting - elapsed);
+      if (deadline === null || elapsed < deadline) setVisible(true);
     };
-  }, [dismiss, duration, entry.id, entry.revision, held]);
+  }, [dismiss, duration, entry.expiresAt, entry.id, entry.revision, held]);
 
   return (
     <div
@@ -265,7 +285,11 @@ function ToastItem({
           setFocused(false);
       }}
     >
-      <span className="toast-message">{entry.message}</span>
+      {/* A new node for each revision, so a repeated message, whose text
+          does not change, is announced again. */}
+      <span key={entry.revision} className="toast-message">
+        {entry.message}
+      </span>
       {entry.action ? (
         <button
           type="button"
@@ -300,7 +324,9 @@ function ToastItem({
  * regions stay mounted while empty, because screen readers announce text
  * added to a region they already track and can skip a region inserted
  * together with its text. Each region has `aria-atomic="false"`, so a new
- * toast is read without the toasts already shown.
+ * toast is read without the toasts already shown. Since the regions are
+ * separate, warnings are drawn below information toasts, whichever was
+ * shown first.
  */
 export function ToastProvider({
   children,

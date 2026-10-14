@@ -273,16 +273,16 @@ export function useTrashActions({
           if (fromKeyboard) toasts.show(`Restoring ${name}…`, { dedupeKey });
           undo(item, path);
         };
-        pendingUndo.current = {
-          run: () => run(true),
-          until: Date.now() + UNDO_DURATION_MS,
-        };
+        // The toast closes when ⌘Z stops working, even while it is held.
+        const until = Date.now() + UNDO_DURATION_MS;
+        pendingUndo.current = { run: () => run(true), until };
         await refresh(
           `Moved ${name} to Trash`,
           storeOf(shown, item.store)?.server,
           {
             action: { label: 'Undo', onAction: () => run() },
             durationMs: UNDO_DURATION_MS,
+            expiresAt: until,
             dedupeKey,
           },
         );

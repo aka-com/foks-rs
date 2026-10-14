@@ -544,7 +544,7 @@ crate::applock::require_unlocked_generation(&app, access)?;</div>
 <ul>
   <li><strong>Linux Timeout:</strong> 15 seconds.</li>
   <li><strong>macOS Timeout:</strong> 30 seconds. Linux enforces a shorter window because Linux desktop environments lack a standardized clipboard concealment protocol.</li>
-  <li><strong>Stated Timeout:</strong> <code>copy_item_field</code> and <code>copy_item_value</code> return the timeout as <code>clearAfterSeconds</code>, and the copy toast states it, for example "Password copied &middot; clears in 30 s".</li>
+  <li><strong>Stated Timeout:</strong> <code>copy_item_field</code> and <code>copy_item_value</code> return the timeout as <code>clearAfterSeconds</code>, and the copy toast states it, for example "Password copied &middot; clears in 30 s". The toast closes by that time even while it is hovered.</li>
   <li><strong>macOS Concealed Marker:</strong> On macOS, FOKS tags the pasteboard item with <code>org.nspasteboard.ConcealedType</code>, instructing utilities like Raycast, Alfred, and 1Password not to log the entry.</li>
 </ul>
 
