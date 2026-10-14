@@ -10,6 +10,7 @@ import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom, settle } from './lib/dom-harness';
+import { readSource } from './lib/source';
 
 installDom({
   url: 'http://localhost/',
@@ -206,6 +207,21 @@ test('each link names its destination host to assistive technology once', () => 
   );
   for (const suffix of document.querySelectorAll('.chat-link-host'))
     assert.equal(suffix.getAttribute('aria-hidden'), 'true');
+});
+
+test('a long destination host wraps instead of overflowing the message list', async () => {
+  // jsdom does not lay out, so the rule is read from the stylesheet: a
+  // nowrap host wider than the column would scroll its registrable name out
+  // of view (bank.example.<long label>.evil.example).
+  const css = await readSource('../src/screens/chat.css', import.meta.url);
+  const rule = /\.chat-link-host\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+  assert.match(rule, /display: inline-block;/);
+  assert.doesNotMatch(rule, /white-space/);
+  assert.match(
+    css,
+    /\.chat-message-text\s*\{[^}]*overflow-wrap: anywhere;/,
+    'the host inherits a break opportunity at any character',
+  );
 });
 
 test('a context menu inside the sheet does not open the row menu', async () => {

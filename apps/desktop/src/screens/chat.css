@@ -1727,11 +1727,16 @@
   color: var(--amber-strong);
   vertical-align: -2px;
 }
+/* An inline block moves to the next line whole when it does not fit after the
+   label, and wraps inside (with the inherited overflow-wrap) only when it is
+   wider than the line, so a long host such as
+   bank.example.<200 characters>.evil.example is shown in full rather than
+   overflowing the scroller with its registrable name out of view. */
 .chat-link-host {
+  display: inline-block;
   margin-left: 4px;
   font-size: 12.5px;
   color: var(--muted);
-  white-space: nowrap;
 }
 .chat-link-host.mismatch {
   color: var(--amber-ink);
