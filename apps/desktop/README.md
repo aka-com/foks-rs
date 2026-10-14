@@ -939,12 +939,15 @@ break. The ? at the end of the line opens Formatting and keys, which lists each
 form `message-text.tsx` renders with the rendering drawn by `MessageText`
 itself, so the sheet cannot list a form messages do not get, and the keys.
 Ctrl+B, Ctrl+I and Ctrl+E (⌘ on macOS) wrap the selection in `**`, `*` and
-`` ` ``, or remove those markers when the selection is already wrapped in them
-or the caret sits between an empty pair. Inline styles do not cross lines, so
-a selection across lines has each non-blank line wrapped after any `- `, `* `,
-`1. ` or `> ` marker that starts it, keeping a list a list, and pressing the
-key again removes the markers when every such line is wrapped; lines in a ```
-fence are left as typed. Ctrl+Shift+E (⇧⌘E) puts the selected lines in a ```
+`` ` ``, or remove those markers when the selection is already one span in
+them or the caret sits between an empty pair. A span holds no character of
+its markers, as `message-text.tsx` reads it, so `**a** b **c**` is two spans
+and a caret in `*a**b*` sits between two spans, not in an empty pair; the key
+adds markers to these. Inline styles do not cross lines, so a selection across
+lines has each non-blank line wrapped after any `- `, `* `, `1. ` or `> `
+marker that starts it, keeping a list a list, and pressing the key again
+removes the markers when every such line is one span; lines in a ``` fence are
+left as typed. Ctrl+Shift+E (⇧⌘E) puts the selected lines in a ```
 fence. None of these is an accelerator of the macOS application menu, and the
 code-block chord avoids Ctrl+Shift+C, which opens the element inspector in
 Chromium-based webviews when developer tools are enabled. The edits go through

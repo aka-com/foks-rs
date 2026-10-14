@@ -21,14 +21,57 @@ export type ComposerFormat = 'bold' | 'italic' | 'code' | 'codeBlock';
 const MARKS = { bold: '**', italic: '*', code: '`' } as const;
 
 /**
- * Whether `[start, end)` of `value` is enclosed in `mark`. A `*` enclosed in
- * `**` on both sides is bold, not italic, unless a third `*` precedes it.
+ * The inline styles of `message-text.tsx`, by the patterns it reads them
+ * with: a span holds no character of its markers and does not cross a line.
+ */
+const SPAN = /`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*/g;
+
+/**
+ * Whether `inner` can stand between a pair of `mark` as one span: it holds no
+ * character of the mark, as `message-text.tsx` requires. `*` and `**` may
+ * also enclose a span of the other, which is how the keys combine italic and
+ * bold (`***x***`).
+ */
+function plain(inner: string, mark: string): boolean {
+  if (!inner.includes(mark[0])) return true;
+  if (mark[0] !== '*') return false;
+  const other = mark === '*' ? '**' : '*';
+  const width = other.length;
+  return (
+    inner.length > 2 * width &&
+    inner.startsWith(other) &&
+    inner.endsWith(other) &&
+    !inner.slice(width, -width).includes('*')
+  );
+}
+
+/**
+ * Whether a span of `message-text.tsx` on the line around `at` starts or ends
+ * at `at`. Markers on both sides of a caret there are then the edges of
+ * neighbouring spans (`*a**b*`), not an empty pair.
+ */
+function spanEdge(value: string, at: number): boolean {
+  const lineStart = value.lastIndexOf('\n', at - 1) + 1;
+  const newline = value.indexOf('\n', at);
+  const line = value.slice(lineStart, newline < 0 ? value.length : newline);
+  for (const match of line.matchAll(SPAN)) {
+    const from = lineStart + match.index;
+    if (from === at || from + match[0].length === at) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether `[start, end)` of `value` is enclosed in `mark` as one span. A `*`
+ * enclosed in `**` on both sides is bold, not italic, unless a third `*`
+ * precedes it.
  */
 function enclosed(value: string, start: number, end: number, mark: string) {
   const width = mark.length;
   if (
     value.slice(start - width, start) !== mark ||
-    value.slice(end, end + width) !== mark
+    value.slice(end, end + width) !== mark ||
+    !plain(value.slice(start, end), mark)
   )
     return false;
   if (mark !== '*') return true;
@@ -40,15 +83,17 @@ function enclosed(value: string, start: number, end: number, mark: string) {
 }
 
 /**
- * Whether `core` starts and ends with `mark`. A `*` that starts `**` opens
- * bold, not italic, unless a third `*` follows it.
+ * Whether `core` is one span in `mark`: it starts and ends with the mark and
+ * the text between is {@link plain}. A line such as `**a** b **c**` holds two
+ * spans and is not wrapped, and `**a**` is bold, not italic.
  */
 function wrapped(core: string, mark: string): boolean {
+  const width = mark.length;
   return (
-    core.length > 2 * mark.length &&
+    core.length > 2 * width &&
     core.startsWith(mark) &&
     core.endsWith(mark) &&
-    !(mark === '*' && core.startsWith('**') && !core.startsWith('***'))
+    plain(core.slice(width, -width), mark)
   );
 }
 
@@ -60,12 +105,13 @@ const BLOCK_MARKER = /^(?:[-*] |\d+\. |> )/;
 
 /**
  * Wraps the selection in the format's markers, or removes them when the
- * selection is already wrapped in them; a caret between an empty pair
- * removes the pair. `message-text.tsx` reads an inline style within one line
- * only, so a selection across lines is handled line by line (see
- * {@link linesEdit}). Whitespace at the edges of the selection stays outside
- * the markers, as it belongs to the surrounding text. A code block puts the
- * selected lines, whole, between ``` fence lines.
+ * selection is already one span in them; a caret between an empty pair
+ * removes the pair, but a caret between the markers of neighbouring spans
+ * does not. `message-text.tsx` reads an inline style within one line only, so
+ * a selection across lines is handled line by line (see {@link linesEdit}).
+ * Whitespace at the edges of the selection stays outside the markers, as it
+ * belongs to the surrounding text. A code block puts the selected lines,
+ * whole, between ``` fence lines.
  */
 export function formatEdit(
   format: ComposerFormat,
@@ -84,7 +130,10 @@ export function formatEdit(
     end - (selected.length - selected.trimEnd().length),
   );
   const core = value.slice(coreStart, coreEnd);
-  if (enclosed(value, coreStart, coreEnd, mark))
+  if (
+    enclosed(value, coreStart, coreEnd, mark) &&
+    (coreStart < coreEnd || !spanEdge(value, coreStart))
+  )
     return {
       from: coreStart - width,
       to: coreEnd + width,
@@ -119,9 +168,9 @@ export function formatEdit(
  * non-blank line is wrapped after any list item or quote marker that starts
  * it, so `- one` becomes `- **one**` and stays a list item. Fence lines and
  * the lines between them are left as they are, since a code block shows its
- * text as typed. When every line the format applies to is already wrapped in
- * the markers, they are removed from each line instead; otherwise lines that
- * are already wrapped are not wrapped again.
+ * text as typed. When every line the format applies to is already one span
+ * in the markers, they are removed from each line instead; otherwise lines
+ * that are already one span are not wrapped again.
  */
 function linesEdit(
   value: string,

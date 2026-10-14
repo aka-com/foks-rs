@@ -70,6 +70,43 @@ test('inline formats wrap the selection and remove markers they find around it',
   assert.equal(format('italic', '**[]**'), '***[]***');
 });
 
+test('a line that starts and ends with separate spans is not one span', () => {
+  // `message-text.tsx` reads `**Name:**` and `**(req)**` as two spans, so
+  // the key wraps the line rather than stripping its outer markers.
+  assert.equal(
+    format('bold', '[**Name:** a **(req)**]'),
+    '**[**Name:** a **(req)**]**',
+  );
+  assert.equal(format('italic', '[*a* b *c*]'), '*[*a* b *c*]*');
+  assert.equal(format('code', '[`a` b `c`]'), '`[`a` b `c`]`');
+  // Nor is a selection between the inner markers of two spans enclosed.
+  assert.equal(format('bold', '**[a** b **c]**'), '****[a** b **c]****');
+  // Bold and italic still combine and come apart.
+  assert.equal(format('italic', '[***word***]'), '[**word**]');
+  assert.equal(format('bold', '**[*word*]**'), '[*word*]');
+  // Across lines, such lines are wrapped, not stripped.
+  const edit = formatEdit(
+    'bold',
+    '**Name:** a **(req)**\n**Kind:** b **(opt)**',
+    0,
+    43,
+  );
+  assert.equal(edit.removed, false);
+  assert.equal(
+    format('bold', '[**Name:** a **(req)**\n**Kind:** b **(opt)**]'),
+    '[****Name:** a **(req)****\n****Kind:** b **(opt)****]',
+  );
+});
+
+test('a caret between neighbouring spans is not an empty pair', () => {
+  assert.equal(format('italic', '*a*[]*b*'), '*a**[]**b*');
+  assert.equal(format('code', '`a`[]`b`'), '`a``[]``b`');
+  assert.equal(format('bold', '**a**[]**b**'), '**a****[]****b**');
+  // An empty pair typed right after a span is still removed.
+  assert.equal(format('italic', '*a**[]*'), '*a*[]');
+  assert.equal(format('bold', '**a****[]**'), '**a**[]');
+});
+
 test('inline formats wrap each non-blank line of a selection across lines', () => {
   assert.equal(
     format('bold', '[first\n\n  second]'),
