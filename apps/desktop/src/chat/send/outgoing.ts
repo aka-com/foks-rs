@@ -207,6 +207,29 @@ export function unsent(message: OutgoingMessage): boolean {
   );
 }
 
+const encoder = new TextEncoder();
+/** Each record's text and its UTF-8 length, measured once per text. */
+const measured = new WeakMap<
+  OutgoingMessage,
+  { text: string; bytes: number }
+>();
+
+/**
+ * The UTF-8 length of the message's text, as the send service's retention
+ * bound counts it. The length is kept with the record until its text
+ * changes, so a bound check over every retained message encodes only texts
+ * it has not measured before.
+ */
+export function outgoingBytes(message: OutgoingMessage): number {
+  const text = message.text;
+  if (!text) return 0;
+  const known = measured.get(message);
+  if (known?.text === text) return known.bytes;
+  const bytes = encoder.encode(text).length;
+  measured.set(message, { text, bytes });
+  return bytes;
+}
+
 export function deliveryOf(op: ChatOperation): Delivery {
   return terminal(op)
     ? { stage: 'terminal', op }

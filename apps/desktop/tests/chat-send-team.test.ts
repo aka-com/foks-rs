@@ -45,6 +45,7 @@ test('retiring a team discards its messages and everything it learned', () => {
     insert_time: '0',
     content: { kind: 'text', text: 'hello' },
     channel: CHANNEL,
+    bytes: 5,
   });
   t.loaded.add(CHANNEL);
   t.loadErrors.set(CHANNEL, 'Load failed');

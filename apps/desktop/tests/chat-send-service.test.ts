@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import {
   CHAT_QUEUE_ROWS,
   ChatSendService,
@@ -533,6 +533,85 @@ test('all drafts share one byte quota, and a refused draft keeps the last text',
     assert.equal(h.service.draft('team:eng', 'third').length, 1000);
   } finally {
     h.service.stop();
+  }
+});
+
+/**
+ * Counts how often any TextEncoder encodes one of `texts`, until `restore`.
+ * The byte bounds measure UTF-8 through TextEncoder, so this shows which
+ * texts a bound check measured again.
+ */
+function countEncodes(texts: readonly string[]) {
+  const encode = mock.method(TextEncoder.prototype, 'encode');
+  return {
+    count: () =>
+      encode.mock.calls.filter((call) =>
+        texts.includes(call.arguments[0] ?? ''),
+      ).length,
+    restore: () => encode.mock.restore(),
+  };
+}
+
+test('the retention bound measures each retained message once, not on every later send', async () => {
+  const gate = deferred();
+  const h = await setup(async (action, run) => {
+    if (action.action === 'submit-message') await gate.promise;
+    return run();
+  });
+  const first = 'in flight '.repeat(20);
+  const encodes = countEncodes([first]);
+  const sending = h.service.submit('team:eng', h.channel, first);
+  try {
+    await settle();
+    await h.service.submit('team:eng', h.channel, 'queued 0');
+    await settle();
+    const measured = encodes.count();
+    // Each send checks the bound over every retained message; the first
+    // message's length was measured by an earlier check and is not again.
+    for (let count = 1; count <= 3; count++)
+      await h.service.submit('team:eng', h.channel, `queued ${count}`);
+    assert.equal(h.service.messages('team:eng', h.channel).length, 5);
+    assert.equal(encodes.count(), measured);
+  } finally {
+    encodes.restore();
+    gate.resolve();
+    h.service.stop();
+    await sending.catch(() => {});
+  }
+});
+
+test('history observed again is not measured again for the observation bound', async () => {
+  const gate = deferred();
+  const h = await setup(async (action, run) => {
+    if (action.action === 'submit-message') await gate.promise;
+    return run();
+  });
+  const sending = h.service.submit('team:eng', h.channel, 'in flight');
+  const texts = ['first row', 'second row', 'third row'];
+  const rows = texts.map((text, index) => ({
+    id: submissionId(),
+    sequence: String(index + 1),
+    sender: null,
+    send_time: String(index + 1),
+    insert_time: String(index + 1),
+    content: { kind: 'text' as const, text },
+  }));
+  const encodes = countEncodes(texts);
+  try {
+    await settle();
+    // A queued message has no operation yet, so the service keeps the
+    // channel's delivered rows to match it against later.
+    await h.service.submit('team:eng', h.channel, 'queued');
+    h.service.observeHistory('team:eng', h.channel, rows);
+    assert.equal(encodes.count(), texts.length);
+    h.service.observeHistory('team:eng', h.channel, rows);
+    h.service.observeHistory('team:eng', h.channel, rows.slice(1));
+    assert.equal(encodes.count(), texts.length);
+  } finally {
+    encodes.restore();
+    gate.resolve();
+    h.service.stop();
+    await sending.catch(() => {});
   }
 });
 

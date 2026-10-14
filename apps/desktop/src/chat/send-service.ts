@@ -46,6 +46,7 @@ import {
   operationOf,
   outcomeUnknown,
   outgoingActions,
+  outgoingBytes,
   preparationAmbiguous,
   running,
   terminal,
@@ -95,6 +96,9 @@ const problem = (message: string) => ({
   ambiguous: false,
   retryable: false,
 });
+/** The text an observation's byte length counts: none for a non-text row. */
+const observedText = (message: ChatMessage) =>
+  message.content.kind === 'text' ? message.content.text : '';
 
 export class ChatSendService {
   private snapshot?: AgentSnapshot;
@@ -568,16 +572,19 @@ export class ChatSendService {
     team.loading.set(channel, work);
     return work;
   }
+  /**
+   * Whether every team together can hold one more message with `text`. Each
+   * retained message's length is measured once (`outgoingBytes`), so a
+   * recovery that checks the bound for each operation body it reads does not
+   * encode every retained text again.
+   */
   private canRetain(text: string): boolean {
     const messages = [...this.teams.values()].flatMap((team) =>
       team.messages.filter((m) => !m.observed || intentHeld(m)),
     );
     return (
       messages.length < CHAT_PENDING_ROWS &&
-      messages.reduce(
-        (sum, m) => sum + new TextEncoder().encode(m.text ?? '').length,
-        0,
-      ) +
+      messages.reduce((sum, m) => sum + outgoingBytes(m), 0) +
         new TextEncoder().encode(text).length <=
         CHAT_HISTORY_BYTES
     );
@@ -1046,30 +1053,31 @@ export class ChatSendService {
     const ids = delivered(rows);
     const messages = rows.filter((m) => ids.has(m.id));
     if (team.messages.some((m) => m.channel === channel && !operationOf(m))) {
-      for (const message of messages)
+      // Each observation keeps its text's length, so a page that repeats
+      // rows already observed encodes none of them again.
+      for (const message of messages) {
+        const text = observedText(message);
+        const previous = team.observations.get(message.id);
         team.observations.set(message.id, {
           ...message,
           channel,
           content: { ...message.content },
+          bytes:
+            previous && observedText(previous) === text
+              ? previous.bytes
+              : new TextEncoder().encode(text).length,
         });
-      let bytes = [...team.observations.values()].reduce(
-        (sum, m) =>
-          sum +
-          (m.content.kind === 'text'
-            ? new TextEncoder().encode(m.content.text).length
-            : 0),
-        0,
-      );
-      for (const [id, message] of team.observations) {
+      }
+      let bytes = 0;
+      for (const observed of team.observations.values())
+        bytes += observed.bytes;
+      for (const [id, observed] of team.observations) {
         if (
           team.observations.size <= CHAT_PENDING_ROWS &&
           bytes <= CHAT_HISTORY_BYTES
         )
           break;
-        bytes -=
-          message.content.kind === 'text'
-            ? new TextEncoder().encode(message.content.text).length
-            : 0;
+        bytes -= observed.bytes;
         team.observations.delete(id);
       }
     }

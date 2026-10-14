@@ -20,7 +20,12 @@ export interface Team {
   epoch: number;
   blocked: boolean;
   operations: TrackedOperation[];
-  observations: Map<string, ChatMessage & { channel: string }>;
+  /**
+   * Delivered history rows of channels where a message has no operation
+   * yet, kept to match the operation once it is reported. Each row carries
+   * its channel and the UTF-8 length of its text.
+   */
+  observations: Map<string, ChatMessage & { channel: string; bytes: number }>;
   messages: OutgoingMessage[];
   loaded: Set<string>;
   loading: Map<string, Promise<void>>;
