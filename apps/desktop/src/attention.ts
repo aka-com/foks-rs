@@ -5,14 +5,15 @@
  * Nothing here reads the agent. The items restate, one entity at a time, the
  * same signals the rail's counts and dots summarise: a team's join requests,
  * the Devices reasons in `device-alert.ts`, the servers the Settings dot
- * answers for, and the notices only Settings › Account lists. Each item names
+ * answers for, and the notices only Settings › Account lists. They add the
+ * interrupted membership changes a team's own page bands. Each item names
  * the page that resolves it, so the list is a set of links and not a second
  * place to act. The checklist reads the device lists the shell preloads, the
  * app lock state the host reports and the catalog; a step whose fact has not
  * been read this session is left out rather than guessed.
  */
 
-import type { Location } from './location';
+import type { DevicesSheetIntent, Location } from './location';
 import type {
   AccountStore,
   AgentSnapshot,
@@ -29,6 +30,7 @@ import {
   settingsServerFlag,
   usernameOf,
 } from './model';
+import { teamRequestTotals } from './operation-queries';
 import type { TeamRequestCount } from './operation-queries';
 import type { recoveryPhraseTests } from './recovery-phrase-tests';
 import type { DeviceAlertSnapshot } from './screens/device-alert';
@@ -53,6 +55,11 @@ export interface AttentionFacts {
   snapshot: AgentSnapshot;
   /** The shared per-team request counts the Teams badge reads. */
   teamRequests: ReadonlyMap<StoreRef, TeamRequestCount>;
+  /**
+   * Each team's interrupted membership changes, from the journal a team's
+   * page reads (`usePendingMembershipCounts`).
+   */
+  pendingMembership: ReadonlyMap<StoreRef, number>;
   devices: DeviceAlertSnapshot;
   phraseTests: ReturnType<typeof recoveryPhraseTests>;
   /** The notices only Settings › Account lists (`unroutedNotices`). */
@@ -84,6 +91,7 @@ function accountOf(
 export function attentionItems({
   snapshot,
   teamRequests,
+  pendingMembership,
   devices,
   phraseTests,
   notices,
@@ -155,17 +163,33 @@ export function attentionItems({
     }
   }
   for (const store of snapshot.stores) {
-    if (store.kind !== 'team' || store.team_kind !== 'named') continue;
-    const count = teamRequests.get(store.id);
-    if (count === undefined) continue;
-    const total =
-      typeof count === 'string' ? Number.parseInt(count, 10) : count;
+    if (store.kind !== 'team') continue;
+    const count = pendingMembership.get(store.id);
+    if (!count) continue;
+    items.push({
+      id: `team-membership:${store.id}`,
+      source: 'teams',
+      // An interrupted change blocks every later membership change on the
+      // team until it is resumed.
+      severity: 'warning',
+      title: `${plural(count, 'incomplete membership change')} in ${store.name}`,
+      detail:
+        count === 1
+          ? 'It blocks other membership changes on this team.'
+          : 'They block other membership changes on this team.',
+      location: { kind: 'group-settings', ref: store.id },
+    });
+  }
+  for (const { store, total, truncated } of teamRequestTotals(
+    snapshot,
+    teamRequests,
+  )) {
     if (!total) continue;
     items.push({
       id: `team-requests:${store.id}`,
       source: 'teams',
       severity: 'info',
-      title: `${typeof count === 'string' ? 'At least ' : ''}${plural(total, 'request')} to join ${store.name}`,
+      title: `${truncated ? 'At least ' : ''}${plural(total, 'request')} to join ${store.name}`,
       location: { kind: 'group-settings', ref: store.id, tab: 'requests' },
     });
   }
@@ -196,6 +220,11 @@ export interface SetupStep {
   /** What the step protects or enables, or why it cannot be done here. */
   detail: string;
   done: boolean;
+  /**
+   * The step cannot be done on this computer. It is listed for its detail,
+   * and is not counted toward the checklist's progress or completion.
+   */
+  unavailable?: true;
   /** Where the step is done. Absent when nothing in the app can do it. */
   location?: Location;
 }
@@ -213,7 +242,8 @@ export interface SetupFacts {
  * The "Get set up" steps, in the order they are worth doing. A step is left
  * out while its fact is unknown: an account whose keys this session has not
  * read says nothing about its recovery phrase or its second key, the same
- * rule the Devices dot follows.
+ * rule the Devices dot follows. A per-account step is listed as open once one
+ * read account lacks it, and as done only once every account has been read.
  */
 export function setupChecklist({
   snapshot,
@@ -223,48 +253,58 @@ export function setupChecklist({
 }: SetupFacts): SetupStep[] {
   const steps: SetupStep[] = [];
   const accounts = accountStores(snapshot);
-  const addDevice = (store: AccountStore): Location => ({
-    kind: 'devices',
-    store: store.id,
-    open: 'add',
-  });
+  const devicesSheet = (
+    store: AccountStore,
+    open: DevicesSheetIntent,
+  ): Location => ({ kind: 'devices', store: store.id, open });
 
-  const phrased = accounts.filter((store) => devices.phraseLists.has(store.id));
-  if (phrased.length) {
-    const missing = phrased.find(
-      (store) => devices.phraseLists.get(store.id)?.length === 0,
-    );
+  const missingPhrase = accounts.find(
+    (store) => devices.phraseLists.get(store.id)?.length === 0,
+  );
+  if (
+    missingPhrase ||
+    (accounts.length &&
+      accounts.every((store) => devices.phraseLists.has(store.id)))
+  ) {
     steps.push({
       id: 'recovery-phrase',
       title: 'Create a recovery phrase',
-      detail: missing
-        ? `Restores ${accountLabel(snapshot, missing)} if every device is lost.`
+      detail: missingPhrase
+        ? `Restores ${accountLabel(snapshot, missingPhrase)} if every device is lost.`
         : 'Every account on this device has one.',
-      done: !missing,
-      ...(missing ? { location: addDevice(missing) } : {}),
+      done: !missingPhrase,
+      ...(missingPhrase
+        ? { location: devicesSheet(missingPhrase, 'phrase') }
+        : {}),
     });
   }
 
-  const counted = accounts.filter((store) => devices.keyCounts.has(store.id));
-  if (counted.length) {
-    const single = counted.find((store) => {
-      const count = devices.keyCounts.get(store.id);
-      return count !== undefined && count.devices < 2 && count.cards === 0;
-    });
+  // A hardware-card key is one of the account's devices, so a single key is
+  // one whether it is this computer's or a card's.
+  const singleKey = accounts.find((store) => {
+    const count = devices.keyCounts.get(store.id);
+    return count !== undefined && count.devices < 2;
+  });
+  if (
+    singleKey ||
+    (accounts.length &&
+      accounts.every((store) => devices.keyCounts.has(store.id)))
+  ) {
     steps.push({
       id: 'second-key',
       title: 'Add a second device or a hardware key',
-      detail: single
-        ? `${accountLabel(snapshot, single)} has one device. A second key keeps the account usable if it is lost.`
+      detail: singleKey
+        ? `${accountLabel(snapshot, singleKey)} has one key. Another device or a hardware key keeps the account usable if that key is lost.`
         : 'Every account on this device has a second key.',
-      done: !single,
-      ...(single ? { location: addDevice(single) } : {}),
+      done: !singleKey,
+      ...(singleKey ? { location: devicesSheet(singleKey, 'add') } : {}),
     });
   }
 
   if (appLock) {
     // Whether the lock is available depends on this computer's own sign-in
-    // set-up, which nothing in the app changes, so the step has no link.
+    // set-up, which nothing in the app changes, so the step has no link, and
+    // an unavailable lock is not an open step.
     steps.push({
       id: 'app-lock',
       title: 'App lock',
@@ -273,6 +313,7 @@ export function setupChecklist({
         : (appLock.unavailableReason ??
           'App lock is not available on this computer.'),
       done: appLock.available,
+      ...(appLock.available ? {} : { unavailable: true }),
     });
   }
 
@@ -285,7 +326,7 @@ export function setupChecklist({
       title: 'Save a password',
       detail: password
         ? 'A vault on this device holds a password.'
-        : 'Add a login or any secret value to a vault.',
+        : 'Add a password to a vault.',
       done: password,
       ...(password ? {} : { location: { kind: 'files' } }),
     });

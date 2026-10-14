@@ -73,9 +73,12 @@ export function AttentionControl({
     close();
     onNavigate(location);
   };
-  const done = checklist.filter((step) => step.done).length;
+  // A step this computer cannot do is listed and not counted, so it neither
+  // holds the checklist open nor counts toward its progress.
+  const counted = checklist.filter((step) => !step.unavailable);
+  const done = counted.filter((step) => step.done).length;
   const showChecklist =
-    !checklistHidden && checklist.length > 0 && done < checklist.length;
+    !checklistHidden && counted.length > 0 && done < counted.length;
   const label = attentionLabel(items.length);
   return (
     <>
@@ -149,7 +152,7 @@ export function AttentionControl({
                     Get set up
                   </h2>
                   <span className="attention-progress">
-                    {done} of {checklist.length} done
+                    {done} of {counted.length} done
                   </span>
                   <button
                     type="button"
@@ -171,13 +174,19 @@ export function AttentionControl({
                       <>
                         {step.done ? (
                           <Icon name="circleCheck" className="step-mark" />
+                        ) : step.unavailable ? (
+                          <Icon name="info" className="step-mark unavailable" />
                         ) : (
                           <span className="step-mark todo" aria-hidden="true" />
                         )}
                         <span className="t">
                           <b>
                             <span className="attention-state">
-                              {step.done ? 'Done: ' : 'To do: '}
+                              {step.done
+                                ? 'Done: '
+                                : step.unavailable
+                                  ? 'Not available: '
+                                  : 'To do: '}
                             </span>
                             {step.title}
                           </b>
@@ -198,7 +207,7 @@ export function AttentionControl({
                           </button>
                         ) : (
                           <div
-                            className={`attention-row step${step.done ? ' done' : ''}`}
+                            className={`attention-row step${step.done || step.unavailable ? ' done' : ''}`}
                           >
                             {body}
                           </div>
@@ -231,6 +240,16 @@ export function AttentionControl({
                 <ol className="attention-recent">
                   {[...recent].reverse().map((record) => (
                     <li key={record.id} className={record.tone}>
+                      {/* Colour alone does not mark a warning: the row has the
+                          alert icon and a spoken prefix, unless the message
+                          opens with its own ⚠. */}
+                      {record.tone === 'warning' &&
+                      !record.message.trimStart().startsWith('⚠') ? (
+                        <>
+                          <Icon name="alert" className="tone" />
+                          <span className="attention-state">Warning: </span>
+                        </>
+                      ) : null}
                       <span className="t">{record.message}</span>
                       <time dateTime={new Date(record.shownAt).toISOString()}>
                         {shownAt(record)}

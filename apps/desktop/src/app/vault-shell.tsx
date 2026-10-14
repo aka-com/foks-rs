@@ -68,7 +68,11 @@ import {
 import { copyAndAnnounce, openWebsiteAndAnnounce } from '../screens/item-copy';
 import { exportedPasswords } from '../screens/export-passwords-sheet';
 import { itemActionProblem } from '../screens/store-access';
-import { teamRequestsBadge, useTeamRequestCounts } from '../operation-queries';
+import {
+  teamRequestsBadge,
+  usePendingMembershipCounts,
+  useTeamRequestCounts,
+} from '../operation-queries';
 import {
   initialWriteWorkflow,
   writeBlockReason,
@@ -487,6 +491,14 @@ export function VaultShell({
     commandError,
     deviceCache.repository,
   );
+  // The attention centre also lists each team's interrupted membership
+  // changes, from the one journal row per profile a team's page reads.
+  const pendingMembership = usePendingMembershipCounts(
+    bridge,
+    shown,
+    commandError,
+    deviceCache.repository,
+  );
   const deviceAlerts = useSyncExternalStore(
     deviceAlertRegistry(bridge).subscribe,
     deviceAlertRegistry(bridge).getSnapshot,
@@ -519,30 +531,28 @@ export function VaultShell({
       live = false;
     };
   }, [bridge]);
-  const attention = useMemo(
-    () => ({
-      items: attentionItems({
-        snapshot: shown,
-        teamRequests: teamRequestCounts,
-        devices: deviceAlerts,
-        phraseTests,
-        notices: unroutedNotices(shown),
-      }),
-      checklist: setupChecklist({
+  // Whether a recovery phrase is due for a test depends on the time. The
+  // Devices dot and the bell's list read the same clock on the same render,
+  // so a snooze that ends or a test that falls due moves both at once.
+  const alertsAt = Date.now();
+  const attentionList = attentionItems({
+    snapshot: shown,
+    teamRequests: teamRequestCounts,
+    pendingMembership,
+    devices: deviceAlerts,
+    phraseTests,
+    notices: unroutedNotices(shown),
+    now: alertsAt,
+  });
+  const checklist = useMemo(
+    () =>
+      setupChecklist({
         snapshot: shown,
         devices: deviceAlerts,
         ...(appLock ? { appLock } : {}),
         catalogReady: agentCatalogReady,
       }),
-    }),
-    [
-      agentCatalogReady,
-      appLock,
-      deviceAlerts,
-      phraseTests,
-      shown,
-      teamRequestCounts,
-    ],
+    [agentCatalogReady, appLock, deviceAlerts, shown],
   );
   const appRef = useRef<HTMLDivElement>(null);
   const portalRoot = useMemo(
@@ -868,6 +878,7 @@ export function VaultShell({
                 shown,
                 deviceAlerts,
                 phraseTests,
+                alertsAt,
               )}
             />
           ) : (
@@ -882,6 +893,7 @@ export function VaultShell({
                   shown,
                   deviceAlerts,
                   phraseTests,
+                  alertsAt,
                 )}
                 settingsAlert={settingsAlertSummary(shown)}
                 onTabNavigate={(tab) => locations.navigateTab(tab)}
@@ -980,7 +992,8 @@ export function VaultShell({
                     })
                   }
                   attention={{
-                    ...attention,
+                    items: attentionList,
+                    checklist,
                     recent: toastHistory,
                     onNavigate: (location) => locations.navigate(location),
                     onClearRecent: () => toasts.clearHistory(),

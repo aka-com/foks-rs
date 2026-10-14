@@ -87,10 +87,7 @@ test('the bell lists each signal, links it to its page, and keeps the setup step
   await ui.waitFor(() => {
     const facts = deviceAlertRegistry(bridge).getSnapshot();
     assert.equal(facts.phraseLists.get('acct:work')?.length, 0);
-    assert.deepEqual(facts.keyCounts.get('acct:work'), {
-      devices: 1,
-      cards: 0,
-    });
+    assert.deepEqual(facts.keyCounts.get('acct:work'), { devices: 1 });
   });
   await ui.waitFor(() => {
     const bell = document.querySelector('.attention-trigger');
@@ -107,13 +104,15 @@ test('the bell lists each signal, links it to its page, and keeps the setup step
   );
   assert.ok(
     rows.some((text) =>
-      /To do: Add a second device or a hardware key.*vitalik on Acme has one device/.test(
+      /To do: Add a second device or a hardware key.*vitalik on Acme has one key/.test(
         text,
       ),
     ),
   );
   assert.ok(
-    rows.some((text) => /To do: App lock.*polkit is not installed/.test(text)),
+    rows.some((text) =>
+      /Not available: App lock.*polkit is not installed/.test(text),
+    ),
   );
   assert.equal(
     open.querySelector('.attention-recent'),
@@ -163,5 +162,186 @@ test('the bell lists each signal, links it to its page, and keeps the setup step
   assert.equal(
     window.localStorage.getItem('onboarding.dismissed.setup-checklist'),
     'true',
+  );
+});
+
+test('the recovery-phrase step opens Create recovery phrase on the account that lacks one', async () => {
+  Object.defineProperty(document, 'hidden', {
+    configurable: true,
+    value: false,
+  });
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  ui.render(createElement(App, { bridge: mockBridge(FIXTURE) }));
+  const step = await ui.waitFor(async () => {
+    const found = [
+      ...(await openBell()).querySelectorAll<HTMLButtonElement>(
+        'button.attention-row.step',
+      ),
+    ].find((row) => /Create a recovery phrase/.test(row.textContent ?? ''));
+    assert.ok(found);
+    return found;
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(step);
+  });
+  await ui.screen.findByRole('dialog', { name: 'Create recovery phrase' });
+  assert.match(decodeURIComponent(window.location.search), /acct:work/);
+  assert.doesNotMatch(window.location.search, /open=/);
+});
+
+test('a lock that holds clears the recent messages', async () => {
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { ToastController } = (await vite.ssrLoadModule(
+    '/kit/toasts.tsx',
+  )) as typeof import('../kit/toasts');
+  // The lock also unmounts the shell and its controller, so the controller
+  // the shell connected is held here to read its history afterwards.
+  const controllers = new Set<InstanceType<typeof ToastController>>();
+  // Restored below, and only ever called with a controller as `this`.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const connect = ToastController.prototype.connect;
+  ToastController.prototype.connect = function (listener) {
+    controllers.add(this);
+    return connect.call(this, listener);
+  };
+  try {
+    const bridge: Bridge = {
+      ...mockBridge(FIXTURE),
+      lockApp: async () => ({
+        locked: true,
+        available: true,
+        mechanism: 'password',
+      }),
+    };
+    ui.render(createElement(App, { bridge }));
+    await ui.waitFor(() =>
+      assert.ok(document.querySelector('.attention-trigger')),
+    );
+    assert.equal(controllers.size, 1);
+    const [toasts] = controllers;
+    await ui.act(async () => {
+      toasts.show('Saved');
+    });
+    const open = await openBell();
+    assert.deepEqual(
+      [...open.querySelectorAll('.attention-recent .t')].map(
+        (node) => node.textContent,
+      ),
+      ['Saved'],
+    );
+    await ui.act(async () => {
+      ui.fireEvent.keyDown(document, { key: 'Escape' });
+    });
+    await ui.act(async () => {
+      ui.fireEvent.click(document.querySelector('.rail-foot .who')!);
+    });
+    await ui.act(async () => {
+      ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Lock' }));
+    });
+    await ui.screen.findByRole('button', { name: 'Unlock' });
+    assert.deepEqual(toasts.getHistory(), []);
+  } finally {
+    ToastController.prototype.connect = connect;
+  }
+});
+
+test('an interrupted membership change is read once per profile and links to its team', async () => {
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const reads = new Map<string, number>();
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    listPendingOperations: async (profile) => {
+      reads.set(profile, (reads.get(profile) ?? 0) + 1);
+      return profile === 'acme'
+        ? [
+            { kind: 'team-member-edit', alias: 'engineering' },
+            // Another kind of journalled work is not a membership change.
+            { kind: 'team-rekey', alias: 'engineering' },
+          ]
+        : [];
+    },
+  };
+  ui.render(createElement(App, { bridge }));
+  const row = await ui.waitFor(async () => {
+    const found = [
+      ...(await openBell()).querySelectorAll<HTMLButtonElement>(
+        'button.attention-row',
+      ),
+    ].find((entry) =>
+      /1 incomplete membership change in Engineering/.test(
+        entry.textContent ?? '',
+      ),
+    );
+    assert.ok(found);
+    return found;
+  });
+  assert.equal(reads.get('acme'), 1);
+  await ui.act(async () => {
+    ui.fireEvent.click(row);
+  });
+  assert.match(decodeURIComponent(window.location.search), /team:eng/);
+});
+
+test('a warning in Recent is marked by more than its colour', async () => {
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const { AttentionControl } = (await vite.ssrLoadModule(
+    '/src/shell/attention-centre.tsx',
+  )) as typeof import('../src/shell/attention-centre');
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
+  ui.render(
+    createElement(OverlayProvider, {
+      backgroundRef: { current: null },
+      portalRoot,
+      children: createElement(AttentionControl, {
+        items: [],
+        checklist: [],
+        recent: [
+          { id: 1, message: 'Saved', tone: 'info', shownAt: 0 },
+          { id: 2, message: 'Sync stopped', tone: 'warning', shownAt: 0 },
+          { id: 3, message: '⚠ Restore failed', tone: 'warning', shownAt: 0 },
+        ],
+        onNavigate: () => undefined,
+      }),
+    }),
+  );
+  const open = await openBell();
+  // Newest first; a message that opens with ⚠ already carries its mark.
+  assert.deepEqual(
+    [...open.querySelectorAll('.attention-recent li')].map((entry) => [
+      entry.textContent?.replace(/\d\d:\d\d.*$/, ''),
+      entry.querySelector('.ic') !== null,
+    ]),
+    [
+      ['⚠ Restore failed', false],
+      ['Warning: Sync stopped', true],
+      ['Saved', false],
+    ],
   );
 });

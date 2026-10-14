@@ -87,12 +87,16 @@ export const TEAMS_SHEET_INTENTS: readonly TeamsSheetIntent[] = [
 /**
  * The sheet an address asks the Devices page to open when it arrives: `add`
  * is the Add a device chooser, which the ⌘K palette's Actions open from any
- * page.
+ * page; `phrase` is Create a recovery phrase, which the attention centre's
+ * setup step opens.
  */
-export type DevicesSheetIntent = 'add';
+export type DevicesSheetIntent = 'add' | 'phrase';
 
 /** The intents a Devices `?open=` value may name, for decoding an address. */
-export const DEVICES_SHEET_INTENTS: readonly DevicesSheetIntent[] = ['add'];
+export const DEVICES_SHEET_INTENTS: readonly DevicesSheetIntent[] = [
+  'add',
+  'phrase',
+];
 
 /** A step in the first-run state machine. */
 export type FirstRunStep = string;

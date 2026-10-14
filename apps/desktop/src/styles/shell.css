@@ -273,12 +273,14 @@ button.attention-row:focus-visible{outline:2px solid var(--accent-border);outlin
 .attention-row .go{flex:none;align-self:center;font-size:12px;color:var(--faint)}
 .attention-row .step-mark{flex:none;width:15px;height:15px;margin-top:1px;font-size:15px;color:var(--ok-solid)}
 .attention-row .step-mark.todo{box-sizing:border-box;border:1.5px solid var(--faint);border-radius:50%}
+.attention-row .step-mark.unavailable{color:var(--faint)}
 .attention-row.done .t b{color:var(--muted);font-weight:500}
 .attention-state{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .attention-recent{list-style:none;margin:0;padding:0 6px}
 .attention-recent li{display:flex;align-items:baseline;gap:10px;padding:4px 0;color:var(--ink-3)}
 .attention-recent li+li{border-top:1px solid var(--line-soft)}
 .attention-recent li.warning{color:var(--amber-ink)}
+.attention-recent .tone{flex:none;align-self:center;font-size:13px}
 .attention-recent .t{flex:1;min-width:0;overflow-wrap:anywhere}
 .attention-recent time{flex:none;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
 .attention-empty{margin:0;padding:4px 6px 6px;color:var(--muted)}

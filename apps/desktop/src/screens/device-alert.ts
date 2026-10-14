@@ -10,7 +10,6 @@
 import type { AccountDevice, BackupEnrollment, Bridge } from '../bridge';
 import type { AgentSnapshot, StoreRef } from '../model';
 import { accountStores } from '../model';
-import { deviceIsCard } from './device-model';
 import {
   recoveryPhraseTestDue,
   recoveryPhraseTestStatus,
@@ -25,17 +24,16 @@ export interface DeviceAlertSnapshot {
   phraseLists: ReadonlyMap<StoreRef, readonly BackupEnrollment[]>;
   /**
    * Each account's authenticated keys, as the keys list answered: how many
-   * there are, and how many of them are keys on a hardware card. An account
-   * missing from the map has not had its keys read this session.
+   * there are, counting keys on a hardware card. An account missing from the
+   * map has not had its keys read this session.
    */
   keyCounts: ReadonlyMap<StoreRef, AccountKeyCount>;
   offers: ReadonlySet<StoreRef>;
 }
 
-/** How many authenticated keys an account has, and how many are on a card. */
+/** How many authenticated keys an account has, hardware-card keys included. */
 export interface AccountKeyCount {
   devices: number;
-  cards: number;
 }
 
 const EMPTY: DeviceAlertSnapshot = {
@@ -93,21 +91,13 @@ export class DeviceAlertRegistry {
 
   /**
    * Records how many authenticated keys the keys list answered for an
-   * account, so a single-device account can be told apart from one with a
-   * second device or a hardware key.
+   * account, so an account with a single key can be told apart from one with
+   * a second device or a hardware key.
    */
   reportAccountKeys(store: StoreRef, devices: readonly AccountDevice[]): void {
-    const count: AccountKeyCount = {
-      devices: devices.length,
-      cards: devices.filter(deviceIsCard).length,
-    };
+    const count: AccountKeyCount = { devices: devices.length };
     const listed = this.snapshot.keyCounts.get(store);
-    if (
-      listed !== undefined &&
-      listed.devices === count.devices &&
-      listed.cards === count.cards
-    )
-      return;
+    if (listed !== undefined && listed.devices === count.devices) return;
     const keyCounts = new Map(this.snapshot.keyCounts);
     keyCounts.set(store, count);
     this.snapshot = { ...this.snapshot, keyCounts };

@@ -540,17 +540,26 @@ topbar.
 
 Left of the refresh is the attention bell (`shell/attention-centre.tsx`), with
 a count of the items that need the reader. Its popover has three sections,
-built by `src/attention.ts` from facts the shell already holds; nothing in it
-reads the agent. "Needs attention" restates the rail's signals one entity at a
-time, warnings first: an unverified server or a lapsed check-in, an account
-with no recovery phrase, an open pairing offer, a recovery phrase due for a
-test, a team's join requests and the notices only Settings › Account lists.
-Each row opens the page that resolves it. "Get set up" lists the steps still
-open after first run: a recovery phrase and a second device or hardware key
-for each account (from the device lists the shell preloads), whether the app
+built by `src/attention.ts` from facts the shell already holds; the model
+itself reads nothing from the agent. "Needs attention" restates the rail's
+signals one entity at a time, warnings first: an unverified server or a lapsed
+check-in, an account with no recovery phrase, an open pairing offer, a
+recovery phrase due for a test, a team's join requests and the notices only
+Settings › Account lists. It adds each team's interrupted membership changes,
+which block later membership changes on that team; the shell reads them from
+the same cached journal row a team's page reads, once per server profile that
+holds a team (`list_pending_operations`). Each row opens the page that resolves
+it. "Get set up" lists the steps still open after first run: a recovery phrase
+and a second device or hardware key for each account (from the device lists
+the shell preloads; a hardware-card key counts as a device), whether the app
 lock is available on this computer (`app_lock_state`), a first password and a
-team. A step whose fact has not been read this session is left out. The
-checklist hides once every step is done, or when the reader hides it; Settings
+team. A step whose fact has not been read this session is left out; a
+per-account step is open as soon as one account lacks it, and done only once
+every account has been read. The recovery-phrase step opens Create recovery
+phrase on Devices (`open: 'phrase'`), the second-key step the Add a device
+chooser. An app lock this computer cannot provide is listed with its reason
+and is not counted, since nothing in the app can complete it. The checklist
+hides once every counted step is done, or when the reader hides it; Settings
 › Preferences › Onboarding tips shows it again (the
 `onboarding.dismissed.setup-checklist` `localStorage` key). "Recent" lists the
 last 20 toast messages, newest first, from the shell's `ToastController`:

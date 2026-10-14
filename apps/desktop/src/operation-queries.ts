@@ -7,7 +7,7 @@ import {
   normalizeCommandError,
 } from './bridge';
 import type { Bridge, PendingOperation } from './bridge';
-import { plural } from './model';
+import { plural, storeOperationAvailability } from './model';
 import type { AgentSnapshot, StoreRef, TeamStore } from './model';
 import { INVITATION_ACTIVITY } from './invitation-activity';
 import type { InvitationActivityDetail } from './invitation-activity';
@@ -267,6 +267,33 @@ export function useTeamRequestCounts(
   );
 }
 
+/** One named team's request count, as `teamRequestTotals` reads it. */
+export interface TeamRequestTotal {
+  store: TeamStore;
+  total: number;
+  /** The server may hold more than `total`. */
+  truncated: boolean;
+}
+
+/**
+ * Each named team's request count as a number, and whether the server may
+ * hold more: the rows the Teams badge sums and the attention centre lists one
+ * by one. A team whose count is not known yet is left out.
+ */
+export function teamRequestTotals(
+  snapshot: AgentSnapshot,
+  counts: ReadonlyMap<StoreRef, TeamRequestCount>,
+): TeamRequestTotal[] {
+  return snapshot.stores.flatMap((store): TeamRequestTotal[] => {
+    if (store.kind !== 'team' || store.team_kind !== 'named') return [];
+    const count = counts.get(store.id);
+    if (count === undefined) return [];
+    return typeof count === 'string'
+      ? [{ store, total: Number.parseInt(count, 10), truncated: true }]
+      : [{ store, total: count, truncated: false }];
+  });
+}
+
 /**
  * The Teams tab's rail badge: the sum of every named team's request count,
  * in `railChatUnread`'s own shape. A team whose count is not known yet
@@ -278,17 +305,89 @@ export function teamRequestsBadge(
 ): { label: string; description: string } | null {
   let total = 0;
   let truncated = false;
-  for (const store of snapshot.stores) {
-    if (store.kind !== 'team' || store.team_kind !== 'named') continue;
-    const count = counts.get(store.id) ?? 0;
-    truncated ||= typeof count === 'string';
-    total += typeof count === 'string' ? Number.parseInt(count, 10) : count;
+  for (const entry of teamRequestTotals(snapshot, counts)) {
+    total += entry.total;
+    truncated ||= entry.truncated;
   }
   if (!total) return null;
   return {
     label: String(requestCount(total, truncated)),
     description: `${truncated ? 'At least ' : ''}${plural(total, 'request')} to join a team`,
   };
+}
+
+/**
+ * Whether a journalled operation is an interrupted membership change on the
+ * team with this alias: the rows that block its later membership writes
+ * until they are resumed.
+ */
+function blocksMembership(row: PendingOperation, alias: string): boolean {
+  return (
+    row.alias === alias &&
+    (row.kind === 'team-member-addition' || row.kind === 'team-member-edit')
+  );
+}
+
+/**
+ * How many interrupted membership changes each team holds, for the shell's
+ * attention centre. The journal is one row per server profile, the same
+ * cached row a team's page reads, so it is read once for each profile that
+ * holds a team whose membership can be changed now, and the page's resume
+ * and refresh move this count too. A team whose profile has not been read
+ * is left out; one with nothing interrupted is too.
+ */
+export function usePendingMembershipCounts(
+  bridge: Bridge,
+  snapshot: AgentSnapshot,
+  onError?: (error: unknown) => void,
+  /** As for `useTeamRequestCounts`: the repository a caller above the provider reads. */
+  repository?: MetadataRepository,
+): ReadonlyMap<StoreRef, number> {
+  const devices = useDeviceCache();
+  const shared = useMetadataRepository(
+    bridge,
+    repository ?? devices?.repository,
+  );
+  // The same condition a team's page reads its journal under.
+  const candidates = snapshot.stores.filter(
+    (store): store is TeamStore =>
+      store.kind === 'team' &&
+      storeOperationAvailability(snapshot, store, 'teams').available,
+  );
+  const signature = candidates.map((store) => store.id).join('|');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const teams = useMemo(() => candidates, [signature]);
+  const profiles = useMemo(
+    () => [...new Set(teams.map((store) => store.server))],
+    [teams],
+  );
+  const queries = useMemo(
+    () =>
+      profiles.map((profile) =>
+        pendingOperationsQuery(shared, bridge, profile),
+      ),
+    [profiles, shared, bridge],
+  );
+  const reportError = useCallback(
+    (error: unknown) => {
+      if (onError && reportableTeamRequestError(error)) onError(error);
+    },
+    [onError],
+  );
+  const states = useMetadataQueries(queries, { onError: reportError });
+  return useMemo(
+    () =>
+      new Map(
+        teams.flatMap((store) => {
+          const rows = states[profiles.indexOf(store.server)]?.data;
+          const count =
+            rows?.filter((row) => blocksMembership(row, store.alias)).length ??
+            0;
+          return count ? [[store.id, count] as const] : [];
+        }),
+      ),
+    [teams, profiles, states],
+  );
 }
 
 export function usePendingGroupOperations(
@@ -308,12 +407,9 @@ export function usePendingGroupOperations(
   const alias = store?.alias;
   const operations = useMemo(
     () =>
-      (state.data ?? []).filter(
-        (row) =>
-          row.alias === alias &&
-          (row.kind === 'team-member-addition' ||
-            row.kind === 'team-member-edit'),
-      ),
+      alias === undefined
+        ? []
+        : (state.data ?? []).filter((row) => blocksMembership(row, alias)),
     [alias, state.data],
   );
   const generation = useCallback(
