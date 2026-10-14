@@ -1,5 +1,6 @@
 import { ChatThread } from '../chat/chat-thread';
 import { ChatConversationProvider } from '../chat/conversation-provider';
+import { chatMentions } from '../chat/mentions';
 import { useComposerAutofocus } from '../chat/use-composer-autofocus';
 import { ChatAlerts, failureAlert, type ChatAlert } from '../chat/chat-alerts';
 import { PendingRow } from '../chat/pending-row';
@@ -160,6 +161,17 @@ export function ChatScreen({
     const names = partyNames(agentSnapshot, storeId);
     if (actor && ownName) names.set(actor, ownName);
     return names;
+  }, [agentSnapshot, storeId, actor, ownName]);
+  // The roster's usernames, and the reader's own from the account or, failing
+  // that, the roster.
+  const mentions = useMemo(() => {
+    const users = partiesOf(agentSnapshot, storeId).filter(
+      (party) => party.party_kind === 'user',
+    );
+    return chatMentions(
+      users.flatMap((party) => (party.username ? [party.username] : [])),
+      ownName ?? users.find((party) => party.party_id_hex === actor)?.username,
+    );
   }, [agentSnapshot, storeId, actor, ownName]);
   // The roster the team page already loads, read here rather than fetched
   // again. A team whose roster has not arrived yet has no parties on this
@@ -350,6 +362,7 @@ export function ChatScreen({
             actor={actor}
             scope={scope}
             senderNames={senderNames}
+            mentions={mentions}
             request={guardedRequest}
             refreshPending={guardedRefreshPending}
             markRead={guardedMarkRead}

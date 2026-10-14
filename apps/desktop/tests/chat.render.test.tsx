@@ -191,6 +191,39 @@ test('composer suppresses IME and repeated Enter, and renders hostile text safel
   assert.equal(ownMessage.querySelector('.chat-sender')?.textContent, 'You');
   assert.equal(ownMessage.querySelector('.chat-avatar')?.textContent, 'V');
 });
+test('@names on the team roster are drawn as mentions in history and in sent messages', async () => {
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        const reply = await base.chat(store, action, view);
+        if (action.action === 'history' && reply.result.kind === 'history')
+          reply.result.messages = reply.result.messages.map((message) => ({
+            ...message,
+            content: {
+              kind: 'text' as const,
+              text: 'Ask @vitalik or @priya.n, not @satoshi.',
+            },
+          }));
+        return reply;
+      },
+    }),
+    false,
+  );
+  const self = await ui.screen.findByText('@vitalik');
+  assert.equal(self.className, 'chat-mention self');
+  assert.equal(self.title, 'Mentions you');
+  assert.equal(ui.screen.getByText('@priya.n').className, 'chat-mention');
+  // satoshi has no Engineering membership, so the name stays text.
+  assert.match(self.parentElement?.textContent ?? '', /not @satoshi\.$/);
+  assert.equal(document.querySelectorAll('.chat-mention').length, 2);
+  const composer = ui.screen.getByRole('textbox', { name: 'Message' });
+  ui.fireEvent.change(composer, { target: { value: 'Thanks @sam.ortiz' } });
+  ui.fireEvent.keyDown(composer, { key: 'Enter' });
+  const sent = await ui.screen.findByText('@sam.ortiz');
+  assert.equal(sent.className, 'chat-mention');
+  assert.ok(sent.closest('.chat-outgoing'));
+});
 test('empty and whitespace-only messages are silent no-ops', async () => {
   let submissions = 0;
   await setup((base) => ({

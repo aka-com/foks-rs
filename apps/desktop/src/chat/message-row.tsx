@@ -92,7 +92,7 @@ export function HistoryRow({
 }: {
   row: Extract<ThreadRow, { kind: 'message' }>;
 }): ReactNode {
-  const { bridge } = useChatConversationContext();
+  const { bridge, mentions } = useChatConversationContext();
   const m = row.message;
   return (
     <MessageRow
@@ -106,7 +106,11 @@ export function HistoryRow({
       attributes={{ 'data-message': m.id, 'data-sequence': m.sequence }}
     >
       {m.content.kind === 'text' ? (
-        <MessageText text={m.content.text} actions={bridge} />
+        <MessageText
+          text={m.content.text}
+          actions={bridge}
+          mentions={mentions}
+        />
       ) : (
         <p className="chat-unsupported">
           {m.content.kind === 'oversized'

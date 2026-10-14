@@ -906,7 +906,24 @@ it, a hint line offers only the markup the thread renders (`**bold**`,
 `*italics*`, `` `code` ``, `> quote`, `- list`, `[label](https://…)`); mentions
 are not among them.
 
-A `[label](url)` link in a message carries its full URL as a tooltip, and unless
+`message-text.tsx` renders that subset without recursion: markup inside a
+token stays text. A bare `http://` or `https://` URL that does not continue a
+word is a link once trailing `.`, `,`, `;`, `:`, `!`, `?`, `'` and `"`, and a
+`)` or `]` that closes nothing opened in the URL, are left as text
+(`trimBareUrl`); it then passes `safeChatLink` and is drawn like a
+`[label](url)` link whose label is the URL text. One or more blank lines
+between blocks start a new paragraph (a 12px gap); single line breaks do not.
+Lists are indented inside the text column. A fenced code block is drawn on a
+surface with a copy button that appears while the block is hovered or holds
+focus; a block of more than 20 lines shows its first 12 and Show all N lines.
+An `@name` is drawn as a mention when the name, compared lower case with
+combining marks removed and `.` and `-` read as `_`, is a username on the
+team's roster, and as a highlighted mention when it is the reader's own
+(`mentions.ts`). This is styling of Basic text only: a mention raises no
+notification and is not counted, and mentions as a protocol feature remain
+deferred (ISSUES.md).
+
+A link in a message carries its full URL as a tooltip, and unless
 the label is the URL itself (up to the case of ASCII letters and a final `/`)
 and names no other host, it is followed by the destination host in parentheses,
 as `new URL(url).hostname` gives it, so an internationalized host appears in its

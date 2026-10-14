@@ -31,7 +31,7 @@ export function OutgoingRow({
   grouped?: boolean;
   avatarName: string;
 }) {
-  const { bridge, storeId } = useChatConversationContext();
+  const { bridge, storeId, mentions } = useChatConversationContext();
   const service = useChatSendService();
   const [error, setError] = useState('');
   const run = async (edit: boolean) => {
@@ -130,7 +130,7 @@ export function OutgoingRow({
       }
     >
       {message.text !== undefined && (
-        <MessageText text={message.text} actions={bridge} />
+        <MessageText text={message.text} actions={bridge} mentions={mentions} />
       )}
     </MessageRow>
   );

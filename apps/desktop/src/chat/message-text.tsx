@@ -6,6 +6,7 @@ import { Icon } from '../components/icon';
 import { SheetDialog } from '../components/sheet';
 import { ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useOptionalToast } from '/kit/toasts';
+import { mentionKey, type ChatMentions } from './mentions';
 
 /** Literal absolute HTTP(S) only; never decode entities into executable URLs. */
 export function safeChatLink(value: string): string | null {
@@ -27,31 +28,63 @@ export function safeChatLink(value: string): string | null {
 }
 
 type Actions = Pick<Bridge, 'copyText' | 'openChatLink'>;
-function Copy({
-  text,
-  label,
+
+// A fenced block of more than `LONG_CODE_LINES` lines is drawn with its first
+// `COLLAPSED_CODE_LINES` lines and a control that shows the rest, so one long
+// log neither fills the thread nor adds a second scroll region inside it.
+const LONG_CODE_LINES = 20;
+const COLLAPSED_CODE_LINES = 12;
+
+function CodeBlock({
+  code,
+  className,
   actions,
 }: {
-  text: string;
-  label: string;
+  code: string;
+  className?: string;
   actions: Actions;
 }) {
-  const [status, setStatus] = useState('');
+  const id = useId();
+  const [expanded, setExpanded] = useState(false);
+  const toasts = useOptionalToast();
+  const lines = code.split('\n');
+  const long = lines.length > LONG_CODE_LINES;
   return (
-    <>
-      <Button
-        size="sm"
+    <div className={className ? `chat-code ${className}` : 'chat-code'}>
+      <pre id={id}>
+        <code>
+          {long && !expanded
+            ? lines.slice(0, COLLAPSED_CODE_LINES).join('\n')
+            : code}
+        </code>
+      </pre>
+      <button
+        type="button"
+        className="chat-code-copy"
+        aria-label="Copy code"
+        title="Copy code"
         onClick={() => {
           void actions
-            .copyText(text)
-            .then(() => setStatus('Copied'))
-            .catch(() => setStatus('Could not copy'));
+            .copyText(code)
+            .then(() => toasts?.show('Code copied'))
+            .catch(() => toasts?.show('Could not copy', { tone: 'warning' }));
         }}
       >
-        {label}
-      </Button>
-      <span role="status">{status}</span>
-    </>
+        <Icon name="copy" />
+      </button>
+      {long && (
+        <button
+          type="button"
+          className="chat-code-more"
+          aria-controls={id}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          <Icon name="chevronDown" />
+          {expanded ? 'Show fewer lines' : `Show all ${lines.length} lines`}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -515,16 +548,52 @@ function Link({
   );
 }
 
-function inline(text: string, actions: Actions): ReactNode[] {
-  // Deliberately nonrecursive and bounded. Unsupported/nested syntax remains text.
+/**
+ * A bare URL without the punctuation that ends the sentence around it: any
+ * trailing `.`, `,`, `;`, `:`, `!`, `?`, `'` or `"`, and a trailing `)` or `]`
+ * that closes nothing the URL opened (`(see https://example.com/a_(b))` keeps
+ * the URL's own `)`). Linear in the URL's length.
+ */
+export function trimBareUrl(url: string): string {
+  let parens = 0,
+    brackets = 0;
+  for (const c of url)
+    if (c === '(') parens++;
+    else if (c === ')') parens--;
+    else if (c === '[') brackets++;
+    else if (c === ']') brackets--;
+  let end = url.length;
+  while (end > 0) {
+    const c = url[end - 1];
+    if (`.,;:!?'"`.includes(c)) end--;
+    else if (c === ')' && parens < 0) {
+      parens++;
+      end--;
+    } else if (c === ']' && brackets < 0) {
+      brackets++;
+      end--;
+    } else break;
+  }
+  return url.slice(0, end);
+}
+
+function inline(
+  text: string,
+  actions: Actions,
+  mentions: ChatMentions | undefined,
+): ReactNode[] {
+  // Deliberately nonrecursive and bounded. Unsupported/nested syntax remains
+  // text. A bare URL must not continue a word, and an `@name` must not
+  // continue a word, a name or an email address (`bob@example.com`).
   const parts: ReactNode[] = [];
   const pattern =
-    /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\))/g;
+    /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\)|(?<![\p{L}\p{N}])https?:\/\/[^\s<>]+|(?<![\p{L}\p{M}\p{N}_@.])@[\p{L}\p{N}][\p{L}\p{M}\p{N}._-]*)/giu;
   let last = 0;
-  for (const match of text.matchAll(pattern)) {
+  for (let match; (match = pattern.exec(text));) {
     if (parts.length >= 256) break;
     const token = match[0],
       at = match.index;
+    let used = token.length;
     parts.push(text.slice(last, at));
     if (token.startsWith('`'))
       parts.push(<code key={at}>{token.slice(1, -1)}</code>);
@@ -532,7 +601,7 @@ function inline(text: string, actions: Actions): ReactNode[] {
       parts.push(<strong key={at}>{token.slice(2, -2)}</strong>);
     else if (token.startsWith('*'))
       parts.push(<em key={at}>{token.slice(1, -1)}</em>);
-    else {
+    else if (token.startsWith('[')) {
       const split = token.indexOf('](');
       const url = safeChatLink(token.slice(split + 2, -1));
       parts.push(
@@ -547,8 +616,36 @@ function inline(text: string, actions: Actions): ReactNode[] {
           token
         ),
       );
+    } else if (token.startsWith('@')) {
+      // A name does not end in `.`, `_` or `-`; those end the sentence.
+      const name = token.slice(1).replace(/[._-]+$/u, '');
+      used = name.length + 1;
+      const key = mentionKey(name);
+      parts.push(
+        mentions?.members.has(key) ? (
+          key === mentions.self ? (
+            <span key={at} className="chat-mention self" title="Mentions you">
+              @{name}
+            </span>
+          ) : (
+            <span key={at} className="chat-mention">
+              @{name}
+            </span>
+          )
+        ) : (
+          token.slice(0, used)
+        ),
+      );
+    } else {
+      const bare = trimBareUrl(token);
+      used = bare.length;
+      const url = safeChatLink(bare);
+      parts.push(
+        url ? <Link key={at} url={url} label={bare} actions={actions} /> : bare,
+      );
     }
-    last = at + token.length;
+    last = at + used;
+    pattern.lastIndex = last;
   }
   parts.push(text.slice(last));
   return parts;
@@ -557,9 +654,12 @@ function inline(text: string, actions: Actions): ReactNode[] {
 export function MessageText({
   text,
   actions,
+  mentions,
 }: {
   text: string;
   actions: Actions;
+  /** The names an `@name` is drawn as a mention of; none without it. */
+  mentions?: ChatMentions;
 }) {
   const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(
     null,
@@ -568,25 +668,32 @@ export function MessageText({
   const lines = text.split('\n');
   const blocks: ReactNode[] = [];
   if (text.length <= 65536 && lines.length <= 512) {
+    // Set by blank lines between blocks: the next block is drawn after a
+    // paragraph gap. Blank lines before the first block draw nothing.
+    let gap = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+      const className = gap ? 'chat-gap' : undefined;
       if (line.startsWith('```')) {
         const start = i;
         const body: string[] = [];
         while (++i < lines.length && !lines[i].startsWith('```'))
           body.push(lines[i]);
         if (i === lines.length) {
-          blocks.push(<p key={start}>{lines.slice(start).join('\n')}</p>);
+          blocks.push(
+            <p key={start} className={className}>
+              {lines.slice(start).join('\n')}
+            </p>,
+          );
           break;
         }
-        const code = body.join('\n');
         blocks.push(
-          <div key={start}>
-            <pre>
-              <code>{code}</code>
-            </pre>
-            <Copy text={code} label="Copy code" actions={actions} />
-          </div>,
+          <CodeBlock
+            key={start}
+            className={className}
+            code={body.join('\n')}
+            actions={actions}
+          />,
         );
       } else if (/^[-*] /.test(line) || /^\d+\. /.test(line)) {
         const start = i,
@@ -595,19 +702,41 @@ export function MessageText({
         const marker = ordered ? /^\d+\. / : /^[-*] /;
         do {
           items.push(
-            <li key={i}>{inline(lines[i].replace(marker, ''), actions)}</li>,
+            <li key={i}>
+              {inline(lines[i].replace(marker, ''), actions, mentions)}
+            </li>,
           );
           i++;
         } while (i < lines.length && marker.test(lines[i]));
         i--;
         blocks.push(
-          ordered ? <ol key={start}>{items}</ol> : <ul key={start}>{items}</ul>,
+          ordered ? (
+            <ol key={start} className={className}>
+              {items}
+            </ol>
+          ) : (
+            <ul key={start} className={className}>
+              {items}
+            </ul>
+          ),
         );
       } else if (line.startsWith('> '))
         blocks.push(
-          <blockquote key={i}>{inline(line.slice(2), actions)}</blockquote>,
+          <blockquote key={i} className={className}>
+            {inline(line.slice(2), actions, mentions)}
+          </blockquote>,
         );
-      else if (line) blocks.push(<p key={i}>{inline(line, actions)}</p>);
+      else if (line)
+        blocks.push(
+          <p key={i} className={className}>
+            {inline(line, actions, mentions)}
+          </p>,
+        );
+      else {
+        gap = blocks.length > 0;
+        continue;
+      }
+      gap = false;
     }
   }
   return (

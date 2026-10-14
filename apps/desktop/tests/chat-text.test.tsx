@@ -8,6 +8,8 @@ let MessageText: typeof import('../src/chat/message-text').MessageText;
 let safeChatLink: typeof import('../src/chat/message-text').safeChatLink;
 let labelHosts: typeof import('../src/chat/message-text').labelHosts;
 let chatLinkDisplay: typeof import('../src/chat/message-text').chatLinkDisplay;
+let trimBareUrl: typeof import('../src/chat/message-text').trimBareUrl;
+let chatMentions: typeof import('../src/chat/mentions').chatMentions;
 let relativeMessageTime: typeof import('../src/chat/presentation').relativeMessageTime;
 let ToastProvider: typeof import('../kit/toasts').ToastProvider;
 let ToastController: typeof import('../kit/toasts').ToastController;
@@ -17,8 +19,9 @@ test.before(async () => {
     appType: 'custom',
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
-  ({ MessageText, safeChatLink, labelHosts, chatLinkDisplay } =
+  ({ MessageText, safeChatLink, labelHosts, chatLinkDisplay, trimBareUrl } =
     await vite.ssrLoadModule('/src/chat/message-text.tsx'));
+  ({ chatMentions } = await vite.ssrLoadModule('/src/chat/mentions.ts'));
   ({ relativeMessageTime } = await vite.ssrLoadModule(
     '/src/chat/presentation.ts',
   ));
@@ -32,11 +35,14 @@ const actions = {
   copyText: async () => ({ ok: true as const }),
   openChatLink: async () => ({ ok: true as const }),
 };
-const messageMarkup = (text: string): string =>
+const messageMarkup = (
+  text: string,
+  mentions?: ReturnType<typeof chatMentions>,
+): string =>
   renderToStaticMarkup(
     createElement(ToastProvider, {
       controller: new ToastController(),
-      children: createElement(MessageText, { text, actions }),
+      children: createElement(MessageText, { text, actions, mentions }),
     }),
   );
 test('Basic source renders safe bounded Markdown without HTML or image fetching', () => {
@@ -472,6 +478,131 @@ test('reading the hosts of a long label takes linear time', () => {
   const started = performance.now();
   messageMarkup(`[${'a.'.repeat(32000)}](https://evil.example/)`);
   assert.ok(performance.now() - started < 1000);
+});
+
+test('a bare URL is a link without the punctuation that ends its sentence', () => {
+  const html = messageMarkup(
+    'Notes: https://example.com/notes. See (https://example.com/a_(b)) and https://example.com/x?y=1),',
+  );
+  assert.match(
+    html,
+    /Notes: <a href="https:\/\/example\.com\/notes" title="https:\/\/example\.com\/notes" rel="noreferrer noopener"><bdi>https:\/\/example\.com\/notes<\/bdi><\/a>\. See \(<a href="https:\/\/example\.com\/a_\(b\)"/,
+  );
+  assert.match(
+    html,
+    /<bdi>https:\/\/example\.com\/a_\(b\)<\/bdi><\/a>\) and <a href="https:\/\/example\.com\/x\?y=1"/,
+  );
+  assert.match(html, /<bdi>https:\/\/example\.com\/x\?y=1<\/bdi><\/a>\),<\/p>/);
+  assert.doesNotMatch(html, /chat-link-host|chat-link-mismatch/);
+  assert.equal(
+    trimBareUrl('https://example.com/a]"!?'),
+    'https://example.com/a',
+  );
+  assert.equal(
+    trimBareUrl('https://example.com/[a]'),
+    'https://example.com/[a]',
+  );
+});
+
+test('a bare URL passes the same checks as a link destination', () => {
+  // safeChatLink rejects credentials, so the text stays inert.
+  const html = messageMarkup(
+    'https://user@evil.example/ x https://ex\u0430mple.com/ y https://evil.example/#@bank.example foohttps://example.com',
+  );
+  assert.doesNotMatch(html, /href="https:\/\/user@/);
+  assert.match(
+    html,
+    /^<div class="chat-message-text"><p>https:\/\/user@evil\.example\/ x <a/,
+  );
+  // An internationalized host is followed by the host it resolves to.
+  assert.match(
+    html,
+    /<bdi dir="ltr" aria-hidden="true" class="chat-link-host">\(xn--exmple-4nf\.com\)<\/bdi>/,
+  );
+  // A URL whose text names another host is marked like a disguised label.
+  assert.match(
+    html,
+    /<a href="https:\/\/evil\.example\/#@bank\.example" title="[^"]*" class="chat-link-mismatch"/,
+  );
+  // A scheme that continues a word does not start a link.
+  assert.match(html, /foohttps:\/\/example\.com<\/p>/);
+});
+
+test('bare-URL and mention scanning is linear in the text length', () => {
+  for (const text of [
+    `https://example.com/${')'.repeat(64000)}`,
+    `https://example.com/${'.'.repeat(64000)}`,
+    `@a${'.'.repeat(64000)}`,
+    '@a '.repeat(21000),
+  ]) {
+    const started = performance.now();
+    messageMarkup(text, chatMentions(['a.b'], 'a.b'));
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 1000, `${text.slice(0, 8)}… took ${elapsed} ms`);
+  }
+});
+
+test('blank lines separate paragraphs; single line breaks do not', () => {
+  assert.match(
+    messageMarkup('one\ntwo'),
+    /^<div class="chat-message-text"><p>one<\/p><p>two<\/p><\/div>/,
+  );
+  const html = messageMarkup(
+    '\n\none\n\n\ntwo\n\n- a\n- b\n\n> q\n\n```\nx\n```\n',
+  );
+  // Leading blank lines draw nothing; a run of blank lines is one gap.
+  assert.ok(
+    html.startsWith(
+      '<div class="chat-message-text"><p>one</p><p class="chat-gap">two</p>' +
+        '<ul class="chat-gap"><li>a</li><li>b</li></ul>' +
+        '<blockquote class="chat-gap">q</blockquote>' +
+        '<div class="chat-code chat-gap"><pre',
+    ),
+    html,
+  );
+});
+
+test('a code block has one copy button and collapses past twenty lines', () => {
+  const block = (n: number) =>
+    '```\n' +
+    Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n') +
+    '\n```';
+  const short = messageMarkup(block(20));
+  assert.match(
+    short,
+    /<button type="button" class="chat-code-copy" aria-label="Copy code" title="Copy code">/,
+  );
+  assert.doesNotMatch(short, /role="status"|chat-code-more/);
+  assert.match(short, /line 20<\/code>/);
+  const long = messageMarkup(block(21));
+  assert.match(long, /line 12<\/code><\/pre>/);
+  assert.doesNotMatch(long, /line 13/);
+  assert.match(
+    long,
+    /<button type="button" class="chat-code-more" aria-controls="([^"]+)" aria-expanded="false">.*Show all 21 lines<\/button>/,
+  );
+  const controls = /aria-controls="([^"]+)"/.exec(long)?.[1];
+  assert.ok(controls && long.includes(`<pre id="${controls}">`));
+});
+
+test('@names on the roster are drawn as mentions, the reader as a mention of them', () => {
+  const mentions = chatMentions(['satoshi', 'priya.n', 'łukasz'], 'satoshi');
+  const html = messageMarkup(
+    '@satoshi and @Priya.N. ask @nobody, mail bob@priya.n, @łukasz\n- @priya_n',
+    mentions,
+  );
+  assert.match(
+    html,
+    /<p><span class="chat-mention self" title="Mentions you">@satoshi<\/span> and <span class="chat-mention">@Priya\.N<\/span>\. ask @nobody, mail bob@priya\.n, <span class="chat-mention">@łukasz<\/span><\/p>/,
+  );
+  assert.match(html, /<li><span class="chat-mention">@priya_n<\/span><\/li>/);
+  // Without the roster, @names are text.
+  assert.doesNotMatch(messageMarkup('@satoshi'), /chat-mention/);
+  // A mention is text styling only: code and link labels keep their text.
+  assert.doesNotMatch(
+    messageMarkup('`@satoshi` [@satoshi](https://example.com/)', mentions),
+    /chat-mention/,
+  );
 });
 
 test('oversized line sets fall back to literal source', () => {

@@ -387,11 +387,13 @@ function OperationRow({
   row: Extract<ThreadRow, { kind: 'operation' }>;
   onChange: () => void;
 }): ReactNode {
-  const { bridge, storeId } = useChatConversationContext();
+  const { bridge, storeId, mentions } = useChatConversationContext();
   const op = row.operation;
   return (
     <article className="chat-message" data-operation={op.id}>
-      {op.text && <MessageText text={op.text} actions={bridge} />}
+      {op.text && (
+        <MessageText text={op.text} actions={bridge} mentions={mentions} />
+      )}
       <PendingRow
         storeId={storeId}
         operation={op}
