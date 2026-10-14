@@ -22,7 +22,7 @@ import {
   integrity,
   type ChatWorkPriority,
 } from './client';
-import { cancelled } from './errors';
+import { accessChanged, cancelled } from './errors';
 import { eventFromReply } from './conversation-events';
 import { delivered, reconcileOperations, observeMessages } from './operations';
 import type { TrackedOperation } from './operations';
@@ -798,14 +798,10 @@ export class ChatSendService {
                   (c) => c.id === action.channel && c.writable,
                 ))))
       )
-        throw {
-          code: 'access-changed',
-          message:
-            'Chat access changed. Saved work is kept until access returns.',
-          fatal: false,
-          ambiguous: phase === 'after',
-          retryable: phase === 'before',
-        };
+        throw accessChanged(
+          'Chat access changed. Saved work is kept until access returns.',
+          phase,
+        );
       if (this.snapshot?.agent.state !== 'ready') throw cancelled();
       if (
         channel &&
@@ -936,13 +932,10 @@ export class ChatSendService {
         // so closing the window no longer loses this submission.
         this.move(message, { type: 'saved', token });
         if (generation !== (this.generations.get(team.profile) ?? 0))
-          throw {
-            code: 'access-changed',
-            message: 'Chat access changed. Your saved message has been kept.',
-            fatal: false,
-            ambiguous: false,
-            retryable: true,
-          };
+          throw accessChanged(
+            'Chat access changed. Your saved message has been kept.',
+            'before',
+          );
         this.report(team, message, 'saved');
         // A submit whose reply was lost may have reached the agent, so every
         // later preparation of this submission only asks it to prepare.

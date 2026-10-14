@@ -625,6 +625,10 @@ export class ChatInboxService {
     if (error.code === 'catalog-required')
       this.requestCatalogRefresh(this.profileOf(id));
     if (recovery.kind === 'ignore') return true;
+    // A local guard's refusal says nothing about the agent's view of the
+    // team; only a local integrity failure quarantines.
+    if (error.origin === 'local' && recovery.kind !== 'quarantine')
+      return false;
     if (recovery.scope === 'channel' && channel) {
       this.blockChannel(id, channel);
       return true;

@@ -846,7 +846,11 @@ way `useChatConversation` guards a write: the availability clock and the
 server's access generation are checked before and after each one — off the
 snapshot, the clock and the generations the shell holds now, read through refs
 rather than the ones the request started with, so a check-in that lapses or an
-access generation that moves mid-request is seen — and a reply under a scope
+access generation that moves mid-request is seen. A refusal by that check is
+the local `access-changed` error the send service also raises, not the agent's
+`chat-access-denied`, so the inbox does not mark the team unavailable for it; a
+refusal before the preparation has left this Mac withdraws the submission and
+leaves its fields in the sheet. A reply under a scope
 other than the one the service holds for the team quarantines the account rather
 than being trusted. The preparation is retired only by a settled
 `attempt` — until then Recover re-issues that same operation, so an `attempt`

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Bridge } from '../src/bridge';
+import { commandRecovery, normalizeCommandError } from '../src/bridge';
 import type {
   ChatAction,
   ChatOperation,
@@ -63,6 +64,7 @@ async function setup(
   const actions: ChatAction[] = [];
   const blocked: string[] = [];
   const invalidated: string[] = [];
+  const handled: unknown[] = [];
   const inbox = new Map<string, TeamInbox>([
     [
       store.id,
@@ -114,6 +116,7 @@ async function setup(
     {
       getSnapshot: () => inbox,
       handleError: (id, cause) => {
+        handled.push(cause);
         if ((cause as { code?: string }).code !== 'chat-integrity')
           return false;
         blocked.push(id);
@@ -136,6 +139,7 @@ async function setup(
     actions,
     blocked,
     invalidated,
+    handled,
     inbox,
     changeGeneration: () => {
       generation++;
@@ -254,6 +258,78 @@ test('fresh generation authorization rejects a late preparation without attempti
   controller.dispose();
 });
 
+test('an access change before the preparation is sent withdraws it with a local error', async () => {
+  const { controller, store, actions, handled, changeGeneration } = await setup(
+    async () => reply(prepared),
+  );
+  controller.submit(store, input);
+  // The request runs after submit returns, so its guard sees the new
+  // generation and the preparation never reaches the agent.
+  changeGeneration();
+  await tick();
+  assert.equal(
+    actions.some((action) => action.action === 'prepare-channel'),
+    false,
+  );
+  const record = controller.getSnapshot()[0];
+  assert.equal(record.state, 'cancelled');
+  assert.equal(record.input, undefined);
+  assert.match(record.error, /Chat access changed/);
+  assert.equal(handled.length, 1);
+  const error = normalizeCommandError(handled[0]);
+  assert.equal(error.code, 'access-changed');
+  assert.equal(error.origin, 'local');
+  assert.equal(error.ambiguous, false);
+  assert.notEqual(commandRecovery(error).kind, 'revalidate');
+  controller.dispose();
+});
+
+test('an access change after the preparation is sent leaves it unresolved with a local error', async () => {
+  let finish!: (reply: ChatReply) => void;
+  const { controller, store, handled, changeGeneration } = await setup(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  controller.submit(store, input);
+  await tick();
+  changeGeneration();
+  finish(reply(prepared));
+  await tick();
+  const record = controller.getSnapshot()[0];
+  assert.equal(record.state, 'unresolved');
+  assert.deepEqual(record.input, input);
+  const error = normalizeCommandError(handled[0]);
+  assert.equal(error.code, 'access-changed');
+  assert.equal(error.ambiguous, true);
+  assert.notEqual(commandRecovery(error).kind, 'revalidate');
+  controller.dispose();
+});
+
+test('agent refusals that retrying cannot settle are held for review', async () => {
+  for (const code of [
+    'chat-key-unavailable',
+    'chat-name-conflict',
+    'chat-reprepare-required',
+  ]) {
+    const { controller, store } = await setup(async (action) => {
+      if (action.action === 'prepare-channel') return reply(prepared);
+      throw {
+        code,
+        message: code,
+        ambiguous: false,
+        retryable: false,
+        fatal: false,
+      };
+    });
+    controller.submit(store, input);
+    await tick();
+    assert.equal(controller.getSnapshot()[0].state, 'review', code);
+    controller.dispose();
+  }
+});
+
 test('changed scope and mismatched confirmed operation never count as success', async () => {
   for (const altered of [
     { ...reply(prepared), scope: { ...scope, actor: 'other' } },
@@ -296,7 +372,7 @@ test('stale preparations require review or cancellation, not an endless retry lo
     if (action.action === 'cancel')
       return reply({ ...prepared, state: 'cancelled' });
     throw {
-      code: 'chat-stale-key',
+      code: 'chat-key-unavailable',
       message: 'Keys changed',
       ambiguous: false,
       retryable: false,
@@ -683,8 +759,7 @@ test('completion destinations require fresh access and cannot redirect after ack
   denyAccess();
   assert.throws(
     () => controller.completedDestination(id),
-    (error: unknown) =>
-      (error as { code: string }).code === 'chat-access-denied',
+    (error: unknown) => (error as { code: string }).code === 'access-changed',
   );
   controller.acknowledge(id);
   assert.equal(controller.completedDestination(id), null);

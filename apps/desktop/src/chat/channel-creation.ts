@@ -10,6 +10,7 @@ import { chatAvailable, storeOf } from '../model';
 import type { AgentSnapshot, TeamStore } from '../model';
 import { failure, preparationCanChange, submissionId } from './actions';
 import { chatClient, integrity, sameScope } from './client';
+import { accessChanged } from './errors';
 import type { ChatInboxService } from './inbox-service';
 import { freezeDto } from './snapshots';
 import {
@@ -20,6 +21,12 @@ import {
 
 export const CHANNEL_CREATION_COMPLETION_LIMIT = 16;
 export const CHANNEL_CREATION_RECORD_LIMIT = 64;
+// Agent refusals that a retry of the same preparation cannot settle.
+const REVIEW_CODES: ReadonlySet<string> = new Set([
+  'chat-key-unavailable',
+  'chat-name-conflict',
+  'chat-reprepare-required',
+]);
 
 export interface ChannelCreationInput {
   name: string;
@@ -202,16 +209,12 @@ export class ChannelCreationController {
       generation === (access.accessGenerations?.get(store.server) ?? 0)
     )
       return;
-    throw {
-      code: 'chat-access-denied',
-      message:
-        'Chat access changed. The saved channel creation can be checked when access is available.',
-      fatal: false,
-      // A request that may already have been taken is not retryable on its
-      // own: the saved preparation is what settles it.
-      ambiguous: phase === 'after',
-      retryable: phase === 'before',
-    };
+    // A request that may already have been taken is not retryable on its
+    // own: the saved preparation is what settles it.
+    throw accessChanged(
+      'Chat access changed. The saved channel creation can be checked when access is available.',
+      phase,
+    );
   }
 
   // The service holds the scope this team's chat has been established under.
@@ -471,11 +474,16 @@ export class ChannelCreationController {
       // and can be closed without preventing the user from navigating away.
       record.invalidIdentity ||= quarantined;
       this.inbox.handleError(record.store.id, failed);
+      // A local access refusal before the request was sent leaves the agent
+      // unchanged, so a submission the agent does not hold is withdrawn like
+      // one it refused on its content, and the sheet keeps the fields.
+      const withdrawable =
+        preparationCanChange(failed) ||
+        (failed.code === 'access-changed' && !failed.ambiguous);
       record.state =
         quarantined ||
-        (!record.held && preparationCanChange(cause)) ||
-        failed.code === 'chat-reprepare-required' ||
-        /(?:stale|key|name-conflict)/.test(failed.code)
+        (!record.held && withdrawable) ||
+        REVIEW_CODES.has(failed.code)
           ? 'review'
           : 'unresolved';
       record.error = failed.message;

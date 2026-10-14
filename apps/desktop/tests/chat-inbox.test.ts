@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { cancelled } from '../src/chat/client';
+import { ChannelCreationController } from '../src/chat/channel-creation';
 import { ChatInboxService } from '../src/chat/inbox-service';
 import type { ChatClock, ChatInboxTiming } from '../src/chat/inbox-service';
 import type { Bridge } from '../src/bridge';
@@ -625,6 +626,93 @@ test('access-denied canonical team hands polling to an accessible sibling', asyn
   f.bump('3');
   await f.clock.advance(1000);
   assert.equal(f.service.getSnapshot().get('t1')?.data?.head, '3');
+  f.service.stop();
+});
+
+for (const phase of ['before', 'after'] as const) {
+  test(`a channel creation refused by its access guard ${phase} preparation leaves the inbox and its poll alone`, async () => {
+    const f = fixture();
+    await f.clock.advance(500);
+    assert.equal(f.service.getSnapshot().get('t0')?.state, 'ready');
+    assert.equal(f.waits.size, 1);
+    const store = f.snapshot.stores.find(
+      (candidate): candidate is TeamStore => candidate.id === 't0',
+    )!;
+    let generation = 0;
+    let finish!: (reply: ChatReply) => void;
+    const bridge = {
+      chat: async (_store: string, action: ChatAction) => {
+        const scope = f.service.getSnapshot().get('t0')!.scope!;
+        if (action.action === 'pending')
+          return { scope, result: { kind: 'pending', operations: [] } };
+        return new Promise<ChatReply>((resolve) => {
+          finish = resolve;
+        });
+      },
+      cancelChat: async () => {},
+    } as unknown as Bridge;
+    const controller = new ChannelCreationController(bridge, f.service, {
+      get current() {
+        return {
+          snapshot: f.snapshot,
+          accessNow: () => 0,
+          accessGenerations: new Map([['p', generation]]),
+        };
+      },
+    });
+    await controller.discover(store);
+    controller.submit(store, {
+      name: 'design',
+      description: 'design discussion',
+      admin: false,
+    });
+    if (phase === 'after') await Promise.resolve();
+    // The shell's access generation moves while the creation is in flight.
+    generation++;
+    if (phase === 'after')
+      finish({
+        scope: f.service.getSnapshot().get('t0')!.scope!,
+        result: {
+          kind: 'operation',
+          operation: {
+            id: 'operation',
+            channel: 'channel',
+            kind: 'create-channel',
+            state: 'prepared',
+            confirmation: null,
+            rejection_code: null,
+          },
+        },
+      });
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    assert.equal(
+      controller.getSnapshot()[0].state,
+      phase === 'before' ? 'cancelled' : 'unresolved',
+    );
+    for (const id of ['t0', 't1'])
+      assert.equal(f.service.getSnapshot().get(id)?.state, 'ready', id);
+    assert.equal(f.waits.size, 1);
+    controller.dispose();
+    f.service.stop();
+  });
+}
+
+test('a local access refusal does not revalidate the team', async () => {
+  const f = fixture();
+  await f.clock.advance(500);
+  assert.equal(
+    f.service.handleError('t0', {
+      code: 'chat-access-denied',
+      message: 'Chat access changed.',
+      retryable: true,
+      ambiguous: false,
+      fatal: false,
+      origin: 'local',
+    }),
+    false,
+  );
+  assert.equal(f.service.getSnapshot().get('t0')?.state, 'ready');
+  assert.equal(f.waits.size, 1);
   f.service.stop();
 });
 
