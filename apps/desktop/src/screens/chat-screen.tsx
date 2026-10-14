@@ -456,9 +456,9 @@ export function ChatScreen({
           {unfinished.map((op) => (
             <PendingRow
               key={op.id}
+              storeId={storeId}
               operation={op}
               channelName={channelNames.get(op.channel)}
-              request={guardedRequest}
               onChange={() => void guardedRefresh()}
             />
           ))}

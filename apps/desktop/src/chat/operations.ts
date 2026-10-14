@@ -10,6 +10,42 @@ export interface TrackedOperation extends ChatOperation {
 }
 const terminal = (op: ChatOperation) =>
   !['prepared', 'uncertain'].includes(op.state);
+
+/**
+ * Whether the operation may already have reached the server: its state is
+ * uncertain, its status is unknown after a failed request, or its message is
+ * in accepted history. Such an operation is reconciled under its ID and never
+ * attempted again.
+ */
+export function deliveryUnconfirmed(
+  op: Pick<TrackedOperation, 'state' | 'observed' | 'statusUnknown'>,
+): boolean {
+  return (
+    op.state === 'uncertain' ||
+    op.observed === true ||
+    op.statusUnknown === true
+  );
+}
+
+/** The requests a tracked operation accepts in its current state. */
+export interface OperationActions {
+  /**
+   * The delivery request, if the operation can still change: `attempt` for a
+   * prepared operation known not to have been sent, else `reconcile`.
+   */
+  deliver?: 'attempt' | 'reconcile';
+  /** Only a prepared operation known not to have been sent is cancelled. */
+  cancel: boolean;
+}
+
+export function operationActions(op: TrackedOperation): OperationActions {
+  if (terminal(op)) return { cancel: false };
+  const unconfirmed = deliveryUnconfirmed(op);
+  return {
+    deliver: unconfirmed ? 'reconcile' : 'attempt',
+    cancel: op.state === 'prepared' && !unconfirmed,
+  };
+}
 /** Ledger status and accepted-history observation are independent facts. */
 export function reconcileOperations(
   old: TrackedOperation[],

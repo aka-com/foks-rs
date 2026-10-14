@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button } from '../components';
-import type { ChatAction, ChatOperation, ChatReply } from '../chat-contract';
+import type { ChatOperation } from '../chat-contract';
 import { shortId } from '../model';
 import { failure } from './actions';
 import type { TrackedOperation } from './operations';
+import { useChatSendService } from './send-provider';
 const PENDING_STATE: Record<ChatOperation['state'], string> = {
   prepared: 'Not sent',
   uncertain: 'Delivery unconfirmed',
@@ -30,18 +31,25 @@ function pendingExplanation(op: ChatOperation): string {
   }
 }
 
+/**
+ * A tracked operation no outgoing message carries. The send service decides
+ * which requests the operation accepts and sends them; this row only offers
+ * them.
+ */
 export function PendingRow({
+  storeId,
   operation,
   channelName,
-  request,
   onChange,
 }: {
+  storeId: string;
   operation: TrackedOperation;
   channelName: string | undefined;
-  request: (a: ChatAction) => Promise<ChatReply>;
   onChange: () => void;
 }): ReactNode {
   const op = operation;
+  const service = useChatSendService();
+  const actions = service.operationActions(storeId, op.id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const active = useRef(true);
@@ -52,27 +60,17 @@ export function PendingRow({
       active.current = false;
     };
   }, []);
-  const run = async (
-    action: 'attempt' | 'cancel' | 'finalize' | 'status' | 'reconcile',
-  ) => {
+  const run = async (action: 'deliver' | 'cancel') => {
     if (running.current) return;
     running.current = true;
     setBusy(true);
     setError('');
     try {
-      const reply = await request({ action, operation: op.id });
-      if (active.current && reply.result.kind === 'operation') {
-        onChange();
-      }
+      if (action === 'deliver') await service.deliverOperation(storeId, op.id);
+      else await service.cancelOperation(storeId, op.id);
+      if (active.current) onChange();
     } catch (e) {
-      if (active.current) {
-        setError(failure(e));
-        try {
-          await request({ action: 'status', operation: op.id });
-        } catch {
-          /* Retain the last known operation when status is unavailable. */
-        }
-      }
+      if (active.current) setError(failure(e));
     } finally {
       running.current = false;
       if (active.current) setBusy(false);
@@ -103,24 +101,12 @@ export function PendingRow({
         </p>
       )}
       <div className="chat-pending-actions">
-        {(op.state === 'prepared' || op.state === 'uncertain') && (
-          <Button
-            size="sm"
-            disabled={busy}
-            onClick={() =>
-              void run(
-                op.statusUnknown || op.state === 'uncertain'
-                  ? 'reconcile'
-                  : 'attempt',
-              )
-            }
-          >
-            {op.statusUnknown || op.state === 'uncertain'
-              ? 'Check again'
-              : 'Retry'}
+        {actions.deliver && (
+          <Button size="sm" disabled={busy} onClick={() => void run('deliver')}>
+            {actions.deliver === 'reconcile' ? 'Check again' : 'Retry'}
           </Button>
         )}
-        {op.state === 'prepared' && !op.statusUnknown && (
+        {actions.cancel && (
           <Button size="sm" disabled={busy} onClick={() => void run('cancel')}>
             Cancel
           </Button>

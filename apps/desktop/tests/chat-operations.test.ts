@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   delivered,
   observeMessages,
+  operationActions,
   reconcileOperations as reduceOperations,
 } from '../src/chat/operations';
 import type {
@@ -234,3 +235,36 @@ test('a page for another channel replaces the held window', () => {
     ['d'.repeat(32)],
   );
 });
+
+const actionTable: [
+  name: string,
+  operation: TrackedOperation,
+  deliver: 'attempt' | 'reconcile' | undefined,
+  cancel: boolean,
+][] = [
+  ['prepared', op, 'attempt', true],
+  // A failed request may have reached the agent, so it is checked instead.
+  [
+    'prepared with unknown status',
+    { ...op, statusUnknown: true },
+    'reconcile',
+    false,
+  ],
+  ['prepared and observed', { ...op, observed: true }, 'reconcile', false],
+  ['uncertain', { ...op, state: 'uncertain' }, 'reconcile', false],
+  ['confirmed', { ...op, state: 'confirmed' }, undefined, false],
+  [
+    'rejected',
+    { ...op, state: 'rejected', rejection_code: 12006 },
+    undefined,
+    false,
+  ],
+  ['cancelled', { ...op, state: 'cancelled' }, undefined, false],
+];
+for (const [name, operation, deliver, cancel] of actionTable)
+  test(`operation actions: ${name}`, () => {
+    assert.deepEqual(
+      operationActions(operation),
+      deliver ? { deliver, cancel } : { cancel },
+    );
+  });

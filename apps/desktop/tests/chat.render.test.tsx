@@ -2877,3 +2877,53 @@ test('opening a channel keeps its retained history ahead of channels not reopene
     window.history.replaceState(null, '', '/');
   }
 });
+
+test('a saved operation row sends the request the send service chooses', async () => {
+  const sent: string[] = [];
+  let seeded = false;
+  let fail = true;
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      if (!seeded && action.action === 'pending') {
+        seeded = true;
+        await base.chat(store, {
+          action: 'prepare-channel',
+          submission: 'cd'.repeat(16),
+          name: 'saved-channel',
+          description: '',
+          admin: false,
+        });
+      }
+      if ('operation' in action) {
+        sent.push(action.action);
+        if (fail && (action.action === 'attempt' || action.action === 'status'))
+          throw {
+            code: 'unavailable',
+            message: 'The agent did not answer.',
+            fatal: false,
+            retryable: true,
+            ambiguous: true,
+          };
+      }
+      return base.chat(store, action, view);
+    },
+  }));
+  const section = await ui.screen.findByRole('region', {
+    name: 'Needs attention',
+  });
+  const row = ui.within(section);
+  assert.ok(row.getByRole('button', { name: 'Cancel' }));
+  ui.fireEvent.click(row.getByRole('button', { name: 'Retry' }));
+  await row.findByRole('alert');
+  // The failed attempt is followed by a status read; with the status unknown,
+  // the operation may have been sent, so it is only checked from now on.
+  assert.deepEqual(sent, ['attempt', 'status']);
+  await row.findByRole('button', { name: 'Check again' });
+  assert.equal(row.queryByRole('button', { name: 'Cancel' }), null);
+  fail = false;
+  ui.fireEvent.click(row.getByRole('button', { name: 'Check again' }));
+  await ui.waitFor(() =>
+    assert.deepEqual(sent, ['attempt', 'status', 'reconcile']),
+  );
+});

@@ -359,15 +359,15 @@ function OperationRow({
   row: Extract<ThreadRow, { kind: 'operation' }>;
   onChange: () => void;
 }): ReactNode {
-  const { bridge, request } = useChatConversationContext();
+  const { bridge, storeId } = useChatConversationContext();
   const op = row.operation;
   return (
     <article className="chat-message" data-operation={op.id}>
       {op.text && <MessageText text={op.text} actions={bridge} />}
       <PendingRow
+        storeId={storeId}
         operation={op}
         channelName={undefined}
-        request={request}
         onChange={onChange}
       />
     </article>

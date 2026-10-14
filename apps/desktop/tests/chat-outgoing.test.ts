@@ -9,6 +9,7 @@ import {
   newOutgoing,
   operationOf,
   outcomeUnknown,
+  outgoingActions,
   phaseOf,
   preparationAmbiguous,
   running,
@@ -413,6 +414,50 @@ test('outgoing transition: a status reply after Retry does not end or redirect t
   assert.equal(running(message), false);
   assert.equal(phaseOf(message), 'sent');
 });
+
+const rejected = run(
+  delivering,
+  { type: 'attempted', token: 1, op: op('rejected') },
+  { type: 'finished', token: 1 },
+);
+const actionTable: [
+  name: string,
+  state: OutgoingMessage,
+  retry: 'retry' | 'check' | undefined,
+  edit: boolean,
+][] = [
+  ['queued', queued, undefined, true],
+  ['saving', saving, undefined, false],
+  [
+    'save failed',
+    run(saving, fail(1), { type: 'finished', token: 1 }),
+    'retry',
+    true,
+  ],
+  [
+    'save failed with access changed',
+    run(saving, fail(1, true), { type: 'finished', token: 1 }),
+    'retry',
+    false,
+  ],
+  // A preparation that may have reached the agent is checked, never edited.
+  ['submit reply lost', submitLost, 'check', false],
+  ['delivering', delivering, undefined, false],
+  ['attempt failed', attemptFailed, 'check', false],
+  [
+    'attempt failed with access changed',
+    run(delivering, fail(1, true), { type: 'finished', token: 1 }),
+    'check',
+    false,
+  ],
+  // The server refused it, so it is edited rather than sent again.
+  ['rejected', rejected, undefined, true],
+  ['confirmed', confirmed, undefined, false],
+];
+for (const [name, state, retry, edit] of actionTable)
+  test(`outgoing actions: ${name}`, () => {
+    assert.deepEqual(outgoingActions(state), { retry, edit });
+  });
 
 test('outgoing copy shares no mutable state with the message', () => {
   const message = run(attemptFailed, {

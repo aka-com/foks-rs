@@ -6,7 +6,7 @@ import { useChatSendService } from './send-provider';
 import {
   cleanupErrorOf,
   operationOf,
-  outcomeUnknown,
+  outgoingActions,
   phaseOf,
   running,
   type OutgoingMessage,
@@ -53,14 +53,7 @@ export function OutgoingRow({
   // Waiting behind another message of this channel, and held in memory only.
   const queued = phase === 'queued';
   const statusLabel = statusLabels[phase];
-  const retryable =
-    ['not-sent', 'unconfirmed', 'paused'].includes(phase) &&
-    !['rejected', 'cancelled'].includes(op?.state ?? '');
-  const editable =
-    (phase === 'not-sent' || queued) &&
-    !busy &&
-    !outcomeUnknown(message) &&
-    message.text !== undefined;
+  const actions = outgoingActions(message);
   const createdAt = String(message.createdAt);
   return (
     <MessageRow
@@ -96,7 +89,7 @@ export function OutgoingRow({
                 {statusLabel}
               </span>
             )}
-            {editable && (
+            {actions.edit && (
               <button
                 type="button"
                 className="chat-edit-link"
@@ -109,14 +102,13 @@ export function OutgoingRow({
         )
       }
       footer={
-        !sending && (message.error || retryable || cleanupError || error) ? (
+        !sending &&
+        (message.error || actions.retry || cleanupError || error) ? (
           <div className="chat-send-status">
             {message.error && <span>{message.error}</span>}
-            {retryable && (
+            {actions.retry && (
               <Button size="sm" disabled={busy} onClick={() => void run(false)}>
-                {phase === 'unconfirmed' || outcomeUnknown(message)
-                  ? 'Check again'
-                  : 'Retry'}
+                {actions.retry === 'check' ? 'Check again' : 'Retry'}
               </Button>
             )}
             {cleanupError && (

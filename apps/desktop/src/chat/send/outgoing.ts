@@ -474,3 +474,35 @@ export function phaseOf(message: OutgoingMessage): SendPhase {
   }
   return message.stopped === 'failed' ? 'not-sent' : 'saving';
 }
+
+/** What a row offers for an outgoing message in its current state. */
+export interface OutgoingActions {
+  /**
+   * Drives the message again: `check` when it may already have been sent, so
+   * it is checked rather than sent a second time; `retry` otherwise.
+   */
+  retry?: 'retry' | 'check';
+  /** Returns the text to the composer and removes the message. */
+  edit: boolean;
+}
+
+export function outgoingActions(message: OutgoingMessage): OutgoingActions {
+  const phase = phaseOf(message);
+  const state = operationOf(message)?.state;
+  const retryable =
+    (phase === 'not-sent' || phase === 'unconfirmed' || phase === 'paused') &&
+    state !== 'rejected' &&
+    state !== 'cancelled';
+  return {
+    retry: retryable
+      ? phase === 'unconfirmed' || outcomeUnknown(message)
+        ? 'check'
+        : 'retry'
+      : undefined,
+    edit:
+      (phase === 'not-sent' || phase === 'queued') &&
+      !running(message) &&
+      !outcomeUnknown(message) &&
+      message.text !== undefined,
+  };
+}

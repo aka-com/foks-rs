@@ -24,8 +24,14 @@ import {
 } from './client';
 import { accessChanged, cancelled } from './errors';
 import { eventFromReply } from './conversation-events';
-import { delivered, reconcileOperations, observeMessages } from './operations';
-import type { TrackedOperation } from './operations';
+import {
+  delivered,
+  deliveryUnconfirmed,
+  operationActions,
+  reconcileOperations,
+  observeMessages,
+} from './operations';
+import type { OperationActions, TrackedOperation } from './operations';
 import { chatIntentPersistence } from './intent';
 import type { ChatIntentPersistence } from './intent';
 import { sameScope } from './scope';
@@ -907,11 +913,15 @@ export class ChatSendService {
     }
     const epoch = team.epoch;
     const generation = this.generations.get(team.profile) ?? 0;
+    // The tracked operation adds what this device learned about the
+    // operation outside the message: an unknown status or an observation.
     const checking = (op: ChatOperation) =>
       message.observed ||
-      op.state === 'uncertain' ||
       message.delivery.stage === 'uncertain' ||
-      team.operations.some((o) => o.id === op.id && o.statusUnknown);
+      deliveryUnconfirmed({
+        ...team.operations.find((o) => o.id === op.id),
+        ...op,
+      });
     const prepared = operationOf(message);
     this.move(message, {
       type: 'started',
@@ -1027,6 +1037,52 @@ export class ChatSendService {
     }
     if (op && terminal(op)) return;
     await this.drive(team, message);
+  }
+  /**
+   * The requests a tracked operation accepts, for a row that shows an
+   * operation no outgoing message carries.
+   */
+  operationActions(storeId: string, id: string): OperationActions {
+    const op = this.teams.get(storeId)?.operations.find((o) => o.id === id);
+    return op ? operationActions(op) : { cancel: false };
+  }
+  /**
+   * Sends the delivery request {@link operationActions} offers for a tracked
+   * operation: an attempt, or a reconcile when the operation may already have
+   * reached the server. Does nothing when the operation accepts neither.
+   */
+  deliverOperation(storeId: string, id: string): Promise<void> {
+    return this.operationRequest(
+      storeId,
+      id,
+      this.operationActions(storeId, id).deliver,
+    );
+  }
+  /** Cancels a tracked operation if it accepts cancellation. */
+  cancelOperation(storeId: string, id: string): Promise<void> {
+    return this.operationRequest(
+      storeId,
+      id,
+      this.operationActions(storeId, id).cancel ? 'cancel' : undefined,
+    );
+  }
+  private async operationRequest(
+    storeId: string,
+    id: string,
+    action: 'attempt' | 'reconcile' | 'cancel' | undefined,
+  ): Promise<void> {
+    if (!action) return;
+    try {
+      await this.request(storeId, { action, operation: id });
+    } catch (error) {
+      // A failed request leaves the operation's state unknown to this device,
+      // so its status is read again before the failure is reported. The reply
+      // is applied like any other operation report.
+      await this.request(storeId, { action: 'status', operation: id }).catch(
+        () => {},
+      );
+      throw error;
+    }
   }
   async restoreDraft(storeId: string, id: string): Promise<void> {
     const team = this.ensure(storeId);

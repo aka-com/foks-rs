@@ -11,6 +11,7 @@ import type { ChatAction, ChatReply } from '../src/chat-contract';
 import type { ChatClock } from '../src/chat/clock';
 import type { TeamInbox } from '../src/chat/inbox-service';
 import { phaseOf } from '../src/chat/send/outgoing';
+import { submissionId } from '../src/chat/actions';
 import { CHAT_HISTORY_BYTES } from '../src/chat-limits';
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -664,6 +665,105 @@ test('a failed recovery keeps its own backoff rather than the idle interval', as
     await h.clock.advance(120_000);
     const runs = recoveries(h.calls);
     assert.ok(runs <= 5, `${runs} recoveries after recovery succeeded`);
+  } finally {
+    h.service.stop();
+  }
+});
+
+/** Prepares a message the send service holds no outgoing message for. */
+async function prepareOrphan(h: Awaited<ReturnType<typeof setup>>) {
+  const reply = await h.service.request('team:eng', {
+    action: 'prepare-message',
+    submission: submissionId(),
+    channel: h.channel,
+    text: 'saved elsewhere',
+  });
+  if (reply.result.kind !== 'operation') throw new Error('operation expected');
+  return reply.result.operation.id;
+}
+const unavailable = {
+  code: 'unavailable',
+  message: 'The agent did not answer.',
+  fatal: false,
+  retryable: true,
+  ambiguous: true,
+};
+
+test('a tracked operation is attempted, and its status is read after a failure', async () => {
+  let fail = true;
+  const h = await setup(async (action, run) => {
+    if (action.action === 'attempt' && fail) throw unavailable;
+    return run();
+  });
+  try {
+    const id = await prepareOrphan(h);
+    assert.deepEqual(h.service.operationActions('team:eng', id), {
+      deliver: 'attempt',
+      cancel: true,
+    });
+    const before = h.calls.length;
+    await assert.rejects(h.service.deliverOperation('team:eng', id));
+    assert.deepEqual(
+      h.calls.slice(before).map((a) => a.action),
+      ['attempt', 'status'],
+    );
+    // The status reply is applied: the agent still holds the operation as
+    // prepared, so the next request is an attempt again.
+    const op = h.service.operations('team:eng').find((o) => o.id === id);
+    assert.equal(op?.statusUnknown, false);
+    fail = false;
+    await h.service.deliverOperation('team:eng', id);
+    assert.equal(
+      h.service.operations('team:eng').find((o) => o.id === id)?.state,
+      'confirmed',
+    );
+    assert.deepEqual(h.service.operationActions('team:eng', id), {
+      cancel: false,
+    });
+  } finally {
+    h.service.stop();
+  }
+});
+
+test('a tracked operation with an unknown status is reconciled, never attempted or cancelled', async () => {
+  const h = await setup(async (action, run) => {
+    if (action.action === 'attempt' || action.action === 'status')
+      throw unavailable;
+    return run();
+  });
+  try {
+    const id = await prepareOrphan(h);
+    await assert.rejects(h.service.deliverOperation('team:eng', id));
+    assert.deepEqual(h.service.operationActions('team:eng', id), {
+      deliver: 'reconcile',
+      cancel: false,
+    });
+    const before = h.calls.length;
+    await h.service.cancelOperation('team:eng', id);
+    await h.service.deliverOperation('team:eng', id);
+    assert.deepEqual(
+      h.calls.slice(before).map((a) => a.action),
+      ['reconcile'],
+    );
+  } finally {
+    h.service.stop();
+  }
+});
+
+test('a prepared tracked operation is cancelled through the service', async () => {
+  const h = await setup();
+  try {
+    const id = await prepareOrphan(h);
+    const before = h.calls.length;
+    await h.service.cancelOperation('team:eng', id);
+    assert.deepEqual(
+      h.calls.slice(before).map((a) => a.action),
+      ['cancel'],
+    );
+    // A cancelled send is no longer tracked.
+    assert.deepEqual(h.service.operationActions('team:eng', id), {
+      cancel: false,
+    });
   } finally {
     h.service.stop();
   }
