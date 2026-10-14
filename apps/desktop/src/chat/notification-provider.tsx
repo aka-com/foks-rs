@@ -26,6 +26,7 @@ import {
   inheritedAlerts,
   notificationKey,
   storedAlertMode,
+  teamMuted,
 } from './local-contract';
 /** The agent's code for alerts the system has not permitted. */
 const PERMISSION_CODE = 'chat-notification-permission';
@@ -280,7 +281,7 @@ function inheritedDetail({
 }: ReturnType<typeof inheritedAlerts>): string {
   if (from === 'muted') return 'None while the channel is muted';
   if (from === 'team') return `${ALERT_TITLES[mode]}, the team default`;
-  return 'Device setting';
+  return `${ALERT_TITLES[mode]}, the device setting`;
 }
 const noSubscribe = () => () => {};
 /** Whether the published projection marks a channel muted. */
@@ -426,16 +427,20 @@ export function NotificationSettings({
  * takes the channel's unread count out of its team's and the Chat tab's
  * totals and silences its alerts unless it has its own alert mode. The
  * pinned protocol cannot mute a channel on the server, so it does not reach
- * other devices.
+ * other devices. While the team is muted the switch is on and cannot be
+ * changed.
  */
 export function ChannelMuteSetting({
   storeId,
   scope,
   channel,
+  describedBy,
 }: {
   storeId: string;
   scope: ChatScope;
   channel: string;
+  /** The id of the text that says what a mute does. */
+  describedBy?: string;
 }) {
   const context = useContext(Context);
   // While a change saves there is no session; the projection keeps the mutes
@@ -443,8 +448,9 @@ export function ChannelMuteSetting({
   const projected = useProjectedMute(context?.service, storeId, channel);
   if (!context) return null;
   const { session, configure } = context;
+  const team = !!session && teamMuted(session.settings, scope);
   const muted = session
-    ? session.settings.muted.includes(notificationKey(scope, channel))
+    ? team || session.settings.muted.includes(notificationKey(scope, channel))
     : projected;
   return (
     <label className="chat-info-row chat-info-mute">
@@ -454,8 +460,9 @@ export function ChannelMuteSetting({
         <input
           type="checkbox"
           role="switch"
+          aria-describedby={describedBy}
           checked={muted}
-          disabled={!session}
+          disabled={!session || team}
           onChange={(event) =>
             void configure({
               action: 'configure',

@@ -10,7 +10,7 @@ import { GeometricInterval, SYNC_RETRY, retryDelay } from './backoff';
 import { systemChatClock } from './clock';
 import { DeadlineTimer } from './deadline-timer';
 import { ChatHistoryCache } from './history-cache';
-import { notificationKey } from './local-contract';
+import { notificationKey, teamKey } from './local-contract';
 import {
   accountKey,
   teamIdentity,
@@ -227,7 +227,7 @@ export class ChatInboxService {
   ) {
     this.timer = new DeadlineTimer(clock, () => this.drain());
   }
-  /** The channel keys muted on this device; see `setLocalMutes`. */
+  /** The channel and team keys muted on this device; see `setLocalMutes`. */
   private localMutes: ReadonlySet<string> = readonlySet([]);
   private published?: {
     from: ReadonlyMap<string, TeamInbox>;
@@ -265,8 +265,9 @@ export class ChatInboxService {
     return view;
   };
   /**
-   * Sets the channel keys (`notificationKey`) muted on this device and
-   * republishes every team when they changed.
+   * Sets the channel keys (`notificationKey`) and team keys (`teamKey`)
+   * muted on this device and republishes every team when they changed. A
+   * team's key mutes each of its conversations.
    */
   setLocalMutes(keys: Iterable<string>) {
     const next = new Set(keys);
@@ -283,12 +284,16 @@ export class ChatInboxService {
     const known = this.mutedEntries.get(entry);
     if (known?.mutes === this.localMutes) return known.entry;
     const { scope, data } = entry;
+    const team = !!scope && this.localMutes.has(teamKey(scope));
     let changed = false;
     const conversations = (data?.conversations ?? []).map((conversation) => {
       if (
         conversation.muted ||
         !scope ||
-        !this.localMutes.has(notificationKey(scope, conversation.channel.id))
+        !(
+          team ||
+          this.localMutes.has(notificationKey(scope, conversation.channel.id))
+        )
       )
         return conversation;
       changed = true;

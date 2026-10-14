@@ -15,7 +15,9 @@ import { Button, Chip, Icon } from '../components';
 import {
   ChannelMuteSetting,
   NotificationSettings,
+  useLocalAlerts,
 } from '../chat/notification-provider';
+import { teamMuted } from '../chat/local-contract';
 import { channelLabel } from '../chat/presentation';
 import {
   channelAudience,
@@ -140,6 +142,10 @@ export function ChannelInfoPanel({
   // A channel every team user can read folds its reader list behind one row.
   const [everyoneOpen, setEveryoneOpen] = useState(false);
   const everyoneList = useId();
+  const muteNote = useId();
+  const localSettings = useLocalAlerts()?.session?.settings;
+  const muteFromTeam =
+    !!scope && !!localSettings && teamMuted(localSettings, scope);
   const people = (): void => {
     onNavigate({ kind: 'group-settings', ref: store.id, tab: 'people' });
   };
@@ -294,14 +300,18 @@ export function ChannelInfoPanel({
                 storeId={store.id}
                 scope={scope}
                 channel={channel.id}
+                describedBy={muteNote}
               />
             )}
           </div>
           {scope && (
-            <p className="chat-info-aside chat-info-mute-note">
-              Mute applies to this device only. A muted channel is left out of
-              the team and Chat unread counts, and raises no alerts unless its
-              Alerts setting is its own.
+            <p id={muteNote} className="chat-info-aside chat-info-mute-note">
+              Mute applies to this device only.{' '}
+              {muteFromTeam &&
+                `All ${store.name} channels are muted from the team menu. `}
+              A muted channel is left out of the team and Chat unread counts,
+              and raises no alerts unless the channel has its own Alerts
+              setting.
             </p>
           )}
         </>

@@ -12,7 +12,7 @@ import { Button } from '../components/button';
 import { Icon } from '../components/icon';
 import { SheetDialog } from '../components/sheet';
 import { useOptionalToast } from '/kit/toasts';
-import { mentionKey, type ChatMentions } from './mentions';
+import { inlineTokens, mentionKey, type ChatMentions } from './mentions';
 
 /** Literal absolute HTTP(S) only; never decode entities into executable URLs. */
 export function safeChatLink(value: string): string | null {
@@ -618,11 +618,9 @@ function inline(
   mentions: ChatMentions | undefined,
 ): ReactNode[] {
   // Deliberately nonrecursive and bounded. Unsupported/nested syntax remains
-  // text. A bare URL must not continue a word, and an `@name` must not
-  // continue a word, a name or an email address (`bob@example.com`).
+  // text. `mentionsReader` reads the same tokens.
   const parts: ReactNode[] = [];
-  const pattern =
-    /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\)|(?<![\p{L}\p{N}])https?:\/\/[^\s<>]+|(?<![\p{L}\p{M}\p{N}_@.])@[\p{L}\p{N}][\p{L}\p{M}\p{N}._-]*)/giu;
+  const pattern = inlineTokens();
   let last = 0;
   for (let match; (match = pattern.exec(text));) {
     if (parts.length >= 256) break;

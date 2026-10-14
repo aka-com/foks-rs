@@ -14,7 +14,10 @@ export interface LocalSettings {
   previews: boolean;
   /** A channel's own alert mode, by {@link notificationKey}. */
   overrides: Record<string, LocalAlertMode>;
-  /** The channels muted on this device, by {@link notificationKey}. */
+  /**
+   * The channels and teams muted on this device, by {@link notificationKey}
+   * or {@link teamKey}. A team's mute covers each of its channels.
+   */
   muted: readonly string[];
   /** A team's default alert mode, by {@link teamKey}. */
   teams: Record<string, LocalAlertMode>;
@@ -38,7 +41,10 @@ export type LocalAction =
       previews?: boolean;
       storeId?: string;
       scope?: ChatScope;
-      /** The channel to configure; without it, `mode` is the team default. */
+      /**
+       * The channel to configure; without it, `mode` is the team default and
+       * `muted` mutes the team.
+       */
       channel?: string;
       /** `null` removes the channel's own mode or the team default. */
       mode?: LocalAlertMode | null;
@@ -171,6 +177,10 @@ export function teamKey(scope: ChatScope): string {
     teamKeys.set(scope, key);
   }
   return key;
+}
+/** Whether a team is muted on this device; see {@link LocalSettings.muted}. */
+export function teamMuted(settings: LocalSettings, scope: ChatScope): boolean {
+  return settings.muted.includes(teamKey(scope));
 }
 /** A channel's or team's alert mode in the terms the shell offers. */
 export type AlertChoice = 'all' | 'mentions' | 'none';

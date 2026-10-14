@@ -517,7 +517,11 @@ test('mentions only alerts for messages whose text names the reader', async () =
     ...message(sequence),
     content: { kind: 'text', text: value },
   });
+  // The agent cuts a text at 256 characters, here inside the name.
+  const cut = `${'x'.repeat(249)} @sam.o`;
+  assert.equal(cut.length, 256);
   f.rows.set('a', [
+    text(5, cut),
     text(4, 'and @Sam.Ortiz, see above'),
     text(3, 'mail sam.ortiz@example.com'),
     text(2, 'nothing for sam.ortiz'),
@@ -544,7 +548,7 @@ test('mentions only alerts for messages whose text names the reader', async () =
   const d = f.make();
   try {
     await f.clock.flush();
-    f.rows.set('a', [text(5, '@sam.ortiz again'), ...f.rows.get('a')!]);
+    f.rows.set('a', [text(6, '@sam.ortiz again'), ...f.rows.get('a')!]);
     f.update({ channelRevisions: new Map([['a', 3]]) });
     await f.clock.flush();
     assert.equal(displays(f.alerts).length, 1);

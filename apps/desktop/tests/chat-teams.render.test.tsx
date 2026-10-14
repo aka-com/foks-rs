@@ -119,8 +119,13 @@ async function mount(
   override?: (bridge: Bridge) => Bridge,
   clock?: ChatClock,
   shell?: Partial<Shell>,
+  /** Also mount the navigation rail, which draws the Chat unread count. */
+  rail = false,
 ) {
   const { ChatTab } = await vite.ssrLoadModule('/src/screens/chat-tab.tsx');
+  const { Sidebar } = (await vite.ssrLoadModule(
+    '/src/shell/sidebar.tsx',
+  )) as typeof import('../src/shell/sidebar');
   const { ChatInboxProvider } = await vite.ssrLoadModule(
     '/src/chat/inbox-provider.tsx',
   );
@@ -167,18 +172,30 @@ async function mount(
             snapshot: live,
             clock,
             accessGenerations: generations,
-            children: createElement(ChatTab, {
-              snapshot: live,
-              bridge,
-              location,
-              query,
-              accessNow: shell?.accessNow,
-              accessGenerations: generations,
-              onNavigate: (next: Location) => {
-                journal.push(next);
-                if (next.kind === 'chat') setLocation(next);
-              },
-            }),
+            children: [
+              createElement(ChatTab, {
+                key: 'tab',
+                snapshot: live,
+                bridge,
+                location,
+                query,
+                accessNow: shell?.accessNow,
+                accessGenerations: generations,
+                onNavigate: (next: Location) => {
+                  journal.push(next);
+                  if (next.kind === 'chat') setLocation(next);
+                },
+              }),
+              rail
+                ? createElement(Sidebar, {
+                    key: 'rail',
+                    snapshot: live,
+                    location,
+                    onNavigate: () => {},
+                    onLock: () => {},
+                  })
+                : null,
+            ],
           }),
         }),
       }),
@@ -2366,6 +2383,93 @@ test('Mute channel keeps a channel listed but out of its team total on this devi
   assert.equal(folded(), '5');
 });
 
+test('Mute all channels takes a team out of its folded count and the rail count on this device', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const configured: Record<string, unknown>[] = [];
+  await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:eng' },
+    (base) =>
+      withChannels(
+        {
+          ...base,
+          chatLocal: async (action) => {
+            if (action.action === 'configure') configured.push(action);
+            return base.chatLocal(action);
+          },
+        },
+        'team:household',
+        [
+          { id: '11'.repeat(16), name: 'chores', unread: '3' },
+          { id: '22'.repeat(16), name: 'archive', unread: '2' },
+        ],
+      ),
+    undefined,
+    undefined,
+    true,
+  );
+  const railCount = () =>
+    document.querySelector('.side.rail .rail-tail.count')?.textContent ?? '';
+  const folded = () => {
+    ui.fireEvent.click(
+      ui.screen.getByRole('button', { name: 'Collapse Household' }),
+    );
+    const count =
+      head('Household').querySelector('.chat-unread')?.textContent ?? '';
+    ui.fireEvent.click(
+      ui.screen.getByRole('button', { name: 'Expand Household' }),
+    );
+    return count;
+  };
+  const teamMute = () => {
+    ui.fireEvent.contextMenu(head('Household'));
+    return ui.screen.getByRole('menuitemcheckbox', {
+      name: 'Mute all channels',
+    });
+  };
+  await ui.waitFor(() =>
+    assert.ok(channelRow('#archive').querySelector('.chat-unread')),
+  );
+  const before = folded();
+  const rail = Number(railCount());
+  assert.ok(Number(before) >= 5 && rail >= Number(before));
+  await ui.waitFor(() =>
+    assert.equal(teamMute().getAttribute('aria-disabled'), null),
+  );
+  assert.equal(teamMute().getAttribute('aria-checked'), 'false');
+  ui.fireEvent.click(teamMute());
+  assert.equal(ui.screen.queryByRole('menu'), null);
+  await ui.waitFor(() =>
+    assert.ok(channelRow('#archive').classList.contains('muted')),
+  );
+  assert.ok(channelRow('#chores').classList.contains('muted'));
+  // The team's channels leave its folded count and the rail's Chat count.
+  assert.equal(folded(), '');
+  assert.equal(Number(railCount() || '0'), rail - Number(before));
+  const [change] = configured;
+  assert.deepEqual(
+    [change.storeId, change.muted, 'channel' in change, 'mode' in change],
+    ['team:household', true, false, false],
+  );
+  assert.equal(teamMute().getAttribute('aria-checked'), 'true');
+  ui.fireEvent.keyDown(document, { key: 'Escape' });
+  // A channel's own mute cannot be changed while its team is muted.
+  ui.fireEvent.contextMenu(channelRow('#archive'));
+  const item = ui.screen.getByRole('menuitem', { name: /Mute channel/ });
+  assert.equal(item.getAttribute('aria-disabled'), 'true');
+  assert.equal(
+    item.getAttribute('title'),
+    'All Household channels are muted from the team menu.',
+  );
+  ui.fireEvent.keyDown(document, { key: 'Escape' });
+  ui.fireEvent.click(teamMute());
+  await ui.waitFor(() =>
+    assert.ok(!channelRow('#archive').classList.contains('muted')),
+  );
+  assert.equal(folded(), before);
+  assert.equal(Number(railCount()), rail);
+});
+
 test('a team menu sets the alert default its channels take on this device', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   const configured: unknown[] = [];
@@ -2431,6 +2535,10 @@ test('a team menu sets the alert default its channels take on this device', asyn
       .within(panel)
       .getByRole<HTMLInputElement>('switch', { name: 'Mute channel' });
   assert.equal(mute().checked, false);
+  // The note under the switch is its description.
+  const note = panel.querySelector('.chat-info-mute-note');
+  assert.ok(note?.id);
+  assert.equal(mute().getAttribute('aria-describedby'), note.id);
   ui.fireEvent.click(mute());
   await ui.waitFor(() =>
     assert.match(

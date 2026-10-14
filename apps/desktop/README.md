@@ -737,10 +737,10 @@ its channels, and the whole heading is the control that folds them: it carries
 `aria-expanded` and `aria-controls`, and the channels are a `group` labeled by
 the team. Folded, the heading carries the total unread count of the channels it
 hides, leaving out hidden and muted ones as the rail's count does; a channel
-muted on this device counts as muted. A search
-unfolds every team while it runs and leaves the folds as they were. A heading
-click on a team with a single channel also opens that channel; the click still
-folds or unfolds the team, and that fold is stored like any other.
+muted on this device, alone or with its team, counts as muted. A search unfolds
+every team while it runs and leaves the folds as they were. A heading click on
+a team with a single channel also opens that channel; the click still folds or
+unfolds the team, and that fold is stored like any other.
 
 Each team's channels keep one order, built by `listChannels`: the general
 channel first, then A to Z, with hidden conversations last, dimmed and marked
@@ -784,35 +784,47 @@ A channel's context menu offers Open channel; Mark as read, while the channel's
 row draws an unread count (a channel of an unreachable team draws none), which
 issues `mark-read` through the send service's request path at the newest
 position the inbox states (`lastPosition`) and applies the confirmed pointer
-the way the open conversation does; Mute channel or Unmute channel; and
-Channel info. Renaming and deleting
-channels are not offered until channel management ships. Copying a link to a
-channel is not offered either: the app registers no URL scheme, and an in-app
-location names local store references that mean nothing on another
+the way the open conversation does; Mute channel or Unmute channel, which
+cannot be changed while the team is muted; and Channel info. Renaming and
+deleting channels are not offered until channel management ships. Copying a
+link to a channel is not offered either: the app registers no URL scheme, and
+an in-app location names local store references that mean nothing on another
 installation. A team's menu offers Go to team, the team's alert default on this
 device as four radio items (Device setting, All new messages, Mentions only,
-None) and the add-people actions; the column's background offers New channel.
+None), Mute all channels as a checkbox item, and the add-people actions; the
+column's background offers New channel. The menu opens at the pointer, or at a
+focused channel row or team heading with the ContextMenu key or Shift+F10;
+dismissing it, or marking a channel read, returns focus to that row.
 
 A mute is kept on this device, in the native local settings beside the alert
 modes (`chat_local.rs`): the pinned server always reports a conversation's
 `muted` and `hidden` as false and the protocol has no request that sets them.
-The settings hold a set of muted channel keys and a team default per team key,
-each a pair of SHA-256 digests (`notificationKey` and `teamKey` in
-`local-contract.ts`), so the file names no alias, channel or team; each holds at
-most 4,096 entries, as the per-channel alert modes do. `ChatInboxService`
-publishes `muted` as the server's flag or this device's mute, so the row's
-dimmed look and "Muted" caption, the team and rail counts, the Alt+Shift
-steps and the screen-reader announcements follow a mute without changes of
-their own; its own state keeps the server's value. A channel's alert mode is
-its own when it has one (All new messages, Mentions only or None), else None
-while it is muted, else its team's default, else every message; the native
-side refuses a desktop alert by the same order, from the mutes it stores. Mentions only alerts for a
-message whose first 256 characters contain `@` and the reader's username at
-the word boundaries the message renderer draws a mention at, compared as
-`mentionKey` compares names. It is a text match on this device, not a protocol
-mention, which the pinned protocol does not have; a sender can write any name. The menu opens at the pointer, or at a
-focused channel row or team heading with the ContextMenu key or Shift+F10;
-dismissing it, or marking a channel read, returns focus to that row.
+The settings hold a set of muted channel and team keys and a team default per
+team key, each key a pair of SHA-256 digests (`notificationKey` and `teamKey`
+in `local-contract.ts`), so the file names no alias, channel or team; each
+holds at most 4,096 entries, as the per-channel alert modes do. A team's key
+in the muted set mutes each of its channels, including those created later.
+`ChatInboxService` publishes `muted` as the server's flag or this device's
+mute, so the row's dimmed look and "Muted" caption, the team and rail counts,
+the Alt+Shift steps and the screen-reader announcements follow a mute without
+changes of their own; its own state keeps the server's value. A channel's
+alert mode is its own when it has one (All new messages, Mentions only or
+None), else None while it or its team is muted, else its team's default, else
+every message; the native side refuses a desktop alert by the same order, from
+the mutes it stores. Each change to these settings, a mute included, clears the
+desktop alerts already delivered and restarts the notification consumer, which
+takes a fresh baseline for every watched channel. A settings file that holds a
+mute, a team default or Mentions only cannot be read by a desktop build from
+before these settings existed: that build refuses the whole file, and its local
+alert settings fail until the file is removed.
+
+Mentions only alerts for a message whose first 256 characters name the reader
+as `@username` where the message renderer would draw a mention: the match runs
+over the renderer's own inline tokens (`inlineTokens` in `mentions.ts`), so an
+`@username` inside a code span, a Markdown link, a bare URL or a fenced code
+block does not count, and names are compared as `mentionKey` compares them. It
+is a text match on this device, not a protocol mention, which the pinned
+protocol does not have; a sender can write any name.
 
 Alt+Up and Alt+Down (Option on macOS) open the previous and next channel row
 the column draws, stopping at either end; channels of a folded team are not
@@ -946,15 +958,17 @@ that opens `chat-info.tsx` — rendered as a third column when space permits, an
 as an overlay covering the conversation pane below 1000px tab width to preserve
 readability at the 960px minimum window width. The overlay covers the entire
 conversation pane to avoid partially obscuring message text and header
-controls. The team column remains visible to allow navigating away at any time. It carries the channel's description; Access, with
-Who can read and Who can post ("Admins and owners", "Everyone on the team",
-"Members at visibility level 1 and above"); Readers, each with an avatar, the
-shell's `roleName` (never the band) and "can post" or "read only"; the
-per-device alert mode, whose Default choice states the mode it gives and why
-("None while the channel is muted", "Mentions only, the team default"), and
-the Mute channel switch; and "Manage in Teams". A channel that every team user can read folds its readers
-behind one All members row; any other lists them and names the team users who
-cannot read it.
+controls. The team column remains visible to allow navigating away at any
+time. It carries the channel's description; Access, with Who can read and Who
+can post ("Admins and owners", "Everyone on the team", "Members at visibility
+level 1 and above"); Readers, each with an avatar, the shell's `roleName` (never
+the band) and "can post" or "read only"; the per-device alert mode, whose
+Default choice states the mode it gives and why ("None while the channel is
+muted", "Mentions only, the team default", "All new messages, the device
+setting"), and the Mute channel switch, described by the note under it, which is
+on and cannot be changed while the team is muted; and "Manage in Teams". A
+channel that every team user can read folds its readers behind one All members
+row; any other lists them and names the team users who cannot read it.
 
 The audience comes from `channelAudience` in `chat/audience.ts`, on the roster
 the team page already loads: the user parties whose role `admits` the read
@@ -1217,11 +1231,10 @@ Four things the chat redesign drafts showed are deliberately not built, because
 no `ChatAction` reaches them: reactions, "Retry all" and "Discard" over every
 pending operation at once (one attempt per operation is the rule the recovery
 model keeps), Leave / Delete / Edit description in the ⓘ panel (Mute is
-there, as a setting on this device), and a
-"Join a team" button, which has no FOKS equivalent
-— a team arrives through an invitation or a per-server check for groups, both
-of which live in Teams, so the column's foot keeps the one "Create or join a
-team" button.
+there, as a setting on this device), and a "Join a team" button, which has no
+FOKS equivalent — a team arrives through an invitation or a per-server check
+for groups, both of which live in Teams, so the column's foot keeps the one
+"Create or join a team" button.
 
 The conversation header carries Refresh alongside search, files and ⓘ, because
 the history, channel list and saved work can become stale.

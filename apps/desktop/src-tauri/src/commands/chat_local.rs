@@ -25,9 +25,11 @@ pub struct Settings {
     pub previews: bool,
     /// A channel's own alert mode, by channel key.
     pub overrides: BTreeMap<String, AlertMode>,
-    /// The channels muted on this device, by channel key. A muted channel
-    /// stays out of unread totals, and raises no alerts unless it has its
-    /// own mode in `overrides`.
+    /// The channels and teams muted on this device, by channel key or team
+    /// key; the two kinds cannot coincide (see `team_key`). A team's mute
+    /// covers each of its channels, including those created later. A muted
+    /// channel stays out of unread totals, and raises no alerts unless it has
+    /// its own mode in `overrides`.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub muted: BTreeSet<String>,
     /// A team's default alert mode for its channels without their own, by
@@ -78,19 +80,17 @@ impl From<AlertMode> for StoredMode {
 }
 impl Settings {
     /// The alert mode that applies to a channel: its own, else none while it
-    /// is muted, else its team's default, else every message.
+    /// or its team is muted, else its team's default, else every message.
     fn alert_mode(&self, scope: &ChatScope, channel: &str) -> AlertMode {
         let key = key(scope, channel);
         if let Some(mode) = self.overrides.get(&key) {
             return *mode;
         }
-        if self.muted.contains(&key) {
+        let team = team_key(scope);
+        if self.muted.contains(&key) || self.muted.contains(&team) {
             return AlertMode::None;
         }
-        self.teams
-            .get(&team_key(scope))
-            .copied()
-            .unwrap_or(AlertMode::All)
+        self.teams.get(&team).copied().unwrap_or(AlertMode::All)
     }
 }
 /// Distinguishes a field sent as `null` (`Some(None)`) from one left out
@@ -116,7 +116,8 @@ pub enum Action {
         #[serde(rename = "storeId")]
         store_id: Option<String>,
         scope: Option<ChatScope>,
-        /// The channel to configure; without it, `mode` is the team default.
+        /// The channel to configure; without it, `mode` is the team default
+        /// and `muted` mutes the team.
         channel: Option<String>,
         /// `null` removes the channel's own mode or the team default; left
         /// out, the mode is unchanged.
@@ -193,6 +194,17 @@ fn valid_key(k: &str) -> bool {
         && k.bytes()
             .enumerate()
             .all(|(i, c)| i == 64 || c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+/// Adds or removes a muted channel or team key, within the bound.
+fn set_muted(muted: &mut BTreeSet<String>, key: String, value: bool) -> Result<(), AgentError> {
+    if !value {
+        muted.remove(&key);
+    } else if muted.contains(&key) || muted.len() < KEYED_LIMIT {
+        muted.insert(key);
+    } else {
+        return Err(error("Local channel setting limit reached."));
+    }
+    Ok(())
 }
 /// Sets (`Some`) or removes (`None`) a keyed alert mode, within the bound.
 fn set_keyed(
@@ -445,25 +457,16 @@ pub async fn chat_local(
                     if let Some(mode) = mode {
                         set_keyed(&mut settings.overrides, key.clone(), mode)?;
                     }
-                    match muted {
-                        Some(true) => {
-                            if !settings.muted.contains(&key) && settings.muted.len() >= KEYED_LIMIT
-                            {
-                                return Err(error("Local channel setting limit reached."));
-                            }
-                            settings.muted.insert(key);
-                        }
-                        Some(false) => {
-                            settings.muted.remove(&key);
-                        }
-                        None => {}
+                    if let Some(value) = muted {
+                        set_muted(&mut settings.muted, key, value)?;
                     }
                 } else {
-                    if muted.is_some() {
-                        return Err(error("A channel is required."));
-                    }
+                    let key = team_key(&scope);
                     if let Some(mode) = mode {
-                        set_keyed(&mut settings.teams, team_key(&scope), mode)?;
+                        set_keyed(&mut settings.teams, key.clone(), mode)?;
+                    }
+                    if let Some(value) = muted {
+                        set_muted(&mut settings.muted, key, value)?;
                     }
                 }
             }
@@ -710,7 +713,30 @@ mod tests {
         assert_eq!(settings.alert_mode(&scope, "d"), AlertMode::Mentions);
         settings.overrides.insert(key(&scope, "c"), AlertMode::All);
         assert_eq!(settings.alert_mode(&scope, "c"), AlertMode::All);
+        // A team's mute covers each of its channels without its own mode,
+        // and no other team's.
+        settings.muted.insert(team_key(&scope));
+        assert_eq!(settings.alert_mode(&scope, "d"), AlertMode::None);
+        assert_eq!(settings.alert_mode(&scope, "c"), AlertMode::All);
+        assert_eq!(settings.alert_mode(&other, "d"), AlertMode::All);
         assert_ne!(team_key(&scope), key(&scope, ""));
+    }
+
+    #[test]
+    fn muted_keys_are_bounded_and_unmuting_an_absent_key_is_a_no_op() {
+        let mut muted = BTreeSet::new();
+        let scope = test_scope("t");
+        set_muted(&mut muted, team_key(&scope), false).unwrap();
+        assert!(muted.is_empty());
+        for i in 0..KEYED_LIMIT {
+            set_muted(&mut muted, key(&scope, &i.to_string()), true).unwrap();
+        }
+        assert!(set_muted(&mut muted, team_key(&scope), true).is_err());
+        // An entry already held is set again, and one removed makes room.
+        set_muted(&mut muted, key(&scope, "0"), true).unwrap();
+        set_muted(&mut muted, key(&scope, "0"), false).unwrap();
+        set_muted(&mut muted, team_key(&scope), true).unwrap();
+        assert_eq!(muted.len(), KEYED_LIMIT);
     }
 
     #[test]

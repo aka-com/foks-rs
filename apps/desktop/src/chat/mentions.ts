@@ -63,25 +63,43 @@ export function chatMentions(
 }
 
 /**
- * An `@name` where the message renderer draws one: not continuing a word, a
- * name or an email address (`bob@example.com`).
+ * The inline tokens the message renderer (`MessageText`) draws, in the order
+ * it tries them: a code span, bold, italics, a Markdown link, a bare URL and
+ * an `@name`. A bare URL must not continue a word, and an `@name` must not
+ * continue a word, a name or an email address (`bob@example.com`). A new
+ * expression on each call, since a global one keeps its position.
  */
-const MENTION =
-  /(?<![\p{L}\p{M}\p{N}_@.])@([\p{L}\p{N}][\p{L}\p{M}\p{N}._-]*)/gu;
+export function inlineTokens(): RegExp {
+  return /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\)|(?<![\p{L}\p{N}])https?:\/\/[^\s<>]+|(?<![\p{L}\p{M}\p{N}_@.])@[\p{L}\p{N}][\p{L}\p{M}\p{N}._-]*)/giu;
+}
 
 /**
- * Whether `text` names `username` as an `@name`, compared as
- * {@link mentionKey} compares names, with the trailing `.`, `_` or `-` that
- * ends a sentence left out as the renderer leaves it out. This is a match on
- * the text on this device, for the Mentions only alert mode: the pinned
- * protocol has no mentions, and a sender can write any name.
+ * Whether `text` names `username` where the message renderer would draw a
+ * mention: an `@name` token of {@link inlineTokens}, outside fenced code
+ * blocks, compared as {@link mentionKey} compares names, with the trailing
+ * `.`, `_` or `-` that ends a sentence left out as the renderer leaves it
+ * out. An `@name` inside a code span, a link or a bare URL is not one. This
+ * is a match on the text on this device, for the Mentions only alert mode:
+ * the pinned protocol has no mentions, and a sender can write any name.
  */
 export function mentionsReader(text: string, username: string): boolean {
   const self = mentionKey(username);
-  for (const match of text.matchAll(MENTION)) {
-    let end = match[1].length;
-    while (end > 1 && '._-'.includes(match[1][end - 1])) end--;
-    if (mentionKey(match[1].slice(0, end)) === self) return true;
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    // A fenced block is drawn as code, and a fence left open as plain text
+    // to the end of the message; neither holds a mention.
+    if (lines[i].startsWith('```')) {
+      while (++i < lines.length && !lines[i].startsWith('```'));
+      continue;
+    }
+    // The renderer reads a list item or a quote line without its marker.
+    const line = lines[i].replace(/^(?:[-*] |\d+\. |> )/, '');
+    for (const [token] of line.matchAll(inlineTokens())) {
+      if (!token.startsWith('@')) continue;
+      let end = token.length;
+      while (end > 2 && '._-'.includes(token[end - 1])) end--;
+      if (mentionKey(token.slice(1, end)) === self) return true;
+    }
   }
   return false;
 }

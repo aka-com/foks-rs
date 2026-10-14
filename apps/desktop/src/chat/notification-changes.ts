@@ -46,7 +46,6 @@ export interface NotificationView {
 export function notificationView(
   entry: TeamInbox | undefined,
   channel: string,
-  preference = true,
 ): NotificationView | undefined {
   if (!entry?.scope || !entry.data) return;
   let index = indexes.get(entry.data);
@@ -72,7 +71,8 @@ export function notificationView(
     muted: !!conversation?.muted,
     hidden: !!conversation?.hidden,
     quarantined: entry.blockedChannels.has(channel),
-    preference,
+    // The consumer clears it for a channel whose alert mode is none.
+    preference: true,
     // A muted channel stays eligible: a mute silences alerts unless the
     // channel has its own alert mode, which the consumer decides.
     eligible:

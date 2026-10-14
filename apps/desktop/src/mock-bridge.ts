@@ -1024,7 +1024,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
             : [teamKey(action.scope), notificationSettings.teams];
           if (action.mode === null) delete modes[key];
           else if (action.mode !== undefined) modes[key] = action.mode;
-          if (action.channel && action.muted !== undefined) {
+          if (action.muted !== undefined) {
             if (action.muted) notificationSettings.muted.add(key);
             else notificationSettings.muted.delete(key);
           }

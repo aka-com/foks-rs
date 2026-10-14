@@ -4,7 +4,7 @@ import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { cancelled } from '../src/chat/client';
 import { ChannelCreationController } from '../src/chat/channel-creation';
 import { ChatInboxService } from '../src/chat/inbox-service';
-import { notificationKey } from '../src/chat/local-contract';
+import { notificationKey, teamKey } from '../src/chat/local-contract';
 import { teamUnread } from '../src/chat/unread';
 import type { ChatClock } from '../src/chat/clock';
 import type { ChatInboxTiming } from '../src/chat/inbox-service';
@@ -1266,6 +1266,12 @@ test('a channel muted on this device is published muted and leaves the team tota
     f.service.setLocalMutes([]);
     assert.equal(conversation('c1').muted, false);
     assert.equal(teamUnread(f.service.getSnapshot().get('t0'))?.label, '8');
+    // A team's key mutes each of its conversations and no other team's.
+    f.service.setLocalMutes([teamKey(scope)]);
+    assert.equal(conversation('c0').muted, true);
+    assert.equal(conversation('c1').muted, true);
+    assert.equal(teamUnread(f.service.getSnapshot().get('t0')), null);
+    assert.equal(f.service.getSnapshot().get('t1'), plain.get('t1'));
     off();
   } finally {
     f.service.stop();

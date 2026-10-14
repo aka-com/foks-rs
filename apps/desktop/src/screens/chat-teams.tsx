@@ -74,6 +74,7 @@ import {
   notificationKey,
   storedAlertMode,
   teamKey,
+  teamMuted,
 } from '../chat/local-contract';
 import type { AlertChoice, LocalAction } from '../chat/local-contract';
 import {
@@ -604,6 +605,14 @@ export function ChatTeamColumn({
     !!localSettings?.muted.includes(
       notificationKey(contextScope, context.channel),
     );
+  // A team's mute covers its channels, so a channel's own mute cannot be
+  // changed until the team is unmuted.
+  const contextTeamMuted =
+    !!contextScope && !!localSettings && teamMuted(localSettings, contextScope);
+  const teamMuteReason =
+    contextTeamMuted && contextRow
+      ? `All ${contextRow.store.name} channels are muted from the team menu.`
+      : undefined;
   const teamMode = contextScope
     ? localSettings?.teams[teamKey(contextScope)]
     : undefined;
@@ -946,9 +955,9 @@ export function ChatTeamColumn({
                     icon={contextMuted ? 'bell' : 'bellOff'}
                     title="Applies to this device only"
                     reason={
-                      contextChannel
-                        ? localReason
-                        : 'This channel is no longer available.'
+                      !contextChannel
+                        ? 'This channel is no longer available.'
+                        : (localReason ?? teamMuteReason)
                     }
                     // Like Mark as read, this leaves the reader in the column.
                     onClick={() => {
@@ -1008,6 +1017,17 @@ export function ChatTeamColumn({
                         ? 'Desktop alerts are unavailable in this build.'
                         : undefined)
                     }
+                    muted={contextTeamMuted}
+                    muteReason={localReason}
+                    onMute={(muted) => {
+                      dismissContext();
+                      configureLocal(
+                        { muted },
+                        muted
+                          ? `${contextRow.store.name} channels were not muted.`
+                          : `${contextRow.store.name} channels were not unmuted.`,
+                      );
+                    }}
                     onChoose={(choice) => {
                       dismissContext();
                       configureLocal(
@@ -1087,21 +1107,32 @@ function channelUnreadTotal(channels: readonly ListedChannel[]): number {
 
 /**
  * A team menu's alert default: the mode its channels without their own take
- * on this device, as radio items, so each choice is one arrow key away.
+ * on this device, as radio items, so each choice is one arrow key away; and
+ * the team's mute, which takes every channel of the team, including those
+ * created later, out of the unread totals on this device.
  */
 function TeamAlertItems({
   team,
   value,
   reason,
+  muted,
+  muteReason,
+  onMute,
   onChoose,
 }: {
   team: string;
   value: AlertChoice | 'inherit';
   /** Why the choices do not apply, when they do not. */
   reason?: string;
+  /** The team is muted on this device. */
+  muted: boolean;
+  /** Why the mute cannot be changed, when it cannot. */
+  muteReason?: string;
+  onMute: (muted: boolean) => void;
   onChoose: (choice: AlertChoice | 'inherit') => void;
 }): ReactNode {
   const descriptionId = useId();
+  const muteDescriptionId = useId();
   const choices = [
     ['inherit', 'Device setting'],
     ['all', ALERT_TITLES.all],
@@ -1138,6 +1169,24 @@ function TeamAlertItems({
       {reason ? (
         <span id={descriptionId} className="offscreen">
           {reason}
+        </span>
+      ) : null}
+      <button
+        type="button"
+        className="chat-team-alert"
+        role="menuitemcheckbox"
+        aria-checked={muted}
+        aria-disabled={muteReason ? true : undefined}
+        aria-describedby={muteReason ? muteDescriptionId : undefined}
+        title={muteReason ?? 'Applies to this device only'}
+        onClick={muteReason ? undefined : () => onMute(!muted)}
+      >
+        <Icon name="check" />
+        Mute all channels
+      </button>
+      {muteReason ? (
+        <span id={muteDescriptionId} className="offscreen">
+          {muteReason}
         </span>
       ) : null}
     </>

@@ -182,6 +182,18 @@ test('mentions only matches the reader as an @name, as the renderer draws one', 
   assert.ok(!mentionsReader('mail priya@priya.n', 'priya.n'));
   assert.ok(!mentionsReader('@priya.nx', 'priya.n'));
   assert.ok(!mentionsReader('x@priya.n', 'priya.n'));
+  // Where the renderer draws a code span, a link or a bare URL, or a fenced
+  // block, it draws no mention, and neither is one matched.
+  assert.ok(!mentionsReader('see https://example.social/@priya.n', 'priya.n'));
+  assert.ok(!mentionsReader('run `ping @priya.n`', 'priya.n'));
+  assert.ok(!mentionsReader('[x](https://example.social/@priya.n)', 'priya.n'));
+  assert.ok(!mentionsReader('```\n@priya.n\n```', 'priya.n'));
+  assert.ok(!mentionsReader('```\n@priya.n, the fence left open', 'priya.n'));
+  assert.ok(!mentionsReader('**@priya.n**', 'priya.n'));
+  assert.ok(mentionsReader('```\ncode\n```\nthen @priya.n', 'priya.n'));
+  assert.ok(mentionsReader('[link](https://example.com) @priya.n', 'priya.n'));
+  assert.ok(mentionsReader('> @priya.n wrote this', 'priya.n'));
+  assert.ok(mentionsReader('- @priya.n', 'priya.n'));
 });
 test('mentions only reads the username of the account the scope names on the store server', () => {
   const snapshot = {
