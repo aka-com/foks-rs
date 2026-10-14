@@ -733,7 +733,9 @@ fn dispatch_with_page_rows(
                                     ChatContent::Text {
                                         text: if notification {
                                             SecretString::new(
-                                                text.chars().take(256).collect::<String>(),
+                                                text.chars()
+                                                    .take(CHAT_NOTIFICATION_TEXT_CHARS)
+                                                    .collect::<String>(),
                                             )
                                         } else {
                                             SecretString::new(text.as_str())

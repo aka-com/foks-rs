@@ -12,6 +12,7 @@ import {
   CHAT_DESCRIPTION_MIN_CHARS,
   CHAT_NAME_MAX_CHARS,
   CHAT_NAME_MIN_CHARS,
+  CHAT_NOTIFICATION_TEXT_CHARS,
 } from '../src/chat-limits';
 import {
   channelDescriptionProblem,
@@ -396,7 +397,10 @@ test('notification history accepts only bounded snippets and retains history sco
           sender: null,
           send_time: '1',
           insert_time: '1',
-          content: { kind: 'text', text: '😀'.repeat(256) },
+          content: {
+            kind: 'text',
+            text: '😀'.repeat(CHAT_NOTIFICATION_TEXT_CHARS),
+          },
         },
       ],
     },
@@ -409,6 +413,12 @@ test('notification history accepts only bounded snippets and retains history sco
   assert.equal(decodeChatReply(reply, storeId, action).result.kind, 'history');
   reply.result.messages[0].content.text += 'x';
   assert.throws(() => decodeChatReply(reply, storeId, action));
+});
+
+test('the notification text bound comes from the shared chat limits', () => {
+  // The agent truncates to this value and the native validator rejects longer
+  // text; both read it from the same `chat-limits.json`.
+  assert.equal(CHAT_NOTIFICATION_TEXT_CHARS, 256);
 });
 
 test('the channel name and description bands are the ones the agent admits', () => {

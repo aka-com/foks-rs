@@ -1,6 +1,10 @@
 import type { AgentSnapshot } from './model';
 import { cancelled } from './chat/client';
-import { CHAT_PAGE_ROWS, CHAT_SNIPPET_BYTES } from './chat-limits';
+import {
+  CHAT_NOTIFICATION_TEXT_CHARS,
+  CHAT_PAGE_ROWS,
+  CHAT_SNIPPET_BYTES,
+} from './chat-limits';
 import {
   decodeChatOperation,
   decodeChatReplyFor,
@@ -265,14 +269,17 @@ export function mockChat(
                 BigInt(all.at(-1)?.sequence ?? '0') < BigInt(after),
             }),
         channel: action.channel,
-        // The agent cuts each notification text to 256 characters.
+        // The agent cuts each notification text to CHAT_NOTIFICATION_TEXT_CHARS
+        // characters.
         messages: (after === undefined ? rows : [...rows].reverse()).map((m) =>
           action.action === 'notification-history' && m.content.kind === 'text'
             ? {
                 ...m,
                 content: {
                   kind: 'text',
-                  text: Array.from(m.content.text).slice(0, 256).join(''),
+                  text: Array.from(m.content.text)
+                    .slice(0, CHAT_NOTIFICATION_TEXT_CHARS)
+                    .join(''),
                 },
               }
             : m,

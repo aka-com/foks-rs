@@ -1,6 +1,7 @@
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import type { ChatMessage } from '../chat-contract';
+import { CHAT_NOTIFICATION_TEXT_CHARS, CHAT_PAGE_ROWS } from '../chat-limits';
 import { chatClient, channelIntegrity, integrity } from './client';
 import { sameScope, channelWorkKey } from './scope';
 import {
@@ -469,11 +470,11 @@ export class NotificationConsumer {
       if (!sameScope(reply.scope, p.view.scope)) throw integrity();
       // Native enforcement precedes decryption; reject malformed fake/adapter replies too.
       if (
-        reply.result.messages.length > 50 ||
+        reply.result.messages.length > CHAT_PAGE_ROWS ||
         reply.result.messages.some(
           (m) =>
             m.content.kind === 'text' &&
-            Array.from(m.content.text).length > 256,
+            Array.from(m.content.text).length > CHAT_NOTIFICATION_TEXT_CHARS,
         )
       )
         throw channelIntegrity('Invalid notification history bound.');

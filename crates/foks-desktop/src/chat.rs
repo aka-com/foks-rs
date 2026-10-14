@@ -212,7 +212,9 @@ pub fn validate_chat_reply(
                         && valid_content(&m.content, CHAT_TEXT_BYTES)
                         && (!matches!(action, ChatAction::NotificationHistory { .. })
                             || match &m.content {
-                                ChatContent::Text { text } => text.expose().chars().count() <= 256,
+                                ChatContent::Text { text } => {
+                                    text.expose().chars().count() <= CHAT_NOTIFICATION_TEXT_CHARS
+                                }
                                 _ => true,
                             })
                 })
@@ -606,6 +608,54 @@ mod tests {
             *before = Some("2".into());
         }
         assert!(validate_chat_reply(&store, &action, &reply).is_err());
+    }
+
+    #[test]
+    fn notification_history_text_is_bounded_in_characters() {
+        let store = TeamStoreRef {
+            profile: "local".into(),
+            account_alias: "me".into(),
+            team_alias: "team".into(),
+            team_id: format!("03{}", "ab".repeat(32)),
+        };
+        let reply = |text: String| ChatReply {
+            scope: ChatScope {
+                store: store.clone(),
+                host: format!("02{}", "ab".repeat(32)),
+                actor: format!("01{}", "ab".repeat(32)),
+            },
+            result: ChatResult::History {
+                gap: None,
+                channel: "ab".repeat(16),
+                messages: vec![ChatMessage {
+                    id: "cd".repeat(16),
+                    sequence: "1".into(),
+                    sender: None,
+                    send_time: "1".into(),
+                    insert_time: "1".into(),
+                    content: ChatContent::Text {
+                        text: foks_agent_proto::SecretString::new(text),
+                    },
+                }],
+                before: None,
+                missing_predecessors: vec![],
+            },
+        };
+        let notification = ChatAction::NotificationHistory {
+            channel: "ab".repeat(16),
+            before: None,
+        };
+        let history = ChatAction::History {
+            after: None,
+            channel: "ab".repeat(16),
+            before: None,
+        };
+        // Four-byte characters: the bound counts Unicode scalar values.
+        let at_bound = reply("\u{1F600}".repeat(CHAT_NOTIFICATION_TEXT_CHARS));
+        validate_chat_reply(&store, &notification, &at_bound).unwrap();
+        let past_bound = reply("\u{1F600}".repeat(CHAT_NOTIFICATION_TEXT_CHARS + 1));
+        assert!(validate_chat_reply(&store, &notification, &past_bound).is_err());
+        validate_chat_reply(&store, &history, &past_bound).unwrap();
     }
 
     #[test]

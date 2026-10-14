@@ -178,6 +178,7 @@ a build script and imported directly by the desktop's TypeScript.
 | `CHAT_INBOX_ROWS` | 1,000 |
 | `CHAT_CHANNEL_ROWS` | 256 |
 | `CHAT_TEXT_BYTES` | 65,536 |
+| `CHAT_NOTIFICATION_TEXT_CHARS` | 256 |
 | `CHAT_POLL_MILLISECONDS` | 55,000 |
 | `CHAT_OPEN_VIEWS` | 32 |
 

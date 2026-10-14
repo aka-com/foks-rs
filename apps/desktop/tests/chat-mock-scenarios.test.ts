@@ -23,6 +23,7 @@ import {
   type ChatAction,
   type ChatReply,
 } from '../src/chat-contract';
+import { CHAT_NOTIFICATION_TEXT_CHARS } from '../src/chat-limits';
 import { FIXTURE } from '../src/fixture';
 
 // The native decoder checks the scope against a JSON store id, so the
@@ -288,7 +289,7 @@ test('a scripted session on a fixture store ID decodes as the agent would reply'
   if (first.result.kind !== 'inbox') throw new Error('inbox expected');
   // A long line of four-byte characters: the inbox preview is cut on a
   // character boundary within the snippet bound, and notification history
-  // to 256 characters, as the agent cuts them.
+  // to CHAT_NOTIFICATION_TEXT_CHARS characters, as the agent cuts them.
   const long = '\u{1F600}'.repeat(300);
   for (const [index, body] of [long, 'x'.repeat(300)].entries())
     await call({
@@ -305,7 +306,10 @@ test('a scripted session on a fixture store ID decodes as the agent would reply'
         before: null,
       }),
     ).slice(-2),
-    ['\u{1F600}'.repeat(256), 'x'.repeat(256)],
+    [
+      '\u{1F600}'.repeat(CHAT_NOTIFICATION_TEXT_CHARS),
+      'x'.repeat(CHAT_NOTIFICATION_TEXT_CHARS),
+    ],
   );
   assert.deepEqual(
     text(

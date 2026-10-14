@@ -1,15 +1,18 @@
 /**
  * Shared with the Rust agent protocol; values are UTF-8 bytes, character counts
- * or row counts. The `*_CHARS` bounds are the ones `ChatLimits`
- * (`crates/foks-client-db/src/chat_limits.rs`) admits a channel name and
- * description on, counted in Unicode scalar values; `crates/foks-agent/src/chat.rs`
- * asserts the two sides agree.
+ * or row counts. `*_CHARS` bounds count Unicode scalar values. The channel name
+ * and description bounds are the ones `ChatLimits`
+ * (`crates/foks-client-db/src/chat_limits.rs`) admits a channel on, and
+ * `crates/foks-agent/src/chat.rs` asserts the two sides agree.
+ * `CHAT_NOTIFICATION_TEXT_CHARS` is the length the agent cuts each
+ * notification-history text to.
  */
 import limits from '../../../crates/foks-agent-proto/chat-limits.json';
 
 export const {
   CHAT_TEXT_BYTES,
   CHAT_SNIPPET_BYTES,
+  CHAT_NOTIFICATION_TEXT_CHARS,
   CHAT_PAGE_ROWS,
   CHAT_CHANNEL_ROWS,
   CHAT_NAME_BYTES,

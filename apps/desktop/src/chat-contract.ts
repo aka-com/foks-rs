@@ -6,6 +6,7 @@ import {
   CHAT_NAME_BYTES,
   CHAT_DESCRIPTION_BYTES,
   CHAT_SNIPPET_BYTES,
+  CHAT_NOTIFICATION_TEXT_CHARS,
   CHAT_LABEL_BYTES,
   CHAT_MISSING_PREDECESSORS,
   CHAT_PENDING_ROWS,
@@ -516,7 +517,8 @@ export function decodeChatResult(
       action.action === 'notification-history' &&
       messages.some(
         (m) =>
-          m.content.kind === 'text' && Array.from(m.content.text).length > 256,
+          m.content.kind === 'text' &&
+          Array.from(m.content.text).length > CHAT_NOTIFICATION_TEXT_CHARS,
       )
     )
       fail();

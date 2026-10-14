@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { incoming, notificationText } from '../src/chat/notification-policy';
+import { CHAT_NOTIFICATION_TEXT_CHARS } from '../src/chat-limits';
 import {
   decodeLocalSession,
   notificationKey,
@@ -81,6 +82,14 @@ test('notification candidates exclude baseline, own, unknown, duplicate and visi
   assert.equal(alerts[3].count, 17);
   assert.equal(alerts[3].incomplete, true);
 });
+test('notification bodies are cut to the shared bound in characters, not UTF-16 units', () => {
+  const long = '\u{1F600}'.repeat(CHAT_NOTIFICATION_TEXT_CHARS + 1);
+  const [alert] = notificationText(
+    [{ ...message(1), content: { kind: 'text', text: long } }],
+    false,
+  );
+  assert.equal(alert.body, '\u{1F600}'.repeat(CHAT_NOTIFICATION_TEXT_CHARS));
+});
 test('local preference keys bind actor, host, team and channel without persisting aliases', async () => {
   const key = await notificationKey(scope, 'c');
   assert.match(key, /^[a-f0-9]{64}\/[a-f0-9]{64}$/);
@@ -129,7 +138,7 @@ test('consumer fakes reject a notification page the agent could not send', async
       null,
     ),
   });
-  let next = reply('x'.repeat(256));
+  let next = reply('x'.repeat(CHAT_NOTIFICATION_TEXT_CHARS));
   const bridge = decodedChatBridge({ chat: async () => next }, team);
   const read = () =>
     bridge.chat('team:eng', {
@@ -138,8 +147,9 @@ test('consumer fakes reject a notification page the agent could not send', async
       before: null,
     });
   await read();
-  // The agent cuts each notification text to 256 characters.
-  next = reply('x'.repeat(257));
+  // The agent cuts each notification text to CHAT_NOTIFICATION_TEXT_CHARS
+  // characters.
+  next = reply('x'.repeat(CHAT_NOTIFICATION_TEXT_CHARS + 1));
   await assert.rejects(read(), { code: 'chat-integrity' });
 });
 

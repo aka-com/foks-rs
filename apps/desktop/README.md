@@ -233,7 +233,7 @@ are decisions, not details:
   its scope check compares against the team the fixture store ID stands for,
   since fixture IDs such as `team:eng` are not the native JSON store
   references. As the agent does, the mock cuts notification history text to
-  256 characters and reports an inbox preview's first line whole when it fits
+  `CHAT_NOTIFICATION_TEXT_CHARS` (256) characters and reports an inbox preview's first line whole when it fits
   in 512 bytes, otherwise cut to make room for an ellipsis. Tests that fake
   `chat` directly can decode their replies the same way with
   `decodedChatBridge` (`tests/lib/decoded-chat-bridge.ts`).

@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../chat-contract';
+import { CHAT_NOTIFICATION_TEXT_CHARS } from '../chat-limits';
 /** Select verified incoming Basic messages; positions and delivery are independent. */
 export function incoming(
   messages: readonly ChatMessage[],
@@ -31,7 +32,9 @@ export function notificationText(
   const first = messages.slice(0, 3).map((m) => ({
     body:
       m.content.kind === 'text'
-        ? Array.from(m.content.text).slice(0, 256).join('')
+        ? Array.from(m.content.text)
+            .slice(0, CHAT_NOTIFICATION_TEXT_CHARS)
+            .join('')
         : undefined,
     count: 1,
     incomplete: false,
