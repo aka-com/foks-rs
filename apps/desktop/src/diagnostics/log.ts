@@ -4,7 +4,8 @@
  * Every layer records the same record: the renderer directly, the desktop
  * backend through a source the shell registers, the agent through the timing
  * each of its responses carries. Nothing here persists or leaves the process;
- * the Refresh status popover's Copy diagnostics is the only reader.
+ * Copy diagnostics, in the Refresh status popover or on the window fault
+ * screen, is the only reader.
  *
  * What may be recorded is what the popover already prints: server ids, job
  * kinds, command and operation names, opaque store ids, and short hashes of

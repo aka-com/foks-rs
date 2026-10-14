@@ -2,7 +2,8 @@
  * Isolates screen render failures from the surrounding application shell.
  *
  * A failed screen is replaced with an error notice and retry action while the
- * rail and topbar remain available. The shell keys the boundary by screen and
+ * rail and topbar remain available, and the fault is recorded for Copy
+ * diagnostics. The shell keys the boundary by screen and
  * clears failures when the full page identity changes without remounting a
  * healthy screen.
  */
@@ -11,6 +12,10 @@ import { Component, Fragment } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import { normalizeCommandError } from '../bridge';
 import { Band, Button } from '../components';
+import {
+  recordRendererFault,
+  type LabelledBoundary,
+} from '../diagnostics/renderer-fault';
 import type { Location } from '../location';
 
 /**
@@ -59,11 +64,12 @@ interface ScreenErrorBoundaryState {
   generation: number;
 }
 
-export class ScreenErrorBoundary extends Component<
-  ScreenErrorBoundaryProps,
-  ScreenErrorBoundaryState
-> {
+export class ScreenErrorBoundary
+  extends Component<ScreenErrorBoundaryProps, ScreenErrorBoundaryState>
+  implements LabelledBoundary
+{
   override state: ScreenErrorBoundaryState = { failure: null, generation: 0 };
+  readonly faultLabel = 'screen';
 
   static getDerivedStateFromError(
     error: unknown,
@@ -81,8 +87,9 @@ export class ScreenErrorBoundary extends Component<
 
   override componentDidCatch(error: unknown, info: ErrorInfo): void {
     // Display the error in the UI and retain the stack trace in the console for
-    // diagnostics and tests.
+    // diagnostics and tests. The timing log records the fault without either.
     console.error('A page failed to render.', error, info.componentStack);
+    recordRendererFault(this.faultLabel, error);
   }
 
   override render(): ReactNode {

@@ -681,6 +681,36 @@ rail's light says which one is in force.
   the platform offers, and a full-width Unlock. The boot error card shares the
   same box.
 
+### Render faults
+
+A render error stays inside the nearest error boundary
+(`src/app/fault-boundaries.tsx`, `src/app/screen-error-boundary.tsx`):
+
+- **Screen.** The routed screen shows "This page could not be shown" with
+  Reload page; the rail and topbar remain.
+- **Panels.** The details panel, Team info, the search palette and the write
+  workflow sheets each have their own boundary. A failed panel unmounts, which
+  discards any value it had revealed, the shell closes it, and a warning toast
+  states that it was closed.
+- **Window.** A failure anywhere else (the rail, the topbar, first-run setup,
+  the boot screens) replaces the window with a full-window card, "This window
+  could not be shown", with Reload window, Copy diagnostics and Quit FOKS. The
+  card uses no shell context, and it renders inside the exit guard, so Quit
+  FOKS and the window's own close still ask about the agent.
+
+Each fault is one `renderer.fault` event in the timing log, under the static
+label of the boundary that caught it (`screen`, `details`, `team-info`,
+`search`, `write-workflow`, `shell`, `app`). `createRoot`'s error callbacks
+record what no labelled boundary caught (`uncaught`, `unlabelled`,
+`recoverable`), and window listeners record script errors (`window-error`) and
+unhandled promise rejections (`unhandled-rejection`). The event's `code` is the
+constructor name of a built-in error type, such as `TypeError`, and is absent
+otherwise: minified builds rename components and custom error classes, and the
+log never holds error messages. At most 32 faults are recorded per label in one
+window load. Copy diagnostics lists them in a `renderer faults` table by label
+and code; the window card's Copy diagnostics copies the timing log without the
+status lines that need the shell.
+
 ### What each tab is
 
 Accounts is the list of what needs attention — the page that used to be called

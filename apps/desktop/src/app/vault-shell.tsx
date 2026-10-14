@@ -105,6 +105,7 @@ import {
   initialScene,
   fixtureScenesAllowed,
 } from './scenes';
+import { PanelErrorBoundary } from './fault-boundaries';
 import { ScreenRouter } from './screen-router';
 import {
   ScreenErrorBoundary,
@@ -806,6 +807,15 @@ export function VaultShell({
     agentLifecycle.state === 'ready' && agentCatalogReady && !chrome.blocked,
     concealSignal,
   );
+  // A panel that failed to render has already unmounted, discarding anything
+  // it revealed. Closing it keeps the shell from mounting it again, and the
+  // toast states why it closed.
+  const panelFault = (name: string, close: () => void) => (): void => {
+    close();
+    toasts.show(`${name} could not be shown and was closed.`, {
+      tone: 'warning',
+    });
+  };
   const shell = (
     <div
       className={[
@@ -1043,73 +1053,92 @@ export function VaultShell({
           listsItems(here) &&
           !detailsShown &&
           infoStore?.kind === 'team' ? (
-            <TeamInfoPanel
-              snapshot={shown}
-              store={infoStore}
-              bridge={bridge}
-              requestCount={teamRequestCounts.get(infoStore.id)}
-              accessNow={accessNow}
-              onError={commandError}
-              onNavigate={(location) => locations.navigate(location)}
-              onClose={(restoreFocus = true) => {
-                setTeamInfo(null);
-                if (restoreFocus)
-                  teamInfo?.trigger?.focus({ preventScroll: true });
-              }}
-            />
+            <PanelErrorBoundary
+              label="team-info"
+              onFault={panelFault('Team info', () => setTeamInfo(null))}
+            >
+              <TeamInfoPanel
+                snapshot={shown}
+                store={infoStore}
+                bridge={bridge}
+                requestCount={teamRequestCounts.get(infoStore.id)}
+                accessNow={accessNow}
+                onError={commandError}
+                onNavigate={(location) => locations.navigate(location)}
+                onClose={(restoreFocus = true) => {
+                  setTeamInfo(null);
+                  if (restoreFocus)
+                    teamInfo?.trigger?.focus({ preventScroll: true });
+                }}
+              />
+            </PanelErrorBoundary>
           ) : null}
           {here.kind !== 'first-run' && detailsShown ? (
-            <DetailsPanel
-              snapshot={shown}
-              bridge={bridge}
-              revealRequest={revealRequest}
-              onRevealHandled={() => setRevealRequest(null)}
-              selection={state.selection}
-              onClose={() => {
+            <PanelErrorBoundary
+              label="details"
+              onFault={panelFault('The details panel', () => {
+                setRevealRequest(null);
                 locations.setDetails(false);
-              }}
-              onMove={(item) => setWorkflow({ kind: 'move', item })}
-              onCopyToVault={(item) => setWorkflow({ kind: 'copy', item })}
-              onTrash={trash.moveToTrash}
-              onConflict={(item, draft, operation) =>
-                setWorkflow({ kind: 'conflict', item, draft, operation })
-              }
-              onApplied={refresh}
-              onCommandError={commandError}
-              onMutationError={mutationError}
-              concealSignal={concealSignal}
-              accessGeneration={selectedAccessGeneration}
-              accessNow={accessNow}
-              accessSession={accessSession}
-              accessTicket={lifetime.capture(
-                state.selection
-                  ? storeOf(shown, state.selection.store)?.server
-                  : undefined,
-              )}
-              resumeDraft={resumeDraft}
-            />
+              })}
+            >
+              <DetailsPanel
+                snapshot={shown}
+                bridge={bridge}
+                revealRequest={revealRequest}
+                onRevealHandled={() => setRevealRequest(null)}
+                selection={state.selection}
+                onClose={() => {
+                  locations.setDetails(false);
+                }}
+                onMove={(item) => setWorkflow({ kind: 'move', item })}
+                onCopyToVault={(item) => setWorkflow({ kind: 'copy', item })}
+                onTrash={trash.moveToTrash}
+                onConflict={(item, draft, operation) =>
+                  setWorkflow({ kind: 'conflict', item, draft, operation })
+                }
+                onApplied={refresh}
+                onCommandError={commandError}
+                onMutationError={mutationError}
+                concealSignal={concealSignal}
+                accessGeneration={selectedAccessGeneration}
+                accessNow={accessNow}
+                accessSession={accessSession}
+                accessTicket={lifetime.capture(
+                  state.selection
+                    ? storeOf(shown, state.selection.store)?.server
+                    : undefined,
+                )}
+                resumeDraft={resumeDraft}
+              />
+            </PanelErrorBoundary>
           ) : null}
-          <ShellSearch
-            snapshot={shown}
-            open={searchOpen}
-            onClose={() => setSearchOpen(false)}
-            onNavigate={(location) => locations.navigate(location)}
-            onOpenItem={(storeId, path) =>
-              locations.navigateAndSelect(
-                { kind: 'store', ref: storeId },
-                { store: storeId, path },
-              )
-            }
-            onOpenFolder={(storeId, path) =>
-              locations.navigateToFolder(
-                { kind: 'store', ref: storeId },
-                folderKey(true, storeId, path),
-              )
-            }
-            onCopyItem={copyFromPalette}
-            onOpenWebsite={openWebsiteFromPalette}
-            actions={paletteActions}
-          />
+          <PanelErrorBoundary
+            label="search"
+            identity={String(searchOpen)}
+            onFault={panelFault('Search', () => setSearchOpen(false))}
+          >
+            <ShellSearch
+              snapshot={shown}
+              open={searchOpen}
+              onClose={() => setSearchOpen(false)}
+              onNavigate={(location) => locations.navigate(location)}
+              onOpenItem={(storeId, path) =>
+                locations.navigateAndSelect(
+                  { kind: 'store', ref: storeId },
+                  { store: storeId, path },
+                )
+              }
+              onOpenFolder={(storeId, path) =>
+                locations.navigateToFolder(
+                  { kind: 'store', ref: storeId },
+                  folderKey(true, storeId, path),
+                )
+              }
+              onCopyItem={copyFromPalette}
+              onOpenWebsite={openWebsiteFromPalette}
+              actions={paletteActions}
+            />
+          </PanelErrorBoundary>
           <ShortcutSheet
             open={shortcutsOpen}
             onClose={() => setShortcutsOpen(false)}

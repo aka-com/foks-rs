@@ -509,6 +509,8 @@ button.attention-row:focus-visible{outline:2px solid var(--accent-border);outlin
 /* Takeover frame */
 .takeover{position:absolute;inset:var(--topbar-h) 0 0 var(--side-w);z-index:18;display:grid;place-items:center;padding:20px;overflow:auto}
 .stopwrap{background:var(--main-surface)}
+/* The renderer fault screen has no rail or topbar to leave visible. */
+.fault-takeover{inset:0}
 
 /* Blocking states */
 .booting{flex:1;min-height:0;display:grid;place-items:center;align-content:center;gap:12px;padding:20px;text-align:center;color:var(--muted)}
