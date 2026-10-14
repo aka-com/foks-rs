@@ -23,6 +23,7 @@ import { channelTitle } from './presentation';
 import { newMessagesUnloaded, threadRows } from './thread-rows';
 import { ThreadHeader } from './thread-header';
 import { MessageList } from './message-list';
+import { MessageFindContext } from './message-text';
 import { Composer } from './thread-composer';
 import { quoteInsertion } from './message-actions';
 import { channelRoster } from './mentions';
@@ -480,28 +481,30 @@ export function ChatThread({
         </div>
       ) : (
         <>
-          <MessageList
-            channel={channel}
-            rows={rows}
-            history={thread}
-            viewport={viewport}
-            divider={divider}
-            newFrom={newFrom}
-            newUnloaded={newUnloaded}
-            unread={unreadCount}
-            position={position}
-            hasOperations={pending.length > 0}
-            teamName={teamName}
-            audience={audience}
-            onMarkAll={markAll}
-            onKeyDown={markOnEscape}
-            onQuote={channel.writable ? quote : undefined}
-            onLeave={
-              channel.writable
-                ? () => composerField.current?.focus()
-                : undefined
-            }
-          />
+          <MessageFindContext.Provider value={find.holdsQuery}>
+            <MessageList
+              channel={channel}
+              rows={rows}
+              history={thread}
+              viewport={viewport}
+              divider={divider}
+              newFrom={newFrom}
+              newUnloaded={newUnloaded}
+              unread={unreadCount}
+              position={position}
+              hasOperations={pending.length > 0}
+              teamName={teamName}
+              audience={audience}
+              onMarkAll={markAll}
+              onKeyDown={markOnEscape}
+              onQuote={channel.writable ? quote : undefined}
+              onLeave={
+                channel.writable
+                  ? () => composerField.current?.focus()
+                  : undefined
+              }
+            />
+          </MessageFindContext.Provider>
           {channel.writable ? (
             <Composer
               storeId={storeId}

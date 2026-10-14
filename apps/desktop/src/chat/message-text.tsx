@@ -12,26 +12,10 @@ import { Button } from '../components/button';
 import { Icon } from '../components/icon';
 import { SheetDialog } from '../components/sheet';
 import { useOptionalToast } from '/kit/toasts';
-import { inlineTokens, mentionKey, type ChatMentions } from './mentions';
+import { mentionKey, type ChatMentions } from './mentions';
+import { drawnLinkLabel, inlineParts, messageBlocks } from './message-syntax';
 
-/** Literal absolute HTTP(S) only; never decode entities into executable URLs. */
-export function safeChatLink(value: string): string | null {
-  if (
-    value.length > 2048 ||
-    Array.from(value).some(
-      (c) =>
-        /[\s\\]/u.test(c) || c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127,
-    )
-  )
-    return null;
-  if (!/^https?:\/\//i.test(value)) return null;
-  try {
-    const url = new URL(value);
-    return url.hostname && !url.username && !url.password ? url.href : null;
-  } catch {
-    return null;
-  }
-}
+export { safeChatLink, trimBareUrl } from './message-syntax';
 
 type Actions = Pick<Bridge, 'copyText' | 'openChatLink'>;
 
@@ -42,6 +26,15 @@ type Actions = Pick<Bridge, 'copyText' | 'openChatLink'>;
  * entering the row still reach them.
  */
 export const MessageTabOrderContext = createContext(true);
+
+/**
+ * Whether text holds the open find bar's query, or `null` while no query is
+ * open. A collapsed code block whose hidden lines hold the query is drawn
+ * whole, so find counts and steps to every match in the message.
+ */
+export const MessageFindContext = createContext<
+  ((text: string) => boolean) | null
+>(null);
 
 // A fenced block of more than `LONG_CODE_LINES` lines is drawn with its first
 // `COLLAPSED_CODE_LINES` lines and a control that shows the rest, so one long
@@ -59,18 +52,23 @@ function CodeBlock({
   actions: Actions;
 }) {
   const id = useId();
-  const [expanded, setExpanded] = useState(false);
+  // The reader's choice; `null` until they make one.
+  const [expanded, setExpanded] = useState<boolean | null>(null);
   const toasts = useOptionalToast();
   const tabIndex = useContext(MessageTabOrderContext) ? undefined : -1;
+  const holdsQuery = useContext(MessageFindContext);
   const lines = code.split('\n');
   const long = lines.length > LONG_CODE_LINES;
+  const whole =
+    !long ||
+    (expanded ??
+      holdsQuery?.(lines.slice(COLLAPSED_CODE_LINES).join('\n')) ??
+      false);
   return (
     <div className={className ? `chat-code ${className}` : 'chat-code'}>
       <pre id={id}>
         <code>
-          {long && !expanded
-            ? lines.slice(0, COLLAPSED_CODE_LINES).join('\n')
-            : code}
+          {whole ? code : lines.slice(0, COLLAPSED_CODE_LINES).join('\n')}
         </code>
       </pre>
       <button
@@ -93,12 +91,12 @@ function CodeBlock({
           type="button"
           className="chat-code-more"
           aria-controls={id}
-          aria-expanded={expanded}
+          aria-expanded={whole}
           tabIndex={tabIndex}
-          onClick={() => setExpanded((open) => !open)}
+          onClick={() => setExpanded(!whole)}
         >
           <Icon name="chevronDown" />
-          {expanded ? 'Show fewer lines' : `Show all ${lines.length} lines`}
+          {whole ? 'Show fewer lines' : `Show all ${lines.length} lines`}
         </button>
       )}
     </div>
@@ -156,9 +154,6 @@ const AUTHORITY_END = /[/?#\\]/u;
 // selectors, U+180B..U+180D, U+17B4 and U+17B5). The Hangul fillers are
 // default ignorable letters that many fonts draw as a blank, so they are kept.
 const INVISIBLE = /(?!\p{L})[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
-// The bidirectional formatting characters: U+061C, U+200E, U+200F,
-// U+202A..U+202E and U+2066..U+2069.
-const BIDI_CONTROL = /\p{Bidi_Control}/gu;
 // A scheme as browsers accept it before a host: `https://`, and also
 // `https:/` and `https:\\`. A match can start only where a run of scheme
 // characters starts, and the part before its first letter holds no letter, so
@@ -405,7 +400,7 @@ export interface ChatLinkDisplay {
 /** How a `[label](url)` link is drawn; `href` is a `safeChatLink` result. */
 export function chatLinkDisplay(label: string, href: string): ChatLinkDisplay {
   const host = linkHost(href);
-  const drawn = label.replace(BIDI_CONTROL, '');
+  const drawn = drawnLinkLabel(label);
   // ASCII letters only: a non-ASCII letter that the URL parser maps to an
   // ASCII one leaves the host suffix in place.
   const text = drawn.trim().replace(/[A-Z]+/g, (upper) => upper.toLowerCase());
@@ -567,126 +562,50 @@ function Link({
   );
 }
 
-/** Closing brackets a bare URL may end in, each with its opening bracket. */
-const URL_BRACKETS = new Map([
-  [')', '('],
-  [']', '['],
-  ['\uFF09', '\uFF08'], // full-width parentheses
-  ['\uFF3D', '\uFF3B'], // full-width square brackets
-  ['\u300D', '\u300C'], // corner brackets
-  ['\u300F', '\u300E'], // white corner brackets
-  ['\u3011', '\u3010'], // black lenticular brackets
-]);
-
-/**
- * A bare URL without the punctuation that ends the sentence around it: any
- * trailing `.`, `,`, `;`, `:`, `!`, `?`, `'` or `"`, the CJK sentence
- * punctuation `。`, `、`, `，`, `．`, `！`, `？`, `：` and `；`, a trailing `_`
- * when the URL follows a `_` (`_https://example.com_`), and a trailing
- * closing bracket (ASCII, full-width or CJK corner and lenticular) that closes
- * nothing the URL opened (`(see https://example.com/a_(b))` keeps the URL's
- * own `)`). Linear in the URL's length.
- */
-export function trimBareUrl(url: string, underscored = false): string {
-  // Per opening bracket: openings minus closings in the whole URL.
-  const open = new Map<string, number>();
-  for (const opener of URL_BRACKETS.values()) open.set(opener, 0);
-  for (const c of url) {
-    const opener = URL_BRACKETS.get(c);
-    if (opener !== undefined) open.set(opener, (open.get(opener) ?? 0) - 1);
-    else if (open.has(c)) open.set(c, (open.get(c) ?? 0) + 1);
-  }
-  const trailing = `.,;:!?'"\u3002\u3001\uFF0C\uFF0E\uFF01\uFF1F\uFF1A\uFF1B${
-    underscored ? '_' : ''
-  }`;
-  let end = url.length;
-  while (end > 0) {
-    const c = url[end - 1];
-    const opener = URL_BRACKETS.get(c);
-    if (trailing.includes(c)) end--;
-    else if (opener !== undefined && (open.get(opener) ?? 0) < 0) {
-      open.set(opener, (open.get(opener) ?? 0) + 1);
-      end--;
-    } else break;
-  }
-  return url.slice(0, end);
-}
-
 function inline(
   text: string,
   actions: Actions,
   mentions: ChatMentions | undefined,
 ): ReactNode[] {
-  // Deliberately nonrecursive and bounded. Unsupported/nested syntax remains
-  // text. `mentionsReader` reads the same tokens.
-  const parts: ReactNode[] = [];
-  const pattern = inlineTokens();
-  let last = 0;
-  for (let match; (match = pattern.exec(text));) {
-    if (parts.length >= 256) break;
-    const token = match[0],
-      at = match.index;
-    let used = token.length;
-    parts.push(text.slice(last, at));
-    if (token.startsWith('`'))
-      parts.push(<code key={at}>{token.slice(1, -1)}</code>);
-    else if (token.startsWith('**'))
-      parts.push(<strong key={at}>{token.slice(2, -2)}</strong>);
-    else if (token.startsWith('*'))
-      parts.push(<em key={at}>{token.slice(1, -1)}</em>);
-    else if (token.startsWith('[')) {
-      const split = token.indexOf('](');
-      const url = safeChatLink(token.slice(split + 2, -1));
-      parts.push(
-        url ? (
+  return inlineParts(text).map((part) => {
+    switch (part.kind) {
+      case 'text':
+        return part.text;
+      case 'code':
+        return <code key={part.at}>{part.text}</code>;
+      case 'strong':
+        return <strong key={part.at}>{part.text}</strong>;
+      case 'em':
+        return <em key={part.at}>{part.text}</em>;
+      case 'link':
+        return (
           <Link
-            key={at}
-            url={url}
-            label={token.slice(1, split)}
+            key={part.at}
+            url={part.url}
+            label={part.label}
             actions={actions}
           />
+        );
+      case 'mention': {
+        const key = mentionKey(part.name);
+        if (!mentions?.members.has(key)) return `@${part.name}`;
+        return key === mentions.self ? (
+          <span
+            key={part.at}
+            className="chat-mention self"
+            title="Mentions you"
+          >
+            @{part.name}
+            <span className="offscreen">, mentions you</span>
+          </span>
         ) : (
-          token
-        ),
-      );
-    } else if (token.startsWith('@')) {
-      // A name does not end in `.`, `_` or `-`; those end the sentence. A
-      // backward scan, since a trailing-separator regex backtracks on a long
-      // separator run followed by a name character.
-      let end = token.length;
-      while (end > 2 && '._-'.includes(token[end - 1])) end--;
-      const name = token.slice(1, end);
-      used = end;
-      const key = mentionKey(name);
-      parts.push(
-        mentions?.members.has(key) ? (
-          key === mentions.self ? (
-            <span key={at} className="chat-mention self" title="Mentions you">
-              @{name}
-              <span className="offscreen">, mentions you</span>
-            </span>
-          ) : (
-            <span key={at} className="chat-mention">
-              @{name}
-            </span>
-          )
-        ) : (
-          token.slice(0, used)
-        ),
-      );
-    } else {
-      const bare = trimBareUrl(token, text[at - 1] === '_');
-      used = bare.length;
-      const url = safeChatLink(bare);
-      parts.push(
-        url ? <Link key={at} url={url} label={bare} actions={actions} /> : bare,
-      );
+          <span key={part.at} className="chat-mention">
+            @{part.name}
+          </span>
+        );
+      }
     }
-    last = at + used;
-    pattern.lastIndex = last;
-  }
-  parts.push(text.slice(last));
-  return parts;
+  });
 }
 
 export function MessageText({
@@ -699,93 +618,57 @@ export function MessageText({
   /** The names an `@name` is drawn as a mention of; none without it. */
   mentions?: ChatMentions;
 }) {
-  const lines = text.split(/\r?\n/);
-  const blocks: ReactNode[] = [];
-  if (text.length <= 65536 && lines.length <= 512) {
-    // Set by blank lines between blocks: the next block is drawn after a
-    // paragraph gap. Blank lines before the first block draw nothing.
-    let gap = false;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const className = gap ? 'chat-gap' : undefined;
-      if (line.startsWith('```')) {
-        const start = i;
-        const body: string[] = [];
-        while (++i < lines.length && !lines[i].startsWith('```'))
-          body.push(lines[i]);
-        if (i === lines.length) {
-          blocks.push(
-            <p key={start} className={className}>
-              {lines.slice(start).join('\n')}
-            </p>,
-          );
-          break;
-        }
-        blocks.push(
+  const blocks = messageBlocks(text).map((block) => {
+    const className = block.gap ? 'chat-gap' : undefined;
+    switch (block.kind) {
+      case 'code':
+        return (
           <CodeBlock
-            key={start}
+            key={block.start}
             className={className}
-            code={body.join('\n')}
+            code={block.code}
             actions={actions}
-          />,
+          />
         );
-      } else if (/^[-*] /.test(line) || /^\d+\. /.test(line)) {
-        const start = i,
-          ordered = /^\d+\. /.test(line),
-          items: ReactNode[] = [];
-        const marker = ordered ? /^\d+\. / : /^[-*] /;
-        do {
-          items.push(
-            <li key={i}>
-              {inline(lines[i].replace(marker, ''), actions, mentions)}
-            </li>,
-          );
-          i++;
-        } while (i < lines.length && marker.test(lines[i]));
-        i--;
-        blocks.push(
-          ordered ? (
-            <ol key={start} className={className}>
-              {items}
-            </ol>
-          ) : (
-            <ul key={start} className={className}>
-              {items}
-            </ul>
-          ),
+      case 'literal':
+        return (
+          <p key={block.start} className={className}>
+            {block.text}
+          </p>
         );
-      } else if (line.startsWith('> ')) {
-        // Consecutive quote lines are one quote, as a quote reply writes them.
-        const start = i,
-          quoted: ReactNode[] = [];
-        do {
-          quoted.push(
-            <Fragment key={i}>
-              {i > start && <br />}
-              {inline(lines[i].slice(2), actions, mentions)}
-            </Fragment>,
-          );
-          i++;
-        } while (i < lines.length && lines[i].startsWith('> '));
-        i--;
-        blocks.push(
-          <blockquote key={start} className={className}>
-            {quoted}
-          </blockquote>,
+      case 'list': {
+        const items = block.items.map((item) => (
+          <li key={item.line}>{inline(item.text, actions, mentions)}</li>
+        ));
+        return block.ordered ? (
+          <ol key={block.start} className={className}>
+            {items}
+          </ol>
+        ) : (
+          <ul key={block.start} className={className}>
+            {items}
+          </ul>
         );
-      } else if (line.trim())
-        blocks.push(
-          <p key={i} className={className}>
-            {inline(line, actions, mentions)}
-          </p>,
-        );
-      else {
-        gap = blocks.length > 0;
-        continue;
       }
-      gap = false;
+      case 'quote':
+        return (
+          <blockquote key={block.start} className={className}>
+            {block.lines.map((line, n) => (
+              <Fragment key={line.line}>
+                {n > 0 && <br />}
+                {inline(line.text, actions, mentions)}
+              </Fragment>
+            ))}
+          </blockquote>
+        );
+      case 'paragraph':
+        return (
+          <p key={block.start} className={className}>
+            {inline(block.text, actions, mentions)}
+          </p>
+        );
     }
-  }
+  });
   // Copy message and the other message actions belong to the row that draws
   // this text (`message-actions.tsx`).
   return (

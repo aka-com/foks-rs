@@ -352,73 +352,95 @@ test('Chat with teams keeps New channel and a live field', () => {
   assert.ok(ui.screen.getByRole('button', { name: 'New channel' }));
 });
 
-test('in a channel the field finds text in it until its badge is dropped', async () => {
-  const { ChatInboxProvider } = (await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  )) as typeof import('../src/chat/inbox-provider');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const snapshot = {
-    ...FIXTURE,
-    servers: FIXTURE.servers.map((server) => ({
-      ...server,
-      services: { ...server.services, chat: true },
-    })),
-  };
-  const bridge = mockBridge(snapshot);
-  const reply = await bridge.chat('team:eng', {
-    action: 'sync-inbox',
-    blocked_channels: [],
-  });
-  assert.equal(reply.result.kind, 'inbox');
-  if (reply.result.kind !== 'inbox') return;
-  const channel = reply.result.conversations[0].channel;
-  const found: string[] = [];
-  const queries: string[] = [];
-  ui.render(
-    createElement(ChatInboxProvider, {
-      snapshot,
-      bridge,
-      children: createElement(Topbar, {
+for (const drop of ['the badge button', 'Backspace'] as const) {
+  test(`in a channel the field finds text in it until ${drop} drops its badge`, async () => {
+    const { ChatInboxProvider } = (await vite.ssrLoadModule(
+      '/src/chat/inbox-provider.tsx',
+    )) as typeof import('../src/chat/inbox-provider');
+    const { mockBridge } = (await vite.ssrLoadModule(
+      '/src/mock-bridge.ts',
+    )) as typeof import('../src/mock-bridge');
+    const snapshot = {
+      ...FIXTURE,
+      servers: FIXTURE.servers.map((server) => ({
+        ...server,
+        services: { ...server.services, chat: true },
+      })),
+    };
+    const bridge = mockBridge(snapshot);
+    const reply = await bridge.chat('team:eng', {
+      action: 'sync-inbox',
+      blocked_channels: [],
+    });
+    assert.equal(reply.result.kind, 'inbox');
+    if (reply.result.kind !== 'inbox') return;
+    const channel = reply.result.conversations[0].channel;
+    const found: string[] = [];
+    const queries: string[] = [];
+    ui.render(
+      createElement(ChatInboxProvider, {
         snapshot,
-        location: { kind: 'chat', ref: 'team:eng', channel: channel.id },
-        collapsed: false,
-        onNavigate: () => {},
-        query: '',
-        onQuery: (query) => queries.push(query),
-        onNewChat: () => {},
-        onFindInChannel: (text) => {
-          found.push(text);
-          return true;
-        },
-        chatTeamCount: 1,
+        bridge,
+        children: createElement(Topbar, {
+          snapshot,
+          location: { kind: 'chat', ref: 'team:eng', channel: channel.id },
+          collapsed: false,
+          onNavigate: () => {},
+          query: '',
+          onQuery: (query) => queries.push(query),
+          onNewChat: () => {},
+          onFindInChannel: (text) => {
+            found.push(text);
+            return true;
+          },
+          chatTeamCount: 1,
+        }),
       }),
-    }),
-  );
-  const title = `#${channel.name || 'general'}`;
-  const field = await ui.screen.findByRole('textbox', {
-    name: `Find in ${title}`,
+    );
+    const title = `#${channel.name || 'general'}`;
+    const field = await ui.screen.findByRole('textbox', {
+      name: `Find in ${title}`,
+    });
+    assert.equal(
+      document.querySelector('.search-badge .n')?.textContent,
+      title,
+    );
+    // The input, not the badge's button, is the label's control, so a click
+    // on the badge's text does not drop the badge.
+    const label = field.closest('label');
+    assert.equal(label?.control, field);
+    ui.fireEvent.click(document.querySelector('.search-badge .n') as Element);
+    assert.equal(
+      document.querySelector('.search-badge .n')?.textContent,
+      title,
+    );
+    // Typing moves into the conversation's find bar, not the name filter.
+    ui.fireEvent.change(field, { target: { value: 'c' } });
+    assert.deepEqual(found, ['c']);
+    assert.deepEqual(queries, []);
+    // Dropping the badge returns the field to team and channel names, and
+    // focus stays in the field.
+    if (drop === 'Backspace') {
+      // The field is controlled; the find bar took the text.
+      field.focus();
+      ui.fireEvent.keyDown(field, { key: 'Backspace' });
+    } else {
+      const clear = ui.screen.getByRole('button', {
+        name: 'Search team and channel names instead',
+      });
+      clear.focus();
+      ui.fireEvent.click(clear);
+    }
+    const names = ui.screen.getByRole('textbox', {
+      name: 'Search team and channel names',
+    });
+    assert.equal(document.querySelector('.search-badge'), null);
+    assert.equal(document.activeElement, names);
+    ui.fireEvent.change(names, { target: { value: 'eng' } });
+    assert.deepEqual(queries, ['eng']);
+    assert.deepEqual(found, ['c']);
   });
-  assert.equal(document.querySelector('.search-badge .n')?.textContent, title);
-  // Typing moves into the conversation's find bar, not the name filter.
-  ui.fireEvent.change(field, { target: { value: 'c' } });
-  assert.deepEqual(found, ['c']);
-  assert.deepEqual(queries, []);
-  // Dropping the badge returns the field to team and channel names.
-  ui.fireEvent.click(
-    ui.screen.getByRole('button', {
-      name: 'Search team and channel names instead',
-    }),
-  );
-  const names = ui.screen.getByRole('textbox', {
-    name: 'Search team and channel names',
-  });
-  assert.equal(document.querySelector('.search-badge'), null);
-  ui.fireEvent.change(names, { target: { value: 'eng' } });
-  assert.deepEqual(queries, ['eng']);
-  assert.deepEqual(found, ['c']);
-});
+}
 
 for (const location of [
   { kind: 'chat', ref: 'team:eng', channel: 'general' },

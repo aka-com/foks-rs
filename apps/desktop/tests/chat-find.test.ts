@@ -3,6 +3,7 @@ import test from 'node:test';
 import { JSDOM } from 'jsdom';
 import type { ChatMessage } from '../src/chat-contract';
 import {
+  findableText,
   findOffsets,
   findRanges,
   findSnippet,
@@ -54,6 +55,29 @@ test('an older-page scan keeps a reference to each matching text row, newest fir
   assert.deepEqual(scanPage(page, '   '), []);
 });
 
+test('older rows are matched on the text the list draws, not on their Markdown', () => {
+  const source =
+    '**alpha** beta [docs](https://example.com/x) `code`\n> one\n> two\n- item';
+  const row = message(1, { kind: 'text', text: source });
+  assert.equal(findableText(row), 'alpha beta docs code\none\ntwo\nitem');
+  assert.equal(scanPage([row], 'alpha beta').length, 1);
+  // Link destinations, markers and runs across quote lines do not match.
+  for (const needle of ['example.com', '**', 'one two', '- item'])
+    assert.deepEqual(scanPage([row], needle), [], needle);
+  assert.deepEqual(findSnippet(scanPage([row], 'beta')[0].text, 'beta'), {
+    before: 'alpha ',
+    match: 'beta',
+    after: ' docs code one two item',
+  });
+  // Every line of a long code block, including those a collapsed block hides.
+  const lines = Array.from({ length: 25 }, (_, i) => `line ${i + 1}`);
+  const code = message(2, {
+    kind: 'text',
+    text: '```\n' + lines.join('\n') + '\n```',
+  });
+  assert.equal(scanPage([code], 'line 25').length, 1);
+});
+
 test('a snippet puts the match on one line with its context', () => {
   assert.deepEqual(
     findSnippet('first line\n\nthen the Canary went out', 'canary', 9),
@@ -71,12 +95,13 @@ test('a snippet puts the match on one line with its context', () => {
   assert.equal(findSnippet('rollback', 'canary'), null);
 });
 
-test('matches span inline formatting but not paragraphs, controls or screen-reader text', () => {
+test('matches span inline formatting but not paragraphs, quote lines, controls or screen-reader text', () => {
   const { document } = new JSDOM(`<div id="list">
     <article data-message="a"><div class="chat-message-text">
       <p>The <strong>can</strong>ary is <span class="chat-mention">@sam</span>'s<span class="offscreen">, mentions canary</span></p>
       <p>canary</p>
       <div class="chat-code"><pre>canary</pre><button>canary</button></div>
+      <blockquote>the can<br>ary</blockquote>
     </div></article>
     <article data-operation="b"><div class="chat-message-text"><p>canary</p></div></article>
     <article data-message="c"><div class="chat-message-text"><p>can</p><p>ary</p></div></article>

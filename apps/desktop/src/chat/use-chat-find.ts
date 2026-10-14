@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -19,7 +20,12 @@ import {
   type FindReference,
 } from './find';
 
-/** How long a stepped-to row is marked after it scrolls into view. */
+/**
+ * How long a stepped-to row is marked after it scrolls into view: longer than
+ * the 0.7 s flash animation in `chat.css`. A timer rather than
+ * `animationend`, which does not fire where reduced motion turns the
+ * animation off.
+ */
 const FLASH_MS = 800;
 
 /**
@@ -102,6 +108,11 @@ export function useChatFind({
   const openRef = useRef(false);
   const queryRef = useRef('');
   const needle = open ? foldFindText(query.trim()) : '';
+  const holdsQuery = useMemo(
+    () =>
+      needle ? (text: string) => foldFindText(text).includes(needle) : null,
+    [needle],
+  );
   const [count, setCount] = useState({ total: 0, current: 0 });
   const [scan, setScanState] = useState<OlderScan>(IDLE_SCAN);
   const scanRef = useRef(scan);
@@ -204,15 +215,20 @@ export function useChatFind({
       const found = root && needle ? findRanges(root, needle) : [];
       matches.current = found;
       let index: number | null = null;
+      // A preferred row is taken once it is drawn, with a match or without,
+      // so the preference does not outlive the read that opened it.
+      const prefer = preferred.current;
+      if (
+        prefer !== null &&
+        [...(root?.querySelectorAll<HTMLElement>('[data-message]') ?? [])].some(
+          (row) => row.dataset.message === prefer,
+        )
+      ) {
+        preferred.current = null;
+        const at = found.findIndex((m) => m.row.dataset.message === prefer);
+        if (at >= 0) index = at;
+      }
       if (found.length) {
-        const prefer = preferred.current;
-        if (prefer !== null) {
-          const at = found.findIndex((m) => m.row.dataset.message === prefer);
-          if (at >= 0) {
-            index = at;
-            preferred.current = null;
-          }
-        }
         const key = currentKey.current;
         if (index === null && key) {
           let nth = 0;
@@ -233,7 +249,10 @@ export function useChatFind({
   useLayoutEffect(() => {
     const changed = measuredNeedle.current !== needle;
     measuredNeedle.current = needle;
-    if (changed) currentKey.current = null;
+    if (changed) {
+      currentKey.current = null;
+      preferred.current = null;
+    }
     measure(changed);
   }, [measure, messages, needle]);
   // Rows redraw their text without a change of window, such as a mention
@@ -326,6 +345,7 @@ export function useChatFind({
     setOpen(false);
     setQuery('');
     setScan(IDLE_SCAN);
+    preferred.current = null;
     unflash();
     const back = returnTo.current;
     returnTo.current = null;
@@ -447,6 +467,8 @@ export function useChatFind({
     /** The current match, numbered from the newest; 0 when there is none. */
     current: count.current,
     scan,
+    /** Whether text holds the query; `null` while there is none. */
+    holdsQuery,
     input,
     show,
     close,

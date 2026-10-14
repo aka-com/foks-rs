@@ -2682,6 +2682,157 @@ test('searching older messages reads pages without growing the window and opens 
   ui.screen.getByRole('button', { name: 'Load newer messages' });
 });
 
+test('a cancelled or failed search of older messages resumes at the page it had not read', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => false,
+  });
+  const channel = await busyChannel(400, 400);
+  // Older rows are matched on the text they draw, not on their Markdown.
+  channel.state.text = (n) =>
+    n === 330 ? `Skip the **canary** for ${n}` : `Message ${n}`;
+  // A read below `held.before` waits for `held.release`; one below
+  // `failBefore` fails.
+  let held: {
+    before: string;
+    release: () => void;
+    wait: Promise<void>;
+  } | null = null;
+  const hold = (before: string) => {
+    let release!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    held = { before, release, wait };
+    return release;
+  };
+  let failBefore: string | null = null;
+  await setup((bridge) => {
+    const inner = channel.override(bridge);
+    return {
+      ...inner,
+      chat: async (store, action, view) => {
+        if (action.action === 'history' && action.before !== undefined) {
+          if (held && action.before === held.before) await held.wait;
+          if (failBefore !== null && action.before === failBefore)
+            throw {
+              code: 'chat-network',
+              message: 'The server could not be reached.',
+              fatal: false,
+              retryable: true,
+              ambiguous: false,
+            };
+        }
+        return inner.chat(store, action, view);
+      },
+    };
+  }, false);
+  await ui.screen.findByText('Message 400');
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Find in channel' }),
+  );
+  const field = ui.screen.getByRole('textbox', { name: /^Find in #/ });
+  ui.fireEvent.change(field, { target: { value: 'skip the canary' } });
+  await ui.screen.findByText('No matches in loaded messages');
+  const searchOlder = () =>
+    ui.screen.getByRole('button', { name: /^Search older messages/ });
+  // Cancelled before a page arrives, the scan is as if it never ran, and the
+  // page that arrives late is dropped.
+  let release = hold('351');
+  ui.fireEvent.click(searchOlder());
+  await ui.screen.findByText('Searching older messages · page 1 of 5');
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Cancel' }));
+  searchOlder();
+  release();
+  await sleep(0);
+  searchOlder();
+  assert.equal(ui.screen.queryByText(/^Searched /), null);
+  // Cancelled after a page, it states how far it read and what it found.
+  release = hold('301');
+  ui.fireEvent.click(searchOlder());
+  await ui.screen.findByText('Searching older messages · page 2 of 5');
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Cancel' }));
+  await ui.screen.findByText(/^Stopped after 1 page, back to .* · 1 match$/);
+  release();
+  const found = ui.screen.getByRole('group', {
+    name: 'Matches in older messages',
+  });
+  assert.equal(
+    found.querySelector('.snip')?.textContent,
+    'Skip the canary for 330',
+  );
+  // A page that fails is read again by Try again, and the scan goes on.
+  held = null;
+  failBefore = '301';
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Search further' }));
+  await ui.screen.findByText(/^Older messages could not be searched\./);
+  failBefore = null;
+  const reads = channel.history.length;
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Try again' }));
+  await ui.screen.findByText(
+    /^Searched 300 older messages back to .* · 1 match$/,
+  );
+  assert.deepEqual(
+    channel.history
+      .slice(reads)
+      .map((action) => (action.action === 'history' ? action.before : '')),
+    ['301', '251', '201', '151', '101'],
+  );
+});
+
+test('a match in the hidden lines of a long code block is counted, and the block drawn whole', async () => {
+  const channel = await busyChannel(60, 60);
+  const code = Array.from({ length: 25 }, (_, i) =>
+    i === 14 ? 'canary ready' : `line ${i + 1}`,
+  ).join('\n');
+  channel.state.text = (n) =>
+    n === 60 ? '```\n' + code + '\n```' : `Message ${n}`;
+  await setup(channel.override, false);
+  await ui.screen.findByRole('button', { name: 'Show all 25 lines' });
+  const block = () =>
+    document.querySelector('[data-sequence="60"] pre')?.textContent ?? '';
+  assert.doesNotMatch(block(), /canary/);
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Find in channel' }),
+  );
+  const field = ui.screen.getByRole('textbox', { name: /^Find in #/ });
+  ui.fireEvent.change(field, { target: { value: 'CANARY ready' } });
+  await ui.screen.findByText('1 of 1');
+  assert.match(block(), /canary ready/);
+  ui.screen.getByRole('button', { name: 'Show fewer lines' });
+  assert.equal(
+    document.querySelector<HTMLElement>('[data-find="current"]')?.dataset
+      .sequence,
+    '60',
+  );
+  // Closing the bar draws the block as the reader left it.
+  ui.fireEvent.keyDown(field, { key: 'Escape' });
+  await ui.screen.findByRole('button', { name: 'Show all 25 lines' });
+  assert.doesNotMatch(block(), /canary/);
+});
+
+test('Ctrl+F does not open find while a dialog is open', async () => {
+  const channel = await busyChannel(60, 60);
+  channel.state.text = (n) =>
+    n === 60 ? '[bank.example](https://evil.example/)' : `Message ${n}`;
+  await setup(channel.override, false);
+  ui.fireEvent.click(
+    await ui.screen.findByRole('link', { name: /bank\.example/ }),
+  );
+  const dialog = await ui.screen.findByRole('alertdialog', {
+    name: 'Check this link',
+  });
+  ui.fireEvent.keyDown(document, { key: 'f', ctrlKey: true });
+  await sleep(0);
+  assert.equal(ui.screen.queryByRole('search'), null);
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Cancel' }));
+  await ui.waitFor(() =>
+    assert.equal(ui.screen.queryByRole('alertdialog'), null),
+  );
+  ui.fireEvent.keyDown(document, { key: 'f', ctrlKey: true });
+  await ui.screen.findByRole('search');
+});
+
 test('a team the catalog no longer lists is reported as inaccessible, not as a fault', async () => {
   let failing = false;
   const { toggleChat: toggle } = await setup((base) => ({

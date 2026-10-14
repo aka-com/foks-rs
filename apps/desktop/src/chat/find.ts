@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../chat-contract';
+import { messagePlainText } from './message-syntax';
 import { messageDate } from './presentation';
 
 /**
@@ -50,11 +51,15 @@ export function findOffsets(haystack: string, needle: string): number[] {
 }
 
 /**
- * The text find matches in a message: its Basic text. A row that did not
- * decrypt and verify, or whose type the desktop does not draw, has none.
+ * The text find matches in a message: the text its Basic content draws, as
+ * {@link messagePlainText} reads it, so a row on an older page matches as it
+ * does once the list draws it. A row that did not decrypt and verify, or
+ * whose type the desktop does not draw, has none.
  */
 export function findableText(message: ChatMessage): string | null {
-  return message.content.kind === 'text' ? message.content.text : null;
+  return message.content.kind === 'text'
+    ? messagePlainText(message.content.text)
+    : null;
 }
 
 /**
@@ -66,6 +71,7 @@ export interface FindReference {
   sequence: string;
   sender: string | null;
   insert_time: string;
+  /** The message's {@link findableText}. */
   text: string;
 }
 
@@ -152,18 +158,24 @@ export interface FindMatch {
   range: Range;
 }
 
+const SHOW_ELEMENT = 0x1;
 const SHOW_TEXT = 0x4;
+const TEXT_NODE = 3;
 /** Text inside these is not part of what the message says. */
 const SKIPPED = 'button, .offscreen, [aria-hidden="true"]';
-/** A change of block between two text nodes ends a run a match can span. */
+/**
+ * A change of block between two text nodes ends a run a match can span, as
+ * does a line break between quote lines.
+ */
 const BLOCK = 'p, li, pre, blockquote, div';
 
 /**
  * The occurrences of `needle` in the message text the history rows under
  * `root` draw, oldest first. Each row's text is matched as one string, so a
  * match may span formatting such as a bold word or a mention, but not two
- * paragraphs. Screen-reader-only text and the controls inside a message (a
- * code block's Copy, for one) are not matched.
+ * paragraphs, list items or quote lines. Screen-reader-only text and the
+ * controls inside a message (a code block's Copy, for one) are not matched.
+ * This is the text {@link findableText} reads from the message's source.
  */
 export function findRanges(root: ParentNode, needle: string): FindMatch[] {
   const folded = foldFindText(needle);
@@ -173,19 +185,25 @@ export function findRanges(root: ParentNode, needle: string): FindMatch[] {
     const body = row.querySelector<HTMLElement>('.chat-message-text');
     if (!body) continue;
     const document = body.ownerDocument;
-    const walker = document.createTreeWalker(body, SHOW_TEXT);
+    const walker = document.createTreeWalker(body, SHOW_ELEMENT | SHOW_TEXT);
     const nodes: { node: Text; start: number }[] = [];
     let text = '';
     let block: Element | null = null;
+    let broken = false;
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.nodeType !== TEXT_NODE) {
+        if (node.nodeName === 'BR') broken = true;
+        continue;
+      }
       const parent = node.parentElement;
       const skipped = parent?.closest(SKIPPED);
       if (!parent || (skipped && body.contains(skipped))) continue;
       const value = node.nodeValue ?? '';
       if (!value) continue;
       const here = parent.closest(BLOCK);
-      if (nodes.length > 0 && here !== block) text += '\n';
+      if (nodes.length > 0 && (here !== block || broken)) text += '\n';
       block = here;
+      broken = false;
       nodes.push({ node: node as Text, start: text.length });
       text += value;
     }

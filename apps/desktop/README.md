@@ -899,15 +899,22 @@ the agent has already decrypted and verified, and counts from the newest match:
 wrapping at either end, and the current match scrolls to the middle of the list
 with its row marked; Esc closes the bar and returns focus to where it was.
 Matches are measured in the rendered rows, so a match may span a bold word or a
-mention but never two paragraphs, a control such as a code block's Copy, or
-screen-reader-only text. Every match is tinted and the current one drawn solid
+mention but never two paragraphs, list items or quote lines, a control such as
+a code block's Copy, or screen-reader-only text; a link matches on its label,
+not its destination. While the query is in the hidden lines of a collapsed code
+block, the block is drawn whole, so those matches are counted and can be
+stepped to. Every match is tinted and the current one drawn solid
 with the CSS Custom Highlight API, which leaves the rows' DOM alone; a webview
 without it tints the matching rows instead. With no match the bar reads "No
 matches in loaded messages", because older history has not been read, and
 offers "Search older messages (loaded back to Sep 30)". That reads up to five
 older pages (250 rows) per click, below the window, with the same history
 request as Load older messages, and keeps only a reference to each matching
-row: its sequence, sender, time and text. The window itself is not changed, so
+row: its sequence, sender, time and text. Those rows are matched on the text
+the list would draw for them (`messagePlainText` in `chat/message-syntax.ts`,
+which the renderer's own parsing produces), so a message matches the same
+query on an older page as once it is opened, and the listed snippet carries no
+Markdown markers. The window itself is not changed, so
 a search never pushes it past its row or byte bound. Cancel stops the scan and
 drops the page in flight, which the next run reads again; "Search further"
 continues from where the last run stopped, and the line states how far back the
@@ -982,9 +989,9 @@ constrained widths to prioritize channel name visibility, with
 the description and access line ("Member can read and write" — the visibility
 band is a FOKS internal and is not drawn, except when the read and write roles
 differ by the band alone, where the band is the only thing that tells them
-apart), and carries one Refresh that reloads the history, the channel list and
-the saved work, the search button that opens the find bar, Team files, and the ⓘ
-that opens `chat-info.tsx` — rendered as a third column when space permits, and
+apart), and carries the team's unsent-work chip, the Find in channel toggle
+(⌘F, Ctrl+F elsewhere) that opens the find bar, and the ⓘ that opens
+`chat-info.tsx` — rendered as a third column when space permits, and
 as an overlay covering the conversation pane below 1000px tab width to preserve
 readability at the 960px minimum window width. The overlay covers the entire
 conversation pane to avoid partially obscuring message text and header

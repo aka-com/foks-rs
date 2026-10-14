@@ -448,7 +448,9 @@ matches with CSS highlights rather than editing the rows. "Search older
 messages" reads up to five pages below the window per click with the
 same `history` request as paging back, and keeps only a reference to each
 matching row — its sequence, sender, time and text — until the bar
-closes. Those pages never enter the window, so a search cannot push it
+closes. Older rows are matched on the text the renderer would draw for
+them, read with the renderer's own parser, so a query matches a message
+the same way on an older page and once it is drawn. Those pages never enter the window, so a search cannot push it
 past its bounds, and opening a match uses the anchored read, which
 replaces the window. The agent keeps no message index and persists no
 plaintext (see [Chapter 16](16-chat.qmd)), so search across channels

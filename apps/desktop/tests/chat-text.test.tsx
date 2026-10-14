@@ -3,6 +3,7 @@ import test from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
+import { JSDOM } from 'jsdom';
 let vite: ViteDevServer;
 let MessageText: typeof import('../src/chat/message-text').MessageText;
 let safeChatLink: typeof import('../src/chat/message-text').safeChatLink;
@@ -17,14 +18,25 @@ let quoteReply: typeof import('../src/chat/message-actions').quoteReply;
 let quoteInsertion: typeof import('../src/chat/message-actions').quoteInsertion;
 let ToastProvider: typeof import('../kit/toasts').ToastProvider;
 let ToastController: typeof import('../kit/toasts').ToastController;
+let MessageFindContext: typeof import('../src/chat/message-text').MessageFindContext;
+let find: typeof import('../src/chat/find');
 test.before(async () => {
   vite = await createServer({
     configFile: new URL('../vite.config.ts', import.meta.url).pathname,
     appType: 'custom',
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
-  ({ MessageText, safeChatLink, labelHosts, chatLinkDisplay, trimBareUrl } =
-    await vite.ssrLoadModule('/src/chat/message-text.tsx'));
+  ({
+    MessageText,
+    MessageFindContext,
+    safeChatLink,
+    labelHosts,
+    chatLinkDisplay,
+    trimBareUrl,
+  } = await vite.ssrLoadModule('/src/chat/message-text.tsx'));
+  find = (await vite.ssrLoadModule(
+    '/src/chat/find.ts',
+  )) as typeof import('../src/chat/find');
   ({ chatMentions, mentionKey } = await vite.ssrLoadModule(
     '/src/chat/mentions.ts',
   ));
@@ -679,6 +691,76 @@ test('a code block has one copy button and collapses past twenty lines', () => {
   );
   const controls = /aria-controls="([^"]+)"/.exec(long)?.[1];
   assert.ok(controls && long.includes(`<pre id="${controls}">`));
+});
+
+test('a long code block is drawn whole while the hidden lines hold the find query', () => {
+  const text =
+    '```\n' +
+    Array.from({ length: 25 }, (_, i) => `line ${i + 1}`).join('\n') +
+    '\n```';
+  const drawn = (holdsQuery: ((text: string) => boolean) | null) =>
+    renderToStaticMarkup(
+      createElement(ToastProvider, {
+        controller: new ToastController(),
+        children: createElement(MessageFindContext.Provider, {
+          value: holdsQuery,
+          children: createElement(MessageText, { text, actions }),
+        }),
+      }),
+    );
+  const whole = drawn((lines) => lines.includes('line 15'));
+  assert.match(whole, /line 25<\/code>/);
+  assert.match(whole, /aria-expanded="true">.*Show fewer lines<\/button>/);
+  // A query the hidden lines do not hold, or none, leaves it collapsed.
+  for (const holdsQuery of [() => false, null])
+    assert.match(drawn(holdsQuery), /line 12<\/code><\/pre>/);
+});
+
+test('find matches the drawn text of a message as an older-page scan matches its source', () => {
+  const mentions = chatMentions(['sam'], 'sam');
+  const sources = [
+    '**alpha** beta [docs](https://example.com/x) `code`',
+    'The **can**ary is @sam, [bank.example](https://evil.example/)',
+    '> quoted one\n> quoted two\n\n- item one\n1. item two',
+    'see https://example.com/a. *done*\n```\nfn canary()\n```',
+    '```\nunclosed **fence**',
+  ];
+  const needles = [
+    'alpha beta',
+    'example.com',
+    '**',
+    'canary',
+    'one quoted',
+    'quoted two',
+    'item',
+    '@sam',
+    'mentions you',
+    'bank.example',
+    'evil',
+    'fence',
+    'docs code',
+  ];
+  for (const text of sources) {
+    const { document } = new JSDOM(
+      `<article data-message="m">${messageMarkup(text, mentions)}</article>`,
+    ).window;
+    const plain = find.foldFindText(
+      find.findableText({
+        id: 'm',
+        sequence: '1',
+        sender: null,
+        send_time: '1',
+        insert_time: '1',
+        content: { kind: 'text', text },
+      }) ?? '',
+    );
+    for (const needle of needles)
+      assert.equal(
+        find.findRanges(document.body, needle).length,
+        find.findOffsets(plain, find.foldFindText(needle)).length,
+        `${needle} in ${text}`,
+      );
+  }
 });
 
 test('@names on the roster are drawn as mentions, the reader as a mention of them', () => {

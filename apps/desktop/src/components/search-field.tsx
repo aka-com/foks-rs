@@ -1,6 +1,6 @@
 /** Controlled search input with optional scope context and keyboard badge. */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './icon';
 
@@ -54,6 +54,7 @@ export function SearchField({
   className,
 }: SearchFieldProps): ReactNode {
   const inputRef = useRef<HTMLInputElement>(null);
+  const inputId = useId();
 
   useEffect(() => {
     if (!shortcut) return;
@@ -70,8 +71,17 @@ export function SearchField({
   }, [shortcut]);
 
   const label = accessibleName ?? (scope ? `Search ${scope}` : placeholder);
+  // Dropping the badge removes its button; focus stays in the field.
+  const clearBadge = (): void => {
+    badge?.onClear();
+    inputRef.current?.focus();
+  };
+  // The label names the input as its control, so a click on the icon or on
+  // the badge's text focuses the field. Without `htmlFor` the badge's button,
+  // the first labelable element inside, would be the control.
   return (
     <label
+      htmlFor={inputId}
       className={['search', shortcut ? '' : 'no-shortcut', className ?? '']
         .filter(Boolean)
         .join(' ')}
@@ -85,7 +95,7 @@ export function SearchField({
             aria-label={badge.clearLabel}
             title={badge.clearLabel}
             disabled={disabled}
-            onClick={badge.onClear}
+            onClick={clearBadge}
           >
             <Icon name="close" />
           </button>
@@ -93,6 +103,7 @@ export function SearchField({
       ) : null}
       <input
         ref={inputRef}
+        id={inputId}
         type="text"
         value={value}
         placeholder={placeholder}
@@ -108,7 +119,7 @@ export function SearchField({
             onChange('');
           } else if (event.key === 'Backspace' && !value && badge) {
             event.preventDefault();
-            badge.onClear();
+            clearBadge();
           }
         }}
       />
