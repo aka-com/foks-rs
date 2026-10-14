@@ -3528,6 +3528,99 @@ test('opening a channel keeps its retained history ahead of channels not reopene
   }
 });
 
+test('a history read whose access lapses in flight is refused locally and leaves the team ready', async () => {
+  const { ChatInboxProvider, useChatInbox } = (await vite.ssrLoadModule(
+    '/src/chat/inbox-provider.tsx',
+  )) as typeof import('../src/chat/inbox-provider');
+  const { useChatConversation } = (await vite.ssrLoadModule(
+    '/src/chat/use-chat-conversation.ts',
+  )) as typeof import('../src/chat/use-chat-conversation');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  type Inbox = import('../src/chat/inbox-service').ChatInboxService;
+  type Conversation = ReturnType<
+    typeof import('../src/chat/use-chat-conversation').useChatConversation
+  >;
+  type Availability = import('../src/model').Availability;
+  const snapshot = {
+    ...FIXTURE,
+    stores: FIXTURE.stores.filter(
+      (s) => s.kind !== 'team' || s.id === 'team:eng',
+    ),
+    servers: FIXTURE.servers.map((s) =>
+      s.profileName === 'acme'
+        ? { ...s, services: { ...s.services, chat: true } }
+        : s,
+    ),
+  };
+  const base = mockBridge(snapshot);
+  let release = () => {};
+  let started = false;
+  const bridge: Bridge = {
+    ...base,
+    chat: async (store, action, view) => {
+      const reply = await base.chat(store, action, view);
+      if (action.action === 'history') {
+        started = true;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return reply;
+    },
+  };
+  // The shell's availability check reports a reason that is also an agent
+  // code (`chat-unsupported` revalidates a team when the agent returns it).
+  let availability: Availability = { available: true };
+  let service!: Inbox;
+  let conversation!: Conversation;
+  function Probe() {
+    service = useChatInbox().service;
+    conversation = useChatConversation(
+      bridge,
+      'acme',
+      'team:eng',
+      () => availability,
+    );
+    return null;
+  }
+  ui.render(
+    createElement(ChatInboxProvider, {
+      bridge,
+      snapshot,
+      children: createElement(Probe),
+    }),
+  );
+  const channel = await ui.waitFor(() => {
+    const entry = service.getSnapshot().get('team:eng');
+    assert.equal(entry?.state, 'ready');
+    const listed = entry?.data?.channels;
+    assert.ok(listed?.length);
+    return listed[0].id;
+  });
+  const read = conversation
+    .request({ action: 'history', channel, before: null })
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
+  await ui.waitFor(() => assert.ok(started));
+  availability = { available: false, reason: 'chat-unsupported' };
+  release();
+  const error = (await read) as import('../src/bridge').CommandError | null;
+  assert.ok(error);
+  assert.equal(error.code, 'access-changed');
+  assert.equal(error.origin, 'local');
+  // A read has no outcome left to recover.
+  assert.equal(error.ambiguous, false);
+  assert.equal(error.retryable, false);
+  assert.equal(service.getSnapshot().get('team:eng')?.state, 'ready');
+});
+
 test('a saved operation row sends the request the send service chooses', async () => {
   const sent: string[] = [];
   let seeded = false;

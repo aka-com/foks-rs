@@ -22,6 +22,7 @@ import {
   channelIntegrity,
   type ChatWorkPriority,
 } from './client';
+import { accessChanged } from './errors';
 import { useChatSends } from './send-provider';
 import { markChannelRead } from './mark-read';
 import type { HistoryBinding, ListPosition } from './history-cache';
@@ -95,18 +96,13 @@ export function useChatConversation(
           generation !== accessGenerationRef.current ||
           !availability.available
         )
-          throw {
-            code: availability.available
-              ? 'access-changed'
-              : availability.reason,
-            message:
-              phase === 'after'
-                ? 'Access changed after the chat history read was sent.'
-                : 'Access changed before the chat history read was sent.',
-            fatal: false,
-            ambiguous: false,
-            retryable: phase === 'before',
-          };
+          throw accessChanged(
+            phase === 'after'
+              ? 'Access changed after the chat history read was sent.'
+              : 'Access changed before the chat history read was sent.',
+            phase,
+            'read',
+          );
       };
       assertAccess('before');
       const token = owner.current;

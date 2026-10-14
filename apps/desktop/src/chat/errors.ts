@@ -26,15 +26,20 @@ export const channelIntegrity = (
 /**
  * A local access guard found that the shell's availability or access
  * generation changed around a request. The code is local, not the agent's
- * `chat-access-denied`, so the inbox does not revalidate the team for it. A
- * refusal before the request is sent can be retried; one after a mutation was
- * sent leaves its outcome unknown.
+ * `chat-access-denied` or an availability reason, so the inbox does not
+ * revalidate the team for it. A refusal before the request is sent can be
+ * retried; one after a mutation was sent leaves its outcome unknown, while a
+ * read has no outcome to recover.
  */
-export const accessChanged = (message: string, phase: 'before' | 'after') => ({
+export const accessChanged = (
+  message: string,
+  phase: 'before' | 'after',
+  request: 'mutation' | 'read' = 'mutation',
+) => ({
   code: 'access-changed',
   message,
   retryable: phase === 'before',
   fatal: false,
-  ambiguous: phase === 'after',
+  ambiguous: request === 'mutation' && phase === 'after',
   origin: 'local' as const,
 });

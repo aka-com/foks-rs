@@ -873,8 +873,9 @@ server's access generation are checked before and after each one — off the
 snapshot, the clock and the generations the shell holds now, read through refs
 rather than the ones the request started with, so a check-in that lapses or an
 access generation that moves mid-request is seen. A refusal by that check is
-the local `access-changed` error the send service also raises, not the agent's
-`chat-access-denied`, so the inbox does not mark the team unavailable for it; a
+the local `access-changed` error the send service and the conversation's
+history reads also raise, not the agent's `chat-access-denied` or the shell's
+availability reason, so the inbox does not mark the team unavailable for it; a
 refusal before the preparation has left this Mac withdraws the submission,
 leaves its fields in the sheet and states that the channel was not created, while
 a refusal of a saved preparation states that it can be checked once access
