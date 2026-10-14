@@ -166,3 +166,32 @@ test('tree keys open, close, enter and leave folders', () => {
   });
   assert.equal(treeKeyAction('ArrowDown', folded, 9), null);
 });
+
+test('a store whose only child is its Trash opens, closes and is entered', () => {
+  const roots = [{ storeId: 's3', root: node('/'), trash: true }];
+  const open = treeEntries(roots, new Set(), '/.trash');
+  assert.deepEqual(
+    open.map((entry) => [entry.key, entry.level, entry.expandable]),
+    [
+      ['s3|/', 1, true],
+      ['s3|/.trash', 2, false],
+    ],
+  );
+  assert.deepEqual(treeKeyAction('ArrowRight', open, 0), {
+    kind: 'focus',
+    index: 1,
+  });
+  assert.deepEqual(treeKeyAction('ArrowLeft', open, 0), {
+    kind: 'toggle',
+    index: 0,
+  });
+  const closed = treeEntries(roots, new Set(['s3|/']), '/.trash');
+  assert.deepEqual(
+    closed.map((entry) => entry.key),
+    ['s3|/'],
+  );
+  assert.deepEqual(treeKeyAction('ArrowRight', closed, 0), {
+    kind: 'toggle',
+    index: 0,
+  });
+});

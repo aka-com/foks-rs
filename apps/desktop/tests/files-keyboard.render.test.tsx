@@ -156,6 +156,9 @@ test('the list is a grid with column headers, row positions and one tab stop', a
   assert.deepEqual(tabStops(table), [rows[0]]);
   for (const button of table.querySelectorAll('.acts button'))
     assert.equal(button.getAttribute('tabindex'), '-1');
+  // A row cannot carry aria-haspopup; it names the key for its menu.
+  for (const row of rows)
+    assert.equal(row.getAttribute('aria-keyshortcuts'), 'Shift+F10');
 });
 
 test('arrow keys move between rows and into a row’s own actions', async () => {
@@ -225,6 +228,17 @@ test('the arrow keys reach rows outside the virtual window and keep the tab stop
   assert.equal(focused(), last);
   assert.ok(last.isConnected);
   assert.deepEqual(tabStops(table), [last]);
+  // Focus returning to the pinned row from outside the list scrolls the
+  // list to the row's real place.
+  ui.screen.getByRole('button', { name: 'Grid view' }).focus();
+  last.focus();
+  await ui.waitFor(() =>
+    assert.notEqual(
+      table.querySelector('.row')?.getAttribute('aria-rowindex'),
+      '2',
+    ),
+  );
+  assert.equal(focused(), last);
   ui.fireEvent.keyDown(last, { key: 'PageUp' });
   await ui.waitFor(() =>
     assert.ok(Number(focused().getAttribute('aria-rowindex')) < total + 1),
@@ -302,6 +316,11 @@ test('folder rows join the grid ahead of the items', async () => {
   const rows = [...table.querySelectorAll<HTMLElement>('.row')];
   assert.ok(rows[0].classList.contains('folder'));
   assert.equal(rows[0].getAttribute('role'), 'row');
+  // A folder row has an empty actions cell, so every row has a cell under
+  // each column header.
+  const headers = ui.within(table).getAllByRole('columnheader').length;
+  for (const row of rows)
+    assert.equal(row.querySelectorAll('[role="gridcell"]').length, headers);
   assert.deepEqual(tabStops(table), [rows[0]]);
   rows[0].focus();
   ui.fireEvent.keyDown(rows[0], { key: 'ArrowDown' });
@@ -327,6 +346,20 @@ test('each folder tree is one tab stop that the arrow keys open, close and walk'
   assert.equal(tabStops(vaults)[0], items()[0]);
   assert.equal(personal.getAttribute('aria-level'), '1');
   assert.equal(personal.getAttribute('aria-expanded'), 'true');
+  // Every row drawn above a deeper row, a store with only its Trash below it
+  // included, is a parent that states whether it is open.
+  for (const tree of [vaults, teams]) {
+    const rows = ui.within(tree).getAllByRole('treeitem');
+    rows.forEach((row, index) => {
+      const next = rows[index + 1];
+      if (
+        next &&
+        Number(next.getAttribute('aria-level')) >
+          Number(row.getAttribute('aria-level'))
+      )
+        assert.equal(row.getAttribute('aria-expanded'), 'true', named(row));
+    });
+  }
   personal.focus();
   ui.fireEvent.keyDown(personal, { key: 'ArrowRight' });
   const child = focused();

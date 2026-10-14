@@ -234,13 +234,17 @@ interface RowNav {
   colIndex?: number;
 }
 
-/** The outer element's grid role and position for `nav`. */
+/**
+ * The outer element's grid role and position for `nav`. A row cannot carry
+ * aria-haspopup, so a list row names the key that opens its menu instead.
+ */
 function navAttributes(nav: RowNav, selected?: boolean) {
   return nav.layout === 'list'
     ? {
         role: 'row',
         'aria-rowindex': nav.rowIndex,
         'aria-selected': selected,
+        'aria-keyshortcuts': 'Shift+F10',
         tabIndex: nav.tabIndex,
         'data-nav-key': nav.key,
       }
@@ -583,6 +587,9 @@ function FolderRow({
       <span className="cell num" role={cellRole(nav)}>
         {itemCount(count)}
       </span>
+      {nav.layout === 'list' ? (
+        <span className="acts-none" role="gridcell" />
+      ) : null}
     </div>
   );
 }
@@ -1260,6 +1267,7 @@ export function ItemsScreen({
     const trashKey = `${tree.store.id}|${TRASH_ROOT}`;
     const open = !closed.has(foldKey);
     const expired = leaseExpired(tree.store);
+    const hasTrash = storeReadable(snapshot, tree.store.id);
     return (
       <Fragment key={tree.store.id}>
         <TreeRow
@@ -1289,7 +1297,9 @@ export function ItemsScreen({
             ) : undefined
           }
           open={open}
-          expandable={tree.root.folders.length > 0}
+          // Trash is drawn under the store, so a store without folders is
+          // still a parent that opens and closes.
+          expandable={tree.root.folders.length > 0 || hasTrash}
           action={
             tree.store.kind === 'team' ? (
               // A pointer shortcut: the row's menu offers Team settings to
@@ -1311,7 +1321,7 @@ export function ItemsScreen({
           onToggle={() => locations.toggleFolder(foldKey)}
         />
         {open ? drawFolders(tree.root.folders, tree.store, 1, stop) : null}
-        {open && storeReadable(snapshot, tree.store.id) ? (
+        {open && hasTrash ? (
           <TreeRow
             tree={treePlace(trashKey, 2, stop)}
             depth={1}
@@ -1706,6 +1716,26 @@ export function ItemsScreen({
     rowIndex: cardLayout ? undefined : index + 1 + headerRows,
     colIndex: cardLayout ? (index % lineSize) + 1 : undefined,
   });
+  /** Scrolls a windowed list so that the entry at `index` is in view. */
+  const revealRow = (index: number): void => {
+    const body = bodyRef.current;
+    if (!flatMode || !body) return;
+    const sticky =
+      body.querySelector<HTMLElement>(
+        '.list-window > .selbar, .files-items > .hdr',
+      )?.offsetHeight ?? 0;
+    const next = revealOffset({
+      top: listMetrics.top + Math.floor(index / lineSize) * linePitch,
+      height: cardLayout ? cardHeight : ROW_HEIGHT,
+      scrollTop,
+      viewport: listMetrics.viewport,
+      stickyTop: sticky,
+    });
+    if (next !== scrollTop) {
+      body.scrollTop = next;
+      setScrollTop(next);
+    }
+  };
   /**
    * Moves focus to the entry at `index`, first scrolling a windowed list so
    * that the entry is mounted and in view.
@@ -1714,23 +1744,7 @@ export function ItemsScreen({
     const key = navKeys[index];
     if (key === undefined) return;
     const body = bodyRef.current;
-    if (flatMode && body) {
-      const sticky =
-        body.querySelector<HTMLElement>(
-          '.list-window > .selbar, .files-items > .hdr',
-        )?.offsetHeight ?? 0;
-      const next = revealOffset({
-        top: listMetrics.top + Math.floor(index / lineSize) * linePitch,
-        height: cardLayout ? cardHeight : ROW_HEIGHT,
-        scrollTop,
-        viewport: listMetrics.viewport,
-        stickyTop: sticky,
-      });
-      if (next !== scrollTop) {
-        body.scrollTop = next;
-        setScrollTop(next);
-      }
-    }
+    revealRow(index);
     setRowFocus(key);
     const element = navElement(body, key);
     if (element) element.focus({ preventScroll: flatMode });
@@ -1778,8 +1792,14 @@ export function ItemsScreen({
       event.target instanceof HTMLElement
         ? event.target.closest<HTMLElement>('[data-nav-key]')
         : null;
-    if (entry?.dataset.navKey && event.currentTarget.contains(entry))
-      setRowFocus(entry.dataset.navKey);
+    if (!entry?.dataset.navKey || !event.currentTarget.contains(entry)) return;
+    setRowFocus(entry.dataset.navKey);
+    // The tab stop outside the virtual window is drawn one line beyond its
+    // edge, not where it belongs; focus returning to it (Tab after scrolling
+    // the list away) scrolls the list to its real place.
+    const index = navKeys.indexOf(entry.dataset.navKey);
+    if (index >= 0 && (index < rowWindow.start || index >= rowWindow.end))
+      revealRow(index);
   };
   /** The card grid's lines, from the line holding entry `first`. */
   const cardLines = (

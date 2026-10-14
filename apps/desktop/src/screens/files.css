@@ -420,13 +420,16 @@
   flex: none;
 }
 
-/* The row's own actions, floating over the Size cell they replace. */
+/* The row's own actions, floating over the Size cell they replace. They are
+   hidden by opacity rather than display: none, so the actions gridcell stays
+   in the accessibility tree under its column header. */
 .folder-body .row .acts {
   position: absolute;
   opacity: 0;
+  pointer-events: none;
   right: 8px;
   top: 4px;
-  display: none;
+  display: flex;
   gap: 2px;
   padding: 1px;
   border: 1px solid var(--line-mid);
@@ -437,8 +440,13 @@
 .folder-body .row:hover .acts,
 .folder-body .row:focus-within .acts,
 .folder-body .row.sel .acts {
-  display: flex;
   opacity: 1;
+  pointer-events: auto;
+}
+/* A folder row has no actions; its empty actions cell keeps the row's cells
+   in line with the column headers and takes no space. */
+.folder-body .row > .acts-none {
+  position: absolute;
 }
 .folder-body .row .acts button {
   width: 26px;
@@ -466,8 +474,10 @@
   flex-direction: column;
   min-height: 0;
 }
-/* Names the cell holding a row's own actions, which float over Size. */
-.folder-body .hdr.cols > .acts-head {
+/* Names the cell holding a row's own actions, which float over Size, or in
+   Trash sit in a column without a visible heading. */
+.folder-body .hdr.cols > .acts-head,
+.folder-body .hdr.trash-cols > .acts-head {
   position: absolute;
   width: 1px;
   height: 1px;

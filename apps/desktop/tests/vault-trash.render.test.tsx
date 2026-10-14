@@ -243,6 +243,69 @@ test('the Trash view restores, offers a copy for an occupied path, and deletes p
   );
 });
 
+test('the Trash list is a grid with one tab stop that the arrow keys walk', async () => {
+  const { rendered, store } = await mount();
+  await trashGithub(rendered);
+  const pdf = 'passport-scan.pdf';
+  await ui.act(async () =>
+    store.select({ store: 'acct:personal', path: `/documents/${pdf}` }),
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      await rendered.findByRole('button', { name: 'Move to Trash' }),
+    );
+  });
+  await ui.waitFor(() =>
+    assert.match(toasts(), /Moved passport-scan\.pdf to Trash/),
+  );
+  await ui.act(async () => store.setFolder('/.trash'));
+  await ui.waitFor(() => assert.ok(trashRow(pdf)));
+  const grid = rendered.getByRole('grid', { name: 'Trash · Personal' });
+  const rows = [...grid.querySelectorAll<HTMLElement>('.row')];
+  assert.equal(rows.length, 2);
+  assert.equal(grid.getAttribute('aria-rowcount'), '3');
+  assert.deepEqual(
+    ui
+      .within(grid)
+      .getAllByRole('columnheader')
+      .map((cell) => cell.textContent),
+    ['Name', 'Original location', 'Deleted', 'Size', 'Actions'],
+  );
+  assert.deepEqual(
+    rows.map((row) => [
+      row.getAttribute('role'),
+      row.getAttribute('aria-rowindex'),
+      row.querySelectorAll('[role="gridcell"]').length,
+    ]),
+    [
+      ['row', '2', 5],
+      ['row', '3', 5],
+    ],
+  );
+  const stops = () => [...grid.querySelectorAll<HTMLElement>('[tabindex="0"]')];
+  assert.deepEqual(stops(), [rows[0]]);
+  for (const button of grid.querySelectorAll('.trash-acts button'))
+    assert.equal(button.getAttribute('tabindex'), '-1');
+  rows[0].focus();
+  ui.fireEvent.keyDown(rows[0], { key: 'ArrowDown' });
+  assert.equal(document.activeElement, rows[1]);
+  assert.deepEqual(stops(), [rows[1]]);
+  ui.fireEvent.keyDown(rows[1], { key: 'Home' });
+  assert.equal(document.activeElement, rows[0]);
+  // Right walks the row's Restore and Delete permanently; Left walks back.
+  const actions = [...rows[0].querySelectorAll<HTMLElement>('button')];
+  ui.fireEvent.keyDown(rows[0], { key: 'ArrowRight' });
+  assert.equal(document.activeElement, actions[0]);
+  ui.fireEvent.keyDown(actions[0], { key: 'ArrowRight' });
+  assert.equal(document.activeElement, actions[1]);
+  ui.fireEvent.keyDown(actions[1], { key: 'ArrowLeft' });
+  ui.fireEvent.keyDown(actions[0], { key: 'ArrowLeft' });
+  assert.equal(document.activeElement, rows[0]);
+  ui.fireEvent.keyDown(rows[0], { key: 'Enter' });
+  assert.equal(rows[0].getAttribute('aria-selected'), 'true');
+  assert.equal(rows[1].getAttribute('aria-selected'), 'false');
+});
+
 test('a folder moves to Trash whole, restores whole, and Empty Trash removes every entry', async () => {
   const { rendered, store, paths } = await mount();
   const folder = document.querySelector<HTMLElement>(

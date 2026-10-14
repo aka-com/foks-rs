@@ -108,6 +108,7 @@ export interface TreeEntry {
 /**
  * The rows a set of store trees draws, in order: each store, then while it is
  * open its folders depth first and, when `trash` names the store, its Trash.
+ * A store that draws Trash is a parent even when it holds no folders.
  */
 export function treeEntries(
   roots: readonly { storeId: string; root: FolderNode; trash: boolean }[],
@@ -115,7 +116,12 @@ export function treeEntries(
   trashPath: string,
 ): TreeEntry[] {
   const entries: TreeEntry[] = [];
-  const visit = (storeId: string, node: FolderNode, level: number): boolean => {
+  const visit = (
+    storeId: string,
+    node: FolderNode,
+    level: number,
+    trash = false,
+  ): boolean => {
     const key = `${storeId}|${node.path}`;
     const open = !closed.has(key);
     entries.push({
@@ -123,7 +129,7 @@ export function treeEntries(
       storeId,
       path: node.path,
       level,
-      expandable: node.folders.length > 0,
+      expandable: node.folders.length > 0 || trash,
       open,
     });
     if (open)
@@ -131,7 +137,7 @@ export function treeEntries(
     return open;
   };
   for (const { storeId, root, trash } of roots) {
-    const open = visit(storeId, root, 1);
+    const open = visit(storeId, root, 1, trash);
     if (open && trash)
       entries.push({
         key: `${storeId}|${trashPath}`,

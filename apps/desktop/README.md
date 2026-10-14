@@ -198,12 +198,16 @@ targets): Up, Down, Home, End, PageUp and PageDown move focus, scrolling the
 virtual window to mount the target first. In the list, Right and Left move
 between a row and its Copy, Reveal or Download buttons; in the card view
 they move between cards, whose actions are in the row menu (Shift+F10 or the
-ContextMenu key). Enter opens details. The focused row stays mounted, one
-line beyond the window's edge, when the list scrolls away from it. The
-vaults and the teams in the folder tree are each a `tree` with one tab stop:
-Up and Down move between drawn rows, Right opens a folder or moves into it,
-Left closes it or moves to its parent, and Enter selects. A team's settings
-are in its row menu as well as behind the gear its row shows on hover.
+ContextMenu key; list rows name it in `aria-keyshortcuts`). Enter opens
+details. The focused row stays mounted, one line beyond the window's edge,
+when the list scrolls away from it, and focus returning to it scrolls the
+list back to its place. A store's Trash list is the same kind of `grid`,
+whose Right and Left reach Restore and Delete permanently. The vaults and
+the teams in the folder tree are each a `tree` with one tab stop: Up and
+Down move between drawn rows, Right opens a folder or moves into it, Left
+closes it or moves to its parent, and Enter selects. A store is a parent
+when it draws Trash, even with no folders. A team's settings are in its row
+menu as well as behind the gear its row shows on hover.
 
 Delete moves an item, or a folder with everything in it, into the vault's
 Trash: `/.trash/<role-tag>/` in the same store, one folder per read role,

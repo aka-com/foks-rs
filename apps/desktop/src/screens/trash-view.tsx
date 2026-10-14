@@ -6,7 +6,11 @@
  */
 
 import { useState } from 'react';
-import type { ReactNode } from 'react';
+import type {
+  FocusEvent as ReactFocusEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  ReactNode,
+} from 'react';
 import { Band, Button, Icon } from '../components';
 import {
   fmtSize,
@@ -19,6 +23,7 @@ import {
 } from '../model';
 import type { AgentSnapshot, Store, TrashEntry } from '../model';
 import type { Bridge } from '../bridge';
+import { gridFocusTarget, rovingKey } from './files-keyboard';
 import { itemActionProblem } from './store-access';
 import { useTrashOrigins } from './trash-origins';
 
@@ -65,6 +70,56 @@ export function TrashView({
   const entries = useTrashOrigins(bridge, listed);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const selected = entries.find((entry) => entry.item.path === selectedPath);
+  // The list is one tab stop, as the Files list is: the row focus last moved
+  // to, else the selected row, else the first carries tabIndex 0.
+  const [focusPath, setFocusPath] = useState<string | null>(null);
+  const paths = entries.map((entry) => entry.item.path);
+  const stop = rovingKey(paths, focusPath, selectedPath);
+  const gridKeys = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey)
+      return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const row = target.closest<HTMLElement>('[data-trash-path]');
+    if (!row || !event.currentTarget.contains(row)) return;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      // Left and Right move between a row and its enabled actions.
+      const stops = [
+        row,
+        ...row.querySelectorAll<HTMLElement>('.trash-acts button:enabled'),
+      ];
+      const at = stops.indexOf(target);
+      const next = stops[at + (event.key === 'ArrowRight' ? 1 : -1)];
+      if (at < 0 || !next) return;
+      event.preventDefault();
+      next.focus();
+      return;
+    }
+    const rows = [
+      ...event.currentTarget.querySelectorAll<HTMLElement>('[data-trash-path]'),
+    ];
+    const scroller = row.closest<HTMLElement>('.folder-body');
+    const next = gridFocusTarget(event.key, {
+      index: rows.indexOf(row),
+      count: rows.length,
+      columns: 1,
+      page: Math.max(
+        1,
+        Math.floor((scroller?.clientHeight ?? 0) / (row.offsetHeight || 1)),
+      ),
+    });
+    if (next === null) return;
+    event.preventDefault();
+    setFocusPath(rows[next].dataset.trashPath ?? null);
+    rows[next].focus();
+  };
+  const rowFocused = (event: ReactFocusEvent<HTMLDivElement>): void => {
+    const row =
+      event.target instanceof HTMLElement
+        ? event.target.closest<HTMLElement>('[data-trash-path]')
+        : null;
+    if (row?.dataset.trashPath) setFocusPath(row.dataset.trashPath);
+  };
   // Empty Trash removes the entries this account can change and leaves the
   // rest; it is unavailable only when there are none.
   const all = trashEntries(snapshot, store.id);
@@ -108,15 +163,27 @@ export function TrashView({
         </Button>
       </div>
       {entries.length ? (
-        <div className="list-window">
-          <div className="hdr trash-cols">
-            <span>Name</span>
-            <span>Original location</span>
-            <span>Deleted</span>
-            <span className="trash-size">Size</span>
-            <span />
+        <div
+          className="list-window"
+          role="grid"
+          aria-label={`Trash · ${store.name}`}
+          aria-rowcount={entries.length + 1}
+          onKeyDown={gridKeys}
+          onFocus={rowFocused}
+        >
+          <div className="hdr trash-cols" role="row" aria-rowindex={1}>
+            <span role="columnheader">Name</span>
+            <span role="columnheader">Original location</span>
+            <span role="columnheader">Deleted</span>
+            <span role="columnheader" className="trash-size">
+              Size
+            </span>
+            {/* Names the actions cell; the column has no visible heading. */}
+            <span role="columnheader" className="acts-head">
+              Actions
+            </span>
           </div>
-          {entries.map((entry) => {
+          {entries.map((entry, index) => {
             const label = trashEntryLabel(entry);
             const problem = itemActionProblem(
               snapshot,
@@ -135,10 +202,12 @@ export function TrashView({
                 ]
                   .filter(Boolean)
                   .join(' ')}
-                role="button"
-                tabIndex={0}
-                aria-pressed={selectedPath === entry.item.path}
+                role="row"
+                aria-rowindex={index + 2}
+                aria-selected={selectedPath === entry.item.path}
                 aria-label={`${label}, deleted ${deletedLabel(entry.deletedAt)}`}
+                tabIndex={entry.item.path === stop ? 0 : -1}
+                data-trash-path={entry.item.path}
                 onClick={() => setSelectedPath(entry.item.path)}
                 onKeyDown={(event) => {
                   if (event.target !== event.currentTarget) return;
@@ -156,7 +225,7 @@ export function TrashView({
                   }
                 }}
               >
-                <span className="name">
+                <span className="name" role="gridcell">
                   <Icon
                     name={entry.item.kind === 'Folder' ? 'folder' : 'file'}
                     className="f"
@@ -171,15 +240,26 @@ export function TrashView({
                     </span>
                   ) : null}
                 </span>
-                <span className="cell" title={entry.original ?? undefined}>
+                <span
+                  className="cell"
+                  role="gridcell"
+                  title={entry.original ?? undefined}
+                >
                   {originalLabel(entry)}
                 </span>
-                <span className="cell">{deletedLabel(entry.deletedAt)}</span>
-                <span className="cell trash-size">{sizeLabel(entry)}</span>
-                <span className="trash-acts">
+                <span className="cell" role="gridcell">
+                  {deletedLabel(entry.deletedAt)}
+                </span>
+                <span className="cell trash-size" role="gridcell">
+                  {sizeLabel(entry)}
+                </span>
+                <span className="trash-acts" role="gridcell">
                   <Button
                     size="sm"
                     icon="restore"
+                    // Reached with the arrow keys from the row, which is
+                    // the tab stop.
+                    tabIndex={-1}
                     disabled={Boolean(problem)}
                     title={problem ?? `Restore ${label}`}
                     aria-label={`Restore ${label}`}
@@ -195,6 +275,7 @@ export function TrashView({
                     variant="quiet"
                     danger
                     icon="trash"
+                    tabIndex={-1}
                     disabled={Boolean(problem)}
                     title={problem ?? `Delete ${label} permanently`}
                     aria-label={`Delete ${label} permanently`}
