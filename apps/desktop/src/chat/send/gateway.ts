@@ -92,7 +92,7 @@ export function authorizer(
   generation: number,
   channel: string | undefined,
 ): (phase: 'before' | 'after') => void {
-  const local = CHAT_ACTIONS[action.action].local;
+  const { local, mutates } = CHAT_ACTIONS[action.action];
   return (phase) => {
     if (!access.current(team, epoch)) throw cancelled();
     if (
@@ -107,6 +107,7 @@ export function authorizer(
       throw accessChanged(
         'Chat access changed. Saved work is kept until access returns.',
         phase,
+        mutates ? 'mutation' : 'read',
       );
     if (!access.agentReady()) throw cancelled();
     if (channel && !local && access.channelBlocked(team, channel))

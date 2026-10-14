@@ -183,6 +183,30 @@ test('a request is authorized against the access it was started under', () => {
   );
 });
 
+test('an access change after a request was sent is ambiguous only for a mutation', () => {
+  const t = team();
+  const refusal = (action: ChatAction) => {
+    try {
+      authorizer(
+        access({ generation: () => 1 }),
+        t,
+        action,
+        0,
+        0,
+        CHANNEL,
+      )('after');
+    } catch (error) {
+      return error as { code: string; ambiguous: boolean };
+    }
+    throw new Error('expected a refusal');
+  };
+  assert.equal(refusal(submit).code, 'access-changed');
+  assert.equal(refusal(submit).ambiguous, true);
+  const channels: ChatAction = { action: 'channels' };
+  assert.equal(refusal(channels).code, 'access-changed');
+  assert.equal(refusal(channels).ambiguous, false);
+});
+
 const scope = (actor: string): ChatScope => ({
   store: {
     profile: 'acme',
