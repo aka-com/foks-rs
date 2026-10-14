@@ -18,7 +18,7 @@ const CHAT_ERROR_COPY: Readonly<Record<string, string>> = {
   'chat-refresh-required':
     'Chat state changed on the server. Try again once the channel list refreshes.',
   'chat-reprepare-required':
-    'This saved message can no longer be sent as prepared. Cancel it and write it again.',
+    'This saved message can no longer be sent as prepared. Write it again.',
   'chat-not-found': 'The channel or saved message no longer exists.',
   'chat-key-unavailable':
     'The channel key is not available on this device yet. Try again once the team refreshes.',
@@ -32,10 +32,31 @@ const CHAT_ERROR_COPY: Readonly<Record<string, string>> = {
   'chat-channel-integrity': 'Content in this channel could not be verified.',
 };
 
+/**
+ * Where a channel creation's failure differs from a message's. The agent
+ * returns `chat-reprepare-required` for a creation when the team's channel set
+ * or the pending channel keys changed since it was prepared.
+ */
+const CHANNEL_CREATION_COPY: Readonly<Record<string, string>> = {
+  'chat-reprepare-required':
+    "The team's channels changed since this creation was prepared. Review the name and audience, then create the channel again.",
+  'chat-not-found': 'The saved channel creation no longer exists.',
+  'chat-operation-state':
+    'The saved channel creation changed state before this request finished.',
+};
+
+/**
+ * `subject` is what the failed request was about: a message (the default) or
+ * a channel creation, whose copy differs for the codes above.
+ */
 export function chatErrorText(
   error: Pick<CommandError, 'code' | 'message' | 'origin'>,
+  subject: 'message' | 'channel-creation' = 'message',
 ): string {
-  const copy = CHAT_ERROR_COPY[error.code];
+  const copy =
+    (subject === 'channel-creation'
+      ? CHANNEL_CREATION_COPY[error.code]
+      : undefined) ?? CHAT_ERROR_COPY[error.code];
   return copy !== undefined &&
     (error.origin === 'invoke' || error.origin === 'response')
     ? copy

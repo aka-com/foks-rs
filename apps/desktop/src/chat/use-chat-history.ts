@@ -155,8 +155,8 @@ export interface ChatHistoryOptions {
    * returned.
    */
   onAccepted?: AcceptHistory;
-  /** The channel's history failed verification. */
-  onFatal?: (channel: string) => void;
+  /** The channel's history failed verification, with the failure. */
+  onFatal?: (channel: string, cause: CommandError) => void;
   /** A read is about to start. */
   onLoading?: (load: HistoryLoad) => void;
 }
@@ -472,7 +472,8 @@ export function useChatHistory({
         }
         failed.current = null;
       } catch (e) {
-        const code = normalizeCommandError(e).code;
+        const typed = normalizeCommandError(e);
+        const code = typed.code;
         end(outcomeForCode(code), { code });
         if (current()) {
           // An incremental read can be skipped by its own gates, so Retry
@@ -481,8 +482,8 @@ export function useChatHistory({
             load === 'incremental'
               ? { load: 'tail', cursor: null }
               : { load, cursor };
-          if (normalizeCommandError(e).code === 'chat-channel-integrity')
-            callbacks.current.onFatal?.(channel.id);
+          if (code === 'chat-channel-integrity')
+            callbacks.current.onFatal?.(channel.id, typed);
           setError(e);
         }
       } finally {

@@ -588,7 +588,9 @@ test('the native chat-reprepare-required error stops retries until review or can
       return reply({ ...prepared, state: 'cancelled' });
     throw {
       code: 'chat-reprepare-required',
-      message: 'Prepare again with current keys',
+      message:
+        'channel set changed; prepare a new create after reviewing names',
+      origin: 'invoke',
       ambiguous: false,
       retryable: false,
       fatal: false,
@@ -597,6 +599,11 @@ test('the native chat-reprepare-required error stops retries until review or can
   const id = controller.submit(store, input);
   await tick();
   assert.equal(controller.getSnapshot()[0].state, 'review');
+  // The sheet states the creation's failure in its own terms, not a message's.
+  assert.equal(
+    controller.getSnapshot()[0].error,
+    "The team's channels changed since this creation was prepared. Review the name and audience, then create the channel again.",
+  );
   assert.deepEqual(controller.getSnapshot()[0].input, input);
   controller.retry(id);
   controller.check(id);

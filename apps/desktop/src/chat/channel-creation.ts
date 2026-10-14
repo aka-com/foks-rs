@@ -499,7 +499,7 @@ export class ChannelCreationController {
         REVIEW_CODES.has(failed.code)
           ? 'review'
           : 'unresolved';
-      record.error = chatErrorText(failed);
+      record.error = chatErrorText(failed, 'channel-creation');
       // A preparation the agent refused on its content can be changed and
       // sent again; one it may have taken cannot, and is recovered as it
       // stands. That includes a later refusal of a request that never

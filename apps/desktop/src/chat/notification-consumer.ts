@@ -624,7 +624,7 @@ export class NotificationConsumer {
       }
       p.dirty = true;
       if (error.code === 'chat-channel-integrity') {
-        this.service.blockChannel(p.id, p.channel);
+        this.service.blockChannel(p.id, p.channel, error);
         this.discard(p);
       } else if (error.code === 'chat-access-denied') {
         p.baseline = null;

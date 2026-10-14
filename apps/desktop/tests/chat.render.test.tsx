@@ -831,9 +831,14 @@ test('a recheck reopens a channel whose history verifies again', async () => {
   const id = 'ab'.repeat(16);
   let fail = true;
   const exclusions: string[][] = [];
+  const copied: string[] = [];
   await setup(
     (base) => ({
       ...base,
+      copyText: async (text) => {
+        copied.push(text);
+        return { ok: true };
+      },
       chat: async (store, action, view) => {
         if (action.action === 'sync-inbox')
           exclusions.push(action.blocked_channels ?? []);
@@ -857,6 +862,15 @@ test('a recheck reopens a channel whose history verifies again', async () => {
   await ui.screen.findByRole('heading', { name: 'Channel stopped' });
   // The agent's description of the failed check is for diagnostics only.
   assert.equal(ui.screen.queryByText(/predecessor contradiction/), null);
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Copy diagnostic details' }),
+  );
+  await ui.waitFor(() => assert.equal(copied.length, 1));
+  assert.match(copied[0], /\nError code: chat-channel-integrity\n/);
+  assert.match(
+    copied[0],
+    /\nDetail: chat channel content integrity check failed: predecessor contradiction\n/,
+  );
   await ui.waitFor(() => assert.ok(exclusions.at(-1)?.includes(id)));
   ui.fireEvent.click(
     ui.screen.getByRole('button', { name: 'Recheck channel' }),
@@ -3227,6 +3241,102 @@ for (const offline of [true, false]) {
     );
   });
 }
+
+test('a popover emptied by its last request stays closed when new saved work arrives', async () => {
+  let seed: ((text: string, submission: string) => Promise<unknown>) | null =
+    null;
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action) => {
+        if (!seed) {
+          seed = (text, submission) =>
+            base.chat(store, {
+              action: 'prepare-message',
+              channel: 'ab'.repeat(16),
+              submission,
+              text,
+            });
+          await seed('Cancel this preparation', '77'.repeat(16));
+        }
+        if (action.action === 'sync-inbox')
+          throw {
+            code: 'offline',
+            message: 'Offline',
+            fatal: false,
+            retryable: true,
+            ambiguous: false,
+          };
+        return base.chat(store, action);
+      },
+    }),
+    false,
+  );
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', { name: '1 unsent' }),
+  );
+  const popover = await ui.screen.findByRole('dialog', {
+    name: /Unsent work/,
+  });
+  ui.fireEvent.click(
+    ui.within(popover).getByRole('button', { name: 'Cancel' }),
+  );
+  const settled = (await ui.screen.findByText(/All caught up/)).closest(
+    '[role="status"]',
+  );
+  assert.ok(settled);
+  assert.equal(ui.screen.queryByRole('dialog', { name: /Unsent work/ }), null);
+  // Focus left the removed popover for the status that replaced the chip.
+  assert.notEqual(document.activeElement, document.body);
+  assert.equal(document.activeElement, settled);
+  await seed!('Saved after the list emptied', '78'.repeat(16));
+  ui.fireEvent.click(ui.screen.getAllByRole('button', { name: 'Retry' })[0]);
+  const chip = await ui.screen.findByRole('button', { name: '1 unsent' });
+  assert.equal(chip.getAttribute('aria-expanded'), 'false');
+  assert.equal(ui.screen.queryByRole('dialog', { name: /Unsent work/ }), null);
+});
+
+test('a stopped channel’s saved messages are counted by the chip in its pane', async () => {
+  const id = 'ab'.repeat(16);
+  let seeded = false;
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        if (!seeded) {
+          seeded = true;
+          await base.chat(store, {
+            action: 'prepare-message',
+            channel: id,
+            submission: '79'.repeat(16),
+            text: 'Saved in a channel that stops',
+          });
+        }
+        if (action.action === 'history' && action.channel === id)
+          throw {
+            code: 'chat-channel-integrity',
+            message: 'chat channel content integrity check failed',
+            retryable: false,
+            fatal: true,
+            ambiguous: false,
+            origin: 'invoke',
+          };
+        return base.chat(store, action, view);
+      },
+    }),
+    false,
+  );
+  await ui.screen.findByRole('heading', { name: 'Channel stopped' });
+  // The stopped pane draws no thread, so the chip is where the message is.
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', { name: '1 unsent' }),
+  );
+  const popover = await ui.screen.findByRole('dialog', {
+    name: /Unsent work/,
+  });
+  assert.match(popover.textContent ?? '', /Message in #general/);
+  assert.ok(ui.within(popover).getByRole('button', { name: 'Cancel' }));
+});
 
 test('durable pending refresh replaces stale prepared state after lost delivery and status replies', async () => {
   let uncertain = false;

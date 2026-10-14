@@ -1140,37 +1140,50 @@ arrived in between. `book/20-desktop.qmd` describes the history reads behind
 this.
 
 Saved work the open thread does not draw (channel creations, and messages in
-other channels or in a channel the reader can no longer read) is counted by a
-chip in the conversation header, or in a bar of its own when no channel is
-open. The count covers the states that leave work for the reader (Not sent,
-Checking delivery, Couldn't confirm delivery, Couldn't post, Waiting for
-access) and reads "Saved work" when none of them remains. The chip opens a
-popover that lists each operation with its channel, saved text, state and
-verbs, and Jump for a message in a channel the reader can open; Esc closes it
-and returns focus to the chip. Once the last of it is accounted for the chip
-says "All caught up" rather than disappearing without a word. A channel whose
+other channels or in a channel the reader can no longer read or that is
+stopped) is counted by a chip in the conversation header, or in a bar of its
+own when no channel is open. The count covers the states that leave work for
+the reader (Not sent, Checking delivery, Couldn't confirm delivery, Couldn't
+post, Waiting for access) and reads "Saved work" when none of them remains.
+The chip opens a popover that lists each operation with its channel, saved
+text, state and verbs, and Jump for a message in a channel the reader can
+open; Esc closes it and returns focus to the chip. Once the last of it is
+accounted for the chip says "All caught up" rather than disappearing without a
+word, and the popover closes, so the next saved operation does not reopen it.
+A channel creation's failures use their own copy where a message's would name
+the wrong thing (`chatErrorText(error, 'channel-creation')`). A channel whose
 content could not be verified shows "Channel stopped" under its own header,
 with "Recheck channel" and "Copy diagnostic details". Recheck removes the
 channel from the blocked set the desktop sends with `sync-inbox`
 (`ChatInboxService.unblockChannel`) and synchronizes the team again: the agent
 reports the channel in `blocked_channels` again if it still detects the
 conflict, and otherwise the thread reads its history and verifies it from the
-start, where hard-state anchors still catch an equivocating server. A channel
-stopped again after a recheck says when it was checked. "Chat stopped", the
+start, where hard-state anchors still catch an equivocating server. A
+synchronization already running when the reader rechecks was sent the old set,
+which the agent echoes back; those echoes are ignored. A channel stopped again
+after a recheck says when that happened, until a synchronization and a history
+read since the recheck have both left it unblocked (`chat/recheck.ts`). The
+diagnostic details carry the failure that stopped the channel, its code and
+the agent's description of the failed check, or name `sync-inbox` when the
+channel was stopped because the synchronization listed it. "Chat stopped", the
 account-wide quarantine, still needs a new chat session, which the next unlock
 starts; it offers Copy diagnostic details, which carries the error code and
-the agent's own description of the failed check that the pane does not show. When the team's server check-in has lapsed the
-column stays and the pane carries the notice, with "Check in" opening that
-server in Settings › Servers; every other unavailable state is stated without
-an action, because no button in Chat resolves it, and "Open another team" is
-offered only when another team can actually be opened. A location naming a team
-that has no chat says so in the pane rather than waiting for an inbox that will
-not arrive. A location naming a channel the team does not list _yet_ is the
-opposite case: while that team has been invalidated and its next synchronization
-has not landed, the pane says it is loading rather than calling the channel
-unavailable, which is what a channel created a moment ago would otherwise read
-as. A synchronization that failed carries its error instead, so the wait always
-has something behind it.
+the agent's own description of the failed check that the pane does not show.
+A page whose predecessors could not all be fetched still raises one channel-wide
+band. A header chip that scrolls to the first such loaded page needs only
+today's data and is not built yet; marking the individual rows needs a
+per-message `predecessor_unchecked` field from the agent. When the team's server
+check-in has lapsed the column stays and the pane carries the notice, with
+"Check in" opening that server in Settings › Servers; every other unavailable
+state is stated without an action, because no button in Chat resolves it, and
+"Open another team" is offered only when another team can actually be opened. A
+location naming a team that has no chat says so in the pane rather than waiting
+for an inbox that will not arrive. A location naming a channel the team does not
+list _yet_ is the opposite case: while that team has been invalidated and its
+next synchronization has not landed, the pane says it is loading rather than
+calling the channel unavailable, which is what a channel created a moment ago
+would otherwise read as. A synchronization that failed carries its error
+instead, so the wait always has something behind it.
 
 Four things the chat redesign drafts showed are deliberately not built, because
 no `ChatAction` reaches them: reactions, "Retry all" and "Discard" over every

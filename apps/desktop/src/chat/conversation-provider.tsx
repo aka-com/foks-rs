@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import type { Bridge } from '../bridge';
+import type { Bridge, CommandError } from '../bridge';
 import type { ChatAction, ChatReply, ChatScope } from '../chat-contract';
 import type { AcceptHistory } from './conversation-model';
 import type { ListPosition } from './history-cache';
@@ -28,8 +28,11 @@ export interface ChatConversationValue {
   refreshPending: () => Promise<void>;
   markRead: (channel: string, sequence: string) => Promise<void>;
   acceptHistory: AcceptHistory;
-  /** Stops a channel whose history failed verification. */
-  blockHistory: (channel: string) => void;
+  /**
+   * Stops a channel whose history failed verification; `cause` is kept for
+   * the stopped pane's diagnostic details.
+   */
+  blockHistory: (channel: string, cause?: CommandError) => void;
   /** Where the reader left a channel's retained window, if anywhere. */
   listPosition: (channel: string) => ListPosition | null;
   /** Records where the reader leaves a channel; `null` at its newest end. */

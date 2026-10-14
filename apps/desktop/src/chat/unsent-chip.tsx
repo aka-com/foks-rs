@@ -9,11 +9,12 @@ import { PendingRow } from './pending-row';
 /**
  * The team's saved work that the open thread does not draw, as a chip in the
  * conversation header: channel creations, and messages in other channels or
- * in a channel the reader can no longer read. The chip counts the operations
- * whose state leaves work for the reader (`deliveryNeedsAttention`) and opens
- * a popover that lists every one of them with its requests and, for a message
- * in a channel the reader can open, Jump. Once the last of them is accounted
- * for, the chip says so instead of disappearing without a word.
+ * in a channel the reader can no longer read or that is stopped. The chip
+ * counts the operations whose state leaves work for the reader
+ * (`deliveryNeedsAttention`) and opens a popover that lists every one of them
+ * with its requests and, for a message in a channel the reader can open, Jump.
+ * Once the last of them is accounted for, the chip says so instead of
+ * disappearing without a word, and the popover closes.
  */
 export function UnsentChip({
   storeId,
@@ -38,11 +39,30 @@ export function UnsentChip({
   onChange: () => void;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const [refocus, setRefocus] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
+  const settled = useRef<HTMLSpanElement>(null);
+  // Resolving the last operation from the popover empties it, and it unmounts
+  // without `onClose`. Close it here so the next operation does not reopen it
+  // and take focus, and move focus from the removed popover to the status
+  // that replaces the chip rather than leaving it on the document body.
+  if (operations.length === 0 && open) {
+    setOpen(false);
+    setRefocus(true);
+  }
+  useEffect(() => {
+    if (!refocus) return;
+    setRefocus(false);
+    const active = document.activeElement;
+    if (!active || active === document.body)
+      settled.current?.focus({ preventScroll: true });
+  }, [refocus]);
   if (operations.length === 0) {
     if (!recovered) return null;
     return (
       <span
+        ref={settled}
+        tabIndex={-1}
         className="chip ok chat-unsent-chip"
         role="status"
         title="Everything saved on this device has been accounted for."

@@ -21,10 +21,11 @@ import { useChatConversationContext } from './conversation-provider';
  * belongs in `timeTitle`. A tracked operation restored from the agent's
  * ledger has no time, since `ChatOperation` carries none. A grouped row
  * continues the previous message's run: its avatar, author and time are kept
- * for screen readers only, and anything in `status` stays visible. The row's message actions
- * ({@link useMessageActions}) draw a toolbar over its top corner. The row is
- * focusable and carries its key in the list as `data-row`; only the list's
- * current row is in the tab order, with the links in its content.
+ * for screen readers only, and anything in `status` stays visible. The row's
+ * message actions ({@link useMessageActions}) draw a toolbar over its top
+ * corner. The row is focusable and carries its key in the list as `data-row`;
+ * only the list's current row is in the tab order, with the links in its
+ * content.
  */
 export function MessageRow({
   className,

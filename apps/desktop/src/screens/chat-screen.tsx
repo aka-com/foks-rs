@@ -112,6 +112,8 @@ export function ChatScreen({
     history,
     blockHistory,
     recheckChannel,
+    rechecked,
+    channelBlockCause,
     listPosition,
     keepListPosition,
   } = useChatConversation(
@@ -253,13 +255,11 @@ export function ChatScreen({
       : undefined;
   const empty = !loading && !listed.length && !error;
   const toasts = useOptionalToast();
-  // When the reader last rechecked each stopped channel, so a channel the
-  // recheck stops again says so rather than reading as unchanged.
-  const [rechecked, setRechecked] = useState<ReadonlyMap<string, number>>(
-    () => new Map(),
-  );
   const copyDiagnostic = (stopped?: string) => {
     if (!store) return;
+    // A stopped channel reports the failure that blocked it; a channel
+    // `sync-inbox` listed as blocked has none, and says where it came from.
+    const cause = stopped ? channelBlockCause(stopped) : blockedFailure;
     void bridge
       .copyText(
         chatDiagnostic({
@@ -267,10 +267,10 @@ export function ChatScreen({
           teamId: scope?.store.team_id,
           server: serverDisplayLabelForStore(agentSnapshot, store),
           channel: stopped,
-          code: stopped
-            ? 'chat-channel-integrity'
-            : (blockedFailure?.code ?? 'chat-integrity'),
-          detail: stopped ? undefined : blockedFailure?.message,
+          code: cause?.code ?? (stopped ? undefined : 'chat-integrity'),
+          reportedBy:
+            stopped && !cause ? 'sync-inbox blocked_channels' : undefined,
+          detail: cause?.message,
           at: Date.now(),
         }),
       )
@@ -280,12 +280,15 @@ export function ChatScreen({
   // Whether this conversation has carried saved work since it was opened, so
   // the chip can say it was accounted for rather than simply vanishing.
   const [recovered, setRecovered] = useState(false);
+  // The open thread draws its own channel's operations, except when the
+  // channel is unreadable or stopped and no thread is drawn.
   const unfinished = pending.filter(
     (op) =>
       !op.observed &&
       (op.kind === 'create-channel' ||
         op.channel !== channel?.id ||
-        !channel?.readable),
+        !channel?.readable ||
+        blockedChannels.has(op.channel)),
   );
   if (unfinished.length > 0 && !recovered) setRecovered(true);
   const readable = new Set(
@@ -444,19 +447,14 @@ export function ChatScreen({
                 messages are not shown. Other channels remain available.
               </p>
               <p role="status">
-                {rechecked.has(channel.id)
-                  ? `Checked again at ${messageClock(String(rechecked.get(channel.id)))}. The content still could not be verified.`
+                {rechecked.get(channel.id)?.stopped
+                  ? `Checked again at ${messageClock(String(rechecked.get(channel.id)?.stopped))}. The content still could not be verified.`
                   : 'Recheck channel reads its history again and verifies it from the start.'}
               </p>
               <div className="chat-locked-actions">
                 <Button
                   variant="primary"
-                  onClick={() => {
-                    setRechecked((old) =>
-                      new Map(old).set(channel.id, Date.now()),
-                    );
-                    recheckChannel(channel.id);
-                  }}
+                  onClick={() => recheckChannel(channel.id)}
                 >
                   Recheck channel
                 </Button>

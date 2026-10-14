@@ -853,6 +853,38 @@ test('a rechecked channel is synchronized again without its block, and the agent
   f.service.stop();
 });
 
+test('a recheck during a synchronization is not undone by that synchronization echoing the old block', async () => {
+  const f = fixture();
+  const original = f.bridge.chat.bind(f.bridge);
+  const id = 'ab'.repeat(16);
+  let hold: (() => void) | undefined;
+  f.bridge.chat = async (store, action, view) => {
+    const reply = await original(store, action, view);
+    if (
+      store === 't0' &&
+      action.action === 'sync-inbox' &&
+      reply.result.kind === 'inbox'
+    ) {
+      // The agent echoes the blocked set it was sent.
+      reply.result.blocked_channels = [...(action.blocked_channels ?? [])];
+      if (action.blocked_channels?.includes(id))
+        await new Promise<void>((resolve) => (hold = resolve));
+    }
+    return reply;
+  };
+  await f.clock.advance(500);
+  f.service.blockChannel('t0', id);
+  f.service.invalidate('t0');
+  await f.clock.advance(500);
+  assert.ok(hold, 'a synchronization carrying the block is in flight');
+  f.service.unblockChannel('t0', id);
+  assert.equal(f.service.isChannelBlocked('t0', id), false);
+  hold();
+  await f.clock.advance(5_000);
+  assert.equal(f.service.isChannelBlocked('t0', id), false);
+  f.service.stop();
+});
+
 test('an unrefreshed profile asks for one catalog refresh per profile, not one per team or retry', async () => {
   const f = fixture();
   const requested: string[] = [];

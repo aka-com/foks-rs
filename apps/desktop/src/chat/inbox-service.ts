@@ -94,6 +94,11 @@ interface Team {
   binding: string;
   quarantine?: CommandError;
   blocked: Set<string>;
+  /**
+   * The failure that blocked each channel in `blocked`, for diagnostics. A
+   * channel `sync-inbox` reported in `blocked_channels` has none.
+   */
+  blockCauses: Map<string, CommandError>;
   store: TeamStore;
   dirty: boolean;
   due: number;
@@ -442,6 +447,7 @@ export class ChatInboxService {
           binding: binding(store),
           store,
           blocked: new Set(),
+          blockCauses: new Map(),
           degraded: new Map(),
           dirty: true,
           due: 0,
@@ -572,10 +578,24 @@ export class ChatInboxService {
   isChannelBlocked(id: string, channel: string): boolean {
     return this.snapshot.get(id)?.blockedChannels.has(channel) ?? false;
   }
-  blockChannel(id: string, channel: string) {
+  /**
+   * The failure that blocked a channel, or `undefined` when the channel is not
+   * blocked or was blocked because `sync-inbox` reported it.
+   */
+  channelBlockCause(id: string, channel: string): CommandError | undefined {
+    for (const account of this.accounts.values()) {
+      const cause = account.teams.get(id)?.blockCauses.get(channel);
+      if (cause) return cause;
+    }
+    return undefined;
+  }
+  blockChannel(id: string, channel: string, cause?: CommandError) {
     for (const account of this.accounts.values()) {
       const team = account.teams.get(id);
-      if (!team || account.blocked || team.blocked.has(channel)) continue;
+      if (!team || account.blocked) continue;
+      if (cause && !team.blockCauses.has(channel))
+        team.blockCauses.set(channel, cause);
+      if (team.blocked.has(channel)) continue;
       team.blocked.add(channel);
       const old = this.snapshot.get(id) ?? initial();
       this.publish(
@@ -605,6 +625,7 @@ export class ChatInboxService {
     for (const account of this.accounts.values()) {
       const team = account.teams.get(id);
       if (!team || account.blocked || !team.blocked.delete(channel)) continue;
+      team.blockCauses.delete(channel);
       const old = this.snapshot.get(id) ?? initial();
       this.publish(
         id,
@@ -645,7 +666,7 @@ export class ChatInboxService {
     if (error.origin === 'local' && recovery.kind !== 'quarantine')
       return false;
     if (recovery.scope === 'channel' && channel) {
-      this.blockChannel(id, channel);
+      this.blockChannel(id, channel, error);
       return true;
     }
     if (
@@ -918,6 +939,11 @@ export class ChatInboxService {
     const epoch = this.epoch;
     const generation = team.generation;
     const started = this.clock.now();
+    // The agent reports every channel it was sent as blocked in
+    // `blocked_channels` again, and skips their previews, so a channel in
+    // this set that `unblockChannel` withdrew while the request ran is an
+    // echo of the old set, not a new detection.
+    const sent = new Set(team.blocked);
     team.busy = true;
     team.dirty = false;
     this.profiles.add(team.store.server);
@@ -941,7 +967,8 @@ export class ChatInboxService {
       if (!this.valid(account, team, epoch, generation)) return;
       this.accept(account, team, reply);
       if (reply.result.kind !== 'inbox') throw integrity();
-      for (const id of reply.result.blocked_channels) team.blocked.add(id);
+      for (const id of reply.result.blocked_channels)
+        if (!sent.has(id)) team.blocked.add(id);
       const data = withoutBlockedPreviews(reply.result, team.blocked);
       const old = this.snapshot.get(team.store.id);
       const revisions = contentRevisions(

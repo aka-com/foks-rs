@@ -29,6 +29,7 @@ import { markChannelRead } from './mark-read';
 import type { HistoryBinding, ListPosition } from './history-cache';
 import type { HistoryPlacement } from './conversation-model';
 import { useChatInbox } from './inbox-provider';
+import { settleRechecks, type Recheck } from './recheck';
 import type { Availability } from '../model';
 
 /** Foreground history owner. Submissions and account sync belong to the shell. */
@@ -147,7 +148,7 @@ export function useChatConversation(
           const typed = normalizeCommandError(cause);
           service.handleError(storeId, typed, channel);
           if (typed.code === 'chat-channel-integrity' && channel) {
-            service.blockChannel(storeId, channel);
+            service.blockChannel(storeId, channel, typed);
             cancelHistory(channel);
           } else if (service.getSnapshot().get(storeId)?.state === 'blocked') {
             cancelHistory();
@@ -248,19 +249,42 @@ export function useChatConversation(
       ),
     [service, storeId],
   );
+  // The channels the reader rechecked, until each recheck settles; see
+  // `settleRechecks`.
+  const [rechecks, setRechecks] = useState<ReadonlyMap<string, Recheck>>(
+    () => new Map(),
+  );
   // The reader's Recheck of a stopped channel: the inbox withdraws its block
   // and synchronizes again, and the thread that mounts reads the channel's
   // history from the start.
   const recheckChannel = useCallback(
-    (channel: string) => service.unblockChannel(storeId, channel),
+    (channel: string) => {
+      const revision =
+        service.getSnapshot().get(storeId)?.authorizationRevision ?? 0;
+      service.unblockChannel(storeId, channel);
+      setRechecks((old) =>
+        new Map(old).set(channel, { stopped: null, revision, read: false }),
+      );
+    },
     [service, storeId],
   );
   const blockHistory = useCallback(
-    (channel: string) => {
-      service.blockChannel(storeId, channel);
+    (channel: string, cause?: CommandError) => {
+      service.blockChannel(storeId, channel, cause);
       cancelHistory(channel);
     },
     [service, storeId, cancelHistory],
+  );
+  const blockedChannels = inbox?.blockedChannels ?? EMPTY_BLOCKED;
+  const authorizationRevision = inbox?.authorizationRevision ?? 0;
+  useEffect(() => {
+    setRechecks((old) =>
+      settleRechecks(old, blockedChannels, authorizationRevision),
+    );
+  }, [blockedChannels, authorizationRevision]);
+  const channelBlockCause = useCallback(
+    (channel: string) => service.channelBlockCause(storeId, channel),
+    [service, storeId],
   );
   const acceptHistory = useCallback(
     (
@@ -300,6 +324,15 @@ export function useChatConversation(
         placement,
       );
       sends.observeHistory(storeId, result.channel, result.messages);
+      const entry = service.getSnapshot().get(storeId);
+      setRechecks((old) =>
+        settleRechecks(
+          old,
+          entry?.blockedChannels ?? EMPTY_BLOCKED,
+          entry?.authorizationRevision ?? 0,
+          result.channel,
+        ),
+      );
       return accepted;
     },
     [service, sends, storeId],
@@ -373,7 +406,10 @@ export function useChatConversation(
       service.isInvalidated(storeId),
     blocked,
     blockedFailure,
-    blockedChannels: inbox?.blockedChannels ?? EMPTY_BLOCKED,
+    blockedChannels,
+    /** The channels the reader rechecked; see `settleRechecks`. */
+    rechecked: rechecks,
+    channelBlockCause,
     revision: inbox?.revision ?? 0,
     channelRevisions: inbox?.channelRefreshRevisions ?? inbox?.channelRevisions,
     scope: inbox?.scope ?? null,

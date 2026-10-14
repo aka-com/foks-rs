@@ -12,6 +12,7 @@ import {
 import { chatErrorText } from '../src/chat/error-copy';
 import { failure } from '../src/chat/actions';
 import { chatDiagnostic } from '../src/chat/diagnostic';
+import { settleRechecks, type Recheck } from '../src/chat/recheck';
 import {
   newOutgoing,
   transition,
@@ -237,4 +238,37 @@ test('diagnostic details name where chat stopped, and the agent detail only ther
     /\nDetail: chat integrity check failed: team host mismatch\n/,
   );
   assert.doesNotMatch(session, /Channel:/);
+  // A channel the inbox synchronization listed as blocked has no failure.
+  const reported = chatDiagnostic({
+    team: 'Engineering',
+    server: 'acme.example',
+    channel: 'ab'.repeat(16),
+    reportedBy: 'sync-inbox blocked_channels',
+    at,
+  });
+  assert.match(reported, /\nReported by: sync-inbox blocked_channels\n/);
+  assert.doesNotMatch(reported, /Error code:/);
+});
+
+test('a recheck reports a new block until the channel verifies, and not after', () => {
+  const open: Recheck = { stopped: null, revision: 4, read: false };
+  const none: ReadonlySet<string> = new Set();
+  let rechecks: ReadonlyMap<string, Recheck> = new Map([['c', open]]);
+  // Blocked again before it verified: the pane states when.
+  const stopped = settleRechecks(rechecks, new Set(['c']), 4).get('c');
+  assert.equal(typeof stopped?.stopped, 'number');
+  // Neither a page nor a synchronization alone settles it, in either order.
+  rechecks = settleRechecks(rechecks, none, 4, 'c');
+  assert.deepEqual(rechecks.get('c'), { ...open, read: true });
+  assert.equal(settleRechecks(rechecks, none, 4), rechecks);
+  rechecks = settleRechecks(rechecks, none, 5);
+  assert.equal(rechecks.has('c'), false);
+  const synced = settleRechecks(new Map([['c', open]]), none, 5);
+  assert.equal(synced.get('c'), open);
+  assert.equal(settleRechecks(synced, none, 5, 'c').has('c'), false);
+  // A page of another channel does not count.
+  assert.equal(settleRechecks(synced, none, 5, 'd').get('c'), open);
+  // Once stopped, the entry stays until the reader rechecks again.
+  const kept = new Map([['c', { ...open, stopped: 1 }]]);
+  assert.equal(settleRechecks(kept, none, 9, 'c'), kept);
 });

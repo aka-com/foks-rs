@@ -2,7 +2,9 @@
  * The text "Copy diagnostic details" puts on the clipboard for a stopped
  * channel or a stopped chat session: what a support request needs to find the
  * failure, and nothing from the conversation itself. `detail` is the agent's
- * own description of the failed check, which the pane does not show.
+ * own description of the failed check, which the pane does not show. A channel
+ * blocked with no failure, because `sync-inbox` listed it in
+ * `blocked_channels`, has no code; `reportedBy` names that source instead.
  */
 export function chatDiagnostic({
   team,
@@ -10,6 +12,7 @@ export function chatDiagnostic({
   server,
   channel,
   code,
+  reportedBy,
   detail,
   at,
 }: {
@@ -19,7 +22,9 @@ export function chatDiagnostic({
   server: string;
   /** The stopped channel's ID; omitted when the whole session stopped. */
   channel?: string;
-  code: string;
+  code?: string;
+  /** Where a block with no failure came from. */
+  reportedBy?: string;
   detail?: string;
   /** Milliseconds since the epoch. */
   at: number;
@@ -29,7 +34,8 @@ export function chatDiagnostic({
     `Team: ${team}${teamId ? ` (${teamId})` : ''}`,
     `Server: ${server}`,
     ...(channel ? [`Channel: ${channel}`] : []),
-    `Error code: ${code}`,
+    ...(code ? [`Error code: ${code}`] : []),
+    ...(reportedBy ? [`Reported by: ${reportedBy}`] : []),
     ...(detail ? [`Detail: ${detail}`] : []),
     `Time: ${new Date(at).toISOString()}`,
   ].join('\n');
