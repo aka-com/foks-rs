@@ -22,6 +22,7 @@ import {
 } from './message-actions';
 import { messageClock, messageDayKey, messageTime } from './presentation';
 import { splitThreadRows, type ThreadRow } from './thread-rows';
+import { audienceSentence, type ChannelAudience } from './audience';
 import type { useChatHistory } from './use-chat-history';
 import type { useChatViewport } from './use-chat-viewport';
 
@@ -72,7 +73,7 @@ export function MessageList({
   position,
   hasOperations,
   teamName,
-  memberCount,
+  audience,
   onMarkAll,
   onKeyDown,
   onQuote,
@@ -94,7 +95,8 @@ export function MessageList({
   /** Whether the channel has tracked operations, which rule out "No messages". */
   hasOperations: boolean;
   teamName?: string;
-  memberCount?: number;
+  /** Who can read the channel; `undefined` while the roster has not arrived. */
+  audience?: ChannelAudience;
   onMarkAll: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   /** Writes a quote into the composer; omitted where the reader cannot send. */
@@ -462,11 +464,7 @@ export function MessageList({
               <b>No messages yet</b>
               <span>
                 Send a message to start the conversation.{' '}
-                {memberCount !== undefined && teamName
-                  ? `Only the ${plural(memberCount, 'member')} of ${teamName} can read it.`
-                  : teamName
-                    ? `Only the members of ${teamName} can read it.`
-                    : ''}
+                {teamName ? audienceSentence(audience, teamName) : ''}
               </span>
             </div>
           </div>

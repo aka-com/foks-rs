@@ -268,16 +268,6 @@ export function openChannel(
   );
 }
 
-/**
- * Removes the internal visibility band from a channel role label. The agent
- * represents a member role as, for example, "Member (0)". The shell's
- * `roleName` takes a parsed `Role`; this function accepts the role text from
- * the chat contract.
- */
-export function roleTextWithoutBand(role: string): string {
-  return role.replace(/\s*\(-?\d+\)$/, '');
-}
-
 export function accessSummary(channel: ChatChannel): string {
   if (!channel.readable) return 'Read access required';
   return channel.writable ? 'You can read and write' : 'You can read only';

@@ -923,13 +923,27 @@ that opens `chat-info.tsx` — rendered as a third column when space permits, an
 as an overlay covering the conversation pane below 1000px tab width to preserve
 readability at the 960px minimum window width. The overlay covers the entire
 conversation pane to avoid partially obscuring message text and header
-controls. The team column remains visible to allow navigating away at any time. It carries the channel's description, who can take part, the
-team roster with its size and roles (the shell's `roleName`, never the band —
-the chat contract's own role text is stripped by `roleTextWithoutBand`, which is
-named for what it does so the two cannot be confused), the per-device alert
-settings that used to be a strip above every thread, and "Manage in Teams".
-Leaving, muting, renaming and deleting a channel have no `ChatAction`, so the
-panel does not draw them.
+controls. The team column remains visible to allow navigating away at any time. It carries the channel's description; Access, with
+Who can read and Who can post ("Admins and owners", "Everyone on the team",
+"Members at visibility level 1 and above"); Readers, each with an avatar, the
+shell's `roleName` (never the band) and "can post" or "read only"; the
+per-device alert settings that used to be a strip above every thread; and
+"Manage in Teams". A channel that every team user can read folds its readers
+behind one All members row; any other lists them and names the team users who
+cannot read it.
+
+The audience comes from `channelAudience` in `chat/audience.ts`, on the roster
+the team page already loads: the user parties whose role `admits` the read
+role, raised to Admin on an admins-only channel because the server applies the
+tier's floor first, and among them those whose role also admits the write
+role. Team parties are not counted, since basic chat serves direct user
+members only. The header line under the channel name, the empty
+conversation's sentence ("Only the 3 admins and owners of Engineering can read
+it.") and the panel all draw from it, so none of them counts the whole roster
+for a channel only part of it can read; such a channel leads its header line
+with its reader count ("3 readers"). While the roster has not arrived no count
+is drawn. Leaving, muting, renaming and deleting a channel have no
+`ChatAction`, so the panel does not draw them.
 
 The composer exposes text entry and delivery actions. Attachments, an emoji
 picker and message expiry are omitted until supported. A hint line under the

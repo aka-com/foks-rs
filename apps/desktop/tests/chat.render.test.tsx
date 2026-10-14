@@ -7,7 +7,7 @@ import { layOutLists } from './lib/list-layout';
 import { readSource } from './lib/source';
 import type { Location } from '../src/location';
 import type { Bridge } from '../src/bridge';
-import type { ChatAction } from '../src/chat-contract';
+import type { ChatAction, ChatChannel } from '../src/chat-contract';
 installDom({
   url: 'http://localhost/',
   body: '<div id="root"></div><div id="overlays"></div>',
@@ -1221,6 +1221,177 @@ test('team members opens the existing membership workflow in the same window', a
     ref: 'team:eng',
     tab: 'people',
   });
+});
+
+/**
+ * A bridge override that creates an empty channel, `#oncall`, through the
+ * mock's own ledger before the first request it passes on, and reports the
+ * channel with `roles` in place of the ones the mock writes, when given.
+ */
+function emptyChannel(admin: boolean, roles?: { read: string; write: string }) {
+  let id = '';
+  const override = (base: Bridge): Bridge => {
+    let created: Promise<void> | undefined;
+    const create = async () => {
+      const prepared = await base.chat('team:eng', {
+        action: 'prepare-channel',
+        submission: 'ad'.repeat(16),
+        name: 'oncall',
+        description: '',
+        admin,
+      });
+      if (prepared.result.kind !== 'operation') throw new Error('fixture');
+      await base.chat('team:eng', {
+        action: 'attempt',
+        operation: prepared.result.operation.id,
+      });
+      id = prepared.result.operation.channel;
+    };
+    const rewrite = (channel: ChatChannel): ChatChannel =>
+      roles && channel.id === id
+        ? { ...channel, read_role: roles.read, write_role: roles.write }
+        : channel;
+    return {
+      ...base,
+      chat: async (store, action, view) => {
+        await (created ??= create());
+        const reply = await base.chat(store, action, view);
+        const result = reply.result;
+        if (result.kind === 'channels' || result.kind === 'inbox')
+          result.channels = result.channels.map(rewrite);
+        if (result.kind === 'inbox')
+          result.conversations = result.conversations.map((conversation) => ({
+            ...conversation,
+            channel: rewrite(conversation.channel),
+          }));
+        return reply;
+      },
+    };
+  };
+  /** Opens the channel from its row and waits for its empty conversation. */
+  const open = async () => {
+    const row = await ui.waitFor(() => {
+      const found = document.querySelector<HTMLElement>(
+        `[data-chat-channel="${id}"]`,
+      );
+      assert.ok(found);
+      return found;
+    });
+    ui.fireEvent.click(row);
+    await ui.screen.findByText('No messages yet');
+  };
+  return { override, open };
+}
+
+/** The info panel's Access rows, its reader rows and its note. */
+function channelInfo() {
+  const panel = ui.screen.getByRole('complementary', { name: 'Channel info' });
+  /** Each matched row's two parts, as "first: second". */
+  const pairs = (row: string, first: string, second: string) =>
+    [...panel.querySelectorAll(row)].map(
+      (node) =>
+        `${node.querySelector(first)?.textContent}: ${node.querySelector(second)?.textContent}`,
+    );
+  return {
+    panel,
+    access: pairs('.chat-info-row', '.k', '.v').filter((row) =>
+      row.startsWith('Who can'),
+    ),
+    readers: pairs('.chat-info-reader', 'b', 'small'),
+    note: [...panel.querySelectorAll('.chat-info-aside')].map((node) =>
+      (node.textContent ?? '').replace(/\s+/g, ' '),
+    ),
+  };
+}
+
+test('an admins-only channel states its admins and owners as its audience, not the roster', async () => {
+  const channel = emptyChannel(true);
+  await setup(channel.override, false, () => {}, true, true);
+  await channel.open();
+  // Engineering has six parties; only the Owner and the two Admins read.
+  assert.equal(
+    document.querySelector('.chat-thread-sub')?.textContent,
+    '3 readers',
+  );
+  ui.screen.getByText(
+    'Send a message to start the conversation. Only the 3 admins and owners of Engineering can read it.',
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
+  await ui.screen.findByRole('complementary', { name: 'Channel info' });
+  const info = channelInfo();
+  assert.deepEqual(info.access, [
+    'Who can read: Admins and owners',
+    'Who can post: Admins and owners',
+  ]);
+  assert.deepEqual(info.readers, [
+    'sam.ortiz: Owner · can post',
+    'priya.n: Admin · can post',
+    'vitalikYou: Admin · can post',
+  ]);
+  assert.deepEqual(info.note, [
+    '2 other team members cannot read this channel: dana.okafor and deploy-bot.',
+  ]);
+  assert.equal(
+    ui.within(info.panel).getByRole('list', { name: 'Readers' }).hidden,
+    false,
+  );
+});
+
+test('a banded read role counts only the members at or above its band', async () => {
+  const channel = emptyChannel(false, { read: 'Member (1)', write: 'Admin' });
+  await setup(channel.override, false, () => {}, true, true);
+  await channel.open();
+  assert.equal(
+    document.querySelector('.chat-thread-sub')?.textContent,
+    '3 readers',
+  );
+  ui.screen.getByText(
+    'Send a message to start the conversation. Only the 3 members of Engineering at visibility level 1 and above can read it.',
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
+  await ui.screen.findByRole('complementary', { name: 'Channel info' });
+  assert.deepEqual(channelInfo().access, [
+    'Who can read: Members at visibility level 1 and above',
+    'Who can post: Admins and owners',
+  ]);
+});
+
+test('a channel every member reads folds its readers and marks who can post', async () => {
+  const channel = emptyChannel(false, {
+    read: 'Member (0)',
+    write: 'Admin',
+  });
+  await setup(channel.override, false, () => {}, true, true);
+  await channel.open();
+  // The five users of the team; the federated team party does not read chat.
+  assert.equal(
+    document.querySelector('.chat-thread-sub')?.textContent,
+    '5 members',
+  );
+  ui.screen.getByText(
+    'Send a message to start the conversation. Only the 5 members of Engineering can read it.',
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
+  await ui.screen.findByRole('complementary', { name: 'Channel info' });
+  const info = channelInfo();
+  assert.deepEqual(info.access, [
+    'Who can read: Everyone on the team',
+    'Who can post: Admins and owners',
+  ]);
+  assert.deepEqual(info.note, []);
+  const all = ui.within(info.panel).getByRole('button', {
+    name: /^All members/,
+  });
+  assert.equal(all.getAttribute('aria-expanded'), 'false');
+  const list = document.getElementById(all.getAttribute('aria-controls')!);
+  assert.equal(list?.hidden, true);
+  ui.fireEvent.click(all);
+  assert.equal(all.getAttribute('aria-expanded'), 'true');
+  assert.equal(list?.hidden, false);
+  assert.deepEqual(channelInfo().readers.slice(3), [
+    'dana.okafor: Member · read only',
+    'deploy-bot: Member · read only',
+  ]);
 });
 
 test('reopening recovers retained pending text without attempting the send', async () => {

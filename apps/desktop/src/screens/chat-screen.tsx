@@ -1,4 +1,5 @@
 import { ChatThread } from '../chat/chat-thread';
+import { channelAudience } from '../chat/audience';
 import { ChatConversationProvider } from '../chat/conversation-provider';
 import { chatMentions, mentionKey } from '../chat/mentions';
 import { useComposerAutofocus } from '../chat/use-composer-autofocus';
@@ -191,14 +192,17 @@ export function ChatScreen({
       return [{ username, role: party.destination_role }];
     });
   }, [agentSnapshot, storeId, actor, mentions.self]);
-  // The roster the team page already loads, read here rather than fetched
-  // again. A team whose roster has not arrived yet has no parties on this
-  // store id, which is indistinguishable from an empty team — but a real team
-  // always has at least its own member, so an empty result means "not loaded"
-  // and the header omits the count instead of showing zero.
-  const memberCount = storeId
-    ? partiesOf(agentSnapshot, storeId).length || undefined
-    : undefined;
+  // Who can read the open channel, from the roster the team page already
+  // loads, read here rather than fetched again. `channelAudience` treats a
+  // roster with no parties as not loaded, so the header omits the count
+  // instead of showing zero.
+  const audience = useMemo(
+    () =>
+      storeId && channel
+        ? channelAudience(agentSnapshot, storeId, channel)
+        : undefined,
+    [agentSnapshot, storeId, channel],
+  );
   const accessAvailable = useCallback(
     (): boolean => access().available,
     [access],
@@ -396,7 +400,7 @@ export function ChatScreen({
               key={`${channel.id}:${channel.readable}`}
               channel={channel}
               teamName={store?.name}
-              memberCount={memberCount}
+              audience={audience}
               onInfo={onToggleInfo}
               infoOpen={infoOpen}
               infoRef={infoRef}

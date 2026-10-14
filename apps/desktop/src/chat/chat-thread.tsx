@@ -19,6 +19,7 @@ import { MessageList } from './message-list';
 import { Composer } from './thread-composer';
 import { quoteInsertion } from './message-actions';
 import { channelRoster } from './mentions';
+import type { ChannelAudience } from './audience';
 
 /**
  * One channel of the open team. The thread owns the channel's history
@@ -32,7 +33,7 @@ export function ChatThread({
   alerts = [],
   channel,
   teamName,
-  memberCount,
+  audience,
   onInfo,
   infoOpen = false,
   infoRef,
@@ -55,12 +56,12 @@ export function ChatThread({
    */
   teamName?: string;
   /**
-   * The channel's member count, from the roster the team page already loads.
-   * `undefined` while that roster has not arrived for the open team — the
-   * header omits the count rather than claiming zero.
+   * Who can read and post in the channel, from the roster the team page
+   * already loads. `undefined` while that roster has not arrived for the open
+   * team — the header omits the count rather than claiming zero.
    */
-  memberCount?: number;
-  /** Callback to toggle the channel info panel, which displays the member roster. */
+  audience?: ChannelAudience;
+  /** Callback to toggle the channel info panel, which lists the readers. */
   onInfo?: () => void;
   infoOpen?: boolean;
   /** The caller's handle on the ⓘ, so closing the panel can focus it again. */
@@ -301,7 +302,7 @@ export function ChatThread({
     <>
       <ThreadHeader
         channel={channel}
-        memberCount={memberCount}
+        audience={audience}
         onInfo={onInfo}
         infoOpen={infoOpen}
         infoRef={infoRef}
@@ -365,7 +366,7 @@ export function ChatThread({
             position={position}
             hasOperations={pending.length > 0}
             teamName={teamName}
-            memberCount={memberCount}
+            audience={audience}
             onMarkAll={markAll}
             onKeyDown={markOnEscape}
             onQuote={channel.writable ? quote : undefined}

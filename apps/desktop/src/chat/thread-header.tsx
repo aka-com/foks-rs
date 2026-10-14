@@ -1,34 +1,32 @@
 import type { ReactNode, Ref } from 'react';
 import { Button, Chip } from '../components';
 import type { ChatChannel } from '../chat-contract';
-import { plural } from '../model';
+import { audienceLine, type ChannelAudience } from './audience';
 import { channelTitle } from './presentation';
 
-/** The channel's name, its description or member count, and the ⓘ toggle. */
+/**
+ * The channel's name, its description and audience (`audienceLine`), and the
+ * ⓘ toggle.
+ */
 export function ThreadHeader({
   channel,
-  memberCount,
+  audience,
   onInfo,
   infoOpen = false,
   infoRef,
 }: {
   channel: ChatChannel;
   /** `undefined` while the team's roster has not arrived: no count is shown. */
-  memberCount?: number;
+  audience?: ChannelAudience;
   onInfo?: () => void;
   infoOpen?: boolean;
   infoRef?: Ref<HTMLButtonElement>;
 }): ReactNode {
-  const description = channel.description?.trim();
+  const line = audienceLine(audience, channel.description?.trim());
   return (
     <div className="chat-thread-header">
       <h2>{channelTitle(channel)}</h2>
-      {(description || memberCount !== undefined) && (
-        <p className="chat-thread-sub">
-          {description ||
-            (memberCount === undefined ? '' : plural(memberCount, 'member'))}
-        </p>
-      )}
+      {line && <p className="chat-thread-sub">{line}</p>}
       {channel.admin && <Chip>Admins</Chip>}
       {!channel.readable && <Chip tone="warn">Restricted</Chip>}
       <span className="chat-thread-spacer" />
