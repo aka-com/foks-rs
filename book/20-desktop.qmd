@@ -208,10 +208,10 @@ node to authenticate it. Before it zeroizes that plaintext, `foks-client`
 records one bit, `shape: login` when the text has the layout the desktop
 writes and `shape: other` otherwise, and the bit travels through
 `KvCatalogReport`, the agent's `KvEntryMetadata` and its retained catalog
-pages, and the host's `ItemDto`. It is agent IPC only and never reaches the Go wire. The renderer
-lists a small file with `shape: login` as a Password wherever it is filed;
-a catalog entry without a shape, from an agent that predates the field,
-falls back to the `/logins/` folder.
+pages, and the host's `ItemDto`. It is agent IPC only and never reaches the
+Go wire. The renderer lists a small file with `shape: login` as a Password
+wherever it is filed; a catalog entry without a shape, from an agent that
+predates the field, falls back to the `/logins/` folder.
 
 Copy on a login reaches the clipboard one field at a time.
 `copy_item_field` reads the exact listed version, selects the password,
@@ -219,14 +219,18 @@ user name or website line in the host, and passes only that value to
 `copy_with_hygiene`; the other lines are dropped with the zeroizing read
 buffer. Lines are separated by `\n` with one trailing `\r` removed. A field
 line splits at its first `:`; its key is not trimmed and must be non-empty
-with no ASCII whitespace at either end, so an indented `  password: x` or a
-spaced `password : x` is not one. The value loses exactly the one space the
-desktop writes after the `:`, so a password that begins or ends with a space
-is copied whole. `user` and `username` name the user name, `url` and
-`website` name the website, and the first line naming a field wins. A small
-file is a login when every line that is not blank is a field line and one
-has the key `password`; an indented YAML document or one with free-text
-lines stays a Document with Copy value. A field that is absent or empty
+with no ASCII whitespace, so an indented `  password: x`, a spaced
+`password : x` and a sentence such as `Reset it at https://example.com` are
+not field lines. Neither is a line whose `:` is followed directly by `//`,
+such as a bare URL. The value loses exactly the one space the desktop
+writes after the `:`, so a password that begins or ends with a space is
+copied whole. `user` and `username` name the user name, `url` and `website`
+name the website, and the first line naming a field wins. A small file is a
+login when every line that is not blank is a field line and one has the key
+`password`; an indented YAML document, an INI section, or a note with a
+line of prose or a URL stays a Document with Copy value. A note line of the
+form `Note: text` is a field line, so a login may carry it and the details
+panel lists it as its own row. A field that is absent or empty
 fails with `field-missing` instead of copying something else. Both the
 listing's classification and the host's field selection use
 `foks_client::kv::login`, so an item listed as a login has a password line

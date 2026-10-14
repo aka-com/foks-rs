@@ -17,6 +17,7 @@ import {
   canCreateInStore,
   canChangeItem,
   displayPath,
+  fieldLineText,
   fmtSize,
   formatRole,
   HUES,
@@ -368,12 +369,31 @@ test('login fields follow the host parser: aliases, exact keys, first line wins'
     'database:\n  host: db.internal\n  password: s3cret\n',
     '[db]\npassword: x',
     'password: x\nrotate this every quarter',
+    // A key has no inner whitespace, and `://` starts a URL.
+    'user: alice\npassword: hunter2\nReset it at https://example.com/reset',
+    'user: alice\npassword: hunter2\nhttps://example.com/reset',
+    'API key: x\npassword: y',
   ])
     assert.equal(shapeOf(text), 'other', text);
-  assert.deepEqual(loginLines('ssid: Guest\r\nfree text'), [
-    { key: 'ssid', value: 'Guest', raw: 'ssid: Guest\r' },
-    { key: null, value: 'free text', raw: 'free text' },
+  assert.deepEqual(loginLines('ssid: Guest\r\nfree text\npin:4\nhttps://x'), [
+    { key: 'ssid', value: 'Guest', separator: ' ', raw: 'ssid: Guest\r' },
+    { key: null, value: 'free text', separator: '', raw: 'free text' },
+    { key: 'pin', value: '4', separator: '', raw: 'pin:4' },
+    { key: null, value: 'https://x', separator: '', raw: 'https://x' },
   ]);
+  // Only `//` directly after the `:` marks a URL.
+  assert.equal(loginField('password: //x', 'password'), '//x');
+  assert.equal(loginField('password://x', 'password'), null);
+});
+
+test('a rewritten field line keeps its separator unless the value needs one', () => {
+  assert.equal(fieldLineText('pin', '', '5'), 'pin:5');
+  assert.equal(fieldLineText('user', ' ', 'b'), 'user: b');
+  // Each reads back as the value written.
+  for (const value of [' pad', '//x']) {
+    const line = fieldLineText('password', '', value);
+    assert.equal(loginField(line, 'password'), value, line);
+  }
 });
 
 test('a login value keeps every space but the separator', () => {

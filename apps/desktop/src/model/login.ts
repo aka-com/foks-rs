@@ -10,8 +10,10 @@
  *
  * - Lines are separated by `\n`, and one trailing `\r` is removed from each.
  * - A field line splits at its first `:`. The key is not trimmed; it must be
- *   non-empty and must not begin or end with ASCII whitespace (space, tab,
- *   line feed, form feed, carriage return).
+ *   non-empty and contain no ASCII whitespace (space, tab, line feed, form
+ *   feed, carriage return), so a sentence such as `Reset it at https://x` is
+ *   not a field line. A line whose `:` is followed directly by `//`, such as
+ *   a bare `https://example.com`, is a URL and not a field line either.
  * - The value loses exactly one leading space, the separator the sheet
  *   writes; any other whitespace is part of the value.
  * - Keys match exactly, with the aliases `user`/`username` and
@@ -42,16 +44,19 @@ const ALIASES: Readonly<Record<LoginFieldName, readonly string[]>> = {
 
 /**
  * One line of a login: the key and value of a field line, or `key: null` and
- * the line itself for any other line. `raw` is the line as stored, with its
- * `\r`, so an editor can write back a line it did not change.
+ * the line itself for any other line. `separator` is the space that followed
+ * the `:`, or `''` when there was none or the line is not a field line. `raw`
+ * is the line as stored, with its `\r`, so an editor can write back a line it
+ * did not change.
  */
 export interface LoginLine {
   key: string | null;
   value: string;
+  separator: '' | ' ';
   raw: string;
 }
 
-const EDGE_SPACE = /^[\t\n\f\r ]|[\t\n\f\r ]$/;
+const SPACE = /[\t\n\f\r ]/;
 const BLANK = /^[\t\n\f\r ]*$/;
 
 /** Every line of a login's text, in order. */
@@ -60,10 +65,28 @@ export function loginLines(text: string): LoginLine[] {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
     const cut = line.indexOf(':');
     const key = cut < 0 ? '' : line.slice(0, cut);
-    if (!key || EDGE_SPACE.test(key)) return { key: null, value: line, raw };
-    const value = line.slice(cut + 1);
-    return { key, value: value.startsWith(' ') ? value.slice(1) : value, raw };
+    const rest = line.slice(cut + 1);
+    if (!key || SPACE.test(key) || rest.startsWith('//'))
+      return { key: null, value: line, separator: '', raw };
+    return rest.startsWith(' ')
+      ? { key, value: rest.slice(1), separator: ' ', raw }
+      : { key, value: rest, separator: '', raw };
   });
+}
+
+/**
+ * The stored form of a field line with a new value, keeping the line's own
+ * separator. A space is added after a bare `:` only when the value begins
+ * with a space or `//`, which would otherwise be read back differently.
+ */
+export function fieldLineText(
+  key: string,
+  separator: '' | ' ',
+  value: string,
+): string {
+  const spaced =
+    separator === ' ' || value.startsWith(' ') || value.startsWith('//');
+  return `${key}:${spaced ? ' ' : ''}${value}`;
 }
 
 /** The login field a key names, if any. */

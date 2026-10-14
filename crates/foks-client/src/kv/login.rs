@@ -10,9 +10,12 @@
 //!
 //! Lines are separated by `\n`, and one trailing `\r` is removed from each. A
 //! field line is split at its first `:`. The key is the text before it,
-//! untrimmed: it must be non-empty and must not begin or end with ASCII
-//! whitespace (space, tab, line feed, form feed or carriage return), so an
-//! indented `  password: x` or a spaced `password : x` is not a field line.
+//! untrimmed: it must be non-empty and contain no ASCII whitespace (space,
+//! tab, line feed, form feed or carriage return), so an indented
+//! `  password: x`, a spaced `password : x` and a sentence such as
+//! `Reset it at https://example.com` are not field lines. A line whose `:` is
+//! followed directly by `//`, such as a bare `https://example.com/reset`, is
+//! a URL and not a field line either.
 //! The value is the text after the `:` with exactly one leading space removed,
 //! the separator the desktop writes; any other whitespace is part of the
 //! value, so a password that begins or ends with a space is kept whole. Keys
@@ -46,8 +49,9 @@ impl LoginField {
 fn field_line(line: &str) -> Option<(&str, &str)> {
     let line = line.strip_suffix('\r').unwrap_or(line);
     let (key, value) = line.split_once(':')?;
-    let edge = |c: char| c.is_ascii_whitespace();
-    let well_formed = !key.is_empty() && !key.starts_with(edge) && !key.ends_with(edge);
+    let well_formed = !key.is_empty()
+        && !key.contains(|c: char| c.is_ascii_whitespace())
+        && !value.starts_with("//");
     well_formed.then(|| (key, value.strip_prefix(' ').unwrap_or(value)))
 }
 
@@ -129,6 +133,10 @@ mod tests {
             // Every line that is not blank must be a field line.
             b"[db]\npassword: x",
             b"password: x\nrotate this every quarter",
+            // A key has no inner whitespace, and `://` starts a URL.
+            b"user: alice\npassword: hunter2\nReset it at https://example.com/reset",
+            b"user: alice\npassword: hunter2\nhttps://example.com/reset",
+            b"API key: x\npassword: y",
         ] {
             assert_eq!(small_file_shape(content), KvSmallFileShape::Other);
         }
@@ -166,6 +174,13 @@ mod tests {
         );
         // A key with a byte-order mark is not a login key.
         assert_eq!(login_field("\u{feff}user: a", LoginField::Username), None);
+        // Only `//` directly after the `:` marks a URL; a value may start
+        // with it after the separator space.
+        assert_eq!(
+            login_field("password: //x", LoginField::Password),
+            Some("//x")
+        );
+        assert_eq!(login_field("password://x", LoginField::Password), None);
     }
 
     #[test]

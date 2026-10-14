@@ -26,6 +26,7 @@ import {
 import type { FilterKind } from '../components';
 import {
   displayPath,
+  fieldLineText,
   fmtSize,
   formatRole,
   initials,
@@ -147,7 +148,8 @@ function roleText(wire: RoleWire): string {
 /**
  * Whether the structured login editor opens for this text: it has a line the
  * host would copy as the password, which the editor masks. Other text opens
- * in the textarea, which is covered while the window is inactive.
+ * in the textarea. The choice is made once, when the edit opens, so typing
+ * never swaps one editor for the other.
  */
 function editsAsLogin(text: string): boolean {
   return loginLines(text).some(({ key }) => loginFieldOf(key) === 'password');
@@ -335,6 +337,8 @@ export function DetailsPanel({
   const accessDescriptionId = useId();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
+  // Whether the open edit uses the structured login editor; see editsAsLogin.
+  const [editLogin, setEditLogin] = useState(false);
   const [editPasswordShown, setEditPasswordShown] = useState(false);
   const [editContentConcealed, setEditContentConcealed] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -526,13 +530,7 @@ export function DetailsPanel({
       concealEpoch.current += 1;
       setRead(null);
       setEditPasswordShown(false);
-      if (
-        editing &&
-        item &&
-        !(kindOf(item) === 'Password' && editsAsLogin(editValue)) &&
-        item.kind !== 'File' &&
-        !binaryFile
-      )
+      if (editing && item && item.kind !== 'File' && !binaryFile)
         setEditContentConcealed(true);
     },
     Boolean(read) || editing || saving,
@@ -565,6 +563,9 @@ export function DetailsPanel({
     if (appliedDraft.current === resumeDraft.epoch) return;
     appliedDraft.current = resumeDraft.epoch;
     setEditValue(resumeDraft.value);
+    setEditLogin(
+      kindOf(item) === 'Password' && editsAsLogin(resumeDraft.value),
+    );
     setEditContentConcealed(false);
     editBaseline.current = null;
     editTarget.current = item;
@@ -752,6 +753,7 @@ export function DetailsPanel({
     if (!request || !requireAccess(true)) return;
     setEditError(null);
     if (fileMode) {
+      setEditLogin(false);
       setEditContentConcealed(false);
       editBaseline.current = '';
       editTarget.current = item;
@@ -781,6 +783,7 @@ export function DetailsPanel({
       if (!current()) return;
       const opened = response.value;
       setEditValue(opened);
+      setEditLogin(kind === 'Password' && editsAsLogin(opened));
       setEditContentConcealed(false);
       editBaseline.current = opened;
       editTarget.current = item;
@@ -795,6 +798,7 @@ export function DetailsPanel({
       if (typed.code === 'not-text' && item.kind === 'Secret') {
         setBinaryFile(true);
         setRead(null);
+        setEditLogin(false);
         setEditContentConcealed(false);
         editBaseline.current = '';
         editTarget.current = item;
@@ -868,33 +872,55 @@ export function DetailsPanel({
   };
 
   // One row per stored line, split by the rules Copy follows. Changing a row
-  // rewrites only its line; every other line is saved as it was read.
-  const editRows =
-    editing && kind === 'Password' && editsAsLogin(editValue)
-      ? loginLines(editValue)
-      : null;
+  // rewrites only its line, keeping its separator; every other line is saved
+  // as it was read.
+  const editRows = editing && editLogin ? loginLines(editValue) : null;
   const updateEditField = (index: number, value: string): void => {
     if (!editRows) return;
     setEditValue(
       editRows
-        .map(({ key, raw }, candidate) => {
+        .map(({ key, separator, raw }, candidate) => {
           if (candidate !== index) return raw;
-          const line = key === null ? value : `${key}: ${value}`;
+          const line =
+            key === null ? value : fieldLineText(key, separator, value);
           return raw.endsWith('\r') ? `${line}\r` : line;
         })
         .join('\n'),
     );
   };
 
+  // A concealed draft shows one masked Contents row in either editor.
   const preview =
-    inlineEditing && editRows ? (
+    inlineEditing && editContentConcealed ? (
+      <Inset variant="preview">
+        <InsetRow
+          label="Contents"
+          valueClass="mask"
+          action={
+            <button
+              title="Show"
+              className="value-action"
+              aria-label="Show"
+              type="button"
+              onClick={() => setEditContentConcealed(false)}
+            >
+              <Icon name="eye" />
+            </button>
+          }
+        >
+          {MASK}
+        </InsetRow>
+      </Inset>
+    ) : inlineEditing && editRows ? (
       <Inset className="edit">
         {editRows.map(({ key: field, value }, index) => {
           const loginKey = loginFieldOf(field);
           const secret = loginKey === 'password';
           return (
+            // A row is a line, and editing a row never adds or removes one,
+            // so a line keeps its input when its parse changes.
             <Field
-              key={`${field ?? 'value'}-${index}`}
+              key={index}
               label={FIELD_LABELS[loginKey ?? field ?? ''] ?? field ?? 'Value'}
               value={value}
               type={secret && !editPasswordShown ? 'password' : 'text'}
@@ -928,26 +954,6 @@ export function DetailsPanel({
             />
           );
         })}
-      </Inset>
-    ) : inlineEditing && editContentConcealed ? (
-      <Inset variant="preview">
-        <InsetRow
-          label="Contents"
-          valueClass="mask"
-          action={
-            <button
-              title="Show"
-              className="value-action"
-              aria-label="Show"
-              type="button"
-              onClick={() => setEditContentConcealed(false)}
-            >
-              <Icon name="eye" />
-            </button>
-          }
-        >
-          {MASK}
-        </InsetRow>
       </Inset>
     ) : inlineEditing ? (
       <Inset variant="preview">

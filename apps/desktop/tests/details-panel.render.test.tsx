@@ -1167,15 +1167,24 @@ test('the login editor masks the line Copy reads as the password and keeps other
   assert.equal((password as HTMLInputElement).value, 'x ');
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
   assert.equal(password.getAttribute('type'), 'text');
-  ui.fireEvent(window, new Event('blur'));
-  assert.equal(password.getAttribute('type'), 'password');
 
+  // Losing focus covers every row, not only the password.
+  ui.fireEvent(window, new Event('blur'));
+  assert.equal(r.queryByLabelText('Network'), null);
+  assert.equal(r.queryByLabelText('Password'), null);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
+  assert.equal(r.getByLabelText('Password').getAttribute('type'), 'password');
+
+  // Each line keeps its own separator.
   ui.fireEvent.change(r.getByLabelText('Network'), {
     target: { value: 'Cabin-5G' },
   });
+  ui.fireEvent.change(r.getByLabelText('Password'), {
+    target: { value: 'y ' },
+  });
   ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
   await ui.waitFor(() => assert.equal(p.saved.length, 1));
-  assert.equal(p.saved[0], 'ssid: Cabin-5G\r\npassword:x \r\n');
+  assert.equal(p.saved[0], 'ssid: Cabin-5G\r\npassword:y \r\n');
 });
 
 test('a Password whose text has no password line edits in the concealable textarea', async () => {
@@ -1187,6 +1196,15 @@ test('a Password whose text has no password line edits in the concealable textar
     (contents as HTMLTextAreaElement).value,
     'ssid: Cabin\nnote: no password yet',
   );
+  // The editor is chosen when the edit opens; typing a password line keeps
+  // the textarea, and its focus, in place.
+  contents.focus();
+  ui.fireEvent.change(contents, {
+    target: { value: 'ssid: Cabin\npassword: x' },
+  });
+  assert.equal(r.getByRole('textbox', { name: 'Contents' }), contents);
+  assert.equal(document.activeElement, contents);
+  assert.equal(r.queryByLabelText('Password'), null);
   ui.fireEvent(window, new Event('blur'));
   assert.equal(r.queryByRole('textbox', { name: 'Contents' }), null);
 });
