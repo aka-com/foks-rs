@@ -644,6 +644,14 @@ test('a quote reply is Basic text naming the author and the first lines', () => 
   const emoji = '😀'.repeat(150);
   const cut = quoteReply('lee', at, emoji).split('\n')[1];
   assert.equal(cut, `> ${'😀'.repeat(99)}…`);
+  // The ellipsis marks the line that was cut, not a complete line after it.
+  assert.equal(
+    quoteReply('lee', at, `${long}\nShort second line.`)
+      .split('\n')
+      .slice(1, 3)
+      .join('\n'),
+    `${quoted}\n> Short second line.`,
+  );
   // The quote starts on a line of its own.
   assert.equal(quoteInsertion('', '> q\n\n'), '> q\n\n');
   assert.equal(quoteInsertion('Thanks', '> q\n\n'), '\n> q\n\n');

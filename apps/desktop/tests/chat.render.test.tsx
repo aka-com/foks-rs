@@ -235,9 +235,11 @@ test('message actions copy, quote into the composer and show details', async () 
   }));
   const row = ui.screen.getByText('Team chat is ready.').closest('article');
   assert.ok(row);
+  // The toolbar and the menu are named after the message they act on.
   const toolbar = ui.within(row).getByRole('toolbar', {
-    name: 'Message actions',
+    name: /^Actions for .+'s message at \S+/,
   });
+  const name = toolbar.getAttribute('aria-label');
   const tools = ui.within(toolbar).getAllByRole('button');
   // No action is drawn for the reserved Edit, Delete, Reaction and Reply
   // types, enabled or not.
@@ -324,7 +326,7 @@ test('message actions copy, quote into the composer and show details', async () 
     clientX: 40,
     clientY: 50,
   });
-  const menu = await ui.screen.findByRole('menu', { name: 'Message actions' });
+  const menu = await ui.screen.findByRole('menu', { name: name ?? '' });
   assert.deepEqual(
     ui
       .within(menu)
@@ -2325,6 +2327,104 @@ test('an unverifiable message renders as one placeholder row and leaves the chan
       .disabled,
     false,
   );
+});
+
+test('an unsupported message type details its sender as a claim', async () => {
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action) => {
+        const reply = await base.chat(store, action);
+        if (action.action === 'history' && reply.result.kind === 'history') {
+          reply.result.messages = [
+            {
+              id: '05'.repeat(16),
+              sequence: '5',
+              sender: `01${'cd'.repeat(32)}`,
+              send_time: '1700000000000',
+              insert_time: '1700000000001',
+              content: { kind: 'unsupported' as const },
+            },
+          ];
+          reply.result.before = null;
+        }
+        return reply;
+      },
+    }),
+    false,
+  );
+  const placeholder = await ui.screen.findByText(
+    'This message type is not supported yet.',
+  );
+  const article = placeholder.closest('article');
+  assert.ok(article);
+  // The client opens only Basic rows, so the sender, times and sequence of
+  // any other type are the server's unauthenticated claims.
+  ui.fireEvent.click(
+    ui.within(article).getByRole('button', { name: 'Message details' }),
+  );
+  const details = await ui.screen.findByRole('dialog', {
+    name: 'Message details',
+  });
+  assert.ok(ui.within(details).getByText('Claimed sender'));
+  assert.ok(
+    ui
+      .within(details)
+      .getByText(
+        'This message type is not supported, so its sender and times are not verified.',
+      ),
+  );
+  assert.equal(ui.within(details).queryByText(/was checked/), null);
+});
+
+test('the message list has one toolbar tab stop, on the row focus last entered', async () => {
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action) => {
+        const reply = await base.chat(store, action);
+        if (action.action === 'history' && reply.result.kind === 'history') {
+          const row = (sequence: string, text: string) => ({
+            id: sequence.padStart(2, '0').repeat(16),
+            sequence,
+            sender: null,
+            send_time: '1700000000000',
+            insert_time: '1700000000001',
+            content: { kind: 'text' as const, text },
+          });
+          reply.result.messages = [
+            row('1', 'Notes at https://docs.example/a'),
+            row('2', 'Second'),
+            row('3', 'Third'),
+          ];
+          reply.result.before = null;
+        }
+        return reply;
+      },
+    }),
+    false,
+  );
+  const article = (text: string) => {
+    const node = ui.screen.getByText(text).closest('article');
+    assert.ok(node);
+    return node;
+  };
+  await ui.screen.findByText('Third');
+  const stops = () =>
+    [...document.querySelectorAll<HTMLElement>('.chat-actions button')]
+      .filter((node) => node.tabIndex === 0)
+      .map((node) => node.closest('article'));
+  // Tab crosses the list through the newest row's toolbar only.
+  assert.deepEqual(stops(), [article('Third')]);
+  const link = document.querySelector<HTMLElement>(
+    'a[href="https://docs.example/a"]',
+  );
+  const first = link?.closest('article');
+  assert.ok(link && first);
+  ui.act(() => link.focus());
+  // Focus entering a row moves the tab stop to its toolbar, which follows
+  // the row's links.
+  assert.deepEqual(stops(), [first]);
 });
 
 for (const offline of [true, false]) {

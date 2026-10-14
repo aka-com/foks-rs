@@ -15,7 +15,11 @@ import { HistoryRow } from './message-row';
 import { OutgoingRow } from './outgoing-row';
 import { PendingRow } from './pending-row';
 import { MessageText } from './message-text';
-import { useMessageActions } from './message-actions';
+import {
+  ToolbarTabStopContext,
+  useMessageActions,
+  type ToolbarTabStop,
+} from './message-actions';
 import { messageClock, messageDayKey, messageTime } from './presentation';
 import { splitThreadRows, type ThreadRow } from './thread-rows';
 import type { useChatHistory } from './use-chat-history';
@@ -213,6 +217,27 @@ export function MessageList({
       : 0;
   // The rows this device has not seen in history follow the newer edge.
   const { held, unsent } = splitThreadRows(rows);
+  // One message toolbar is a tab stop: the row that last held focus while it
+  // is drawn, otherwise the newest row with actions. Other rows' toolbars are
+  // reached by hover, the context menu, or focus entering the row, so a Tab
+  // across the list does not stop at every message.
+  const [focusedRow, setFocusedRow] = useState<string | null>(null);
+  const actionRows = [...held, ...unsent]
+    .filter(
+      (row) =>
+        row.kind === 'message' ||
+        row.kind === 'outgoing' ||
+        (row.kind === 'operation' && row.operation.text),
+    )
+    .map((row) => row.key);
+  const toolbarRow =
+    focusedRow !== null && actionRows.includes(focusedRow)
+      ? focusedRow
+      : (actionRows.at(-1) ?? null);
+  const toolbarTabStop = useMemo<ToolbarTabStop>(
+    () => ({ current: toolbarRow, claim: setFocusedRow }),
+    [toolbarRow],
+  );
   const draw = (row: ThreadRow): ReactNode => {
     switch (row.kind) {
       case 'day':
@@ -239,6 +264,7 @@ export function MessageList({
         return (
           <OutgoingRow
             key={row.key}
+            rowKey={row.key}
             message={row.message}
             grouped={row.grouped}
             avatarName={row.avatarName}
@@ -341,7 +367,9 @@ export function MessageList({
             </div>
           </div>
         )}
-        {held.map(draw)}
+        <ToolbarTabStopContext.Provider value={toolbarTabStop}>
+          {held.map(draw)}
+        </ToolbarTabStopContext.Provider>
         {detached && (
           <div className="chat-history-edge chat-history-newer" ref={newerEdge}>
             {/* Marked busy rather than disabled while a page loads, so
@@ -360,7 +388,9 @@ export function MessageList({
             )}
           </div>
         )}
-        {unsent.map(draw)}
+        <ToolbarTabStopContext.Provider value={toolbarTabStop}>
+          {unsent.map(draw)}
+        </ToolbarTabStopContext.Provider>
       </div>
       {(!atBottom || detached) && messages.length > 0 && (
         <Button
@@ -393,16 +423,22 @@ function OperationRow({
 }): ReactNode {
   const { bridge, storeId, mentions } = useChatConversationContext();
   const op = row.operation;
-  const { open, onContextMenu, onKeyDown, actions } = useMessageActions(
-    { text: op.text || undefined },
-    bridge,
-  );
+  const { open, onContextMenu, onKeyDown, onFocus, actions } =
+    useMessageActions(
+      {
+        rowKey: row.key,
+        label: 'Actions for your message',
+        text: op.text || undefined,
+      },
+      bridge,
+    );
   return (
     <article
       className={open ? 'chat-message actions-open' : 'chat-message'}
       data-operation={op.id}
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
+      onFocus={onFocus}
     >
       {op.text && (
         <MessageText text={op.text} actions={bridge} mentions={mentions} />

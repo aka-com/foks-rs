@@ -23,10 +23,13 @@ const statusLabels: Partial<Record<SendPhase, string>> = {
   cancelled: 'Cancelled',
 };
 export function OutgoingRow({
+  rowKey,
   message,
   grouped = false,
   avatarName,
 }: {
+  /** The row's key in the list's toolbar tab stop. */
+  rowKey?: string;
   message: OutgoingMessage;
   grouped?: boolean;
   avatarName: string;
@@ -74,7 +77,7 @@ export function OutgoingRow({
       // Copy only: the message is not in history yet, so it has no sequence
       // or server time to detail, and quoting your own unsent text is not
       // offered.
-      actions={{ text: message.text }}
+      actions={{ rowKey, text: message.text }}
       status={
         sending ? (
           <span

@@ -1,5 +1,18 @@
-import { useEffect, useId, useRef, useState } from 'react';
-import type { KeyboardEvent, MouseEvent, ReactNode, RefObject } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react';
+import type {
+  FocusEvent,
+  KeyboardEvent,
+  MouseEvent,
+  ReactNode,
+  RefObject,
+} from 'react';
 import type { Bridge } from '../bridge';
 import { Icon } from '../components';
 import {
@@ -18,10 +31,12 @@ export interface MessageDetails {
   sender: string;
   own: boolean;
   /**
-   * The message could not be decrypted or verified, so its sender is the
-   * server's unauthenticated claim.
+   * Set when the sender, times and sequence are the server's unauthenticated
+   * claims: `unverifiable` for a message that could not be decrypted or
+   * verified, `unsupported` for a message type the client does not open.
+   * Only Basic text that decrypts and verifies is authenticated.
    */
-  unverifiable: boolean;
+  unauthenticated?: 'unverifiable' | 'unsupported';
   /** The server's receive time, in milliseconds since the epoch. */
   received: string;
   /** The sender's clock when it sent the message. */
@@ -36,6 +51,10 @@ export interface MessageDetails {
 }
 
 export interface MessageActionOptions {
+  /** The row's key in the list's {@link ToolbarTabStop}. */
+  rowKey?: string;
+  /** The toolbar's and the menu's accessible name. */
+  label?: string;
   /** The text Copy message copies; omitted for content without text. */
   text?: string;
   /** Writes a quote of the message into the composer; omitted where the reader cannot send. */
@@ -43,6 +62,18 @@ export interface MessageActionOptions {
   /** Omitted for a message history does not hold yet. */
   details?: MessageDetails;
 }
+
+/**
+ * The message list's one toolbar tab stop: the key of the row whose toolbar
+ * Tab reaches, and the call a row makes when focus enters it. Other rows'
+ * toolbars are reached by hover, the context menu, or focus entering the
+ * row. Without a provider every toolbar is a tab stop.
+ */
+export interface ToolbarTabStop {
+  current: string | null;
+  claim: (rowKey: string) => void;
+}
+export const ToolbarTabStopContext = createContext<ToolbarTabStop | null>(null);
 
 // A quote carries the first lines of a message, each cut at a word boundary
 // near this many characters, so a long message is not pasted back whole.
@@ -70,16 +101,17 @@ export function quoteReply(
     .filter((line) => !line.startsWith('```'))
     .map((line) => line.replace(/^>\s?/, ''))
     .filter((line) => line.trim());
-  let cut = source.length > QUOTE_LINES;
-  const lines = source.slice(0, QUOTE_LINES).map((line) => {
+  // A line that was cut ends in an ellipsis, and so does the last line when
+  // lines after it were left out.
+  const lines = source.slice(0, QUOTE_LINES).map((line, index) => {
     const chars = Array.from(line.trimEnd());
-    if (chars.length <= QUOTE_LINE_CHARS) return chars.join('');
-    cut = true;
+    const dropped = index === QUOTE_LINES - 1 && source.length > QUOTE_LINES;
+    if (chars.length <= QUOTE_LINE_CHARS)
+      return dropped ? `${chars.join('')}…` : chars.join('');
     const head = chars.slice(0, QUOTE_LINE_CHARS - 1).join('');
     const space = head.lastIndexOf(' ');
-    return space > QUOTE_LINE_CHARS / 2 ? head.slice(0, space) : head;
+    return `${space > QUOTE_LINE_CHARS / 2 ? head.slice(0, space) : head}…`;
   });
-  if (cut && lines.length) lines[lines.length - 1] += '…';
   return `${[`**${name}** · ${messageClock(at)}`, ...lines]
     .map((line) => `> ${line}`)
     .join('\n')}\n\n`;
@@ -97,24 +129,34 @@ export function quoteInsertion(before: string, quote: string): string {
  * The actions of one message row: a toolbar shown while the row is hovered or
  * holds focus, the same actions as a menu from a right-click, the ContextMenu
  * key or Shift+F10 within the row, and the Details popover. The row spreads
- * `onContextMenu` and `onKeyDown` on its element and draws `actions` inside
- * it; `open` is set while the menu or Details is open, which keeps the
- * toolbar shown.
+ * `onContextMenu`, `onKeyDown` and `onFocus` on its element and draws
+ * `actions` inside it; `open` is set while the menu or Details is open, which
+ * keeps the toolbar shown. Inside a {@link ToolbarTabStopContext} only the
+ * current row's toolbar is a tab stop.
  *
  * Every action works on data the row already holds. Edit, Delete, Reaction
  * and Reply message types are reserved by the protocol but the server accepts
  * only Basic sends, so no action for them is drawn.
  */
 export function useMessageActions(
-  { text, onQuote, details }: MessageActionOptions,
+  {
+    rowKey,
+    label: name = 'Message actions',
+    text,
+    onQuote,
+    details,
+  }: MessageActionOptions,
   bridge: Pick<Bridge, 'copyText'>,
 ): {
   open: boolean;
   onContextMenu: (event: MouseEvent<HTMLElement>) => void;
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+  onFocus: (event: FocusEvent<HTMLElement>) => void;
   actions: ReactNode;
 } {
   const toasts = useOptionalToast();
+  const stop = useContext(ToolbarTabStopContext);
+  const tabbable = !stop || rowKey === undefined || stop.current === rowKey;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   // The toolbar is one tab stop; the arrow keys move between its buttons.
@@ -157,21 +199,36 @@ export function useMessageActions(
   ) =>
     event.target instanceof Node && event.currentTarget.contains(event.target);
 
+  // The toolbar and the menu draw the same list. `restore` returns focus to
+  // where it was when the menu closes, for an action that does not move it.
   const tools: {
     label: string;
     icon: 'copy' | 'quote' | 'info';
-    run: () => void;
+    run: (fromMenu: boolean) => void;
+    restore: boolean;
     popup?: boolean;
   }[] = [];
   if (text !== undefined)
-    tools.push({ label: 'Copy message', icon: 'copy', run: copy });
+    tools.push({
+      label: 'Copy message',
+      icon: 'copy',
+      run: copy,
+      restore: true,
+    });
   if (onQuote)
-    tools.push({ label: 'Quote reply', icon: 'quote', run: onQuote });
+    tools.push({
+      label: 'Quote reply',
+      icon: 'quote',
+      run: onQuote,
+      restore: false,
+    });
   if (details)
     tools.push({
       label: 'Message details',
       icon: 'info',
-      run: () => setDetailsOpen((open) => !open),
+      // The toolbar button toggles the popover; the menu entry opens it.
+      run: (fromMenu) => setDetailsOpen((open) => fromMenu || !open),
+      restore: false,
       popup: true,
     });
   const tabStop = Math.min(current, tools.length - 1);
@@ -182,7 +239,7 @@ export function useMessageActions(
       <div
         className="chat-actions"
         role="toolbar"
-        aria-label="Message actions"
+        aria-label={name}
         onKeyDown={(event) => {
           const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
           if (!keys.includes(event.key)) return;
@@ -212,9 +269,9 @@ export function useMessageActions(
             title={label}
             aria-haspopup={popup ? 'dialog' : undefined}
             aria-expanded={popup ? detailsOpen : undefined}
-            tabIndex={index === tabStop ? 0 : -1}
+            tabIndex={tabbable && index === tabStop ? 0 : -1}
             onFocus={() => setCurrent(index)}
-            onClick={run}
+            onClick={() => run(false)}
           >
             <Icon name={icon} />
           </button>
@@ -228,46 +285,23 @@ export function useMessageActions(
         >
           <Menu
             className="menu"
-            aria-label="Message actions"
+            aria-label={name}
             initialFocus="first"
             onClose={() => closeMenu(true)}
           >
-            {text !== undefined && (
+            {tools.map(({ label, icon, run, restore }) => (
               <button
                 type="button"
+                key={label}
                 onClick={() => {
-                  closeMenu(true);
-                  copy();
+                  closeMenu(restore);
+                  run(true);
                 }}
               >
-                <Icon name="copy" />
-                Copy message
+                <Icon name={icon} />
+                {label}
               </button>
-            )}
-            {onQuote && (
-              <button
-                type="button"
-                onClick={() => {
-                  closeMenu(false);
-                  onQuote();
-                }}
-              >
-                <Icon name="quote" />
-                Quote reply
-              </button>
-            )}
-            {details && (
-              <button
-                type="button"
-                onClick={() => {
-                  closeMenu(false);
-                  setDetailsOpen(true);
-                }}
-              >
-                <Icon name="info" />
-                Message details
-              </button>
-            )}
+            ))}
           </Menu>
         </ContextMenu>
       )}
@@ -303,6 +337,9 @@ export function useMessageActions(
       const bounds = (event.target as HTMLElement).getBoundingClientRect();
       openMenu(event, bounds.left, bounds.bottom);
     },
+    onFocus: () => {
+      if (rowKey !== undefined) stop?.claim(rowKey);
+    },
     actions,
   };
 }
@@ -329,23 +366,27 @@ function DetailsPopover({
   useEffect(() => {
     close.current?.focus({ preventScroll: true });
   }, []);
-  const check = details.unverifiable
-    ? {
-        tone: 'warn',
-        icon: 'alert' as const,
-        text: 'This message could not be decrypted or verified.',
-      }
-    : details.incomplete
-      ? {
-          tone: 'warn',
-          icon: 'alert' as const,
-          text: 'Earlier messages on the history page that loaded this message could not be checked.',
-        }
-      : {
-          tone: 'ok',
-          icon: 'shield' as const,
-          text: 'The history page that loaded this message was checked.',
-        };
+  const warn = (text: string) => ({
+    tone: 'warn',
+    icon: 'alert' as const,
+    text,
+  });
+  const check =
+    details.unauthenticated === 'unverifiable'
+      ? warn('This message could not be decrypted or verified.')
+      : details.unauthenticated === 'unsupported'
+        ? warn(
+            'This message type is not supported, so its sender and times are not verified.',
+          )
+        : details.incomplete
+          ? warn(
+              'Earlier messages on the history page that loaded this message could not be checked.',
+            )
+          : {
+              tone: 'ok',
+              icon: 'shield' as const,
+              text: 'The history page that loaded this message was checked.',
+            };
   return (
     <Popover
       anchorRef={anchor}
@@ -368,7 +409,7 @@ function DetailsPopover({
         </div>
         <dl>
           <div>
-            <dt>{details.unverifiable ? 'Claimed sender' : 'Sent by'}</dt>
+            <dt>{details.unauthenticated ? 'Claimed sender' : 'Sent by'}</dt>
             <dd>
               {details.sender}
               {details.own && <small> (you)</small>}

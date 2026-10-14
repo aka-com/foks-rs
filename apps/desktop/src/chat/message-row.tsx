@@ -61,8 +61,15 @@ export function MessageRow({
     open,
     onContextMenu,
     onKeyDown,
+    onFocus,
     actions: tools,
-  } = useMessageActions(actions, bridge);
+  } = useMessageActions(
+    {
+      label: `Actions for ${own ? 'your message' : `${author}'s message`} at ${messageClock(at)}`,
+      ...actions,
+    },
+    bridge,
+  );
   return (
     <article
       className={[
@@ -77,6 +84,7 @@ export function MessageRow({
       title={grouped ? messageTime(at) : undefined}
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
+      onFocus={onFocus}
     >
       <AccountMark name={avatarName} className="chat-avatar" />
       <div className="chat-message-body">
@@ -133,6 +141,7 @@ export function HistoryRow({
       timeTitle={`Sent ${messageTime(m.send_time)} · Message #${m.sequence}`}
       attributes={{ 'data-message': m.id, 'data-sequence': m.sequence }}
       actions={{
+        rowKey: row.key,
         text,
         onQuote:
           onQuote && text !== undefined
@@ -144,7 +153,13 @@ export function HistoryRow({
         details: {
           sender: row.avatarName,
           own: row.own,
-          unverifiable: m.content.kind === 'unverifiable',
+          // Only Basic text that decrypts and verifies is authenticated. An
+          // oversized row is such text, which the agent does not return.
+          unauthenticated:
+            m.content.kind === 'unverifiable' ||
+            m.content.kind === 'unsupported'
+              ? m.content.kind
+              : undefined,
           received: m.insert_time,
           sent: m.send_time,
           sequence: m.sequence,

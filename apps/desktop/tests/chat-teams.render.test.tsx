@@ -385,7 +385,7 @@ test('message copy is offered by the message toolbar and the right-click menu', 
   const row = message.closest('article');
   assert.ok(row);
   const toolbar = ui.within(row).getByRole('toolbar', {
-    name: 'Message actions',
+    name: /^Actions for /,
   });
   ui.fireEvent.click(
     ui.within(toolbar).getByRole('button', { name: 'Copy message' }),

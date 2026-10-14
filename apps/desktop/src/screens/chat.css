@@ -1037,8 +1037,10 @@
   flex: 1;
   padding: 0 24px;
 }
-/* Message row layout: avatar, sender name, timestamp, and body. */
+/* Message row layout: avatar, sender name, timestamp, and body. The row
+   positions its actions toolbar. */
 .chat-message {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -1049,11 +1051,8 @@
 }
 /* A message's actions (message-actions.tsx): a toolbar over the row's top
    corner, shown while the row is hovered, holds focus, or has its menu or
-   details open. Hidden by opacity rather than visibility, so it stays in the
-   tab order and focus reaching it shows it. */
-.chat-message {
-  position: relative;
-}
+   details open. Hidden by opacity rather than visibility, so the list's one
+   toolbar tab stop stays focusable and focus reaching it shows it. */
 .chat-actions {
   position: absolute;
   z-index: 2;
