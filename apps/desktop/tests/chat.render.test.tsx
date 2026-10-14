@@ -1601,7 +1601,7 @@ test('channel creation opens in a sheet, selects the new channel, and needs no m
     ui.screen.queryByRole('button', { name: 'Finish cleanup' }),
     null,
   );
-  assert.equal(ui.screen.queryByText('Needs attention'), null);
+  assert.equal(ui.screen.queryByRole('button', { name: /unsent/ }), null);
   assert.deepEqual(navigations.at(-1), {
     kind: 'chat',
     ref: 'team:eng',
@@ -3151,7 +3151,21 @@ for (const offline of [true, false]) {
     await ui.screen.findByText(
       offline ? 'Offline' : 'Your current role cannot read this channel.',
     );
-    ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Cancel' }));
+    // With no thread to draw it, the preparation is reached from the chip.
+    ui.fireEvent.click(
+      await ui.screen.findByRole('button', { name: '1 unsent' }),
+    );
+    const popover = await ui.screen.findByRole('dialog', {
+      name: /Unsent work/,
+    });
+    // An unreadable or unlisted channel cannot be opened from here.
+    assert.equal(
+      ui.within(popover).queryByRole('button', { name: 'Jump' }),
+      null,
+    );
+    ui.fireEvent.click(
+      ui.within(popover).getByRole('button', { name: 'Cancel' }),
+    );
     await ui.waitFor(() =>
       assert.ok(ui.screen.queryByRole('button', { name: 'Cancel' }) === null),
     );
@@ -4153,6 +4167,69 @@ test('a history read whose access lapses in flight is refused locally and leaves
   assert.equal(service.getSnapshot().get('team:eng')?.state, 'ready');
 });
 
+test('the unsent chip lists another channel’s message and jumps to it', async () => {
+  const navigations: unknown[] = [];
+  let seeded = false;
+  let other = '';
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        if (!seeded && action.action === 'pending') {
+          seeded = true;
+          const created = await base.chat(store, {
+            action: 'prepare-channel',
+            submission: 'ce'.repeat(16),
+            name: 'deploys',
+            description: '',
+            admin: false,
+          });
+          if (created.result.kind !== 'operation') throw new Error('fixture');
+          other = created.result.operation.channel;
+          await base.chat(store, {
+            action: 'attempt',
+            operation: created.result.operation.id,
+          });
+          await base.chat(store, {
+            action: 'prepare-message',
+            submission: 'cf'.repeat(16),
+            channel: other,
+            text: 'Can we skip the canary?',
+          });
+        }
+        return base.chat(store, action, view);
+      },
+    }),
+    true,
+    (location) => navigations.push(location),
+  );
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', { name: '1 unsent' }),
+  );
+  const popover = await ui.screen.findByRole('dialog', {
+    name: 'Unsent work in Engineering',
+  });
+  const item = ui.within(popover);
+  await item.findByText('Message in #deploys');
+  // The saved text arrives with the send service's recovery tick.
+  await item.findByText('Can we skip the canary?', undefined, {
+    timeout: 3_000,
+  });
+  assert.ok(item.getByText('Not sent'));
+  ui.fireEvent.click(item.getByRole('button', { name: 'Jump' }));
+  assert.deepEqual(navigations.at(-1), {
+    kind: 'chat',
+    ref: 'team:eng',
+    channel: other,
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      ui.screen.queryByRole('dialog', { name: /Unsent work/ }),
+      null,
+    ),
+  );
+});
+
 test('a saved operation row sends the request the send service chooses', async () => {
   const sent: string[] = [];
   let seeded = false;
@@ -4184,10 +4261,13 @@ test('a saved operation row sends the request the send service chooses', async (
       return base.chat(store, action, view);
     },
   }));
-  const section = await ui.screen.findByRole('region', {
-    name: 'Needs attention',
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', { name: '1 unsent' }),
+  );
+  const popover = await ui.screen.findByRole('dialog', {
+    name: /Unsent work/,
   });
-  const row = ui.within(section);
+  const row = ui.within(popover);
   assert.ok(row.getByRole('button', { name: 'Cancel' }));
   ui.fireEvent.click(row.getByRole('button', { name: 'Retry' }));
   await row.findByRole('alert');

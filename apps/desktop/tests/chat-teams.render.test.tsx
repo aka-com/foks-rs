@@ -761,7 +761,7 @@ async function reopenConversation(
   });
 }
 
-test('unfinished work sits in a bounded section and keeps the composer', async () => {
+test('unfinished work sits behind a header chip and keeps the composer', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   let bridge: Bridge | undefined;
   const shell: Partial<Shell> = {};
@@ -797,21 +797,39 @@ test('unfinished work sits in a bounded section and keeps the composer', async (
       'test',
     );
   await reopenConversation(shell, open);
-  await ui.waitFor(() =>
-    assert.equal(document.querySelectorAll('.chat-pending').length, 6),
+  // The work is counted in the open thread's header rather than drawn above
+  // the conversation, so it cannot push the thread or the composer away.
+  const chip = await ui.screen.findByRole('button', { name: '6 unsent' });
+  assert.ok(chip.closest('.chat-thread-header'));
+  assert.equal(document.querySelectorAll('.chat-pending').length, 0);
+  assert.ok(document.querySelector('.chat-composer'));
+  ui.fireEvent.click(chip);
+  const popover = await ui.screen.findByRole('dialog', {
+    name: 'Unsent work in Engineering',
+  });
+  assert.equal(popover.querySelectorAll('.chat-pending').length, 6);
+  // A channel creation names no channel and offers no Jump.
+  assert.equal(ui.within(popover).getAllByText('New channel').length, 6);
+  assert.equal(
+    ui.within(popover).queryByRole('button', { name: 'Jump' }),
+    null,
   );
-  const conversation = document.querySelector('.chat-conversation');
-  const recovery = document.querySelector('.chat-recovery');
-  const composer = document.querySelector('.chat-composer');
-  assert.ok(recovery && composer, 'the composer stays beside the saved work');
-  assert.equal(recovery.parentElement, conversation);
-  assert.ok(conversation?.contains(composer));
-  // The section is bounded and scrolls, so the rows cannot take the pane.
+  // The list is bounded and scrolls inside the popover.
   const css = await readSource('../src/screens/chat.css', import.meta.url);
-  const rule = /\.chat-recovery \{([^}]*)\}/.exec(css)?.[1] ?? '';
+  const rule = /\.chat-unsent-list \{([^}]*)\}/.exec(css)?.[1] ?? '';
   assert.match(rule, /overflow:\s*auto/);
-  assert.match(rule, /max-height:\s*\d+%/);
-  assert.doesNotMatch(rule, /flex:\s*none/);
+  assert.match(rule, /max-height:/);
+  // Esc closes the popover and returns focus to the chip.
+  ui.fireEvent.keyDown(document.activeElement ?? document.body, {
+    key: 'Escape',
+  });
+  await ui.waitFor(() =>
+    assert.equal(
+      ui.screen.queryByRole('dialog', { name: /Unsent work/ }),
+      null,
+    ),
+  );
+  assert.equal(document.activeElement, chip);
 });
 
 test('saved work that is accounted for says so rather than vanishing', async () => {
@@ -847,12 +865,23 @@ test('saved work that is accounted for says so rather than vanishing', async () 
     'test',
   );
   await reopenConversation(shell, open);
-  await ui.screen.findByText('Needs attention');
-  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Cancel' }));
-  await ui.screen.findByText(
-    'All caught up. Everything saved on this device has been accounted for.',
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', { name: '1 unsent' }),
   );
-  assert.equal(ui.screen.queryByText('Needs attention'), null);
+  const popover = await ui.screen.findByRole('dialog', { name: /Unsent work/ });
+  ui.fireEvent.click(
+    ui.within(popover).getByRole('button', { name: 'Cancel' }),
+  );
+  const done = (await ui.screen.findByText(/All caught up/)).closest(
+    '[role="status"]',
+  );
+  assert.ok(done);
+  assert.match(
+    done.textContent ?? '',
+    /Everything saved on this device has been accounted for\./,
+  );
+  assert.equal(ui.screen.queryByRole('button', { name: /unsent/ }), null);
+  assert.equal(ui.screen.queryByRole('dialog', { name: /Unsent work/ }), null);
 });
 
 test('the rail returns to the chat the tab last had open', async () => {

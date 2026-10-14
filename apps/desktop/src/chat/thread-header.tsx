@@ -5,8 +5,8 @@ import { audienceLine, type ChannelAudience } from './audience';
 import { channelTitle } from './presentation';
 
 /**
- * The channel's name, its description and audience (`audienceLine`), and the
- * ⓘ toggle.
+ * The channel's name, its description and audience (`audienceLine`), the
+ * team's unsent-work chip, and the ⓘ toggle.
  */
 export function ThreadHeader({
   channel,
@@ -14,6 +14,7 @@ export function ThreadHeader({
   onInfo,
   infoOpen = false,
   infoRef,
+  attention,
 }: {
   channel: ChatChannel;
   /** `undefined` while the team's roster has not arrived: no count is shown. */
@@ -21,6 +22,8 @@ export function ThreadHeader({
   onInfo?: () => void;
   infoOpen?: boolean;
   infoRef?: Ref<HTMLButtonElement>;
+  /** The team's `UnsentChip`, drawn before the ⓘ. */
+  attention?: ReactNode;
 }): ReactNode {
   const line = audienceLine(audience, channel.description?.trim());
   return (
@@ -30,6 +33,7 @@ export function ThreadHeader({
       {channel.admin && <Chip>Admins</Chip>}
       {!channel.readable && <Chip tone="warn">Restricted</Chip>}
       <span className="chat-thread-spacer" />
+      {attention}
       {onInfo && (
         <Button
           variant="quiet"

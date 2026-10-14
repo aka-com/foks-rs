@@ -470,31 +470,44 @@
   line-height: 1.45;
   color: var(--muted);
 }
-/* Saved work that has not finished. Limited to ~40% of the pane, so
-   many unfinished operations scroll here rather than pushing the
-   thread and the composer off screen. */
-.chat-recovery {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 38%;
-  overflow: auto;
-  padding: 8px 20px;
-  border-bottom: 1px solid var(--line-soft);
-  background: var(--surface);
-}
-.chat-recovery .sec {
-  margin: 0 0 2px;
-}
-.chat-recovery.caught-up {
-  padding: 6px 20px;
-  background: var(--ok-wash);
-}
-.chat-recovery.caught-up .chat-quiet {
+/* The team's unsent work outside the open thread: a chip in the thread
+   header, or in a bar of its own when the pane has no channel. */
+.chat-attention-bar {
+  flex: none;
   display: flex;
+  justify-content: flex-end;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.btn.chat-unsent-chip {
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.btn.chat-unsent-chip.warn {
+  color: var(--amber-strong);
+}
+.chip.chat-unsent-chip {
+  flex: none;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 0;
-  color: var(--ok-ink);
+  gap: 4px;
+}
+/* The list scrolls inside the popover, so many unfinished operations never
+   push the thread or the composer off screen. */
+.chat-details.chat-unsent {
+  width: min(380px, calc(100vw - 16px));
+}
+.chat-unsent-note {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.chat-unsent-list {
+  max-height: min(60vh, 420px);
+  overflow: auto;
 }
 .chat-pending {
   display: grid;

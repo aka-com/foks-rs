@@ -598,7 +598,7 @@ test('a message being sent is neither prompted about nor refused', async () => {
   assert.equal(composer().value, '');
   write('another thought');
   await leave(store);
-  // Durable work is recovered in "Needs attention", so the move is allowed.
+  // Durable work is recovered through the unsent chip, so the move is allowed.
   assert.equal(dialog(), null);
   assert.deepEqual(refusals, []);
   assert.deepEqual(store.getSnapshot().location, { kind: 'files' });

@@ -888,8 +888,8 @@ other than the one the service holds for the team quarantines the account rather
 than being trusted. The preparation is retired only by a settled
 `attempt` — until then Recover re-issues that same operation, so an `attempt`
 that failed is retried rather than turned into a second channel, and whatever
-the agent is still holding is invalidated into the conversation's "Needs
-attention" in case the sheet is closed on it. Once a request has failed
+the agent is still holding is invalidated into the conversation's unsent
+chip in case the sheet is closed on it. Once a request has failed
 ambiguously the submission is the agent's to settle: a later refusal, of a
 request that never left this Mac, does not discard it, and Recover is disabled
 only while a recovery is running — not by a name collision, a lapsed check-in or
@@ -1139,10 +1139,16 @@ left it on, or at the first unread message when more than a page of messages
 arrived in between. `book/20-desktop.qmd` describes the history reads behind
 this.
 
-Saved work that has not finished sits above the conversation in a bounded
-"Needs attention" section with the per-operation rows and their verbs; once the
-last of it is accounted for the section says "All caught up" rather than
-disappearing without a word. When the team's server check-in has lapsed the
+Saved work the open thread does not draw (channel creations, and messages in
+other channels or in a channel the reader can no longer read) is counted by a
+chip in the conversation header, or in a bar of its own when no channel is
+open. The count covers the states that leave work for the reader (Not sent,
+Checking delivery, Couldn't confirm delivery, Couldn't post, Waiting for
+access) and reads "Saved work" when none of them remains. The chip opens a
+popover that lists each operation with its channel, saved text, state and
+verbs, and Jump for a message in a channel the reader can open; Esc closes it
+and returns focus to the chip. Once the last of it is accounted for the chip
+says "All caught up" rather than disappearing without a word. When the team's server check-in has lapsed the
 column stays and the pane carries the notice, with "Check in" opening that
 server in Settings › Servers; every other unavailable state is stated without
 an action, because no button in Chat resolves it, and "Open another team" is

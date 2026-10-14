@@ -31,6 +31,7 @@ import { channelReadRole, type ChannelAudience } from './audience';
 export function ChatThread({
   autofocusComposer,
   alerts = [],
+  attention,
   channel,
   teamName,
   audience,
@@ -48,6 +49,8 @@ export function ChatThread({
 }: {
   autofocusComposer?: (element: HTMLTextAreaElement) => void;
   alerts?: readonly ChatAlert[];
+  /** The team's unsent-work chip, which the header draws. */
+  attention?: ReactNode;
   history: HistoryWindow | null;
   channel: ChatChannel;
   /**
@@ -307,6 +310,7 @@ export function ChatThread({
         onInfo={onInfo}
         infoOpen={infoOpen}
         infoRef={infoRef}
+        attention={attention}
       />
       <ChatAlerts
         alerts={[

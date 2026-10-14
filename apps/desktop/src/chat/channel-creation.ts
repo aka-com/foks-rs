@@ -522,7 +522,7 @@ export class ChannelCreationController {
         // The column reads the service, so the new channel is listed only once
         // the team has been synchronized again.
         // Whatever the agent is still holding belongs in the conversation's
-        // "Needs attention" as well, in case the sheet is closed on it.
+        // unsent chip as well, in case the sheet is closed on it.
         this.inbox.invalidate(record.store.id);
         this.publish();
       }

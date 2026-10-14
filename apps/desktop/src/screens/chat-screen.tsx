@@ -4,7 +4,8 @@ import { ChatConversationProvider } from '../chat/conversation-provider';
 import { chatMentions, mentionKey } from '../chat/mentions';
 import { useComposerAutofocus } from '../chat/use-composer-autofocus';
 import { ChatAlerts, failureAlert, type ChatAlert } from '../chat/chat-alerts';
-import { PendingRow } from '../chat/pending-row';
+import { UnsentChip } from '../chat/unsent-chip';
+import { ThreadHeader } from '../chat/thread-header';
 import {
   channelTitle,
   listChannels,
@@ -13,7 +14,7 @@ import {
 } from '../chat/presentation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
-import { Button, Icon, Notice, SectionLabel } from '../components';
+import { Button, Icon, Notice } from '../components';
 import type { Bridge } from '../bridge';
 import type { ChatAction, ChatReply } from '../chat-contract';
 import {
@@ -247,7 +248,7 @@ export function ChatScreen({
       : undefined;
   const empty = !loading && !listed.length && !error;
   // Whether this conversation has carried saved work since it was opened, so
-  // the section can say it was accounted for rather than simply vanishing.
+  // the chip can say it was accounted for rather than simply vanishing.
   const [recovered, setRecovered] = useState(false);
   const unfinished = pending.filter(
     (op) =>
@@ -257,6 +258,27 @@ export function ChatScreen({
         !channel?.readable),
   );
   if (unfinished.length > 0 && !recovered) setRecovered(true);
+  const readable = new Set(
+    listed.flatMap(({ channel }) => (channel.readable ? [channel.id] : [])),
+  );
+  const attention = (
+    <UnsentChip
+      storeId={storeId}
+      operations={unfinished}
+      recovered={recovered}
+      teamName={store?.name}
+      channelName={(id) => channelNames.get(id)}
+      canOpen={(id) => readable.has(id) && id !== channel?.id}
+      onJump={(id) =>
+        onNavigate({ kind: 'chat', ref: location.ref, channel: id })
+      }
+      onChange={() => void guardedRefresh()}
+    />
+  );
+  // The header that carries the chip is drawn with a channel; without one, the
+  // chip sits in a bar of its own above the pane.
+  const headed =
+    available && !blocked && Boolean(team) && channel !== undefined;
   // Only a team that can actually be opened is worth offering: `chatTeams`
   // filters on the server's capability, not on whether it answers today.
   const elsewhere = chatTeams(agentSnapshot).find(
@@ -367,17 +389,27 @@ export function ChatScreen({
       <>
         {!channel && <ChatAlerts alerts={error ? syncAlerts : alerts} />}
         {channel && blockedChannels.has(channel.id) ? (
-          <div className="empty">
-            <h2>Channel stopped</h2>
-            <p role="alert">
-              Content in this channel could not be verified. Other channels
-              remain available.
-            </p>
-            <p>
-              Check the account and server connection, then lock and unlock FOKS
-              to revalidate this channel.
-            </p>
-          </div>
+          <>
+            <ThreadHeader
+              channel={channel}
+              audience={audience}
+              onInfo={onToggleInfo}
+              infoOpen={infoOpen}
+              infoRef={infoRef}
+              attention={attention}
+            />
+            <div className="empty">
+              <h2>Channel stopped</h2>
+              <p role="alert">
+                Content in this channel could not be verified. Other channels
+                remain available.
+              </p>
+              <p>
+                Check the account and server connection, then lock and unlock
+                FOKS to revalidate this channel.
+              </p>
+            </div>
+          </>
         ) : channel ? (
           <ChatConversationProvider
             bridge={bridge}
@@ -398,6 +430,7 @@ export function ChatScreen({
             <ChatThread
               autofocusComposer={autofocusComposer}
               alerts={alerts}
+              attention={attention}
               key={`${channel.id}:${channel.readable}`}
               channel={channel}
               teamName={store?.name}
@@ -487,34 +520,8 @@ export function ChatScreen({
     );
   return (
     <>
-      {unfinished.length > 0 ? (
-        <section className="chat-recovery" aria-label="Needs attention">
-          <SectionLabel>Needs attention</SectionLabel>
-          <p className="chat-quiet">
-            Saved work that has not finished. Nothing here is sent again unless
-            you ask.
-          </p>
-          {unfinished.map((op) => (
-            <PendingRow
-              key={op.id}
-              storeId={storeId}
-              operation={op}
-              channelName={channelNames.get(op.channel)}
-              onChange={() => void guardedRefresh()}
-            />
-          ))}
-        </section>
-      ) : (
-        // What was saved here and then accounted for is worth saying once: the
-        // section it sat in leaving without a word reads as work gone missing.
-        recovered && (
-          <section className="chat-recovery caught-up" aria-label="Saved work">
-            <p className="chat-quiet" role="status">
-              <Icon name="check" size={13} /> All caught up. Everything saved on
-              this device has been accounted for.
-            </p>
-          </section>
-        )
+      {!headed && (unfinished.length > 0 || recovered) && (
+        <div className="chat-attention-bar">{attention}</div>
       )}
       {pane}
     </>
