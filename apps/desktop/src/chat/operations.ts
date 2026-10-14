@@ -8,6 +8,13 @@ export interface TrackedOperation extends ChatOperation {
   statusUnknown?: boolean;
   bodyUnavailable?: boolean;
 }
+/** A copy of `op` that shares no mutable object with it. */
+export function copyOperation<T extends ChatOperation>(op: T): T {
+  return {
+    ...op,
+    confirmation: op.confirmation ? { ...op.confirmation } : null,
+  };
+}
 const terminal = (op: ChatOperation) =>
   !['prepared', 'uncertain'].includes(op.state);
 

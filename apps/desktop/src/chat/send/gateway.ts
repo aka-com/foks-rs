@@ -115,12 +115,13 @@ export function authorizer(
 }
 
 /**
- * Every chat request the send service and the conversation make for a team
- * goes through here: identical requests of a coalescing action share one
- * run, each request is authorized against current access before it is sent
- * and after it returns, the reply's scope is checked against the team's and
- * the inbox's, and the reply is reconciled into the team before the caller
- * sees it.
+ * Every request made through `ChatSendService.request` goes through here;
+ * intent persistence and conversation history reads use the team's client
+ * directly. Identical requests of a coalescing action share one run, each
+ * request is authorized against current access before it is sent and after
+ * it returns, the reply's scope is checked against the team's and the
+ * inbox's, and the reply is reconciled into the team before the caller sees
+ * it.
  */
 export class ChatRequestGateway {
   constructor(private host: GatewayHost) {}

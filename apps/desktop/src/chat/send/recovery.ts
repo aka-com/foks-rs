@@ -213,7 +213,7 @@ export async function recover(team: Team, host: RecoveryHost) {
       team.checks,
       job.key,
       () => host.now(),
-      () => run(team, job, obligations, host),
+      () => run(team, epoch, job, obligations, host),
     );
   }
   pruneChecks(team);
@@ -226,6 +226,7 @@ export async function recover(team: Team, host: RecoveryHost) {
 /** Runs one job. A job that leaves its work unfinished rejects. */
 async function run(
   team: Team,
+  epoch: number,
   job: RecoveryJob,
   obligations: Map<string, ChatOperation>,
   host: RecoveryHost,
@@ -254,7 +255,8 @@ async function run(
         obligations.delete(op.id);
         if (!obligations.size) team.cleanupError = '';
       } catch (error) {
-        team.cleanupError = failure(error);
+        // A team retired meanwhile keeps the cleared error.
+        if (host.current(epoch)) team.cleanupError = failure(error);
         throw error;
       }
       return;

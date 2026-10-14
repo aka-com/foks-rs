@@ -16,7 +16,7 @@ import {
   runChecked,
   type RecoveryHost,
 } from '../src/chat/send/recovery';
-import { newTeam, type Team } from '../src/chat/send/team';
+import { newTeam, retire, type Team } from '../src/chat/send/team';
 
 const CHANNEL = 'b'.repeat(32);
 const op = (
@@ -272,6 +272,23 @@ test('a failed finalize is reported as the team cleanup error and left for a lat
   assert.equal(t.jobs, true);
   assert.equal(t.checks.get(`cleanup:${confirmed.id}`)?.failures, 1);
   assert.deepEqual(h.actions, ['pending', 'cleanup-pending', 'finalize']);
+});
+
+test('a finalize that fails after the team was retired leaves no cleanup error', async () => {
+  const t = team();
+  const confirmed = op('a', 'confirmed');
+  t.operations.push({ ...confirmed, observed: true });
+  const h = host(t, (action) => {
+    if (action.action === 'cleanup-pending')
+      return { kind: 'cleanup-pending', operations: [confirmed] };
+    if (action.action === 'pending') return { kind: 'pending', operations: [] };
+    // Retiring disposes the client, which cancels the request in flight.
+    retire(t);
+    throw new Error('Conversation closed.');
+  });
+  await recover(t, h);
+  assert.deepEqual(h.actions, ['pending', 'cleanup-pending', 'finalize']);
+  assert.equal(t.cleanupError, '');
 });
 
 test('a team retired during recovery is not marked recovered', async () => {

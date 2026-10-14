@@ -1,4 +1,5 @@
 import type { ChatOperation } from '../../chat-contract';
+import { copyOperation } from '../operations';
 
 /** What a row shows for one outgoing message, derived by `phaseOf`. */
 export type SendPhase =
@@ -236,10 +237,7 @@ export function copyOutgoing(message: OutgoingMessage): OutgoingMessage {
     delivery: op
       ? ({
           ...message.delivery,
-          op: {
-            ...op,
-            confirmation: op.confirmation ? { ...op.confirmation } : null,
-          },
+          op: copyOperation(op),
         } as Delivery)
       : { ...message.delivery },
     intent:

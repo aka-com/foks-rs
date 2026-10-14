@@ -23,6 +23,7 @@ import {
 import { accessChanged, cancelled } from './errors';
 import { eventFromReply } from './conversation-events';
 import {
+  copyOperation,
   delivered,
   deliveryUnconfirmed,
   operationActions,
@@ -409,10 +410,7 @@ export class ChatSendService {
   }
   /** Copies of the team's tracked operations, like {@link messages}. */
   operations(storeId: string): TrackedOperation[] {
-    return (this.teams.get(storeId)?.operations ?? []).map((op) => ({
-      ...op,
-      confirmation: op.confirmation ? { ...op.confirmation } : null,
-    }));
+    return (this.teams.get(storeId)?.operations ?? []).map(copyOperation);
   }
   /**
    * How many submissions this session is the only copy of: the queued
@@ -1126,11 +1124,7 @@ export class ChatSendService {
       this.current(team) &&
       teamHasWork(
         team,
-        () =>
-          this.available(team) &&
-          (
-            this.inbox.getSnapshot().get(team.storeId)?.data?.channels ?? []
-          ).some((c) => c.readable && !team.loaded.has(c.id)),
+        () => this.available(team) && this.unopenedChannels(team).length > 0,
       )
     );
   }
@@ -1140,15 +1134,16 @@ export class ChatSendService {
    * team.
    */
   private async background(team: Team) {
-    if (this.available(team)) {
-      const channels =
-        this.inbox.getSnapshot().get(team.storeId)?.data?.channels ?? [];
-      for (const channel of channels
-        .filter((c) => c.readable && !team.loaded.has(c.id))
-        .slice(0, 4))
+    if (this.available(team))
+      for (const channel of this.unopenedChannels(team).slice(0, 4))
         await this.open(team.storeId, channel.id, false, 'background');
-    }
     if (!this.current(team)) return;
     await this.refresh(team.storeId, 'background');
+  }
+  /** The team's readable channels that have not been opened yet. */
+  private unopenedChannels(team: Team) {
+    return (
+      this.inbox.getSnapshot().get(team.storeId)?.data?.channels ?? []
+    ).filter((c) => c.readable && !team.loaded.has(c.id));
   }
 }
