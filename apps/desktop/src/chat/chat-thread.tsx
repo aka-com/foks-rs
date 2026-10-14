@@ -142,18 +142,18 @@ export function ChatThread({
     anchorRow,
   );
   const { scroller, atBottom, capture, release } = viewport;
-  const thread = useChatHistory(
+  const thread = useChatHistory({
     channel,
     request,
     revision,
-    acceptHistory,
     history,
-    blockHistory,
-    capture,
-    incrementalHistory,
     position,
     anchor,
-  );
+    incremental: incrementalHistory,
+    onAccepted: acceptHistory,
+    onFatal: blockHistory,
+    onLoading: capture,
+  });
   const { messages, before, missing, failure, busy, detached, anchoring } =
     thread;
   // A placement waits for its page; a failed read brings none.

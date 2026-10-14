@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useCallback, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
-import { installDom } from './lib/dom-harness';
+import { installDom, settle } from './lib/dom-harness';
 import type {
   ChatAction,
   ChatChannel,
@@ -121,7 +121,7 @@ async function setup(
       (action: ChatAction) => service.request(storeId, action),
       [service],
     );
-    history = useChatHistory(channel, request);
+    history = useChatHistory({ channel, request });
     return createElement(Draft, { channel });
   }
   function Conversation() {
@@ -551,16 +551,14 @@ test('history revisions append incrementally, retain older rows, and replace gap
       },
       [],
     );
-    current = useChatHistory(
+    current = useChatHistory({
       channel,
       request,
       revision,
-      accept,
-      held,
-      undefined,
-      undefined,
+      history: held,
       incremental,
-    );
+      onAccepted: accept,
+    });
     return null;
   }
   const view = ui.render(createElement(History, { revision: 0 }));
@@ -664,16 +662,12 @@ test('changing channels ignores the old in-flight page and starts a full load', 
     write_role: 'member',
   };
   function History({ id }: { id: string }) {
-    useChatHistory(
-      { ...channel, id },
+    useChatHistory({
+      channel: { ...channel, id },
       request,
-      0,
-      accept,
-      null,
-      undefined,
-      undefined,
-      true,
-    );
+      incremental: true,
+      onAccepted: accept,
+    });
     return null;
   }
   const view = ui.render(createElement(History, { id: 'a' }));
@@ -688,6 +682,173 @@ test('changing channels ignores the old in-flight page and starts a full load', 
   assert.deepEqual(calls, [
     { action: 'history', channel: 'a', before: null },
     { action: 'history', channel: 'b', before: null },
+  ]);
+});
+
+test('inline history callbacks neither reload the window nor go stale', async () => {
+  const { mergeHistoryPage } = (await vite.ssrLoadModule(
+    '/src/chat/conversation-model.ts',
+  )) as typeof import('../src/chat/conversation-model');
+  const { historyEvent } = (await vite.ssrLoadModule(
+    '/src/chat/conversation-events.ts',
+  )) as typeof import('../src/chat/conversation-events');
+  const channel: ChatChannel = {
+    id: channelId,
+    name: '',
+    description: null,
+    admin: false,
+    readable: true,
+    writable: true,
+    read_role: 'member',
+    write_role: 'member',
+  };
+  const calls: ChatAction[] = [];
+  let rows = [2, 1];
+  const request = async (action: ChatAction): Promise<ChatReply> => {
+    assert.equal(action.action, 'history');
+    calls.push(action);
+    const selected = rows.filter(
+      (n) => action.after === undefined || n > Number(action.after),
+    );
+    return {
+      scope: {} as ChatScope,
+      result: {
+        kind: 'history',
+        channel: action.channel,
+        messages: selected.map((n) => ({
+          id: `m${n}`,
+          sequence: String(n),
+          sender: null,
+          send_time: '1',
+          insert_time: '1',
+          content: { kind: 'unsupported' },
+        })),
+        before: null,
+        missing_predecessors: [],
+        ...(action.after === undefined ? {} : { gap: false }),
+      },
+    };
+  };
+  const accepted: string[] = [];
+  const loading: string[] = [];
+  let current!: ReturnType<typeof HistoryHook>;
+  function History({ revision, label }: { revision: number; label: string }) {
+    const [held, setHeld] = useState<
+      import('../src/chat/conversation-model').HistoryWindow | null
+    >(null);
+    // Every render passes new callbacks, as a caller that does not memoize
+    // them would.
+    current = useChatHistory({
+      channel,
+      request,
+      revision,
+      history: held,
+      incremental: true,
+      onAccepted: (page, before, placement) => {
+        accepted.push(label);
+        setHeld((previous) =>
+          mergeHistoryPage(
+            placement?.replace ? null : previous,
+            historyEvent(page, before),
+          ),
+        );
+      },
+      onLoading: (load) => loading.push(`${label}:${load}`),
+    });
+    return null;
+  }
+  const view = ui.render(
+    createElement(History, { revision: 0, label: 'first' }),
+  );
+  await ui.waitFor(() => assert.equal(current.messages.length, 2));
+  view.rerender(createElement(History, { revision: 0, label: 'second' }));
+  await ui.act(settle);
+  assert.equal(calls.length, 1);
+  // A later read reports to the callbacks of the latest render.
+  rows = [3, 2, 1];
+  view.rerender(createElement(History, { revision: 1, label: 'second' }));
+  await ui.waitFor(() => assert.equal(current.messages.length, 3));
+  assert.deepEqual(accepted, ['first', 'second']);
+  assert.deepEqual(loading, ['first:tail', 'second:incremental']);
+  assert.deepEqual(calls.at(-1), {
+    action: 'history',
+    channel: channelId,
+    before: null,
+    after: '2',
+  });
+  assert.equal(calls.length, 2);
+});
+
+test('a new request owner reads the window again and drops the old reply', async () => {
+  const first = deferred();
+  const page = (id: string): ChatReply => ({
+    scope: {} as ChatScope,
+    result: {
+      kind: 'history',
+      channel: channelId,
+      messages: [
+        {
+          id,
+          sequence: '1',
+          sender: null,
+          send_time: '1',
+          insert_time: '1',
+          content: { kind: 'unsupported' },
+        },
+      ],
+      before: null,
+      missing_predecessors: [],
+    },
+  });
+  const oldCalls: ChatAction[] = [];
+  const newCalls: ChatAction[] = [];
+  const oldRequest = async (action: ChatAction): Promise<ChatReply> => {
+    oldCalls.push(action);
+    await first.promise;
+    return page('old');
+  };
+  const newRequest = async (action: ChatAction): Promise<ChatReply> => {
+    newCalls.push(action);
+    return page('new');
+  };
+  const accepted: string[] = [];
+  const accept = (
+    result: Extract<
+      import('../src/chat-contract').ChatResult,
+      { kind: 'history' }
+    >,
+  ) => {
+    accepted.push(result.messages[0].id);
+  };
+  const channel: ChatChannel = {
+    id: channelId,
+    name: '',
+    description: null,
+    admin: false,
+    readable: true,
+    writable: true,
+    read_role: 'member',
+    write_role: 'member',
+  };
+  function History({
+    request,
+  }: {
+    request: (action: ChatAction) => Promise<ChatReply>;
+  }) {
+    useChatHistory({ channel, request, onAccepted: accept });
+    return null;
+  }
+  const view = ui.render(createElement(History, { request: oldRequest }));
+  await ui.waitFor(() => assert.equal(oldCalls.length, 1));
+  view.rerender(createElement(History, { request: newRequest }));
+  await ui.waitFor(() => assert.deepEqual(accepted, ['new']));
+  await ui.act(async () => {
+    first.resolve();
+    await first.promise;
+  });
+  assert.deepEqual(accepted, ['new']);
+  assert.deepEqual(newCalls, [
+    { action: 'history', channel: channelId, before: null },
   ]);
 });
 
@@ -771,17 +932,15 @@ test('a tail costs one read per arrival, and a revision that moved no position c
       },
       [],
     );
-    current = useChatHistory(
+    current = useChatHistory({
       channel,
       request,
       revision,
-      accept,
-      held,
-      undefined,
-      undefined,
-      true,
+      history: held,
       position,
-    );
+      incremental: true,
+      onAccepted: accept,
+    });
     return null;
   }
   const view = ui.render(
@@ -941,18 +1100,16 @@ test('an unread channel opens at its first unread row and pages forward while de
       },
       [],
     );
-    current = useChatHistory(
+    current = useChatHistory({
       channel,
       request,
       revision,
-      accept,
-      held,
-      undefined,
-      undefined,
-      true,
+      history: held,
       position,
-      '60',
-    );
+      anchor: '60',
+      incremental: true,
+      onAccepted: accept,
+    });
     return null;
   }
   const sequences = () => current.messages.map((m) => Number(m.sequence));

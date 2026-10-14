@@ -59,22 +59,52 @@ function newest(messages: readonly ChatMessage[], floor = 0n): bigint {
   );
 }
 
-/** Loads verified pages and retains invalidations while a request is running. */
-export function useChatHistory(
-  channel: ChatChannel,
-  request: (action: ChatAction) => Promise<ChatReply>,
-  revision = 0,
+/**
+ * The newest end of the held window, which the next incremental or forward
+ * read continues from.
+ */
+interface HeldEnd {
+  channel: string;
+  /** The newest held sequence, or `undefined` when no row is held. */
+  tail: string | undefined;
+  detached: boolean;
+}
+
+function endOf(window: HistoryWindow | null): HeldEnd | null {
+  return (
+    window && {
+      channel: window.channel,
+      tail: window.messages.at(-1)?.sequence,
+      detached: window.detached,
+    }
+  );
+}
+
+/** The newest sequence among `messages` and `floor`. */
+function tailOf(
+  messages: readonly ChatMessage[],
+  floor: string | undefined,
+): string | undefined {
+  return messages.reduce(
+    (max, m) =>
+      max === undefined || BigInt(m.sequence) > BigInt(max) ? m.sequence : max,
+    floor,
+  );
+}
+
+/** The channel {@link useChatHistory} reads, and what it reports to. */
+export interface ChatHistoryOptions {
+  channel: ChatChannel;
   /**
-   * Accepts a page. A page merged from several replies, when the agent
-   * narrowed a range, arrives with the replies' results in `sources`, so the
-   * owner can check each of them rather than the merged object it never
-   * returned.
+   * Sends one history read. Its identity names the request owner: a new
+   * function reads the window again, because the owner it replaces cancels
+   * the reads it started. Pass a stable function for one owner.
    */
-  onAccepted?: AcceptHistory,
-  history?: HistoryWindow | null,
-  onFatal?: (channel: string) => void,
-  onLoading?: (load: HistoryLoad) => void,
-  incrementalHistory = false,
+  request: (action: ChatAction) => Promise<ChatReply>;
+  /** Raised by the inbox when the channel may have changed. */
+  revision?: number;
+  /** The window the owner holds for the channel, or `null` for none. */
+  history?: HistoryWindow | null;
   /**
    * The channel's newest position as the inbox last published it, or `null`
    * when nothing states one. A revision moves for reasons other than arriving
@@ -90,15 +120,46 @@ export function useChatHistory(
    * hold the thread at what it last read. The caller rate-limits the
    * revisions it raises in that state instead.
    */
-  position: string | null = null,
+  position?: string | null;
   /**
    * The read pointer to open the channel at, or `null` to open it at the
    * newest page. Read once, when the thread mounts: the first load is then an
    * `anchor` read that starts {@link ANCHOR_READ_ROWS} rows above the first
    * unread message.
    */
-  anchor: string | null = null,
-) {
+  anchor?: string | null;
+  /** Whether the agent accepts `after` reads for the incremental tail. */
+  incremental?: boolean;
+  /**
+   * Accepts a page. A page merged from several replies, when the agent
+   * narrowed a range, arrives with the replies' results in `sources`, so the
+   * owner can check each of them rather than the merged object it never
+   * returned.
+   */
+  onAccepted?: AcceptHistory;
+  /** The channel's history failed verification. */
+  onFatal?: (channel: string) => void;
+  /** A read is about to start. */
+  onLoading?: (load: HistoryLoad) => void;
+}
+
+/**
+ * Loads verified pages and retains invalidations while a request is running.
+ * The callbacks are read when they are called, so a caller can pass inline
+ * functions without reloading the window on every render.
+ */
+export function useChatHistory({
+  channel,
+  request,
+  revision = 0,
+  history,
+  position = null,
+  anchor = null,
+  incremental: incrementalHistory = false,
+  onAccepted,
+  onFatal,
+  onLoading,
+}: ChatHistoryOptions) {
   const accepted = history?.channel === channel.id ? history : null;
   const messages = accepted?.messages ?? EMPTY_MESSAGES;
   const before = accepted?.before ?? null;
@@ -119,8 +180,13 @@ export function useChatHistory(
   const again = useRef(false);
   const seenRevision = useRef(revision);
   const generation = useRef(0);
-  const latest = useRef(accepted);
-  latest.current = accepted;
+  const heldEnd = useRef(endOf(accepted));
+  heldEnd.current = endOf(accepted);
+  // The request and the callbacks are read through a ref for the same reason
+  // as the position below: in the load's dependencies, an inline callback
+  // would reopen the thread on every render.
+  const callbacks = useRef({ request, onAccepted, onFatal, onLoading });
+  callbacks.current = { request, onAccepted, onFatal, onLoading };
   // Read through a ref: a position in the load's dependencies would rebuild
   // the callback, and the mount effect depends on it, so every unread count
   // would reopen the thread with a full page.
@@ -158,9 +224,10 @@ export function useChatHistory(
       }
       const run = generation.current;
       const current = () => active.current && generation.current === run;
+      const { request, onAccepted, onFatal, onLoading } = callbacks.current;
       const held =
-        latest.current?.channel === channel.id ? latest.current : null;
-      const tail = held?.messages.at(-1)?.sequence;
+        heldEnd.current?.channel === channel.id ? heldEnd.current : null;
+      const tail = held?.tail;
       if (load === 'incremental' && held?.detached) {
         // A detached window ends below the published head, so an `after` read
         // would always report a gap: truncation and rollback both look like
@@ -326,8 +393,8 @@ export function useChatHistory(
         if (!current()) return;
         if (reply.result.kind === 'history') {
           const page = reply.result;
-          const kept = latest.current;
-          const keptTail = BigInt(kept?.messages.at(-1)?.sequence ?? '0');
+          const kept = heldEnd.current;
+          const keptTail = BigInt(kept?.tail ?? '0');
           if (before === null && (after === undefined || replace))
             replace ||= newest(page.messages) < keptTail;
           // A range read decides whether the window reaches the head: the
@@ -358,25 +425,18 @@ export function useChatHistory(
           if (load === 'anchor') opening.current = null;
           acceptedHere.current = true;
           // Acceptance publishes synchronously, but React may not render before a
-          // retained invalidation starts. Keep its next cursor current here too:
-          // the window the owner accepted, or the page merged into the held
-          // rows when the owner does not return one.
-          const rows = new Map(
-            [...(replace ? [] : (kept?.messages ?? [])), ...page.messages].map(
-              (m) => [m.sequence, m],
-            ),
-          );
-          latest.current = stored ?? {
-            channel: channel.id,
-            messages: [...rows.values()].sort((a, b) =>
-              BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1,
-            ),
-            before: load === 'newer' && kept ? kept.before : page.before,
-            verification: new Map(),
-            detached:
-              detached ??
-              (load === 'older' ? (kept?.detached ?? false) : false),
-          };
+          // retained invalidation starts. Keep the held end current here too:
+          // the end of the window the owner accepted, or, when the owner does
+          // not return one, the newest of the page and the held tail.
+          heldEnd.current = stored
+            ? endOf(stored)
+            : {
+                channel: channel.id,
+                tail: tailOf(page.messages, replace ? undefined : kept?.tail),
+                detached:
+                  detached ??
+                  (load === 'older' ? (kept?.detached ?? false) : false),
+              };
         }
         failed.current = null;
       } catch (e) {
@@ -406,15 +466,7 @@ export function useChatHistory(
         }
       }
     },
-    [
-      request,
-      channel.id,
-      onAccepted,
-      onFatal,
-      onLoading,
-      setError,
-      incrementalHistory,
-    ],
+    [channel.id, setError, incrementalHistory],
   );
   const load = useCallback(
     (older: string | null = null, incremental = false) =>
@@ -440,7 +492,8 @@ export function useChatHistory(
     reading.current = false;
     again.current = false;
     active.current = true;
-    const held = latest.current?.channel === channel.id ? latest.current : null;
+    const held =
+      heldEnd.current?.channel === channel.id ? heldEnd.current : null;
     const cancelled = inFlight.current;
     inFlight.current = null;
     if (channel.readable) {
@@ -462,7 +515,8 @@ export function useChatHistory(
     return () => {
       active.current = false;
     };
-  }, [read, channel.id, channel.readable]);
+    // `request` is read through a ref, but a new one is a new request owner.
+  }, [read, channel.id, channel.readable, request]);
   useEffect(() => {
     if (revision === seenRevision.current) return;
     seenRevision.current = revision;

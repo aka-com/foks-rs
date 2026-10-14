@@ -53,7 +53,10 @@ export function useChatConversation(
   const accessGenerationRef = useRef(accessGeneration);
   accessRef.current = access;
   accessGenerationRef.current = accessGeneration;
-  const owner = useRef<ReturnType<typeof chatClient> | null>(null);
+  // The mounted request owner. It is replaced when the bridge, profile or
+  // store changes and cleared when the team is blocked; a history reply that
+  // returns to an earlier owner is discarded.
+  const owner = useRef<object | null>(null);
   const resolvedScope = useRef<ChatScope | null>(null);
   const historyClients = useRef(
     new Map<ReturnType<typeof chatClient>, string>(),
@@ -66,9 +69,10 @@ export function useChatConversation(
       }
     }
   }, []);
-  const performRequest = useCallback(
-    async (action: ChatAction): Promise<ChatReply> => {
-      if (action.action !== 'history') return sends.request(storeId, action);
+  const readHistory = useCallback(
+    async (
+      action: Extract<ChatAction, { action: 'history' }>,
+    ): Promise<ChatReply> => {
       const generation = accessGenerationRef.current;
       const binding = service.histories.binding(
         storeId,
@@ -93,19 +97,15 @@ export function useChatConversation(
               : availability.reason,
             message:
               phase === 'after'
-                ? 'Access changed after the chat operation was sent. Reconcile its saved operation before continuing.'
-                : 'Access changed before the chat operation was sent.',
+                ? 'Access changed after the chat history read was sent.'
+                : 'Access changed before the chat history read was sent.',
             fatal: false,
-            ambiguous:
-              phase === 'after' &&
-              !['channels', 'history', 'pending', 'status'].includes(
-                action.action,
-              ),
+            ambiguous: false,
             retryable: phase === 'before',
           };
       };
       assertAccess('before');
-      const client = owner.current;
+      const token = owner.current;
       const channel = action.channel;
       const checkChannel = () => {
         if (channel && service.isChannelBlocked(storeId, channel))
@@ -113,19 +113,16 @@ export function useChatConversation(
       };
       checkChannel();
       if (fatal.current) throw integrity(fatal.current);
-      if (!client) throw cancelled();
-      let historyClient: ReturnType<typeof chatClient> | undefined;
+      if (!token) throw cancelled();
+      // Each read has its own client, so blocking one channel cancels only
+      // that channel's reads.
+      const client = chatClient(bridge, profile, storeId);
+      historyClients.current.set(client, channel);
       try {
-        let transport = client;
-        if (action.action === 'history') {
-          historyClient = chatClient(bridge, profile, storeId);
-          transport = historyClient;
-          historyClients.current.set(historyClient, action.channel);
-        }
         assertAccess('before');
-        const reply = await transport.request(action, undefined, assertAccess);
+        const reply = await client.request(action, undefined, assertAccess);
         assertAccess('after');
-        if (owner.current !== client) throw cancelled();
+        if (owner.current !== token) throw cancelled();
         const trusted = service.getSnapshot().get(storeId)?.scope;
         if (
           (trusted && !sameScope(trusted, reply.scope)) ||
@@ -141,14 +138,13 @@ export function useChatConversation(
         historyBindings.current.set(reply.result, binding!);
         return reply;
       } catch (cause) {
-        if (owner.current === client) {
+        if (owner.current === token) {
           const typed = normalizeCommandError(cause);
           service.handleError(storeId, typed, channel);
           if (typed.code === 'chat-channel-integrity' && channel) {
             service.blockChannel(storeId, channel);
             cancelHistory(channel);
           } else if (service.getSnapshot().get(storeId)?.state === 'blocked') {
-            client.dispose();
             cancelHistory();
             owner.current = null;
             fatal.current = typed.message;
@@ -159,29 +155,35 @@ export function useChatConversation(
         }
         throw cause;
       } finally {
-        historyClient?.dispose();
-        if (historyClient) historyClients.current.delete(historyClient);
+        client.dispose();
+        historyClients.current.delete(client);
       }
     },
-    [bridge, profile, storeId, service, sends, cancelHistory],
+    [bridge, profile, storeId, service, cancelHistory],
   );
-  // Automatic recovery admits one RPC at a time. Explicit requests enter the
-  // profile queue before the next automatic item, bypassing scheduler backoff.
-  const request = performRequest;
+  // History reads belong to this conversation. Every other action goes to the
+  // send service, which owns operation state and the profile queue.
+  const request = useCallback(
+    (action: ChatAction): Promise<ChatReply> =>
+      action.action === 'history'
+        ? readHistory(action)
+        : sends.request(storeId, action),
+    [readHistory, sends, storeId],
+  );
   const refreshPending = useCallback(
     () => sends.refresh(storeId),
     [sends, storeId],
   );
   const refresh = useCallback(
     async (priority: ChatWorkPriority = 'foreground') => {
-      const client = owner.current;
+      const token = owner.current;
       setFailure(null);
       service.invalidate(storeId);
       try {
         await sends.refresh(storeId, priority);
       } catch (cause) {
         if (
-          owner.current === client &&
+          owner.current === token &&
           normalizeCommandError(cause).code !== 'cancelled'
         )
           setFailure(normalizeCommandError(cause));
@@ -191,8 +193,14 @@ export function useChatConversation(
   );
   const markRead = useCallback(
     (channel: string, sequence: string) =>
-      markChannelRead(request, service, storeId, channel, sequence),
-    [request, service, storeId],
+      markChannelRead(
+        (action) => sends.request(storeId, action),
+        service,
+        storeId,
+        channel,
+        sequence,
+      ),
+    [sends, service, storeId],
   );
   const setOpenChannel = useCallback(
     (channel: string | null) => service.setOpenChannel(storeId, channel),
@@ -248,13 +256,12 @@ export function useChatConversation(
     [service, sends, storeId],
   );
   // Cached channels can mount a child history effect immediately. Establish
-  // request ownership before passive effects in that child run.
+  // request ownership before passive effects in that child run. A new bridge,
+  // profile or store is a new owner.
   useLayoutEffect(() => {
-    const client = chatClient(bridge, profile, storeId);
-    owner.current = client;
+    owner.current = {};
     return () => {
       owner.current = null;
-      client.dispose();
       cancelHistory();
       historyBindings.current = new WeakMap();
       resolvedScope.current = null;
@@ -270,7 +277,6 @@ export function useChatConversation(
   }, [inbox?.data, inbox?.blockedChannels, cancelHistory]);
   useEffect(() => {
     if (inbox?.state === 'blocked') {
-      owner.current?.dispose();
       owner.current = null;
       cancelHistory();
       fatal.current = inbox.error;
