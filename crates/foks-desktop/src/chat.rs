@@ -785,4 +785,87 @@ mod shared_contract_tests {
             assert_eq!(accepted, case.valid, "{}", case.name);
         }
     }
+
+    #[derive(Deserialize)]
+    struct Actions {
+        actions: Vec<ActionEntry>,
+    }
+    #[derive(Deserialize)]
+    struct ActionEntry {
+        request: serde_json::Value,
+        mutates: bool,
+        result_kind: String,
+    }
+
+    /// Position of `action`'s variant in `ChatAction`. The match is
+    /// exhaustive, so a new variant does not compile until it is listed here
+    /// and in the shared action fixture.
+    fn variant(action: &ChatAction) -> usize {
+        match action {
+            ChatAction::LoadIntent { .. } => 0,
+            ChatAction::SaveIntent { .. } => 1,
+            ChatAction::ClearIntent { .. } => 2,
+            ChatAction::ImportIntent { .. } => 3,
+            ChatAction::Channels => 4,
+            ChatAction::History { .. } => 5,
+            ChatAction::NotificationHistory { .. } => 6,
+            ChatAction::Inbox => 7,
+            ChatAction::SyncInbox { .. } => 8,
+            ChatAction::MarkRead { .. } => 9,
+            ChatAction::PollInbox { .. } => 10,
+            ChatAction::PrepareChannel { .. } => 11,
+            ChatAction::PrepareMessage { .. } => 12,
+            ChatAction::SubmitMessage { .. } => 13,
+            ChatAction::Status { .. } => 14,
+            ChatAction::OperationBody { .. } => 15,
+            ChatAction::Attempt { .. } => 16,
+            ChatAction::Reconcile { .. } => 17,
+            ChatAction::Cancel { .. } => 18,
+            ChatAction::Finalize { .. } => 19,
+            ChatAction::Pending => 20,
+            ChatAction::CleanupPending => 21,
+        }
+    }
+
+    /// The TypeScript `CHAT_ACTIONS` table is asserted against the same
+    /// fixture, so the two classifications cannot drift apart.
+    #[test]
+    fn shared_action_fixture_matches_mutation_and_reply_classification() {
+        let actions: Actions = serde_json::from_str(include_str!(
+            "../../foks-agent-proto/tests/fixtures/chat-actions.json"
+        ))
+        .unwrap();
+        let replies: Fixtures = serde_json::from_str(include_str!(
+            "../../foks-agent-proto/tests/fixtures/chat-replies.json"
+        ))
+        .unwrap();
+        let mut seen = [false; 22];
+        for entry in actions.actions {
+            let action: ChatAction = serde_json::from_value(entry.request.clone()).unwrap();
+            let name = action.operation_name();
+            assert!(action.validate(), "{name}");
+            assert_eq!(
+                serde_json::to_value(&action).unwrap(),
+                entry.request,
+                "{name} is not canonical"
+            );
+            assert!(
+                !std::mem::replace(&mut seen[variant(&action)], true),
+                "{name} repeated"
+            );
+            assert_eq!(action.is_mutation(), entry.mutates, "{name}");
+            let kinds: Vec<_> = replies
+                .cases
+                .iter()
+                .filter(|case| case.valid && variant(&case.action) == variant(&action))
+                .map(|case| case.reply["result"]["kind"].as_str().unwrap())
+                .collect();
+            assert!(!kinds.is_empty(), "{name} has no valid reply case");
+            assert!(
+                kinds.iter().all(|kind| *kind == entry.result_kind),
+                "{name}"
+            );
+        }
+        assert!(seen.iter().all(|seen| *seen));
+    }
 }

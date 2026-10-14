@@ -2711,6 +2711,879 @@
           }
         }
       }
+    },
+    {
+      "name": "inbox answers the unsynchronized snapshot",
+      "valid": true,
+      "action": {
+        "action": "inbox"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "inbox",
+          "channels": [
+            {
+              "id": "abababababababababababababababab",
+              "description": null,
+              "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+              "admin": false,
+              "readable": true,
+              "read_role": "Member (0)",
+              "write_role": "Member (0)",
+              "writable": true
+            }
+          ],
+          "conversations": [
+            {
+              "channel": {
+                "id": "abababababababababababababababab",
+                "description": null,
+                "name": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+                "admin": false,
+                "readable": true,
+                "read_role": "Member (0)",
+                "write_role": "Member (0)",
+                "writable": true
+              },
+              "inbox_version": "1",
+              "read_through": "0",
+              "pending_read": null,
+              "unread": "0",
+              "hidden": false,
+              "muted": false,
+              "preview": null
+            }
+          ],
+          "head": "1",
+          "cursor": "1",
+          "degraded": false,
+          "read_retry_pending": false,
+          "previews_incomplete": false,
+          "blocked_channels": []
+        }
+      }
+    },
+    {
+      "name": "inbox cannot answer with channels",
+      "valid": false,
+      "action": {
+        "action": "inbox"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "channels",
+          "channels": [],
+          "version": "1"
+        }
+      }
+    },
+    {
+      "name": "poll reports a newer inbox version",
+      "valid": true,
+      "action": {
+        "action": "poll-inbox",
+        "since": "2",
+        "timeout_milliseconds": 1000
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "poll",
+          "bumped": true,
+          "inbox_version": "3"
+        }
+      }
+    },
+    {
+      "name": "poll reports an unchanged inbox version",
+      "valid": true,
+      "action": {
+        "action": "poll-inbox",
+        "since": "2",
+        "timeout_milliseconds": 1000
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "poll",
+          "bumped": false,
+          "inbox_version": "2"
+        }
+      }
+    },
+    {
+      "name": "poll bump requires a newer inbox version",
+      "valid": false,
+      "action": {
+        "action": "poll-inbox",
+        "since": "2",
+        "timeout_milliseconds": 1000
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "poll",
+          "bumped": true,
+          "inbox_version": "2"
+        }
+      }
+    },
+    {
+      "name": "mark read confirms the requested sequence",
+      "valid": true,
+      "action": {
+        "action": "mark-read",
+        "channel": "abababababababababababababababab",
+        "sequence": "7"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "read",
+          "channel": "abababababababababababababababab",
+          "sequence": "7"
+        }
+      }
+    },
+    {
+      "name": "mark read cannot confirm another sequence",
+      "valid": false,
+      "action": {
+        "action": "mark-read",
+        "channel": "abababababababababababababababab",
+        "sequence": "7"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "read",
+          "channel": "abababababababababababababababab",
+          "sequence": "6"
+        }
+      }
+    },
+    {
+      "name": "notification history page",
+      "valid": true,
+      "action": {
+        "action": "notification-history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "12121212121212121212121212121212",
+              "sequence": "4",
+              "sender": "01cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
+              "content": {
+                "kind": "text",
+                "text": "notification text"
+              }
+            }
+          ],
+          "before": "4",
+          "missing_predecessors": []
+        }
+      }
+    },
+    {
+      "name": "notification history has no incremental gap flag",
+      "valid": false,
+      "action": {
+        "action": "notification-history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "history",
+          "channel": "abababababababababababababababab",
+          "messages": [
+            {
+              "id": "12121212121212121212121212121212",
+              "sequence": "4",
+              "sender": "01cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "send_time": "1700000000000",
+              "insert_time": "1700000000001",
+              "content": {
+                "kind": "text",
+                "text": "notification text"
+              }
+            }
+          ],
+          "before": "4",
+          "missing_predecessors": [],
+          "gap": false
+        }
+      }
+    },
+    {
+      "name": "pending lists unsettled operations",
+      "valid": true,
+      "action": {
+        "action": "pending"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "pending",
+          "operations": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "channel": "abababababababababababababababab",
+              "state": "prepared",
+              "rejection_code": null,
+              "kind": "send-message",
+              "confirmation": null
+            },
+            {
+              "id": "12121212121212121212121212121212",
+              "channel": "abababababababababababababababab",
+              "state": "uncertain",
+              "rejection_code": null,
+              "kind": "send-message",
+              "confirmation": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "pending excludes settled operations",
+      "valid": false,
+      "action": {
+        "action": "pending"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "pending",
+          "operations": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "channel": "abababababababababababababababab",
+              "state": "confirmed",
+              "rejection_code": null,
+              "kind": "send-message",
+              "confirmation": {
+                "kind": "message-sent",
+                "sequence": "3"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "pending cannot answer with cleanup",
+      "valid": false,
+      "action": {
+        "action": "pending"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "cleanup-pending",
+          "operations": []
+        }
+      }
+    },
+    {
+      "name": "cleanup pending lists settled operations",
+      "valid": true,
+      "action": {
+        "action": "cleanup-pending"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "cleanup-pending",
+          "operations": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "channel": "abababababababababababababababab",
+              "state": "confirmed",
+              "rejection_code": null,
+              "kind": "send-message",
+              "confirmation": {
+                "kind": "message-sent",
+                "sequence": "3"
+              }
+            },
+            {
+              "id": "12121212121212121212121212121212",
+              "channel": "abababababababababababababababab",
+              "state": "rejected",
+              "rejection_code": 12006,
+              "kind": "send-message",
+              "confirmation": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "cleanup pending excludes unsettled operations",
+      "valid": false,
+      "action": {
+        "action": "cleanup-pending"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "cleanup-pending",
+          "operations": [
+            {
+              "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "channel": "abababababababababababababababab",
+              "state": "prepared",
+              "rejection_code": null,
+              "kind": "send-message",
+              "confirmation": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "cleanup pending cannot answer with pending",
+      "valid": false,
+      "action": {
+        "action": "cleanup-pending"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "pending",
+          "operations": []
+        }
+      }
+    },
+    {
+      "name": "prepare channel returns channel creation",
+      "valid": true,
+      "action": {
+        "action": "prepare-channel",
+        "submission": "efefefefefefefefefefefefefefefef",
+        "name": "design",
+        "description": "Design reviews",
+        "admin": false
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "prepared",
+            "rejection_code": null,
+            "kind": "create-channel",
+            "confirmation": null
+          }
+        }
+      }
+    },
+    {
+      "name": "prepare channel cannot return a send",
+      "valid": false,
+      "action": {
+        "action": "prepare-channel",
+        "submission": "efefefefefefefefefefefefefefefef",
+        "name": "design",
+        "description": "Design reviews",
+        "admin": false
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "prepared",
+            "rejection_code": null,
+            "kind": "send-message",
+            "confirmation": null
+          }
+        }
+      }
+    },
+    {
+      "name": "prepare message binds the channel",
+      "valid": true,
+      "action": {
+        "action": "prepare-message",
+        "submission": "efefefefefefefefefefefefefefefef",
+        "channel": "abababababababababababababababab",
+        "text": "message"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "prepared",
+            "rejection_code": null,
+            "kind": "send-message",
+            "confirmation": null
+          }
+        }
+      }
+    },
+    {
+      "name": "prepare message cannot return another channel",
+      "valid": false,
+      "action": {
+        "action": "prepare-message",
+        "submission": "efefefefefefefefefefefefefefefef",
+        "channel": "12121212121212121212121212121212",
+        "text": "message"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "prepared",
+            "rejection_code": null,
+            "kind": "send-message",
+            "confirmation": null
+          }
+        }
+      }
+    },
+    {
+      "name": "attempt confirms the requested operation",
+      "valid": true,
+      "action": {
+        "action": "attempt",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "confirmed",
+            "rejection_code": null,
+            "kind": "send-message",
+            "confirmation": {
+              "kind": "message-sent",
+              "sequence": "3"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "attempt cannot return another operation",
+      "valid": false,
+      "action": {
+        "action": "attempt",
+        "operation": "12121212121212121212121212121212"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "uncertain",
+            "rejection_code": null,
+            "kind": "send-message",
+            "confirmation": null
+          }
+        }
+      }
+    },
+    {
+      "name": "reconcile preserves uncertainty",
+      "valid": true,
+      "action": {
+        "action": "reconcile",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "uncertain",
+            "rejection_code": null,
+            "kind": "send-message",
+            "confirmation": null
+          }
+        }
+      }
+    },
+    {
+      "name": "reconcile cannot return another operation",
+      "valid": false,
+      "action": {
+        "action": "reconcile",
+        "operation": "12121212121212121212121212121212"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "confirmed",
+            "rejection_code": null,
+            "kind": "send-message",
+            "confirmation": {
+              "kind": "message-sent",
+              "sequence": "3"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "cancel settles prepared work",
+      "valid": true,
+      "action": {
+        "action": "cancel",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "cancelled",
+            "rejection_code": null,
+            "kind": "send-message",
+            "confirmation": null
+          }
+        }
+      }
+    },
+    {
+      "name": "cancel cannot answer with pending",
+      "valid": false,
+      "action": {
+        "action": "cancel",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "pending",
+          "operations": []
+        }
+      }
+    },
+    {
+      "name": "finalize returns the rejected operation",
+      "valid": true,
+      "action": {
+        "action": "finalize",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "rejected",
+            "rejection_code": 12006,
+            "kind": "send-message",
+            "confirmation": null
+          }
+        }
+      }
+    },
+    {
+      "name": "finalize cannot return another operation",
+      "valid": false,
+      "action": {
+        "action": "finalize",
+        "operation": "12121212121212121212121212121212"
+      },
+      "reply": {
+        "scope": {
+          "store": {
+            "profile": "local",
+            "account_alias": "me",
+            "team_alias": "team",
+            "team_id": "03abababababababababababababababababababababababababababababababab"
+          },
+          "host": "02abababababababababababababababababababababababababababababababab",
+          "actor": "01abababababababababababababababababababababababababababababababab"
+        },
+        "result": {
+          "kind": "operation",
+          "operation": {
+            "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "channel": "abababababababababababababababab",
+            "state": "cancelled",
+            "rejection_code": null,
+            "kind": "send-message",
+            "confirmation": null
+          }
+        }
+      }
     }
   ]
 }

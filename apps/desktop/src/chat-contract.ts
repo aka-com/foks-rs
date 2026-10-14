@@ -78,19 +78,135 @@ export type ChatAction =
       action: 'attempt' | 'cancel' | 'finalize' | 'status' | 'reconcile';
       operation: string;
     };
+export interface ChatActionMeta {
+  /** The result kind the agent answers the action with. */
+  result: ChatResult['kind'];
+  /**
+   * Whether the agent treats the action as a mutation
+   * (`ChatAction::is_mutation`); an undecodable or unclassified failure is
+   * then reported as ambiguous and not retryable.
+   */
+  mutates: boolean;
+  /**
+   * Whether the action only reads or settles operation records stored on
+   * this device, so the send service does not refuse it when chat access or
+   * the profile generation has changed or its channel is quarantined.
+   */
+  local: boolean;
+  /** Whether the send service lets identical concurrent requests share one reply. */
+  coalesce: boolean;
+}
+/**
+ * Per-action properties of the chat IPC contract, in one table. Tests assert
+ * `result` and `mutates` against the Rust agent contract through
+ * `crates/foks-agent-proto/tests/fixtures/chat-actions.json`.
+ */
+export const CHAT_ACTIONS = {
+  'load-intent': {
+    result: 'intent',
+    mutates: false,
+    local: false,
+    coalesce: false,
+  },
+  'save-intent': {
+    result: 'intent',
+    mutates: true,
+    local: false,
+    coalesce: false,
+  },
+  'clear-intent': {
+    result: 'intent',
+    mutates: true,
+    local: false,
+    coalesce: false,
+  },
+  'import-intent': {
+    result: 'intent',
+    mutates: true,
+    local: false,
+    coalesce: false,
+  },
+  'operation-body': {
+    result: 'operation-body',
+    mutates: false,
+    local: false,
+    coalesce: false,
+  },
+  channels: {
+    result: 'channels',
+    mutates: false,
+    local: false,
+    coalesce: false,
+  },
+  history: { result: 'history', mutates: false, local: false, coalesce: false },
+  'notification-history': {
+    result: 'history',
+    mutates: false,
+    local: false,
+    coalesce: false,
+  },
+  inbox: { result: 'inbox', mutates: false, local: false, coalesce: false },
+  'sync-inbox': {
+    result: 'inbox',
+    mutates: false,
+    local: false,
+    coalesce: false,
+  },
+  'poll-inbox': {
+    result: 'poll',
+    mutates: false,
+    local: false,
+    coalesce: false,
+  },
+  'mark-read': { result: 'read', mutates: true, local: false, coalesce: false },
+  pending: { result: 'pending', mutates: false, local: true, coalesce: true },
+  'cleanup-pending': {
+    result: 'cleanup-pending',
+    mutates: false,
+    local: true,
+    coalesce: true,
+  },
+  'prepare-channel': {
+    result: 'operation',
+    mutates: true,
+    local: false,
+    coalesce: false,
+  },
+  'prepare-message': {
+    result: 'operation',
+    mutates: true,
+    local: false,
+    coalesce: false,
+  },
+  'submit-message': {
+    result: 'operation',
+    mutates: true,
+    local: false,
+    coalesce: false,
+  },
+  status: { result: 'operation', mutates: false, local: true, coalesce: true },
+  attempt: {
+    result: 'operation',
+    mutates: true,
+    local: false,
+    coalesce: false,
+  },
+  reconcile: {
+    result: 'operation',
+    mutates: true,
+    local: false,
+    coalesce: true,
+  },
+  cancel: { result: 'operation', mutates: true, local: true, coalesce: false },
+  finalize: {
+    result: 'operation',
+    mutates: true,
+    local: true,
+    coalesce: true,
+  },
+} as const satisfies Record<ChatAction['action'], ChatActionMeta>;
 export function chatActionMutates(action: ChatAction): boolean {
-  return ![
-    'load-intent',
-    'operation-body',
-    'channels',
-    'pending',
-    'inbox',
-    'sync-inbox',
-    'poll-inbox',
-    'history',
-    'notification-history',
-    'status',
-  ].includes(action.action);
+  return CHAT_ACTIONS[action.action].mutates;
 }
 
 export interface ChatScope {
@@ -423,6 +539,7 @@ export function decodeChatResult(
   action: ChatAction,
 ): ChatResult {
   const r = object(value);
+  if (r.kind !== CHAT_ACTIONS[action.action].result) return fail();
   let result: ChatResult;
   if (
     r.kind === 'intent' &&
@@ -682,19 +799,7 @@ export function decodeChatResult(
     const bumped = bool(r.bumped);
     if (bumped !== BigInt(inboxVersion) > BigInt(since)) return fail();
     result = { kind: 'poll', bumped, inbox_version: inboxVersion };
-  } else if (
-    r.kind === 'operation' &&
-    [
-      'prepare-channel',
-      'prepare-message',
-      'submit-message',
-      'attempt',
-      'cancel',
-      'finalize',
-      'status',
-      'reconcile',
-    ].includes(action.action)
-  ) {
+  } else if (r.kind === 'operation') {
     object(r, ['kind', 'operation']);
     const op = operation(r.operation);
     if (
@@ -721,10 +826,7 @@ export function decodeChatResult(
       channel: channelId,
       text: r.text === null ? null : text(r.text, CHAT_TEXT_BYTES),
     };
-  } else if (
-    (r.kind === 'pending' && action.action === 'pending') ||
-    (r.kind === 'cleanup-pending' && action.action === 'cleanup-pending')
-  ) {
+  } else if (r.kind === 'pending' || r.kind === 'cleanup-pending') {
     object(r, ['kind', 'operations']);
     const operations = array(r.operations, CHAT_PENDING_ROWS, operation);
     if (

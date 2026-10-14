@@ -1,5 +1,5 @@
 import { normalizeMutationError } from '../bridge';
-import { chatActionMutates } from '../chat-contract';
+import { CHAT_ACTIONS, chatActionMutates } from '../chat-contract';
 import {
   scheduleProfileWork,
   type BackgroundHistoryWork,
@@ -18,33 +18,9 @@ export { cancelled, integrity, channelIntegrity } from './errors';
 import { sameScope } from './scope';
 export { sameScope } from './scope';
 
-const kinds = {
-  'load-intent': 'intent',
-  'save-intent': 'intent',
-  'clear-intent': 'intent',
-  'import-intent': 'intent',
-  'operation-body': 'operation-body',
-  channels: 'channels',
-  history: 'history',
-  'notification-history': 'history',
-  inbox: 'inbox',
-  'sync-inbox': 'inbox',
-  'poll-inbox': 'poll',
-  'mark-read': 'read',
-  pending: 'pending',
-  'cleanup-pending': 'cleanup-pending',
-  reconcile: 'operation',
-  'prepare-channel': 'operation',
-  'prepare-message': 'operation',
-  'submit-message': 'operation',
-  status: 'operation',
-  attempt: 'operation',
-  cancel: 'operation',
-  finalize: 'operation',
-} as const satisfies Record<ChatAction['action'], ChatResult['kind']>;
 type ResultFor<A extends ChatAction> = Extract<
   ChatResult,
-  { kind: (typeof kinds)[A['action']] }
+  { kind: (typeof CHAT_ACTIONS)[A['action']]['result'] }
 >;
 export type ReplyFor<A extends ChatAction> = Omit<ChatReply, 'result'> & {
   result: ResultFor<A>;
@@ -80,7 +56,7 @@ export function chatClient(bridge: Bridge, profile: string, storeId: string) {
       if (closed) throw cancelled();
       authorize?.('after');
       if (scope && !sameScope(scope, reply.scope)) throw integrity();
-      if (reply.result.kind !== kinds[action.action])
+      if (reply.result.kind !== CHAT_ACTIONS[action.action].result)
         throw integrity('Unexpected chat response.');
       scope = reply.scope;
       // Both scope and the action/result correlation have been checked above.

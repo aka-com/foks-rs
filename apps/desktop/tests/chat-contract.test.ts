@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  CHAT_ACTIONS,
+  chatActionMutates,
   decodeChatReply,
   decodeChatReplyFor,
   decodeChatResult,
@@ -341,6 +343,50 @@ test('shared Rust and TypeScript chat reply fixtures agree', async () => {
         () => decodeChatReply(fixture.reply, id, fixture.action),
         fixture.name,
       );
+  }
+});
+
+test('the chat action table matches the shared Rust action fixture', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const read = async (name: string) =>
+    JSON.parse(
+      await readFile(
+        new URL(
+          `../../../crates/foks-agent-proto/tests/fixtures/${name}`,
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as unknown;
+  const { actions } = (await read('chat-actions.json')) as {
+    actions: {
+      request: import('../src/chat-contract').ChatAction;
+      mutates: boolean;
+      result_kind: string;
+    }[];
+  };
+  const { cases } = (await read('chat-replies.json')) as {
+    cases: {
+      valid: boolean;
+      action: import('../src/chat-contract').ChatAction;
+      reply: { result: { kind: string } };
+    }[];
+  };
+  assert.deepEqual(
+    actions.map((entry) => entry.request.action).sort(),
+    Object.keys(CHAT_ACTIONS).sort(),
+  );
+  for (const { request, mutates, result_kind } of actions) {
+    const meta = CHAT_ACTIONS[request.action];
+    assert.equal(meta.mutates, mutates, request.action);
+    assert.equal(chatActionMutates(request), mutates, request.action);
+    assert.equal(meta.result, result_kind, request.action);
+    const replies = cases.filter(
+      (c) => c.valid && c.action.action === request.action,
+    );
+    assert.ok(replies.length > 0, `no valid reply case: ${request.action}`);
+    for (const c of replies)
+      assert.equal(c.reply.result.kind, result_kind, request.action);
   }
 });
 

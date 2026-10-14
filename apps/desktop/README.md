@@ -261,6 +261,19 @@ the other facts needed by the Phase 2 shell; `read_item`,
 the Rust command tests pin serialization so a drift fails on one side or the
 other.
 
+The per-action properties of `chat_request` are one table, `CHAT_ACTIONS` in
+`src/chat-contract.ts`: the result kind each action is answered with, whether
+the agent treats it as a mutation (which selects `checkedMutation`), and the
+send service's local and coalescing rules. Two shared fixtures in
+`crates/foks-agent-proto/tests/fixtures/` hold both languages to it:
+`chat-actions.json` lists every action's canonical request, mutation flag and
+result kind, and `chat-replies.json` holds accepted and rejected replies with
+at least one accepted reply per action. The native tests in
+`crates/foks-desktop/src/chat.rs` check them against `ChatAction`
+serialization, `ChatAction::is_mutation` and `validate_chat_reply`;
+`tests/chat-contract.test.ts` checks them against `CHAT_ACTIONS` and
+`decodeChatReply`.
+
 Phase 3 adds `create_text_item`, `create_link`, `edit_text_item`,
 `remove_item`, dropped/native-picker file import and exact-version file
 replacement, `resume_group_creation` and `abandon_group_creation`, the local

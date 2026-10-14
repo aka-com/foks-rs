@@ -234,3 +234,30 @@ test('chat drops a reply when access changes while the RPC is in flight', async 
   await assert.rejects(pending, { code: 'vault-unavailable' });
   client.dispose();
 });
+
+test('a failed cleanup-pending read stays retryable while a failed mutation is ambiguous', async () => {
+  const failure = {
+    code: 'unknown',
+    message: 'The agent request failed.',
+    fatal: false,
+    ambiguous: false,
+    retryable: true,
+  };
+  const bridge = {
+    chat: async () => {
+      throw failure;
+    },
+    cancelChat: async () => {},
+  } as unknown as Bridge;
+  const client = chatClient(bridge, 'p', 't');
+  await assert.rejects(client.request({ action: 'cleanup-pending' }), {
+    code: 'unknown',
+    ambiguous: false,
+    retryable: true,
+  });
+  await assert.rejects(
+    client.request({ action: 'attempt', operation: 'cd'.repeat(16) }),
+    { code: 'unknown', ambiguous: true, retryable: false },
+  );
+  client.dispose();
+});

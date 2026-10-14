@@ -7,6 +7,7 @@ import type {
   ChatReply,
   ChatScope,
 } from '../chat-contract';
+import { CHAT_ACTIONS } from '../chat-contract';
 import {
   CHAT_HISTORY_BYTES,
   CHAT_PENDING_ROWS,
@@ -98,13 +99,6 @@ interface Team {
   jobs: boolean;
   cleanupError: string;
 }
-const localActions = new Set([
-  'pending',
-  'status',
-  'cleanup-pending',
-  'cancel',
-  'finalize',
-]);
 /**
  * How long the tick waits while a team has work in hand. The tick itself
  * issues nothing; it lets each team's own two-second gate through.
@@ -760,13 +754,7 @@ export class ChatSendService {
     priority: ChatWorkPriority = 'foreground',
   ): Promise<ChatReply> {
     const team = this.ensure(storeId);
-    const key = [
-      'status',
-      'reconcile',
-      'finalize',
-      'pending',
-      'cleanup-pending',
-    ].includes(action.action)
+    const key = CHAT_ACTIONS[action.action].coalesce
       ? JSON.stringify(action)
       : undefined;
     if (key && team.requests.has(key)) return team.requests.get(key)!;
@@ -797,7 +785,7 @@ export class ChatSendService {
     const authorize = (phase: 'before' | 'after') => {
       if (!this.current(team, epoch)) throw cancelled();
       if (
-        !localActions.has(action.action) &&
+        !CHAT_ACTIONS[action.action].local &&
         (!this.available(team) ||
           generation !== (this.generations.get(team.profile) ?? 0) ||
           (phase === 'before' &&
@@ -821,7 +809,7 @@ export class ChatSendService {
       if (this.snapshot?.agent.state !== 'ready') throw cancelled();
       if (
         channel &&
-        !localActions.has(action.action) &&
+        !CHAT_ACTIONS[action.action].local &&
         this.inbox.isChannelBlocked(team.storeId, channel)
       )
         throw channelIntegrity();

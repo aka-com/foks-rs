@@ -1,0 +1,202 @@
+{
+  "actions": [
+    {
+      "request": {
+        "action": "load-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab"
+      },
+      "mutates": false,
+      "result_kind": "intent"
+    },
+    {
+      "request": {
+        "action": "save-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab",
+        "submission": "efefefefefefefefefefefefefefefef",
+        "text": "pending text"
+      },
+      "mutates": true,
+      "result_kind": "intent"
+    },
+    {
+      "request": {
+        "action": "clear-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab",
+        "submission": "efefefefefefefefefefefefefefefef"
+      },
+      "mutates": true,
+      "result_kind": "intent"
+    },
+    {
+      "request": {
+        "action": "import-intent",
+        "host": "02abababababababababababababababababababababababababababababababab",
+        "actor": "01abababababababababababababababababababababababababababababababab",
+        "channel": "abababababababababababababababab",
+        "submission": "efefefefefefefefefefefefefefefef",
+        "text": "pending text",
+        "source": "1212121212121212121212121212121212121212121212121212121212121212"
+      },
+      "mutates": true,
+      "result_kind": "intent"
+    },
+    {
+      "request": {
+        "action": "channels"
+      },
+      "mutates": false,
+      "result_kind": "channels"
+    },
+    {
+      "request": {
+        "action": "history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "mutates": false,
+      "result_kind": "history"
+    },
+    {
+      "request": {
+        "action": "notification-history",
+        "channel": "abababababababababababababababab",
+        "before": null
+      },
+      "mutates": false,
+      "result_kind": "history"
+    },
+    {
+      "request": {
+        "action": "inbox"
+      },
+      "mutates": false,
+      "result_kind": "inbox"
+    },
+    {
+      "request": {
+        "action": "sync-inbox",
+        "blocked_channels": []
+      },
+      "mutates": false,
+      "result_kind": "inbox"
+    },
+    {
+      "request": {
+        "action": "mark-read",
+        "channel": "abababababababababababababababab",
+        "sequence": "7"
+      },
+      "mutates": true,
+      "result_kind": "read"
+    },
+    {
+      "request": {
+        "action": "poll-inbox",
+        "since": "2",
+        "timeout_milliseconds": 1000
+      },
+      "mutates": false,
+      "result_kind": "poll"
+    },
+    {
+      "request": {
+        "action": "prepare-channel",
+        "submission": "efefefefefefefefefefefefefefefef",
+        "name": "design",
+        "description": "Design reviews",
+        "admin": false
+      },
+      "mutates": true,
+      "result_kind": "operation"
+    },
+    {
+      "request": {
+        "action": "prepare-message",
+        "submission": "efefefefefefefefefefefefefefefef",
+        "channel": "abababababababababababababababab",
+        "text": "message"
+      },
+      "mutates": true,
+      "result_kind": "operation"
+    },
+    {
+      "request": {
+        "action": "submit-message",
+        "submission": "efefefefefefefefefefefefefefefef",
+        "channel": "abababababababababababababababab",
+        "text": "message"
+      },
+      "mutates": true,
+      "result_kind": "operation"
+    },
+    {
+      "request": {
+        "action": "status",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "mutates": false,
+      "result_kind": "operation"
+    },
+    {
+      "request": {
+        "action": "operation-body",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "channel": "abababababababababababababababab"
+      },
+      "mutates": false,
+      "result_kind": "operation-body"
+    },
+    {
+      "request": {
+        "action": "attempt",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "mutates": true,
+      "result_kind": "operation"
+    },
+    {
+      "request": {
+        "action": "reconcile",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "mutates": true,
+      "result_kind": "operation"
+    },
+    {
+      "request": {
+        "action": "cancel",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "mutates": true,
+      "result_kind": "operation"
+    },
+    {
+      "request": {
+        "action": "finalize",
+        "operation": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      },
+      "mutates": true,
+      "result_kind": "operation"
+    },
+    {
+      "request": {
+        "action": "pending"
+      },
+      "mutates": false,
+      "result_kind": "pending"
+    },
+    {
+      "request": {
+        "action": "cleanup-pending"
+      },
+      "mutates": false,
+      "result_kind": "cleanup-pending"
+    }
+  ]
+}
