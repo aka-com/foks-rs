@@ -139,7 +139,8 @@ export function mergeHistoryPage(
   };
 }
 
-function textBytes(message: ChatMessage): number {
+/** The UTF-8 bytes of a message's text, which the byte bounds count. */
+export function textBytes(message: ChatMessage): number {
   return message.content.kind === 'text'
     ? new TextEncoder().encode(message.content.text).length
     : 0;

@@ -1529,6 +1529,69 @@ test('a channel reopens where the reader left it', async () => {
   }
 });
 
+test('a channel that gained more than a page while away opens at its first unread message', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => false,
+  });
+  const channel = await busyChannel(200, 180);
+  const restore = layOutLists();
+  try {
+    const view = await setup(channel.override, false);
+    await ui.screen.findByText('Message 200');
+    // Twenty unread fit the anchored page, which reaches the newest row.
+    assert.deepEqual(
+      [heldSequences()[0], heldSequences().at(-1)],
+      ['171', '200'],
+    );
+    let scroller = ui.screen.getByLabelText('Message history');
+    scroller.scrollTop = 500;
+    ui.fireEvent.scroll(scroller);
+    view.toggleChat();
+    await ui.waitFor(() =>
+      assert.equal(ui.screen.queryByLabelText('Message history'), null),
+    );
+    // Sixty more arrive: the newest page no longer continues the held rows,
+    // so the saved row and the first unread one would not survive the tail
+    // read a resumed window takes.
+    await channel.arrive(Array<'other'>(60).fill('other'));
+    await ui.waitFor(
+      () => assert.ok(ui.screen.getAllByLabelText('80 unread').length),
+      { timeout: 5_000 },
+    );
+    const reads = channel.history.length;
+    view.toggleChat();
+    scroller = await ui.screen.findByLabelText('Message history');
+    await ui.screen.findByText('Message 220');
+    assert.deepEqual(
+      [
+        ...new Set(
+          channel.history
+            .slice(reads)
+            .map((action) =>
+              action.action === 'history' ? action.before : '',
+            ),
+        ),
+      ],
+      ['221'],
+    );
+    assert.deepEqual(
+      [heldSequences()[0], heldSequences().at(-1)],
+      ['171', '220'],
+    );
+    const rows = [
+      ...document.querySelectorAll<HTMLElement>('.chat-divider, .chat-message'),
+    ];
+    const divider = rows.findIndex((row) =>
+      row.classList.contains('chat-divider'),
+    );
+    assert.equal(rows[divider + 1]?.dataset.sequence, '181');
+    ui.screen.getByRole('button', { name: 'Load newer messages' });
+  } finally {
+    restore();
+  }
+});
+
 test('the jump control counts messages from others that arrived while scrolled up', async () => {
   Object.defineProperty(document, 'hasFocus', {
     configurable: true,

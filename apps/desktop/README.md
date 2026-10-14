@@ -960,7 +960,9 @@ appears when it has focus. A conversation holds at most 400 messages, fewer
 when they are long: paging further back drops the newest ones, after which the
 list ends in "Load newer messages", and new messages drop the oldest. Switching
 to another channel or tab and back reopens a channel at the message the reader
-left it on. `book/20-desktop.qmd` describes the history reads behind this.
+left it on, or at the first unread message when more than a page of messages
+arrived in between. `book/20-desktop.qmd` describes the history reads behind
+this.
 
 Saved work that has not finished sits above the conversation in a bounded
 "Needs attention" section with the per-operation rows and their verbs; once the

@@ -4,6 +4,7 @@ import type { TeamInbox } from './inbox-service';
 import {
   HISTORY_WINDOW,
   mergeHistoryPage,
+  textBytes,
   type HistoryPlacement,
   type HistoryWindow,
   type WindowLimits,
@@ -225,11 +226,7 @@ export class ChatHistoryCache {
       verification: readonlyMap(result.verification),
     });
     const bytes = history.messages.reduce(
-      (sum, message) =>
-        sum +
-        (message.content.kind === 'text'
-          ? new TextEncoder().encode(message.content.text).length
-          : 0),
+      (sum, message) => sum + textBytes(message),
       0,
     );
     this.entries.delete(binding);

@@ -17,7 +17,8 @@ const REVEAL_OFFSET = 0.3;
  *
  * While the reader is away from the bottom, the list keeps the first row on
  * screen where it was when rows above it change: an older page lands above
- * it, or the window drops rows from its oldest end.
+ * it, or the window drops rows from its oldest end. When that row is itself
+ * dropped, the oldest row kept takes the top of the list.
  */
 export function useChatViewport(
   messages: readonly ChatMessage[],
@@ -74,6 +75,18 @@ export function useChatViewport(
       position.offset;
     return true;
   }, []);
+  /**
+   * Keeps the first row on screen where it was after the window dropped rows
+   * from its oldest end. When that row was among them, the oldest row kept,
+   * which followed it, takes the top of the list instead.
+   */
+  const keepTrimmed = useCallback(
+    (rows: readonly ChatMessage[]) => {
+      if (!keep(measured.current) && rows[0])
+        keep({ message: rows[0].id, offset: 0 });
+    },
+    [keep],
+  );
   /**
    * Where the reader is leaving the list: the first row on screen, or `null`
    * at the bottom, where the list opens anyway.
@@ -164,7 +177,7 @@ export function useChatViewport(
         // extended it may have dropped rows from the oldest end.
         const tail = placed.at(-1)?.id;
         if (!messages.some((m) => m.id === tail)) element.scrollTop = 0;
-        else keep(measured.current);
+        else keepTrimmed(messages);
       }
     } else if (resumed !== null && keep(resumed)) {
       // Opened where the reader left the held rows.
@@ -173,10 +186,10 @@ export function useChatViewport(
       element.scrollTop = element.scrollHeight;
     } else if (previous[0]?.id !== messages[0]?.id) {
       // Rows left or joined the oldest end above the reader.
-      keep(measured.current);
+      keepTrimmed(messages);
     }
     onScroll();
-  }, [messages, pendingKey, onScroll, reveal, keep]);
+  }, [messages, pendingKey, onScroll, reveal, keep, keepTrimmed]);
   return {
     scroller,
     atBottom,

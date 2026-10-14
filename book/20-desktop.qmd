@@ -388,7 +388,9 @@ keyboard focus, and drawn always in a webview without
 `IntersectionObserver`. While the reader is away from the bottom, the list
 holds the first row on screen at its offset whenever rows above it change,
 by measuring that row rather than the list's height, so a page that adds
-rows above and trims rows below does not move what is on screen.
+rows above and trims rows below does not move what is on screen. When the
+trim at the oldest end removes that row itself, the oldest row kept takes
+the top of the list.
 
 Each channel's window is a sliding window of at most 400 rows and 3 MiB of
 message text. A page that takes it past either bound trims the held rows
@@ -415,9 +417,12 @@ The cache entry also keeps where the reader left the channel: the first
 message row on screen and its offset, or nothing when the list was at its
 newest end. A thread that mounts on a window still holding that row opens
 there instead of at the bottom, and keeps a detached window rather than
-replacing it with the newest page. With unread messages it resumes only
-when the window also holds the first unread message; otherwise it opens
-at the first unread message as described above. The position is dropped
+replacing it with the newest page. A window that is not detached reads
+the newest page as it opens, so it resumes only while the published head
+is at most one page past its newest row; a newest page that does not
+continue the held rows would replace them. With unread messages it
+resumes only when the window also holds the first unread message;
+otherwise it opens at the first unread message as described above. The position is dropped
 with the window when the entry is evicted or its binding retired.
 
 ## Vault edits

@@ -104,6 +104,15 @@ test('rows that leave the oldest end above the reader leave the rows on screen i
   assert.deepEqual(viewport.position(), { message: id(113), offset: -30 });
 });
 
+test('when the row on screen leaves the oldest end, the oldest row kept takes the top', () => {
+  // Row 103 is first on screen; twenty new rows push out the oldest twenty.
+  const list = mount(rows(101, 150), 230);
+  ui.act(() => viewport.capture('incremental'));
+  list.show(rows(121, 170));
+  assert.equal(list.scroller.scrollTop, 0);
+  assert.deepEqual(viewport.position(), { message: id(121), offset: 0 });
+});
+
 test('a newer page keeps the row on screen when it extends the window, and starts at the top when it replaces it', () => {
   const list = mount(rows(101, 150), 2_530);
   ui.act(() => viewport.capture('newer'));

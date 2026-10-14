@@ -3,6 +3,7 @@ import type { KeyboardEvent, ReactNode, Ref } from 'react';
 import { Icon } from '../components';
 import { ChatAlerts, failureAlert, type ChatAlert } from './chat-alerts';
 import type { ChatChannel, ChatMessage } from '../chat-contract';
+import { CHAT_PAGE_ROWS } from '../chat-limits';
 import type { HistoryWindow } from './conversation-model';
 import type { TrackedOperation } from './operations';
 import { useChatConversationContext } from './conversation-provider';
@@ -123,15 +124,25 @@ export function ChatThread({
   // Also read once: the held window and where the reader left it. The thread
   // resumes there when the window still holds that row and, with unread
   // messages, also holds the first of them, which an anchored open would
-  // otherwise read.
+  // otherwise read. A window that is not detached also reads the newest page
+  // on open, which replaces it unless that page continues its tail: it
+  // resumes only while the published head is at most a page past the tail.
   const [resume] = useState(() => {
     const saved = listPosition(channel.id);
-    const held = history?.channel === channel.id ? history.messages : [];
+    const window = history?.channel === channel.id ? history : null;
+    const held = window?.messages ?? [];
     if (!saved || !held.some((m) => m.id === saved.message)) return null;
-    if (readPoint === null || unread === null || BigInt(unread) === 0n)
-      return saved;
     const first = held[0];
     const last = held.at(-1);
+    if (
+      !window?.detached &&
+      (position === null ||
+        !last ||
+        BigInt(position) - BigInt(last.sequence) > BigInt(CHAT_PAGE_ROWS))
+    )
+      return null;
+    if (readPoint === null || unread === null || BigInt(unread) === 0n)
+      return saved;
     return first &&
       last &&
       BigInt(first.sequence) <= BigInt(readPoint) + 1n &&
