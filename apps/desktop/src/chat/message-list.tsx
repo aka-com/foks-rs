@@ -11,16 +11,23 @@ import { Button, Icon } from '../components';
 import type { ChatChannel } from '../chat-contract';
 import { plural } from '../model';
 import { useChatConversationContext } from './conversation-provider';
-import { HistoryRow } from './message-row';
+import { HistoryRow, MessageRow } from './message-row';
 import { OutgoingRow } from './outgoing-row';
-import { PendingRow } from './pending-row';
-import { MessageTabOrderContext, MessageText } from './message-text';
 import {
-  RowTabStopContext,
-  useMessageActions,
-  type RowTabStop,
-} from './message-actions';
-import { messageClock, messageDayKey, messageTime } from './presentation';
+  DeliveryStatus,
+  OperationFooter,
+  operationDetails,
+  useOperationRequests,
+} from './pending-row';
+import { operationDelivery } from './delivery';
+import { MessageText } from './message-text';
+import { RowTabStopContext, type RowTabStop } from './message-actions';
+import {
+  channelTitle,
+  messageClock,
+  messageDayKey,
+  messageTime,
+} from './presentation';
 import { splitThreadRows, type ThreadRow } from './thread-rows';
 import {
   audienceSentence,
@@ -378,6 +385,7 @@ export function MessageList({
             message={row.message}
             grouped={row.grouped}
             avatarName={row.avatarName}
+            place={channelTitle(channel)}
           />
         );
       case 'operation':
@@ -385,6 +393,7 @@ export function MessageList({
           <OperationRow
             key={row.key}
             row={row}
+            place={channelTitle(channel)}
             onChange={() => {
               void refreshPending();
               void load();
@@ -528,55 +537,61 @@ export function MessageList({
   );
 }
 
-/** A tracked operation that no outgoing message of this device carries. */
+/**
+ * A tracked operation that no outgoing message of this device carries, such
+ * as one restored from the agent's ledger after a restart. It is drawn as the
+ * reader's own message with the delivery slot an outgoing message has; it has
+ * no time, because the ledger records none.
+ */
 function OperationRow({
   row,
+  place,
   onChange,
 }: {
   row: Extract<ThreadRow, { kind: 'operation' }>;
+  /** The channel's title, which a rejection reason names. */
+  place: string;
   onChange: () => void;
 }): ReactNode {
   const { bridge, storeId, mentions } = useChatConversationContext();
   const op = row.operation;
-  const {
-    open,
-    onContextMenu,
-    onKeyDown,
-    onFocus,
-    current,
-    tabIndex,
-    actions,
-  } = useMessageActions(
-    {
-      rowKey: row.key,
-      label: 'Actions for your message',
-      text: op.text || undefined,
-    },
-    bridge,
-  );
+  const state = operationDelivery(op);
+  const requests = useOperationRequests(storeId, op, onChange);
   return (
-    <article
-      className={open ? 'chat-message actions-open' : 'chat-message'}
-      data-row={row.key}
-      data-operation={op.id}
-      tabIndex={tabIndex}
-      onContextMenu={onContextMenu}
-      onKeyDown={onKeyDown}
-      onFocus={onFocus}
+    <MessageRow
+      className="chat-outgoing chat-operation"
+      grouped={false}
+      avatarName={row.avatarName}
+      author="You"
+      own
+      timeTitle={null}
+      attributes={{ 'data-operation': op.id }}
+      actions={{
+        rowKey: row.key,
+        text: op.text || undefined,
+        delivery: operationDetails(op),
+      }}
+      status={<DeliveryStatus state={state} kind={op.kind} />}
+      footer={
+        <OperationFooter
+          op={op}
+          state={state}
+          place={place}
+          requests={requests}
+        />
+      }
     >
-      {op.text && (
-        <MessageTabOrderContext.Provider value={current}>
-          <MessageText text={op.text} actions={bridge} mentions={mentions} />
-        </MessageTabOrderContext.Provider>
+      {op.text ? (
+        <MessageText text={op.text} actions={bridge} mentions={mentions} />
+      ) : (
+        op.text === undefined && (
+          <p className="chat-unsupported">
+            Saved text is unavailable in this view. Checking delivery uses the
+            same operation ID and does not send it again.
+          </p>
+        )
       )}
-      <PendingRow
-        storeId={storeId}
-        operation={op}
-        channelName={undefined}
-        onChange={onChange}
-      />
-      {actions}
-    </article>
+    </MessageRow>
   );
 }
 

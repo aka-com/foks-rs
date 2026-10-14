@@ -9,6 +9,7 @@ import {
 import type { RefObject } from 'react';
 import type { ChatMessage } from '../chat-contract';
 import { normalizeCommandError } from '../bridge';
+import { chatErrorText } from './error-copy';
 
 /** How long a row has to stay on screen before it counts as read. */
 export const SEEN_DWELL_MS = 500;
@@ -103,7 +104,7 @@ export function useChatReadIntent(
         if (disposed.current) return;
         const typed = normalizeCommandError(cause);
         if (typed.code === 'cancelled' || typed.retryable) return;
-        setReadFailure({ channel, message: typed.message });
+        setReadFailure({ channel, message: chatErrorText(typed) });
       })
       .finally(() => {
         if (markingThrough.current === sequence) markingThrough.current = '0';

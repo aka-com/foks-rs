@@ -826,15 +826,30 @@ test('the failures mock scenario shows ledger operations and a saved-message loa
         { timeout: 3_000 },
       );
       await ui.screen.findByText('Can someone confirm the 2.4 tag?');
-      await ui.screen.findByText(/Delivery unconfirmed/);
+      await ui.screen.findByText('Couldn’t confirm delivery');
       const rejected = (
         await ui.screen.findByText('Incident summary for this morning.')
       ).closest<HTMLElement>('article')!;
       ui.fireEvent.click(
         ui.within(rejected).getByRole('button', { name: 'Retry' }),
       );
-      await ui.screen.findByText(
-        'The server rejected this message (status 12006).',
+      // The rejection reads as its reason, under the vocabulary's label; the
+      // numeric code is only in Details.
+      await ui
+        .within(rejected)
+        .findByText(/^New messages arrived in #\S+ first\.$/);
+      assert.ok(ui.within(rejected).getByText('Couldn’t post'));
+      assert.doesNotMatch(rejected.textContent ?? '', /12006/);
+      ui.fireEvent.click(
+        ui.within(rejected).getByRole('button', { name: 'Message details' }),
+      );
+      const details = await ui.screen.findByRole('dialog', {
+        name: 'Message details',
+      });
+      assert.ok(ui.within(details).getByText('12006'));
+      assert.ok(ui.within(details).getByText(/STATUS_RT_MSG_ORDER_ERROR/));
+      ui.fireEvent.click(
+        ui.within(details).getByRole('button', { name: 'Close details' }),
       );
       await ui.waitFor(() =>
         assert.equal(
@@ -1500,6 +1515,60 @@ test('reopening recovers retained pending text without attempting the send', asy
   }));
   await ui.screen.findByText('Recovered original pending text');
   assert.equal(attempts, 0);
+});
+
+test('a restored operation is drawn as your message, with its ID only in Details', async () => {
+  let seeded = false;
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      if (action.action === 'pending' && !seeded) {
+        seeded = true;
+        const channels = await base.chat(store, { action: 'channels' }, view);
+        if (channels.result.kind !== 'channels') throw new Error('fixture');
+        await base.chat(
+          store,
+          {
+            action: 'prepare-message',
+            submission: 'ad'.repeat(16),
+            channel: channels.result.channels[0].id,
+            text: 'Restored from the ledger',
+          },
+          view,
+        );
+      }
+      return base.chat(store, action, view);
+    },
+  }));
+  const row = (
+    await ui.screen.findByText('Restored from the ledger')
+  ).closest<HTMLElement>('article')!;
+  const id = row.dataset.operation!;
+  assert.match(id, /^[0-9a-f]{32}$/);
+  // The same row an outgoing message has: avatar, author and the state.
+  assert.ok(row.querySelector('.chat-avatar'));
+  assert.equal(row.querySelector('.chat-sender')?.textContent, 'You');
+  assert.equal(ui.within(row).getByRole('status').textContent, 'Not sent');
+  assert.ok(
+    ui
+      .within(row)
+      .getByText(
+        'Saved on this device. The message has not reached the server.',
+      ),
+  );
+  assert.ok(ui.within(row).getByRole('button', { name: 'Retry' }));
+  // No disclosure with a shortened ID or the raw ledger state.
+  assert.equal(row.querySelector('details'), null);
+  assert.doesNotMatch(row.textContent ?? '', /prepared|[0-9a-f]{8}/);
+  ui.fireEvent.click(
+    ui.within(row).getByRole('button', { name: 'Message details' }),
+  );
+  const details = await ui.screen.findByRole('dialog', {
+    name: 'Message details',
+  });
+  assert.ok(ui.within(details).getByText(id));
+  assert.ok(ui.within(details).getByText('prepared'));
+  assert.ok(ui.within(details).getByRole('button', { name: 'Copy ID' }));
 });
 
 test('channel creation opens in a sheet, selects the new channel, and needs no manual cleanup', async () => {

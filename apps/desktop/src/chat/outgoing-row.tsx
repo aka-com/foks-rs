@@ -6,33 +6,38 @@ import { useChatSendService } from './send-provider';
 import {
   cleanupErrorOf,
   operationOf,
-  phaseOf,
   running,
   type OutgoingMessage,
-  type SendPhase,
 } from './send/outgoing';
 import { MessageText } from './message-text';
 import { failure } from './actions';
 import { messageTime, relativeMessageTime } from './presentation';
+import {
+  deliveryExplanation,
+  outgoingDelivery,
+  rejectionReason,
+} from './delivery';
+import { DeliveryStatus, operationDetails } from './pending-row';
 
-const statusLabels: Partial<Record<SendPhase, string>> = {
-  queued: 'Queued',
-  'not-sent': 'Not sent',
-  unconfirmed: 'Delivery unconfirmed',
-  paused: 'Waiting for access',
-  cancelled: 'Cancelled',
-};
+/**
+ * A message this session sent or is sending, drawn as the reader's own
+ * message with its delivery state (`outgoingDelivery`) after the time and,
+ * below the text, what happened and the actions the state allows.
+ */
 export function OutgoingRow({
   rowKey,
   message,
   grouped = false,
   avatarName,
+  place,
 }: {
   /** The row's key in the list's toolbar tab stop. */
   rowKey?: string;
   message: OutgoingMessage;
   grouped?: boolean;
   avatarName: string;
+  /** The channel's title, which a rejection reason names. */
+  place?: string;
 }) {
   const { bridge, storeId, mentions } = useChatConversationContext();
   const service = useChatSendService();
@@ -46,15 +51,21 @@ export function OutgoingRow({
       setError(failure(cause));
     }
   };
-  const phase = phaseOf(message);
+  const state = outgoingDelivery(message);
   const op = operationOf(message);
   const busy = running(message);
   const cleanupError = cleanupErrorOf(message);
-  const sent = phase === 'sent';
-  const sending = ['saving', 'preparing', 'sending'].includes(phase);
+  const sent = state === null;
+  const sending = state === 'sending';
   // Waiting behind another message of this channel, and held in memory only.
-  const queued = phase === 'queued';
-  const statusLabel = statusLabels[phase];
+  const queued = state === 'queued';
+  // A rejection is stated as its reason; otherwise a failed request's error
+  // says what happened, and the state's explanation stands in without one.
+  const line =
+    state === 'rejected' && op
+      ? rejectionReason(op.rejection_code, op.kind, place)
+      : message.error ||
+        (state === null || sending || queued ? '' : deliveryExplanation(state));
   const actions = service.outgoingActions(storeId, message);
   const createdAt = String(message.createdAt);
   return (
@@ -74,27 +85,20 @@ export function OutgoingRow({
         'data-submission': message.submission,
         'data-operation': op?.id,
       }}
-      // Copy only: the message is not in history yet, so it has no sequence
-      // or server time to detail, and quoting your own unsent text is not
-      // offered.
-      actions={{ rowKey, text: message.text }}
+      // The message is not in history yet, so it has no sequence or server
+      // time to detail; Details lists its operation once the agent prepared
+      // one. Quoting your own unsent text is not offered.
+      actions={{
+        rowKey,
+        text: message.text,
+        delivery: op && !sent ? operationDetails(op) : undefined,
+      }}
       status={
         sending ? (
-          <span
-            className="chat-send-spinner"
-            role="status"
-            aria-label="Sending"
-          />
+          <DeliveryStatus state={state} />
         ) : (
           <>
-            {statusLabel && (
-              <span
-                className={queued ? 'offscreen' : 'chat-send-state'}
-                role="status"
-              >
-                {statusLabel}
-              </span>
-            )}
+            <DeliveryStatus state={state} kind={op?.kind} />
             {actions.edit && (
               <button
                 type="button"
@@ -108,10 +112,9 @@ export function OutgoingRow({
         )
       }
       footer={
-        !sending &&
-        (message.error || actions.retry || cleanupError || error) ? (
+        !sending && (line || actions.retry || cleanupError || error) ? (
           <div className="chat-send-status">
-            {message.error && <span>{message.error}</span>}
+            {line && <span>{line}</span>}
             {actions.retry && (
               <Button size="sm" disabled={busy} onClick={() => void run(false)}>
                 {actions.retry === 'check' ? 'Check again' : 'Retry'}

@@ -11,6 +11,7 @@ import type { AgentSnapshot, TeamStore } from '../model';
 import { failure, preparationCanChange, submissionId } from './actions';
 import { chatClient, integrity, sameScope } from './client';
 import { accessChanged } from './errors';
+import { chatErrorText } from './error-copy';
 import type { ChatInboxService } from './inbox-service';
 import { freezeDto } from './snapshots';
 import {
@@ -498,7 +499,7 @@ export class ChannelCreationController {
         REVIEW_CODES.has(failed.code)
           ? 'review'
           : 'unresolved';
-      record.error = failed.message;
+      record.error = chatErrorText(failed);
       // A preparation the agent refused on its content can be changed and
       // sent again; one it may have taken cannot, and is recovered as it
       // stands. That includes a later refusal of a request that never

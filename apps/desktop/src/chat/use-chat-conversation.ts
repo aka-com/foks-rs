@@ -23,6 +23,7 @@ import {
   type ChatWorkPriority,
 } from './client';
 import { accessChanged } from './errors';
+import { chatErrorText } from './error-copy';
 import { useChatSends } from './send-provider';
 import { markChannelRead } from './mark-read';
 import type { HistoryBinding, ListPosition } from './history-cache';
@@ -147,8 +148,8 @@ export function useChatConversation(
           } else if (service.getSnapshot().get(storeId)?.state === 'blocked') {
             cancelHistory();
             owner.current = null;
-            fatal.current = typed.message;
-            setBlocked(typed.message);
+            fatal.current = chatErrorText(typed);
+            setBlocked(fatal.current);
             service.histories.clear(storeId);
           }
           if (typed.code === 'chat-access-denied') service.invalidate(storeId);
@@ -333,7 +334,7 @@ export function useChatConversation(
           )
         : null,
     error:
-      failure?.message ||
+      (failure ? chatErrorText(failure) : '') ||
       (!inbox?.data || inbox?.state === 'unavailable'
         ? (inbox?.error ?? '')
         : ''),

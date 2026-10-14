@@ -51,7 +51,13 @@ export type ThreadRow =
       avatarName: string;
       grouped: boolean;
     }
-  | { kind: 'operation'; key: string; operation: TrackedOperation };
+  | {
+      kind: 'operation';
+      key: string;
+      operation: TrackedOperation;
+      /** The reader's name, which the avatar draws beside "You". */
+      avatarName: string;
+    };
 
 export interface ThreadRowOptions {
   /** The reader's party identifier, or `null` while the scope is unknown. */
@@ -194,6 +200,7 @@ export function threadRows(
         kind: 'operation',
         key: `operation:${operation.id}`,
         operation,
+        avatarName: ownName,
       });
   return rows;
 }

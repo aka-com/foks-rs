@@ -1,6 +1,8 @@
 import { normalizeCommandError } from '../bridge';
+import { chatErrorText } from './error-copy';
+/** What a failed chat request says to the reader (`chatErrorText`). */
 export function failure(error: unknown): string {
-  return normalizeCommandError(error).message;
+  return chatErrorText(normalizeCommandError(error));
 }
 export function preparationCanChange(error: unknown): boolean {
   return [

@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { Band, Button } from '../components';
 import type { Severity } from '../model';
+import type { CommandError } from '../bridge';
+import { chatErrorText } from './error-copy';
 
 export interface ChatAlertAction {
   label: string;
@@ -23,7 +25,7 @@ const severityOrder: Record<Severity, number> = { info: 0, warn: 1, crit: 2 };
  * catalog that has not been read yet is a prompt; anything else is an error.
  */
 export function failureAlert(
-  failure: { code: string; message: string } | null | undefined,
+  failure: Pick<CommandError, 'code' | 'message' | 'origin'> | null | undefined,
   team: string | undefined,
   actions: readonly ChatAlertAction[],
 ): ChatAlert {
@@ -40,7 +42,7 @@ export function failureAlert(
     case 'catalog-required':
       return { severity: 'warn', message: failure.message, actions };
     default:
-      return { severity: 'crit', message: failure.message, actions };
+      return { severity: 'crit', message: chatErrorText(failure), actions };
   }
 }
 

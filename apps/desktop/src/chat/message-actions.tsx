@@ -25,6 +25,8 @@ import {
 import { useOptionalToast } from '/kit/toasts';
 import { mentionKey, type ChatMentions } from './mentions';
 import { messageClock, messageTimeWithSeconds } from './presentation';
+import type { ChatOperation } from '../chat-contract';
+import { rejectionStatusName } from './delivery';
 
 /** What Details lists for a message the history window holds. */
 export interface MessageDetails {
@@ -51,6 +53,20 @@ export interface MessageDetails {
   incomplete: boolean;
 }
 
+/**
+ * What Details lists for a message history does not hold yet: the tracked
+ * operation behind it. This is the only place the operation ID and a numeric
+ * rejection code appear; the row states them in words.
+ */
+export interface DeliveryDetails {
+  operation: string;
+  kind: ChatOperation['kind'];
+  state: ChatOperation['state'];
+  /** The status request after a failed one has not answered yet. */
+  statusUnknown: boolean;
+  rejectionCode: number | null;
+}
+
 export interface MessageActionOptions {
   /** The row's key in the list's {@link RowTabStop}. */
   rowKey?: string;
@@ -62,6 +78,8 @@ export interface MessageActionOptions {
   onQuote?: () => void;
   /** Omitted for a message history does not hold yet. */
   details?: MessageDetails;
+  /** The tracked operation of a message history does not hold yet. */
+  delivery?: DeliveryDetails;
 }
 
 /**
@@ -156,6 +174,7 @@ export function useMessageActions(
     text,
     onQuote,
     details,
+    delivery,
   }: MessageActionOptions,
   bridge: Pick<Bridge, 'copyText'>,
 ): {
@@ -240,7 +259,7 @@ export function useMessageActions(
       run: onQuote,
       restore: false,
     });
-  if (details)
+  if (details || delivery)
     tools.push({
       label: 'Message details',
       icon: 'info',
@@ -250,6 +269,11 @@ export function useMessageActions(
       popup: true,
     });
   const tabStop = Math.min(current, tools.length - 1);
+  const closeDetails = (restore: boolean) => {
+    setDetailsOpen(false);
+    if (restore && !anyDialogOpen())
+      detailsButton.current?.focus({ preventScroll: true });
+  };
 
   const available = tools.length > 0;
   const actions = available ? (
@@ -327,11 +351,20 @@ export function useMessageActions(
         <DetailsPopover
           details={details}
           anchor={detailsButton}
-          onClose={(restore) => {
-            setDetailsOpen(false);
-            if (restore && !anyDialogOpen())
-              detailsButton.current?.focus({ preventScroll: true });
-          }}
+          onClose={closeDetails}
+        />
+      )}
+      {detailsOpen && !details && delivery && (
+        <DeliveryDetailsPopover
+          details={delivery}
+          anchor={detailsButton}
+          onCopy={() =>
+            void bridge
+              .copyText(delivery.operation)
+              .then(() => toasts?.show('Operation ID copied'))
+              .catch(() => toasts?.show('Could not copy', { tone: 'warning' }))
+          }
+          onClose={closeDetails}
         />
       )}
     </>
@@ -463,6 +496,89 @@ function DetailsPopover({
           <Icon name={check.icon} />
           <span>{check.text}</span>
         </p>
+      </div>
+    </Popover>
+  );
+}
+
+/**
+ * The tracked operation behind an unsent row: its full ID with Copy, what it
+ * creates, its state in the agent's ledger and, for a rejection, the server's
+ * status code and generated status name.
+ */
+function DeliveryDetailsPopover({
+  details,
+  anchor,
+  onCopy,
+  onClose,
+}: {
+  details: DeliveryDetails;
+  anchor: RefObject<HTMLButtonElement | null>;
+  onCopy: () => void;
+  /** `restore` is set when focus should return to the Details button. */
+  onClose: (restore: boolean) => void;
+}): ReactNode {
+  const titleId = useId();
+  const close = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    close.current?.focus({ preventScroll: true });
+  }, []);
+  const status = rejectionStatusName(details.rejectionCode);
+  return (
+    <Popover
+      anchorRef={anchor}
+      className="menu-portal chat-details"
+      align="end"
+      onClose={() => onClose(false)}
+    >
+      <div role="dialog" aria-labelledby={titleId}>
+        <div className="chat-details-head">
+          <h3 id={titleId}>Message details</h3>
+          <button
+            type="button"
+            ref={close}
+            aria-label="Close details"
+            title="Close"
+            onClick={() => onClose(true)}
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+        <dl>
+          <div>
+            <dt>Operation</dt>
+            <dd className="chat-details-id">
+              <code>{details.operation}</code>
+              <button type="button" className="chat-edit-link" onClick={onCopy}>
+                Copy ID
+              </button>
+            </dd>
+          </div>
+          <div>
+            <dt>Kind</dt>
+            <dd>
+              {details.kind === 'create-channel'
+                ? 'Channel creation'
+                : 'Message'}
+            </dd>
+          </div>
+          <div>
+            <dt>Ledger state</dt>
+            <dd>
+              {details.state}
+              {details.statusUnknown && <small> (status unknown)</small>}
+            </dd>
+          </div>
+          {details.rejectionCode !== null && (
+            <div>
+              <dt>Server status</dt>
+              <dd>
+                {details.rejectionCode}
+                {status && <small> {status}</small>}
+              </dd>
+            </div>
+          )}
+        </dl>
       </div>
     </Popover>
   );

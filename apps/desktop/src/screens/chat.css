@@ -507,8 +507,22 @@
   font-size: 12.5px;
 }
 .chat-pending-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   font-weight: 600;
   color: var(--ink);
+}
+.chat-pending-title .chat-send-state {
+  font-weight: 500;
+}
+.chat-pending-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
 }
 .chat-pending small {
   font-size: 12px;
@@ -1250,6 +1264,15 @@
 .chat-details dd small {
   color: var(--muted);
 }
+.chat-details dd.chat-details-id {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+.chat-details-id code {
+  font: 12px var(--mono);
+}
 .chat-details-check {
   display: flex;
   align-items: flex-start;
@@ -1330,6 +1353,14 @@
   flex: none;
   font-size: 12px;
   color: var(--faint);
+}
+/* A state that leaves work for the reader: refused or not sent, and
+   unresolved delivery. */
+.chat-send-state.crit {
+  color: var(--danger-ink);
+}
+.chat-send-state.warn {
+  color: var(--amber-strong);
 }
 .chat-message header time {
   font-family: inherit;

@@ -1,6 +1,7 @@
 import type { Bridge, CommandError } from '../bridge';
 import { commandRecovery, normalizeCommandError } from '../bridge';
 import { reportReadinessError } from '../bridge/errors';
+import { chatErrorText } from './error-copy';
 import type { ChatReply, ChatResult, ChatScope } from '../chat-contract';
 import { chatAvailable } from '../model';
 import type { AvailabilityOptions, TeamStore, AgentSnapshot } from '../model';
@@ -457,7 +458,7 @@ export class ChatInboxService {
             ? {
                 ...initial(),
                 state: 'blocked',
-                error: account.blocked.message,
+                error: chatErrorText(account.blocked),
                 failure: account.blocked,
               }
             : initial(),
@@ -656,7 +657,7 @@ export class ChatInboxService {
           {
             ...initial(),
             state: quarantined ? 'blocked' : 'unavailable',
-            error: error.message,
+            error: chatErrorText(error),
             failure: error,
             authorizationRevision: this.snapshot.get(team.store.id)
               ?.authorizationRevision,
@@ -996,7 +997,7 @@ export class ChatInboxService {
         team.store.id,
         {
           ...old,
-          error: error.message,
+          error: chatErrorText(error),
           failure: error,
           stale: true,
         },

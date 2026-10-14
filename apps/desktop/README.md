@@ -1078,7 +1078,8 @@ it. A right-click on the row, the ContextMenu key or Shift+F10 on anything
 focused in it, or Enter on the row itself opens the same actions as a menu;
 Shift+F10 and the toolbar are the keyboard routes in WKWebView on macOS, which
 has no ContextMenu key. Copy message copies the message's
-Markdown source; it is the only action on an unsent or pending message. Quote
+Markdown source. On an unsent or pending message it is joined only by Message
+details, once the agent has prepared an operation for it. Quote
 reply, offered only where the reader can send, writes a quote as Basic text at
 the composer's caret, on a line of its own: a `>` line with the author in bold
 (as `@name` when the name is on the team's roster) and the message's clock
@@ -1097,6 +1098,24 @@ message types that the server does not accept, so no action is drawn for them.
 Copy link waits for a message identifier that means the same message to another
 member: a store reference is local to this Mac, and no URI scheme routes a link
 back into the app.
+
+Your own unsent work is drawn as your message, with avatar and author, whether
+it is an outgoing message of this session or a tracked operation restored from
+the agent's ledger; a restored operation has no time, because `ChatOperation`
+carries none. `delivery.ts` holds the one state vocabulary all of these rows
+use: Sending, Queued, Not sent, Checking delivery, Couldn't confirm delivery,
+Couldn't post (Couldn't create for a channel), Cancelled and Waiting for
+access. The state follows the header's time, and a line under the text says
+what happened, with only the actions the state allows. A rejection reads as
+its reason ("New messages arrived in #general first."), mapped from the closed
+set of codes `definite_rejection` in foks-client treats as refused before
+commit (1013, 1030, 12002, 12003, 12005 and 12006). The numeric code, its
+generated status name, the full operation ID with Copy ID, and the ledger
+state appear only in Message details. A failure the agent returns with a
+`chat-*` code is shown with the copy table in `error-copy.ts` rather than the
+agent's message, which names the failing check in client-library terms; the
+agent's text stays on the error object and the code in the diagnostic timing
+log. Failures the desktop raises itself keep their own message.
 
 A channel with unread messages opens at the first of them, with the NEW divider
 30% down the list and the ten messages before it above, rather than at the

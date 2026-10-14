@@ -13,12 +13,15 @@ import { useChatConversationContext } from './conversation-provider';
 /**
  * The structure every message of a conversation shares, whether history
  * holds it or it is still on its way: the avatar, a header with the author
- * and the time, the content, and a footer for a delivery status.
+ * and the time, the content, and a footer for a delivery status. History
+ * rows, outgoing messages and tracked operations all draw through it, in the
+ * one delivery vocabulary of `delivery.ts`.
  *
  * Every row draws its time with {@link messageClock}; a relative age, if any,
- * belongs in `timeTitle`. A grouped row continues the previous message's run:
- * its avatar, author and time are kept for screen readers only, and anything
- * in `status` stays visible. The row's message actions
+ * belongs in `timeTitle`. A tracked operation restored from the agent's
+ * ledger has no time, since `ChatOperation` carries none. A grouped row
+ * continues the previous message's run: its avatar, author and time are kept
+ * for screen readers only, and anything in `status` stays visible. The row's message actions
  * ({@link useMessageActions}) draw a toolbar over its top corner. The row is
  * focusable and carries its key in the list as `data-row`; only the list's
  * current row is in the tab order, with the links in its content.
@@ -45,13 +48,19 @@ export function MessageRow({
   author: string;
   own: boolean;
   authorTitle?: string;
-  /** The row's time in milliseconds since the epoch. */
-  at: string;
+  /** The row's time in milliseconds since the epoch, if it has one. */
+  at?: string;
   /** The time's tooltip, or `null` to draw no time, as while sending. */
   timeTitle: string | null;
-  /** Shown after the time: a sending spinner, a state, an action. */
+  /**
+   * The delivery slot's state, shown after the time: a sending spinner, a
+   * `deliveryLabel`, an action.
+   */
   status?: ReactNode;
-  /** Shown below the content: a delivery failure and its actions. */
+  /**
+   * The delivery slot's line below the content: what happened and the actions
+   * the state allows.
+   */
   footer?: ReactNode;
   attributes?: Partial<Record<`data-${string}`, string>>;
   /** What the row's message actions offer; none without it. */
@@ -69,7 +78,9 @@ export function MessageRow({
     actions: tools,
   } = useMessageActions(
     {
-      label: `Actions for ${own ? 'your message' : `${author}'s message`} at ${messageClock(at)}`,
+      label: `Actions for ${own ? 'your message' : `${author}'s message`}${
+        at === undefined ? '' : ` at ${messageClock(at)}`
+      }`,
       ...actions,
     },
     bridge,
@@ -86,7 +97,7 @@ export function MessageRow({
         .join(' ')}
       data-row={actions.rowKey}
       {...attributes}
-      title={grouped ? messageTime(at) : undefined}
+      title={grouped && at !== undefined ? messageTime(at) : undefined}
       tabIndex={tabIndex}
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
@@ -104,7 +115,7 @@ export function MessageRow({
             >
               {author}
             </span>
-            {timeTitle !== null && (
+            {timeTitle !== null && at !== undefined && (
               <time
                 className={grouped ? 'offscreen' : undefined}
                 dateTime={messageDate(at)?.toISOString()}

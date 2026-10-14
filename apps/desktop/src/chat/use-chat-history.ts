@@ -1,5 +1,6 @@
 import { normalizeCommandError } from '../bridge';
 import type { CommandError } from '../bridge';
+import { chatErrorText } from './error-copy';
 import {
   useCallback,
   useEffect,
@@ -192,7 +193,7 @@ export function useChatHistory({
     (cause: unknown) => setFailure(cause ? normalizeCommandError(cause) : null),
     [],
   );
-  const error = failure?.message ?? '';
+  const error = failure ? chatErrorText(failure) : '';
   // The read in flight, for a control that shows which one is loading.
   const [loading, setLoading] = useState<HistoryLoad | null>(null);
   const busy = loading !== null;
