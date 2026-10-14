@@ -87,6 +87,11 @@ test('agent PIN refusals are recognized with their remaining attempts', () => {
     securityKeyPinRefusalText({ kind: 'blocked' }),
     /^The PIN is blocked\. Unblock it with the PUK/,
   );
+  // Unblock PIN… is on a server's page, which Settings lists under Account.
+  assert.match(
+    securityKeyPinRefusalText({ kind: 'blocked' }),
+    /Settings › Account .*Unblock PIN… under Security keys/,
+  );
 });
 
 test('a refused or malformed PIN is not reported as a request for the PIN', () => {

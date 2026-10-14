@@ -1558,6 +1558,7 @@
 
 .first-run-main .account-form .fr .v {
   display: flex;
+  flex-wrap: wrap;
   flex: 1;
   min-width: 0;
 }
@@ -1928,6 +1929,12 @@
 .inset .fr .v small.pin-note.crit {
   color: var(--danger-text);
   font-weight: 600;
+}
+/* The first-run form's value cell is a flex row: the note takes a line of
+   its own under the full-width input. */
+.first-run-main .account-form .fr .v small.pin-note {
+  flex-basis: 100%;
+  padding: 0 14px 6px;
 }
 .pw-meter {
   display: inline-flex;

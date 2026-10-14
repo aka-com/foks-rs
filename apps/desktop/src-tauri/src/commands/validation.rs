@@ -227,9 +227,11 @@ pub(super) fn yubi_retry_configuration(
     pin_attempts: u8,
     puk_attempts: u8,
 ) -> Result<YubiRetryConfiguration, AgentError> {
-    if pin_attempts == 0 || puk_attempts == 0 {
+    // `foks_yubi::PinRetryConfiguration::new` accepts one to fifteen attempts.
+    let allowed = |attempts: u8| (1..=15).contains(&attempts);
+    if !allowed(pin_attempts) || !allowed(puk_attempts) {
         return Err(invalid_request(
-            "PIN and unlock-code retry counts must be greater than zero.",
+            "PIN and unlock-code retry counts must be between 1 and 15.",
         ));
     }
     Ok(YubiRetryConfiguration {

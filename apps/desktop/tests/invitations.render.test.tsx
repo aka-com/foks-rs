@@ -535,6 +535,12 @@ test('Invite new user keeps a PIN refusal and states the attempts left', async (
     r.getByLabelText('Security key PIN').getAttribute('aria-describedby'),
     note.id,
   );
+  // The refused PIN is cleared, so it cannot be sent again unchanged.
+  assert.equal(
+    (r.getByLabelText('Security key PIN') as HTMLInputElement).value,
+    '',
+  );
+  assert.equal(finish().disabled, true);
 
   ui.fireEvent.change(r.getByLabelText('Security key PIN'), {
     target: { value: '222222' },
@@ -599,6 +605,74 @@ test('a resumed hardware-key request can receive its PIN on step one', async () 
   ui.fireEvent.click(r.getByText('Submit'));
   await ui.waitFor(() => assert.deepEqual(received, [null, '123456']));
   await ui.waitFor(() => assert.equal(r.queryByText('Submit'), null));
+});
+
+test('a refused PIN on a resumed request is cleared and not sent again', async () => {
+  const { InvitationPanel } = (await vite.ssrLoadModule(
+    '/src/components/invitation-panel.tsx',
+  )) as typeof import('../src/components/invitation-panel');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const received: Array<string | null> = [];
+  const operation = { operation_id: 'e'.repeat(32), state: 'prepared' };
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (
+      _p: string,
+      _a: string,
+      action: InvitationAction,
+      pin: string | null,
+    ) => {
+      if (action.action === 'list') return [operation];
+      received.push(pin);
+      if (!pin) return { ...operation, hardware_required: true };
+      throw {
+        code: 'operation-failed',
+        message: 'Hardware key PIN was rejected; 1 attempt(s) remain',
+        retryable: false,
+        ambiguous: false,
+        fatal: false,
+      };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(InvitationPanel, {
+        bridge,
+        profile: 'local',
+        account: 'work',
+        presentation,
+        onComplete: () => {},
+      }),
+    ),
+  );
+  ui.fireEvent.click(r.getByText('Resume a pending request'));
+  await ui.waitFor(() => assert.ok(r.getByText('Submit')));
+  ui.fireEvent.click(r.getByText('Submit'));
+  await ui.waitFor(() => assert.ok(r.getByLabelText('Security key PIN')));
+  ui.fireEvent.change(r.getByLabelText('Security key PIN'), {
+    target: { value: '111111' },
+  });
+  ui.fireEvent.click(r.getByText('Submit'));
+  await ui.waitFor(() =>
+    assert.equal(
+      r.getByRole('alert').textContent,
+      'Hardware key PIN was rejected; 1 attempt(s) remain',
+    ),
+  );
+  assert.ok(r.getByText(/^1 attempt left\. Another incorrect PIN blocks/));
+  assert.equal(
+    (r.getByLabelText('Security key PIN') as HTMLInputElement).value,
+    '',
+  );
+  // Submitting again without a new PIN does not resend the refused one.
+  ui.fireEvent.click(r.getByText('Submit'));
+  await ui.waitFor(() => assert.equal(received.length, 3));
+  assert.deepEqual(received, [null, '111111', null]);
 });
 
 test('an invitation action discards the profile’s journal of unfinished operations', async () => {

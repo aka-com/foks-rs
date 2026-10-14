@@ -33,7 +33,7 @@ export function securityKeyPinProblem(value: string): string | null {
   // Printable ASCII without the space: U+0021 to U+007E, as
   // `u8::is_ascii_graphic` accepts.
   if (!/^[\x21-\x7e]*$/.test(value))
-    return 'Use letters, digits and symbols only, without spaces.';
+    return 'Use ASCII letters, digits and symbols, without spaces or accents.';
   if (
     value.length < SECURITY_KEY_PIN_LENGTH.min ||
     value.length > SECURITY_KEY_PIN_LENGTH.max
@@ -88,7 +88,7 @@ export function securityKeyPinRefusalText(
   refusal: SecurityKeyPinRefusal,
 ): string {
   if (refusal.kind === 'blocked')
-    return 'The PIN is blocked. Unblock it with the PUK in Settings › Server › Security keys › Unblock PIN…, then enter the new PIN here.';
+    return 'The PIN is blocked. Unblock it with the PUK: open the server in Settings › Account and choose Unblock PIN… under Security keys, then enter the new PIN here.';
   if (refusal.remaining === 1)
     return '1 attempt left. Another incorrect PIN blocks the PIN until it is unblocked with the PUK.';
   return `${refusal.remaining} attempts left before the PIN is blocked.`;

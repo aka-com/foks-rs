@@ -21,7 +21,10 @@ import {
   unfinishedOperation,
 } from '../invitation-writes';
 import type { TeamStore } from '../model';
-import { validSecurityKeyPin } from '../security-key-pin';
+import {
+  securityKeyPinRefusal,
+  validSecurityKeyPin,
+} from '../security-key-pin';
 import { useMetadataRepository } from '../query-hooks';
 import { useSheetGuard, useTabSheetState } from '../navigation-guard';
 import {
@@ -154,6 +157,9 @@ export function InviteNewUserSheet({
       await work();
     } catch (failure) {
       if (!live.current) return;
+      // A refused PIN is not offered again unchanged: one more refusal can
+      // block the PIN.
+      if (securityKeyPinRefusal(failure)) setPin('');
       if (hardwareUnlockRequested(failure)) {
         setNeedPin(true);
         setError('Enter the PIN for your security key to sign the invitation.');

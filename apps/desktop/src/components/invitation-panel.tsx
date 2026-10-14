@@ -15,6 +15,7 @@ import {
   nativeRole,
   settleInvitationWrite,
 } from '../invitation-writes';
+import { securityKeyPinRefusal } from '../security-key-pin';
 import {
   Button,
   Chip,
@@ -176,6 +177,9 @@ export function InvitationPanel({
       setNeedPin(false);
     } catch (failure) {
       if (active.current !== identity) return;
+      // A refused PIN is not offered again unchanged: one more refusal can
+      // block the PIN.
+      if (securityKeyPinRefusal(failure)) setPin('');
       if (failure instanceof UnlockNeeded || hardwareUnlockRequested(failure)) {
         setNeedPin(true);
         setError('Enter the PIN for your security key to continue.');

@@ -19,12 +19,22 @@ fn security_key_responses_are_exact_typed_and_state_bound() {
     for (signing, pq) in [(0x82, 0x82), (0x81, 0x83), (0x82, 0x96)] {
         assert_eq!(yubi_slots(signing, pq).unwrap_err().code, "invalid-request");
     }
-    assert_eq!(
-        yubi_retry_configuration("12345678".to_owned(), 0, 3)
-            .unwrap_err()
-            .code,
-        "invalid-request"
-    );
+    for (pin_attempts, puk_attempts) in [(0, 3), (3, 0), (16, 3), (3, 16), (255, 255)] {
+        assert_eq!(
+            yubi_retry_configuration("12345678".to_owned(), pin_attempts, puk_attempts)
+                .unwrap_err()
+                .code,
+            "invalid-request"
+        );
+    }
+    for (pin_attempts, puk_attempts) in [(1, 1), (15, 15)] {
+        let configuration =
+            yubi_retry_configuration("12345678".to_owned(), pin_attempts, puk_attempts).unwrap();
+        assert_eq!(
+            (configuration.pin_attempts, configuration.puk_attempts),
+            (pin_attempts, puk_attempts)
+        );
+    }
     let cards = yubi_card_dtos(serde_json::json!([
         {"name":"YubiKey 5","serial":42},
         {"name":"YubiKey Bio","serial":43}

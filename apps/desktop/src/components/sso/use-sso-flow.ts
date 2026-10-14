@@ -3,7 +3,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Bridge } from '../../bridge';
 import { normalizeCommandError } from '../../bridge';
-import { securityKeyPinProblem } from '../../security-key-pin';
+import {
+  securityKeyPinProblem,
+  securityKeyPinRefusal,
+} from '../../security-key-pin';
 import type { SsoAction, SsoProgress } from '../../sso-contract';
 import { useWorkflowAccess } from '../../workflow-context';
 
@@ -188,7 +191,11 @@ export function useSsoFlow({
         await onComplete();
       }
     } catch (e) {
-      if (active.current === owner) setError(normalizeCommandError(e).message);
+      if (active.current !== owner) return;
+      // A refused PIN is not offered again unchanged: one more refusal can
+      // block the PIN.
+      if (securityKeyPinRefusal(e)) setPin('');
+      setError(normalizeCommandError(e).message);
     } finally {
       if (active.current === owner) setBusy(false);
     }

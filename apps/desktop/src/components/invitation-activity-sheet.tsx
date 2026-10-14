@@ -20,6 +20,7 @@ import {
   settleInvitationWrite,
   unfinishedOperation,
 } from '../invitation-writes';
+import { securityKeyPinRefusal } from '../security-key-pin';
 import type { TeamStore } from '../model';
 import { useMetadataRepository } from '../query-hooks';
 import {
@@ -133,6 +134,9 @@ export function InvitationActivitySheet({
       await work();
     } catch (failure) {
       if (!live.current) return;
+      // A refused PIN is not offered again unchanged: one more refusal can
+      // block the PIN.
+      if (securityKeyPinRefusal(failure)) setPin('');
       if (hardwareUnlockRequested(failure)) {
         setNeedPin(true);
         setError('Enter the PIN for your security key to continue.');
