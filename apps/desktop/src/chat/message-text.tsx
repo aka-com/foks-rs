@@ -115,10 +115,8 @@ const BIDI_CONTROL = /\p{Bidi_Control}/gu;
 // a long word without a colon is scanned once rather than from every position.
 const SCHEME = /(?<![a-z\d+.-])[\d+.-]*[a-z][a-z\d+.-]*:[/\\]+/iu;
 // Final labels that make a bare name such as `index.html` or `Node.js` read
-// as a file or product name rather than a host. Extensions that are also
-// top-level domains (md, py, rs, sh, zip, mov and others) are left out, so
-// `docs.rs` and `README.md` are compared as hosts. The rule applies to the
-// whole name, so `vite.config.ts` is not read as a host, and neither is
+// as a file or product name rather than a host. The rule applies to the whole
+// name, so `vite.config.ts` is not read as a host, and neither is
 // `paypal.com.js`; the destination host shown after the link still names
 // where it opens.
 const FILE_EXTENSIONS = new Set(
@@ -128,6 +126,21 @@ const FILE_EXTENSIONS = new Set(
     'yml'
   ).split(' '),
 );
+// File extensions that are also top-level domains. A name ending in one is
+// read as a file name only when its stem marks it as one (`README.md`,
+// `setup_env.sh`, `Main.java`); `docs.rs` and `get.sh` are compared as hosts.
+const TLD_FILE_EXTENSIONS = new Set('java md mov py rs sh zip'.split(' '));
+// Runs of the characters a file name's stem is written with: label
+// characters, full stops and underscores.
+const STEM_RUN = new RegExp(`[${LABEL_CHARS}${STOPS}_]+`, 'gu');
+// A character that marks a stem as part of a file name: an upper-case
+// letter, or an underscore after a letter, mark or digit. A leading
+// underscore, as in `_docs.rs_`, is emphasis rather than part of a name.
+const STEM_MARK = /\p{Lu}|(?<=[\p{L}\p{M}\p{N}])_/u;
+// `?@` or `#@` directly after an authority, or after one `/` that follows
+// it, and the text up to the next `/`, `?`, `#` or `\`, which a reader who
+// takes the host to follow the last `@` reads as the host.
+const QUERY_AT = /^\/?[?#]@([^/?#\\]*)/u;
 
 function normalHost(host: string): string {
   try {
@@ -148,52 +161,101 @@ function hostName(labels: string[]): string {
   return `${shown.join('').toLowerCase()}…`;
 }
 
+function nameHost({ labels }: DottedName): string {
+  return hostName(labels);
+}
+
 /**
- * The dotted names in one run of consecutive non-empty labels: the labels up
- * to the last one shaped like a final label (`bank.example`), then any four
- * one- to three-digit labels (an IPv4 address) after it. Version numbers such
- * as `1.5` and `v1.2.3`, and abbreviations such as `e.g`, name nothing.
+ * The dotted names in one run of consecutive non-empty labels, each as the
+ * start and end of its labels: the labels up to the last one shaped like a
+ * final label (`bank.example`), then any four one- to three-digit labels (an
+ * IPv4 address) after it. Version numbers such as `1.5` and `v1.2.3`, and
+ * abbreviations such as `e.g`, name nothing.
  */
-function labelRunNames(labels: string[]): string[][] {
-  const names: string[][] = [];
+function labelRunNames(labels: string[]): [number, number][] {
+  const names: [number, number][] = [];
   let last = 0;
   for (let i = 1; i < labels.length; i++)
     if (LAST_LABEL.test(labels[i].replace(MARKS, ''))) last = i;
   let i = 0;
   if (last) {
-    names.push(labels.slice(0, last + 1));
+    names.push([0, last + 1]);
     i = last + 1;
   }
   while (i + 4 <= labels.length) {
     let parts = 0;
     while (parts < 4 && IPV4_PART.test(labels[i + parts])) parts++;
     if (parts === 4) {
-      names.push(labels.slice(i, i + 4));
+      names.push([i, i + 4]);
       i += 4;
     } else i++;
   }
   return names;
 }
 
+interface DottedName {
+  labels: string[];
+  /** Where the last label starts in the text the name was read from. */
+  lastAt: number;
+}
+
 /**
- * The dotted names in `text`, each as its labels. A name is bordered by any
- * character other than a letter, combining mark, digit, hyphen or full stop,
- * so quotes, brackets, `'s`, dashes and ellipses around a host do not hide it.
- * An empty label (a leading, trailing or doubled full stop) also ends a name.
+ * The dotted names in `text`, in order. A name is bordered by any character
+ * other than a letter, combining mark, digit, hyphen or full stop, so quotes,
+ * brackets, `'s`, dashes and ellipses around a host do not hide it. An empty
+ * label (a leading, trailing or doubled full stop) also ends a name.
  */
-function dottedNames(text: string): string[][] {
-  const names: string[][] = [];
-  for (const [run] of text.matchAll(NAME_RUN)) {
+function dottedNames(text: string): DottedName[] {
+  const names: DottedName[] = [];
+  for (const run of text.matchAll(NAME_RUN)) {
     let labels: string[] = [];
-    for (const label of [...run.split(SEPARATOR), '']) {
-      if (label) labels.push(label);
-      else {
-        names.push(...labelRunNames(labels));
+    let starts: number[] = [];
+    // Every full stop is one UTF-16 code unit.
+    let at = run.index;
+    for (const label of [...run[0].split(SEPARATOR), '']) {
+      if (label) {
+        labels.push(label);
+        starts.push(at);
+      } else {
+        for (const [start, end] of labelRunNames(labels))
+          names.push({
+            labels: labels.slice(start, end),
+            lastAt: starts[end - 1],
+          });
         labels = [];
+        starts = [];
       }
+      at += label.length + 1;
     }
   }
   return names;
+}
+
+/**
+ * A test of whether a dotted name read from the path-less word `word` is a
+ * file or product name rather than a host. Its last label is a file
+ * extension that is not a top-level domain, or one that is and the stem
+ * before it, within one run of `STEM_RUN` characters, holds a `STEM_MARK`.
+ * The test is applied to names in the order `dottedNames` gives them, and
+ * reads `word` at most once.
+ */
+function fileNameTest(word: string): (name: DottedName) => boolean {
+  let stems: { end: number; mark: number }[] | undefined;
+  let stem = 0;
+  return ({ labels, lastAt }) => {
+    const extension = labels[labels.length - 1].toLowerCase();
+    if (FILE_EXTENSIONS.has(extension)) return true;
+    if (!TLD_FILE_EXTENSIONS.has(extension)) return false;
+    stems ??= Array.from(word.matchAll(STEM_RUN), (run) => {
+      const mark = run[0].search(STEM_MARK);
+      return {
+        end: run.index + run[0].length,
+        mark: mark < 0 ? Infinity : run.index + mark,
+      };
+    });
+    while (stems[stem].end <= lastAt) stem++;
+    return stems[stem].mark < lastAt;
+  };
 }
 
 /**
@@ -201,27 +263,24 @@ function dottedNames(text: string): string[][] {
  * that is every host named before the scheme (`paypal.com/x:/evil.example`),
  * then every dotted name in the authority (both sides of an `@`, since a
  * reader may take either for the host), or the name after the last `@` when
- * the authority has no dotted name.
+ * the authority has no dotted name, and every dotted name after a `?@` or
+ * `#@` that ends the authority (`https://bank.example#@evil.example`).
  * Without a scheme, it is every dotted name before the first `/`, `\`, `?` or
- * `#`, except a file or product name in a word that is nothing else.
+ * `#`, except a file or product name (`fileNameTest`) in a word that is
+ * nothing else.
  */
 function wordHosts(word: string, wholeWord = true): string[] {
   const scheme = SCHEME.exec(word);
   if (!scheme) {
     const authority = word.split(AUTHORITY_END, 1)[0];
-    return dottedNames(authority)
-      .filter(
-        (labels) =>
-          !wholeWord ||
-          authority !== word ||
-          !FILE_EXTENSIONS.has(labels[labels.length - 1].toLowerCase()),
-      )
-      .map(hostName);
+    const names = dottedNames(authority);
+    if (!wholeWord || authority !== word) return names.map(nameHost);
+    const fileName = fileNameTest(word);
+    return names.filter((name) => !fileName(name)).map(nameHost);
   }
-  const authority = word
-    .slice(scheme.index + scheme[0].length)
-    .split(AUTHORITY_END, 1)[0];
-  const hosts = dottedNames(authority).map(hostName);
+  const rest = word.slice(scheme.index + scheme[0].length);
+  const authority = rest.split(AUTHORITY_END, 1)[0];
+  const hosts = dottedNames(authority).map(nameHost);
   if (!hosts.length) {
     // A scheme URL names a host even without a dotted name, as in
     // `https://intranet` or `https://127.1`.
@@ -230,6 +289,8 @@ function wordHosts(word: string, wholeWord = true): string[] {
     );
     if (named) hosts.push(hostName(named[0].split(SEPARATOR)));
   }
+  const queryAt = QUERY_AT.exec(rest.slice(authority.length));
+  if (queryAt) hosts.push(...dottedNames(queryAt[1]).map(nameHost));
   // The text before the scheme's `:` holds no scheme, since this one is the
   // leftmost, and is followed by the rest of the URL.
   const before = word.slice(0, scheme.index + scheme[0].indexOf(':'));
@@ -266,7 +327,10 @@ export interface ChatLinkDisplay {
   label: string;
   /** The destination host, from `linkHost`. */
   host: string;
-  /** False only when the label is the destination URL itself. */
+  /**
+   * False only when the label is the destination URL itself, up to the case
+   * of ASCII letters and a final `/`.
+   */
   showHost: boolean;
   /**
    * The first host the label names that differs from `host`. The link then
@@ -279,11 +343,14 @@ export interface ChatLinkDisplay {
 export function chatLinkDisplay(label: string, href: string): ChatLinkDisplay {
   const host = linkHost(href);
   const drawn = label.replace(BIDI_CONTROL, '');
-  const text = drawn.trim();
+  // ASCII letters only: a non-ASCII letter that the URL parser maps to an
+  // ASCII one leaves the host suffix in place.
+  const text = drawn.trim().replace(/[A-Z]+/g, (upper) => upper.toLowerCase());
+  const url = href.replace(/[A-Z]+/g, (upper) => upper.toLowerCase());
   return {
     label: drawn,
     host,
-    showHost: text !== href && `${text}/` !== href,
+    showHost: text !== url && `${text}/` !== url,
     mismatchedHost:
       labelHosts(label).find((named) => !sameHost(named, host)) ?? null,
   };
@@ -394,12 +461,15 @@ function Link({
         {/* Isolated so right-to-left text in the label cannot reorder the
             host shown after the link. */}
         <bdi>{drawn}</bdi>
+        {showHost && <span className="offscreen">, opens {host}</span>}
       </a>
       {showHost && (
         // Isolated left to right, so a bidirectional control in the message
-        // text before the link cannot reverse the host.
+        // text before the link cannot reverse the host. The link's name
+        // already states the host, so assistive technology skips this copy.
         <bdi
           dir="ltr"
+          aria-hidden="true"
           className={
             mismatchedHost ? 'chat-link-host mismatch' : 'chat-link-host'
           }

@@ -173,6 +173,20 @@ test('a link whose label names no host opens directly', async () => {
   assert.deepEqual(opened, ['https://docs.example/n']);
 });
 
+test('each link names its destination host to assistive technology once', () => {
+  mount();
+  assert.ok(
+    ui.screen.getByRole('link', {
+      name: /^Link text names a different host: ?https:\/\/bank\.example\/login, opens evil\.example$/,
+    }),
+  );
+  assert.ok(
+    ui.screen.getByRole('link', { name: 'the notes, opens docs.example' }),
+  );
+  for (const suffix of document.querySelectorAll('.chat-link-host'))
+    assert.equal(suffix.getAttribute('aria-hidden'), 'true');
+});
+
 test('a context menu inside the sheet does not open the message menu', async () => {
   mount();
   ui.fireEvent.click(link(/bank\.example/));

@@ -95,7 +95,7 @@ test('a link label naming another host is marked and its destination host shown'
   assert.match(html, /Link text names a different host: /);
   assert.match(
     html,
-    /<bdi dir="ltr" class="chat-link-host mismatch">\(evil\.example\)<\/bdi>/,
+    /<span class="offscreen">, opens evil\.example<\/span><\/a><bdi dir="ltr" aria-hidden="true" class="chat-link-host mismatch">\(evil\.example\)<\/bdi>/,
   );
   assert.deepEqual(
     chatLinkDisplay('https://bank.example/login', 'https://evil.example/'),
@@ -122,12 +122,27 @@ test('a link label that is the destination URL carries no host suffix or warning
   }
 });
 
+test('a label that differs from the URL only in the case of ASCII letters carries no host suffix', () => {
+  for (const label of ['HTTPS://BANK.EXAMPLE', 'https://Bank.Example/'])
+    assert.equal(
+      chatLinkDisplay(label, 'https://bank.example/').showHost,
+      false,
+      label,
+    );
+  // A non-ASCII letter the URL parser maps to an ASCII one is not ignored.
+  assert.equal(
+    chatLinkDisplay('https://\u212aey.example/', 'https://key.example/')
+      .showHost,
+    true,
+  );
+});
+
 test('a plain-word label shows the destination host without a warning', () => {
   const html = messageMarkup('Notes are [here](https://docs.example/notes).');
   assert.match(html, /title="https:\/\/docs\.example\/notes"/);
   assert.match(
     html,
-    />here<\/bdi><\/a><bdi dir="ltr" class="chat-link-host">\(docs\.example\)<\/bdi>/,
+    />here<\/bdi><span class="offscreen">, opens docs\.example<\/span><\/a><bdi dir="ltr" aria-hidden="true" class="chat-link-host">\(docs\.example\)<\/bdi>/,
   );
   assert.doesNotMatch(html, /chat-link-mismatch|different host/);
 });
@@ -214,6 +229,7 @@ test('label hosts are read from words that read as URLs or host names', () => {
     // a user name.
     ['https://bank.example@evil.example/', ['bank.example', 'evil.example']],
     ['bank.example@evil.example', ['bank.example', 'evil.example']],
+    ['x.y@z@bank.example', ['bank.example']],
     ['https://user@bank.example', ['bank.example']],
     ['alice@bank.example', ['bank.example']],
     // A file or product name reads as a host only with a scheme, path, port
@@ -223,9 +239,23 @@ test('label hosts are read from words that read as URLs or host names', () => {
     ['config.yaml', []],
     ['https://index.html', ['index.html']],
     ['index.html/x', ['index.html']],
-    // Extensions that are also top-level domains are compared as hosts.
-    ['README.md', ['readme.md']],
+    // An extension that is also a top-level domain makes a file name only
+    // after a stem with an upper-case letter or an inner underscore, compared
+    // without regard to case.
+    ['README.md', []],
+    ['README.MD', []],
+    ['"README.md"', []],
+    ['setup_env.sh', []],
+    ['__init__.py', []],
+    ['Main.java', []],
     ['docs.rs', ['docs.rs']],
+    ['docs.RS', ['docs.rs']],
+    ['crates.rs', ['crates.rs']],
+    ['get.sh', ['get.sh']],
+    ['(docs.rs)', ['docs.rs']],
+    ['_docs.rs_', ['docs.rs']],
+    ['README.md/x', ['readme.md']],
+    ['https://README.md', ['readme.md']],
     ['security.center@bank.example', ['security.center', 'bank.example']],
     // Non-ASCII punctuation and suffixes around a host.
     ["bank.example's portal", ['bank.example']],
@@ -245,6 +275,14 @@ test('label hosts are read from words that read as URLs or host names', () => {
     ['https://127.1', ['127.0.0.1']],
     ['https://a.b', ['a.b']],
     ['https://\u0301', []],
+    ['HTTPS:\\bank.example', ['bank.example']],
+    // A name after `?@` or `#@` at the end of the authority reads as the host
+    // to a reader who takes the host to follow the last `@`.
+    ['https://bank.example?@evil.example', ['bank.example', 'evil.example']],
+    ['https://bank.example/#@evil.example', ['bank.example', 'evil.example']],
+    ['https://bank.example/?next=@evil.example', ['bank.example']],
+    ['https://bank.example/?to=a@evil.example', ['bank.example']],
+    ['https://mastodon.social/@user', ['mastodon.social']],
     // A host before a scheme is read first.
     ['paypal.com/x:/evil.example', ['paypal.com', 'evil.example']],
     ['paypal.com:/evil.example', ['paypal.com', 'evil.example']],
@@ -314,6 +352,19 @@ test('a label host is compared with the destination up to one leading www.', () 
     chatLinkDisplay('index.html', 'https://github.com/x/y').mismatchedHost,
     null,
   );
+  const againstEvil: [string, string | null][] = [
+    ['README.md', null],
+    ['setup_env.sh', null],
+    ['docs.rs', 'docs.rs'],
+    ['get.sh', 'get.sh'],
+    ['https://evil.example#@bank.example', 'bank.example'],
+  ];
+  for (const [label, named] of againstEvil)
+    assert.equal(
+      chatLinkDisplay(label, 'https://evil.example/').mismatchedHost,
+      named,
+      label,
+    );
   assert.equal(
     chatLinkDisplay('security.center@bank.example', 'https://security.center/')
       .mismatchedHost,
@@ -327,7 +378,7 @@ test('a link label is isolated from the bidirectional context of the text after 
   );
   assert.match(
     html,
-    /<bdi>\u05e9\u05dc\u05d5\u05dd<\/bdi><\/a><bdi dir="ltr" class="chat-link-host">\(evil\.example\)<\/bdi>/,
+    /<bdi>\u05e9\u05dc\u05d5\u05dd<\/bdi><span class="offscreen">, opens evil\.example<\/span><\/a><bdi dir="ltr" aria-hidden="true" class="chat-link-host">\(evil\.example\)<\/bdi>/,
   );
 });
 
@@ -377,6 +428,11 @@ test('reading the hosts of a long label takes linear time', () => {
     `https://${'a.'.repeat(32000)}`,
     `${'a:'.repeat(32000)}//bank.example`,
     `a.bb${'\u0301'.repeat(32000)}${'\u0316'.repeat(32000)}`,
+    // Many file names with top-level-domain extensions in one stem run, each
+    // of whose stems is tested for a mark.
+    'a_a.md_'.repeat(9000),
+    `x_${'a.md.'.repeat(12800)}`,
+    `https://bank.example#@${'a.'.repeat(32000)}bb`,
   ]) {
     const started = performance.now();
     labelHosts(label);
