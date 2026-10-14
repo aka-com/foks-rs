@@ -1,7 +1,8 @@
 /**
  * The details panel's plaintext reducer: which transitions clear a revealed
- * value or an edit draft, which keep a draft, and that `PLAINTEXT_FIELDS`
- * names every field that can hold item plaintext.
+ * value or an edit draft, which keep a draft, that `PLAINTEXT_FIELDS` names
+ * every field that can hold item plaintext, and that `CONCEALING` lists every
+ * action that must drop a read still in flight.
  */
 
 import assert from 'node:assert/strict';
@@ -10,6 +11,7 @@ import test from 'node:test';
 import { FIXTURE } from '../src/fixture';
 import {
   CHANGED_ON_SERVER,
+  CONCEALING,
   EMPTY,
   PLAINTEXT_FIELDS,
   editorBound,
@@ -23,6 +25,77 @@ const KEY = `${ITEM.store}|${ITEM.path}|${ITEM.version}`;
 const SCOPE = 'scope-a';
 const SECRET = 'plaintext-sentinel';
 const DRAFT = 'draft-sentinel';
+const BINDING = { item: ITEM, scope: SCOPE, generation: 0 };
+
+/**
+ * One instance of each action type. The mapped type fails the typecheck for a
+ * new action until it has a sample here, so the tests that iterate over every
+ * action cover it.
+ */
+const SAMPLES: {
+  [T in SecretsAction['type']]: Extract<SecretsAction, { type: T }>;
+} = {
+  'reveal-start': { type: 'reveal-start', key: KEY },
+  'reveal-done': { type: 'reveal-done', key: KEY, value: SECRET },
+  'reveal-fail': { type: 'reveal-fail', key: KEY, message: 'read failed' },
+  'show-rows': { type: 'show-rows', ids: ['user'], keep: true },
+  'hide-row': { type: 'hide-row', id: 'user' },
+  'hide-value': { type: 'hide-value' },
+  'not-text': { type: 'not-text' },
+  'read-blocked': { type: 'read-blocked' },
+  'generation-changed': { type: 'generation-changed' },
+  'item-changed': { type: 'item-changed', scope: SCOPE, generation: 0 },
+  'conceal-inactive': { type: 'conceal-inactive', file: false },
+  'conceal-signal': { type: 'conceal-signal' },
+  'open-editor': {
+    type: 'open-editor',
+    value: SECRET,
+    loginLines: [0],
+    binding: BINDING,
+  },
+  'restore-draft': {
+    type: 'restore-draft',
+    value: DRAFT,
+    loginLines: null,
+    binding: BINDING,
+  },
+  edit: { type: 'edit', value: DRAFT },
+  'show-password': { type: 'show-password', shown: true },
+  'unconceal-draft': { type: 'unconceal-draft' },
+  replacement: {
+    type: 'replacement',
+    path: '/tmp/replacement',
+    error: 'replace failed',
+  },
+  'edit-error': { type: 'edit-error', message: 'refused' },
+  'close-editor': { type: 'close-editor' },
+};
+const ACTIONS = Object.values(SAMPLES) as SecretsAction[];
+
+/** Dotted paths of the string fields that hold no item plaintext. */
+const NOT_PLAINTEXT = new Set([
+  'read.key',
+  'read.state',
+  'read.message',
+  'revealed.*',
+  'editor.binding.scope',
+  'editor.replacementPath',
+  'editError',
+]);
+
+/** Every string in `value` by dotted path, with `*` for an array index. */
+function stringLeaves(value: unknown, path = ''): [string, string][] {
+  if (typeof value === 'string') return [[path, value]];
+  if (value === null || typeof value !== 'object') return [];
+  // The bound item's metadata names it; it holds no plaintext.
+  if (path === 'editor.binding.item') return [];
+  return Object.entries(value).flatMap(([field, child]) =>
+    stringLeaves(
+      child,
+      `${path ? `${path}.` : ''}${Array.isArray(value) ? '*' : field}`,
+    ),
+  );
+}
 
 function run(state: ItemSecrets, ...actions: SecretsAction[]): ItemSecrets {
   return actions.reduce(itemSecrets, state);
@@ -66,6 +139,55 @@ test('PLAINTEXT_FIELDS names every field that holds plaintext', () => {
   const json = JSON.stringify(stripped);
   assert.ok(!json.includes(SECRET));
   assert.ok(!json.includes(DRAFT));
+});
+
+test('every string field is in PLAINTEXT_FIELDS or named as not plaintext', () => {
+  const plaintext = new Set<string>(PLAINTEXT_FIELDS);
+  const states = [
+    populated(),
+    ...ACTIONS.map((action) => itemSecrets(EMPTY, action)),
+    ...ACTIONS.map((action) => itemSecrets(populated(), action)),
+  ];
+  for (const state of states) {
+    for (const [path, value] of stringLeaves(state)) {
+      assert.ok(
+        plaintext.has(path) || NOT_PLAINTEXT.has(path),
+        `unclassified string field ${path}`,
+      );
+      if (value === SECRET || value === DRAFT)
+        assert.ok(plaintext.has(path), `${path} holds plaintext`);
+    }
+  }
+});
+
+/**
+ * Actions that clear `read` without advancing the epoch: a read that lands
+ * rechecks access and the generation it started under, and `not-text` and
+ * `open-editor` record what a completed read or Edit found.
+ */
+const CLEARS_WITHOUT_EPOCH = new Set<SecretsAction['type']>([
+  'read-blocked',
+  'generation-changed',
+  'not-text',
+  'open-editor',
+]);
+
+test('every other action that clears a loading or shown value is CONCEALING', () => {
+  const loading = run(populated(), { type: 'reveal-start', key: KEY });
+  for (const action of ACTIONS) {
+    for (const state of [loading, populated()]) {
+      if (itemSecrets(state, action).read !== null) continue;
+      assert.ok(
+        CONCEALING.has(action.type) || CLEARS_WITHOUT_EPOCH.has(action.type),
+        `${action.type} clears read but does not advance the epoch`,
+      );
+    }
+  }
+  for (const type of CONCEALING) {
+    assert.ok(!CLEARS_WITHOUT_EPOCH.has(type), type);
+    assert.equal(itemSecrets(loading, SAMPLES[type]).read, null, type);
+    assert.equal(itemSecrets(populated(), SAMPLES[type]).read, null, type);
+  }
 });
 
 test('conceal-signal leaves no plaintext', () => {

@@ -64,7 +64,12 @@ export const EMPTY: ItemSecrets = {
   binaryFile: false,
 };
 
-/** Every field of `ItemSecrets` that holds item plaintext, as a dotted path. */
+/**
+ * Every field of `ItemSecrets` that holds item plaintext, as a dotted path.
+ * The reducer test classifies each string the state can hold as plaintext,
+ * from this list, or as a named non-plaintext field; a new string field fails
+ * that test until it is listed in one of the two.
+ */
 export const PLAINTEXT_FIELDS = [
   'read.value',
   'editor.value',
@@ -254,8 +259,12 @@ export function itemSecrets(
   }
 }
 
-/** Actions after which a read or edit-open still in flight must be dropped. */
-const CONCEALING: ReadonlySet<SecretsAction['type']> = new Set([
+/**
+ * Actions after which a read or edit-open still in flight must be dropped.
+ * The reducer test checks that every other action which clears `read` is one
+ * of the transitions the panel guards by other means.
+ */
+export const CONCEALING: ReadonlySet<SecretsAction['type']> = new Set([
   'hide-value',
   'item-changed',
   'conceal-inactive',
