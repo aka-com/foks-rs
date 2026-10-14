@@ -576,7 +576,7 @@ export function decodeChatResult(
     )
       return fail();
     result = { kind: 'intent', channel, intent };
-  } else if (r.kind === 'channels' && action.action === 'channels') {
+  } else if (r.kind === 'channels') {
     object(r, ['kind', 'channels', 'version']);
     const channels = array(r.channels, CHAT_CHANNEL_ROWS, channel);
     if (new Set(channels.map((c) => c.id)).size !== channels.length)

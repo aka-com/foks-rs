@@ -797,6 +797,9 @@ mod shared_contract_tests {
         result_kind: String,
     }
 
+    /// Number of `ChatAction` variants; `variant` returns indices below it.
+    const VARIANTS: usize = 22;
+
     /// Position of `action`'s variant in `ChatAction`. The match is
     /// exhaustive, so a new variant does not compile until it is listed here
     /// and in the shared action fixture.
@@ -839,7 +842,7 @@ mod shared_contract_tests {
             "../../foks-agent-proto/tests/fixtures/chat-replies.json"
         ))
         .unwrap();
-        let mut seen = [false; 22];
+        let mut seen = [false; VARIANTS];
         for entry in actions.actions {
             let action: ChatAction = serde_json::from_value(entry.request.clone()).unwrap();
             let name = action.operation_name();
@@ -849,8 +852,10 @@ mod shared_contract_tests {
                 entry.request,
                 "{name} is not canonical"
             );
+            let index = variant(&action);
+            assert!(index < VARIANTS, "{name} has index {index}; raise VARIANTS");
             assert!(
-                !std::mem::replace(&mut seen[variant(&action)], true),
+                !std::mem::replace(&mut seen[index], true),
                 "{name} repeated"
             );
             assert_eq!(action.is_mutation(), entry.mutates, "{name}");
@@ -866,6 +871,10 @@ mod shared_contract_tests {
                 "{name}"
             );
         }
-        assert!(seen.iter().all(|seen| *seen));
+        let missing: Vec<_> = (0..VARIANTS).filter(|index| !seen[*index]).collect();
+        assert!(
+            missing.is_empty(),
+            "variants {missing:?} have no entry in the shared action fixture"
+        );
     }
 }
