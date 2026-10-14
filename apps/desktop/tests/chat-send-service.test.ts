@@ -72,6 +72,8 @@ async function setup(
     action: ChatAction,
     run: () => Promise<ChatReply>,
   ) => Promise<ChatReply>,
+  /** Starts with an empty inbox and opens no channel. */
+  unknown = false,
 ) {
   const snapshot = {
     ...FIXTURE,
@@ -88,22 +90,20 @@ async function setup(
   const base = mockBridge(snapshot);
   const reply = await base.chat('team:eng', { action: 'inbox' });
   if (reply.result.kind !== 'inbox') throw new Error('inbox expected');
-  const entries = new Map<string, TeamInbox>([
-    [
-      'team:eng',
-      {
-        state: 'ready',
-        data: reply.result,
-        scope: reply.scope,
-        error: '',
-        note: '',
-        stale: false,
-        revision: 1,
-        channelRevisions: new Map(),
-        blockedChannels: new Set(),
-      },
-    ],
-  ]);
+  const entry: TeamInbox = {
+    state: 'ready',
+    data: reply.result,
+    scope: reply.scope,
+    error: '',
+    note: '',
+    stale: false,
+    revision: 1,
+    channelRevisions: new Map(),
+    blockedChannels: new Set(),
+  };
+  const entries = new Map<string, TeamInbox>(
+    unknown ? [] : [['team:eng', entry]],
+  );
   const listeners = new Set<() => void>();
   const invalidated: string[] = [];
   const inbox = {
@@ -136,12 +136,13 @@ async function setup(
   service.update(snapshot);
   service.start();
   const channel = reply.result.channels[0].id;
-  await service.open('team:eng', channel);
+  if (!unknown) await service.open('team:eng', channel);
   return {
     service,
     channel,
     calls,
     clock,
+    entry,
     entries,
     invalidated,
     update: () => {
@@ -579,6 +580,26 @@ test('an idle team is recovered on the idle interval, not every two seconds', as
       runs,
     );
     assert.deepEqual(h.service.operations('team:eng'), []);
+  } finally {
+    h.service.stop();
+  }
+});
+
+test('a team the inbox reports after the service starts is recovered on the active tick', async () => {
+  const h = await setup(undefined, true);
+  try {
+    // With no team known, start() armed the idle wait.
+    await h.clock.advance(100);
+    assert.equal(h.calls.length, 0);
+    h.entries.set('team:eng', h.entry);
+    h.update();
+    // No channel is open and nothing publishes, but the new team has never
+    // been recovered, so its first recovery does not wait out the idle tick.
+    await h.clock.advance(1_500);
+    assert.deepEqual(
+      h.calls.map((call) => call.action),
+      ['load-intent', 'pending', 'cleanup-pending'],
+    );
   } finally {
     h.service.stop();
   }

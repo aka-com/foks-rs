@@ -25,6 +25,10 @@ export class DraftStore {
   get(store: string, channel: string): string {
     return this.drafts.get(store)?.get(channel)?.text ?? '';
   }
+  /** The UTF-8 length of the channel's draft, measured when it was stored. */
+  size(store: string, channel: string): number {
+    return this.drafts.get(store)?.get(channel)?.bytes ?? 0;
+  }
   /** The UTF-8 length of all drafts together. */
   bytes(): number {
     return this.total;

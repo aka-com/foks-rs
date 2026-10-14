@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-} from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import type { ChatChannel, ChatScope } from '../chat-contract';
 import { CHAT_TEXT_BYTES } from '../chat-limits';
 import { failure } from './actions';
@@ -32,10 +26,9 @@ export function useChatDraft(storeId: string, channel: string) {
   );
   const read = () => service.draft(storeId, channel);
   const draft = useSyncExternalStore(subscribe, read, read);
-  const draftBytes = useMemo(
-    () => new TextEncoder().encode(draft).length,
-    [draft],
-  );
+  // The store measured the text when it was stored; reading its length here
+  // does not encode the draft a second time.
+  const draftBytes = draft ? service.draftBytes(storeId, channel) : 0;
   return {
     draft,
     draftBytes,

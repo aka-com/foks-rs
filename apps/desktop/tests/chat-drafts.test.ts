@@ -43,6 +43,8 @@ test('the byte total follows each change without measuring other drafts', () => 
   // Two bytes per character: the quota counts UTF-8, not characters.
   store.set('team:b', 'two', 'ééé');
   assert.equal(store.bytes(), 10);
+  assert.equal(store.size('team:b', 'two'), 6);
+  assert.equal(store.size('team:b', 'none'), 0);
   store.set('team:a', 'one', 'ab');
   assert.equal(store.bytes(), 8);
   // A draft that would take the total past the quota is refused, and the

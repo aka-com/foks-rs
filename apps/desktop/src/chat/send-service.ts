@@ -312,10 +312,14 @@ export class ChatSendService {
     if (!this.active || this.synchronizing || !this.snapshot) return;
     this.synchronizing = true;
     let changed = false;
+    let created = false;
     try {
       for (const [id, entry] of this.inbox.getSnapshot()) {
         const store = storeOf(this.snapshot, id);
-        if (store?.kind === 'team' && entry.scope) this.ensure(id);
+        if (store?.kind === 'team' && entry.scope && !this.teams.has(id)) {
+          this.ensure(id);
+          created = true;
+        }
       }
       for (const [id, team] of this.teams) {
         const entry = this.inbox.getSnapshot().get(id);
@@ -399,6 +403,10 @@ export class ChatSendService {
       this.synchronizing = false;
     }
     if (changed) this.publish();
+    // A team first known here has never been recovered, so it is work for
+    // the tick. Its record alters nothing a subscriber reads, so it does not
+    // publish; it only brings the tick forward from the idle wait.
+    else if (created) this.arm();
   }
   /**
    * Removes the team's drafts for channels other than `live`. The unlocked
@@ -411,6 +419,10 @@ export class ChatSendService {
   }
   draft(storeId: string, channel: string): string {
     return this.draftStore.get(storeId, channel);
+  }
+  /** The UTF-8 length of the channel's draft, as the draft quota counts it. */
+  draftBytes(storeId: string, channel: string): number {
+    return this.draftStore.size(storeId, channel);
   }
   /**
    * Calls `listener` whenever the channel's draft changes. Draft changes are
