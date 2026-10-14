@@ -627,6 +627,14 @@ export function VaultShell({
         icon: 'settings',
         run: () => locations.navigate({ kind: 'settings' }),
       },
+      {
+        id: 'add-device',
+        label: 'Add a device',
+        detail:
+          'Pair a device, create a recovery phrase or connect a hardware key',
+        icon: 'laptop',
+        run: () => locations.navigate({ kind: 'devices', open: 'add' }),
+      },
     ],
     [
       chrome.blocked,

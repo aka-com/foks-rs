@@ -6,12 +6,14 @@ import {
 } from './legacy-routes';
 import { settingsSectionOf } from './routes';
 import {
+  DEVICES_SHEET_INTENTS,
   GROUP_SETTINGS_TABS,
   SETTINGS_SECTIONS,
   TEAMS_SHEET_INTENTS,
 } from './types';
 import type {
   DevicesSection,
+  DevicesSheetIntent,
   GroupSettingsTab,
   Location,
   SettingsSection,
@@ -74,6 +76,15 @@ function teamsSheetIntent(value: string | null): TeamsSheetIntent | undefined {
     : undefined;
 }
 
+/** The Devices sheet a `?open=` value names, or nothing for anything else. */
+function devicesSheetIntent(
+  value: string | null,
+): DevicesSheetIntent | undefined {
+  return value && (DEVICES_SHEET_INTENTS as readonly string[]).includes(value)
+    ? (value as DevicesSheetIntent)
+    : undefined;
+}
+
 /** The `?state=` value and extra parameters a location deep-links as. */
 export function encodeLocation(location: Location): {
   state: string;
@@ -121,6 +132,7 @@ export function encodeLocation(location: Location): {
           store: location.store ?? null,
           section: location.section ?? null,
           device: location.device ?? null,
+          open: location.open ?? null,
         },
       };
     case 'settings':
@@ -208,6 +220,7 @@ export function decodeProductionLocation(search: string): Location | null {
     const section = params.get('section');
     const store = params.get('store') ?? undefined;
     const device = params.get('device') ?? undefined;
+    const open = devicesSheetIntent(params.get('open'));
     const resolved =
       section && (DEVICES_SECTIONS as readonly string[]).includes(section)
         ? (section as DevicesSection)
@@ -219,6 +232,7 @@ export function decodeProductionLocation(search: string): Location | null {
       ...(resolved ? { section: resolved } : {}),
       ...(store ? { store } : {}),
       ...(device ? { device } : {}),
+      ...(open ? { open } : {}),
     };
   }
   if (state === 'settings') {

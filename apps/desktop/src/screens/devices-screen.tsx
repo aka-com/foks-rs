@@ -382,6 +382,35 @@ export function DevicesScreen({
     closeSheets();
   }, [closeSheets, selectedId]);
 
+  // The address can arrive asking for Add a device (`open: 'add'`), which the
+  // ⌘K palette's Actions send from any page. As on the Teams page, the intent
+  // is spent in two commits: the address is replaced with the plain list
+  // first, and the chooser opens on the commit after that, so the sheet's
+  // tab-persisted state belongs to the list's address and Back, a re-render
+  // or a return to the tab lands on the list.
+  const intent = location.open;
+  const navigateRef = useRef(onNavigate);
+  navigateRef.current = onNavigate;
+  const requestedAdd = useRef<StoreRef | null>(null);
+  useEffect(() => {
+    // With no account yet the page cannot say whose device would be added,
+    // so the intent waits for the catalog rather than being spent on nothing.
+    if (!intent || !selectedId) return;
+    requestedAdd.current = selectedId;
+    navigateRef.current(
+      { kind: 'devices', store: selectedId },
+      { replace: true, force: true },
+    );
+  }, [intent, selectedId]);
+  useEffect(() => {
+    const request = requestedAdd.current;
+    if (intent || !request) return;
+    requestedAdd.current = null;
+    if (request !== selectedId) return;
+    if (canAdd) setSheet('add');
+    else if (addReason) toasts.show(addReason, { tone: 'warning' });
+  }, [intent, selectedId, canAdd, addReason, setSheet, toasts]);
+
   // Card presence is live hardware state, never part of the metadata cache.
   useEffect(() => {
     setCards([...snapshot.cardsConnected]);

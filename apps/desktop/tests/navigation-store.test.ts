@@ -330,6 +330,21 @@ test('a Teams sheet intent is spent where it was handed over, not remembered', (
   });
 });
 
+test('a Devices sheet intent is spent where it was handed over, not remembered', () => {
+  const store = new LocationStore();
+  // The ⌘K palette's Add a device sends a reader to Devices.
+  store.navigate({ kind: 'devices', open: 'add' });
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'devices',
+    open: 'add',
+  });
+  // A tab left before the page could consume the intent resumes the list.
+  store.navigateTab('files');
+  store.navigateTab('devices');
+  assert.equal('open' in store.getSnapshot().location, false);
+  assert.equal(store.getSnapshot().location.kind, 'devices');
+});
+
 test('a Teams sheet opened on the canonical address survives a tab round trip', () => {
   const store = new LocationStore({
     ...INITIAL_STATE,

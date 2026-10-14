@@ -84,6 +84,16 @@ export const TEAMS_SHEET_INTENTS: readonly TeamsSheetIntent[] = [
   'invite',
 ];
 
+/**
+ * The sheet an address asks the Devices page to open when it arrives: `add`
+ * is the Add a device chooser, which the ⌘K palette's Actions open from any
+ * page.
+ */
+export type DevicesSheetIntent = 'add';
+
+/** The intents a Devices `?open=` value may name, for decoding an address. */
+export const DEVICES_SHEET_INTENTS: readonly DevicesSheetIntent[] = ['add'];
+
 /** A step in the first-run state machine. */
 export type FirstRunStep = string;
 export type FirstRunPath = 'invited' | 'own';
@@ -110,13 +120,15 @@ export type Location =
   /**
    * Devices. `device` is one row's own page: the key id of a Mac or a paper
    * key, or `yubi:<alias>` for a security-key enrollment, which the agent
-   * names by alias and not by an id.
+   * names by alias and not by an id. `open` asks the list for a sheet, as on
+   * Teams.
    */
   | {
       kind: 'devices';
       section?: DevicesSection;
       store?: StoreRef;
       device?: string;
+      open?: DevicesSheetIntent;
     }
   /**
    * `store` names the account the page acts on, which the Account section

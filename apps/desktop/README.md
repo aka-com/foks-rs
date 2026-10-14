@@ -570,10 +570,14 @@ without opening the item; with query text selected, ⌘C copies that text. A
 file has no copy. ⌘O on a Password opens its website in the default browser
 through `open_item_url`, which reads the `url` line in the host and returns
 nothing; a login without a website, or whose website is not an http or https
-address, gets a warning toast. ⌘D, or the star in the details header, adds an item or a
-folder to Favorites. An empty query lists Recent, every favorite and Actions
-(New password and Add a document on a writable Files page, Lock, Keyboard
-shortcuts, Settings).
+address, gets a warning toast. ⌘D, or the star in the details header, adds an
+item or a folder to Favorites. An empty query lists Recent, every favorite and
+Actions (New password and Add a document on a writable Files page, Lock,
+Keyboard shortcuts, Settings, Add a device). Add a device navigates to
+Devices with `open: 'add'`; the page replaces that address with the plain
+list and then opens its Add a device chooser, or shows why the account cannot
+add one, as the Teams page does with its sheet intents. A return to the tab
+resumes the list, not the chooser.
 Favorites holds up to 100 items; adding one past that drops the oldest.
 `src/recent-favorites.ts` stores both lists as a `StoreRef` and a dirent id
 per item. The `StoreRef` names the server profile, the account and, for a

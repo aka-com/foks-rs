@@ -1,9 +1,10 @@
 /**
  * The ⌘K palette in the running shell: the copy the shell runs for ⌘C and
- * the website it opens for ⌘O, with their access check and toasts, and the
- * New actions it offers only on a Files
- * page whose store this account can write. `search-palette.render.test.tsx`
- * covers the palette itself with stub handlers.
+ * the website it opens for ⌘O, with their access check and toasts, the New
+ * actions it offers only on a Files page whose store this account can write,
+ * and Add a device, which opens the Devices page's chooser.
+ * `search-palette.render.test.tsx` covers the palette itself with stub
+ * handlers.
  */
 
 import assert from 'node:assert/strict';
@@ -90,7 +91,7 @@ async function mount({
     createElement(App, { snapshot: fixture, bridge, store }),
   );
   await ui.waitFor(() => assert.ok(document.querySelector('.topbar')));
-  return { rendered, copies, opens };
+  return { rendered, copies, opens, store };
 }
 
 function field(): HTMLInputElement {
@@ -227,4 +228,20 @@ test('Enter on New password closes the palette and opens the new-item sheet', as
     await rendered.findByRole('dialog', { name: /New password/ }),
     'the sheet opens as the palette closes',
   );
+});
+
+test('Add a device opens the Devices chooser and leaves the list address behind', async () => {
+  const { rendered, store } = await mount({ location: { kind: 'settings' } });
+  await openPalette('add a device');
+  assert.equal(resultNames()[0], 'Add a device');
+  ui.fireEvent.keyDown(field(), { key: 'Enter' });
+  assert.ok(
+    await rendered.findByRole('dialog', { name: /Add a device/ }),
+    'the chooser opens on the Devices page',
+  );
+  // The intent is spent: the address is the plain list, at the account.
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'devices',
+    store: 'acct:personal',
+  });
 });

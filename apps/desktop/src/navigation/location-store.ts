@@ -134,13 +134,20 @@ export class LocationStore {
     let location = saved?.location ?? defaults[tab];
     if (location.kind === 'teams')
       location = normalizeTeamsLocation(this.stores, location);
-    // A Teams sheet intent is spent where it was handed over. The tab resumes
-    // the list, never the sheet another screen once asked for.
+    // A Teams or Devices sheet intent is spent where it was handed over. The
+    // tab resumes the list, never the sheet another screen once asked for.
     if (location.kind === 'teams' && location.open)
       location = {
         kind: 'teams',
         ...(location.store ? { store: location.store } : {}),
         ...(location.ref ? { ref: location.ref } : {}),
+      };
+    if (location.kind === 'devices' && location.open)
+      location = {
+        kind: 'devices',
+        ...(location.section ? { section: location.section } : {}),
+        ...(location.store ? { store: location.store } : {}),
+        ...(location.device ? { device: location.device } : {}),
       };
     const target = 'ref' in location ? location.ref : undefined;
     if (

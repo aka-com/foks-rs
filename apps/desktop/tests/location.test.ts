@@ -218,6 +218,10 @@ test('sameLocation compares full location properties', () => {
     ),
     false,
   );
+  assert.equal(
+    sameLocation({ kind: 'devices' }, { kind: 'devices', open: 'add' }),
+    false,
+  );
 });
 
 test('railTabOf names the tab a location belongs to', () => {
@@ -255,6 +259,8 @@ const ROUND_TRIP: Location[] = [
   { kind: 'devices', section: 'keys', store: 'acct:work' },
   { kind: 'devices', store: 'acct:personal', device: '04a779c40674' },
   { kind: 'devices', store: 'acct:personal', device: 'yubi:primary key' },
+  { kind: 'devices', open: 'add' },
+  { kind: 'devices', store: 'acct:work', open: 'add' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'channels' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'files' },

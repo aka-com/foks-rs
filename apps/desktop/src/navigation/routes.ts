@@ -150,7 +150,10 @@ export function sameLocation(a: Location, b: Location): boolean {
     return a.store === b.store && a.ref === b.ref && a.open === b.open;
   if (a.kind === 'devices' && b.kind === 'devices')
     return (
-      a.section === b.section && a.store === b.store && a.device === b.device
+      a.section === b.section &&
+      a.store === b.store &&
+      a.device === b.device &&
+      a.open === b.open
     );
   if (a.kind === 'settings' && b.kind === 'settings')
     return (
