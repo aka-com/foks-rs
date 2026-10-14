@@ -72,13 +72,25 @@ export class ChatHistoryCache {
   private current(binding: HistoryBinding): boolean {
     return this.bindings.get(binding.store)?.get(binding.channel) === binding;
   }
+  /**
+   * The channel's retained window. Reading it leaves the eviction order
+   * unchanged, so a render can call this; {@link touch} records a use.
+   */
   get(binding: HistoryBinding | null): HistoryWindow | null {
     if (!binding || !this.current(binding)) return null;
+    return this.entries.get(binding)?.history ?? null;
+  }
+  /**
+   * Moves the channel's retained window to the newest end of the eviction
+   * order. Recency is not observable to subscribers, so this does not
+   * publish.
+   */
+  touch(binding: HistoryBinding | null): void {
+    if (!binding || !this.current(binding)) return;
     const entry = this.entries.get(binding);
-    if (!entry) return null;
+    if (!entry) return;
     this.entries.delete(binding);
     this.entries.set(binding, entry);
-    return entry.history;
   }
   update(store: string, inbox: TeamInbox, generation: number): void {
     if (inbox.state !== 'ready' || !inbox.scope || !inbox.data) {

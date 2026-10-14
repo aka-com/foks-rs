@@ -73,10 +73,17 @@ export class ChannelCreationController {
   private checkSnapshot: ReadonlyMap<string, ChannelCreationCheck> = new Map();
   private epoch = 0;
 
-  readyFor = (store: string) => {
+  /**
+   * Whether the team's saved creations were read under `access`. A render
+   * passes the access it renders with; the default is the access of the
+   * last commit.
+   */
+  readyFor = (
+    store: string,
+    access: ChannelCreationAccess = this.access.current,
+  ) => {
     const scan = this.scans.get(store);
     const scope = this.inbox.getSnapshot().get(store)?.scope;
-    const access = this.access();
     const current = storeOf(access.snapshot, store);
     return Boolean(
       scan &&
@@ -93,7 +100,8 @@ export class ChannelCreationController {
       ChatInboxService,
       'getSnapshot' | 'invalidate' | 'block' | 'handleError'
     >,
-    private access: () => ChannelCreationAccess,
+    /** The access of the last commit; requests read it when they run. */
+    private access: { readonly current: ChannelCreationAccess },
   ) {}
 
   getSnapshot = () => this.snapshot;
@@ -162,7 +170,7 @@ export class ChannelCreationController {
     if (!record || record.state !== 'confirmed' || !record.operation)
       return null;
     const generation =
-      this.access().accessGenerations?.get(record.store.server) ?? 0;
+      this.access.current.accessGenerations?.get(record.store.server) ?? 0;
     this.authorize(record.store, record.scope, generation, 'before');
     return { ref: record.store.id, channel: record.operation.channel };
   }
@@ -176,7 +184,7 @@ export class ChannelCreationController {
     generation: number,
     phase: 'before' | 'after',
   ) {
-    const access = this.access();
+    const access = this.access.current;
     const current = storeOf(access.snapshot, store.id);
     const entry = this.inbox.getSnapshot().get(store.id);
     if (entry?.scope && !sameScope(scope, entry.scope)) {
@@ -239,7 +247,8 @@ export class ChannelCreationController {
         entry.data.channels.map((channel) => channel.name),
       ) ?? channelDescriptionProblem(input.description);
     if (problem) throw new Error(problem);
-    const generation = this.access().accessGenerations?.get(store.server) ?? 0;
+    const generation =
+      this.access.current.accessGenerations?.get(store.server) ?? 0;
     this.authorize(store, entry.scope, generation, 'before');
     this.prune();
     if (this.records.size >= CHANNEL_CREATION_RECORD_LIMIT)
@@ -381,7 +390,7 @@ export class ChannelCreationController {
     this.publish();
     const epoch = this.epoch;
     const generation =
-      this.access().accessGenerations?.get(record.store.server) ?? 0;
+      this.access.current.accessGenerations?.get(record.store.server) ?? 0;
     const client = chatClient(
       this.bridge,
       record.store.server,
@@ -516,7 +525,8 @@ export class ChannelCreationController {
     let check: ChannelCreationCheck | undefined;
     const epoch = this.epoch;
     const scope = entry.scope;
-    const generation = this.access().accessGenerations?.get(store.server) ?? 0;
+    const generation =
+      this.access.current.accessGenerations?.get(store.server) ?? 0;
     const client = chatClient(this.bridge, store.server, store.id);
     this.clients.add(client);
     try {

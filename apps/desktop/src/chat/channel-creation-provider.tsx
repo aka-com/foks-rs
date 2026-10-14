@@ -1,7 +1,9 @@
 import {
   createContext,
   useContext,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -13,10 +15,16 @@ import type { AgentSnapshot, StoreRef } from '../model';
 import { Button } from '../components';
 import { failure } from './actions';
 import { channelTitle } from './presentation';
-import { ChannelCreationController } from './channel-creation';
+import {
+  ChannelCreationController,
+  type ChannelCreationAccess,
+} from './channel-creation';
 import { useChatInbox, useSidebarInbox } from './inbox-provider';
 
-const Context = createContext<ChannelCreationController | null>(null);
+const Context = createContext<{
+  controller: ChannelCreationController;
+  access: ChannelCreationAccess;
+} | null>(null);
 const empty: ReturnType<ChannelCreationController['getSnapshot']> = [];
 const emptySnapshot = () => empty;
 const noChecks: ReturnType<ChannelCreationController['getChecks']> = new Map();
@@ -37,18 +45,29 @@ export function ChannelCreationProvider({
   children: ReactNode;
 }) {
   const { service } = useChatInbox();
-  const current = useRef({ snapshot, accessNow, accessGenerations });
-  current.current = { snapshot, accessNow, accessGenerations };
+  const access = useMemo(
+    () => ({ snapshot, accessNow, accessGenerations }),
+    [snapshot, accessNow, accessGenerations],
+  );
+  // Requests read the access of the last commit when they run. A render
+  // reads the access it renders with, from the context value.
+  const current = useRef(access);
+  useLayoutEffect(() => {
+    current.current = access;
+  }, [access]);
   const controller = useMemo(
-    () => new ChannelCreationController(bridge, service, () => current.current),
+    () => new ChannelCreationController(bridge, service, current),
     [bridge, service],
   );
   useEffect(() => () => controller.dispose(), [controller]);
-  return <Context.Provider value={controller}>{children}</Context.Provider>;
+  const value = useMemo(() => ({ controller, access }), [controller, access]);
+  return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 
 export function useChannelCreation() {
-  const controller = useContext(Context);
+  const context = useContext(Context);
+  const controller = context?.controller ?? null;
+  const access = context?.access;
   const creations = useSyncExternalStore(
     controller?.subscribe ?? noSubscribe,
     controller?.getSnapshot ?? emptySnapshot,
@@ -59,7 +78,14 @@ export function useChannelCreation() {
     controller?.getChecks ?? emptyChecks,
     controller?.getChecks ?? emptyChecks,
   );
-  return { controller, creations, checks };
+  // Whether the team's saved creations were read under the access this
+  // render holds.
+  const readyFor = useCallback(
+    (store: string) =>
+      Boolean(controller && access && controller.readyFor(store, access)),
+    [controller, access],
+  );
+  return { controller, creations, checks, readyFor };
 }
 
 export function ChannelCreationCompletions({

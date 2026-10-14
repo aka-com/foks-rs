@@ -11,7 +11,14 @@ import { useChannelCreation } from '../chat/channel-creation-provider';
  * accepted by `prepare-channel`.
  */
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { ReactNode } from 'react';
 import {
   Button,
@@ -153,13 +160,16 @@ export function NewChatSheet({
   const closing = useRef(false);
   const autoOpen = useRef(false);
   const submittedRef = useRef(onSubmitted);
-  submittedRef.current = onSubmitted;
   const [error, setError] = useState('');
-  const { controller, creations, checks } = useChannelCreation();
+  const { controller, creations, checks, readyFor } = useChannelCreation();
   const [creationId, setCreationId] = useState<string>();
   const active = creations.find((record) => record.id === creationId);
   const draftRef = useRef(onDraft);
-  draftRef.current = onDraft;
+  // The effects below call the latest callbacks without depending on them.
+  useLayoutEffect(() => {
+    submittedRef.current = onSubmitted;
+    draftRef.current = onDraft;
+  });
   useEffect(() => {
     if (active?.state !== 'cancelled') return;
     setError(active.error);
@@ -238,7 +248,9 @@ export function NewChatSheet({
   // subscription from an abandoned submission.
   const openedCreation = useRef<string | undefined>(undefined);
   const openRef = useRef(open);
-  openRef.current = open;
+  useLayoutEffect(() => {
+    openRef.current = open;
+  });
   useEffect(() => {
     if (
       !autoOpen.current ||
@@ -340,7 +352,7 @@ export function NewChatSheet({
   // thing that can stop a recovery is a recovery already running.
   const unsendable =
     !picked ||
-    !controller?.readyFor(picked.store.id) ||
+    !readyFor(picked.store.id) ||
     problem !== null ||
     descriptionProblem !== null ||
     !channelsKnown ||
@@ -354,13 +366,15 @@ export function NewChatSheet({
   // Unsubmitted fields are restored on rail changes. Other destructive moves
   // can ask for discard; submitted work never holds navigation open.
   const guardState = useRef({ typed: false, name: '', locked: false });
-  guardState.current = {
-    typed: !submission && Boolean(name.trim() || description.trim()),
-    name: name.trim(),
-    locked,
-  };
   const closeRef = useRef(close);
-  closeRef.current = close;
+  useLayoutEffect(() => {
+    guardState.current = {
+      typed: !submission && Boolean(name.trim() || description.trim()),
+      name: name.trim(),
+      locked,
+    };
+    closeRef.current = close;
+  });
   const formGuard = useCallback<NavigationGuard>(() => {
     const { typed, name: typedName } = guardState.current;
     // The application owns submitted work independently of this sheet.
@@ -505,7 +519,7 @@ export function NewChatSheet({
             picked &&
             entry?.state === 'ready' &&
             !picked.reason &&
-            !controller.readyFor(picked.store.id) &&
+            !readyFor(picked.store.id) &&
             (check?.state === 'failed' ? (
               <p role="status" className="action-error">
                 Saved channel creations could not be checked: {check.error}{' '}

@@ -28,9 +28,13 @@ export function useChatViewport(
   const anchoring = useRef(false);
   const placingNewer = useRef(false);
   const held = useRef(messages);
-  held.current = messages;
   const target = useRef(anchorTarget);
-  target.current = anchorTarget;
+  // Declared before the placement effect below, which reads `target` in the
+  // same commit.
+  useLayoutEffect(() => {
+    held.current = messages;
+    target.current = anchorTarget;
+  });
   const scroll = useRef<{ height: number; top: number } | null>(null);
   const onScroll = useCallback(() => {
     const element = scroller.current;

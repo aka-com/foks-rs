@@ -80,4 +80,15 @@ export default tseslint.config(
       '@typescript-eslint/no-base-to-string': 'off',
     },
   },
+  {
+    // Chat hooks and screens neither read nor write refs while rendering.
+    // The rest of the desktop source is not yet held to this rule.
+    files: [
+      'apps/desktop/src/chat/**/*.{ts,tsx}',
+      'apps/desktop/src/screens/chat-*.{ts,tsx}',
+    ],
+    rules: {
+      'react-hooks/refs': 'error',
+    },
+  },
 );

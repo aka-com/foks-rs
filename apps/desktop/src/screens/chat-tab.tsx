@@ -91,7 +91,12 @@ export function ChatTab({
   accessNow = systemAccessNow,
   accessGenerations = NO_GENERATIONS,
 }: ChatTabProps): ReactNode {
-  const sidebar = useChatSidebarResize();
+  const {
+    ref: sidebarRef,
+    style: sidebarStyle,
+    handle: sidebarHandle,
+    id: sidebarId,
+  } = useChatSidebarResize();
   const inbox = useSidebarInbox();
   // One clock for the whole tab: the column, the pane and the fallback all
   // read availability off the moment this render started.
@@ -222,13 +227,13 @@ export function ChatTab({
   const showInfo = info && Boolean(open);
   return (
     <section
-      ref={sidebar.ref}
-      style={sidebar.style}
+      ref={sidebarRef}
+      style={sidebarStyle}
       className={showInfo ? 'chat-screen with-info' : 'chat-screen'}
     >
-      {sidebar.handle}
+      {sidebarHandle}
       <ChatTeamColumn
-        id={sidebar.id}
+        id={sidebarId}
         snapshot={snapshot}
         selected={ref}
         activeChannel={channel?.id}

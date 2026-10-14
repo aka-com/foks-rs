@@ -1,5 +1,11 @@
 import { focusedWindow } from './visibility';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { RefObject } from 'react';
 import type { ChatMessage } from '../chat-contract';
 import { normalizeCommandError } from '../bridge';
@@ -61,7 +67,9 @@ export function useChatReadIntent(
   const seen = useRef('0');
   // Observer and timer callbacks outlive a render; they read these.
   const live = useRef({ channelId, markRead, enabled });
-  live.current = { channelId, markRead, enabled };
+  useLayoutEffect(() => {
+    live.current = { channelId, markRead, enabled };
+  });
   const disposed = useRef(false);
   useEffect(() => {
     if (newAfter !== null && !dismissed.current)

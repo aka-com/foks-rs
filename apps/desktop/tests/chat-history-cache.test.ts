@@ -168,12 +168,36 @@ test('retained history has aggregate channel, row, and UTF-8 byte bounds', () =>
     const c = cache.binding('t', 'c', 0)!;
     cache.accept(a, page('a', '1', 'éé'), null);
     cache.accept(b, page('b', '1', 'éé'), null);
-    cache.get(a);
+    cache.touch(a);
     cache.accept(c, page('c', '1', 'éé'), null);
     assert.ok(cache.get(a));
     assert.equal(cache.get(b), null);
     assert.ok(cache.get(c));
   }
+});
+
+test('reading retained history leaves the eviction order unchanged', () => {
+  // Rendering reads the open channel's window; only an open or an accepted
+  // page records a use.
+  const cache = new ChatHistoryCache({ channels: 2, rows: 10, bytes: 100 });
+  cache.update('t', inbox(), 0);
+  const a = cache.binding('t', 'a', 0)!;
+  const b = cache.binding('t', 'b', 0)!;
+  const c = cache.binding('t', 'c', 0)!;
+  cache.accept(a, page('a'), null);
+  cache.accept(b, page('b'), null);
+  let published = 0;
+  cache.subscribe(() => published++);
+  assert.ok(cache.get(a));
+  assert.equal(published, 0);
+  cache.accept(c, page('c'), null);
+  assert.equal(published, 1);
+  assert.equal(cache.get(a), null);
+  assert.ok(cache.get(b));
+  assert.ok(cache.get(c));
+  // Recency is not observable, so recording a use publishes nothing.
+  cache.touch(b);
+  assert.equal(published, 1);
 });
 
 test('a full retained window can advance to the newest page without remaining stuck at its limit', () => {

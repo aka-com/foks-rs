@@ -4,7 +4,6 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useRef,
   useSyncExternalStore,
 } from 'react';
 import type { ReactNode } from 'react';
@@ -32,12 +31,14 @@ export function ChatSendProvider({
   accessGenerations?: ReadonlyMap<string, number>;
   children: ReactNode;
 }) {
-  const initial = useRef(snapshot);
-  initial.current = snapshot;
+  // A new owner starts from the snapshot it is created under, so the render
+  // that creates it already reads current stores. Later snapshots reach the
+  // owner through the layout effect below; they do not replace it.
   const service = useMemo(() => {
     const owner = new ChatSendService(bridge, inbox, clock);
-    owner.update(initial.current);
+    owner.update(snapshot);
     return owner;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, inbox, clock]);
   useLayoutEffect(() => {
     service.update(snapshot, accessGenerations);

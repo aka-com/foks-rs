@@ -1,6 +1,12 @@
 import { normalizeCommandError } from '../bridge';
 import type { CommandError } from '../bridge';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type {
   ChatAction,
   ChatChannel,
@@ -186,7 +192,6 @@ export function useChatHistory({
   const seenRevision = useRef(revision);
   const generation = useRef(0);
   const heldEnd = useRef(endOf(accepted));
-  heldEnd.current = endOf(accepted);
   // The callbacks are read through a ref for the same reason as the position
   // below: in the load's dependencies, an inline callback would reopen the
   // thread on every render. The request is read through it too, so that
@@ -194,14 +199,19 @@ export function useChatHistory({
   // and the mount effect still depends on `request`, because a new request
   // is a new owner.
   const callbacks = useRef({ request, onAccepted, onFatal, onLoading });
-  callbacks.current = { request, onAccepted, onFatal, onLoading };
   // Read through a ref: a position in the load's dependencies would rebuild
   // the callback, and the mount effect depends on it, so every unread count
   // would reopen the thread with a full page.
   // Named for what it is: the newest sequence the inbox published, not the
   // newest one a reply carried.
   const publishedHead = useRef(position);
-  publishedHead.current = position;
+  // Each commit stores the values it rendered with. Reads start from effects
+  // and handlers, after the commit, and this runs before any passive effect.
+  useLayoutEffect(() => {
+    heldEnd.current = endOf(accepted);
+    callbacks.current = { request, onAccepted, onFatal, onLoading };
+    publishedHead.current = position;
+  });
   // Cleared once the anchored page is accepted, or when Jump to latest
   // replaces it: a later run of the mount effect (a new request owner) then
   // reads the tail, unless this mount detached the window.

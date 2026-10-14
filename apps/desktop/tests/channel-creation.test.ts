@@ -98,6 +98,17 @@ async function setup(
     },
     cancelChat: async () => {},
   } as unknown as Bridge;
+  // What the provider's last commit holds; the getter reads the fixture's
+  // current snapshot and generation.
+  const access = {
+    get current() {
+      return {
+        snapshot,
+        accessNow: () => 0,
+        accessGenerations: new Map([[store.server, generation]]),
+      };
+    },
+  };
   const controller = new ChannelCreationController(
     bridge,
     {
@@ -115,15 +126,12 @@ async function setup(
         invalidated.push(id);
       },
     },
-    () => ({
-      snapshot,
-      accessNow: () => 0,
-      accessGenerations: new Map([[store.server, generation]]),
-    }),
+    access,
   );
   await controller.discover(store);
   return {
     controller,
+    access,
     store,
     actions,
     blocked,
@@ -423,6 +431,31 @@ test('a name taken since preparation requires review rather than another attempt
     1,
   );
   assert.equal(controller.submit(store, { ...input, name: 'different' }), id);
+  controller.dispose();
+});
+
+test('readiness is judged under the access a render passes, not the last committed one', async () => {
+  const { controller, access, store } = await setup(async () =>
+    reply(prepared),
+  );
+  // A render holding a generation its provider has not committed yet sees
+  // the ledger check as stale before any request reads the new access.
+  assert.equal(controller.readyFor(store.id), true);
+  const { snapshot } = access.current;
+  assert.equal(
+    controller.readyFor(store.id, {
+      snapshot,
+      accessGenerations: new Map([[store.server, 1]]),
+    }),
+    false,
+  );
+  assert.equal(
+    controller.readyFor(store.id, {
+      snapshot,
+      accessGenerations: new Map([[store.server, 0]]),
+    }),
+    true,
+  );
   controller.dispose();
 });
 

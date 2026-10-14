@@ -49,10 +49,14 @@ export function useChatConversation(
   const [failure, setFailure] = useState<CommandError | null>(null);
   const [blocked, setBlocked] = useState('');
   const fatal = useRef('');
+  // Read by history reads and acceptance, which run after the commit that
+  // rendered them, never during a render.
   const accessRef = useRef(access);
   const accessGenerationRef = useRef(accessGeneration);
-  accessRef.current = access;
-  accessGenerationRef.current = accessGeneration;
+  useLayoutEffect(() => {
+    accessRef.current = access;
+    accessGenerationRef.current = accessGeneration;
+  });
   // The mounted request owner. It is replaced when the bridge, profile or
   // store changes and cleared when the team is blocked; a history reply that
   // returns to an earlier owner is discarded.
@@ -202,8 +206,21 @@ export function useChatConversation(
       ),
     [sends, service, storeId],
   );
+  // Opening a channel is a use of its retained history. `history` is read
+  // while rendering, so it leaves the eviction order alone; the open records
+  // the use instead.
   const setOpenChannel = useCallback(
-    (channel: string | null) => service.setOpenChannel(storeId, channel),
+    (channel: string | null) => {
+      service.setOpenChannel(storeId, channel);
+      if (channel !== null)
+        service.histories.touch(
+          service.histories.binding(
+            storeId,
+            channel,
+            accessGenerationRef.current,
+          ),
+        );
+    },
     [service, storeId],
   );
   const blockHistory = useCallback(
