@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-export type OnboardingTip = 'add-password';
+export type OnboardingTip = 'add-password' | 'setup-checklist';
 const EVENT = 'foks-onboarding-tip-change';
 const keyFor = (tip: OnboardingTip) => `onboarding.dismissed.${tip}`;
 

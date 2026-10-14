@@ -244,6 +244,45 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .sync-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px}
 .sync-empty{margin:0;padding:8px 14px 14px;color:var(--muted)}
 .sync-foot{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:6px;padding:8px 14px;border-top:1px solid var(--line-soft);background:var(--hover)}
+/* Attention: the header's bell, with a count of the items that need the reader, and the popover
+   listing them with the setup steps still open and the session's recent messages. */
+.attention-trigger{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:28px;border-radius:var(--radius-sm);color:var(--muted)}
+.attention-trigger:hover:not([disabled]){background:var(--hover);color:var(--ink)}
+.attention-trigger[disabled]{cursor:default;opacity:.6}
+.attention-trigger .ic{font-size:16px}
+.attention-trigger .attention-count{position:absolute;top:0;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:var(--radius-pill);background:var(--unread);color:var(--unread-ink);font-size:12px;font-weight:700;line-height:16px;text-align:center;font-variant-numeric:tabular-nums}
+.attention-popover{min-width:min(340px,calc(100vw - 16px));max-width:min(420px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;padding:6px 0;font-size:12.5px;background:var(--main-surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-menu)}
+.attention-popover [role="dialog"]:focus{outline:0}
+.attention-popover section{padding:4px 8px}
+.attention-popover section+section{margin-top:4px;padding-top:8px;border-top:1px solid var(--line-soft)}
+.attention-cap-row{display:flex;align-items:center;gap:8px}
+.attention-cap{flex:1;margin:0;padding:4px 6px;font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
+.attention-cap-row .attention-cap{flex:none}
+.attention-progress{flex:1;color:var(--faint);font-variant-numeric:tabular-nums}
+.attention-cap-row .lnk{margin-left:auto;padding:0 6px;font-size:12px;font-weight:600}
+.attention-list{list-style:none;margin:0;padding:0}
+.attention-row{display:flex;align-items:flex-start;gap:8px;width:100%;padding:6px;border:0;border-radius:var(--radius-sm);background:none;color:inherit;font:inherit;text-align:left}
+button.attention-row{cursor:pointer}
+button.attention-row:hover{background:var(--hover)}
+button.attention-row:focus-visible{outline:2px solid var(--accent-border);outline-offset:-2px}
+.attention-row>.ic{flex:none;margin-top:1px;font-size:15px;color:var(--muted)}
+.attention-row.warning>.ic:first-child{color:var(--amber-ink)}
+.attention-row .t{flex:1;min-width:0;line-height:1.35}
+.attention-row .t b{display:block;font-weight:600;color:var(--ink);overflow-wrap:anywhere}
+.attention-row .t small{display:block;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.attention-row .go{flex:none;align-self:center;font-size:12px;color:var(--faint)}
+.attention-row .step-mark{flex:none;width:15px;height:15px;margin-top:1px;font-size:15px;color:var(--ok-solid)}
+.attention-row .step-mark.todo{box-sizing:border-box;border:1.5px solid var(--faint);border-radius:50%}
+.attention-row.done .t b{color:var(--muted);font-weight:500}
+.attention-state{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.attention-recent{list-style:none;margin:0;padding:0 6px}
+.attention-recent li{display:flex;align-items:baseline;gap:10px;padding:4px 0;color:var(--ink-3)}
+.attention-recent li+li{border-top:1px solid var(--line-soft)}
+.attention-recent li.warning{color:var(--amber-ink)}
+.attention-recent .t{flex:1;min-width:0;overflow-wrap:anywhere}
+.attention-recent time{flex:none;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+.attention-empty{margin:0;padding:4px 6px 6px;color:var(--muted)}
+.attention-note{margin:4px 0 0;padding:0 6px;font-size:12px;color:var(--faint)}
 /* Header row containing top-level navigation and shell controls. */
 .topbar{height:var(--topbar-h);flex:none;display:flex;align-items:center;gap:8px;padding:0 14px 0 10px;border-bottom:1px solid var(--line-soft);user-select:none}
 /* Topbar navigation breadcrumbs. */

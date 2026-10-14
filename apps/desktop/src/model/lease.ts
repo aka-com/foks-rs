@@ -739,13 +739,20 @@ export function notesNow(snapshot: AgentSnapshot): Notification[] {
   });
 }
 
-/** A server whose check-in has lapsed or whose trust has never been verified: the two reasons the Settings tab's orange dot answers for. */
-function serverFlaggedForSettings(availability: Availability): boolean {
-  return (
-    !availability.available &&
-    (availability.reason === 'check-in-expired' ||
-      availability.reason === 'verification-required')
-  );
+/**
+ * Why the Settings tab's orange dot answers for a server: its check-in has
+ * lapsed, or its trust has never been verified. Null for any other state.
+ */
+export function settingsServerFlag(
+  snapshot: AgentSnapshot,
+  server: Server,
+): 'check-in-expired' | 'verification-required' | null {
+  const availability = serverAvailability(snapshot, server);
+  if (availability.available) return null;
+  return availability.reason === 'check-in-expired' ||
+    availability.reason === 'verification-required'
+    ? availability.reason
+    : null;
 }
 
 /**
@@ -758,16 +765,15 @@ function serverFlaggedForSettings(availability: Availability): boolean {
 export function settingsAlertSummary(
   snapshot: AgentSnapshot,
 ): { description: string } | null {
-  const flagged = snapshot.servers.filter((server) =>
-    serverFlaggedForSettings(serverAvailability(snapshot, server)),
+  const flagged = snapshot.servers.filter(
+    (server) => settingsServerFlag(snapshot, server) !== null,
   );
   if (!flagged.length) return null;
   if (flagged.length > 1)
     return { description: `${flagged.length} servers need attention` };
   const server = flagged[0];
-  const availability = serverAvailability(snapshot, server);
   const reason =
-    !availability.available && availability.reason === 'check-in-expired'
+    settingsServerFlag(snapshot, server) === 'check-in-expired'
       ? 'check-in expired'
       : 'not verified';
   return { description: `${serverDisplayLabel(server)}: ${reason}` };

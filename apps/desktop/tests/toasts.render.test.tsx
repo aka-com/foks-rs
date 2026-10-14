@@ -9,6 +9,7 @@ let ui: typeof import('@testing-library/react');
 let vite: ViteDevServer;
 let ToastController: typeof import('../kit/toasts').ToastController;
 let ToastProvider: typeof import('../kit/toasts').ToastProvider;
+let TOAST_HISTORY_LENGTH: number;
 test.before(async () => {
   ui = await import('@testing-library/react');
   vite = await createServer({
@@ -16,7 +17,7 @@ test.before(async () => {
     appType: 'custom',
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
-  ({ ToastController, ToastProvider } =
+  ({ ToastController, ToastProvider, TOAST_HISTORY_LENGTH } =
     await vite.ssrLoadModule('/kit/toasts.tsx'));
 });
 test.afterEach(() => ui.cleanup());
@@ -87,4 +88,64 @@ test('deduplicated actionable warnings keep one announcement region and usable c
     rendered.getByRole('button', { name: 'Dismiss notification' }),
   );
   assert.equal(rendered.container.querySelectorAll('.toast').length, 0);
+});
+
+test('the controller keeps the last messages it showed, after their toasts close, until cleared', () => {
+  let now = 1_000;
+  const controller = new ToastController(() => now);
+  let published = 0;
+  const unsubscribe = controller.subscribeHistory(() => {
+    published++;
+  });
+  // Shown before a provider connects, and still recorded.
+  controller.show('Saved');
+  const rendered = ui.render(
+    createElement(ToastProvider, { controller, children: null }),
+  );
+  ui.act(() => {
+    now = 2_000;
+    controller.show('Restoring notes…', { dedupeKey: 'restore' });
+    now = 3_000;
+    controller.show('⚠ Restore failed', { dedupeKey: 'restore' });
+    controller.show('Copied', {
+      action: { label: 'Undo', onAction: () => undefined },
+    });
+  });
+  // The outcome replaces its progress message, as the toast itself does.
+  assert.deepEqual(
+    controller
+      .getHistory()
+      .map((record) => [record.message, record.tone, record.shownAt]),
+    [
+      ['Saved', 'info', 1_000],
+      ['⚠ Restore failed', 'warning', 3_000],
+      ['Copied', 'info', 3_000],
+    ],
+  );
+  ui.act(() => {
+    for (const node of rendered.container.querySelectorAll<HTMLElement>(
+      '[data-toast-dismiss]',
+    ))
+      node.click();
+  });
+  assert.equal(rendered.container.querySelectorAll('.toast').length, 0);
+  assert.equal(controller.getHistory().length, 3);
+
+  ui.act(() => {
+    for (let index = 0; index < TOAST_HISTORY_LENGTH + 5; index++)
+      controller.show(`Message ${index}`);
+  });
+  const history = controller.getHistory();
+  assert.equal(history.length, TOAST_HISTORY_LENGTH);
+  assert.equal(history[0].message, 'Message 5');
+  assert.equal(
+    history[TOAST_HISTORY_LENGTH - 1].message,
+    `Message ${TOAST_HISTORY_LENGTH + 4}`,
+  );
+
+  const before = published;
+  controller.clearHistory();
+  assert.deepEqual(controller.getHistory(), []);
+  assert.equal(published, before + 1);
+  unsubscribe();
 });

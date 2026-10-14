@@ -11,7 +11,8 @@ import {
 import { anyDialogOpen, OverlayProvider } from '/kit/overlay-primitives';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import type { AgentLifecycleController } from '../agent-lifecycle';
-import type { Bridge, ItemField } from '../bridge';
+import { attentionItems, setupChecklist } from '../attention';
+import type { AppLockState, Bridge, ItemField } from '../bridge';
 import { useChatMigration } from '../chat/migration';
 import { ChatInboxProvider } from '../chat/inbox-provider';
 import { DeviceCacheContext } from '../device-cache';
@@ -170,11 +171,18 @@ export function VaultShell({
     lifetime.getSnapshot,
   );
   useEffect(() => () => lifetime.retire('access-change'), [lifetime]);
+  const [toasts] = useState(() => new ToastController());
+  // The attention centre's Recent list is the toast history. A lock also
+  // unmounts this shell, which discards the controller; clearing it here does
+  // not depend on that.
   const onLock = useCallback(async () => {
     const locked = await requestLock();
-    if (locked) lifetime.retire('lock');
+    if (locked) {
+      lifetime.retire('lock');
+      toasts.clearHistory();
+    }
     return locked;
-  }, [lifetime, requestLock]);
+  }, [lifetime, requestLock, toasts]);
   const fixtures = fixtureScenesAllowed(bridge);
   const [{ scene, automaticFirstRun }] = useState(() => {
     const decoded = initialScene(bridge);
@@ -228,7 +236,6 @@ export function VaultShell({
     (value) => value?.kind === 'new' || value?.kind === 'new-folder',
     locations,
   );
-  const [toasts] = useState(() => new ToastController());
   const catalog = useCatalogRuntime({
     lifetime,
     bridge,
@@ -489,6 +496,53 @@ export function VaultShell({
   const phraseTests = useSyncExternalStore(
     subscribeRecoveryPhraseTests,
     recoveryPhraseTests,
+  );
+  // The attention centre restates the rail's signals one entity at a time,
+  // and adds the setup steps and the toast history. See `attention.ts`.
+  const toastHistory = useSyncExternalStore(
+    toasts.subscribeHistory,
+    toasts.getHistory,
+  );
+  const [appLock, setAppLock] = useState<AppLockState | null>(null);
+  useEffect(() => {
+    let live = true;
+    Promise.resolve()
+      .then(() => bridge.appLockState())
+      .then(
+        (state) => {
+          if (live) setAppLock(state);
+        },
+        // The checklist leaves the step out while the state is unknown.
+        () => undefined,
+      );
+    return () => {
+      live = false;
+    };
+  }, [bridge]);
+  const attention = useMemo(
+    () => ({
+      items: attentionItems({
+        snapshot: shown,
+        teamRequests: teamRequestCounts,
+        devices: deviceAlerts,
+        phraseTests,
+        notices: unroutedNotices(shown),
+      }),
+      checklist: setupChecklist({
+        snapshot: shown,
+        devices: deviceAlerts,
+        ...(appLock ? { appLock } : {}),
+        catalogReady: agentCatalogReady,
+      }),
+    }),
+    [
+      agentCatalogReady,
+      appLock,
+      deviceAlerts,
+      phraseTests,
+      shown,
+      teamRequestCounts,
+    ],
   );
   const appRef = useRef<HTMLDivElement>(null);
   const portalRoot = useMemo(
@@ -925,6 +979,12 @@ export function VaultShell({
                       profile,
                     })
                   }
+                  attention={{
+                    ...attention,
+                    recent: toastHistory,
+                    onNavigate: (location) => locations.navigate(location),
+                    onClearRecent: () => toasts.clearHistory(),
+                  }}
                 />
                 {chatMigration.notice}
                 {/* Reset screen failures when the location changes while keeping

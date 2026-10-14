@@ -2,10 +2,10 @@
  * The header row: one 48px band across the top of the content column.
  *
  * It replaced the two bands the shell used to draw — the title strip and the
- * page's own header — so the breadcrumb, search field, primary New control
- * and sync status share one line. Its empty parts are the window's drag
- * region, because the rail's
- * strip alone does not reach across the window.
+ * page's own header — so the breadcrumb, search field, primary New control,
+ * attention bell and sync status share one line. Its empty parts are the
+ * window's drag region, because the rail's strip alone does not reach across
+ * the window.
  */
 
 import { Fragment, useEffect, useRef, useState } from 'react';
@@ -14,6 +14,8 @@ import type { ReactNode } from 'react';
 import { Button, Icon, SearchField } from '../components';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
 import { SYNC_STATUS_ID, SyncPopover, useSyncSummary } from './sync-popover';
+import { AttentionControl } from './attention-centre';
+import type { AttentionCentreProps } from './attention-centre';
 import { serverAvailability } from '../model/lease';
 import { NewItemButton } from './toolbar';
 import { useSidebarInbox } from '../chat/inbox-provider';
@@ -205,6 +207,11 @@ export interface TopbarProps {
   syncService?: DesktopReconciliation;
   /** Opens one server under Settings › Account, from the popover. */
   onOpenServers?: (profile: string) => void;
+  /**
+   * The attention centre's lists. With them the bar carries the bell that
+   * opens them, ahead of the sync control.
+   */
+  attention?: Omit<AttentionCentreProps, 'blocked'>;
   /** A blocking state: the bar is drawn, and nothing on it acts. */
   blocked?: boolean;
 }
@@ -536,6 +543,7 @@ export function Topbar({
   onRefresh,
   syncService,
   onOpenServers,
+  attention,
   blocked = false,
 }: TopbarProps): ReactNode {
   const inbox = useSidebarInbox();
@@ -658,6 +666,7 @@ export function Topbar({
           New chat
         </Button>
       ) : null}
+      {attention ? <AttentionControl {...attention} blocked={blocked} /> : null}
       {onRefresh && syncService && snapshot ? (
         <SyncControls
           snapshot={snapshot}

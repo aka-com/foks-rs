@@ -12,6 +12,8 @@ import { createPortal } from 'react-dom';
 const DEFAULT_DURATION_MS = 2_600;
 const EXIT_DURATION_MS = 300;
 const MAX_VISIBLE_TOASTS = 5;
+/** How many shown messages the controller keeps for the Recent list. */
+export const TOAST_HISTORY_LENGTH = 20;
 
 export interface ToastAction {
   label: string;
@@ -32,20 +34,94 @@ interface ToastRequest extends ToastOptions {
 
 type ToastListener = (request: ToastRequest) => void;
 
+/**
+ * One message the controller showed, as the Recent list draws it: the text
+ * and when it was shown. Actions are not kept; the list only reports.
+ */
+export interface ToastRecord {
+  id: number;
+  message: string;
+  tone: 'info' | 'warning';
+  /** Milliseconds since the epoch. */
+  shownAt: number;
+}
+
+const NO_HISTORY: readonly ToastRecord[] = [];
+
+/** A message is a warning when its caller says so or it starts with ⚠. */
+function toastTone(
+  request: ToastOptions & { message: string },
+): ToastRecord['tone'] {
+  return request.tone === 'warning' ||
+    (request.tone === undefined && request.message.trimStart().startsWith('⚠'))
+    ? 'warning'
+    : 'info';
+}
+
 /** Explicit notification channel owned by one mounted ToastProvider. */
 export class ToastController {
   private listener: ToastListener | null = null;
   private pending: ToastRequest[] = [];
   private nextId = 1;
+  private history: readonly ToastRecord[] = NO_HISTORY;
+  /** The history with each entry's dedupe key, which the list does not show. */
+  private keyed: readonly { key: string; record: ToastRecord }[] = [];
+  private historyListeners = new Set<() => void>();
+
+  constructor(private readonly now: () => number = Date.now) {}
 
   show(message: string, options: ToastOptions = {}): number {
     const request = { id: this.nextId++, message, ...options };
+    this.record(request);
     if (this.listener) this.listener(request);
     else {
       this.pending.push(request);
       this.pending = this.pending.slice(-MAX_VISIBLE_TOASTS);
     }
     return request.id;
+  }
+
+  /**
+   * The last `TOAST_HISTORY_LENGTH` messages, oldest first. Only the message
+   * text is kept, in memory, for as long as this controller lives; callers
+   * clear it when the app locks. A message that replaces a shown one (the
+   * same `dedupeKey`, or the same text) replaces its entry as well, so a
+   * progress message and its outcome take one row.
+   */
+  getHistory = (): readonly ToastRecord[] => this.history;
+
+  subscribeHistory = (listener: () => void): (() => void) => {
+    this.historyListeners.add(listener);
+    return () => {
+      this.historyListeners.delete(listener);
+    };
+  };
+
+  clearHistory(): void {
+    if (!this.history.length) return;
+    this.history = NO_HISTORY;
+    this.keyed = [];
+    this.publishHistory();
+  }
+
+  private record(request: ToastRequest): void {
+    const key = request.dedupeKey ?? request.message;
+    const record: ToastRecord = {
+      id: request.id,
+      message: request.message,
+      tone: toastTone(request),
+      shownAt: this.now(),
+    };
+    this.keyed = [
+      ...this.keyed.filter((entry) => entry.key !== key),
+      { key, record },
+    ].slice(-TOAST_HISTORY_LENGTH);
+    this.history = this.keyed.map((entry) => entry.record);
+    this.publishHistory();
+  }
+
+  private publishHistory(): void {
+    for (const listener of this.historyListeners) listener();
   }
 
   connect(listener: ToastListener): () => void {
@@ -87,9 +163,7 @@ function ToastItem({
   dismiss: (id: number) => void;
 }): ReactNode {
   const [visible, setVisible] = useState(false);
-  const warning =
-    entry.tone === 'warning' ||
-    (entry.tone === undefined && entry.message.trimStart().startsWith('⚠'));
+  const warning = toastTone(entry) === 'warning';
 
   useEffect(() => {
     const animationFrame = window.requestAnimationFrame(() => setVisible(true));

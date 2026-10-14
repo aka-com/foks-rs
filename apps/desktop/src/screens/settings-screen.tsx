@@ -253,6 +253,8 @@ export function SettingsScreen({
 function PreferencesSection(): ReactNode {
   const [passwordTipDismissed, setPasswordTipDismissed] =
     useDismissedOnboardingTip('add-password');
+  const [checklistDismissed, setChecklistDismissed] =
+    useDismissedOnboardingTip('setup-checklist');
   return (
     <>
       <SectionLabel>Appearance</SectionLabel>
@@ -271,6 +273,15 @@ function PreferencesSection(): ReactNode {
             onChange={(event) => setPasswordTipDismissed(!event.target.checked)}
           />
           <span>Add a password</span>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            aria-label="Show the Get set up checklist"
+            checked={!checklistDismissed}
+            onChange={(event) => setChecklistDismissed(!event.target.checked)}
+          />
+          <span>Get set up checklist, in the header’s attention list</span>
         </label>
       </Inset>
     </>
