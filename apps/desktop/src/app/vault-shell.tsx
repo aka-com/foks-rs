@@ -33,6 +33,7 @@ import {
 import {
   applyLease,
   defaultCreateStore,
+  isTrashPath,
   settingsAlertSummary,
   storeOf,
   storeReadable,
@@ -98,6 +99,7 @@ import {
   useDroppedUpload,
   type ResumeDraft,
 } from './shell-overlays';
+import { useTrashActions } from './trash-actions';
 import { useShellRuntime } from './shell-runtime';
 import { ShellSearch } from './shell-search';
 import { useWindowRuntime } from './window-runtime';
@@ -333,6 +335,16 @@ export function VaultShell({
     () => locations.setAccountStores(shown.stores),
     [locations, shown.stores],
   );
+  const trash = useTrashActions({
+    bridge,
+    shown,
+    refresh,
+    refreshSnapshot,
+    mutationError,
+    toasts,
+    locations,
+    setWorkflow,
+  });
   const uploadDroppedFile = useDroppedUpload({
     bridge,
     shown,
@@ -496,7 +508,10 @@ export function VaultShell({
         kind: 'new',
         itemKind,
         storeId: newStore.id,
-        ...(newSelection && newSelection.path !== '/'
+        // Nothing is created in Trash; New saves at the vault's top level.
+        ...(newSelection &&
+        newSelection.path !== '/' &&
+        !isTrashPath(newSelection.path)
           ? { initialFolder: newSelection.path }
           : {}),
       });
@@ -754,6 +769,7 @@ export function VaultShell({
                     uploadDroppedFile={uploadDroppedFile}
                     accessNow={accessNow}
                     accessGenerations={accessGenerations}
+                    trash={trash}
                     onTeamInfo={(storeId, trigger) => {
                       locations.setDetails(false);
                       setTeamInfo({ storeId, trigger });
@@ -793,7 +809,7 @@ export function VaultShell({
                 locations.setDetails(false);
               }}
               onMove={(item) => setWorkflow({ kind: 'move', item })}
-              onDelete={(item) => setWorkflow({ kind: 'delete', item })}
+              onTrash={trash.moveToTrash}
               onConflict={(item, draft, operation) =>
                 setWorkflow({ kind: 'conflict', item, draft, operation })
               }
@@ -836,6 +852,7 @@ export function VaultShell({
         commandError={commandError}
         mutationError={mutationError}
         refreshSnapshot={refreshSnapshot}
+        restoreTrash={trash.restoreTo}
         setResumeDraft={setResumeDraft}
         setConcealSignal={setConcealSignal}
         setLatest={setLatest}

@@ -163,6 +163,13 @@ export type MoveItemRequest = ItemRequest & {
   direntId: string;
 };
 export type RemoveItemRequest = ItemRequest & { direntId: string };
+export type RestoreTrashRequest = RemoveItemRequest & { destination: string };
+
+export interface TrashMutationResponse {
+  applied: boolean;
+  /** Where the entry is now: its Trash path, or the restored path. */
+  path: string;
+}
 
 export interface ImportDroppedFileRequest extends CreateRoleRequest {
   storeId: StoreRef;
@@ -382,6 +389,14 @@ export function decodeCopy(value: unknown): CopyResponse {
 export function decodeDownload(value: unknown): DownloadResponse {
   const item = record(value, 'download_file response');
   return { saved: bool(item.saved, 'download_file.saved') };
+}
+
+export function decodeTrashMutation(value: unknown): TrashMutationResponse {
+  const item = record(value, 'trash mutation response');
+  return {
+    applied: bool(item.applied, 'trash mutation response.applied'),
+    path: string(item.path, 'trash mutation response.path'),
+  };
 }
 
 export function decodeMutation(value: unknown): MutationResponse {

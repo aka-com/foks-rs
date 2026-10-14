@@ -7,6 +7,7 @@ mod groups;
 mod preparation;
 mod servers;
 mod support;
+mod trash;
 mod validation;
 mod vault;
 mod yubikey;

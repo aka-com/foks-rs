@@ -378,7 +378,50 @@ dirent identity and version too. The client validates them before uploading
 content and on every namespace retry, so recreation cannot redirect an open
 editor or file picker to a different entry.
 
-Folder deletion is not supported in the desktop.
+### Trash
+
+Delete in the desktop moves an item, or a folder with everything in it,
+into `/.trash` in the same vault, as one `MoveKv` namespace mutation: a
+tombstone at the source and a dirent at the destination. Nothing is
+destroyed, so Delete asks for no confirmation. The toast it shows offers
+Undo for eight seconds, and ⌘Z does the same while it shows. A child that
+another device adds to a folder while it is moved goes with the folder,
+which a recursive delete could not promise.
+
+Dirent names are sealed under the key of the directory that holds them, so
+one shared Trash folder would expose the names of owner-only items to
+members. Each read role has its own folder, `/.trash/owner`,
+`/.trash/admin` or `/.trash/member-<visibility>`, created with that read
+role, and an entry keeps its own read and write roles when it moves in. A
+folder is filed by its own directory read role, since its children's names
+stay sealed under its key. When another item already holds a role folder's
+name with other roles, the next free `/.trash/<role-tag>.<n>` is used
+instead. In a team, `/.trash` itself is readable and writable through the
+low-visibility Member key every team root uses, so any member who can
+delete an item can add the role folder it needs. Only an owner can create
+`/.trash` at the top level, because team roots are owner-writable.
+
+An entry is named `<UTC yyyymmddThhmmss>~<original path>`, with `%`, `/`
+and control characters percent-encoded, for example
+`20261014T093012~%2Flogins%2Fgithub.com`. When that name would pass the
+255-byte component limit, it is `<stamp>~#<hash>`, where the hash is the
+first 16 bytes of the SHA-256 of the original path, and a small file named
+`<that name>.origin` beside it holds the original path.
+
+Each vault's tree ends with a Trash row. Its view lists the entries the
+account can read, newest first, with where each was and when it was
+deleted. Trash is not part of the ordinary folders, All items or search.
+Restore moves an entry back, creating a missing parent folder with the
+entry's roles; when the original path is taken, it offers to restore the
+entry as `<name> (restored)` beside the item there and never replaces it.
+Delete permanently and Empty Trash use `RemoveKv`, recursive for a folder,
+and the host refuses them outside `/.trash`. Their confirmation says what
+they cannot promise: the server keeps every dirent version, so earlier
+encrypted versions may remain on it.
+
+Go FOKS clients and the CLI list `.trash` as an ordinary folder. The layout
+needs no protocol or storage change, and a Go client can restore an entry
+with an ordinary move.
 
 The card grid windows whole rows at the current viewport width through
 `files-grid.ts`, so it can scroll through the full loaded catalog without
@@ -391,6 +434,7 @@ mounting every card. It no longer imposes the former 200-card cap.
   `src/clipboard.rs`, `src/dragdrop.rs`, `src/commands/context.rs`
   (`record_drop_paths`, `upload_path`), `src/commands/vault.rs`
   (`read_item`, `copy_item_value`, `copy_item_field`, `download_file`),
+  `src/commands/trash.rs` (`trash_item`, `restore_trash_item`, `remove_item`),
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.

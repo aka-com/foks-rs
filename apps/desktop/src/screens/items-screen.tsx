@@ -41,6 +41,7 @@ import {
   displayPathComponent,
   fmtSize,
   initials,
+  isTrashPath,
   kindLabel,
   kindOf,
   nameOf,
@@ -54,9 +55,12 @@ import {
   storeNavigationOrder,
   storeOf,
   storeReadable,
+  TRASH_ROOT,
+  trashEntries,
   usernameOf,
 } from '../model';
-import type { Item, Store, AgentSnapshot } from '../model';
+import type { Item, Store, AgentSnapshot, TrashEntry } from '../model';
+import { TrashView } from './trash-view';
 import type {
   KindFilter,
   LocationStore,
@@ -190,7 +194,7 @@ interface RowProps {
   onCopy: (item: Item, field: ItemField) => void;
   onReveal: (item: Item) => void;
   onDownload: (item: Item) => void;
-  onDelete: (item: Item) => void;
+  onTrash: (item: Item) => void;
   onMove?: (item: Item) => void;
   accessNow: () => number;
 }
@@ -206,7 +210,7 @@ function Row({
   onCopy,
   onReveal,
   onDownload,
-  onDelete,
+  onTrash,
   onMove,
   accessNow,
 }: RowProps): ReactNode {
@@ -287,6 +291,15 @@ function Row({
             return;
           }
           if (event.target !== event.currentTarget) return;
+          if (
+            event.key === 'Delete' ||
+            (event.key === 'Backspace' && (event.metaKey || event.ctrlKey))
+          ) {
+            // Moving to Trash can be undone, so the key asks for nothing more.
+            event.preventDefault();
+            onTrash(item);
+            return;
+          }
           if (event.key !== 'Enter' && event.key !== ' ') return;
           event.preventDefault();
           onSelect();
@@ -392,9 +405,9 @@ function Row({
               icon="trash"
               danger
               reason={writeProblem}
-              onClick={choose(() => onDelete(item))}
+              onClick={choose(() => onTrash(item))}
             >
-              Delete
+              Move to Trash
             </MenuItem>
           </Menu>
         </ContextMenu>
@@ -477,7 +490,7 @@ function TreeRow({
   root?: boolean;
   /** The muted invitation row a section draws in place of no rows at all. */
   quiet?: boolean;
-  icon: 'folder' | 'vault' | 'grid' | 'plus';
+  icon: 'folder' | 'vault' | 'grid' | 'plus' | 'trash';
   /** Drawn in place of `icon` when the row names a store. */
   mark?: ReactNode;
   name: string;
@@ -661,7 +674,14 @@ export interface ItemsScreenProps {
   onReveal: (item: Item) => void;
   onNew: (kind: NewKind, storeId: string, folder?: string) => void;
   onResume: (storeId: string) => Promise<void>;
-  onDelete: (item: Item) => void;
+  /** Moves an item, or a folder with its contents, to Trash. */
+  onTrash: (item: Item) => void;
+  /** Moves a Trash entry back to where it was. */
+  onRestore?: (entry: TrashEntry) => void;
+  /** Asks to remove a Trash entry permanently. */
+  onDeletePermanently?: (item: Item) => void;
+  /** Asks to remove every entry in a store's Trash permanently. */
+  onEmptyTrash?: (storeId: string) => void;
   onMove?: (item: Item) => void;
   onSettings: (storeId: string) => void;
   onTeamInfo?: (storeId: string, trigger?: HTMLElement) => void;
@@ -690,7 +710,10 @@ export function ItemsScreen({
   onReveal,
   onNew,
   onResume,
-  onDelete,
+  onTrash,
+  onRestore,
+  onDeletePermanently,
+  onEmptyTrash,
   onMove,
   onSettings,
   onTeamInfo,
@@ -866,6 +889,15 @@ export function ItemsScreen({
     locations.setFolder(folderKey(samePage, target.id, path));
   };
 
+  const trashCounts = new Map<string, number>();
+  const trashCount = (storeId: string): number => {
+    let count = trashCounts.get(storeId);
+    if (count === undefined) {
+      count = trashEntries(snapshot, storeId).length;
+      trashCounts.set(storeId, count);
+    }
+    return count;
+  };
   const drawFolders = (
     folders: readonly FolderNode[],
     treeStore: Store,
@@ -950,6 +982,22 @@ export function ItemsScreen({
           onToggle={() => locations.toggleFolder(foldKey)}
         />
         {open ? drawFolders(tree.root.folders, tree.store, 1) : null}
+        {open && storeReadable(snapshot, tree.store.id) ? (
+          <TreeRow
+            depth={1}
+            active={
+              selected.store === tree.store.id && selected.path === TRASH_ROOT
+            }
+            quiet={!trashCount(tree.store.id)}
+            icon="trash"
+            name="Trash"
+            count={trashCount(tree.store.id) || undefined}
+            open={false}
+            expandable={false}
+            onSelect={() => selectFolder(tree.store, TRASH_ROOT)}
+            onToggle={() => {}}
+          />
+        ) : null}
       </Fragment>
     );
   };
@@ -960,8 +1008,10 @@ export function ItemsScreen({
       : store && storeReadable(snapshot, store.id)
         ? store.id
         : (defaultCreateStore(snapshot) ?? '');
+  // Trash is not a place to create items in: New saves at the store's root.
+  const trashSelected = Boolean(selectedTree) && isTrashPath(selected.path);
   const createFolder =
-    selectedTree && selectedNode && selected.path !== '/'
+    selectedTree && selectedNode && selected.path !== '/' && !trashSelected
       ? selected.path
       : undefined;
   const currentStoreAvailable = (storeId: string): boolean => {
@@ -974,8 +1024,9 @@ export function ItemsScreen({
   };
   // Dropped files are uploaded to the active store or selected folder.
   // Multi-store views disable drops because no target store is selected.
-  const dropStore =
-    location.kind === 'store'
+  const dropStore = trashSelected
+    ? undefined
+    : location.kind === 'store'
       ? store
       : !state.query
         ? selectedTree?.store
@@ -1109,8 +1160,8 @@ export function ItemsScreen({
             }
           : undefined
       }
-      onDelete={(item) => {
-        if (allowAction(item, true)) onDelete(item);
+      onTrash={(item) => {
+        if (allowAction(item, true)) onTrash(item);
       }}
       accessNow={accessNow}
     />
@@ -1181,11 +1232,28 @@ export function ItemsScreen({
   const scopeLabel =
     selected.store === ALL_ITEMS
       ? 'All items'
-      : selected.path !== '/'
-        ? nameOf(selected.path)
-        : (selectedStore?.name ?? 'All items');
+      : trashSelected
+        ? `Trash · ${selectedStore?.name ?? ''}`
+        : selected.path !== '/'
+          ? nameOf(selected.path)
+          : (selectedStore?.name ?? 'All items');
+  const trashShown =
+    trashSelected && selectedTree
+      ? trashEntries(snapshot, selectedTree.store.id).filter(
+          (entry) =>
+            !state.query ||
+            [entry.name, entry.original ?? '']
+              .join('\n')
+              .toLowerCase()
+              .includes(state.query.toLowerCase()),
+        )
+      : [];
   const shownCount =
-    selected.store === ALL_ITEMS ? items.length : (selectedNode?.count ?? 0);
+    selected.store === ALL_ITEMS
+      ? items.length
+      : trashSelected
+        ? trashShown.length
+        : (selectedNode?.count ?? 0);
   const people =
     selectedStore?.kind === 'team'
       ? partiesOf(snapshot, selectedStore.id).length
@@ -1345,7 +1413,21 @@ export function ItemsScreen({
     selected.store === ALL_ITEMS ? undefined : selected.store,
   );
   const listBody =
-    !items.length && itemReadiness !== 'ready' ? (
+    trashSelected && selectedTree ? (
+      <TrashView
+        snapshot={snapshot}
+        store={selectedTree.store}
+        entries={trashShown}
+        accessNow={accessNow}
+        onRestore={(entry) => {
+          if (allowAction(entry.item, true)) onRestore?.(entry);
+        }}
+        onDeletePermanently={(entry) => {
+          if (allowAction(entry.item, true)) onDeletePermanently?.(entry.item);
+        }}
+        onEmptyTrash={() => onEmptyTrash?.(selectedTree.store.id)}
+      />
+    ) : !items.length && itemReadiness !== 'ready' ? (
       <CollectionStatus state={itemReadiness} label="items" />
     ) : flatMode ? (
       !items.length ? (
@@ -1404,7 +1486,8 @@ export function ItemsScreen({
         {nextUp}
       </div>
     );
-  const listShown = flatMode ? items.length > 0 : !showEmptyFolder;
+  const listShown =
+    !trashSelected && (flatMode ? items.length > 0 : !showEmptyFolder);
 
   return (
     <div className="drop-area">
@@ -1482,9 +1565,23 @@ export function ItemsScreen({
                 <MenuItem
                   icon="trash"
                   danger
-                  reason="Deleting folders is not supported by the desktop agent."
+                  reason={
+                    contextFolder
+                      ? itemActionProblem(
+                          snapshot,
+                          contextFolder,
+                          true,
+                          accessNow(),
+                        )
+                      : 'Refresh this vault to load the folder before moving it to Trash.'
+                  }
+                  onClick={() => {
+                    setFolderMenu(null);
+                    if (contextFolder && allowAction(contextFolder, true))
+                      onTrash(contextFolder);
+                  }}
                 >
-                  Delete folder
+                  Move folder to Trash
                 </MenuItem>
               ) : null}
               {contextStore?.kind === 'team' ? (

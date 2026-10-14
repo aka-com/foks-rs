@@ -7,7 +7,7 @@ import {
 import type { ToastController } from '/kit/toasts';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import type { LocationStore } from '../location';
-import { nameOf, storeOf, type AgentSnapshot } from '../model';
+import { nameOf, storeOf, type AgentSnapshot, type Item } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { NavigationPrompt } from '../navigation-guard';
 import type { DropUpload } from '../screens/items-screen';
@@ -98,6 +98,7 @@ export function ShellOverlays({
   commandError,
   mutationError,
   refreshSnapshot,
+  restoreTrash,
   setResumeDraft,
   setConcealSignal,
   setLatest,
@@ -117,6 +118,7 @@ export function ShellOverlays({
   commandError: CommandErrorHandler;
   mutationError: MutationFailureHandler;
   refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
+  restoreTrash: (item: Item, destination: string) => Promise<void>;
   setResumeDraft: Dispatch<SetStateAction<ResumeDraft | null>>;
   setConcealSignal: Dispatch<SetStateAction<number>>;
   setLatest: Dispatch<SetStateAction<AgentSnapshot>>;
@@ -187,6 +189,7 @@ export function ShellOverlays({
             );
           else toasts.show('This item was already deleted elsewhere.');
         }}
+        onRestoreTrash={restoreTrash}
         onDiscardConflict={() => {
           setWorkflow(null);
           setResumeDraft(null);

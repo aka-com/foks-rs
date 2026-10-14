@@ -934,3 +934,92 @@
     display: none;
   }
 }
+
+/* Trash: Name, Original location, Deleted, Size and the row's own actions,
+   which stay drawn because each row exists to be restored or removed. */
+.trash-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.trash-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--faint);
+}
+.folder-body .hdr.trash-cols,
+.folder-body .row.trash-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 140px) 150px 66px auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+}
+.folder-body .hdr.trash-cols {
+  height: 28px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--faint);
+}
+.folder-body .row.trash-cols .cell {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+.folder-body .trash-cols .trash-size {
+  text-align: right;
+}
+.trash-acts {
+  display: flex;
+  gap: 4px;
+}
+.trash-lock {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--faint);
+}
+.trash-detail {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.trash-detail code {
+  font-family: var(--mono);
+}
+@container (max-width: 600px) {
+  .folder-body .hdr.trash-cols,
+  .folder-body .row.trash-cols {
+    grid-template-columns: minmax(0, 1fr) 66px auto;
+  }
+  .folder-body .trash-cols > :nth-child(2),
+  .folder-body .trash-cols > :nth-child(3) {
+    display: none;
+  }
+}
+.trash-empty-list {
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  font-size: 13px;
+}
+.trash-empty-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.trash-empty-list small {
+  color: var(--faint);
+}

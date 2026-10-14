@@ -45,6 +45,8 @@ import Settings from 'lucide/dist/esm/icons/settings.mjs';
 import ShieldCheck from 'lucide/dist/esm/icons/shield-check.mjs';
 import Terminal from 'lucide/dist/esm/icons/terminal.mjs';
 import Trash from 'lucide/dist/esm/icons/trash.mjs';
+import Undo2 from 'lucide/dist/esm/icons/undo-2.mjs';
+import Lock from 'lucide/dist/esm/icons/lock.mjs';
 import Upload from 'lucide/dist/esm/icons/upload.mjs';
 import User from 'lucide/dist/esm/icons/user.mjs';
 import Users from 'lucide/dist/esm/icons/users.mjs';
@@ -96,6 +98,8 @@ export const FOKS_ICONS = {
   panelLeftOpen: PanelLeftOpen,
   pawPrint: PawPrint,
   plug: Plug,
+  restore: Undo2,
+  lock: Lock,
 } as const satisfies Record<FoksIconName, IconNode>;
 
 export type { FoksIconName } from './icon-name';

@@ -62,7 +62,7 @@ async function setup(
     bridge: readItem ? { ...bridge, readItem } : bridge,
     selection: { store: subject.store, path: subject.path },
     onClose: () => {},
-    onDelete: () => {},
+    onTrash: () => {},
     onConflict: () => {},
     onApplied: async () => {},
     onCommandError: () => {},
@@ -238,7 +238,7 @@ test('access expiring between render and click disables Show and explains the re
   assert.equal(reads, 0);
 });
 
-test('an already-open Delete sheet disables its action when access is lost and re-enables after recovery', async () => {
+test('an already-open Delete permanently sheet disables its action when access is lost and re-enables after recovery', async () => {
   const p = await setup(
     undefined,
     (item) => item.path === '/logins/github.com',
@@ -279,6 +279,7 @@ test('an already-open Delete sheet disables its action when access is lost and r
           onDiscardConflict: () => {},
           onDeleteConflict: async () => {},
           onOpenExisting: async () => {},
+          onRestoreTrash: async () => {},
         }),
       }),
     });
@@ -293,7 +294,7 @@ test('an already-open Delete sheet disables its action when access is lost and r
   };
   rendered.rerender(draw());
   const remove = rendered.getByRole('button', {
-    name: 'Delete',
+    name: 'Delete permanently',
   }) as HTMLButtonElement;
   assert.equal(remove.disabled, true);
   assert.match(remove.title, /unavailable|could not be loaded/i);
@@ -307,8 +308,11 @@ test('an already-open Delete sheet disables its action when access is lost and r
   snapshot = p.props.snapshot;
   rendered.rerender(draw());
   assert.equal(
-    (rendered.getByRole('button', { name: 'Delete' }) as HTMLButtonElement)
-      .disabled,
+    (
+      rendered.getByRole('button', {
+        name: 'Delete permanently',
+      }) as HTMLButtonElement
+    ).disabled,
     false,
   );
   snapshot = {
@@ -319,8 +323,11 @@ test('an already-open Delete sheet disables its action when access is lost and r
   };
   rendered.rerender(draw());
   assert.equal(
-    (rendered.getByRole('button', { name: 'Delete' }) as HTMLButtonElement)
-      .disabled,
+    (
+      rendered.getByRole('button', {
+        name: 'Delete permanently',
+      }) as HTMLButtonElement
+    ).disabled,
     true,
   );
   assert.match(

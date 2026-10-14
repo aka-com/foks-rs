@@ -14,6 +14,7 @@ import {
   decodeDownload,
   decodeMutation,
   decodeReadItem,
+  decodeTrashMutation,
 } from './vault-catalog';
 
 export const vaultCommands: Pick<
@@ -31,6 +32,8 @@ export const vaultCommands: Pick<
   | 'createFolder'
   | 'editTextItem'
   | 'moveItem'
+  | 'trashItem'
+  | 'restoreTrashItem'
   | 'removeItem'
   | 'importDroppedFile'
   | 'pickImportFile'
@@ -122,6 +125,18 @@ export const vaultCommands: Pick<
       'move_item',
       { storeId, path, version, destination, direntId },
       decodeMutation,
+    ),
+  trashItem: ({ storeId, path, version, direntId }) =>
+    checkedMutation(
+      'trash_item',
+      { storeId, path, version, direntId },
+      decodeTrashMutation,
+    ),
+  restoreTrashItem: ({ storeId, path, version, direntId, destination }) =>
+    checkedMutation(
+      'restore_trash_item',
+      { storeId, path, version, direntId, destination },
+      decodeTrashMutation,
     ),
   removeItem: ({ storeId, path, version, direntId }) =>
     checkedMutation(

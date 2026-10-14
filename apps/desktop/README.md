@@ -171,7 +171,14 @@ dirent identity and version remain fixed through concurrent-write retries.
 Deleting and recreating the same path cannot redirect a stale selection to the
 replacement, even when its numeric version is the same.
 
-Folder deletion is not supported in the desktop.
+Delete moves an item, or a folder with everything in it, into the vault's
+Trash: `/.trash/<role-tag>/` in the same store, one folder per read role,
+through `MoveKv`. It asks for no confirmation; its toast offers Undo for eight
+seconds, and ⌘Z does the same. Each vault's Trash row lists its entries,
+restores them (as a `(restored)` copy when the original path is taken) and
+deletes them permanently, which the host allows only inside `/.trash`. Go
+clients list `.trash` as an ordinary folder. See the Trash section of
+`book/20-desktop.qmd` for the layout and entry names.
 
 **Unsupported operations:** Link editing is not supported directly; links must be
 deleted and recreated. Invitation revocation, expiry and requester withdrawal
@@ -245,6 +252,12 @@ drop events contain
 paths only; file bytes never cross into the renderer. The shell polls
 `take_agent_connection_loss`; Retry calls `retry_agent_connection` and then
 reloads the catalog, never replaying the interrupted write.
+
+`trash_item` and `restore_trash_item` take `{storeId, path, version,
+direntId}`, the second also a `destination` outside Trash, and answer
+`{applied, path}` with the path the entry now has. `remove_item` takes the
+same selection and removes only an entry in `/.trash`, recursively for a
+folder.
 
 Phase 4 adds `list_accounts`, `create_group`, member add/promote/demote/remove and their
 resumable continuations, federated admission/re-run, and `copy_text`. Each

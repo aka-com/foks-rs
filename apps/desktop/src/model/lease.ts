@@ -14,6 +14,7 @@ import {
   storeOf,
 } from './readers';
 import { admits } from './roles';
+import { isTrashPath } from './trash';
 import { serverDisplayLabelForStore } from './server-name';
 import { serverDisplayLabel, PROTOCOL_CAPABILITIES } from './types';
 import type {
@@ -640,7 +641,7 @@ const catalogCache = new WeakMap<AgentSnapshot, readonly Item[]>();
 
 /**
  * Returns all accessible items from readable stores, excluding directory
- * entries.
+ * entries and everything in Trash.
  *
  * The result is shared between callers and must not be sorted or otherwise
  * mutated in place; copy it first.
@@ -663,7 +664,10 @@ export function catalog(snapshot: AgentSnapshot): readonly Item[] {
     if (storeAvailability(snapshot, store).available) readable.add(store.id);
   }
   const items = snapshot.items.filter(
-    (item) => item.kind !== 'Folder' && readable.has(item.store),
+    (item) =>
+      item.kind !== 'Folder' &&
+      !isTrashPath(item.path) &&
+      readable.has(item.store),
   );
   catalogCache.set(snapshot, items);
   return items;

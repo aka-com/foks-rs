@@ -37,7 +37,9 @@ import {
   nameOf,
   partiesOf,
   partyName,
+  parseTrashName,
   readersOf,
+  restoredCopyPath,
   serverBlocked,
   serverLeaseUnavailable,
   serverDisplayLabelForStore,
@@ -45,6 +47,8 @@ import {
   storeNavigationOrder,
   storeAvailability,
   storeOf,
+  trashEntries,
+  trashEntryLabel,
 } from '../model';
 import type {
   Item,
@@ -129,7 +133,11 @@ export type WriteWorkflow =
       draft?: NewDraft;
     }
   | { kind: 'move'; item: Item }
+  /** Permanently removes an entry in Trash. */
   | { kind: 'delete'; item: Item }
+  /** Restoring a Trash entry found another item at `destination`. */
+  | { kind: 'restore-conflict'; item: Item; destination: string }
+  | { kind: 'empty-trash'; store: StoreRef }
   | {
       kind: 'conflict';
       item: Item;
@@ -1177,6 +1185,7 @@ export function WriteOverlay({
   onDiscardConflict,
   onDeleteConflict,
   onOpenExisting,
+  onRestoreTrash,
   accessNow = () => Date.now() / 1000,
 }: {
   snapshot: AgentSnapshot;
@@ -1202,6 +1211,8 @@ export function WriteOverlay({
   onOpenExisting: (
     workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>,
   ) => Promise<void>;
+  /** Moves a Trash entry to `destination`, outside Trash. */
+  onRestoreTrash: (item: Item, destination: string) => Promise<void>;
   accessNow?: () => number;
 }): ReactNode {
   if (!workflow) return null;
@@ -1255,6 +1266,27 @@ export function WriteOverlay({
         onApplied={onApplied}
         onMutationError={onMutationError}
         accessNow={accessNow}
+      />
+    );
+  if (workflow.kind === 'restore-conflict')
+    return (
+      <RestoreConflictSheet
+        snapshot={snapshot}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onRestoreTrash={onRestoreTrash}
+      />
+    );
+  if (workflow.kind === 'empty-trash')
+    return (
+      <EmptyTrashSheet
+        snapshot={snapshot}
+        accessNow={accessNow}
+        workflow={workflow}
+        bridge={bridge}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onMutationError={onMutationError}
       />
     );
   if (workflow.kind === 'conflict')
@@ -1388,8 +1420,18 @@ function ConflictSheet({
   );
 }
 
+/** What permanent deletion says it does, in every sheet that offers it. */
+export const PERMANENT_DELETE_COPY =
+  'Removes it for everyone. Earlier encrypted versions may remain on the server.';
+
+/** What an entry in Trash is called: its original name where recorded. */
+function trashLabel(item: Item): string {
+  const parsed = parseTrashName(nameOf(item.path));
+  return parsed?.kind === 'path' ? nameOf(parsed.original) : nameOf(item.path);
+}
+
 /**
- * Confirmation dialog for deleting an item.
+ * Confirmation dialog for permanently deleting an entry in Trash.
  */
 function DeleteSheet({
   snapshot,
@@ -1432,7 +1474,7 @@ function DeleteSheet({
         </span>
       }
       dismissible={!deleting}
-      title={`Delete ${nameOf(workflow.item.path)}?`}
+      title={`Delete ${trashLabel(workflow.item)} permanently?`}
       footer={
         <>
           <Button disabled={deleting} onClick={() => setWorkflow(null)}>
@@ -1466,7 +1508,7 @@ function DeleteSheet({
                   // Keep refresh failure separate from the acknowledged deletion.
                   try {
                     await onApplied(
-                      `Deleted ${nameOf(workflow.item.path)}`,
+                      `Deleted ${trashLabel(workflow.item)} permanently`,
                       storeOf(snapshot, workflow.item.store)?.server,
                     );
                   } catch (failure) {
@@ -1490,7 +1532,7 @@ function DeleteSheet({
               })();
             }}
           >
-            {deleting ? 'Deleting…' : 'Delete'}
+            {deleting ? 'Deleting…' : 'Delete permanently'}
           </Button>
         </>
       }
@@ -1501,7 +1543,219 @@ function DeleteSheet({
           {problem}
         </p>
       ) : null}
-      <p>This cannot be undone.</p>
+      <p>
+        {workflow.item.kind === 'Folder'
+          ? `This folder and everything in it will be deleted. ${PERMANENT_DELETE_COPY}`
+          : PERMANENT_DELETE_COPY}
+      </p>
+    </SheetDialog>
+  );
+}
+
+/**
+ * Restoring an entry from Trash found another item at its original path.
+ * The entry can be restored under a new name beside it; nothing is replaced.
+ */
+function RestoreConflictSheet({
+  snapshot,
+  workflow,
+  setWorkflow,
+  onRestoreTrash,
+}: {
+  snapshot: AgentSnapshot;
+  workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'restore-conflict' }>;
+  setWorkflow: (workflow: WriteWorkflow) => void;
+  onRestoreTrash: (item: Item, destination: string) => Promise<void>;
+}): ReactNode {
+  const [restoring, setRestoring] = useState(false);
+  const { item, destination } = workflow;
+  const copy = restoredCopyPath(destination, (path) =>
+    snapshot.items.some(
+      (candidate) => candidate.store === item.store && candidate.path === path,
+    ),
+  );
+  const occupant = snapshot.items.find(
+    (candidate) =>
+      candidate.store === item.store && candidate.path === destination,
+  );
+  useSheetGuard(
+    restoring
+      ? { verdict: 'refuse', reason: 'Wait for the restore to finish.' }
+      : null,
+    !restoring,
+  );
+  return (
+    <SheetDialog
+      onClose={() => setWorkflow(null)}
+      dismissible={!restoring}
+      title={`${nameOf(destination)} is already in use`}
+      footer={
+        <>
+          <Button
+            disabled={restoring}
+            data-dialog-autofocus="true"
+            onClick={() => setWorkflow(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            disabled={restoring}
+            onClick={() => {
+              if (restoring) return;
+              setRestoring(true);
+              void onRestoreTrash(item, copy).finally(() => {
+                setRestoring(false);
+                setWorkflow(null);
+              });
+            }}
+          >
+            {restoring ? 'Restoring…' : `Restore as ${nameOf(copy)}`}
+          </Button>
+        </>
+      }
+    >
+      <p>
+        Another {occupant?.kind === 'Folder' ? 'folder' : 'item'} is at{' '}
+        <code>{destination}</code>. The entry from Trash can be restored beside
+        it under a new name; neither is replaced.
+      </p>
+      <Inset>
+        <InsetRow label="In use">
+          <code>{destination}</code>
+        </InsetRow>
+        <InsetRow label="Restores to">
+          <code>{copy}</code>
+        </InsetRow>
+      </Inset>
+    </SheetDialog>
+  );
+}
+
+/**
+ * Permanently deletes every entry in one store's Trash that this account can
+ * read, one entry at a time, folders with everything in them.
+ */
+function EmptyTrashSheet({
+  snapshot,
+  accessNow,
+  workflow,
+  bridge,
+  setWorkflow,
+  onApplied,
+  onMutationError,
+}: {
+  snapshot: AgentSnapshot;
+  accessNow: () => number;
+  workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'empty-trash' }>;
+  bridge: Bridge;
+  setWorkflow: (workflow: WriteWorkflow) => void;
+  onApplied: (message: string, profile?: string) => Promise<void>;
+  onMutationError: MutationFailureHandler;
+}): ReactNode {
+  const [entries] = useState(() => trashEntries(snapshot, workflow.store));
+  const [emptying, setEmptying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const store = storeOf(snapshot, workflow.store);
+  const first = entries[0];
+  const problem = first
+    ? itemActionProblem(snapshot, first.item, true, accessNow())
+    : undefined;
+  useSheetGuard(
+    emptying
+      ? { verdict: 'refuse', reason: 'Wait for Trash to finish emptying.' }
+      : null,
+    !emptying,
+  );
+  const count = `${entries.length} ${entries.length === 1 ? 'item' : 'items'}`;
+  return (
+    <SheetDialog
+      danger
+      onClose={() => setWorkflow(null)}
+      glyph={
+        <span className="kico md danger">
+          <Icon name="trash" />
+        </span>
+      }
+      dismissible={!emptying}
+      title={`Permanently delete ${count}?`}
+      footer={
+        <>
+          <Button
+            disabled={emptying}
+            data-dialog-autofocus="true"
+            onClick={() => setWorkflow(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            danger
+            disabled={emptying || !entries.length || Boolean(problem)}
+            title={problem}
+            onClick={() => {
+              if (emptying) return;
+              setEmptying(true);
+              void (async () => {
+                let removed = 0;
+                try {
+                  for (const entry of entries) {
+                    await bridge.removeItem({
+                      storeId: entry.item.store,
+                      path: entry.item.path,
+                      version: entry.item.version,
+                      direntId: entry.item.direntId,
+                    });
+                    removed += 1;
+                    setProgress(removed);
+                  }
+                } catch (error) {
+                  setWorkflow(null);
+                  await onMutationError(error, {
+                    item: entries[removed]?.item,
+                  });
+                  return;
+                } finally {
+                  setEmptying(false);
+                }
+                setWorkflow(null);
+                try {
+                  await onApplied(
+                    `Emptied Trash in ${store?.name ?? 'this vault'}`,
+                    store?.server,
+                  );
+                } catch (failure) {
+                  await onMutationError(failure, { report: false });
+                }
+              })();
+            }}
+          >
+            {emptying
+              ? `Deleting ${progress + 1} of ${entries.length}…`
+              : 'Empty Trash'}
+          </Button>
+        </>
+      }
+    >
+      {problem ? (
+        <p className="action-error" role="status">
+          {problem}
+        </p>
+      ) : null}
+      <p>{PERMANENT_DELETE_COPY}</p>
+      <ul className="trash-empty-list">
+        {entries.map((entry) => (
+          <li key={entry.item.path}>
+            <Icon name={entry.item.kind === 'Folder' ? 'folder' : 'file'} />
+            <span>{trashEntryLabel(entry)}</span>
+            {entry.item.kind === 'Folder' ? (
+              <small>
+                folder · {entry.count} {entry.count === 1 ? 'item' : 'items'}
+              </small>
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </SheetDialog>
   );
 }

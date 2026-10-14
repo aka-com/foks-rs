@@ -8,6 +8,7 @@ import {
   decodeCopy,
   decodeDownload,
   decodeMutation,
+  decodeTrashMutation,
   decodeCheckedProfile,
   decodePendingOperations,
   decodeRecoveryPhrase,
@@ -79,7 +80,7 @@ test('mock mutations reject a recreated source with the same path and version', 
     version: original.version,
     direntId: original.direntId,
   };
-  await bridge.removeItem(request);
+  await bridge.trashItem(request);
   await bridge.createTextItem({
     value: 'test',
     storeId: original.store,
@@ -93,6 +94,7 @@ test('mock mutations reject a recreated source with the same path and version', 
   await assert.rejects(
     bridge.moveItem({ ...request, destination: '/aba-moved' }),
   );
+  await assert.rejects(bridge.trashItem(request));
   await assert.rejects(bridge.removeItem(request));
   assert.ok(
     (await bridge.listCatalog()).items.some(
@@ -321,6 +323,66 @@ test('copyItemField sends the exact version and the field to the host', async ()
         },
       ],
     ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
+test('Trash commands send the bound selection and decode the new path', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return command === 'remove_item'
+            ? { applied: true }
+            : { applied: true, path: `/moved/${command}` };
+        },
+      },
+    },
+    configurable: true,
+  });
+  const selection = {
+    storeId: 'opaque-store-ref',
+    path: '/logins/github.com',
+    version: 4,
+    direntId: '07'.repeat(16),
+  };
+  try {
+    assert.deepEqual(await tauriBridge.trashItem(selection), {
+      applied: true,
+      path: '/moved/trash_item',
+    });
+    assert.deepEqual(
+      await tauriBridge.restoreTrashItem({
+        ...selection,
+        destination: '/logins/github.com (restored)',
+      }),
+      { applied: true, path: '/moved/restore_trash_item' },
+    );
+    assert.deepEqual(await tauriBridge.removeItem(selection), {
+      applied: true,
+    });
+    assert.deepEqual(calls, [
+      ['trash_item', selection],
+      [
+        'restore_trash_item',
+        { ...selection, destination: '/logins/github.com (restored)' },
+      ],
+      ['remove_item', selection],
+    ]);
+    assert.throws(
+      () => decodeTrashMutation({ applied: true }),
+      /trash mutation response\.path/,
+    );
   } finally {
     if (previousWindow === undefined)
       delete (globalThis as { window?: Window }).window;

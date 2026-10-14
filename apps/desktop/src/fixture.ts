@@ -503,7 +503,7 @@ export const COPY = {
   lease_lapsed:
     'This server is locked because its connection expired. Items on this server cannot be viewed or edited until the connection is renewed. Other servers remain available.',
   remove_item:
-    'This item will be deleted if it has not been modified by someone else. Earlier versions will no longer be accessible.',
+    'Removes it for everyone. Earlier encrypted versions may remain on the server.',
   personal_store_fixed:
     'Your Personal vault is private and cannot be shared. To share an item, move it to a team vault.',
   resumable:

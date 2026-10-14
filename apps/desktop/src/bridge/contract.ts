@@ -77,6 +77,8 @@ import type {
   ReadItemResponse,
   RemoveItemRequest,
   MoveItemRequest,
+  RestoreTrashRequest,
+  TrashMutationResponse,
   ReplaceDroppedFileRequest,
 } from './vault-catalog';
 import type { YubiCommand, YubiEnrollment } from './yubikey';
@@ -214,6 +216,20 @@ export interface Bridge {
   createFolder(request: CreateFolderRequest): Promise<MutationResponse>;
   editTextItem(request: EditTextRequest): Promise<MutationResponse>;
   moveItem(request: MoveItemRequest): Promise<MutationResponse>;
+  /**
+   * Moves an item, or a folder with everything in it, into its read role's
+   * folder under `/.trash` in the same store. Resolves with the entry's
+   * Trash path.
+   */
+  trashItem(request: RemoveItemRequest): Promise<TrashMutationResponse>;
+  /** Moves a Trash entry to `destination`, outside Trash. */
+  restoreTrashItem(
+    request: RestoreTrashRequest,
+  ): Promise<TrashMutationResponse>;
+  /**
+   * Permanently removes an entry in Trash, recursively for a folder. The host
+   * refuses items outside Trash.
+   */
   removeItem(request: RemoveItemRequest): Promise<MutationResponse>;
   importDroppedFile(
     request: ImportDroppedFileRequest,

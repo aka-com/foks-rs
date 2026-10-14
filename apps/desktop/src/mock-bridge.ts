@@ -19,7 +19,13 @@ import { storeReadable } from './model/lease';
 import { parseRole, roleRank, visibilityOf } from './model/roles';
 import { loginField, shapeOf } from './model/login';
 import { itemKey } from './model/types';
-import type { RoleWire, Store, AgentSnapshot } from './model/types';
+import type { Item, RoleWire, Store, AgentSnapshot } from './model/types';
+import {
+  TRASH_ROOT,
+  encodeOriginalPath,
+  isTrashPath,
+  trashStamp,
+} from './model/trash';
 import {
   decodeFirstRunCheckpoint,
   FIRST_RUN_CHECKPOINT_KEY,
@@ -399,6 +405,55 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       existing.username = username;
     } else accounts.push({ store: id, alias, username, server: profile });
   };
+  const selectBound = (
+    storeId: string,
+    path: string,
+    version: number,
+    direntId: string,
+  ): Item => {
+    const item = items.find(
+      (candidate) => candidate.store === storeId && candidate.path === path,
+    );
+    if (!item || item.version !== version || item.direntId !== direntId)
+      throw failure('conflict', `${path} changed first.`);
+    return item;
+  };
+  /** Moves an item, and a folder's contents with it, as MoveKv does. */
+  const relocate = (storeId: string, item: Item, destination: string) => {
+    const path = item.path;
+    if (destination.startsWith(`${path}/`))
+      throw failure('conflict', 'A folder cannot contain itself.');
+    for (const candidate of items.filter(
+      (candidate) =>
+        candidate.store === storeId &&
+        (candidate.path === path || candidate.path.startsWith(`${path}/`)),
+    )) {
+      const oldPath = candidate.path;
+      candidate.path = destination + oldPath.slice(path.length);
+      if (candidate === item) {
+        candidate.version = 1;
+        candidate.direntId = crypto.randomUUID().replaceAll('-', '');
+      }
+      const content = contents.get(`${storeId}|${oldPath}`);
+      contents.delete(`${storeId}|${oldPath}`);
+      if (content !== undefined)
+        contents.set(`${storeId}|${candidate.path}`, content);
+    }
+  };
+  const ensureFolder = (storeId: string, path: string, read: RoleWire) => {
+    if (items.some((item) => item.store === storeId && item.path === path))
+      return;
+    items.push({
+      direntId: crypto.randomUUID().replaceAll('-', ''),
+      store: storeId,
+      path,
+      kind: 'Folder',
+      size: 0,
+      version: 1,
+      read,
+      write: read,
+    });
+  };
   const assertFree = (storeId: string, path: string): void => {
     if (items.some((item) => item.store === storeId && item.path === path)) {
       throw failure('already-exists', `${path} already exists.`);
@@ -719,45 +774,58 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       return { applied: true };
     },
     moveItem: async ({ storeId, path, version, destination, direntId }) => {
-      const item = items.find(
-        (candidate) => candidate.store === storeId && candidate.path === path,
-      );
-      if (!item || item.version !== version || item.direntId !== direntId)
-        throw failure('conflict', `${path} changed first.`);
+      const item = selectBound(storeId, path, version, direntId);
       assertFree(storeId, destination);
-      if (destination.startsWith(`${path}/`))
-        throw failure('conflict', 'A folder cannot contain itself.');
-      for (const candidate of items.filter(
-        (candidate) =>
-          candidate.store === storeId &&
-          (candidate.path === path || candidate.path.startsWith(`${path}/`)),
-      )) {
-        const oldPath = candidate.path;
-        candidate.path = destination + oldPath.slice(path.length);
-        if (candidate === item) {
-          candidate.version = 1;
-          candidate.direntId = crypto.randomUUID().replaceAll('-', '');
-        }
-        const content = contents.get(`${storeId}|${oldPath}`);
-        contents.delete(`${storeId}|${oldPath}`);
-        if (content !== undefined)
-          contents.set(`${storeId}|${candidate.path}`, content);
-      }
+      relocate(storeId, item, destination);
       return { applied: true };
     },
-    removeItem: async ({ storeId, path, version, direntId }) => {
-      const item = items.find(
-        (candidate) => candidate.store === storeId && candidate.path === path,
-      );
-      if (!item || item.version !== version || item.direntId !== direntId)
-        throw failure('conflict', `${path} changed first.`);
-      if (item.kind === 'Folder')
+    trashItem: async ({ storeId, path, version, direntId }) => {
+      const item = selectBound(storeId, path, version, direntId);
+      if (isTrashPath(path))
+        throw failure('invalid-request', 'This item is already in Trash.');
+      const role = parseRole(item.read);
+      const tag =
+        role?.kind === 'member'
+          ? `member-${visibilityOf(role)}`
+          : (role?.kind ?? 'owner');
+      const folder = `${TRASH_ROOT}/${tag}`;
+      ensureFolder(storeId, TRASH_ROOT, item.read);
+      ensureFolder(storeId, folder, item.read);
+      const destination = `${folder}/${trashStamp(new Date())}~${encodeOriginalPath(path)}`;
+      assertFree(storeId, destination);
+      relocate(storeId, item, destination);
+      return { applied: true, path: destination };
+    },
+    restoreTrashItem: async ({
+      storeId,
+      path,
+      version,
+      direntId,
+      destination,
+    }) => {
+      const item = selectBound(storeId, path, version, direntId);
+      if (!isTrashPath(path) || isTrashPath(destination))
         throw failure(
           'invalid-request',
-          'Folder removal is not currently supported.',
+          'Only entries in Trash can be restored, to a place outside Trash.',
         );
-      items = items.filter((candidate) => candidate !== item);
-      contents.delete(`${storeId}|${path}`);
+      assertFree(storeId, destination);
+      relocate(storeId, item, destination);
+      return { applied: true, path: destination };
+    },
+    removeItem: async ({ storeId, path, version, direntId }) => {
+      const item = selectBound(storeId, path, version, direntId);
+      if (!path.startsWith(`${TRASH_ROOT}/`))
+        throw failure(
+          'invalid-request',
+          'Only items in Trash can be deleted permanently. Move this item to Trash first.',
+        );
+      const removed = (candidate: Item): boolean =>
+        candidate.store === storeId &&
+        (candidate === item || candidate.path.startsWith(`${path}/`));
+      for (const candidate of items.filter(removed))
+        contents.delete(`${storeId}|${candidate.path}`);
+      items = items.filter((candidate) => !removed(candidate));
       return { applied: true };
     },
     importDroppedFile: async ({ storeId, path, readRole, writeRole }) => {

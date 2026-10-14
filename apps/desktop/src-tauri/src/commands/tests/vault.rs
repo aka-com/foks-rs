@@ -2,9 +2,8 @@ use crate::commands::execution::{execute_kv_mutation, MutationKind};
 use crate::commands::validation::{DOWNLOAD_CHUNK_BYTES, MAXIMUM_TEXT_ITEM_BYTES};
 use crate::commands::vault::{
     create_item_roles, download_to_path, file_create_header, file_edit_header, item_field,
-    parse_item_role, read_text, remove_item_operation, require_file_item, require_text_item,
-    set_create_mutation_roles, set_create_operation_roles, take_text_value, upload_file,
-    CatalogDto, ItemField,
+    parse_item_role, read_text, require_file_item, require_text_item, set_create_mutation_roles,
+    set_create_operation_roles, take_text_value, upload_file, CatalogDto, ItemField,
 };
 use foks_agent_proto::{
     KvChunkResult, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
@@ -663,7 +662,11 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
         MutationKind::Guarded,
     )
     .unwrap();
-    foks_desktop::AgentTransport::call(&transport, remove_item_operation(&item).unwrap()).unwrap();
+    foks_desktop::AgentTransport::call(
+        &transport,
+        foks_desktop::remove_kv_operation(&item, false).unwrap(),
+    )
+    .unwrap();
     let calls = transport.calls.lock().unwrap();
     assert_eq!(
         calls.as_slice(),
@@ -835,26 +838,6 @@ fn native_file_replacement_accepts_both_file_encodings() {
     item.metadata.node_type = "symlink".to_owned();
     assert_eq!(
         require_file_item(&item).unwrap_err().code,
-        "invalid-request"
-    );
-}
-
-#[test]
-fn renderer_remove_boundary_rejects_folders_and_is_never_recursive() {
-    let file = download_item(1);
-    assert!(matches!(
-        remove_item_operation(&file).unwrap(),
-        Operation::RemoveKv {
-            expected_dirent_id: Some(dirent_id),
-            recursive: false,
-            precondition: KvPrecondition::ExactVersion { version: 9 },
-            ..
-        } if dirent_id == [7; 16]
-    ));
-    let mut folder = file;
-    folder.metadata.node_type = "directory".to_owned();
-    assert_eq!(
-        remove_item_operation(&folder).unwrap_err().code,
         "invalid-request"
     );
 }

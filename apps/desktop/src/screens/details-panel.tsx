@@ -251,7 +251,8 @@ export interface DetailsPanelProps {
   revealRequest?: string | null;
   onRevealHandled?: () => void;
   onClose: () => void;
-  onDelete: (item: Item) => void;
+  /** Moves the item to Trash, from where it can be restored. */
+  onTrash: (item: Item) => void;
   onMove?: (item: Item) => void;
   onConflict: (
     item: Item,
@@ -286,7 +287,7 @@ export function DetailsPanel({
   revealRequest = null,
   onRevealHandled,
   onClose,
-  onDelete,
+  onTrash,
   onMove,
   onConflict,
   onApplied,
@@ -1234,15 +1235,15 @@ export function DetailsPanel({
                 variant="danger"
                 icon="trash"
                 disabled={Boolean(writeProblem)}
-                title={writeProblem ?? 'Delete this item'}
+                title={writeProblem ?? 'Move this item to Trash'}
                 aria-describedby={
                   writeProblem ? accessDescriptionId : undefined
                 }
                 onClick={() => {
-                  if (requireAccess(true)) onDelete(item);
+                  if (requireAccess(true)) onTrash(item);
                 }}
               >
-                Delete
+                Move to Trash
               </Button>
             </div>
           )}

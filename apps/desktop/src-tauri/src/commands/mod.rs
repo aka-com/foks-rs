@@ -18,6 +18,7 @@ pub(crate) mod portability;
 mod preparation;
 pub(crate) mod servers;
 pub(crate) mod sso;
+pub(crate) mod trash;
 mod types;
 mod validation;
 pub(crate) mod vault;

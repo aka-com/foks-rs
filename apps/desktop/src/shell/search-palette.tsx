@@ -36,6 +36,7 @@ import {
   hue,
   initials,
   isMachine,
+  isTrashPath,
   kindOf,
   nameOf,
   parseRole,
@@ -148,6 +149,8 @@ function itemEntries(snapshot: AgentSnapshot): SearchEntry[] {
     // Folder results are excluded because selecting a folder requires
     // navigating to its path rather than opening an item.
     if (kind === 'Folder') continue;
+    // Trash has its own view; its entries are not search results.
+    if (isTrashPath(item.path)) continue;
     const store = storeOf(snapshot, item.store);
     if (!store) continue;
     const folder = prefixOf(item.path);

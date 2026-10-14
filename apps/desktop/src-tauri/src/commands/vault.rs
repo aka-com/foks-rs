@@ -713,16 +713,6 @@ pub(super) fn require_text_item(item: &CatalogItem) -> Result<(), AgentError> {
     }
 }
 
-pub(super) fn remove_item_operation(item: &CatalogItem) -> Result<Operation, AgentError> {
-    // Folder deletion is not supported.
-    if item.metadata.node_type == "directory" {
-        return Err(invalid_request(
-            "Folder removal is not currently supported.",
-        ));
-    }
-    foks_desktop::remove_kv_operation(item, false).map_err(invalid_request)
-}
-
 pub(super) fn file_create_header(
     store: &CatalogStoreRef,
     path: &str,
@@ -1477,31 +1467,6 @@ pub async fn move_item(
     let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
     let operation =
         foks_desktop::move_kv_operation(&item, &destination).map_err(invalid_request)?;
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_kv_mutation(
-        &state,
-        KvAccountMutation::Inline(operation),
-        MutationKind::Guarded,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn remove_item(
-    app: tauri::AppHandle,
-    webview: tauri::Webview,
-    state: State<'_, AppState>,
-    store_id: String,
-    path: String,
-    version: u64,
-    dirent_id: String,
-) -> Result<MutationDto, AgentError> {
-    let unlocked = crate::applock::unlocked_generation(&app)?;
-    require_main_window(&webview)?;
-    let state = state.for_store(&store_id)?;
-    let _permit = prepare_catalog_mutation(&state).await?;
-    let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
-    let operation = remove_item_operation(&item)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_kv_mutation(
         &state,
