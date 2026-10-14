@@ -93,6 +93,15 @@ its executable: `npm run test:foks-desktop:packaged -- /path/to/usr/bin/foks-des
 handlers with Tauri. Command names and wire DTO shapes stay aligned with
 `wire-contract.json` and the frontend bridge.
 
+`command-signatures.json` lists every registered command with the camelCase
+argument keys Tauri reads from its payload, each marked `required` or
+`optional` (an `Option` parameter). The test in `src/command_signatures.rs`
+derives it from the `#[tauri::command]` functions, fails when they differ from
+the `generate_handler!` list or from the file, and rewrites the file when
+`FOKS_WRITE_COMMAND_SIGNATURES=1` is set. `tests/command-contract.test.ts` in
+the desktop app checks every bridge call site, and the commands of the
+`YubiCommand` union, against it.
+
 | Module | Responsibility |
 | --- | --- |
 | `accounts` | Account inventory, devices, passphrases, and owner backups |

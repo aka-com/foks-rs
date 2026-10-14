@@ -1,0 +1,565 @@
+{
+  "checkCommand": "cargo test --locked -p foks-desktop-app --lib command_signatures",
+  "commands": {
+    "abandon_group_creation": {
+      "storeId": "required"
+    },
+    "accept_device_pairing": {
+      "deviceName": "required",
+      "phrase": "required",
+      "profile": "required",
+      "targetAlias": "required"
+    },
+    "accept_go_profile_pairing": {
+      "request": "required"
+    },
+    "account_passphrase_status": {
+      "accountStoreId": "required"
+    },
+    "adapter_clock_request": {
+      "accountAlias": "required",
+      "confirm": "required",
+      "profile": "required"
+    },
+    "add_federated_team_member": {
+      "remoteStoreId": "required",
+      "storeId": "required",
+      "visibility": "required"
+    },
+    "add_group_member": {
+      "destination": "required",
+      "storeId": "required",
+      "username": "required"
+    },
+    "agent_process_info": {},
+    "agent_status": {},
+    "app_info": {},
+    "app_lock_state": {},
+    "auto_recover_agent": {},
+    "bot_account_request": {
+      "accountAlias": "required",
+      "action": "required",
+      "profile": "required"
+    },
+    "cancel_chat_requests": {
+      "viewId": "required"
+    },
+    "change_account_passphrase": {
+      "accountStoreId": "required",
+      "confirmation": "required",
+      "current": "optional",
+      "passphrase": "required"
+    },
+    "change_yubi_passphrase": {
+      "alias": "required",
+      "confirmation": "required",
+      "passphrase": "required",
+      "pin": "required",
+      "profile": "required"
+    },
+    "change_yubi_pin": {
+      "alias": "required",
+      "newPin": "required",
+      "oldPin": "required",
+      "profile": "required"
+    },
+    "change_yubi_puk": {
+      "alias": "required",
+      "newPuk": "required",
+      "oldPuk": "required",
+      "profile": "required"
+    },
+    "chat_local": {
+      "action": "required"
+    },
+    "chat_request": {
+      "action": "required",
+      "storeId": "required",
+      "viewId": "required"
+    },
+    "check_and_add_go_profile": {
+      "candidateId": "required",
+      "hostId": "required",
+      "probe": "required",
+      "profileName": "required"
+    },
+    "check_and_add_profile": {
+      "probe": "required",
+      "profileName": "required"
+    },
+    "check_server": {
+      "profile": "required"
+    },
+    "client_state_maintenance_status": {},
+    "commit_owner_backup": {
+      "accountAlias": "required",
+      "backupAlias": "required",
+      "phrase": "required",
+      "profile": "required"
+    },
+    "configure_web_admin": {
+      "accountAlias": "required",
+      "destination": "required",
+      "profile": "required"
+    },
+    "copy_go_profile_device": {
+      "candidateId": "required",
+      "profile": "required",
+      "targetAlias": "required"
+    },
+    "copy_item_field": {
+      "field": "required",
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "copy_item_path": {
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "copy_item_value": {
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "copy_text": {
+      "text": "required"
+    },
+    "create_first_run_account": {
+      "alias": "required",
+      "deviceName": "required",
+      "email": "required",
+      "invite": "required",
+      "passphrase": "optional",
+      "passphraseConfirmation": "optional",
+      "profile": "required",
+      "username": "required"
+    },
+    "create_folder": {
+      "path": "required",
+      "readRole": "optional",
+      "storeId": "required",
+      "writeRole": "optional"
+    },
+    "create_group": {
+      "accountStoreId": "required",
+      "kind": "required",
+      "name": "required",
+      "teamAlias": "required"
+    },
+    "create_link": {
+      "path": "required",
+      "readRole": "optional",
+      "storeId": "required",
+      "target": "required",
+      "writeRole": "optional"
+    },
+    "create_text_item": {
+      "path": "required",
+      "readRole": "optional",
+      "storeId": "required",
+      "value": "required",
+      "writeRole": "optional"
+    },
+    "create_yubi_account": {
+      "alias": "required",
+      "cardSerial": "required",
+      "deviceName": "required",
+      "email": "required",
+      "invite": "required",
+      "passphrase": "optional",
+      "passphraseConfirmation": "optional",
+      "pin": "required",
+      "pinAttempts": "required",
+      "pqSlot": "required",
+      "profile": "required",
+      "puk": "required",
+      "pukAttempts": "required",
+      "signingSlot": "required",
+      "username": "required"
+    },
+    "demote_group_member": {
+      "destination": "required",
+      "storeId": "required",
+      "username": "required"
+    },
+    "describe_reset": {
+      "profile": "required"
+    },
+    "describe_server_status": {
+      "fresh": "optional",
+      "profile": "required"
+    },
+    "diagnostic_timings": {
+      "since": "required"
+    },
+    "discover_go_profiles": {},
+    "discover_groups": {
+      "accountAlias": "required",
+      "profile": "required"
+    },
+    "download_file": {
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "edit_text_item": {
+      "direntId": "required",
+      "path": "required",
+      "storeId": "required",
+      "value": "required",
+      "version": "required"
+    },
+    "empty_trash": {
+      "entries": "required",
+      "storeId": "required"
+    },
+    "exit_state": {},
+    "expel_federated_group": {
+      "remoteHostIdHex": "required",
+      "remoteTeamIdHex": "required",
+      "storeId": "required"
+    },
+    "finish_device_pairing": {
+      "accountStoreId": "required"
+    },
+    "first_run_operation_status": {
+      "attempt": "required"
+    },
+    "get_window_state": {},
+    "handle_exit_action": {
+      "action": "required"
+    },
+    "import_dropped_file": {
+      "path": "required",
+      "readRole": "optional",
+      "sourcePath": "required",
+      "storeId": "required",
+      "writeRole": "optional"
+    },
+    "initialize_client_state": {},
+    "invitation_request": {
+      "accountAlias": "required",
+      "action": "required",
+      "pin": "optional",
+      "profile": "required"
+    },
+    "list_account_devices": {
+      "accountStoreId": "required"
+    },
+    "list_accounts": {
+      "generation": "optional"
+    },
+    "list_backup_enrollments": {
+      "accountStoreId": "required"
+    },
+    "list_catalog": {
+      "fresh": "optional"
+    },
+    "list_catalog_progressive": {
+      "fresh": "optional",
+      "onPartial": "required"
+    },
+    "list_federation": {
+      "storeId": "required"
+    },
+    "list_group_details": {
+      "storeId": "required"
+    },
+    "list_parties": {
+      "storeId": "required"
+    },
+    "list_pending_operations": {
+      "profile": "required"
+    },
+    "list_profile_catalog": {
+      "profile": "required"
+    },
+    "list_servers": {
+      "generation": "optional"
+    },
+    "list_stores": {},
+    "list_yubi_accounts": {
+      "profile": "required"
+    },
+    "list_yubi_cards": {
+      "profile": "required"
+    },
+    "lock_app": {},
+    "maintain_client_state": {
+      "action": "required"
+    },
+    "move_item": {
+      "destination": "required",
+      "direntId": "required",
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "open_chat_link": {
+      "url": "required"
+    },
+    "open_notification_settings": {},
+    "open_sso_browser": {
+      "accountAlias": "required",
+      "operationId": "required",
+      "profile": "required"
+    },
+    "open_web_admin": {
+      "accountAlias": "required",
+      "pin": "optional",
+      "profile": "required"
+    },
+    "pick_and_replace_file": {
+      "direntId": "required",
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "pick_import_file": {},
+    "prepare_owner_backup": {
+      "accountAlias": "required",
+      "backupAlias": "required",
+      "profile": "required"
+    },
+    "promote_group_member": {
+      "destination": "required",
+      "storeId": "required",
+      "username": "required"
+    },
+    "provision_yubi_device": {
+      "accountStoreId": "required",
+      "cardSerial": "required",
+      "deviceName": "required",
+      "pin": "required",
+      "pinAttempts": "required",
+      "pqSlot": "required",
+      "puk": "required",
+      "pukAttempts": "required",
+      "signingSlot": "required",
+      "targetAlias": "required"
+    },
+    "quit_app": {},
+    "read_item": {
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "reconcile_server": {
+      "profile": "required"
+    },
+    "recover_owner_account": {
+      "deviceName": "required",
+      "phrase": "required",
+      "profile": "required",
+      "targetAlias": "required"
+    },
+    "recover_yubi_management_key": {
+      "accountStoreId": "required",
+      "yubiAlias": "required"
+    },
+    "recover_yubi_subkey": {
+      "alias": "required",
+      "pin": "required",
+      "profile": "required"
+    },
+    "release_import_file": {
+      "sourcePath": "required"
+    },
+    "relocate_client_state": {},
+    "remove_account_device": {
+      "accountStoreId": "required",
+      "deviceId": "required"
+    },
+    "remove_group_member": {
+      "storeId": "required",
+      "username": "required"
+    },
+    "remove_item": {
+      "direntId": "required",
+      "outsideTrash": "required",
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "remove_server_and_credentials": {
+      "confirmedProfileName": "required",
+      "profileName": "required"
+    },
+    "rename_account_request": {
+      "accountAlias": "required",
+      "action": "optional",
+      "profile": "required"
+    },
+    "replace_dropped_file": {
+      "direntId": "required",
+      "path": "required",
+      "sourcePath": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "rerun_federated_team_member_add": {
+      "operationId": "required",
+      "storeId": "required"
+    },
+    "reset_server": {
+      "confirmedProfileName": "required",
+      "profileName": "required",
+      "token": "required"
+    },
+    "restart_agent": {
+      "takeover": "required"
+    },
+    "restart_app": {},
+    "restore_trash_item": {
+      "destination": "required",
+      "direntId": "required",
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "resume_device_pairing_acceptance": {
+      "profile": "required",
+      "targetAlias": "required"
+    },
+    "resume_device_pairing_offer": {
+      "accountStoreId": "required"
+    },
+    "resume_first_run_account": {
+      "alias": "required",
+      "profile": "required"
+    },
+    "resume_go_profile_pairing": {
+      "candidateId": "required",
+      "profile": "required",
+      "targetAlias": "required"
+    },
+    "resume_group_creation": {
+      "storeId": "required"
+    },
+    "resume_group_member_addition": {
+      "storeId": "required",
+      "username": "required"
+    },
+    "resume_group_member_edit": {
+      "storeId": "required"
+    },
+    "resume_owner_recovery": {
+      "deviceName": "required",
+      "phrase": "required",
+      "profile": "required",
+      "targetAlias": "required"
+    },
+    "resume_yubi_account": {
+      "alias": "required",
+      "pin": "required",
+      "profile": "required"
+    },
+    "resume_yubi_management_key": {
+      "alias": "required",
+      "pin": "optional",
+      "profile": "required"
+    },
+    "retry_agent_connection": {},
+    "revoke_owner_backup": {
+      "accountStoreId": "required",
+      "backupAlias": "required",
+      "backupId": "required",
+      "confirmation": "required"
+    },
+    "revoke_yubi_device": {
+      "accountStoreId": "required",
+      "confirmation": "required",
+      "yubiAlias": "required"
+    },
+    "rotate_yubi_management_key": {
+      "alias": "required",
+      "pin": "required",
+      "profile": "required"
+    },
+    "run_first_run_account_operation": {
+      "request": "required"
+    },
+    "set_account_passphrase": {
+      "accountStoreId": "required",
+      "confirmation": "required",
+      "passphrase": "required"
+    },
+    "set_first_run_passphrase": {
+      "alias": "required",
+      "confirmation": "required",
+      "passphrase": "required",
+      "profile": "required"
+    },
+    "set_local_account_alias": {
+      "accountStoreId": "required",
+      "label": "required"
+    },
+    "set_server_label": {
+      "label": "optional",
+      "profile": "required"
+    },
+    "set_traffic_lights_visible": {
+      "visible": "required"
+    },
+    "set_unsent_messages": {
+      "count": "required"
+    },
+    "set_yubi_passphrase": {
+      "alias": "required",
+      "confirmation": "required",
+      "passphrase": "required",
+      "pin": "required",
+      "profile": "required"
+    },
+    "sso_request": {
+      "accountAlias": "required",
+      "action": "required",
+      "profile": "required"
+    },
+    "start_device_pairing": {
+      "accountStoreId": "required"
+    },
+    "sync_yubi_account": {
+      "alias": "required",
+      "pin": "required",
+      "profile": "required",
+      "withFederation": "required"
+    },
+    "take_agent_connection_loss": {},
+    "trash_item": {
+      "direntId": "required",
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
+    "unblock_yubi_pin": {
+      "alias": "required",
+      "newPin": "required",
+      "profile": "required",
+      "puk": "required"
+    },
+    "unlock_app": {},
+    "verify_account_passphrase": {
+      "accountStoreId": "required",
+      "passphrase": "required"
+    },
+    "verify_recovery_phrase": {
+      "accountStoreId": "required",
+      "phrase": "required"
+    },
+    "verify_yubi_passphrase": {
+      "alias": "required",
+      "passphrase": "required",
+      "pin": "required",
+      "profile": "required"
+    },
+    "yubi_pin_status": {
+      "alias": "required",
+      "profile": "required"
+    }
+  },
+  "sourceOfTruth": "The #[tauri::command] functions under apps/desktop/src-tauri/src that generate_handler! registers. Each command maps the camelCase key of every parameter Tauri does not inject to required, or to optional for an Option parameter.",
+  "writeCommand": "FOKS_WRITE_COMMAND_SIGNATURES=1 cargo test --locked -p foks-desktop-app --lib command_signatures"
+}

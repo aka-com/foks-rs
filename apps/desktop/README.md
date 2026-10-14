@@ -247,7 +247,11 @@ the other facts needed by the Phase 2 shell; `read_item`,
 `{storeId, path, version}`, and `copy_item_field` takes the same plus
 `field` (`password`, `username`, `url` or `value`). `tests/bridge.test.ts`
 pins the decoder side and the Rust command tests pin serialization so a drift
-fails on one side or the other.
+fails on one side or the other. `tests/command-contract.test.ts` checks the
+command name and argument keys of every native call in `src/` against
+`src-tauri/command-signatures.json`, which a Rust test derives from the
+registered commands; an argument the Rust command requires must not be
+optional or possibly `undefined` on the TypeScript side.
 
 Phase 3 adds `create_text_item`, `create_link`, `edit_text_item`,
 `remove_item`, dropped/native-picker file import and exact-version file

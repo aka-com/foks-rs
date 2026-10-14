@@ -48,6 +48,10 @@ url = { workspace = true }
 zeroize = { workspace = true }
 tempfile = { workspace = true }
 
+[dev-dependencies]
+# Reads the command signatures from source; see src/command_signatures.rs.
+syn = { version = "2", features = ["full", "visit"] }
+
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 zbus = "5"
 

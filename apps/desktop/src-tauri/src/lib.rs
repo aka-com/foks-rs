@@ -10,6 +10,8 @@ mod agent;
 mod applock;
 mod clipboard;
 mod close_guard;
+#[cfg(test)]
+mod command_signatures;
 mod commands;
 mod diagnostics;
 mod dragdrop;
