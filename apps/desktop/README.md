@@ -352,7 +352,9 @@ team vault). Team info's Files section and the Settings account page's Storage
 row show it as "About 2.3 GiB stored (encrypted) · 1,204 files". The server
 walks the vault to compute it, so `src/store-usage.ts` reads it only when one
 of those views opens, keeps it for the session, and reads it again only after
-the vault's listed files change; the metadata reconciliation cadence skips it.
+the vault's listed files change, on an explicit Refresh, or after access is
+reset; the metadata reconciliation cadence skips it, including a retry after a
+failed read.
 The figure has no denominator: the server reports no limit, a Go host sets its
 own, and the quota a write is refused against also counts directories,
 metadata and envelopes, so a fraction or an early upload refusal would be

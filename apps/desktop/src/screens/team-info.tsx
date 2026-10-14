@@ -92,12 +92,7 @@ export function TeamInfoPanel({
     'vault',
     options,
   ).available;
-  const usage = useStoreUsage(
-    bridge,
-    snapshot,
-    store,
-    readable && filesReadable,
-  );
+  const usage = useStoreUsage(bridge, snapshot, store, filesReadable);
   const rosterReadiness = groupDetailReadiness(snapshot, store.id, 'roster');
   const memberReadiness = combineReadiness([
     rosterReadiness,

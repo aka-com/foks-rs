@@ -1551,3 +1551,32 @@ test('a stopped account does not read its storage', async () => {
   assert.ok(rendered.getByText('Not read while access is stopped'));
   assert.deepEqual(reads, []);
 });
+
+test('the Storage fact reports a read in progress while the vault listing loads', async () => {
+  const snapshot = await fixture();
+  const reads: string[] = [];
+  const { rendered } = await renderPeople(
+    {
+      ...snapshot,
+      storeInventory: snapshot.storeInventory.map((entry) =>
+        entry.store === 'acct:personal'
+          ? { ...entry, status: 'loading' as const }
+          : entry,
+      ),
+    },
+    'acct:personal',
+    undefined,
+    {
+      decorate: (bridge) => ({
+        ...bridge,
+        storeUsage: async (storeId) => {
+          reads.push(storeId);
+          return { files: 0, bytes: 0 };
+        },
+      }),
+    },
+  );
+  assert.ok(await rendered.findByText('Reading storage used…'));
+  assert.equal(rendered.queryByText('Storage used unavailable.'), null);
+  assert.deepEqual(reads, []);
+});

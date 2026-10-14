@@ -2,8 +2,8 @@
  * How much a vault stores on its server, read when a view that shows it
  * opens. The server computes usage by decoding the vault's nodes on every
  * request, so a figure is kept for the session and read again only after the
- * vault's listed files change or access is reset; it is never re-read on the
- * metadata cadence.
+ * vault's listed files change, on an explicit Refresh, or after access is
+ * reset; it is never re-read or retried on the metadata cadence.
  *
  * The figure is the server's KV usage: the vault's file count and the files'
  * total ciphertext bytes. The server reports no limit with it, a Go host sets
@@ -46,8 +46,9 @@ export function storeUsageQuery(
         () => bridge.storeUsage(id),
         'store-usage',
       ),
-    // Current until invalidated: a change to the vault's files, an access
-    // reset or a profile replacement. Time alone does not age it.
+    // Current until invalidated: a change to the vault's files, an explicit
+    // Refresh, an access reset or a profile replacement. Time alone does not
+    // age it.
     Number.POSITIVE_INFINITY,
   );
 }

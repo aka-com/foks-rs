@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Bridge, StoreUsage } from '../src/bridge';
 import { decodeStoreUsage } from '../src/bridge';
+import { cadenceReconciles } from '../src/app/metadata-runtime';
 import type { AgentSnapshot, Store } from '../src/model';
 import { FIXTURE } from '../src/fixture';
 import { MetadataRepository } from '../src/metadata-repository';
@@ -149,6 +150,35 @@ test('a usage row is read once per store and is not re-read on the metadata cade
   assert.deepEqual(reads, [personal.id]);
   query.invalidate();
   await query.load();
+  assert.deepEqual(reads, [personal.id, personal.id]);
+  release();
+});
+
+test('a failed usage read is not retried on the metadata cadence once its backoff passes', async () => {
+  let now = 0;
+  const repository = new MetadataRepository(() => now);
+  const reads: string[] = [];
+  const base = mockBridge(FIXTURE);
+  const bridge: Bridge = {
+    ...base,
+    storeUsage: (id) => {
+      reads.push(id);
+      return reads.length === 1
+        ? Promise.reject(new Error('busy'))
+        : base.storeUsage(id);
+    },
+  };
+  const personal = store('acct:personal');
+  const query = storeUsageQuery(repository, bridge, personal);
+  const release = query.subscribe(() => undefined);
+  await assert.rejects(query.load(), /busy/);
+  now += 10 * 60_000;
+  assert.ok(query.isDueSubscribed());
+  assert.equal(cadenceReconciles(storeUsageKey(personal)), false);
+  await repository.reconcileSubscribed(() => true, cadenceReconciles);
+  assert.deepEqual(reads, [personal.id]);
+  // Without the filter the same tick would read the vault again.
+  await repository.reconcileSubscribed();
   assert.deepEqual(reads, [personal.id, personal.id]);
   release();
 });

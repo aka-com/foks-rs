@@ -6,6 +6,7 @@ import { DeviceMetadata, isDeviceQuery } from '../device-metadata';
 import { deviceAlertRegistry } from '../screens/device-alert';
 import { accountStopped, type AgentSnapshot } from '../model';
 import { readRecoveryFor } from '../query-read-recovery';
+import type { QueryKey } from '../metadata-repository';
 import { isStoreUsageQuery } from '../store-usage';
 
 /**
@@ -21,6 +22,15 @@ const PROFILE_METADATA_KINDS = [
   'invitation-recovery',
   'team-requests',
 ] as const;
+
+/**
+ * The rows the metadata cadence re-reads once due. Devices reconcile through
+ * their own model. Storage usage costs the server a walk of the vault, so it
+ * is read only when a view opens or the vault's files change; a failed usage
+ * read is not retried on this cadence either.
+ */
+export const cadenceReconciles = (key: QueryKey): boolean =>
+  !isDeviceQuery(key) && !isStoreUsageQuery(key);
 
 export function useMetadataRuntime({
   lifetime,
@@ -104,12 +114,10 @@ export function useMetadataRuntime({
   metadataReconciliation.current = async () => {
     // Devices publish their own progress. Cached background reads must not
     // hold the generic metadata spinner open for their entire duration.
-    // Storage usage costs the server a walk of the vault, so it is read only
-    // when a view opens or the vault's files change, never on this cadence.
     void devices.reconcile();
     await deviceCache.repository.reconcileSubscribed(
       () => foregroundRefreshAllowed.current && !document.hidden,
-      (key) => !isDeviceQuery(key) && !isStoreUsageQuery(key),
+      cadenceReconciles,
     );
   };
   deviceRefresh.current = async () => {

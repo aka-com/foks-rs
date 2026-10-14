@@ -1021,8 +1021,8 @@ function StorageRow({
   store: AccountStore;
   stopped: boolean;
 }): ReactNode {
-  const readable =
-    !stopped && storeOperationAvailability(snapshot, store, 'vault').available;
+  const access = storeOperationAvailability(snapshot, store, 'vault');
+  const readable = !stopped && access.available;
   const usage = useStoreUsage(bridge, snapshot, store, readable);
   return (
     <InsetRow label="Storage">
@@ -1030,7 +1030,9 @@ function StorageRow({
         ? 'Not read while access is stopped'
         : readable
           ? storeUsageText(usage)
-          : 'Storage used unavailable.'}
+          : !access.available && access.reason === 'loading'
+            ? 'Reading storage used…'
+            : 'Storage used unavailable.'}
     </InsetRow>
   );
 }
