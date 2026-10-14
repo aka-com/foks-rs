@@ -80,6 +80,7 @@ import {
 import { itemActionProblem } from './store-access';
 import { copyProblem } from './item-moves';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
+import { editorBound, useItemSecrets } from './item-secrets';
 
 const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
   ['user', 'User name'],
@@ -343,43 +344,25 @@ export function DetailsPanel({
     : undefined;
 
   const key = item ? `${item.store}|${item.path}|${item.version}` : '';
-  const [read, setRead] = useState<
-    | { key: string; state: 'loading' }
-    | { key: string; state: 'shown'; value: string }
-    | { key: string; state: 'error'; message: string }
-    | null
-  >(null);
-  // The login rows shown while `read` holds the text; any other row stays
-  // masked. Meaningless while nothing is shown.
-  const [revealed, setRevealed] = useState<readonly string[]>([]);
+  // Every revealed value and edit draft, and each transition that clears
+  // them; see item-secrets.ts.
+  const {
+    secrets: { read, revealed, editor, editError, binaryFile },
+    dispatch,
+    epoch: concealEpoch,
+  } = useItemSecrets();
+  const editing = editor !== null;
+  const editValue = editor?.value ?? '';
+  const editPasswordShown = editor?.passwordShown ?? false;
+  const replacementPath = editor?.replacementPath ?? null;
   const toasts = useToast();
   const recentFavorites = useRecentFavorites();
   const accessDescriptionId = useId();
-  const [editing, setEditing] = useState(false);
-  const [editValue, setEditValue] = useState('');
-  // The lines the open edit's structured login editor lists, or null for the
-  // textarea; see loginEditLines.
-  const [editLoginLines, setEditLoginLines] = useState<
-    readonly number[] | null
-  >(null);
-  const [editPasswordShown, setEditPasswordShown] = useState(false);
-  const [editContentConcealed, setEditContentConcealed] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [replacementPath, setReplacementPath] = useState<string | null>(null);
   const [dropHover, setDropHover] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
-  const [binaryFile, setBinaryFile] = useState(false);
   const focusEditorOnOpen = useRef(false);
   const focusActionsOnClose = useRef(false);
   const editorRef = useRef<HTMLDivElement>(null);
-  const concealEpoch = useRef(0);
-  // The value the editor opened from, against which `editValue` is unsaved
-  // work. `null` while no editor is open, and for a draft restored from a
-  // conflict, whose stored counterpart is by definition not what it holds.
-  const editBaseline = useRef<string | null>(null);
-  const editTarget = useRef<Item | null>(null);
-  const editScope = useRef('');
-  const editGeneration = useRef(accessGeneration);
   const selectedStore = item ? storeOf(snapshot, item.store) : undefined;
   const selectedServer = snapshot.servers.find(
     (server) => server.profileName === selectedStore?.server,
@@ -420,20 +403,21 @@ export function DetailsPanel({
   const accessProblemRef = useRef(accessProblem);
   accessProblemRef.current = accessProblem;
   const accessAvailable = useCallback(() => !accessProblemRef.current(), []);
-  const requireAccess = useCallback((write = false): boolean => {
-    const message = accessProblemRef.current(write);
-    if (!message) return true;
-    if (write) setEditError(message);
-    else setRead({ key: keyRef.current, state: 'error', message });
-    return false;
-  }, []);
+  const requireAccess = useCallback(
+    (write = false): boolean => {
+      const message = accessProblemRef.current(write);
+      if (!message) return true;
+      if (write) dispatch({ type: 'edit-error', message });
+      else dispatch({ type: 'reveal-fail', key: keyRef.current, message });
+      return false;
+    },
+    [dispatch],
+  );
   const readProblem = accessProblem();
   const writeProblem = accessProblem(true);
   useEffect(() => {
-    if (!readProblem) return;
-    setRead(null);
-    setEditPasswordShown(false);
-  }, [readProblem]);
+    if (readProblem) dispatch({ type: 'read-blocked' });
+  }, [dispatch, readProblem]);
 
   const request = useMemo<ItemRequest | null>(
     () =>
@@ -452,7 +436,7 @@ export function DetailsPanel({
     const epoch = concealEpoch.current;
     const generation = accessGeneration;
     if (!requireAccess()) return;
-    setRead({ key: requestKey, state: 'loading' });
+    dispatch({ type: 'reveal-start', key: requestKey });
     try {
       const response = await readOnce(
         bridge,
@@ -468,7 +452,7 @@ export function DetailsPanel({
       )
         return;
       if (!requireAccess()) return;
-      setRead({ key: requestKey, state: 'shown', value: response.value });
+      dispatch({ type: 'reveal-done', key: requestKey, value: response.value });
       return response.value;
     } catch (error) {
       if (
@@ -484,13 +468,12 @@ export function DetailsPanel({
         return;
       }
       if (typed.code === 'not-text' && item.kind === 'Secret') {
-        setBinaryFile(true);
-        setRead(null);
+        dispatch({ type: 'not-text' });
         return;
       }
-      setRead({
+      dispatch({
+        type: 'reveal-fail',
         key: requestKey,
-        state: 'error',
         message: typed.message,
       });
     }
@@ -499,38 +482,22 @@ export function DetailsPanel({
     accessGeneration,
     activeAccessSession,
     bridge,
+    concealEpoch,
+    dispatch,
     item,
     key,
     onCommandError,
     request,
   ]);
 
+  // A draft still bound to this scope and generation outlives a new version.
   useEffect(() => {
-    concealEpoch.current += 1;
-    setRead(null);
-    setEditPasswordShown(false);
-    if (
-      editTarget.current &&
-      editScope.current === scopeIdentity &&
-      editGeneration.current === accessGeneration
-    ) {
-      setEditError(
-        'This item changed on the server. Saving will check the original version.',
-      );
-    } else {
-      setEditing(false);
-      setEditValue('');
-      setEditContentConcealed(false);
-      editBaseline.current = null;
-      editTarget.current = null;
-      setReplacementPath(null);
-      setEditError(null);
-      setBinaryFile(false);
-    }
-    return () => {
-      concealEpoch.current += 1;
-    };
-  }, [key, scopeIdentity, accessGeneration]);
+    dispatch({
+      type: 'item-changed',
+      scope: scopeIdentity,
+      generation: accessGeneration,
+    });
+  }, [dispatch, key, scopeIdentity, accessGeneration]);
 
   // Reveal content only when explicitly requested.
   useEffect(() => {
@@ -540,43 +507,26 @@ export function DetailsPanel({
     onRevealHandled?.();
     // Reveal on a login shows its password, the field the list offers.
     const current = read?.key === key;
-    setRevealed((fields) =>
-      current ? [...new Set([...fields, 'password'])] : ['password'],
-    );
+    dispatch({ type: 'show-rows', ids: ['password'], keep: current });
     if (!current) void show();
-  }, [item, key, onRevealHandled, read?.key, revealRequest, show]);
+  }, [dispatch, item, key, onRevealHandled, read?.key, revealRequest, show]);
 
   // Revealed values and plaintext edit drafts are covered without abandoning
   // the details panel or its unsaved work.
   useConcealOnInactive(
-    () => {
-      concealEpoch.current += 1;
-      setRead(null);
-      setEditPasswordShown(false);
-      if (editing && item && item.kind !== 'File' && !binaryFile)
-        setEditContentConcealed(true);
-    },
+    () => dispatch({ type: 'conceal-inactive', file: item?.kind === 'File' }),
     Boolean(read) || editing || saving,
   );
 
   // A read in flight when access changes generation is dropped when it lands,
   // so the control it disabled is released now instead of reading forever.
   useEffect(() => {
-    setRead((current) => (current?.state === 'loading' ? null : current));
-  }, [accessGeneration]);
+    dispatch({ type: 'generation-changed' });
+  }, [dispatch, accessGeneration]);
 
   useEffect(() => {
-    if (!concealSignal) return;
-    concealEpoch.current += 1;
-    setRead(null);
-    setEditValue('');
-    editBaseline.current = null;
-    editTarget.current = null;
-    setEditing(false);
-    setEditPasswordShown(false);
-    setEditContentConcealed(false);
-    setReplacementPath(null);
-  }, [accessGeneration, concealSignal]);
+    if (concealSignal) dispatch({ type: 'conceal-signal' });
+  }, [dispatch, accessGeneration, concealSignal]);
 
   useEffect(() => {
     if (!item || !resumeDraft) return;
@@ -585,17 +535,14 @@ export function DetailsPanel({
     // Restore the draft only once per refresh epoch to avoid overwriting newer changes.
     if (appliedDraft.current === resumeDraft.epoch) return;
     appliedDraft.current = resumeDraft.epoch;
-    setEditValue(resumeDraft.value);
-    setEditLoginLines(
-      kindOf(item) === 'Password' ? loginEditLines(resumeDraft.value) : null,
-    );
-    setEditContentConcealed(false);
-    editBaseline.current = null;
-    editTarget.current = item;
-    editScope.current = scopeIdentity;
-    editGeneration.current = accessGeneration;
-    setEditing(true);
-  }, [item, resumeDraft, scopeIdentity, accessGeneration]);
+    dispatch({
+      type: 'restore-draft',
+      value: resumeDraft.value,
+      loginLines:
+        kindOf(item) === 'Password' ? loginEditLines(resumeDraft.value) : null,
+      binding: { item, scope: scopeIdentity, generation: accessGeneration },
+    });
+  }, [dispatch, item, resumeDraft, scopeIdentity, accessGeneration]);
 
   useEffect(() => {
     if (!editing || !focusEditorOnOpen.current) return;
@@ -623,38 +570,38 @@ export function DetailsPanel({
     onHover: setDropHover,
     onPaths: (paths) => {
       setDropHover(false);
-      if (paths.length !== 1) {
-        setReplacementPath(null);
-        setEditError('Drop exactly one file to replace the current contents.');
-        return;
-      }
-      setReplacementPath(paths[0] ?? null);
-      setEditError(null);
+      dispatch(
+        paths.length === 1
+          ? { type: 'replacement', path: paths[0] ?? null, error: null }
+          : {
+              type: 'replacement',
+              path: null,
+              error: 'Drop exactly one file to replace the current contents.',
+            },
+      );
     },
-    onError: (error) => setEditError(normalizeCommandError(error).message),
+    onError: (error) =>
+      dispatch({
+        type: 'edit-error',
+        message: normalizeCommandError(error).message,
+      }),
   });
 
   /* ------------------------------------------------------- unsaved edits -- */
 
   /** Takes the editor down, so a confirmed move lands on a clean panel. */
-  const clearEdit = useCallback(() => {
-    setEditing(false);
-    setEditValue('');
-    setEditContentConcealed(false);
-    editBaseline.current = null;
-    editTarget.current = null;
-    setEditPasswordShown(false);
-    setReplacementPath(null);
-    setEditError(null);
-  }, []);
+  const clearEdit = useCallback(
+    () => dispatch({ type: 'close-editor' }),
+    [dispatch],
+  );
 
   // An open editor holding the stored value is not unsaved work; a chosen
   // replacement file is, since the file editor carries no text of its own.
   const editDirty =
-    editing &&
-    (replacementPath !== null ||
-      editBaseline.current === null ||
-      editValue !== editBaseline.current);
+    editor !== null &&
+    (editor.replacementPath !== null ||
+      editor.baseline === null ||
+      editor.value !== editor.baseline);
   // Read by the guard when it is asked, so typing re-registers nothing.
   const editGuardState = useRef({
     dirty: false,
@@ -731,9 +678,7 @@ export function DetailsPanel({
   const team = store?.kind === 'team';
   const saveProblem =
     writeProblem ??
-    (editTarget.current &&
-    editScope.current === scopeIdentity &&
-    editGeneration.current === accessGeneration
+    (editorBound(editor, scopeIdentity, accessGeneration)
       ? undefined
       : fileMode
         ? 'Access changed. Reopen Replace before continuing.'
@@ -760,28 +705,27 @@ export function DetailsPanel({
   // `read` while any row is shown, and later rows reveal without a read.
   const showRow = (id: string): void => {
     const held = shownValue !== null || reading;
-    setRevealed((fields) => (held ? [...new Set([...fields, id])] : [id]));
+    dispatch({ type: 'show-rows', ids: [id], keep: held });
     if (!held) void show();
   };
-  const hideRow = (id: string): void => {
-    const remaining = revealed.filter((field) => field !== id);
-    setRevealed(remaining);
-    if (remaining.length) return;
-    concealEpoch.current += 1;
-    setRead(null);
-  };
+  // Hiding the last shown row drops the text.
+  const hideRow = (id: string): void =>
+    dispatch(
+      revealed.some((field) => field !== id)
+        ? { type: 'hide-row', id }
+        : { type: 'hide-value' },
+    );
 
   const beginEdit = async (): Promise<void> => {
     if (!request || !requireAccess(true)) return;
-    setEditError(null);
+    dispatch({ type: 'edit-error', message: null });
+    const binding = {
+      item,
+      scope: scopeIdentity,
+      generation: accessGeneration,
+    };
     if (fileMode) {
-      setEditLoginLines(null);
-      setEditContentConcealed(false);
-      editBaseline.current = '';
-      editTarget.current = item;
-      editScope.current = scopeIdentity;
-      editGeneration.current = accessGeneration;
-      setEditing(true);
+      dispatch({ type: 'open-editor', value: '', loginLines: null, binding });
       return;
     }
     // Ensure the response corresponds to the currently selected item before opening the editor.
@@ -804,29 +748,18 @@ export function DetailsPanel({
       assertExactRead(request, response);
       if (!current()) return;
       const opened = response.value;
-      setEditValue(opened);
-      setEditLoginLines(kind === 'Password' ? loginEditLines(opened) : null);
-      setEditContentConcealed(false);
-      editBaseline.current = opened;
-      editTarget.current = item;
-      editScope.current = scopeIdentity;
-      editGeneration.current = accessGeneration;
-      setEditPasswordShown(false);
-      setEditing(true);
-      setRead(null);
+      dispatch({
+        type: 'open-editor',
+        value: opened,
+        loginLines: kind === 'Password' ? loginEditLines(opened) : null,
+        binding,
+      });
     } catch (error) {
       if (!current()) return;
       const typed = normalizeCommandError(error);
       if (typed.code === 'not-text' && item.kind === 'Secret') {
-        setBinaryFile(true);
-        setRead(null);
-        setEditLoginLines(null);
-        setEditContentConcealed(false);
-        editBaseline.current = '';
-        editTarget.current = item;
-        editScope.current = scopeIdentity;
-        editGeneration.current = accessGeneration;
-        setEditing(true);
+        dispatch({ type: 'not-text' });
+        dispatch({ type: 'open-editor', value: '', loginLines: null, binding });
       } else {
         onCommandError(error, item);
       }
@@ -837,21 +770,21 @@ export function DetailsPanel({
 
   const saveEdit = async (): Promise<void> => {
     if (saving || !requireAccess(true)) return;
-    const target = editTarget.current;
     if (
       !request ||
-      !target ||
-      editScope.current !== scopeIdentity ||
-      editGeneration.current !== accessGeneration
+      !editor ||
+      !editorBound(editor, scopeIdentity, accessGeneration)
     ) {
-      setEditError(
-        fileMode
+      dispatch({
+        type: 'edit-error',
+        message: fileMode
           ? 'Access changed. Reopen Replace before continuing.'
           : 'Access changed. Reopen the editor before saving.',
-      );
+      });
       return;
     }
-    setEditError(null);
+    const target = editor.binding.item;
+    dispatch({ type: 'edit-error', message: null });
     const editRequest = {
       storeId: target.store,
       path: target.path,
@@ -871,10 +804,8 @@ export function DetailsPanel({
       } else {
         await bridge.editTextItem({ ...editRequest, value: editValue });
       }
-      editBaseline.current = null;
-      editTarget.current = null;
       if (!fileMode) focusActionsOnClose.current = true;
-      setEditing(false);
+      dispatch({ type: 'close-editor' });
       await onApplied(
         fileMode ? 'File replaced' : 'Changes saved',
         storeOf(snapshot, target.store)?.server,
@@ -896,7 +827,8 @@ export function DetailsPanel({
   // One row per listed line, split by the rules Copy follows. Changing a row
   // rewrites only its line, keeping its separator; every other line is saved
   // as it was read.
-  const editLines = editing && editLoginLines ? loginLines(editValue) : null;
+  const editLoginLines = editor?.loginLines ?? null;
+  const editLines = editLoginLines ? loginLines(editValue) : null;
   const editRows =
     editLines && editLoginLines
       ? editLoginLines.flatMap((index) => {
@@ -916,8 +848,9 @@ export function DetailsPanel({
     : [];
   const updateEditField = (index: number, value: string): void => {
     if (!editLines) return;
-    setEditValue(
-      editLines
+    dispatch({
+      type: 'edit',
+      value: editLines
         .map(({ key, separator, raw }, candidate) => {
           if (candidate !== index) return raw;
           const line =
@@ -925,12 +858,12 @@ export function DetailsPanel({
           return raw.endsWith('\r') ? `${line}\r` : line;
         })
         .join('\n'),
-    );
+    });
   };
 
   // A concealed draft shows one masked Contents row in either editor.
   const preview =
-    inlineEditing && editContentConcealed ? (
+    inlineEditing && editor.concealed ? (
       <Inset variant="preview">
         <InsetRow
           label="Contents"
@@ -941,7 +874,7 @@ export function DetailsPanel({
               className="value-action"
               aria-label="Show"
               type="button"
-              onClick={() => setEditContentConcealed(false)}
+              onClick={() => dispatch({ type: 'unconceal-draft' })}
             >
               <Icon name="eye" />
             </button>
@@ -970,7 +903,8 @@ export function DetailsPanel({
               onChange={(next) => updateEditField(index, next)}
               shown={editPasswordShown}
               onShownChange={(shown) => {
-                if (!shown || requireAccess()) setEditPasswordShown(shown);
+                if (!shown || requireAccess())
+                  dispatch({ type: 'show-password', shown });
               }}
               showProblem={readProblem ?? undefined}
               showProblemId={accessDescriptionId}
@@ -991,7 +925,9 @@ export function DetailsPanel({
         <textarea
           aria-label="Contents"
           value={editValue}
-          onChange={(event) => setEditValue(event.target.value)}
+          onChange={(event) =>
+            dispatch({ type: 'edit', value: event.target.value })
+          }
         />
       </Inset>
     ) : kind === 'Password' && !fileMode ? (
@@ -1108,10 +1044,7 @@ export function DetailsPanel({
                   className="value-action"
                   aria-label="Hide"
                   type="button"
-                  onClick={() => {
-                    concealEpoch.current += 1;
-                    setRead(null);
-                  }}
+                  onClick={() => dispatch({ type: 'hide-value' })}
                 >
                   <Icon name="eyeOff" />
                 </button>
