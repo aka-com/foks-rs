@@ -3,7 +3,7 @@ import type { AgentLifecycle } from '../agent-lifecycle';
 import type { Bridge } from '../bridge';
 import type { Location, LocationStore, NavigateOptions } from '../location';
 import { storeOf } from '../model';
-import type { AgentSnapshot, DeviceLabel } from '../model';
+import type { AgentSnapshot, DeviceLabel, Item } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { markProfileRostersStale } from '../roster-staleness';
 import { ChatTab } from '../screens/chat-tab';
@@ -70,6 +70,13 @@ export function ScreenRouter({
   accessGenerations: ReadonlyMap<string, number>;
 }): ReactNode {
   const here = state.location;
+  // An exposure review's Open: the item's store, with the item selected so
+  // the details panel shows it and its Edit.
+  const openItem = (item: Item): void =>
+    locations.navigateAndSelect(
+      { kind: 'store', ref: item.store },
+      { store: item.store, path: item.path },
+    );
   // People, Teams, Devices and Settings are the same body under four titles.
   const settingsProps = {
     snapshot: shown,
@@ -171,6 +178,7 @@ export function ScreenRouter({
       onApplied={refresh}
       onError={commandError}
       onMutationError={mutationError}
+      onOpenItem={openItem}
     />
   ) : here.kind === 'teams' ? (
     // Teams shares no state with Settings, so it is given exactly the props it
@@ -201,6 +209,7 @@ export function ScreenRouter({
       onRefreshSnapshot={refreshSnapshot}
       onError={commandError}
       onMutationError={mutationError}
+      onOpenItem={openItem}
     />
   ) : here.kind === 'settings' ? (
     <SettingsScreen

@@ -567,6 +567,42 @@ The card grid windows whole rows at the current viewport width through
 `files-grid.ts`, so it can scroll through the full loaded catalog without
 mounting every card. It no longer imposes the former 200-card cap.
 
+## Reviewing exposure after a removal
+
+Removing a member rotates the team's keys and lowering a role rotates the
+keys of the roles the member loses, as [Chapter 15](15-teams.qmd) describes;
+removing a device ends its access to the account. Each change stops later
+reads only. A credential the party already read, such as an API token or a
+Wi-Fi password, stays valid where it is used until it is changed there.
+
+The Remove, Lower role and Remove device sheets therefore list, before the
+write, the items the party could read: for a member, the team's items whose
+read role the member's role admits; for a lowered member, those the new
+role no longer admits; for a device, every item in its account's own store
+and in the account's teams, since the device held the account's keys. The
+list comes from this account's catalog, so it is a lower bound: an item this
+account cannot list, a Trash entry and a folder are not in it, and the sheet
+says so. The sheet waits until the store's items, and for a member the
+roster, have been read; if they cannot be read, the change can still be made,
+but no list is kept.
+
+Once the write reports success, the list is kept on this device as a
+review, and the team page or Devices shows a band until each entry is
+marked Rotated or Not needed. The review sheet opens an item in Files, where
+Edit can generate a new password. An entry whose item has a higher version
+than at the change reads "Changed since removal" ("Changed since role
+change" after a demotion): any write raises the
+version, so the user confirms rotation rather than the app assuming it. An
+entry whose dirent id is no longer listed, because the item was moved,
+renamed or removed, reads "Not listed".
+
+Reviews are kept in the webview's local storage under
+`foks.exposureReviews`, which persists while the app is locked. A review holds
+`StoreRef`s, dirent ids, versions and marks, the removed party's id, and its
+username or device name, which the server also holds; it holds no item name
+or path, which the sheet resolves from the live snapshot. The review needs
+no agent operation and no protocol change.
+
 ## Where to look
 
 - `apps/desktop/src-tauri`: `capabilities/default.json`, `src/lib.rs` (the
@@ -579,6 +615,8 @@ mounting every card. It no longer imposes the former 200-card cap.
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.
+- `apps/desktop/src/exposure-review.ts` and
+  `apps/desktop/src/screens/exposure-review.tsx`: the exposure review.
 - `apps/desktop/src/chat`: `notification-consumer.ts`,
   `use-chat-history.ts`, `history-cache.ts`; `apps/desktop/src/chat-contract.ts`.
 - `foks-desktop`: `lib.rs` (size constants, streaming), `tests/backend_transcript.rs`.

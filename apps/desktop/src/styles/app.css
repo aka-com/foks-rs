@@ -607,6 +607,45 @@
   margin: 4px 0 10px;
 }
 
+/* The items an exposure review lists: in a removal sheet before the write,
+   and in the review sheet with each entry's state and marks. */
+.exposure-rows {
+  max-height: min(320px, 46vh);
+  margin: 4px 0 8px;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  font-size: 13px;
+}
+.exposure-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.exposure-row .t {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.exposure-row small {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.exposure-row.more {
+  color: var(--muted);
+}
+.exposure-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .kico.group {
   background: var(--c-team);
   border: 0;

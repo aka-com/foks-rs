@@ -57,6 +57,7 @@ import type {
   AgentSnapshot,
   StoreRef,
   DeviceLabel,
+  Item,
 } from '../model';
 import {
   accountStores,
@@ -92,6 +93,8 @@ import { UnavailableAccount } from './account-section';
 
 import { deviceAlertRegistry } from './device-alert';
 import { RecoveryPhraseTestSheet } from './recovery-phrase-test-sheet';
+import { useExposureReviews } from '../exposure-review';
+import { ExposureReviewBands, ExposureReviewSheet } from './exposure-review';
 import {
   RECOVERY_TEST_INTERVAL_DAYS,
   recoveryPhraseTestDue,
@@ -238,6 +241,11 @@ export interface DevicesScreenProps {
   onDeviceLabel?: (label: DeviceLabel | null) => void;
   /** Re-probe connected cards independently of cached enrollment metadata. */
   hardwareRefresh?: number;
+  /**
+   * Opens an item in Files, from the review of what a removed device could
+   * read. Without it, the review lists items without an Open action.
+   */
+  onOpenItem?: (item: Item) => void;
 }
 
 export function DevicesScreen({
@@ -252,6 +260,7 @@ export function DevicesScreen({
   onMutationError,
   onDeviceLabel,
   hardwareRefresh = 0,
+  onOpenItem,
 }: DevicesScreenProps): ReactNode {
   // The shell canonicalizes the route on mount; the scene it was entered at
   // is what decides whether a sheet opens with the page.
@@ -299,6 +308,13 @@ export function DevicesScreen({
   // Which enrollment a per-row key action acts on. The row is the only thing
   // that says which one; there may be more than one.
   const [actingKey, setActingKey] = useState<YubiEnrollment | null>(null);
+  // Reviews of what removed devices could read, kept on this device after
+  // the removal; one is open in its sheet at a time.
+  const exposureReviews = useExposureReviews();
+  const [exposureOpen, setExposureOpen] = useState<string | null>(null);
+  const exposureReview = exposureReviews.find(
+    (review) => review.id === exposureOpen && review.scope === selected?.id,
+  );
 
   const sheetOpen = useRef(sheet);
   sheetOpen.current = sheet;
@@ -342,6 +358,7 @@ export function DevicesScreen({
     setRemoving(null);
     setRevoking(null);
     setActingKey(null);
+    setExposureOpen(null);
   }, [setSheet]);
 
   // Normalize the route to the active account's StoreRef. Because the
@@ -736,6 +753,12 @@ export function DevicesScreen({
                   Devices and keys are not listed while access is stopped.
                 </Band>
               ) : null}
+              <ExposureReviewBands
+                reviews={exposureReviews.filter(
+                  (review) => review.scope === selected?.id,
+                )}
+                onReview={setExposureOpen}
+              />
               {!stopped.stopped && pairingOfferOpen ? (
                 <Band
                   label="A pairing is waiting on this device"
@@ -1003,6 +1026,7 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'remove-device' && selected && removing ? (
         <RemoveDeviceSheet
+          snapshot={snapshot}
           bridge={bridge}
           store={selected}
           device={removing}
@@ -1017,6 +1041,21 @@ export function DevicesScreen({
             await applied(`Device "${name}" removed`);
           }}
           onError={(error) => void onMutationError(error)}
+        />
+      ) : null}
+      {exposureReview ? (
+        <ExposureReviewSheet
+          snapshot={snapshot}
+          review={exposureReview}
+          onOpenItem={
+            onOpenItem
+              ? (item) => {
+                  setExposureOpen(null);
+                  onOpenItem(item);
+                }
+              : undefined
+          }
+          onClose={() => setExposureOpen(null)}
         />
       ) : null}
       {sheet === 'test-backup' && selected ? (

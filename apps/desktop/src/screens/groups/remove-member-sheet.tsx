@@ -2,9 +2,17 @@
 
 import type { ReactNode } from 'react';
 import { Button, Inset, Notice, SheetDialog } from '../../components';
+import {
+  entriesOf,
+  exposureOrder,
+  memberExposureReadiness,
+  memberReads,
+  recordExposure,
+} from '../../exposure-review';
 import { groupDetailFailure, partyName } from '../../model';
 import type { Party } from '../../model';
 import { markProfileRostersStale } from '../../roster-staleness';
+import { ExposureSummary } from '../exposure-review';
 import { GroupMark } from '../group-mark';
 import {
   canTarget,
@@ -28,8 +36,17 @@ export function RemoveMemberSheet({
   const name = target ? partyName(target) : 'them';
   const title = `Remove ${name} from ${store.name}?`;
   const actionable = target ? canTarget(snapshot, target) : false;
+  // What the member could read is listed before the write and kept for review
+  // after it; the list waits for the team's items and roster to be read.
+  const readiness = memberExposureReadiness(snapshot, store.id);
+  const exposed =
+    target && readiness === 'ready'
+      ? exposureOrder(memberReads(snapshot, target))
+      : [];
   const apply = (): Promise<void> => {
-    if (requiredFailure || !target || !actionable) return Promise.resolve();
+    if (requiredFailure || !target || !actionable || readiness === 'loading')
+      return Promise.resolve();
+    const entries = entriesOf(exposed);
     return write(
       title,
       async () => {
@@ -37,6 +54,13 @@ export function RemoveMemberSheet({
         await bridge.removeGroupMember({
           storeId: store.id,
           username: target.username!,
+        });
+        recordExposure({
+          scope: store.id,
+          party: target.party_id_hex,
+          name,
+          cause: 'removed',
+          entries,
         });
         return { profile: store.server };
       },
@@ -58,7 +82,12 @@ export function RemoveMemberSheet({
           <Button
             variant="primary"
             danger
-            disabled={busy || Boolean(requiredFailure) || !actionable}
+            disabled={
+              busy ||
+              Boolean(requiredFailure) ||
+              !actionable ||
+              readiness === 'loading'
+            }
             onClick={() => void apply()}
           >
             Remove and rekey
@@ -81,6 +110,16 @@ export function RemoveMemberSheet({
           {/* Explain why the selected member cannot be removed. */}
           <p>This member is managed by another server or account.</p>
         </Notice>
+      ) : null}
+      {target && actionable && !requiredFailure ? (
+        <ExposureSummary
+          snapshot={snapshot}
+          name={name}
+          heading={`Items ${name} could read`}
+          empty={`${name} cannot read any item this account can list.`}
+          items={exposed}
+          readiness={readiness}
+        />
       ) : null}
     </SheetDialog>
   );

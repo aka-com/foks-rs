@@ -13,9 +13,17 @@ import {
   SectionLabel,
   SheetDialog,
 } from '../../components';
+import {
+  entriesOf,
+  exposureOrder,
+  loweredReads,
+  memberExposureReadiness,
+  recordExposure,
+} from '../../exposure-review';
 import { groupDetailFailure, parseRole, partyName } from '../../model';
 import type { Party } from '../../model';
 import { markProfileRostersStale } from '../../roster-staleness';
+import { ExposureSummary } from '../exposure-review';
 import { GroupMark } from '../group-mark';
 import {
   canTarget,
@@ -54,9 +62,23 @@ export function LowerRoleSheet({
     currentRole?.kind === 'member' ? (currentRole.visibility ?? 0) - 1 : 0;
   const lowerable = target ? demotionFor(target) !== null : false;
   const actionable = target ? canTarget(snapshot, target) : false;
+  // A lower role stops later reads of the items it no longer admits, not
+  // what was already read; those items are listed and kept for review.
+  const readiness = memberExposureReadiness(snapshot, store.id);
+  const exposed =
+    target && demotion && readiness === 'ready'
+      ? exposureOrder(loweredReads(snapshot, target, demotion))
+      : [];
   const apply = (): Promise<void> => {
-    if (requiredFailure || !target || !actionable || !demotion)
+    if (
+      requiredFailure ||
+      !target ||
+      !actionable ||
+      !demotion ||
+      readiness === 'loading'
+    )
       return Promise.resolve();
+    const entries = entriesOf(exposed);
     return write(
       title,
       async () => {
@@ -65,6 +87,13 @@ export function LowerRoleSheet({
           storeId: store.id,
           username: target.username!,
           destination: demotion,
+        });
+        recordExposure({
+          scope: store.id,
+          party: target.party_id_hex,
+          name,
+          cause: 'lowered',
+          entries,
         });
         return { profile: store.server };
       },
@@ -89,7 +118,8 @@ export function LowerRoleSheet({
               Boolean(requiredFailure) ||
               !target ||
               !actionable ||
-              !demotion
+              !demotion ||
+              readiness === 'loading'
             }
             onClick={() => void apply()}
           >
@@ -163,6 +193,16 @@ export function LowerRoleSheet({
             }
           />
         </Inset>
+      ) : null}
+      {target && actionable && demotion && !requiredFailure ? (
+        <ExposureSummary
+          snapshot={snapshot}
+          name={name}
+          heading={`Items ${name} will no longer read`}
+          empty={`The new role still admits every item ${name} reads that this account can list.`}
+          items={exposed}
+          readiness={readiness}
+        />
       ) : null}
     </SheetDialog>
   );

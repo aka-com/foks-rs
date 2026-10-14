@@ -55,7 +55,6 @@ import {
   partiesOf,
   partyName,
   plural,
-  readersOf,
   roleRank,
   serverDisplayLabel,
   serverDisplayLabelForStore as displayServerName,
@@ -96,6 +95,8 @@ import { GroupMark } from './group-mark';
 import { manageReason } from './group-model';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
+import { memberReads, useExposureReviews } from '../exposure-review';
+import { ExposureReviewBands, ExposureReviewSheet } from './exposure-review';
 
 type Tab = GroupSettingsTab;
 export type GroupSheetKind =
@@ -113,14 +114,6 @@ const stateName = (): string =>
 
 function itemsOf(snapshot: AgentSnapshot, store: string): Item[] {
   return catalog(snapshot).filter((item) => item.store === store);
-}
-
-function readsOf(snapshot: AgentSnapshot, party: Party): Item[] {
-  return itemsOf(snapshot, party.store).filter((item) =>
-    readersOf(snapshot, item)?.some(
-      (candidate) => candidate.party_id_hex === party.party_id_hex,
-    ),
-  );
 }
 
 function sortRoster(parties: readonly Party[]): Party[] {
@@ -974,7 +967,7 @@ function SettingsTab({
                       <b>{partyName(party)}</b>
                       <small>
                         {fmtRole(party.destination_role)} · reads{' '}
-                        {readsOf(snapshot, party).length} of {total}
+                        {memberReads(snapshot, party).length} of {total}
                       </small>
                     </span>
                   </button>
@@ -1167,6 +1160,7 @@ export function GroupSettingsScreen({
   onApplied: onSnapshotApplied,
   onError,
   onMutationError: onSnapshotMutationError,
+  onOpenItem,
 }: {
   snapshot: AgentSnapshot;
   bridge: Bridge;
@@ -1183,8 +1177,17 @@ export function GroupSettingsScreen({
   onApplied: (message: string, profile?: string) => Promise<void>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
+  /**
+   * Opens an item in Files, from an exposure review. Without it, the review
+   * lists items without an Open action.
+   */
+  onOpenItem?: (item: Item) => void;
 }): ReactNode {
   const copy = useCopyText(bridge, onError);
+  // Reviews of what removed or lowered members could read, kept on this
+  // device after the change; one is open in its sheet at a time.
+  const exposureReviews = useExposureReviews();
+  const [exposureOpen, setExposureOpen] = useState<string | null>(null);
   const toasts = useToast();
   // The Channels tab reads the same per-group inbox entry the rail and the
   // Chat column read, so the tab's count and its rows cannot disagree.
@@ -1362,6 +1365,7 @@ export function GroupSettingsScreen({
       setRekeyArmed(false);
       setInviting(false);
       setReviewing(false);
+      setExposureOpen(null);
       // A channel preparation the agent may already hold is the exception:
       // it is settled where it was made, so the sheet stays until it is.
       if (!channelUnresolved.current) setAddingChannel(false);
@@ -1451,6 +1455,24 @@ export function GroupSettingsScreen({
       membership={{ operations: membershipPending, onResume: resumeMembership }}
       onClose={() => setReviewing(false)}
       onComplete={() => onApplied('Team requests updated', store.server)}
+    />
+  ) : null;
+  const exposureReview = exposureReviews.find(
+    (review) => review.id === exposureOpen && review.scope === store.id,
+  );
+  const exposureSheet = exposureReview ? (
+    <ExposureReviewSheet
+      snapshot={snapshot}
+      review={exposureReview}
+      onOpenItem={
+        onOpenItem
+          ? (item) => {
+              setExposureOpen(null);
+              onOpenItem(item);
+            }
+          : undefined
+      }
+      onClose={() => setExposureOpen(null)}
     />
   ) : null;
   const changeRange = (raise: boolean): void => {
@@ -1647,6 +1669,12 @@ export function GroupSettingsScreen({
               onReview={() => setReviewing(true)}
             />
           )}
+          <ExposureReviewBands
+            reviews={exposureReviews.filter(
+              (review) => review.scope === store.id,
+            )}
+            onReview={setExposureOpen}
+          />
           <Tabs
             label="Team sections"
             idBase={GROUP_TABS}
@@ -1890,6 +1918,7 @@ export function GroupSettingsScreen({
       ) : null}
       {inviteSheet}
       {activitySheet}
+      {exposureSheet}
     </>
   );
 }

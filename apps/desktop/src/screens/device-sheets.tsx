@@ -60,8 +60,16 @@ import {
   RadioGroup,
   SheetDialog,
 } from '../components';
-import type { AccountStore } from '../model';
+import type { AccountStore, AgentSnapshot } from '../model';
+import {
+  accountExposureReadiness,
+  accountReads,
+  entriesOf,
+  exposureOrder,
+  recordExposure,
+} from '../exposure-review';
 import { deviceAlertRegistry } from './device-alert';
+import { ExposureSummary } from './exposure-review';
 
 /** A YubiKey command that is one sheet of typed values. */
 export type SimpleYubiAction =
@@ -1546,6 +1554,7 @@ export function RevokeBackupSheet({
 }
 
 export function RemoveDeviceSheet({
+  snapshot,
   bridge,
   store,
   device,
@@ -1553,6 +1562,7 @@ export function RemoveDeviceSheet({
   onDone,
   onError,
 }: {
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   store: AccountStore;
   device: AccountDevice;
@@ -1569,6 +1579,11 @@ export function RemoveDeviceSheet({
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   const expected = device.name ?? device.id;
+  // The device held the account's keys, so it could read every item in the
+  // account's own store and its teams. The list waits for all of them.
+  const readiness = accountExposureReadiness(snapshot, store);
+  const exposed =
+    readiness === 'ready' ? exposureOrder(accountReads(snapshot, store)) : [];
   // Removing a device is a write the agent has already been given.
   useSheetGuard(
     busy
@@ -1594,15 +1609,30 @@ export function RemoveDeviceSheet({
           </Button>
           <Button
             variant="danger"
-            disabled={confirmation !== expected || busy || eligibility.disabled}
+            disabled={
+              confirmation !== expected ||
+              busy ||
+              eligibility.disabled ||
+              readiness === 'loading'
+            }
             onClick={() => {
               setBusy(true);
+              const entries = entriesOf(exposed);
               // The display cache can outlive the native catalog's retained
               // device list. Re-read before a destructive action so native
               // target/current-device validation uses fresh records.
               void controller
                 .run(
-                  () => removeDevice(bridge, access, store, device.id),
+                  async () => {
+                    await removeDevice(bridge, access, store, device.id);
+                    recordExposure({
+                      scope: store.id,
+                      party: device.id,
+                      name: expected,
+                      cause: 'device-removed',
+                      entries,
+                    });
+                  },
                   onDone,
                   onError,
                 )
@@ -1627,6 +1657,14 @@ export function RemoveDeviceSheet({
           />
         </InsetRow>
       </Inset>
+      <ExposureSummary
+        snapshot={snapshot}
+        name={expected}
+        heading={`Items ${expected} could read`}
+        empty="This account has no items this device could read."
+        items={exposed}
+        readiness={readiness}
+      />
     </DeviceSheetFrame>
   );
 }
