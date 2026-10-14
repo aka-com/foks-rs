@@ -114,13 +114,22 @@
   outline: 2px solid var(--accent-border);
   outline-offset: -2px;
 }
-/* The selection button omits the twist and count; frame the whole tree row. */
-.folder-split .tpane .fn:has(> .fselect:focus-visible) {
+/* Frame the whole row when a tree row has focus, or the selection button of
+   a row outside a tree, which omits the twist and count. */
+.folder-split .tpane .fn:has(> .fselect:focus-visible),
+.folder-split .tpane .fn[role='treeitem']:focus-visible {
   outline: 2px solid var(--accent-border);
   outline-offset: -2px;
 }
 .folder-split .tpane .fn .fselect:focus-visible {
   outline: none;
+}
+/* A tree row is selected by a click anywhere on it; its twist and team
+   settings mark are pointer shortcuts for the arrow keys and the menu. */
+.folder-split .tpane .fn[role='treeitem'],
+.folder-split .tpane .fn > .twist,
+.folder-split .tpane .fn > .fact {
+  cursor: pointer;
 }
 .folder-split .tpane .fn > .c,
 .folder-split .tpane .fn > .warn {
@@ -347,6 +356,10 @@
 .folder-body .hdr.cols button.on {
   color: var(--ink);
 }
+/* A sort button fills its column header cell. */
+.folder-body .hdr.cols > [role='columnheader'] > button {
+  width: 100%;
+}
 .folder-body .row.one {
   position: relative;
   height: 38px;
@@ -447,11 +460,34 @@
   visibility: hidden;
 }
 
+/* The list's grid: the column headers and the rows, or the card lines. */
+.files-items {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* Names the cell holding a row's own actions, which float over Size. */
+.folder-body .hdr.cols > .acts-head {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* Cards reuse the list's interactive rows and their actions. Fixed heights
-   match files-grid.ts, so a resized inspector can reflow virtual grid rows. */
+   match files-grid.ts, so a resized inspector can reflow virtual grid rows.
+   Each line of cards is a grid row of its own, with the column count
+   files-grid.ts computes from the same widths. */
 .files-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.files-grid-line {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr));
+  grid-template-columns: repeat(var(--files-columns, 1), minmax(0, 1fr));
   gap: 10px;
 }
 .folder-body .files-grid .row.cols {

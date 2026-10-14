@@ -14,6 +14,8 @@ import { CollectionStatus } from '../components/collection-status';
 
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type {
+  FocusEvent as ReactFocusEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
   RefObject,
@@ -24,7 +26,20 @@ import { useDismissedOnboardingTip } from '../onboarding-tips';
 import { virtualListWindow } from '/kit/virtual-list';
 import { rememberFilesView, storedFilesView } from '../files-view-pref';
 import type { FilesView } from '../files-view-pref';
-import { filesGridWindow } from './files-grid';
+import {
+  FILES_CARD_GAP,
+  FILES_CARD_HEIGHT,
+  FILES_CARD_HEIGHT_WITH_LOCATION,
+  filesGridWindow,
+} from './files-grid';
+import {
+  gridFocusTarget,
+  revealOffset,
+  rovingKey,
+  treeEntries,
+  treeKeyAction,
+} from './files-keyboard';
+import type { TreeEntry } from './files-keyboard';
 import { useFilesSidebarResize } from './use-files-sidebar-resize';
 import {
   Band,
@@ -162,33 +177,95 @@ function ListHeader({
   // Within one store, ordering by store is ordering by name; the Name header
   // says so while the Location header is not drawn.
   const shown = !columns.location && sort === 'group' ? 'name' : sort;
-  const head = (key: SortKey, label: string, num = false): ReactNode => (
-    <button
-      type="button"
-      className={[shown === key ? 'on' : '', num ? 'num' : '']
-        .filter(Boolean)
-        .join(' ')}
-      aria-pressed={shown === key}
-      title={`Sort by ${label.toLowerCase()} ${shown === key && direction === 'asc' ? 'descending' : 'ascending'}`}
-      onClick={() =>
-        onSort(key, shown === key && direction === 'asc' ? 'desc' : 'asc')
+  const head = (key: SortKey, label: string): ReactNode => (
+    <span
+      role="columnheader"
+      aria-sort={
+        shown === key
+          ? direction === 'asc'
+            ? 'ascending'
+            : 'descending'
+          : undefined
       }
     >
-      {label}
-      {shown === key ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
-    </button>
+      <button
+        type="button"
+        className={shown === key ? 'on' : undefined}
+        aria-pressed={shown === key}
+        title={`Sort by ${label.toLowerCase()} ${shown === key && direction === 'asc' ? 'descending' : 'ascending'}`}
+        onClick={() =>
+          onSort(key, shown === key && direction === 'asc' ? 'desc' : 'asc')
+        }
+      >
+        {label}
+        {shown === key ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
+      </button>
+    </span>
   );
   return (
-    <div className={`hdr ${columnClass(columns)}`}>
+    <div className={`hdr ${columnClass(columns)}`} role="row" aria-rowindex={1}>
       {head('name', 'Name')}
       {head('kind', 'Kind')}
       {columns.location ? head('group', 'Location') : null}
-      <span className="num">Size</span>
+      <span role="columnheader" className="num">
+        Size
+      </span>
+      {/* Names the cell that holds a row's own actions; it takes no space. */}
+      <span role="columnheader" className="acts-head">
+        Actions
+      </span>
     </div>
   );
 }
 
+/**
+ * Where a list row or card sits in the Files grid. The list view is a grid
+ * of rows under the column headers; the card view is a grid of lines whose
+ * cells are the cards. Only the entry carrying `tabIndex` 0 is a tab stop.
+ */
+interface RowNav {
+  layout: 'list' | 'card';
+  /** `data-nav-key`: the key the arrow keys move focus by. */
+  key: string;
+  tabIndex: 0 | -1;
+  /** aria-rowindex of a list row; a card's line carries its own. */
+  rowIndex?: number;
+  /** aria-colindex of a card within its line. */
+  colIndex?: number;
+}
+
+/** The outer element's grid role and position for `nav`. */
+function navAttributes(nav: RowNav, selected?: boolean) {
+  return nav.layout === 'list'
+    ? {
+        role: 'row',
+        'aria-rowindex': nav.rowIndex,
+        'aria-selected': selected,
+        tabIndex: nav.tabIndex,
+        'data-nav-key': nav.key,
+      }
+    : {
+        role: 'gridcell',
+        'aria-colindex': nav.colIndex,
+        'aria-selected': selected,
+        'aria-haspopup': 'menu' as const,
+        tabIndex: nav.tabIndex,
+        'data-nav-key': nav.key,
+      };
+}
+
+/** The role of a row's columns: cells in the list, plain content in a card. */
+function cellRole(nav: RowNav): 'gridcell' | undefined {
+  return nav.layout === 'list' ? 'gridcell' : undefined;
+}
+
+/** The roving key of a subfolder listed above the selected folder's items. */
+function folderNavKey(storeId: string, path: string): string {
+  return `folder:${storeId}|${path}`;
+}
+
 interface RowProps {
+  nav: RowNav;
   snapshot: AgentSnapshot;
   hues: ReadonlyMap<string, string>;
   item: Item;
@@ -215,6 +292,7 @@ interface RowProps {
 }
 
 function Row({
+  nav,
   snapshot,
   hues,
   item,
@@ -267,6 +345,8 @@ function Row({
     <button
       key={label}
       type="button"
+      // Reached with the arrow keys from the row, which is the tab stop.
+      tabIndex={-1}
       title={label}
       aria-label={`${label} ${name}`}
       onClick={(event) => {
@@ -288,11 +368,8 @@ function Row({
           selected ? 'sel' : '',
           readOnly ? 'ro' : '',
         )}
-        role="button"
-        tabIndex={0}
+        {...navAttributes(nav, selected)}
         data-row-key={rowKey(item)}
-        aria-pressed={selected}
-        aria-haspopup="menu"
         onClick={(event) => {
           if (event.metaKey || event.ctrlKey) onPick('toggle');
           else if (event.shiftKey) onPick('extend');
@@ -332,7 +409,7 @@ function Row({
           else onSelect();
         }}
       >
-        <span className="name">
+        <span className="name" role={cellRole(nav)}>
           <Icon
             name={password ? 'key' : 'file'}
             className={password ? 'k' : 'f'}
@@ -346,9 +423,11 @@ function Row({
             <span className="fpath">/{prefix}</span>
           ) : null}
         </span>
-        <span className="cell kind">{kindLabel(kind)}</span>
+        <span className="cell kind" role={cellRole(nav)}>
+          {kindLabel(kind)}
+        </span>
         {columns.location ? (
-          <span className="cell mark">
+          <span className="cell mark" role={cellRole(nav)}>
             {store ? (
               <StoreMark
                 snapshot={snapshot}
@@ -359,8 +438,10 @@ function Row({
             <span>{whereOf(snapshot, item)}</span>
           </span>
         ) : null}
-        <span className="cell num">{fmtSize(item.size)}</span>
-        <span className="acts">
+        <span className="cell num" role={cellRole(nav)}>
+          {fmtSize(item.size)}
+        </span>
+        <span className="acts" role={cellRole(nav)}>
           {item.kind !== 'File' ? (
             <>
               {copies.map(({ field, label }) =>
@@ -450,6 +531,7 @@ interface StoreTree {
 
 /** A subfolder of the selected folder, listed above its items. */
 function FolderRow({
+  nav,
   name,
   count,
   columns,
@@ -458,6 +540,7 @@ function FolderRow({
   path,
   drop,
 }: {
+  nav: RowNav;
   storeId: string;
   path: string;
   name: string;
@@ -478,25 +561,28 @@ function FolderRow({
       )}
       data-folder-store={storeId}
       data-folder-path={path}
-      aria-haspopup="menu"
-      role="button"
-      tabIndex={0}
+      {...navAttributes(nav)}
       onClick={onSelect}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         onSelect();
       }}
     >
-      <span className="name">
+      <span className="name" role={cellRole(nav)}>
         <Icon name="folder" className="f" />
         <span className="nm" title={name}>
           {name}
         </span>
       </span>
-      <span className="cell kind">Folder</span>
-      {columns.location ? <span className="cell" /> : null}
-      <span className="cell num">{itemCount(count)}</span>
+      <span className="cell kind" role={cellRole(nav)}>
+        Folder
+      </span>
+      {columns.location ? <span className="cell" role={cellRole(nav)} /> : null}
+      <span className="cell num" role={cellRole(nav)}>
+        {itemCount(count)}
+      </span>
     </div>
   );
 }
@@ -519,11 +605,19 @@ function TreeRow({
   storeId,
   path,
   drop,
+  tree,
 }: {
   storeId?: string;
   path?: string;
   /** Rows dragged over this folder: whether they can be dropped here. */
   drop?: 'ok' | 'no';
+  /**
+   * The row's place in a folder tree, where it is a treeitem: the whole row
+   * is the focus target, and the twist and its own action are pointer
+   * shortcuts for the arrow keys and the context menu. A row without one is
+   * a single button outside any tree.
+   */
+  tree?: { key: string; level: number; tabIndex: 0 | -1 };
   depth: number;
   active: boolean;
   root?: boolean;
@@ -544,51 +638,76 @@ function TreeRow({
   onSelect: () => void;
   onToggle: () => void;
 }): ReactNode {
+  const className = [
+    'fn',
+    active ? 'on' : '',
+    root ? 'root' : '',
+    quiet ? 'quiet' : '',
+    drop ? `drop-${drop}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const style = { '--d': depth } as React.CSSProperties;
+  const label = (
+    <>
+      {mark ?? <Icon name={icon} />}
+      <span className="nm">{name}</span>
+    </>
+  );
+  const trailing = (
+    <>
+      {action}
+      {tag ?? (count === undefined ? null : <span className="c">{count}</span>)}
+    </>
+  );
+  if (!tree)
+    return (
+      <div className={className} style={style}>
+        <span className="twist none" aria-hidden="true" />
+        <button
+          type="button"
+          className="fselect"
+          aria-current={active ? 'location' : undefined}
+          onClick={onSelect}
+        >
+          {label}
+        </button>
+        {trailing}
+      </div>
+    );
   return (
     <div
-      className={[
-        'fn',
-        active ? 'on' : '',
-        root ? 'root' : '',
-        quiet ? 'quiet' : '',
-        drop ? `drop-${drop}` : '',
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      className={className}
       data-folder-store={storeId}
       data-folder-path={path}
-      style={{ '--d': depth } as React.CSSProperties}
+      data-tree-key={tree.key}
+      style={style}
+      role="treeitem"
+      aria-level={tree.level}
+      aria-expanded={expandable ? open : undefined}
+      aria-selected={active}
+      aria-haspopup={storeId ? 'menu' : undefined}
+      tabIndex={tree.tabIndex}
+      onClick={onSelect}
     >
       {/* Every row keeps the twist cell so names align down the column; a row
           with nothing to disclose leaves it empty. */}
-      {expandable ? (
-        <button
-          type="button"
-          className={open ? 'twist open' : 'twist'}
-          aria-expanded={open}
-          aria-label={open ? `Collapse ${name}` : `Expand ${name}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggle();
-          }}
-        >
-          <Icon name="chevronDown" />
-        </button>
-      ) : (
-        <span className="twist none" aria-hidden="true" />
-      )}
-      <button
-        type="button"
-        className="fselect"
-        aria-haspopup={storeId ? 'menu' : undefined}
-        aria-current={active ? 'location' : undefined}
-        onClick={onSelect}
+      <span
+        className={expandable ? (open ? 'twist open' : 'twist') : 'twist none'}
+        aria-hidden="true"
+        onClick={
+          expandable
+            ? (event) => {
+                event.stopPropagation();
+                onToggle();
+              }
+            : undefined
+        }
       >
-        {mark ?? <Icon name={icon} />}
-        <span className="nm">{name}</span>
-      </button>
-      {action}
-      {tag ?? (count === undefined ? null : <span className="c">{count}</span>)}
+        {expandable ? <Icon name="chevronDown" /> : null}
+      </span>
+      <span className="fselect">{label}</span>
+      {trailing}
     </div>
   );
 }
@@ -749,6 +868,26 @@ function underFolder(path: string, folder: string): boolean {
   return folder === '/' || path === folder || path.startsWith(`${folder}/`);
 }
 
+/** The mounted list row or card whose `data-nav-key` is `key`. */
+function navElement(
+  container: HTMLElement | null,
+  key: string,
+): HTMLElement | undefined {
+  return [
+    ...(container?.querySelectorAll<HTMLElement>('[data-nav-key]') ?? []),
+  ].find((element) => element.dataset.navKey === key);
+}
+
+/** The drawn folder tree row whose `data-tree-key` is `key`. */
+function treeElement(
+  container: HTMLElement,
+  key: string,
+): HTMLElement | undefined {
+  return [...container.querySelectorAll<HTMLElement>('[data-tree-key]')].find(
+    (element) => element.dataset.treeKey === key,
+  );
+}
+
 /**
  * Returns focus to the list once the chosen rows are gone together with the
  * control that had it: Clear, or a move of every chosen row, unmounts the
@@ -851,6 +990,19 @@ export function ItemsScreen({
   const folderMenuAnchor = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // The list's and the tree's roving tab stops: the entry focus last moved
+  // to, kept while it is still drawn.
+  const [rowFocus, setRowFocus] = useState<string | null>(null);
+  const [treeFocus, setTreeFocus] = useState<string | null>(null);
+  // A row the arrow keys moved to before the virtual window had mounted it;
+  // it takes focus once the scroll that brings it in has rendered.
+  const pendingRowFocus = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const key = pendingRowFocus.current;
+    if (!key) return;
+    pendingRowFocus.current = null;
+    navElement(bodyRef.current, key)?.focus({ preventScroll: true });
+  });
   const [scrollTop, setScrollTop] = useState(0);
   const [listMetrics, setListMetrics] = useState({
     top: 0,
@@ -1013,10 +1165,64 @@ export function ItemsScreen({
     }
     return count;
   };
+  // The vaults and the teams are each one tree: one tab stop whose focused
+  // row the arrow keys move, falling back to the selected folder.
+  const treeRoots = (list: readonly StoreTree[]) =>
+    list.map((tree) => ({
+      storeId: tree.store.id,
+      root: tree.root,
+      trash: storeReadable(snapshot, tree.store.id),
+    }));
+  const vaultEntries = treeEntries(treeRoots(vaultTrees), closed, TRASH_ROOT);
+  const teamEntries = treeEntries(treeRoots(teamTrees), closed, TRASH_ROOT);
+  const selectedTreeKey =
+    selected.store === ALL_ITEMS ? null : `${selected.store}|${selected.path}`;
+  const treeStop = (entries: readonly TreeEntry[]): string | undefined =>
+    rovingKey(
+      entries.map((entry) => entry.key),
+      treeFocus,
+      selectedTreeKey,
+    );
+  const vaultStop = treeStop(vaultEntries);
+  const teamStop = treeStop(teamEntries);
+  const treePlace = (
+    key: string,
+    level: number,
+    stop: string | undefined,
+  ): { key: string; level: number; tabIndex: 0 | -1 } => ({
+    key,
+    level,
+    tabIndex: key === stop ? 0 : -1,
+  });
+  const treeKeys =
+    (entries: readonly TreeEntry[]) =>
+    (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+      if (event.altKey || event.metaKey || event.ctrlKey) return;
+      const row = event.target;
+      if (!(row instanceof HTMLElement) || !row.dataset.treeKey) return;
+      const index = entries.findIndex(
+        (entry) => entry.key === row.dataset.treeKey,
+      );
+      const action = treeKeyAction(event.key, entries, index);
+      if (!action) return;
+      event.preventDefault();
+      const entry = entries[action.index];
+      if (action.kind === 'toggle') locations.toggleFolder(entry.key);
+      else if (action.kind === 'select') row.click();
+      else {
+        setTreeFocus(entry.key);
+        treeElement(event.currentTarget, entry.key)?.focus();
+      }
+    };
+  const treeFocused = (event: ReactFocusEvent<HTMLDivElement>): void => {
+    if (event.target instanceof HTMLElement && event.target.dataset.treeKey)
+      setTreeFocus(event.target.dataset.treeKey);
+  };
   const drawFolders = (
     folders: readonly FolderNode[],
     treeStore: Store,
     depth: number,
+    stop: string | undefined,
   ): ReactNode =>
     folders.map((folder) => {
       const foldKey = `${treeStore.id}|${folder.path}`;
@@ -1024,6 +1230,7 @@ export function ItemsScreen({
       return (
         <Fragment key={foldKey}>
           <TreeRow
+            tree={treePlace(foldKey, depth + 1, stop)}
             storeId={treeStore.id}
             path={folder.path}
             depth={depth}
@@ -1039,20 +1246,24 @@ export function ItemsScreen({
             onSelect={() => selectFolder(treeStore, folder.path)}
             onToggle={() => locations.toggleFolder(foldKey)}
           />
-          {open ? drawFolders(folder.folders, treeStore, depth + 1) : null}
+          {open
+            ? drawFolders(folder.folders, treeStore, depth + 1, stop)
+            : null}
         </Fragment>
       );
     });
 
   // Render store root row and its expandable folder sub-tree.
-  const storeRoot = (tree: StoreTree): ReactNode => {
+  const storeRoot = (tree: StoreTree, stop: string | undefined): ReactNode => {
     const active = selected.store === tree.store.id && selected.path === '/';
     const foldKey = `${tree.store.id}|/`;
+    const trashKey = `${tree.store.id}|${TRASH_ROOT}`;
     const open = !closed.has(foldKey);
     const expired = leaseExpired(tree.store);
     return (
       <Fragment key={tree.store.id}>
         <TreeRow
+          tree={treePlace(foldKey, 1, stop)}
           storeId={tree.store.id}
           path="/"
           depth={0}
@@ -1081,26 +1292,28 @@ export function ItemsScreen({
           expandable={tree.root.folders.length > 0}
           action={
             tree.store.kind === 'team' ? (
-              <button
-                type="button"
+              // A pointer shortcut: the row's menu offers Team settings to
+              // the keyboard and to assistive technology.
+              <span
                 className="fact"
                 title="Team settings"
-                aria-label={`${tree.store.name} settings`}
+                aria-hidden="true"
                 onClick={(event) => {
                   event.stopPropagation();
                   onSettings(tree.store.id);
                 }}
               >
                 <Icon name="settings" />
-              </button>
+              </span>
             ) : undefined
           }
           onSelect={() => selectFolder(tree.store, '/')}
           onToggle={() => locations.toggleFolder(foldKey)}
         />
-        {open ? drawFolders(tree.root.folders, tree.store, 1) : null}
+        {open ? drawFolders(tree.root.folders, tree.store, 1, stop) : null}
         {open && storeReadable(snapshot, tree.store.id) ? (
           <TreeRow
+            tree={treePlace(trashKey, 2, stop)}
             depth={1}
             active={
               selected.store === tree.store.id && selected.path === TRASH_ROOT
@@ -1462,13 +1675,145 @@ export function ItemsScreen({
       </div>
     ) : null;
 
-  const row = (item: Item, chipColumns: Columns): ReactNode => (
+  /* ------------------------------------------------- keyboard movement -- */
+
+  // The list or card grid is one tab stop. Its entries in order: the
+  // selected folder's subfolders, then the listed items.
+  const navKeys = trashSelected
+    ? []
+    : [
+        ...(!flatMode && selectedTree
+          ? folders.map((folder) =>
+              folderNavKey(selectedTree.store.id, folder.path),
+            )
+          : []),
+        ...listedKeys,
+      ];
+  const navStop = rovingKey(navKeys, rowFocus, seed);
+  const navIndex = navStop === undefined ? -1 : navKeys.indexOf(navStop);
+  const cardLayout = view === 'grid';
+  const lineSize = cardLayout ? gridWindow.columns : 1;
+  const cardHeight = columns.location
+    ? FILES_CARD_HEIGHT_WITH_LOCATION
+    : FILES_CARD_HEIGHT;
+  const linePitch = cardLayout ? cardHeight + FILES_CARD_GAP : ROW_HEIGHT;
+  // The column headers are the list grid's first row while they are drawn.
+  const headerRows = !cardLayout && !selectionBar ? 1 : 0;
+  const navFor = (key: string, index: number): RowNav => ({
+    layout: cardLayout ? 'card' : 'list',
+    key,
+    tabIndex: key === navStop ? 0 : -1,
+    rowIndex: cardLayout ? undefined : index + 1 + headerRows,
+    colIndex: cardLayout ? (index % lineSize) + 1 : undefined,
+  });
+  /**
+   * Moves focus to the entry at `index`, first scrolling a windowed list so
+   * that the entry is mounted and in view.
+   */
+  const focusRow = (index: number): void => {
+    const key = navKeys[index];
+    if (key === undefined) return;
+    const body = bodyRef.current;
+    if (flatMode && body) {
+      const sticky =
+        body.querySelector<HTMLElement>(
+          '.list-window > .selbar, .files-items > .hdr',
+        )?.offsetHeight ?? 0;
+      const next = revealOffset({
+        top: listMetrics.top + Math.floor(index / lineSize) * linePitch,
+        height: cardLayout ? cardHeight : ROW_HEIGHT,
+        scrollTop,
+        viewport: listMetrics.viewport,
+        stickyTop: sticky,
+      });
+      if (next !== scrollTop) {
+        body.scrollTop = next;
+        setScrollTop(next);
+      }
+    }
+    setRowFocus(key);
+    const element = navElement(body, key);
+    if (element) element.focus({ preventScroll: flatMode });
+    else pendingRowFocus.current = key;
+  };
+  const gridKeys = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey)
+      return;
+    // Keys typed in a menu opened from a row reach this handler through
+    // React's tree; only the grid's own entries count.
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const entry = target.closest<HTMLElement>('[data-nav-key]');
+    if (!entry || !event.currentTarget.contains(entry)) return;
+    const index = navKeys.indexOf(entry.dataset.navKey ?? '');
+    if (index < 0) return;
+    if (
+      !cardLayout &&
+      (event.key === 'ArrowRight' || event.key === 'ArrowLeft')
+    ) {
+      // In the list, Left and Right move between a row and its own actions.
+      const stops = [
+        entry,
+        ...entry.querySelectorAll<HTMLElement>('.acts button'),
+      ];
+      const at = stops.indexOf(target);
+      const next = stops[at + (event.key === 'ArrowRight' ? 1 : -1)];
+      if (at < 0 || !next) return;
+      event.preventDefault();
+      next.focus();
+      return;
+    }
+    const next = gridFocusTarget(event.key, {
+      index,
+      count: navKeys.length,
+      columns: lineSize,
+      page: Math.max(1, Math.floor(listMetrics.viewport / linePitch)),
+    });
+    if (next === null) return;
+    event.preventDefault();
+    focusRow(next);
+  };
+  const rowFocused = (event: ReactFocusEvent<HTMLDivElement>): void => {
+    const entry =
+      event.target instanceof HTMLElement
+        ? event.target.closest<HTMLElement>('[data-nav-key]')
+        : null;
+    if (entry?.dataset.navKey && event.currentTarget.contains(entry))
+      setRowFocus(entry.dataset.navKey);
+  };
+  /** The card grid's lines, from the line holding entry `first`. */
+  const cardLines = (
+    entries: readonly ReactNode[],
+    first: number,
+  ): ReactNode[] => {
+    const lines: ReactNode[] = [];
+    for (let at = 0; at < entries.length; at += lineSize) {
+      const line = Math.floor((first + at) / lineSize);
+      lines.push(
+        <div
+          key={line}
+          className="files-grid-line"
+          role="row"
+          aria-rowindex={line + 1}
+        >
+          {entries.slice(at, at + lineSize)}
+        </div>,
+      );
+    }
+    return lines;
+  };
+  const cardGridStyle = {
+    '--files-columns': lineSize,
+  } as React.CSSProperties;
+
+  const row = (item: Item, index: number): ReactNode => (
     <Row
       key={`${item.store}|${item.path}`}
+      nav={navFor(rowKey(item), index)}
       snapshot={snapshot}
       hues={hues}
       item={item}
-      columns={chipColumns}
+      columns={columns}
       selected={
         chosen.length
           ? chosenKeys.has(rowKey(item))
@@ -1495,8 +1840,12 @@ export function ItemsScreen({
 
   const paneRows = selectedTree
     ? [
-        ...folders.map((folder) => (
+        ...folders.map((folder, index) => (
           <FolderRow
+            nav={navFor(
+              folderNavKey(selectedTree.store.id, folder.path),
+              index,
+            )}
             storeId={selectedTree.store.id}
             path={folder.path}
             key={folder.path}
@@ -1507,7 +1856,9 @@ export function ItemsScreen({
             onSelect={() => selectFolder(selectedTree.store, folder.path)}
           />
         )),
-        ...folderScopedItems.map((item) => row(item, columns)),
+        ...folderScopedItems.map((item, index) =>
+          row(item, folders.length + index),
+        ),
       ]
     : [];
 
@@ -1539,17 +1890,16 @@ export function ItemsScreen({
       return false;
     const row = target.closest<HTMLElement>('[data-folder-store]');
     if (!row?.dataset.folderStore || !row.dataset.folderPath) return false;
-    const trigger = row.matches('[role="button"]')
-      ? row
-      : (row.querySelector<HTMLElement>('.fselect') ?? row);
-    trigger.focus({ preventScroll: true });
-    folderMenuAnchor.current = trigger;
+    // Every row that opens this menu is its own focus target: a tree row, a
+    // folder row or card, or the single vault's heading.
+    row.focus({ preventScroll: true });
+    folderMenuAnchor.current = row;
     setFolderMenu({
       x,
       y,
       storeId: row.dataset.folderStore,
       path: row.dataset.folderPath,
-      trigger,
+      trigger: row,
     });
     return true;
   };
@@ -1739,6 +2089,60 @@ export function ItemsScreen({
     snapshot,
     selected.store === ALL_ITEMS ? undefined : selected.store,
   );
+  // The windowed list keeps its tab stop mounted after it scrolls out of the
+  // window: the entry is drawn one line beyond the window's edge, in place of
+  // that much spacer, so focus and the way back into the list survive.
+  const pinnedItem =
+    flatMode && (navIndex < rowWindow.start || navIndex >= rowWindow.end)
+      ? items[navIndex]
+      : undefined;
+  const pinnedBefore = pinnedItem !== undefined && navIndex < rowWindow.start;
+  const pinnedAfter = pinnedItem !== undefined && navIndex >= rowWindow.end;
+  const pinnedEntry = pinnedItem ? row(pinnedItem, navIndex) : null;
+  // Keyed as the line it belongs to, so the card keeps its element, and
+  // with it focus, when that line leaves the window.
+  const pinnedLine = pinnedItem ? (
+    <div
+      key={Math.floor(navIndex / lineSize)}
+      className="files-grid-line"
+      role="row"
+      aria-rowindex={Math.floor(navIndex / lineSize) + 1}
+    >
+      {pinnedEntry}
+    </div>
+  ) : null;
+  const padTop = rowWindow.padTop - (pinnedBefore ? linePitch : 0);
+  const padBottom = Math.max(
+    0,
+    rowWindow.padBottom - (pinnedAfter ? linePitch : 0),
+  );
+  const windowEntries = visibleRows.map((item, index) =>
+    row(item, rowWindow.start + index),
+  );
+  // One keyed list, so a row that leaves the window for the pinned place is
+  // moved rather than mounted again.
+  const listEntries = [
+    ...(pinnedBefore ? [pinnedEntry] : []),
+    ...windowEntries,
+    ...(pinnedAfter ? [pinnedEntry] : []),
+  ];
+  const windowLines = [
+    ...(pinnedBefore ? [pinnedLine] : []),
+    ...cardLines(windowEntries, rowWindow.start),
+    ...(pinnedAfter ? [pinnedLine] : []),
+  ];
+  const gridAttributes = {
+    className: 'files-items',
+    role: 'grid',
+    'aria-label': state.query ? `Results for “${state.query}”` : scopeLabel,
+    'aria-rowcount': cardLayout
+      ? Math.ceil(navKeys.length / lineSize)
+      : navKeys.length + headerRows,
+    'aria-colcount': cardLayout ? lineSize : undefined,
+    'aria-multiselectable': onMoveMany || onTrashMany ? true : undefined,
+    onKeyDown: gridKeys,
+    onFocus: rowFocused,
+  };
   const listBody =
     trashSelected && selectedTree ? (
       <TrashView
@@ -1768,33 +2172,30 @@ export function ItemsScreen({
         )
       ) : (
         <div className="list-window">
-          {selectionBar ?? contentsHeader}
-          <div className="virtual-rows" ref={listRef}>
-            {rowWindow.padTop ? (
-              <div
-                className="virtual-spacer"
-                style={{ height: rowWindow.padTop }}
-              />
-            ) : null}
-            {view === 'grid' ? (
-              <div
-                className="files-grid"
-                style={{
-                  gridTemplateColumns: `repeat(${gridWindow.columns}, minmax(0, 1fr))`,
-                  paddingBottom: gridWindow.trailingGap,
-                }}
-              >
-                {visibleRows.map((item) => row(item, columns))}
-              </div>
-            ) : (
-              visibleRows.map((item) => row(item, columns))
-            )}
-            {rowWindow.padBottom ? (
-              <div
-                className="virtual-spacer"
-                style={{ height: rowWindow.padBottom }}
-              />
-            ) : null}
+          {selectionBar}
+          <div {...gridAttributes}>
+            {selectionBar ? null : contentsHeader}
+            <div className="virtual-rows" ref={listRef}>
+              {padTop ? (
+                <div className="virtual-spacer" style={{ height: padTop }} />
+              ) : null}
+              {cardLayout ? (
+                <div
+                  className="files-grid"
+                  style={{
+                    ...cardGridStyle,
+                    paddingBottom: gridWindow.trailingGap,
+                  }}
+                >
+                  {windowLines}
+                </div>
+              ) : (
+                listEntries
+              )}
+              {padBottom ? (
+                <div className="virtual-spacer" style={{ height: padBottom }} />
+              ) : null}
+            </div>
           </div>
           {nextUp}
         </div>
@@ -1807,9 +2208,18 @@ export function ItemsScreen({
       )
     ) : (
       <div className="list-window">
-        {selectionBar ?? contentsHeader}
-        <div className={view === 'grid' ? 'files-grid' : 'virtual-rows'}>
-          {paneRows}
+        {selectionBar}
+        <div {...gridAttributes}>
+          {selectionBar ? null : contentsHeader}
+          {cardLayout ? (
+            <div className="files-grid" ref={listRef} style={cardGridStyle}>
+              {cardLines(paneRows, 0)}
+            </div>
+          ) : (
+            <div className="virtual-rows" ref={listRef}>
+              {paneRows}
+            </div>
+          )}
         </div>
         {nextUp}
       </div>
@@ -1936,6 +2346,15 @@ export function ItemsScreen({
                   >
                     Team info
                   </MenuItem>
+                  <MenuItem
+                    icon="settings"
+                    onClick={() => {
+                      setFolderMenu(null);
+                      onSettings(contextStore.id);
+                    }}
+                  >
+                    Team settings
+                  </MenuItem>
                   <div role="separator" className="menu-separator" />
                   {(
                     [
@@ -2011,7 +2430,16 @@ export function ItemsScreen({
               >
                 {vaultHeading}
               </h6>
-              {vaultTrees.map(storeRoot)}
+              {vaultTrees.length ? (
+                <div
+                  role="tree"
+                  aria-label={vaultHeading}
+                  onKeyDown={treeKeys(vaultEntries)}
+                  onFocus={treeFocused}
+                >
+                  {vaultTrees.map((tree) => storeRoot(tree, vaultStop))}
+                </div>
+              ) : null}
               {
                 <h6>
                   Teams
@@ -2028,8 +2456,16 @@ export function ItemsScreen({
                   </button>
                 </h6>
               }
-              {teamTrees.map(storeRoot)}
-              {!teamTrees.length ? (
+              {teamTrees.length ? (
+                <div
+                  role="tree"
+                  aria-label="Teams"
+                  onKeyDown={treeKeys(teamEntries)}
+                  onFocus={treeFocused}
+                >
+                  {teamTrees.map((tree) => storeRoot(tree, teamStop))}
+                </div>
+              ) : (
                 <TreeRow
                   depth={0}
                   quiet
@@ -2041,7 +2477,7 @@ export function ItemsScreen({
                   onSelect={() => locations.navigate({ kind: 'teams' })}
                   onToggle={() => {}}
                 />
-              ) : null}
+              )}
             </div>
           </aside>
           <section className="lpane" aria-label="Folder contents">

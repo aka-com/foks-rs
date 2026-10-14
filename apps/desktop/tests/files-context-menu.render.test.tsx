@@ -410,7 +410,7 @@ test('grid cards keep item selection, quick actions, and keyboard context menus'
   const password = row('github.com');
   assert.ok(password.closest('.files-grid'));
   ui.fireEvent.keyDown(password, { key: ' ' });
-  assert.equal(password.getAttribute('aria-pressed'), 'true');
+  assert.equal(password.getAttribute('aria-selected'), 'true');
   ui.fireEvent.click(
     ui.within(password).getByRole('button', {
       name: 'Copy password github.com',

@@ -121,13 +121,17 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
   // available row. The expanded rail intentionally has no Back button.
   await ui.act(async () => locations.navigate({ kind: 'all' }));
   const personal = await ui.waitFor(() => {
-    const row = (rendered.getAllByRole('button') as HTMLButtonElement[]).find(
-      (button) => button.textContent?.includes('Personal'),
-    );
+    const row = rendered
+      .getAllByRole('treeitem')
+      .find((item) => item.textContent?.includes('Personal'));
     assert.ok(row);
     return row;
   });
-  assert.equal(personal.disabled, false);
+  assert.equal(personal.getAttribute('aria-disabled'), null);
+  ui.fireEvent.click(personal);
+  await ui.waitFor(() =>
+    assert.equal(personal.getAttribute('aria-selected'), 'true'),
+  );
 });
 
 test('expiry on one profile preserves a healthy neighboring editor draft', async () => {
