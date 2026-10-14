@@ -5,9 +5,8 @@ command surface.
 
 In production, the application selects the Tauri bridge, loads the catalog once,
 validates all responses at runtime, and passes opaque store references back unchanged. Show loads one item at its exact version and keeps the value only in the open
-details panel until Hide, selection change or window blur. Link destinations
-load automatically at the selected version and Open target navigates in one
-click. Copy value and Download stay in Rust. List rows use
+details panel until Hide, selection change or window blur. Copy value and
+Download stay in Rust. List rows use
 `apps/desktop/kit/virtual-list.ts`; card view uses
 `src/screens/files-grid.ts` to window complete grid rows at the current viewport
 width, so it can scroll through the full loaded catalog. Account-store creates
@@ -272,9 +271,8 @@ change; Settings › Preferences can empty Trash automatically after 30 or 90
 days on one device. Go clients list `.trash` as an ordinary folder. See the
 Trash section of `book/20-desktop.qmd` for the layout and entry names.
 
-**Unsupported operations:** Link editing is not supported directly; links must be
-deleted and recreated. Invitation revocation, expiry and requester withdrawal
-remain unsupported.
+**Unsupported operations:** Invitation revocation, expiry and requester
+withdrawal remain unsupported.
 The live bridge now loads each group roster and federation
 admission, so Sharing and every readable-by count are computed from agent
 responses rather than fixture facts.
@@ -1303,14 +1301,13 @@ kept so deep links defined in the design specification resolve to this location.
 | `show`                                                                               | All items                               | loads and reveals GitHub version 9 once                                                                 |
 | `resource`                                                                           | All items                               | selects the masked Anthropic API key                                                                    |
 | `file`                                                                               | All items                               | selects Household's emergency PDF                                                                       |
-| `link`                                                                               | All items                               | selects latest-key and loads its target at the exact catalog version                                    |
+| `link`                                                                               | All items                               | no Link items are shown, so it selects the same group password as `group`                               |
 | `group`                                                                              | Household (`team:household`)            | selects the Wi-Fi password                                                                              |
 | `new`                                                                                | All items                               | Password sheet in Household with explicit group roles and computed reader preview                       |
 | `new-group`                                                                          | All items                               | Resource sheet in Engineering with explicit roles and computed reader preview                           |
 | `new-resource`                                                                       | All items                               | Resource sheet in Personal                                                                              |
 | `new-file`                                                                           | All items                               | File sheet in Household; renderer receives paths, never bytes                                           |
-| `new-link`                                                                           | All items                               | Link sheet in Personal                                                                                  |
-| `group-new-text` · `group-new-link` · `group-new-file`                               | Engineering                             | Phase 7 group create acceptance scenes for text, Link/symlink and streamed File writes                  |
+| `group-new-text` · `group-new-file`                                                  | Engineering                             | Phase 7 group create acceptance scenes for text and streamed File writes                                |
 | `exists`                                                                             | All items                               | must-not-exist refusal; Open refreshes the invalidated catalog first                                    |
 | `conflict`                                                                           | All items                               | exact-version refusal with retained draft and Refresh and review                                        |
 | `grid`                                                                               | All items                               | `view=grid`                                                                                             |

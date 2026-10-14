@@ -327,14 +327,14 @@ function decodeStore(value: unknown, at: string): StoreDto {
   };
 }
 
-const NODE_KINDS: readonly string[] = [
-  'Secret',
-  'File',
-  'Folder',
-] satisfies NodeKind[];
+const NODE_KINDS = {
+  Secret: true,
+  File: true,
+  Folder: true,
+} as const satisfies Record<NodeKind, true>;
 
 function isNodeKind(kind: string): kind is NodeKind {
-  return NODE_KINDS.includes(kind);
+  return Object.hasOwn(NODE_KINDS, kind);
 }
 
 /**
