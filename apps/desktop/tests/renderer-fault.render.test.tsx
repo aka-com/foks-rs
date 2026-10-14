@@ -157,6 +157,8 @@ test('window script errors and unhandled rejections are recorded until the liste
       reason: { code: 'busy' },
     }),
   );
+  // A notice such as the ResizeObserver loop limit carries no thrown value.
+  target.dispatchEvent(Object.assign(new Event('error'), { error: null }));
   stop();
   target.dispatchEvent(
     Object.assign(new Event('error'), { error: new Error('x') }),
@@ -190,6 +192,28 @@ test('Copy diagnostics lists faults by boundary and error type', async () => {
     /^--- renderer faults ---\nboundary\s+code\s+n\s+first\s+last\ndetails\s+TypeError\s+2\s+12:00:00\.000\s+12:00:00\.000\nshell\s+—\s+1\s/,
   );
   assert.match(text, /renderer\.fault\s+error code=TypeError boundary=details/);
+});
+
+test('Copy diagnostics lists a fault older than the timeline window', async () => {
+  const { formatTimings } = (await vite.ssrLoadModule(
+    '/src/diagnostics/format.ts',
+  )) as typeof import('../src/diagnostics/format');
+  const log = new logs.DiagnosticLog(64, {
+    now: () => Date.UTC(2026, 0, 1, 12, 0, 0),
+    elapsed: () => 0,
+  });
+  faults.recordRendererFault('shell', new TypeError('x'), log);
+  const later = Date.UTC(2026, 0, 1, 14, 0, 0);
+  const text = formatTimings(log.events(), { now: later });
+  assert.match(
+    text,
+    /--- renderer faults ---\nboundary\s+code\s+n\s+first\s+last\nshell\s+TypeError\s+1\s+12:00:00\.000\s+12:00:00\.000/,
+  );
+  assert.match(text, /0 events/, 'the timeline still covers its window only');
+  assert.match(
+    boundaries.faultDiagnosticsText(log.events(), later),
+    /--- renderer faults ---[\s\S]*shell\s+TypeError\s+1/,
+  );
 });
 
 async function mountApp(decorate: (base: Bridge) => Partial<Bridge>) {
@@ -313,6 +337,12 @@ test('a render error outside the panels shows the fault screen inside the exit g
     name: 'This window could not be shown',
   });
   assert.ok(screen.closest('.exit-guard-background'), 'inside the exit guard');
+  assert.equal(
+    document.activeElement ===
+      rendered.getByRole('button', { name: 'Reload window' }),
+    true,
+    'focus moves into the card',
+  );
   assert.match(screen.textContent ?? '', /rail state was undefined/);
   assert.deepEqual(
     faultsSince(since).map((event) => [event.attrs?.boundary, event.code]),

@@ -1055,7 +1055,10 @@ export function VaultShell({
           infoStore?.kind === 'team' ? (
             <PanelErrorBoundary
               label="team-info"
-              onFault={panelFault('Team info', () => setTeamInfo(null))}
+              onFault={panelFault('Team info', () => {
+                setTeamInfo(null);
+                teamInfo?.trigger?.focus({ preventScroll: true });
+              })}
             >
               <TeamInfoPanel
                 snapshot={shown}

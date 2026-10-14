@@ -130,7 +130,11 @@ export function listenForWindowFaults(
   target: Pick<Window, 'addEventListener' | 'removeEventListener'>,
   log: DiagnosticLog = diagnosticLog,
 ): () => void {
+  // A script error carries the thrown value. An event without one is a
+  // notice such as the ResizeObserver loop limit, or a cross-origin script
+  // error reported without detail, and is not recorded.
   const error = (event: ErrorEvent): void => {
+    if (event.error === null || event.error === undefined) return;
     recordRendererFault('window-error', event.error, log);
   };
   const rejection = (event: PromiseRejectionEvent): void => {

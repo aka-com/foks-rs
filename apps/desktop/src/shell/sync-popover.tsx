@@ -14,13 +14,7 @@
  * observations.
  */
 
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
+import { useEffect, useId, useState, useSyncExternalStore } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Popover } from '/kit/overlay-primitives';
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
@@ -34,6 +28,7 @@ import {
 } from '../device-metadata';
 import { formatMilliseconds, formatTimings } from '../diagnostics/format';
 import { diagnosticLog, type TimingEvent } from '../diagnostics/log';
+import { useCopyDiagnostics } from '../diagnostics/use-copy-diagnostics';
 import type { DesktopReconciliation } from '../desktop-reconciliation';
 import type {
   ReconciliationKind,
@@ -837,57 +832,18 @@ export function SyncPopover({
       current = false;
     };
   }, []);
-  const [copied, setCopied] = useState(false);
-  const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
+  // A promise-backed clipboard item collects fresh diagnostics after the
+  // click; older clipboard implementations use the events collected on
+  // opening.
+  const { copied, copy } = useCopyDiagnostics(
+    () =>
+      diagnosticLog
+        .collect()
+        .then((events) => events.filter((e) => e.layer !== 'renderer'))
+        .catch(() => external)
+        .then((latest) => diagnosticsText(summary, snapshot, latest)),
+    () => diagnosticsText(summary, snapshot, external),
   );
-  useEffect(
-    () => () => {
-      if (copiedTimer.current !== undefined) clearTimeout(copiedTimer.current);
-    },
-    [],
-  );
-  // Start the clipboard write during the click so WebKit retains the user
-  // gesture. A promise-backed item can collect fresh diagnostics afterward;
-  // older clipboard implementations use the events collected on opening.
-  // Only a write the clipboard accepted says Copied.
-  const copy = (): void => {
-    const clipboard = navigator.clipboard;
-    if (!clipboard) return;
-    let writing: Promise<void>;
-    try {
-      if (typeof ClipboardItem !== 'undefined' && clipboard.write) {
-        const content = diagnosticLog
-          .collect()
-          .then((events) => events.filter((e) => e.layer !== 'renderer'))
-          .catch(() => external)
-          .then(
-            (latest) =>
-              new Blob([diagnosticsText(summary, snapshot, latest)], {
-                type: 'text/plain',
-              }),
-          );
-        writing = clipboard.write([
-          new ClipboardItem({ 'text/plain': content }),
-        ]);
-      } else {
-        writing = clipboard.writeText(
-          diagnosticsText(summary, snapshot, external),
-        );
-      }
-    } catch {
-      return;
-    }
-    void writing.then(
-      () => {
-        if (copiedTimer.current !== undefined)
-          clearTimeout(copiedTimer.current);
-        setCopied(true);
-        copiedTimer.current = setTimeout(() => setCopied(false), 1_000);
-      },
-      () => undefined,
-    );
-  };
   const body = { service, onClose, onOpenServers };
   const single = summary.servers.length === 1 ? summary.servers[0] : null;
   return (

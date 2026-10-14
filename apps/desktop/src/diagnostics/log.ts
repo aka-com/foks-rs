@@ -31,7 +31,10 @@ export interface TimingEvent {
   /** Duration of this step, when it is a step. */
   readonly ms?: number;
   readonly outcome?: TimingOutcome;
-  /** A command error code. Never the message. */
+  /**
+   * A command error code, or a built-in error constructor name for
+   * `renderer.fault`. Never the message.
+   */
   readonly code?: string;
   readonly attrs?: Readonly<Record<string, TimingValue>>;
 }
