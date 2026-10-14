@@ -195,12 +195,27 @@ test('the site check uses the registrable label of the host, not a subdomain', (
       ?.text,
     site,
   );
-  // A subdomain is not the site.
-  assert.equal(
-    typedPasswordStrength('login-violet-quarry', ['login.example.com', ''])
-      ?.text,
-    'Not measured · no common weakness found',
-  );
+  // Each part of a dotted user name is checked, with or without a domain.
+  for (const userName of ['john.smith@x.org', 'john.smith'])
+    for (const value of ['John-1985!x', 'Smith-blue-ocean'])
+      assert.equal(
+        typedPasswordStrength(value, ['example.com', userName])?.text,
+        site,
+        `${value} ${userName}`,
+      );
+  // A subdomain is not the site, also under a country code whose
+  // registrable name is short.
+  for (const [value, host] of [
+    ['login-violet-quarry', 'login.example.com'],
+    ['login-violet-quarry', 'https://login.web.de'],
+    ['Banking-2024-xyz!', 'https://banking.ing.de'],
+    ['account-blue-ocean', 'account.n26.de'],
+  ])
+    assert.equal(
+      typedPasswordStrength(value, [host, ''])?.text,
+      'Not measured · no common weakness found',
+      host,
+    );
 });
 
 test('repeated characters and sequences are warned about', () => {
@@ -214,6 +229,7 @@ test('repeated characters and sequences are warned about', () => {
     '12341234',
     'asdfasdf',
     'aaaaaaaa1!',
+    'aaaa1234!',
   ])
     assert.equal(
       typedPasswordStrength(value, context)?.text,
@@ -227,6 +243,9 @@ test('repeated characters and sequences are warned about', () => {
     '987654321',
     'ytrewq12',
     'abcd1234',
+    'abcd1234!',
+    'abcd1234!!',
+    'poiuytre',
     'hgfedcba',
   ])
     assert.equal(

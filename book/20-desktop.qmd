@@ -254,10 +254,12 @@ exact entropy, `length × log2(pool size)` bits: 147 bits for the default
 password, 11 bits per word. A typed or stored password is not measured. It
 is checked against a short list of common passwords (also with its
 separators removed, so a well-known passphrase matches), the site's
-registrable label (`slack` in `app.slack.com`, not the subdomain) and the
-user name, one unit of up to four characters repeated (`aaaaaaaa`,
-`asdfasdf`), a run of consecutive letters or digits or of a keyboard row
-(`abcdefgh`, `qwerty12`), and the 8-character minimum. A match shows a
+registrable label (`slack` in `app.slack.com`, not the subdomain), the
+user name and each part of it (`john` and `smith` in
+`john.smith@example.org`), one unit of up to four characters repeated
+(`aaaaaaaa`, `asdfasdf`), a run of consecutive letters or digits or of a
+keyboard row (`abcdefgh`, `poiuytre`), also before a trailing run of
+digits and symbols (`abcd1234!`), and the 8-character minimum. A match shows a
 warning at the lowest level without disabling Create or Save; a value with
 no match reads "Not measured · no common weakness found". The strength
 text is a polite live region, so a warning is announced as it appears. The

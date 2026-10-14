@@ -47,7 +47,7 @@ export interface PasswordInputProps {
   showProblem?: string;
   /** The element that states `showProblem` for assistive technology. */
   showProblemId?: string;
-  /** The site and user name, which a typed password should not contain. */
+  /** The site, then the user names: what a typed password should not contain. */
   context?: readonly string[];
 }
 

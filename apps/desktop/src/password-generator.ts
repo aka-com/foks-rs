@@ -207,10 +207,19 @@ function commonForms(value: string): string[] {
 }
 
 /**
+ * Second-level labels under which a country code registers names
+ * (`co.uk`, `com.au`, `ne.jp`).
+ */
+const GENERIC_SECOND_LEVEL = new Set(
+  'ac co com edu gov ltd ne net or org plc'.split(' '),
+);
+
+/**
  * The registrable label of a host: the label before the top-level domain,
- * or before a two-letter country code and a second-level label of at most
- * three characters (`co.uk`, `com.au`). `app.slack.com` gives `slack`, so a
- * subdomain such as `login` or `accounts` is never taken for the site.
+ * or before a two-letter country code and a generic second-level label
+ * (`co.uk`, `com.au`). `app.slack.com` gives `slack` and `login.web.de`
+ * gives `web`, so a subdomain such as `login` or `accounts` is never taken
+ * for the site.
  */
 function registrableLabel(host: string): string {
   const labels = host.split('.').filter(Boolean);
@@ -218,32 +227,41 @@ function registrableLabel(host: string): string {
   let index = labels.length - 2;
   if (
     index > 0 &&
-    labels[index].length <= 3 &&
+    GENERIC_SECOND_LEVEL.has(labels[index]) &&
     labels[labels.length - 1].length === 2
   )
     index--;
   return labels[index];
 }
 
+/** A user name and each part of it between `.`, `_`, `+` and `-`. */
+function userNameParts(name: string): string[] {
+  return [name, ...name.split(/[._+-]/)];
+}
+
 /**
- * The parts of a site or user name a password should not contain: the
- * registrable label of a host, and the part before an `@` (a user name in a
- * URL, or the local part of an email address). Parts shorter than four
- * characters are left out.
+ * The parts of a site or user name a password should not contain. The first
+ * entry is the site, the rest are user names. A site contributes the
+ * registrable label of its host and any user name before an `@` in a URL. A
+ * user name contributes itself, or the local part of an email address and
+ * the registrable label of its domain, and each part of either split at
+ * `.`, `_`, `+` and `-` (`john` and `smith` in `john.smith@example.org`).
+ * Parts shorter than four characters are left out.
  */
 function contextWords(context: readonly string[]): string[] {
   return context
-    .flatMap((entry) => {
+    .flatMap((entry, position) => {
       const authority = entry
         .trim()
         .toLowerCase()
         .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
         .split(/[/?#]/)[0];
       const at = authority.lastIndexOf('@');
+      if (at < 0 && position > 0) return userNameParts(authority);
       const host = authority.slice(at + 1).replace(/:\d*$/, '');
       return at < 0
         ? [registrableLabel(host)]
-        : [authority.slice(0, at), registrableLabel(host)];
+        : [...userNameParts(authority.slice(0, at)), registrableLabel(host)];
     })
     .filter((word) => word.length >= 4);
 }
@@ -284,8 +302,11 @@ function isSequence(text: string): boolean {
  * The feedback for a password not taken from the generator: a warning for
  * the first common weakness found, shown at level 1 (Weak), or a neutral
  * note without a level, since none of these checks measures entropy. The
- * repeat and sequence checks apply to the whole value and to the value
- * without a trailing run of digits and symbols (`abcd1234!`).
+ * repeat and sequence checks apply to the whole value and to its stem, the
+ * value without a trailing run of digits and symbols. The stem is checked
+ * when the run it drops is no longer than the stem, or when that run with
+ * its symbols removed is empty, a repeated unit or a sequence (`abcd1234!`).
+ * The context lists the site first, then the user names.
  */
 export function typedPasswordStrength(
   value: string,
@@ -301,10 +322,12 @@ export function typedPasswordStrength(
       text: 'Weak · contains the site or user name',
       weak: true,
     };
-  // The stem is checked only when the run it drops is no longer than itself.
   const stem = lower.replace(TRAILING_DIGITS_AND_SYMBOLS, '');
+  const tailDigits = lower.slice(stem.length).replace(/\D/g, '');
+  const weakTail =
+    !tailDigits || REPEATED_UNIT.test(tailDigits) || isSequence(tailDigits);
   const shapes =
-    stem && stem !== lower && lower.length <= 2 * stem.length
+    stem && stem !== lower && (lower.length <= 2 * stem.length || weakTail)
       ? [lower, stem]
       : [lower];
   if (shapes.some((shape) => REPEATED_UNIT.test(shape)))
