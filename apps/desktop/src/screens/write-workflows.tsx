@@ -32,6 +32,8 @@ import {
   defaultCreateStore,
   leaseLapsed,
   loginField,
+  loginFieldOf,
+  loginLines,
   nameOf,
   partiesOf,
   partyName,
@@ -178,16 +180,36 @@ export function droppedFileDraft(path: string, sourcePath: string): NewDraft {
 }
 
 /**
+ * Whether the New password sheet holds all of this text: every line that is
+ * not empty names a different one of its three fields.
+ */
+function fitsPasswordSheet(text: string): boolean {
+  const named = new Set<LoginFieldName>();
+  return loginLines(text).every(({ key, raw }) => {
+    if (key === null && (raw === '' || raw === '\r')) return true;
+    const field = loginFieldOf(key);
+    if (field === null || named.has(field)) return false;
+    named.add(field);
+    return true;
+  });
+}
+
+/**
  * The new-item sheet an edit resumes in when the item it was editing has been
  * deleted elsewhere: there is no newer version to review, so the edit is
  * offered as a new item at the same path, for the user to save or discard.
+ * A login resumes in the Password sheet only when that sheet's fields hold
+ * the whole draft; otherwise it resumes as a Document with the draft as its
+ * value, so no line is dropped.
  */
 export function conflictDraftWorkflow(
   item: Item,
   draft: string,
 ): WriteWorkflow {
   const itemKind: NewKind =
-    kindOf(item) === 'Password' ? 'Password' : 'Document';
+    kindOf(item) === 'Password' && fitsPasswordSheet(draft)
+      ? 'Password'
+      : 'Document';
   const field = (name: LoginFieldName): string =>
     itemKind === 'Password' ? (loginField(draft, name) ?? '') : '';
   return {

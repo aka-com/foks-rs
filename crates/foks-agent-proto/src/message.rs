@@ -357,8 +357,8 @@ pub struct KvEntryMetadata {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum KvEntryShape {
-    /// UTF-8 `key: value` lines including a `password` key, the layout the
-    /// desktop writes for a login.
+    /// UTF-8 text whose lines are all `key: value` lines, one with the key
+    /// `password`: the layout the desktop writes for a login.
     Login,
     /// Any other small file.
     Other,

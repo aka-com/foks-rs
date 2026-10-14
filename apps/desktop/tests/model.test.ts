@@ -339,9 +339,8 @@ test('fixture shapes are the shapes the listing computes from their text', () =>
   }
 });
 
-test('login fields follow the host parser: aliases, trimming, first line wins', () => {
-  const stored =
-    'user: satoshi\r\n password : hx7:Qm2 \nurl: \nusername: second';
+test('login fields follow the host parser: aliases, exact keys, first line wins', () => {
+  const stored = 'user: satoshi\r\npassword: hx7:Qm2\nurl: \nusername: second';
   assert.equal(loginField(stored, 'username'), 'satoshi');
   // Only the first colon separates the key.
   assert.equal(loginField(stored, 'password'), 'hx7:Qm2');
@@ -351,19 +350,36 @@ test('login fields follow the host parser: aliases, trimming, first line wins', 
     loginField('website: https://a.example', 'url'),
     'https://a.example',
   );
+  assert.equal(loginField('password:x', 'password'), 'x');
+  // A key is not trimmed, so an indented or spaced key names no field.
+  assert.equal(loginField('  password: x', 'password'), null);
+  assert.equal(loginField('password : x', 'password'), null);
+  assert.equal(loginField('\ufeffuser: x', 'username'), null);
   assert.equal(shapeOf(stored), 'login');
   assert.equal(shapeOf('user: a\npassword: \nurl: '), 'login');
+  assert.equal(shapeOf('ssid: Guest\r\npassword:x\r\n\r\n'), 'login');
   for (const text of [
     'postgres://service:o4Kq@db.internal/prod',
     'passwords: plural is a different key',
     'Password: keys are matched exactly',
     '',
+    'ssid: Guest\n  password: x',
+    'password : x',
+    'database:\n  host: db.internal\n  password: s3cret\n',
+    '[db]\npassword: x',
+    'password: x\nrotate this every quarter',
   ])
     assert.equal(shapeOf(text), 'other', text);
-  assert.deepEqual(loginLines('ssid: Guest\nfree text'), [
-    { key: 'ssid', value: 'Guest' },
-    { key: null, value: 'free text' },
+  assert.deepEqual(loginLines('ssid: Guest\r\nfree text'), [
+    { key: 'ssid', value: 'Guest', raw: 'ssid: Guest\r' },
+    { key: null, value: 'free text', raw: 'free text' },
   ]);
+});
+
+test('a login value keeps every space but the separator', () => {
+  const padded = 'user: a\npassword:  pad-me \r\nurl: ';
+  assert.equal(loginField(padded, 'password'), ' pad-me ');
+  assert.equal(loginField('password: \ttab\ufeff', 'password'), '\ttab\ufeff');
 });
 
 test('isLogin returns true only for items under /logins/', () => {

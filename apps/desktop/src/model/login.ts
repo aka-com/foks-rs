@@ -3,14 +3,22 @@
  * the native host read it.
  *
  * A login is one small file of `key: value` lines (`user: …`, `password: …`,
- * `url: …`). The agent's listing reports `shape: 'login'` for a small file
- * with a `password` key, and `copy_item_field` copies one field, both through
- * `foks_client::kv::login`. This module applies the same rules to text the
- * renderer already holds after Show or Edit, so the fields it displays are
- * the fields Copy finds: a line splits at its first `:`, key and value are
- * trimmed, keys match exactly with the aliases `user`/`username` and
- * `url`/`website`, the first line naming a field wins, and an empty value is
- * absent.
+ * `url: …`). The agent's listing reports `shape: 'login'` for such a file and
+ * `copy_item_field` copies one field, both through `foks_client::kv::login`.
+ * This module applies the same rules to text the renderer already holds after
+ * Show or Edit, so the fields it displays are the fields Copy finds:
+ *
+ * - Lines are separated by `\n`, and one trailing `\r` is removed from each.
+ * - A field line splits at its first `:`. The key is not trimmed; it must be
+ *   non-empty and must not begin or end with ASCII whitespace (space, tab,
+ *   line feed, form feed, carriage return).
+ * - The value loses exactly one leading space, the separator the sheet
+ *   writes; any other whitespace is part of the value.
+ * - Keys match exactly, with the aliases `user`/`username` and
+ *   `url`/`website`; the first line naming a field wins, and an empty value
+ *   is absent.
+ * - A text is a login when every line that is not blank is a field line and
+ *   one has the key `password`.
  */
 
 /** A login field `copy_item_field` can copy. */
@@ -32,20 +40,29 @@ const ALIASES: Readonly<Record<LoginFieldName, readonly string[]>> = {
   url: ['url', 'website'],
 };
 
-/** One line of a login: a trimmed key and value, or a line with no key. */
+/**
+ * One line of a login: the key and value of a field line, or `key: null` and
+ * the line itself for any other line. `raw` is the line as stored, with its
+ * `\r`, so an editor can write back a line it did not change.
+ */
 export interface LoginLine {
   key: string | null;
   value: string;
+  raw: string;
 }
+
+const EDGE_SPACE = /^[\t\n\f\r ]|[\t\n\f\r ]$/;
+const BLANK = /^[\t\n\f\r ]*$/;
 
 /** Every line of a login's text, in order. */
 export function loginLines(text: string): LoginLine[] {
-  return text.split('\n').map((line) => {
+  return text.split('\n').map((raw) => {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
     const cut = line.indexOf(':');
-    const key = cut < 0 ? '' : line.slice(0, cut).trim();
-    return key
-      ? { key, value: line.slice(cut + 1).trim() }
-      : { key: null, value: line.trim() };
+    const key = cut < 0 ? '' : line.slice(0, cut);
+    if (!key || EDGE_SPACE.test(key)) return { key: null, value: line, raw };
+    const value = line.slice(cut + 1);
+    return { key, value: value.startsWith(' ') ? value.slice(1) : value, raw };
   });
 }
 
@@ -63,7 +80,9 @@ export function loginField(text: string, field: LoginFieldName): string | null {
 
 /** The shape the agent's listing reports for a small file with this text. */
 export function shapeOf(text: string): ItemShape {
-  return loginLines(text).some(({ key }) => key === 'password')
+  const lines = loginLines(text);
+  return lines.every(({ key, raw }) => key !== null || BLANK.test(raw)) &&
+    lines.some(({ key }) => key === 'password')
     ? 'login'
     : 'other';
 }

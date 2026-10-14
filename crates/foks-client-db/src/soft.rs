@@ -103,8 +103,8 @@ pub struct KvProjectedEntry {
 /// the file; no field value is retained.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KvSmallFileShape {
-    /// UTF-8 text with a `password:` field line, the layout the desktop
-    /// writes for a login.
+    /// UTF-8 text whose lines are all `key: value` field lines, one with the
+    /// key `password`: the layout the desktop writes for a login.
     Login,
     /// Any other small file, text or binary.
     Other,

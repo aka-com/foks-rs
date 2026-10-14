@@ -6,13 +6,20 @@
 //! the protocol this is an ordinary small file. Metadata synchronization uses
 //! [`small_file_shape`] to report whether a small file holds a login before it
 //! discards the plaintext, and the desktop host uses [`login_field`] to copy a
-//! single field. Both read lines the same way, so an item listed as a login
-//! is one whose fields the host can find.
+//! single field. Both read lines with [`field_line`].
 //!
-//! A line is split at its first `:`; the key and the value are trimmed of
-//! surrounding whitespace, which also drops a trailing `\r`. Keys are matched
-//! exactly, with the aliases the desktop's new-item draft accepts:
-//! `user`/`username` and `url`/`website`. The first line naming a field wins.
+//! Lines are separated by `\n`, and one trailing `\r` is removed from each. A
+//! field line is split at its first `:`. The key is the text before it,
+//! untrimmed: it must be non-empty and must not begin or end with ASCII
+//! whitespace (space, tab, line feed, form feed or carriage return), so an
+//! indented `  password: x` or a spaced `password : x` is not a field line.
+//! The value is the text after the `:` with exactly one leading space removed,
+//! the separator the desktop writes; any other whitespace is part of the
+//! value, so a password that begins or ends with a space is kept whole. Keys
+//! are matched exactly, with the aliases the desktop's new-item draft
+//! accepts: `user`/`username` and `url`/`website`. The first line naming a
+//! field wins. The desktop renderer applies the same rules to text it has
+//! read, in `apps/desktop/src/model/login.ts`.
 
 use foks_client_db::KvSmallFileShape;
 
@@ -34,29 +41,48 @@ impl LoginField {
     }
 }
 
-fn fields(text: &str) -> impl Iterator<Item = (&str, &str)> {
-    text.split('\n').filter_map(|line| {
-        let (key, value) = line.split_once(':')?;
-        let key = key.trim();
-        (!key.is_empty()).then(|| (key, value.trim()))
-    })
+/// The key and value of one line, or `None` when the line is not a field
+/// line. `line` excludes its `\n`.
+fn field_line(line: &str) -> Option<(&str, &str)> {
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let (key, value) = line.split_once(':')?;
+    let edge = |c: char| c.is_ascii_whitespace();
+    let well_formed = !key.is_empty() && !key.starts_with(edge) && !key.ends_with(edge);
+    well_formed.then(|| (key, value.strip_prefix(' ').unwrap_or(value)))
 }
 
-/// Whether a small file's plaintext is a login: UTF-8 with a `password` key.
+fn fields(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.split('\n').filter_map(field_line)
+}
+
+/// Whether a small file's plaintext is a login: UTF-8 in which every line
+/// that is not blank is a field line, and one of them has the key `password`.
 /// The password may be empty; the line alone is what the desktop writes for
-/// every login.
+/// every login. A document with any other line, such as indented YAML or an
+/// INI section header, stays [`KvSmallFileShape::Other`].
 pub fn small_file_shape(content: &[u8]) -> KvSmallFileShape {
-    match std::str::from_utf8(content) {
-        Ok(text) if fields(text).any(|(key, _)| LoginField::Password.accepts(key)) => {
-            KvSmallFileShape::Login
+    let Ok(text) = std::str::from_utf8(content) else {
+        return KvSmallFileShape::Other;
+    };
+    let mut password = false;
+    for line in text.split('\n') {
+        match field_line(line) {
+            Some((key, _)) => password |= LoginField::Password.accepts(key),
+            None if line.bytes().all(|byte| byte.is_ascii_whitespace()) => {}
+            None => return KvSmallFileShape::Other,
         }
-        _ => KvSmallFileShape::Other,
+    }
+    if password {
+        KvSmallFileShape::Login
+    } else {
+        KvSmallFileShape::Other
     }
 }
 
-/// The value of the first line naming `field`, or `None` when no line names
-/// it or that line's value is empty. The result borrows from `text`, so a
-/// caller holding the plaintext in a zeroizing buffer copies only this value.
+/// The value of the first field line naming `field`, or `None` when no line
+/// names it or that line's value is empty, which a login with an empty
+/// password line has. The result borrows from `text`, so a caller holding the
+/// plaintext in a zeroizing buffer copies only this value.
 pub fn login_field(text: &str, field: LoginField) -> Option<&str> {
     fields(text)
         .find(|(key, _)| field.accepts(key))
@@ -82,7 +108,7 @@ mod tests {
             KvSmallFileShape::Login
         );
         assert_eq!(
-            small_file_shape(b"ssid: Guest\r\n  password : x\r\n"),
+            small_file_shape(b"ssid: Guest\r\npassword:x\r\n\r\n"),
             KvSmallFileShape::Login
         );
     }
@@ -96,6 +122,13 @@ mod tests {
             b"Password: keys are matched exactly",
             b"",
             &[0xff, b'p', b'a', b's', b's', b'w', b'o', b'r', b'd', b':'],
+            // The key must start the line and end at the colon.
+            b"ssid: Guest\n  password: x",
+            b"password : x",
+            b"database:\n  host: db.internal\n  password: s3cret\n",
+            // Every line that is not blank must be a field line.
+            b"[db]\npassword: x",
+            b"password: x\nrotate this every quarter",
         ] {
             assert_eq!(small_file_shape(content), KvSmallFileShape::Other);
         }
@@ -123,13 +156,31 @@ mod tests {
     }
 
     #[test]
+    fn only_the_separator_space_and_a_carriage_return_are_removed() {
+        let padded = "user: a\npassword:  pad-me \r\nurl: ";
+        assert_eq!(login_field(padded, LoginField::Password), Some(" pad-me "));
+        assert_eq!(login_field("password:x", LoginField::Password), Some("x"));
+        assert_eq!(
+            login_field("password: \ttab\u{feff}", LoginField::Password),
+            Some("\ttab\u{feff}")
+        );
+        // A key with a byte-order mark is not a login key.
+        assert_eq!(login_field("\u{feff}user: a", LoginField::Username), None);
+    }
+
+    #[test]
     fn a_missing_or_empty_field_is_absent_and_the_first_line_wins() {
         assert_eq!(
             login_field("user: a\npassword: b\nurl: ", LoginField::Url),
             None
         );
+        assert_eq!(
+            login_field("user: a\npassword: \nurl: ", LoginField::Password),
+            None
+        );
         assert_eq!(login_field("password: b", LoginField::Username), None);
         assert_eq!(login_field("plain text", LoginField::Password), None);
+        assert_eq!(login_field("  password: b", LoginField::Password), None);
         assert_eq!(
             login_field("user: first\nusername: second", LoginField::Username),
             Some("first")

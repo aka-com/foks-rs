@@ -1124,3 +1124,69 @@ test('a login saved outside /logins/ is a Password by its listed shape', async (
   await ui.waitFor(() => assert.match(saved, /^user: grafana-admin$/m));
   assert.match(saved, /^password: graf-77$/m);
 });
+
+/** Mounts the panel on one extra login with `text` as its stored value. */
+async function setupLogin(text: string) {
+  const p = await setup();
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const login = {
+    ...p.subject,
+    path: '/wifi/cabin',
+    direntId: '0000000000000000000000000000002f',
+    shape: 'login' as const,
+  };
+  const snapshot = {
+    ...p.props.snapshot,
+    items: [...p.props.snapshot.items, login],
+    plaintext: {
+      ...p.props.snapshot.plaintext,
+      [`${login.store}|${login.path}`]: text,
+    },
+  };
+  const saved: string[] = [];
+  p.props.snapshot = snapshot;
+  p.props.bridge = {
+    ...mockBridge(snapshot),
+    editTextItem: async (request) => {
+      saved.push(request.value);
+      return { applied: true };
+    },
+  };
+  p.props.selection = { store: login.store, path: login.path };
+  return { ...p, saved };
+}
+
+test('the login editor masks the line Copy reads as the password and keeps other lines as stored', async () => {
+  const p = await setupLogin('ssid: Cabin\r\npassword:x \r\n');
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const password = await r.findByLabelText('Password');
+  assert.equal(password.getAttribute('type'), 'password');
+  assert.equal((password as HTMLInputElement).value, 'x ');
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
+  assert.equal(password.getAttribute('type'), 'text');
+  ui.fireEvent(window, new Event('blur'));
+  assert.equal(password.getAttribute('type'), 'password');
+
+  ui.fireEvent.change(r.getByLabelText('Network'), {
+    target: { value: 'Cabin-5G' },
+  });
+  ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
+  await ui.waitFor(() => assert.equal(p.saved.length, 1));
+  assert.equal(p.saved[0], 'ssid: Cabin-5G\r\npassword:x \r\n');
+});
+
+test('a Password whose text has no password line edits in the concealable textarea', async () => {
+  const p = await setupLogin('ssid: Cabin\nnote: no password yet');
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const contents = await r.findByRole('textbox', { name: 'Contents' });
+  assert.equal(
+    (contents as HTMLTextAreaElement).value,
+    'ssid: Cabin\nnote: no password yet',
+  );
+  ui.fireEvent(window, new Event('blur'));
+  assert.equal(r.queryByRole('textbox', { name: 'Contents' }), null);
+});

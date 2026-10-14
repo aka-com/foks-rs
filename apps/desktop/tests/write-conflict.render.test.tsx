@@ -115,6 +115,40 @@ test('an edit conflict with a deleted item preserves a new-item draft', async ()
   assert.doesNotMatch(toasts(), /Review your draft/);
 });
 
+test('a deleted login resumes as a Document when the Password sheet cannot hold every line', async () => {
+  const { conflictDraftWorkflow } = (await vite.ssrLoadModule(
+    '/src/screens/write-workflows.tsx',
+  )) as typeof import('../src/screens/write-workflows');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const item = FIXTURE.items.find(
+    (entry) => entry.store === 'acct:personal' && entry.path === PATH,
+  );
+  assert.ok(item);
+
+  /** The kind and draft of the sheet a deleted item's edit resumes in. */
+  const resume = (draft: string) => {
+    const workflow = conflictDraftWorkflow(item, draft);
+    assert.ok(workflow?.kind === 'new');
+    return { itemKind: workflow.itemKind, draft: workflow.draft };
+  };
+
+  const login = resume('user: kept\npassword:  padded \nurl: \n');
+  assert.equal(login.itemKind, 'Password');
+  assert.equal(login.draft?.password, ' padded ');
+
+  for (const draft of [
+    'ssid: Cabin\npassword: x',
+    'user: a\npassword: x\nrotate this every quarter',
+    'password: first\npassword: second',
+  ]) {
+    const resumed = resume(draft);
+    assert.equal(resumed.itemKind, 'Document', draft);
+    assert.equal(resumed.draft?.value, draft);
+  }
+});
+
 test('an edit conflict with an existing item resumes against the refreshed version', async () => {
   const { rendered } = await mount((base) => ({
     editTextItem: async (request) => {

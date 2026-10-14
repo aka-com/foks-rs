@@ -3,7 +3,8 @@
  *
  * Classifies filesystem nodes into two user-facing product kinds:
  *   - Password: Secret node the agent's listing reports as `shape: 'login'`
- *     (a `password:` line), or, when no shape was reported, one under `/logins/`
+ *     (`key: value` lines with a `password` key, see `login.ts`), or, when no
+ *     shape was reported, one under `/logins/`
  *   - Document: any other Secret node, and every File node
  *
  * The shape is computed by the agent from plaintext it opens during the

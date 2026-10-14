@@ -514,6 +514,12 @@ fn item_field_selects_one_login_field_or_reports_it_missing() {
     assert_eq!(missing.code, "field-missing");
     assert_eq!(missing.message, "This item has no website.");
     assert!(!missing.retryable);
+    // Only the separator space is removed, so a padded password is copied whole.
+    let padded = zeroize::Zeroizing::new("user: a\npassword:  pad-me \r\nurl: ".to_owned());
+    assert_eq!(
+        item_field(padded, ItemField::Password).unwrap().as_str(),
+        " pad-me "
+    );
     let note = zeroize::Zeroizing::new("postgres://service:o4Kq@db/prod".to_owned());
     assert_eq!(
         item_field(note, ItemField::Password).unwrap_err().code,

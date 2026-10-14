@@ -1187,6 +1187,8 @@ pub async fn read_item(
         .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))?
 }
 
+/// Copies an item's whole stored text; the same command as
+/// [`copy_item_field`] with [`ItemField::Value`].
 #[tauri::command]
 pub async fn copy_item_value(
     app: tauri::AppHandle,
@@ -1196,18 +1198,16 @@ pub async fn copy_item_value(
     path: String,
     version: u64,
 ) -> Result<CommandAck, AgentError> {
-    crate::applock::require_unlocked(&app)?;
-    require_main_window(&webview)?;
-    let item = state.selected_item(&store_id, &path, version)?;
-    let transport = state.agent.transport();
-    let value = tauri::async_runtime::spawn_blocking(move || {
-        read_text(transport.as_ref(), &item).map(|read| read.value)
-    })
+    copy_item_field(
+        app,
+        webview,
+        state,
+        store_id,
+        path,
+        version,
+        ItemField::Value,
+    )
     .await
-    .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))??;
-    crate::clipboard::copy_with_hygiene(&app, value)
-        .map_err(|error| AgentError::new("clipboard", error, true))?;
-    Ok(CommandAck { ok: true })
 }
 
 /// The part of a stored item [`copy_item_field`] puts on the clipboard.
@@ -1217,14 +1217,16 @@ pub enum ItemField {
     Password,
     Username,
     Url,
-    /// The whole stored text, as [`copy_item_value`] copies it.
+    /// The whole stored text, which [`copy_item_value`] copies.
     Value,
 }
 
 /// Selects one field of a read item's text. Login fields are found by the
 /// same parser the agent's listing uses to classify a login, so an item
-/// listed as one has fields this can find. The returned value is a fresh
-/// zeroizing copy; the full text is dropped, and zeroized, with `value`.
+/// listed as one has a password line this finds; that line may be empty, and
+/// an empty or absent field is reported as `field-missing`. The returned
+/// value is a fresh zeroizing copy; the full text is dropped, and zeroized,
+/// with `value`.
 pub(super) fn item_field(
     value: Zeroizing<String>,
     field: ItemField,
@@ -1241,8 +1243,8 @@ pub(super) fn item_field(
 }
 
 /// Copies one field of an item, for example only the password of a login
-/// rather than its whole stored text, under the same exact-version read and
-/// clipboard hygiene as [`copy_item_value`]. No content crosses IPC.
+/// rather than its whole stored text, after an exact-version read and with
+/// clipboard hygiene. No content crosses IPC.
 #[tauri::command]
 pub async fn copy_item_field(
     app: tauri::AppHandle,

@@ -144,14 +144,13 @@ function roleText(wire: RoleWire): string {
   return typeof wire === 'string' ? wire : wire.role;
 }
 
-/** Parses lines formatted as "key: value". Lines without a colon delimiter are treated as raw values. */
-function parseFields(value: string): [string | null, string][] {
-  return value.split('\n').map((line) => {
-    const cut = line.indexOf(': ');
-    return cut > 0
-      ? ([line.slice(0, cut), line.slice(cut + 2)] as [string, string])
-      : ([null, line] as [null, string]);
-  });
+/**
+ * Whether the structured login editor opens for this text: it has a line the
+ * host would copy as the password, which the editor masks. Other text opens
+ * in the textarea, which is covered while the window is inactive.
+ */
+function editsAsLogin(text: string): boolean {
+  return loginLines(text).some(({ key }) => loginFieldOf(key) === 'password');
 }
 
 /** One row of a login's Fields section. */
@@ -530,7 +529,7 @@ export function DetailsPanel({
       if (
         editing &&
         item &&
-        kindOf(item) !== 'Password' &&
+        !(kindOf(item) === 'Password' && editsAsLogin(editValue)) &&
         item.kind !== 'File' &&
         !binaryFile
       )
@@ -868,28 +867,35 @@ export function DetailsPanel({
     }
   };
 
-  const editFields =
-    editing && kind === 'Password' ? parseFields(editValue) : [];
+  // One row per stored line, split by the rules Copy follows. Changing a row
+  // rewrites only its line; every other line is saved as it was read.
+  const editRows =
+    editing && kind === 'Password' && editsAsLogin(editValue)
+      ? loginLines(editValue)
+      : null;
   const updateEditField = (index: number, value: string): void => {
+    if (!editRows) return;
     setEditValue(
-      editFields
-        .map(([field, current], candidate) => {
-          const next = candidate === index ? value : current;
-          return field ? `${field}: ${next}` : next;
+      editRows
+        .map(({ key, raw }, candidate) => {
+          if (candidate !== index) return raw;
+          const line = key === null ? value : `${key}: ${value}`;
+          return raw.endsWith('\r') ? `${line}\r` : line;
         })
         .join('\n'),
     );
   };
 
   const preview =
-    inlineEditing && kind === 'Password' ? (
+    inlineEditing && editRows ? (
       <Inset className="edit">
-        {editFields.map(([field, value], index) => {
-          const secret = field?.toLowerCase() === 'password';
+        {editRows.map(({ key: field, value }, index) => {
+          const loginKey = loginFieldOf(field);
+          const secret = loginKey === 'password';
           return (
             <Field
               key={`${field ?? 'value'}-${index}`}
-              label={FIELD_LABELS[field ?? ''] ?? field ?? 'Value'}
+              label={FIELD_LABELS[loginKey ?? field ?? ''] ?? field ?? 'Value'}
               value={value}
               type={secret && !editPasswordShown ? 'password' : 'text'}
               placeholder={secret ? 'password' : undefined}
