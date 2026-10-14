@@ -6,10 +6,12 @@ import {
   cleanupErrorOf,
   copyOutgoing,
   intentHeld,
+  move,
   newOutgoing,
   operationOf,
   outcomeUnknown,
   outgoingActions,
+  outgoingBytes,
   phaseOf,
   preparationAmbiguous,
   running,
@@ -482,4 +484,23 @@ test('outgoing copy shares no mutable state with the message', () => {
   assert.notEqual(operationOf(copy), operationOf(message));
   assert.notEqual(copy.intent, message.intent);
   assert.notEqual(copy.attempt, message.attempt);
+});
+
+test('outgoing bytes: a text change through move measures the new text', () => {
+  const message = newOutgoing({
+    channel: 'b'.repeat(32),
+    submission: 'd'.repeat(32),
+    text: 'hello',
+    createdAt: 0,
+  });
+  assert.equal(outgoingBytes(message), 5);
+  // Revocation discards the text, and its measured length with it.
+  move(message, { type: 'revoked' });
+  assert.equal(message.text, undefined);
+  assert.equal(outgoingBytes(message), 0);
+  // A later body is measured on its own, not reported with the old length.
+  move(message, { type: 'body', text: 'héllo wörld' });
+  assert.equal(outgoingBytes(message), 13);
+  move(message, { type: 'body', text: 'ok' });
+  assert.equal(outgoingBytes(message), 2);
 });

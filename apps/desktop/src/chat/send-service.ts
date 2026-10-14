@@ -22,6 +22,7 @@ import {
 } from './client';
 import { accessChanged, cancelled } from './errors';
 import { eventFromReply } from './conversation-events';
+import { textBytes } from './conversation-model';
 import {
   copyOperation,
   delivered,
@@ -1065,7 +1066,7 @@ export class ChatSendService {
           bytes:
             previous && observedText(previous) === text
               ? previous.bytes
-              : new TextEncoder().encode(text).length,
+              : textBytes(message),
         });
       }
       let bytes = 0;

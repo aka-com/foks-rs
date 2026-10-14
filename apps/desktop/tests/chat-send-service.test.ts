@@ -615,6 +615,53 @@ test('history observed again is not measured again for the observation bound', a
   }
 });
 
+test('the retention bound sums retained UTF-8 lengths, and a revoked text frees its bytes', async () => {
+  const gate = deferred();
+  const h = await setup(async (action, run) => {
+    if (action.action === 'submit-message') await gate.promise;
+    return run();
+  });
+  // The inbox lists a second channel, so two queues hold the bound's rows.
+  const channels = h.entry.data!.channels;
+  const a = h.channel;
+  const b = 'd'.repeat(32);
+  channels.push({ ...channels.find((c) => c.id === a)!, id: b });
+  // Three bytes per character: 65,535 bytes each, so 128 of them leave 128
+  // bytes of CHAT_HISTORY_BYTES.
+  const large = '\u20ac'.repeat(21_845);
+  const sendings: Promise<void>[] = [];
+  try {
+    await h.service.open('team:eng', b);
+    // Each channel holds one message in flight and 63 queued behind it.
+    for (const channel of [a, b])
+      for (let count = 0; count < 64; count++) {
+        sendings.push(h.service.submit('team:eng', channel, large));
+        await settle();
+      }
+    assert.equal(h.service.messages('team:eng').length, 128);
+    const full = { message: /Resolve pending messages before sending more/ };
+    await assert.rejects(
+      h.service.submit('team:eng', a, 'x'.repeat(129)),
+      full,
+    );
+    // Exactly at the bound is admitted, and nothing fits after it.
+    await h.service.submit('team:eng', b, 'x'.repeat(128));
+    await assert.rejects(h.service.submit('team:eng', a, 'x'), full);
+    // Withdrawing the second channel drops its queued rows and the text of
+    // its message in flight, whose record stays until the agent settles it.
+    h.entries.set('team:eng', { ...h.entry, blockedChannels: new Set([b]) });
+    h.update();
+    assert.equal(h.service.messages('team:eng', b).length, 1);
+    assert.equal(h.service.messages('team:eng', b)[0].text, undefined);
+    await h.service.submit('team:eng', a, 'x'.repeat(129));
+    assert.equal(h.service.messages('team:eng', a).length, 65);
+  } finally {
+    gate.resolve();
+    h.service.stop();
+    await Promise.allSettled(sendings);
+  }
+});
+
 test('a send reports its steps to diagnostics without the text', async () => {
   const h = await setup();
   const events: ChatSendTiming[] = [];

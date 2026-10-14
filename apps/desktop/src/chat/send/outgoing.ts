@@ -208,11 +208,12 @@ export function unsent(message: OutgoingMessage): boolean {
 }
 
 const encoder = new TextEncoder();
-/** Each record's text and its UTF-8 length, measured once per text. */
-const measured = new WeakMap<
-  OutgoingMessage,
-  { text: string; bytes: number }
->();
+/**
+ * The UTF-8 length of each record's current text. Only the length is kept,
+ * never the text, and {@link move} drops a record's entry when its text
+ * changes, so a text the record discards is not kept reachable here.
+ */
+const measured = new WeakMap<OutgoingMessage, number>();
 
 /**
  * The UTF-8 length of the message's text, as the send service's retention
@@ -224,9 +225,9 @@ export function outgoingBytes(message: OutgoingMessage): number {
   const text = message.text;
   if (!text) return 0;
   const known = measured.get(message);
-  if (known?.text === text) return known.bytes;
+  if (known !== undefined) return known;
   const bytes = encoder.encode(text).length;
-  measured.set(message, { text, bytes });
+  measured.set(message, bytes);
   return bytes;
 }
 
@@ -539,8 +540,11 @@ export function outgoingActions(
 
 /**
  * Applies `event` to `message` in place. The record keeps its identity,
- * because a drive in flight holds it across its awaits.
+ * because a drive in flight holds it across its awaits. A change of text
+ * drops the record's measured length (`outgoingBytes`).
  */
 export function move(message: OutgoingMessage, event: OutgoingEvent) {
-  Object.assign(message, transition(message, event));
+  const next = transition(message, event);
+  if (next.text !== message.text) measured.delete(message);
+  Object.assign(message, next);
 }
