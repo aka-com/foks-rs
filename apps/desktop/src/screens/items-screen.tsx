@@ -91,6 +91,7 @@ import { normalizeCommandError } from '../bridge';
 import type { Bridge, ItemField } from '../bridge';
 import { useFileDrop } from '../file-drop';
 import { fileDropPath, writeBlockReason } from './write-workflows';
+import { exportedPasswords } from './export-passwords-sheet';
 import type { NewKind } from './write-workflows';
 import { copyActions, copyAndAnnounce } from './item-copy';
 import {
@@ -873,6 +874,8 @@ export interface ItemsScreenProps {
   onCopyToVault?: (item: Item) => void;
   /** Imports logins from a CSV export into a store, at `folder` when given. */
   onImport?: (storeId: string, folder?: string) => void;
+  /** Exports the passwords of a store to a plain-text CSV file. */
+  onExport?: (storeId: string) => void;
   /**
    * Moves several items of one store: to `folder` when a drag names it, or
    * to a folder chosen in the move sheet.
@@ -982,6 +985,7 @@ export function ItemsScreen({
   onMove,
   onCopyToVault,
   onImport,
+  onExport,
   onMoveMany,
   onTrashMany,
   onSettings,
@@ -2400,6 +2404,40 @@ export function ItemsScreen({
                   }}
                 >
                   Move folder to Trash
+                </MenuItem>
+              ) : null}
+              {folderMenu.path === '/' && contextStore && onImport ? (
+                <MenuItem
+                  icon="download"
+                  reason={
+                    !availability(contextStore).available
+                      ? storeDescription(snapshot, contextStore)
+                      : (writeBlockReason(snapshot, contextStore) ?? undefined)
+                  }
+                  onClick={() => {
+                    setFolderMenu(null);
+                    onImport(contextStore.id);
+                  }}
+                >
+                  Import passwords…
+                </MenuItem>
+              ) : null}
+              {folderMenu.path === '/' && contextStore && onExport ? (
+                <MenuItem
+                  icon="upload"
+                  reason={
+                    !availability(contextStore).available
+                      ? storeDescription(snapshot, contextStore)
+                      : exportedPasswords(snapshot, contextStore.id)
+                        ? undefined
+                        : 'This vault has no passwords to export.'
+                  }
+                  onClick={() => {
+                    setFolderMenu(null);
+                    onExport(contextStore.id);
+                  }}
+                >
+                  Export passwords…
                 </MenuItem>
               ) : null}
               {contextStore?.kind === 'team' ? (

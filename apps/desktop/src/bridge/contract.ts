@@ -86,6 +86,7 @@ import type {
   PasswordImportPreview,
   PasswordImportOutcome,
   CommitPasswordImportRequest,
+  LoginExportResult,
 } from './vault-catalog';
 import type { YubiCommand, YubiEnrollment } from './yubikey';
 
@@ -281,6 +282,11 @@ export interface Bridge {
   ): Promise<PasswordImportOutcome[]>;
   /** Drops a held import. */
   discardPasswordImport(importId: string): Promise<CommandAck>;
+  /**
+   * Writes the logins of a store as a plain-text CSV file chosen in the
+   * native save dialog. The host reads them; no value reaches the renderer.
+   */
+  exportLogins(storeId: StoreRef): Promise<LoginExportResult>;
   resumeGroupCreation(storeId: StoreRef): Promise<MutationResponse>;
   /**
    * Forgets the local record of a team whose creation never finished. Only a

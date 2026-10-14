@@ -244,6 +244,9 @@
       "remoteTeamIdHex": "required",
       "storeId": "required"
     },
+    "export_logins": {
+      "storeId": "required"
+    },
     "finish_device_pairing": {
       "accountStoreId": "required"
     },

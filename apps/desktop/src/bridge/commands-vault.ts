@@ -12,6 +12,7 @@ import {
   decodeCatalog,
   decodeCopy,
   decodeDownload,
+  decodeLoginExport,
   decodeMutation,
   decodePasswordImportOutcome,
   decodePasswordImportPreview,
@@ -47,6 +48,7 @@ export const vaultCommands: Pick<
   | 'beginPasswordImport'
   | 'commitPasswordImport'
   | 'discardPasswordImport'
+  | 'exportLogins'
 > = {
   listCatalog: async (onPartial, fresh = false) => {
     if (!onPartial) return checked('list_catalog', { fresh }, decodeCatalog);
@@ -265,4 +267,6 @@ export const vaultCommands: Pick<
   },
   discardPasswordImport: (importId) =>
     checked('discard_password_import', { importId }, decodeCommandAck, false),
+  exportLogins: (storeId) =>
+    checked('export_logins', { storeId }, decodeLoginExport),
 };

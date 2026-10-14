@@ -65,6 +65,7 @@ import {
   listsItems,
 } from '../screens/scope';
 import { copyAndAnnounce } from '../screens/item-copy';
+import { exportedPasswords } from '../screens/export-passwords-sheet';
 import { itemActionProblem } from '../screens/store-access';
 import { teamRequestsBadge, useTeamRequestCounts } from '../operation-queries';
 import {
@@ -589,6 +590,20 @@ export function VaultShell({
             },
           ]
         : []),
+      ...(filesHere &&
+      newStore &&
+      !chrome.blocked &&
+      exportedPasswords(shown, newStore.id)
+        ? [
+            {
+              id: 'export-passwords',
+              label: 'Export passwords',
+              detail: `The passwords in ${newStore.name}, as a plain-text CSV file`,
+              icon: 'upload' as const,
+              run: () => setWorkflow({ kind: 'export', storeId: newStore.id }),
+            },
+          ]
+        : []),
       {
         id: 'lock',
         label: 'Lock',
@@ -613,7 +628,18 @@ export function VaultShell({
         run: () => locations.navigate({ kind: 'settings' }),
       },
     ],
-    [lockFromMenu, locations, newItemStore, startImport, startNewItem],
+    [
+      chrome.blocked,
+      filesHere,
+      lockFromMenu,
+      locations,
+      newItemStore,
+      newStore,
+      setWorkflow,
+      shown,
+      startImport,
+      startNewItem,
+    ],
   );
   // ⌘C in the palette: the same checks and messages as a row's Copy.
   const copyFromPalette = useCallback(

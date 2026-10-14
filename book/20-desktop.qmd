@@ -503,6 +503,17 @@ writes run one at a time under one mutation reservation; the first failure
 other than an occupied path ends the run, and an unknown outcome requires a
 refresh before the next write, as for any other mutation.
 
+`export_logins` goes the other way, for one vault. It writes the column
+layout of a Bitwarden export: a password's folder (relative to `/logins`
+when it is below it, so an import into `/logins` restores it), its decoded
+name, the three fields Copy finds, and its other lines as notes, with the
+`note:` prefix the import adds removed. The host reads each password at the
+version the catalog listed and writes the records to a temporary file next
+to the destination, which replaces the destination only when every record
+is written; a lock during the export stops it and removes the temporary
+file. The file is plain text, like every password manager's CSV export, so
+the sheet asks for the vault's name before the save dialog opens.
+
 ### Trash
 
 Delete in the desktop moves an item, or a folder with everything in it,
@@ -654,7 +665,8 @@ no agent operation and no protocol change.
   `src/commands/trash.rs` (`trash_item`, `restore_trash_item`, `remove_item`,
   `empty_trash`), `src/commands/vault_copy.rs` (`copy_item_to_store`),
   `src/commands/password_import.rs` (`begin_password_import`,
-  `commit_password_import`),
+  `commit_password_import`), `src/commands/password_export.rs`
+  (`export_logins`),
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.

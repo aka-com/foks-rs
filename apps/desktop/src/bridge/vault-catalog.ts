@@ -257,6 +257,15 @@ export interface PasswordImportOutcome {
   message?: string;
 }
 
+/** What an export of a store's logins wrote. */
+export interface LoginExportResult {
+  /** False when the save dialog was cancelled. */
+  saved: boolean;
+  exported: number;
+  /** Logins left out because their text is not UTF-8. */
+  skipped: number;
+}
+
 /**
  * Saves the held import's `entries` (indexes into its preview) under
  * `folder` of a store. Roles are given together for a team and omitted for
@@ -543,5 +552,14 @@ export function decodePasswordImportOutcome(
     index: integer(item.index, `${at}.index`),
     status: status as PasswordImportStatus,
     ...(message === undefined ? {} : { message }),
+  };
+}
+
+export function decodeLoginExport(value: unknown): LoginExportResult {
+  const item = record(value, 'export_logins response');
+  return {
+    saved: bool(item.saved, 'export_logins.saved'),
+    exported: integer(item.exported, 'export_logins.exported'),
+    skipped: integer(item.skipped, 'export_logins.skipped'),
   };
 }

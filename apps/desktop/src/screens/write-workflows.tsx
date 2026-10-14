@@ -67,6 +67,7 @@ import {
 import { AccessBlock, storeOption, writeBlockReason } from './store-choice';
 import { CopyItemSheet } from './copy-item-sheet';
 import { ImportPasswordsSheet } from './import-passwords-sheet';
+import { ExportPasswordsSheet } from './export-passwords-sheet';
 
 export { writeBlockReason };
 
@@ -140,6 +141,8 @@ export type WriteWorkflow =
    * `storeId` unless another vault is chosen.
    */
   | { kind: 'import'; storeId: StoreRef; initialFolder?: string }
+  /** Writes the passwords of `storeId` to a plain-text CSV file. */
+  | { kind: 'export'; storeId: StoreRef }
   /** Several items of one store, moved together to a folder chosen next. */
   | { kind: 'move-many'; items: readonly Item[] }
   /** Moves `items` into `folder` of their store one at a time, with progress. */
@@ -1121,6 +1124,16 @@ export function WriteOverlay({
         onApplied={onApplied}
         onMutationError={onMutationError}
         accessNow={accessNow}
+      />
+    );
+  if (workflow.kind === 'export')
+    return (
+      <ExportPasswordsSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        storeId={workflow.storeId}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
       />
     );
   if (workflow.kind === 'import')

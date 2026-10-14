@@ -124,6 +124,7 @@ export function ScreenRouter({
       onImport={(storeId, initialFolder) =>
         setWorkflow({ kind: 'import', storeId, initialFolder })
       }
+      onExport={(storeId) => setWorkflow({ kind: 'export', storeId })}
       onMoveMany={(items, folder) =>
         setWorkflow(
           folder === undefined

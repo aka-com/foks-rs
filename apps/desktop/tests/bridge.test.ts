@@ -38,6 +38,7 @@ import {
   decodeReadItem,
   decodeServers,
   decodeParties,
+  decodeLoginExport,
   decodePasswordImportOutcome,
   decodePasswordImportPreview,
   decodeFederation,
@@ -589,6 +590,41 @@ test('Password import sends the held id and destination and reports progress fro
         configurable: true,
       });
   }
+});
+
+test('Export passwords sends the store alone and decodes the counts', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return { saved: true, exported: 4, skipped: 1 };
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    assert.deepEqual(await tauriBridge.exportLogins('opaque-store-ref'), {
+      saved: true,
+      exported: 4,
+      skipped: 1,
+    });
+    assert.deepEqual(calls, [
+      ['export_logins', { storeId: 'opaque-store-ref' }],
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+  assert.throws(() => decodeLoginExport({ saved: true, exported: 1 }));
 });
 
 test('password import decoders reject malformed previews and outcomes', () => {

@@ -370,6 +370,7 @@ pub fn run() {
             commands::password_import::begin_password_import,
             commands::password_import::commit_password_import,
             commands::password_import::discard_password_import,
+            commands::password_export::export_logins,
             commands::vault::release_import_file,
             commands::vault::replace_dropped_file,
             commands::vault::pick_and_replace_file,

@@ -1109,6 +1109,22 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         return outcome;
       });
     },
+    exportLogins: async (storeId) => {
+      // The mock saves nowhere; it counts what the host would write.
+      const exported = items.filter(
+        (item) =>
+          item.store === storeId &&
+          item.kind === 'Secret' &&
+          !isTrashPath(item.path) &&
+          shapeOf(contents.get(itemKey(item)) ?? '') === 'login',
+      ).length;
+      if (!exported)
+        throw failure(
+          'invalid-request',
+          'This vault has no passwords to export.',
+        );
+      return { saved: true, exported, skipped: 0 };
+    },
     discardPasswordImport: async (importId) => {
       if (importId === heldImport) heldImport = null;
       return { ok: true };
