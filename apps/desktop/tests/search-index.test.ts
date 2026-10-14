@@ -110,6 +110,17 @@ test('the index holds every kind the palette searches', () => {
     items.find((entry) => entry.name === 'id_ed25519')?.copies,
     undefined,
   );
+  // ⌘O opens a Password's website; a Document, a file and a folder have none.
+  assert.equal(
+    items.find((entry) => entry.name === 'github.com')?.website,
+    true,
+  );
+  assert.equal(database.website, undefined);
+  assert.equal(
+    items.find((entry) => entry.name === 'id_ed25519')?.website,
+    undefined,
+  );
+  assert.equal(ssh.website, undefined);
 
   // Stores: the two accounts, then the named groups, then the ad-hoc share.
   assert.deepEqual(names(INDEX.filter((entry) => entry.scope === 'stores')), [

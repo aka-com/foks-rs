@@ -28,6 +28,7 @@ export const vaultCommands: Pick<
   | 'readItem'
   | 'copyItemValue'
   | 'copyItemField'
+  | 'openItemUrl'
   | 'copyItemPath'
   | 'downloadFile'
   | 'createTextItem'
@@ -84,6 +85,8 @@ export const vaultCommands: Pick<
     checked('copy_item_value', { storeId, path, version }, decodeCopy),
   copyItemField: ({ storeId, path, version, field }) =>
     checked('copy_item_field', { storeId, path, version, field }, decodeCopy),
+  openItemUrl: ({ storeId, path, version }) =>
+    checked('open_item_url', { storeId, path, version }, decodeCopy),
   copyItemPath: ({ storeId, path, version }) =>
     checked('copy_item_path', { storeId, path, version }, decodeCopy),
   downloadFile: ({ storeId, path, version }) =>

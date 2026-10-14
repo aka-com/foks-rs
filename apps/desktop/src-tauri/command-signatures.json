@@ -326,6 +326,11 @@
     "open_chat_link": {
       "url": "required"
     },
+    "open_item_url": {
+      "path": "required",
+      "storeId": "required",
+      "version": "required"
+    },
     "open_notification_settings": {},
     "open_sso_browser": {
       "accountAlias": "required",

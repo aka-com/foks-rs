@@ -1,6 +1,7 @@
 /**
- * The ⌘K palette in the running shell: the copy the shell runs for ⌘C, with
- * its access check and toasts, and the New actions it offers only on a Files
+ * The ⌘K palette in the running shell: the copy the shell runs for ⌘C and
+ * the website it opens for ⌘O, with their access check and toasts, and the
+ * New actions it offers only on a Files
  * page whose store this account can write. `search-palette.render.test.tsx`
  * covers the palette itself with stub handlers.
  */
@@ -10,7 +11,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
-import type { Bridge, CopyFieldRequest } from '../src/bridge';
+import type { Bridge, CopyFieldRequest, ItemRequest } from '../src/bridge';
 import type { Location, LocationStore } from '../src/location';
 import type { AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
@@ -40,7 +41,7 @@ test.after(async () => vite.close());
 /**
  * The app open at `location`. `lapse` expires the Acme server's compatibility
  * verification, which stops access to its stores. `copies` records every field copy that
- * reaches the mock.
+ * reaches the mock, and `opens` every Open website request.
  */
 async function mount({
   location = { kind: 'store', ref: 'acct:personal' },
@@ -69,11 +70,16 @@ async function mount({
     : FIXTURE;
   const base = mockBridge(fixture);
   const copies: CopyFieldRequest[] = [];
+  const opens: ItemRequest[] = [];
   const bridge: Bridge = {
     ...base,
     copyItemField: async (request) => {
       copies.push(request);
       return base.copyItemField(request);
+    },
+    openItemUrl: async (request) => {
+      opens.push(request);
+      return base.openItemUrl(request);
     },
   };
   const store: LocationStore = new LocationStore({
@@ -84,7 +90,7 @@ async function mount({
     createElement(App, { snapshot: fixture, bridge, store }),
   );
   await ui.waitFor(() => assert.ok(document.querySelector('.topbar')));
-  return { rendered, copies };
+  return { rendered, copies, opens };
 }
 
 function field(): HTMLInputElement {
@@ -137,6 +143,53 @@ test('⌘C on an item whose access has stopped warns and copies nothing', async 
   );
   assert.doesNotMatch(toasts(), /copied/);
   assert.deepEqual(copies, []);
+});
+
+test('⌘O on a Password opens its website through the host', async () => {
+  const { mockOpenedSites } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const before = mockOpenedSites.length;
+  const { opens } = await mount();
+  await openPalette('github');
+  assert.match(
+    document.querySelector('.pal-hit.sel .pal-keys')?.textContent ?? '',
+    /Open website/,
+  );
+  ui.fireEvent.keyDown(field(), { key: 'o', metaKey: true });
+  await ui.waitFor(() => assert.match(toasts(), /Website opened/));
+  assert.equal(document.querySelector('.pal'), null);
+  assert.deepEqual(opens, [
+    { storeId: 'acct:personal', path: '/logins/github.com', version: 9 },
+  ]);
+  assert.deepEqual(
+    mockOpenedSites.slice(before).map(({ url }) => url),
+    ['https://github.com/login'],
+  );
+  // Opening a website counts as using the item.
+  await openPalette('');
+  assert.equal(resultNames()[0], 'github.com');
+});
+
+test('⌘O on a login without a website says so', async () => {
+  const { opens } = await mount();
+  await openPalette('fastmail');
+  ui.fireEvent.keyDown(field(), { key: 'o', metaKey: true });
+  await ui.waitFor(() => assert.match(toasts(), /This item has no website\./));
+  assert.equal(opens.length, 1);
+});
+
+test('⌘O on a Document does nothing and keeps the palette open', async () => {
+  const { opens } = await mount();
+  await openPalette('DATABASE_URL');
+  assert.equal(resultNames()[0], 'DATABASE_URL');
+  assert.doesNotMatch(
+    document.querySelector('.pal-hit.sel .pal-keys')?.textContent ?? '',
+    /Open website/,
+  );
+  ui.fireEvent.keyDown(field(), { key: 'o', metaKey: true });
+  assert.ok(document.querySelector('.pal'));
+  assert.deepEqual(opens, []);
 });
 
 test('New password and Add a document are offered only on a writable Files page', async () => {

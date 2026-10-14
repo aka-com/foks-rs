@@ -1,7 +1,7 @@
 /**
  * The items the ⌘K palette lists before a query is typed: the ten most
- * recently opened or copied on this device, and up to 100 marked as
- * favorites, all of which the palette lists.
+ * recently opened, copied or used to open a website on this device, and up
+ * to 100 marked as favorites, all of which the palette lists.
  *
  * Both lists hold an item's `StoreRef` and its dirent id, under the
  * `foks.recentFavorites` `localStorage` key, which persists while the app is

@@ -17,7 +17,8 @@ import type { CollectionReadiness } from '../model';
  *
  * Enter opens the highlighted result. On an item, ⌘C copies its password or
  * value and ⇧⌘C a login's user name through the host's clipboard commands,
- * without opening it, and ⌘D adds it to Favorites or removes it. An empty
+ * without opening it, ⌘O opens a login's website in the default browser, and
+ * ⌘D adds it to Favorites or removes it. An empty
  * query lists Recent, Favorites and the commands (`recent-favorites.ts`).
  *
  * The palette is a sheet, not a location: it carries no `?state=` and pushes no
@@ -44,7 +45,7 @@ import {
   shortcutLabel,
 } from '../shortcuts';
 import { GroupMark } from '../screens/group-mark';
-import { copyActions } from '../screens/item-copy';
+import { copyActions, opensWebsite } from '../screens/item-copy';
 import type { CopyAction } from '../screens/item-copy';
 import type { ItemField } from '../bridge';
 import {
@@ -167,6 +168,8 @@ export interface SearchEntry {
    * Document's value. Absent for a file and a folder.
    */
   copies?: readonly CopyAction[];
+  /** Whether ⌘O opens the item's website: set on a Password. */
+  website?: true;
   /** An action's own shortcut, drawn where other rows name their server. */
   keys?: string;
 }
@@ -257,6 +260,7 @@ function itemEntries(snapshot: AgentSnapshot): SearchEntry[] {
       glyph: { kind: 'item', itemKind: kind },
       target: { kind: 'item', store: item.store, path: item.path },
       ...(copies.length ? { copies } : {}),
+      ...(opensWebsite(item) ? { website: true as const } : {}),
     });
   }
   return entries;
@@ -623,6 +627,11 @@ export interface SearchPaletteProps {
    * closed. Without it, ⌘C in the palette copies query text only.
    */
   onCopyItem?: (store: StoreRef, path: string, field: ItemField) => void;
+  /**
+   * Opens a login's website through the host, after the palette has closed.
+   * Without it, ⌘O does nothing in the palette.
+   */
+  onOpenWebsite?: (store: StoreRef, path: string) => void;
   /** The channels the caller knows; the palette loads none of its own. */
   channels?: readonly SearchChannel[];
   channelReadiness?: CollectionReadiness;
@@ -656,6 +665,7 @@ function rowKeys(
   entry: SearchEntry,
   favorite: boolean,
   canCopy: boolean,
+  canOpenWebsite: boolean,
 ): { keys: string; label: string }[] {
   const keys = [
     {
@@ -674,6 +684,11 @@ function rowKeys(
         label: user.label,
       });
   }
+  if (canOpenWebsite && entry.website)
+    keys.push({
+      keys: shortcutLabel('paletteOpenWebsite'),
+      label: 'Open website',
+    });
   if (entry.ref)
     keys.push({
       keys: shortcutLabel('paletteFavorite'),
@@ -751,6 +766,7 @@ function SearchSheet({
   onOpenItem,
   onOpenFolder,
   onCopyItem,
+  onOpenWebsite,
   channels = [],
   channelReadiness = 'ready',
   actions = [],
@@ -800,6 +816,7 @@ function SearchSheet({
         highlighted,
         isFavorite(lists, highlighted.ref ?? null),
         Boolean(onCopyItem),
+        Boolean(onOpenWebsite),
       )
     : [];
 
@@ -861,6 +878,15 @@ function SearchSheet({
       event.preventDefault();
       onClose();
       onCopyItem(target.store, target.path, copy.field);
+      return;
+    }
+    if (matchesShortcut(event, 'paletteOpenWebsite')) {
+      if (!highlighted?.website || !onOpenWebsite) return;
+      const { target } = highlighted;
+      if (target.kind !== 'item') return;
+      event.preventDefault();
+      onClose();
+      onOpenWebsite(target.store, target.path);
       return;
     }
     if (matchesShortcut(event, 'paletteFavorite')) {

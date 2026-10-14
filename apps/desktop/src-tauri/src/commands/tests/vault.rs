@@ -3,7 +3,7 @@ use crate::commands::validation::{DOWNLOAD_CHUNK_BYTES, MAXIMUM_TEXT_ITEM_BYTES}
 use crate::commands::vault::{
     create_item_roles, download_to_path, file_create_header, file_edit_header, item_field,
     parse_item_role, read_text, require_file_item, require_text_item, set_create_mutation_roles,
-    set_create_operation_roles, take_text_value, upload_file, CatalogDto, ItemField,
+    set_create_operation_roles, take_text_value, upload_file, website_url, CatalogDto, ItemField,
 };
 use foks_agent_proto::{
     KvChunkResult, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
@@ -536,6 +536,37 @@ fn item_field_selects_one_login_field_or_reports_it_missing() {
         );
     }
     assert!(serde_json::from_value::<ItemField>(serde_json::json!("user")).is_err());
+}
+
+#[test]
+fn website_url_opens_only_http_and_https_addresses() {
+    for (field, expected) in [
+        ("https://github.com/login", "https://github.com/login"),
+        ("http://router.local:8080/", "http://router.local:8080/"),
+        // A bare host is taken as https, and the padding a field may keep is
+        // not part of the address.
+        ("github.com/login", "https://github.com/login"),
+        (" example.com:8443 ", "https://example.com:8443/"),
+        ("HTTPS://Example.com", "https://example.com/"),
+    ] {
+        assert_eq!(
+            website_url(field).map(|url| url.to_string()).as_deref(),
+            Some(expected),
+            "{field}"
+        );
+    }
+    for field in [
+        "",
+        "javascript:alert(1)",
+        "file:///etc/passwd",
+        "ftp://files.example.com",
+        "mailto:a@example.com",
+        "https://user:secret@example.com",
+        "github.com/a b",
+        "data:text/html,a",
+    ] {
+        assert!(website_url(field).is_none(), "{field}");
+    }
 }
 
 pub(super) struct MutationTransport {

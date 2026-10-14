@@ -344,6 +344,13 @@ pub async fn open_chat_link(
     require_main_window(&webview)?;
     crate::applock::require_unlocked(webview.app_handle())?;
     let parsed = safe_external_url(&url).ok_or_else(|| invalid_request("Invalid chat link."))?;
+    open_external_url(parsed).await?;
+    Ok(serde_json::json!({"ok": true}))
+}
+
+/// Hands an address [`safe_external_url`] accepted to the platform's opener,
+/// which shows it in the default browser.
+pub(super) async fn open_external_url(parsed: url::Url) -> Result<(), AgentError> {
     tauri::async_runtime::spawn_blocking(move || {
         #[cfg(target_os = "macos")]
         let command = "open";
@@ -365,14 +372,14 @@ pub async fn open_chat_link(
             if !status.success() {
                 return Err(invalid_request("Could not open the link."));
             }
-            Ok(serde_json::json!({"ok": true}))
+            Ok(())
         }
     })
     .await
     .map_err(|_| invalid_request("Link opening was interrupted."))?
 }
 
-fn safe_external_url(input: &str) -> Option<url::Url> {
+pub(super) fn safe_external_url(input: &str) -> Option<url::Url> {
     if input.len() > 2048
         || input
             .chars()

@@ -1269,6 +1269,55 @@ pub async fn copy_item_field(
     Ok(CommandAck { ok: true })
 }
 
+/// The address a login's website field names, as the browser is given it.
+/// A value with no scheme, such as `example.com/login`, is taken as https.
+/// Only an address [`super::chat::safe_external_url`] accepts is returned: an
+/// http or https URL with a host and no user name or password.
+pub(super) fn website_url(field: &str) -> Option<url::Url> {
+    let field = field.trim();
+    if field.contains("://") {
+        super::chat::safe_external_url(field)
+    } else {
+        super::chat::safe_external_url(&format!("https://{field}"))
+    }
+}
+
+/// Opens a login's website in the default browser. The `url` field is read
+/// at the exact version and selected in Rust as for [`copy_item_field`], an
+/// item without one fails with `field-missing`, and a value that is not an
+/// http or https address ([`website_url`]) fails with `website-unsupported`.
+/// Neither the address nor any other content crosses IPC.
+#[tauri::command]
+pub async fn open_item_url(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+    path: String,
+    version: u64,
+) -> Result<CommandAck, AgentError> {
+    let generation = crate::applock::unlocked_generation(&app)?;
+    require_main_window(&webview)?;
+    let item = state.selected_item(&store_id, &path, version)?;
+    let transport = state.agent.transport();
+    let field = tauri::async_runtime::spawn_blocking(move || {
+        read_text(transport.as_ref(), &item).and_then(|read| item_field(read.value, ItemField::Url))
+    })
+    .await
+    .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))??;
+    let url = website_url(&field).ok_or_else(|| {
+        AgentError::new(
+            "website-unsupported",
+            "This item's website is not an http or https address.",
+            false,
+        )
+    })?;
+    // A lock that engaged during the read stops the browser from opening.
+    crate::applock::require_unlocked_generation(&app, generation)?;
+    super::chat::open_external_url(url).await?;
+    Ok(CommandAck { ok: true })
+}
+
 #[tauri::command]
 pub fn copy_item_path(
     app: tauri::AppHandle,

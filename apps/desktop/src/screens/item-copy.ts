@@ -1,6 +1,8 @@
 /**
  * Copy actions for vault items: which copies an item offers, the command
- * each one calls, and the toast that names what reached the clipboard.
+ * each one calls, and the toast that names what reached the clipboard. Open
+ * website, which the host also performs without returning the value, is
+ * here for the same reason.
  */
 
 import type { ToastController } from '/kit/toasts';
@@ -50,6 +52,15 @@ export function copyActions(item: Item): readonly CopyAction[] {
   if (item.kind === 'File') return [];
   if (kindOf(item) !== 'Password') return VALUE_COPIES;
   return item.shape === undefined ? UNSHAPED_PASSWORD_COPIES : PASSWORD_COPIES;
+}
+
+/**
+ * Whether the item offers Open website: a Password, whose `url` line the
+ * host reads. Whether that line holds an http or https address is known only
+ * when the host reads it.
+ */
+export function opensWebsite(item: Item): boolean {
+  return item.kind !== 'File' && kindOf(item) === 'Password';
 }
 
 /** The toast after a copy, naming only what was copied. */
@@ -124,6 +135,43 @@ export async function copyAndAnnounce({
   } catch (error) {
     const missing = missingFieldMessage(error);
     if (missing) toasts.show(missing, { tone: 'warning' });
+    else onError(error, item);
+  }
+}
+
+/** Open website, with the same checks and reports as {@link AnnouncedCopy}. */
+export type AnnouncedOpen = Omit<AnnouncedCopy, 'field'>;
+
+/**
+ * The palette's Open website: refuses with the access `problem` as a
+ * warning when there is one, asks the host to open the login's website in
+ * the default browser, and puts the item at the head of Recent. An item
+ * without a website, or whose website is not an http or https address, is
+ * reported in a warning toast.
+ */
+export async function openWebsiteAndAnnounce({
+  bridge,
+  item,
+  toasts,
+  problem,
+  onError,
+}: AnnouncedOpen): Promise<void> {
+  if (problem) {
+    toasts.show(problem, { tone: 'warning' });
+    return;
+  }
+  try {
+    await bridge.openItemUrl({
+      storeId: item.store,
+      path: item.path,
+      version: item.version,
+    });
+    rememberRecent(itemRefOf(item));
+    toasts.show('Website opened in the browser');
+  } catch (error) {
+    const typed = normalizeCommandError(error);
+    if (typed.code === 'field-missing' || typed.code === 'website-unsupported')
+      toasts.show(typed.message, { tone: 'warning' });
     else onError(error, item);
   }
 }

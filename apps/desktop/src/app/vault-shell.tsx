@@ -64,7 +64,7 @@ import {
   folderSelection,
   listsItems,
 } from '../screens/scope';
-import { copyAndAnnounce } from '../screens/item-copy';
+import { copyAndAnnounce, openWebsiteAndAnnounce } from '../screens/item-copy';
 import { exportedPasswords } from '../screens/export-passwords-sheet';
 import { itemActionProblem } from '../screens/store-access';
 import { teamRequestsBadge, useTeamRequestCounts } from '../operation-queries';
@@ -659,6 +659,23 @@ export function VaultShell({
     },
     [accessNow, bridge, commandError, shown, toasts],
   );
+  // ⌘O in the palette: the same access check as a copy.
+  const openWebsiteFromPalette = useCallback(
+    (storeId: string, path: string): void => {
+      const item = shown.items.find(
+        (candidate) => candidate.store === storeId && candidate.path === path,
+      );
+      if (!item) return;
+      void openWebsiteAndAnnounce({
+        bridge,
+        item,
+        toasts,
+        problem: itemActionProblem(shown, item, false, accessNow()),
+        onError: commandError,
+      });
+    },
+    [accessNow, bridge, commandError, shown, toasts],
+  );
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       const addDocument = matchesShortcut(event, 'newDocument');
@@ -1002,6 +1019,7 @@ export function VaultShell({
               )
             }
             onCopyItem={copyFromPalette}
+            onOpenWebsite={openWebsiteFromPalette}
             actions={paletteActions}
           />
           <ShortcutSheet

@@ -61,6 +61,36 @@ export interface MockCopy {
 /** Every item copy made through a mock bridge, oldest first. */
 export const mockCopies: MockCopy[] = [];
 
+/** One website a mock bridge opened, with the address the host would open. */
+export interface MockOpenedSite {
+  store: string;
+  path: string;
+  url: string;
+}
+
+/** Every website opened through a mock bridge, oldest first. */
+export const mockOpenedSites: MockOpenedSite[] = [];
+
+/**
+ * The address the host's `website_url` would open for a website field, or
+ * `null` for one it refuses: a bare host is taken as https, and only an http
+ * or https address with a host and no credentials is accepted.
+ */
+function mockWebsiteUrl(field: string): string | null {
+  const trimmed = field.trim();
+  if (/\s/.test(trimmed)) return null;
+  try {
+    const url = new URL(
+      trimmed.includes('://') ? trimmed : `https://${trimmed}`,
+    );
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    if (!url.hostname || url.username || url.password) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 const FIELD_NAMES: Readonly<Record<Exclude<ItemField, 'value'>, string>> = {
   password: 'password',
   username: 'user name',
@@ -787,6 +817,20 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           `This item has no ${FIELD_NAMES[field as keyof typeof FIELD_NAMES]}.`,
         );
       mockCopies.push({ store: item.store, path: item.path, field, text });
+      return { ok: true };
+    },
+    openItemUrl: async (request) => {
+      const item = select(request);
+      const field = loginField(contents.get(itemKey(item)) ?? '', 'url');
+      if (field === null)
+        throw failure('field-missing', `This item has no ${FIELD_NAMES.url}.`);
+      const url = mockWebsiteUrl(field);
+      if (url === null)
+        throw failure(
+          'website-unsupported',
+          "This item's website is not an http or https address.",
+        );
+      mockOpenedSites.push({ store: item.store, path: item.path, url });
       return { ok: true };
     },
     copyItemPath: (request) => {

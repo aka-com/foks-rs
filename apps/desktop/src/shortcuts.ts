@@ -291,6 +291,11 @@ export const SHORTCUTS = {
     scope: 'search',
     chords: [{ key: 'c', mod: true, shift: true }],
   },
+  paletteOpenWebsite: {
+    label: "Open a login's website",
+    scope: 'search',
+    chords: [{ key: 'o', mod: true }],
+  },
   paletteFavorite: {
     label: 'Add to Favorites, or remove',
     scope: 'search',

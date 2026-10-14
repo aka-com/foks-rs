@@ -23,6 +23,7 @@ export function ShellSearch({
   onOpenItem,
   onOpenFolder,
   onCopyItem,
+  onOpenWebsite,
   actions,
 }: {
   snapshot: AgentSnapshot;
@@ -32,6 +33,7 @@ export function ShellSearch({
   onOpenItem: (store: string, path: string) => void;
   onOpenFolder: (store: string, path: string) => void;
   onCopyItem: (store: string, path: string, field: ItemField) => void;
+  onOpenWebsite: (store: string, path: string) => void;
   actions: readonly SearchAction[];
 }): ReactNode {
   const inbox = useSidebarInbox();
@@ -57,6 +59,7 @@ export function ShellSearch({
       onOpenItem={onOpenItem}
       onOpenFolder={onOpenFolder}
       onCopyItem={onCopyItem}
+      onOpenWebsite={onOpenWebsite}
       actions={actions}
       channels={channels}
       channelReadiness={combineReadiness(

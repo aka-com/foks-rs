@@ -245,7 +245,15 @@ The ⌘K search palette copies through the same two commands: ⌘C on a
 highlighted Password copies its password, ⇧⌘C its user name, and ⌘C on a
 text document its value, so a value reaches the clipboard without being
 shown or opened. The same keys do the same on the focused row of the Files
-list. The palette searches names and paths only, never values.
+list. ⌘O on a highlighted Password calls `open_item_url`, which reads the
+exact listed version, selects the website line as `copy_item_field` does,
+and hands it to the platform's opener (`open` on macOS, `xdg-open` on Linux)
+only when it is an http or https address with a host and no user name or
+password; a value with no scheme, such as `example.com/login`, is taken as
+https. The address is not returned to the renderer, and a lock that engages
+during the read stops the browser from opening. A missing website fails with
+`field-missing` and any other value with `website-unsupported`. The palette
+searches names and paths only, never values.
 Its Recent and Favorites lists are kept in the webview's local storage,
 which is not cleared by the app lock, so they hold an item's `StoreRef` and
 dirent id and nothing else. The `StoreRef` names the server profile, the
@@ -663,7 +671,8 @@ no agent operation and no protocol change.
   ACL resolution test), `src/applock.rs` and `src/applock/polkit.rs`,
   `src/clipboard.rs`, `src/dragdrop.rs`, `src/commands/context.rs`
   (`record_drop_paths`, `upload_path`), `src/commands/vault.rs`
-  (`read_item`, `copy_item_value`, `copy_item_field`, `download_file`),
+  (`read_item`, `copy_item_value`, `copy_item_field`, `open_item_url`,
+  `download_file`),
   `src/commands/trash.rs` (`trash_item`, `restore_trash_item`, `remove_item`,
   `empty_trash`), `src/commands/vault_copy.rs` (`copy_item_to_store`),
   `src/commands/password_import.rs` (`begin_password_import`,

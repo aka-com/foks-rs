@@ -216,6 +216,13 @@ export interface Bridge {
    * `field-missing`.
    */
   copyItemField(request: CopyFieldRequest): Promise<CopyResponse>;
+  /**
+   * Opens a login's website in the default browser. The host reads the
+   * item and its `url` field and opens only an http or https address; an
+   * item without a website fails with `field-missing`, and any other value
+   * with `website-unsupported`. The address is not returned.
+   */
+  openItemUrl(request: ItemRequest): Promise<CopyResponse>;
   copyItemPath(request: ItemRequest): Promise<CopyResponse>;
   downloadFile(request: ItemRequest): Promise<DownloadResponse>;
   createTextItem(request: CreateTextRequest): Promise<MutationResponse>;

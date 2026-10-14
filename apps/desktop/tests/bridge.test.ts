@@ -337,6 +337,46 @@ test('copyItemField sends the exact version and the field to the host', async ()
   }
 });
 
+test('openItemUrl sends the exact version and receives no address', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return { ok: true };
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    assert.deepEqual(
+      await tauriBridge.openItemUrl({
+        storeId: 'opaque-store-ref',
+        path: '/work/github.com',
+        version: 4,
+      }),
+      { ok: true },
+    );
+    assert.deepEqual(calls, [
+      [
+        'open_item_url',
+        { storeId: 'opaque-store-ref', path: '/work/github.com', version: 4 },
+      ],
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
 test('Trash commands send the bound selection and decode the new path', async () => {
   const previousWindow = globalThis.window;
   const calls: [string, unknown][] = [];

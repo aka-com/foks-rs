@@ -113,7 +113,9 @@ permanently inaccessible.
 `read_item` is that sole value-returning command. `copy_item_value` performs
 the same exact-version read but writes directly to the system clipboard;
 `copy_item_field` does the same with one field of a login (password, user name
-or website) selected in Rust; `download_file` sends bounded exact-version
+or website) selected in Rust; `open_item_url` selects a login's website the
+same way and passes it to the platform's opener only when it is an http or
+https address; `download_file` sends bounded exact-version
 chunks directly to a native-picked destination. None of them returns content
 through IPC.
 
