@@ -38,6 +38,7 @@ export type FoksIconName =
   | 'door'
   | 'chat'
   | 'bell'
+  | 'bellOff'
   | 'send'
   | 'panelLeftClose'
   | 'panelLeftOpen'

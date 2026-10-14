@@ -10,6 +10,7 @@ import {
   useState,
   useCallback,
   useRef,
+  useSyncExternalStore,
 } from 'react';
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
@@ -17,10 +18,15 @@ import type { ChatScope } from '../chat-contract';
 import type { FoksIconName } from '../icons';
 import type { ChatClock } from './clock';
 import type { ChatInboxService } from './inbox-service';
-import type { LocalAction, LocalSession } from './local-contract';
+import type { AlertChoice, LocalAction, LocalSession } from './local-contract';
 import { NotificationConsumer } from './notification-consumer';
 import { diagnosticLog } from '../diagnostics/log';
-import { notificationKey } from './local-contract';
+import {
+  alertChoice,
+  inheritedAlerts,
+  notificationKey,
+  storedAlertMode,
+} from './local-contract';
 /** The agent's code for alerts the system has not permitted. */
 const PERMISSION_CODE = 'chat-notification-permission';
 
@@ -31,16 +37,32 @@ const Context = createContext<{
   permission: boolean;
   /** Opens the system pane where that refusal is undone. */
   openSettings: () => Promise<void>;
+  /**
+   * Applies a change and resolves to the error it was refused with, or to
+   * `''` once it is saved. A change sent while another is saving is dropped
+   * and resolves to an error that says so.
+   */
   configure: (
     action: Extract<LocalAction, { action: 'configure' }>,
-  ) => Promise<void>;
+  ) => Promise<string>;
+  /** The inbox whose projection carries each channel's `muted` flag. */
+  service: ChatInboxService;
 } | null>(null);
+
+/**
+ * The local alert settings and the way to change them, for controls outside
+ * the settings panels (the Chat column's menus); `null` outside the provider.
+ */
+export function useLocalAlerts() {
+  return useContext(Context);
+}
 export function NotificationProvider({
   bridge,
   service,
   children,
   onNavigate,
   clock,
+  username,
 }: {
   bridge: Bridge;
   service: ChatInboxService;
@@ -48,6 +70,11 @@ export function NotificationProvider({
   onNavigate?: (location: Location) => void;
   /** The inbox service's clock, so the consumer's deadlines share its time. */
   clock?: ChatClock;
+  /**
+   * The reader's username in a store, which the Mentions only mode matches;
+   * without it, that mode raises no alerts.
+   */
+  username?: (storeId: string, scope: ChatScope) => string | null;
 }) {
   const [session, setSession] = useState<LocalSession | null>(null),
     [error, setError] = useState(''),
@@ -76,6 +103,12 @@ export function NotificationProvider({
         void bridge.chatLocal({ action: 'end', epoch }).catch(() => {});
     };
   }, [bridge]);
+  // Local mutes reach the published projection, which every unread total
+  // reads. While a change is saving there is no session, and the mutes last
+  // known stay applied.
+  useEffect(() => {
+    if (session) service.setLocalMutes(session.settings.muted);
+  }, [service, session]);
   useEffect(() => {
     if (!session) return;
     const consumer = new NotificationConsumer(
@@ -111,6 +144,8 @@ export function NotificationProvider({
             attrs: { retry: event.retry },
           });
       },
+      undefined,
+      username,
     );
     return () => {
       consumer.stop();
@@ -118,7 +153,7 @@ export function NotificationProvider({
         .chatLocal({ action: 'end', epoch: session.epoch })
         .catch(() => {});
     };
-  }, [bridge, service, session, clock]);
+  }, [bridge, service, session, clock, username]);
   useEffect(() => {
     if (!session || !onNavigate) return;
     let active = true;
@@ -167,8 +202,10 @@ export function NotificationProvider({
     };
   }, [bridge, onNavigate, session]);
   const configure = useCallback(
-    async (action: Extract<LocalAction, { action: 'configure' }>) => {
-      if (configuring.current) return;
+    async (
+      action: Extract<LocalAction, { action: 'configure' }>,
+    ): Promise<string> => {
+      if (configuring.current) return 'Another local setting is being saved.';
       configuring.current = true;
       const owner = lifetime.current;
       setError('');
@@ -181,6 +218,7 @@ export function NotificationProvider({
           void bridge
             .chatLocal({ action: 'end', epoch: next.epoch })
             .catch(() => {});
+        return '';
       } catch (cause) {
         if (owner.active && lifetime.current === owner) {
           setError(failure(cause));
@@ -203,6 +241,7 @@ export function NotificationProvider({
               );
           }
         }
+        return failure(cause);
       } finally {
         configuring.current = false;
       }
@@ -219,11 +258,45 @@ export function NotificationProvider({
   }, [bridge]);
   return (
     <Context.Provider
-      value={{ session, error, permission, openSettings, configure }}
+      value={{ session, error, permission, openSettings, configure, service }}
     >
       {children}
     </Context.Provider>
   );
+}
+/** The titles the alert modes are offered under. */
+export const ALERT_TITLES: Readonly<Record<AlertChoice, string>> = {
+  all: 'All new messages',
+  mentions: 'Mentions only',
+  none: 'None',
+};
+/** What Mentions only matches, said where the mode is offered. */
+export const MENTIONS_DETAIL =
+  'Text containing @ and your username, matched on this device';
+/** The detail of the Default choice: the mode it gives and why. */
+function inheritedDetail({
+  mode,
+  from,
+}: ReturnType<typeof inheritedAlerts>): string {
+  if (from === 'muted') return 'None while the channel is muted';
+  if (from === 'team') return `${ALERT_TITLES[mode]}, the team default`;
+  return 'Device setting';
+}
+const noSubscribe = () => () => {};
+/** Whether the published projection marks a channel muted. */
+function useProjectedMute(
+  service: ChatInboxService | undefined,
+  storeId: string | undefined,
+  channel: string | undefined,
+): boolean {
+  const read = () =>
+    !!service
+      ?.getSnapshot()
+      .get(storeId ?? '')
+      ?.data?.conversations.find(
+        (conversation) => conversation.channel.id === channel,
+      )?.muted;
+  return useSyncExternalStore(service?.subscribe ?? noSubscribe, read, read);
 }
 export function NotificationSettings({
   storeId,
@@ -238,22 +311,14 @@ export function NotificationSettings({
   noteIcon?: FoksIconName;
 }) {
   const context = useContext(Context);
-  const [key, setKey] = useState('');
-  useEffect(() => {
-    let active = true;
-    setKey('');
-    if (scope && channel)
-      void notificationKey(scope, channel).then((value) => {
-        if (active) setKey(value);
-      });
-    return () => {
-      active = false;
-    };
-  }, [scope, channel]);
+  const muted = useProjectedMute(context?.service, storeId, channel);
   if (!context) return null;
   const { session, error, permission, openSettings, configure } = context;
+  const key = scope && channel ? notificationKey(scope, channel) : '';
   const override = key ? session?.settings.overrides[key] : undefined;
-  const mode = override === undefined ? 'inherit' : override ? 'all' : 'none';
+  const mode = override === undefined ? 'inherit' : alertChoice(override);
+  const inherited =
+    session && scope ? inheritedAlerts(session.settings, scope, muted) : null;
   return (
     <div
       className={`chat-local-settings${storeId ? '' : ' device-notification-settings'}`}
@@ -299,9 +364,18 @@ export function NotificationSettings({
               value={mode}
               disabled={!session?.available}
               options={[
-                { id: 'inherit', title: 'Use device setting' },
-                { id: 'all', title: 'All new messages' },
-                { id: 'none', title: 'None' },
+                {
+                  id: 'inherit',
+                  title: 'Default',
+                  detail: inherited ? inheritedDetail(inherited) : undefined,
+                },
+                { id: 'all', title: ALERT_TITLES.all },
+                {
+                  id: 'mentions',
+                  title: ALERT_TITLES.mentions,
+                  detail: MENTIONS_DETAIL,
+                },
+                { id: 'none', title: ALERT_TITLES.none },
               ]}
               onChange={(next) =>
                 void configure({
@@ -309,7 +383,10 @@ export function NotificationSettings({
                   storeId,
                   scope,
                   channel,
-                  mode: next === 'inherit' ? null : next === 'all',
+                  mode:
+                    next === 'inherit'
+                      ? null
+                      : storedAlertMode(next as AlertChoice),
                 })
               }
             />
@@ -341,5 +418,55 @@ export function NotificationSettings({
           <p role="alert">{error}</p>
         ))}
     </div>
+  );
+}
+
+/**
+ * The Mute channel switch. A mute is kept in this device's local settings: it
+ * takes the channel's unread count out of its team's and the Chat tab's
+ * totals and silences its alerts unless it has its own alert mode. The
+ * pinned protocol cannot mute a channel on the server, so it does not reach
+ * other devices.
+ */
+export function ChannelMuteSetting({
+  storeId,
+  scope,
+  channel,
+}: {
+  storeId: string;
+  scope: ChatScope;
+  channel: string;
+}) {
+  const context = useContext(Context);
+  // While a change saves there is no session; the projection keeps the mutes
+  // last known, so the switch does not flicker.
+  const projected = useProjectedMute(context?.service, storeId, channel);
+  if (!context) return null;
+  const { session, configure } = context;
+  const muted = session
+    ? session.settings.muted.includes(notificationKey(scope, channel))
+    : projected;
+  return (
+    <label className="chat-info-row chat-info-mute">
+      <Icon name="bellOff" className="chat-info-row-icon" />
+      <span className="k">Mute channel</span>
+      <span className="v">
+        <input
+          type="checkbox"
+          role="switch"
+          checked={muted}
+          disabled={!session}
+          onChange={(event) =>
+            void configure({
+              action: 'configure',
+              storeId,
+              scope,
+              channel,
+              muted: event.target.checked,
+            })
+          }
+        />
+      </span>
+    </label>
   );
 }

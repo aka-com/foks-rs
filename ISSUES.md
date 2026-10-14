@@ -185,6 +185,10 @@ identify them accurately:
 - Reliable minimized/background operation, native multi-window ownership,
   post-quit operation and non-macOS native notifications remain deferred.
 - Extended channel management, edits, deletion, reactions, threads, mentions and
-  attachments remain disabled.
+  attachments remain disabled. The desktop's Mentions only alert mode matches
+  `@username` in message text on the device; it is not a protocol mention.
+- The pinned protocol has no request that sets a conversation's `muted` or
+  `hidden` flag, and the server reports both as false. The desktop keeps mutes
+  and alert modes in device-local settings, which do not sync between devices.
 - The larger real-desktop catch-up and before/after foreground-latency benchmark
   has not been run.

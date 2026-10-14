@@ -73,10 +73,11 @@ export function notificationView(
     hidden: !!conversation?.hidden,
     quarantined: entry.blockedChannels.has(channel),
     preference,
+    // A muted channel stays eligible: a mute silences alerts unless the
+    // channel has its own alert mode, which the consumer decides.
     eligible:
       row.readable &&
       !entry.blockedChannels.has(channel) &&
-      !conversation?.muted &&
       !conversation?.hidden,
     fresh: entry.state === 'ready' && !entry.stale,
     degraded: entry.data.degraded,

@@ -294,6 +294,20 @@ immediately, and closing it again resumes the interval its quiet passes
 stored. The inbox service holds the invalidations a degraded projection
 raises on no evidence to the same schedule.
 
+**What alerts.** A channel's alert mode is its own when the person set
+one, else none while the channel is muted, else its team's default, else
+every message. Modes and mutes live in device-local settings, keyed by
+SHA-256 digests of the profile and of the host, actor, team and channel ids,
+because the pinned protocol cannot set a conversation's `muted` flag. The
+inbox service publishes `muted` as the server's flag or this device's mute,
+so unread totals follow a mute without code of their own. A muted channel is
+still eligible for watching: its own mode can override the mute, so the
+consumer, not the projection, decides that it stays silent; a silenced
+channel starts no reads and takes no new progress record. The Mentions only mode alerts for a message
+whose first 256 characters name the reader as `@username`; it is a text
+match on this device, and the native side, which never sees the reader's
+name, cannot check it.
+
 **Doubling waits.** `chat/backoff.ts` holds every wait in the chat
 services that doubles from a base to a cap:
 

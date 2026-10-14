@@ -1,10 +1,11 @@
 import { admits, parseRole } from '../model';
-import type { RoleWire } from '../model';
+import type { AgentSnapshot, RoleWire } from '../model';
 
 /**
  * Which `@name` tokens in message text are drawn as mentions. This is text
- * styling of Basic messages only: a mention has no protocol meaning, raises
- * no notification and is not counted.
+ * styling of Basic messages only: a mention has no protocol meaning and is
+ * not counted. It raises a desktop alert only in a channel whose alert mode
+ * is Mentions only, through {@link mentionsReader}.
  */
 export interface ChatMentions {
   /** The team members' usernames, as {@link mentionKey} forms. */
@@ -59,6 +60,50 @@ export function chatMentions(
   const own = self ? mentionKey(self) : null;
   if (own) members.add(own);
   return { members, self: own };
+}
+
+/**
+ * An `@name` where the message renderer draws one: not continuing a word, a
+ * name or an email address (`bob@example.com`).
+ */
+const MENTION =
+  /(?<![\p{L}\p{M}\p{N}_@.])@([\p{L}\p{N}][\p{L}\p{M}\p{N}._-]*)/gu;
+
+/**
+ * Whether `text` names `username` as an `@name`, compared as
+ * {@link mentionKey} compares names, with the trailing `.`, `_` or `-` that
+ * ends a sentence left out as the renderer leaves it out. This is a match on
+ * the text on this device, for the Mentions only alert mode: the pinned
+ * protocol has no mentions, and a sender can write any name.
+ */
+export function mentionsReader(text: string, username: string): boolean {
+  const self = mentionKey(username);
+  for (const match of text.matchAll(MENTION)) {
+    let end = match[1].length;
+    while (end > 1 && '._-'.includes(match[1][end - 1])) end--;
+    if (mentionKey(match[1].slice(0, end)) === self) return true;
+  }
+  return false;
+}
+
+/**
+ * The reader's username in a team store: that of the account the store's
+ * chat scope names (`accountAlias`) on the store's server; `null` when the
+ * snapshot holds no such account.
+ */
+export function readerUsername(
+  snapshot: AgentSnapshot,
+  storeId: string,
+  accountAlias: string,
+): string | null {
+  const store = snapshot.stores.find((candidate) => candidate.id === storeId);
+  if (store?.kind !== 'team') return null;
+  return (
+    snapshot.accounts.find(
+      (account) =>
+        account.server === store.server && account.alias === accountAlias,
+    )?.username ?? null
+  );
 }
 
 /** A team member an `@name` can be completed to. */

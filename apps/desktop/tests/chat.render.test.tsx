@@ -1424,9 +1424,10 @@ function channelInfo() {
       row.startsWith('Who can'),
     ),
     readers: pairs('.chat-info-reader', 'b', 'small'),
-    note: [...panel.querySelectorAll('.chat-info-aside')].map((node) =>
-      (node.textContent ?? '').replace(/\s+/g, ' '),
-    ),
+    // The audience notes; the note under the Mute channel switch is not one.
+    note: [
+      ...panel.querySelectorAll('.chat-info-aside:not(.chat-info-mute-note)'),
+    ].map((node) => (node.textContent ?? '').replace(/\s+/g, ' ')),
   };
 }
 

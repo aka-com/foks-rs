@@ -2289,6 +2289,158 @@ test('clicking a team heading folds it, keeps its unread total, and excludes a m
   );
 });
 
+test('Mute channel keeps a channel listed but out of its team total on this device', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const configured: unknown[] = [];
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) =>
+    withInbox(
+      withChannels(
+        {
+          ...base,
+          chatLocal: async (action) => {
+            if (action.action === 'configure') configured.push(action);
+            return base.chatLocal(action);
+          },
+        },
+        'team:household',
+        [
+          { id: '11'.repeat(16), name: 'chores', unread: '3' },
+          { id: '22'.repeat(16), name: 'archive', unread: '2' },
+        ],
+      ),
+      'team:household',
+      (inbox) => {
+        inbox.conversations = inbox.conversations.map((conversation) =>
+          conversation.channel.name
+            ? conversation
+            : { ...conversation, unread: '0' },
+        );
+      },
+    ),
+  );
+  const folded = () => {
+    ui.fireEvent.click(
+      ui.screen.getByRole('button', { name: 'Collapse Household' }),
+    );
+    const count =
+      head('Household').querySelector('.chat-unread')?.textContent ?? '';
+    ui.fireEvent.click(
+      ui.screen.getByRole('button', { name: 'Expand Household' }),
+    );
+    return count;
+  };
+  await ui.waitFor(() =>
+    assert.ok(channelRow('#archive').querySelector('.chat-unread')),
+  );
+  assert.equal(folded(), '5');
+  ui.fireEvent.contextMenu(channelRow('#archive'));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Mute channel' }));
+  assert.equal(ui.screen.queryByRole('menu'), null);
+  await ui.waitFor(() =>
+    assert.ok(channelRow('#archive').classList.contains('muted')),
+  );
+  assert.equal(
+    channelRow('#archive').querySelector('small:not(.chat-row-identity)')
+      ?.textContent,
+    ' · Muted',
+  );
+  // The row keeps its own count, drawn quiet; the heading leaves it out.
+  assert.equal(
+    channelRow('#archive').querySelector('.chat-unread')?.textContent,
+    '2',
+  );
+  assert.equal(folded(), '3');
+  // The mute names the channel and leaves its alert mode as it was.
+  const [change] = configured as Record<string, unknown>[];
+  assert.deepEqual(
+    [change.storeId, change.channel, change.muted, 'mode' in change],
+    ['team:household', '22'.repeat(16), true, false],
+  );
+  ui.fireEvent.contextMenu(channelRow('#archive'));
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Unmute channel' }),
+  );
+  await ui.waitFor(() =>
+    assert.ok(!channelRow('#archive').classList.contains('muted')),
+  );
+  assert.equal(folded(), '5');
+});
+
+test('a team menu sets the alert default its channels take on this device', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const configured: unknown[] = [];
+  await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) => ({
+    ...base,
+    chatLocal: async (action) => {
+      if (action.action === 'configure') configured.push(action);
+      return base.chatLocal(action);
+    },
+  }));
+  await ui.waitFor(() => assert.ok(general('Engineering')));
+  const choices = () => {
+    ui.fireEvent.contextMenu(head('Engineering'));
+    const menu = ui.screen.getByRole('menu', { name: 'Chat sidebar actions' });
+    return ui.within(menu).getAllByRole('menuitemradio');
+  };
+  await ui.waitFor(() =>
+    assert.equal(choices()[0].getAttribute('aria-disabled'), null),
+  );
+  const options = choices();
+  assert.deepEqual(
+    options.map((item) => [
+      item.textContent,
+      item.getAttribute('aria-checked'),
+    ]),
+    [
+      ['Device setting', 'true'],
+      ['All new messages', 'false'],
+      ['Mentions only', 'false'],
+      ['None', 'false'],
+    ],
+  );
+  ui.fireEvent.click(options[2]);
+  assert.equal(ui.screen.queryByRole('menu'), null);
+  await ui.waitFor(() =>
+    assert.equal(choices()[2].getAttribute('aria-checked'), 'true'),
+  );
+  ui.fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(
+    (configured[0] as { mode: unknown; channel?: string }).mode,
+    'mentions',
+  );
+  assert.equal((configured[0] as { channel?: string }).channel, undefined);
+  // A channel without its own mode states the team default it follows.
+  ui.fireEvent.contextMenu(general('Engineering'));
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Channel info' }));
+  const panel = await ui.screen.findByRole('complementary', {
+    name: 'Channel info',
+  });
+  await ui.waitFor(() =>
+    assert.match(
+      ui.within(panel).getByLabelText('Alerts').textContent ?? '',
+      /Mentions only, the team default/,
+    ),
+  );
+  assert.match(
+    panel.querySelector('.chat-info-mute-note')?.textContent ?? '',
+    /^Mute applies to this device only\./,
+  );
+  // Muting from the panel's switch takes precedence over the team default.
+  const mute = () =>
+    ui
+      .within(panel)
+      .getByRole<HTMLInputElement>('switch', { name: 'Mute channel' });
+  assert.equal(mute().checked, false);
+  ui.fireEvent.click(mute());
+  await ui.waitFor(() =>
+    assert.match(
+      ui.within(panel).getByLabelText('Alerts').textContent ?? '',
+      /None while the channel is muted/,
+    ),
+  );
+  assert.equal(mute().checked, true);
+});
+
 test('a search overrides a fold so a channel it matched inside a collapsed team is seen', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat', ref: 'team:eng' }, (base) =>
@@ -2394,6 +2546,7 @@ test('sidebar context menus distinguish background, teams, and channels', async 
     [
       'Open channel',
       'Mark as read',
+      'Mute channel',
       'Channel info',
       'Add FOKS user…',
       'Add FOKS team…',

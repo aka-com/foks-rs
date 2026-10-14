@@ -1,6 +1,6 @@
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
-import type { ChatMessage } from '../chat-contract';
+import type { ChatMessage, ChatScope } from '../chat-contract';
 import { CHAT_NOTIFICATION_TEXT_CHARS, CHAT_PAGE_ROWS } from '../chat-limits';
 import { chatClient, channelIntegrity, integrity } from './client';
 import { sameScope, channelWorkKey } from './scope';
@@ -8,8 +8,9 @@ import { GeometricInterval, REQUEST_RETRY, retryDelay } from './backoff';
 import { systemChatClock, type ChatClock } from './clock';
 import { DeadlineTimer } from './deadline-timer';
 import type { ChatInboxService } from './inbox-service';
-import type { LocalSession } from './local-contract';
-import { notificationKey } from './local-contract';
+import type { AlertChoice, LocalSession } from './local-contract';
+import { channelAlerts } from './local-contract';
+import { mentionsReader } from './mentions';
 import { incoming, notificationText } from './notification-policy';
 import { messageVisible } from './visibility';
 import {
@@ -57,7 +58,6 @@ type Progress = {
    */
   fallback: GeometricInterval;
   failures: number;
-  preference?: string;
   locallyDisabled?: boolean;
   deniedAt?: number;
 };
@@ -107,6 +107,15 @@ export class NotificationConsumer {
     private clock: ChatClock = systemChatClock,
     private observe?: (event: NotificationMetric) => void,
     private limits: { queued: number; baselines: number } = NOTIFICATION_LIMITS,
+    /**
+     * The reader's username in a store, which the Mentions only mode matches
+     * in message text; `null` when it is not known, and then no message
+     * matches.
+     */
+    private username: (
+      storeId: string,
+      scope: ChatScope,
+    ) => string | null = () => null,
   ) {
     this.admission = notificationAdmission(bridge);
     this.timer = new DeadlineTimer(clock, () => this.scan());
@@ -152,6 +161,24 @@ export class NotificationConsumer {
       if (!this.jobs.has(record.key) && !this.queued.has(record.key))
         return record;
   }
+  /** The alert mode the local settings give a channel in `view`. */
+  private mode(view: NotificationView, channel: string): AlertChoice {
+    return channelAlerts(this.session.settings, view.scope, channel, view.muted)
+      .mode;
+  }
+  /**
+   * A channel's view, with `preference` false when its alert mode is none:
+   * its own mode, a mute or its team's default can each say so.
+   */
+  private view(
+    entry: Parameters<typeof notificationView>[0],
+    channel: string,
+  ): NotificationView | undefined {
+    const view = notificationView(entry, channel);
+    return view && this.mode(view, channel) === 'none'
+      ? { ...view, preference: false }
+      : view;
+  }
   private current(p: Progress): boolean {
     if (
       this.stopped ||
@@ -160,14 +187,10 @@ export class NotificationConsumer {
       this.progress.get(p.key) !== p
     )
       return false;
-    if (p.preference && this.session.settings.overrides[p.preference] === false)
-      return false;
-    const next = notificationView(
-      this.service.getSnapshot().get(p.id),
-      p.channel,
-    );
+    const next = this.view(this.service.getSnapshot().get(p.id), p.channel);
     return (
       !!next &&
+      next.preference &&
       next.fresh &&
       next.eligible &&
       sameScope(next.scope, p.view.scope) &&
@@ -194,12 +217,7 @@ export class NotificationConsumer {
       now = this.clock.now();
     let invalidated = false;
     for (const p of this.progress.values()) {
-      const next = notificationView(
-        snapshot.get(p.id),
-        p.channel,
-        !p.preference ||
-          this.session.settings.overrides[p.preference] !== false,
-      );
+      const next = this.view(snapshot.get(p.id), p.channel);
       const change = classifyNotificationChange(p.view, next);
       if (
         !this.session.available ||
@@ -211,10 +229,7 @@ export class NotificationConsumer {
         invalidated = true;
         continue;
       }
-      const disabled =
-        !!p.preference &&
-        this.session.settings.overrides[p.preference] === false;
-      if (disabled) {
+      if (!next!.preference) {
         invalidated ||= !p.locallyDisabled;
         p.locallyDisabled = true;
         p.baseline = null;
@@ -279,8 +294,8 @@ export class NotificationConsumer {
             deferred = true;
             break;
           }
-          const view = notificationView(entry, channel.id);
-          if (!view?.eligible || !view.fresh) continue;
+          const view = this.view(entry, channel.id);
+          if (!view?.eligible || !view.fresh || !view.preference) continue;
           const key = channelWorkKey(id, view.scope, channel.id);
           if (this.jobs.has(key) || this.queued.has(key)) continue;
           let p = this.progress.get(key);
@@ -476,8 +491,6 @@ export class NotificationConsumer {
       p.dirty = p.dirtyDuringFlight || p.view.revision !== revision;
     };
     try {
-      p.preference = await notificationKey(p.view.scope, p.channel);
-      if (!current()) return;
       // A baseline is the sequence this channel stood at when watching began,
       // and a full history read establishes it as the newest sequence the
       // first page carries. The projection already states that number: the
@@ -573,13 +586,27 @@ export class NotificationConsumer {
         bytes += size;
         bounded.push(m);
       }
-      const candidates = incoming(
+      let candidates = incoming(
         bounded,
         baseline,
         upper,
         p.view.scope.actor,
         (id) => messageVisible(p.id, p.channel, id),
       );
+      if (this.mode(p.view, p.channel) === 'mentions') {
+        const username = this.username(p.id, p.view.scope);
+        candidates = candidates.filter(
+          (m) =>
+            !!username &&
+            m.content.kind === 'text' &&
+            mentionsReader(
+              Array.from(m.content.text)
+                .slice(0, CHAT_NOTIFICATION_TEXT_CHARS)
+                .join(''),
+              username,
+            ),
+        );
+      }
       if (!current()) return;
       commit(upper);
       this.metric({

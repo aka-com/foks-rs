@@ -4,6 +4,8 @@ import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { cancelled } from '../src/chat/client';
 import { ChannelCreationController } from '../src/chat/channel-creation';
 import { ChatInboxService } from '../src/chat/inbox-service';
+import { notificationKey } from '../src/chat/local-contract';
+import { teamUnread } from '../src/chat/unread';
 import type { ChatClock } from '../src/chat/clock';
 import type { ChatInboxTiming } from '../src/chat/inbox-service';
 import type { Bridge } from '../src/bridge';
@@ -1220,6 +1222,51 @@ test('a confirmed read publishes locally, is a floor, and costs no synchronizati
     const settled = f.service.getSnapshot().get('t0')!;
     assert.equal(settled.data?.conversations[0]?.read_through, '3');
     assert.equal(settled.data?.conversations[0]?.unread, '2');
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('a channel muted on this device is published muted and leaves the team total, without changing the service state', async () => {
+  const f = fixture(2);
+  f.inbox.channels = ['c0', 'c1'];
+  f.inbox.position = 4;
+  try {
+    await f.clock.advance(500);
+    const plain = f.service.getSnapshot();
+    const scope = plain.get('t0')!.scope!;
+    const conversation = (channel: string) =>
+      f.service
+        .getSnapshot()
+        .get('t0')!
+        .data!.conversations.find((c) => c.channel.id === channel)!;
+    assert.equal(teamUnread(plain.get('t0'))?.label, '8');
+    let publications = 0;
+    const off = f.service.subscribe(() => publications++);
+    f.service.setLocalMutes([notificationKey(scope, 'c1')]);
+    assert.equal(publications, 1);
+    const muted = f.service.getSnapshot();
+    assert.equal(conversation('c1').muted, true);
+    assert.equal(conversation('c0').muted, false);
+    assert.equal(teamUnread(muted.get('t0'))?.label, '4');
+    // The same channel id in another team is another key, and an entry the
+    // mute does not touch is published as it was.
+    assert.equal(muted.get('t1'), plain.get('t1'));
+    // An unchanged set publishes nothing and keeps the snapshot.
+    f.service.setLocalMutes([notificationKey(scope, 'c1')]);
+    assert.equal(publications, 1);
+    assert.equal(f.service.getSnapshot(), muted);
+    // A local publication and a synchronization keep the mute.
+    f.service.applyRead('t0', 'c1', '1');
+    assert.equal(conversation('c1').muted, true);
+    assert.equal(conversation('c1').unread, '3');
+    f.service.invalidate('t0');
+    await f.clock.advance(500);
+    assert.equal(conversation('c1').muted, true);
+    f.service.setLocalMutes([]);
+    assert.equal(conversation('c1').muted, false);
+    assert.equal(teamUnread(f.service.getSnapshot().get('t0'))?.label, '8');
+    off();
   } finally {
     f.service.stop();
   }

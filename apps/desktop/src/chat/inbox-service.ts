@@ -10,6 +10,7 @@ import { GeometricInterval, SYNC_RETRY, retryDelay } from './backoff';
 import { systemChatClock } from './clock';
 import { DeadlineTimer } from './deadline-timer';
 import { ChatHistoryCache } from './history-cache';
+import { notificationKey } from './local-contract';
 import {
   accountKey,
   teamIdentity,
@@ -226,7 +227,83 @@ export class ChatInboxService {
   ) {
     this.timer = new DeadlineTimer(clock, () => this.drain());
   }
-  getSnapshot = () => this.snapshot;
+  /** The channel keys muted on this device; see `setLocalMutes`. */
+  private localMutes: ReadonlySet<string> = readonlySet([]);
+  private published?: {
+    from: ReadonlyMap<string, TeamInbox>;
+    mutes: ReadonlySet<string>;
+    view: ReadonlyMap<string, TeamInbox>;
+  };
+  private mutedEntries = new WeakMap<
+    TeamInbox,
+    { mutes: ReadonlySet<string>; entry: TeamInbox }
+  >();
+  /**
+   * The published projection: every team's inbox, with `muted` also set on
+   * the conversations muted on this device. The pinned protocol cannot set a
+   * channel's `muted`, so a mute is local, and the unread totals, captions,
+   * announcements and alerts that read the flag follow it without changes of
+   * their own. The service's own state keeps the server's values, so a
+   * synchronization or an unmute never has to undo a local mute.
+   */
+  getSnapshot = (): ReadonlyMap<string, TeamInbox> => {
+    const published = this.published;
+    if (
+      published?.from === this.snapshot &&
+      published.mutes === this.localMutes
+    )
+      return published.view;
+    const view = this.localMutes.size
+      ? readonlyMap(
+          Array.from(this.snapshot, ([id, entry]) => [
+            id,
+            this.withLocalMutes(entry),
+          ]),
+        )
+      : this.snapshot;
+    this.published = { from: this.snapshot, mutes: this.localMutes, view };
+    return view;
+  };
+  /**
+   * Sets the channel keys (`notificationKey`) muted on this device and
+   * republishes every team when they changed.
+   */
+  setLocalMutes(keys: Iterable<string>) {
+    const next = new Set(keys);
+    if (
+      next.size === this.localMutes.size &&
+      [...next].every((key) => this.localMutes.has(key))
+    )
+      return;
+    this.localMutes = readonlySet(next);
+    for (const listener of this.listeners) listener();
+  }
+  /** `entry` with the conversations muted on this device marked muted. */
+  private withLocalMutes(entry: TeamInbox): TeamInbox {
+    const known = this.mutedEntries.get(entry);
+    if (known?.mutes === this.localMutes) return known.entry;
+    const { scope, data } = entry;
+    let changed = false;
+    const conversations = (data?.conversations ?? []).map((conversation) => {
+      if (
+        conversation.muted ||
+        !scope ||
+        !this.localMutes.has(notificationKey(scope, conversation.channel.id))
+      )
+        return conversation;
+      changed = true;
+      return freezeDto({ ...conversation, muted: true });
+    });
+    const muted =
+      changed && data
+        ? Object.freeze({
+            ...entry,
+            data: freezeDto({ ...data, conversations }),
+          })
+        : entry;
+    this.mutedEntries.set(entry, { mutes: this.localMutes, entry: muted });
+    return muted;
+  }
   /** Opt-in timings; an observer cannot change what the service does. */
   observe(observer: (event: ChatInboxTiming) => void): () => void {
     this.observers.add(observer);

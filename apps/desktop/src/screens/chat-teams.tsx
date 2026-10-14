@@ -69,6 +69,18 @@ import {
 } from '../chat/presentation';
 import type { ListedChannel } from '../chat/presentation';
 import { useChatInbox } from '../chat/inbox-provider';
+import {
+  alertChoice,
+  notificationKey,
+  storedAlertMode,
+  teamKey,
+} from '../chat/local-contract';
+import type { AlertChoice, LocalAction } from '../chat/local-contract';
+import {
+  ALERT_TITLES,
+  MENTIONS_DETAIL,
+  useLocalAlerts,
+} from '../chat/notification-provider';
 import type { TeamInbox } from '../chat/inbox-service';
 import { useChatSendService } from '../chat/send-provider';
 import { markChannelRead } from '../chat/mark-read';
@@ -461,6 +473,7 @@ export function ChatTeamColumn({
       .filter(Boolean),
   );
   const toasts = useOptionalToast();
+  const alerts = useLocalAlerts();
   const { controller } = useChannelCreation();
   const [context, setContext] = useState<{
     x: number;
@@ -575,6 +588,46 @@ export function ChatTeamColumn({
         tone: 'warning',
       });
     });
+  };
+  // Mute and the team's alert default are device-local settings, keyed by
+  // the scope the team's inbox was synchronized under.
+  const contextScope = contextRow?.entry?.scope;
+  const localSettings = alerts?.session?.settings;
+  const localReason = !contextScope
+    ? 'Chat is unavailable for this team.'
+    : !localSettings
+      ? 'Local settings are loading.'
+      : undefined;
+  const contextMuted =
+    !!contextScope &&
+    !!context?.channel &&
+    !!localSettings?.muted.includes(
+      notificationKey(contextScope, context.channel),
+    );
+  const teamMode = contextScope
+    ? localSettings?.teams[teamKey(contextScope)]
+    : undefined;
+  const contextTeamMode: AlertChoice | 'inherit' =
+    teamMode === undefined ? 'inherit' : alertChoice(teamMode);
+  const configureLocal = (
+    change: Pick<
+      Extract<LocalAction, { action: 'configure' }>,
+      'channel' | 'muted' | 'mode'
+    >,
+    failed: string,
+  ) => {
+    const team = contextRow?.store.id;
+    if (!alerts || !team || !contextScope) return;
+    void alerts
+      .configure({
+        action: 'configure',
+        storeId: team,
+        scope: contextScope,
+        ...change,
+      })
+      .then((error) => {
+        if (error) toasts?.show(`${failed} ${error}`, { tone: 'warning' });
+      });
   };
   const createReason = !controller
     ? 'Channel creation is unavailable in this window.'
@@ -888,6 +941,32 @@ export function ChatTeamColumn({
                     Mark as read
                   </MenuItem>
                 )}
+                {alerts && (
+                  <MenuItem
+                    icon={contextMuted ? 'bell' : 'bellOff'}
+                    title="Applies to this device only"
+                    reason={
+                      contextChannel
+                        ? localReason
+                        : 'This channel is no longer available.'
+                    }
+                    // Like Mark as read, this leaves the reader in the column.
+                    onClick={() => {
+                      dismissContext();
+                      const title = contextChannel
+                        ? channelTitle(contextChannel.channel)
+                        : 'The channel';
+                      configureLocal(
+                        { channel: context.channel, muted: !contextMuted },
+                        contextMuted
+                          ? `${title} was not unmuted.`
+                          : `${title} was not muted.`,
+                      );
+                    }}
+                  >
+                    {contextMuted ? 'Unmute channel' : 'Mute channel'}
+                  </MenuItem>
+                )}
                 <MenuItem
                   icon="info"
                   reason={
@@ -919,6 +998,30 @@ export function ChatTeamColumn({
                 >
                   Go to team
                 </MenuItem>
+                {alerts && contextRow && (
+                  <TeamAlertItems
+                    team={contextRow.store.name}
+                    value={contextTeamMode}
+                    reason={
+                      localReason ??
+                      (localSettings && !alerts.session?.available
+                        ? 'Desktop alerts are unavailable in this build.'
+                        : undefined)
+                    }
+                    onChoose={(choice) => {
+                      dismissContext();
+                      configureLocal(
+                        {
+                          mode:
+                            choice === 'inherit'
+                              ? null
+                              : storedAlertMode(choice),
+                        },
+                        `Alerts for ${contextRow.store.name} were not changed.`,
+                      );
+                    }}
+                  />
+                )}
               </>
             ) : (
               <MenuItem
@@ -980,6 +1083,65 @@ function channelUnreadTotal(channels: readonly ListedChannel[]): number {
     const count = channelCount(listed);
     return count ? sum + Number(count) : sum;
   }, 0);
+}
+
+/**
+ * A team menu's alert default: the mode its channels without their own take
+ * on this device, as radio items, so each choice is one arrow key away.
+ */
+function TeamAlertItems({
+  team,
+  value,
+  reason,
+  onChoose,
+}: {
+  team: string;
+  value: AlertChoice | 'inherit';
+  /** Why the choices do not apply, when they do not. */
+  reason?: string;
+  onChoose: (choice: AlertChoice | 'inherit') => void;
+}): ReactNode {
+  const descriptionId = useId();
+  const choices = [
+    ['inherit', 'Device setting'],
+    ['all', ALERT_TITLES.all],
+    ['mentions', ALERT_TITLES.mentions],
+    ['none', ALERT_TITLES.none],
+  ] as const;
+  return (
+    <>
+      <div className="menu-separator" role="separator" />
+      <div className="cap" role="presentation">
+        Alerts for {team}
+      </div>
+      {choices.map(([choice, title]) => (
+        <button
+          type="button"
+          key={choice}
+          className="chat-team-alert"
+          role="menuitemradio"
+          aria-checked={value === choice}
+          aria-disabled={reason ? true : undefined}
+          aria-describedby={reason ? descriptionId : undefined}
+          title={
+            reason ??
+            (choice === 'mentions'
+              ? MENTIONS_DETAIL
+              : 'For channels without their own setting, on this device')
+          }
+          onClick={reason ? undefined : () => onChoose(choice)}
+        >
+          <Icon name="check" />
+          {title}
+        </button>
+      ))}
+      {reason ? (
+        <span id={descriptionId} className="offscreen">
+          {reason}
+        </span>
+      ) : null}
+    </>
+  );
 }
 
 /**

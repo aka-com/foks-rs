@@ -8,6 +8,7 @@
 
 import type { IconNode } from 'lucide';
 import Bell from 'lucide/dist/esm/icons/bell.mjs';
+import BellOff from 'lucide/dist/esm/icons/bell-off.mjs';
 import Check from 'lucide/dist/esm/icons/check.mjs';
 import ChevronDown from 'lucide/dist/esm/icons/chevron-down.mjs';
 import ChevronRight from 'lucide/dist/esm/icons/chevron-right.mjs';
@@ -92,6 +93,7 @@ export const FOKS_ICONS = {
   door: DoorOpen,
   chat: MessageSquare,
   bell: Bell,
+  bellOff: BellOff,
   send: Send,
   panelLeftClose: PanelLeftClose,
   panelLeftOpen: PanelLeftOpen,

@@ -78,12 +78,15 @@
 .chat-sort-menu {
   min-width: 240px;
 }
-/* The check marks the chosen order and the previews switch; the glyph keeps
-   its place on the others so the labels stay aligned. */
-.chat-sort-menu [aria-checked='false'] > .ic {
+/* The check marks the chosen order and the previews switch, and a team's
+   alert default; the glyph keeps its place on the others so the labels stay
+   aligned. */
+.chat-sort-menu [aria-checked='false'] > .ic,
+.chat-team-alert[aria-checked='false'] > .ic {
   visibility: hidden;
 }
-.chat-sort-menu [aria-checked='true'] > .ic {
+.chat-sort-menu [aria-checked='true'] > .ic,
+.chat-team-alert[aria-checked='true'] > .ic {
   color: var(--accent-ink);
 }
 .chat-inbox-add {
@@ -874,6 +877,21 @@
   margin: 8px 14px 0;
   font-size: 12px;
   line-height: 1.45;
+  color: var(--muted);
+}
+
+.chat-info-mute {
+  cursor: pointer;
+}
+.chat-info-mute input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.chat-info-mute:has(input:disabled) {
+  cursor: default;
   color: var(--muted);
 }
 

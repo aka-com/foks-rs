@@ -12,7 +12,10 @@ import {
   type RefObject,
 } from 'react';
 import { Button, Chip, Icon } from '../components';
-import { NotificationSettings } from '../chat/notification-provider';
+import {
+  ChannelMuteSetting,
+  NotificationSettings,
+} from '../chat/notification-provider';
 import { channelLabel } from '../chat/presentation';
 import {
   channelAudience,
@@ -286,7 +289,21 @@ export function ChannelInfoPanel({
                 noteIcon="alert"
               />
             </div>
+            {scope && (
+              <ChannelMuteSetting
+                storeId={store.id}
+                scope={scope}
+                channel={channel.id}
+              />
+            )}
           </div>
+          {scope && (
+            <p className="chat-info-aside chat-info-mute-note">
+              Mute applies to this device only. A muted channel is left out of
+              the team and Chat unread counts, and raises no alerts unless its
+              Alerts setting is its own.
+            </p>
+          )}
         </>
       )}
       {rosterFailure && (

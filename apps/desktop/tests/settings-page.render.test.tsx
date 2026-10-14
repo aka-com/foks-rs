@@ -1388,7 +1388,13 @@ test('device notification preferences are reachable without a channel and recove
         return {
           epoch: 'aa'.repeat(16),
           available: true,
-          settings: { enabled: false, previews: false, overrides: {} },
+          settings: {
+            enabled: false,
+            previews: false,
+            overrides: {},
+            muted: [],
+            teams: {},
+          },
         };
       },
     }),

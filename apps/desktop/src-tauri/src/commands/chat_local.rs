@@ -8,7 +8,7 @@ use foks_agent_proto::chat::ChatScope;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::{Read, Write},
     sync::Mutex,
 };
@@ -16,12 +16,91 @@ use std::{
 use tauri::Emitter;
 use tauri::{Manager, State};
 
+/// The most entries each keyed setting holds.
+const KEYED_LIMIT: usize = 4096;
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub enabled: bool,
     pub previews: bool,
-    pub overrides: BTreeMap<String, bool>,
+    /// A channel's own alert mode, by channel key.
+    pub overrides: BTreeMap<String, AlertMode>,
+    /// The channels muted on this device, by channel key. A muted channel
+    /// stays out of unread totals, and raises no alerts unless it has its
+    /// own mode in `overrides`.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub muted: BTreeSet<String>,
+    /// A team's default alert mode for its channels without their own, by
+    /// team key.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub teams: BTreeMap<String, AlertMode>,
+}
+/// Which new messages raise a desktop alert. Stored as `true` (all), `false`
+/// (none) or `"mentions"`, so a file written before mentions-only existed,
+/// which holds only the two booleans, still loads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "StoredMode", into = "StoredMode")]
+pub enum AlertMode {
+    All,
+    /// Messages whose text contains `@` and the reader's username. The
+    /// renderer matches the text; the protocol has no mentions.
+    Mentions,
+    None,
+}
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(untagged)]
+enum StoredMode {
+    Flag(bool),
+    Named(NamedMode),
+}
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum NamedMode {
+    Mentions,
+}
+impl From<StoredMode> for AlertMode {
+    fn from(stored: StoredMode) -> Self {
+        match stored {
+            StoredMode::Flag(true) => AlertMode::All,
+            StoredMode::Flag(false) => AlertMode::None,
+            StoredMode::Named(NamedMode::Mentions) => AlertMode::Mentions,
+        }
+    }
+}
+impl From<AlertMode> for StoredMode {
+    fn from(mode: AlertMode) -> Self {
+        match mode {
+            AlertMode::All => StoredMode::Flag(true),
+            AlertMode::None => StoredMode::Flag(false),
+            AlertMode::Mentions => StoredMode::Named(NamedMode::Mentions),
+        }
+    }
+}
+impl Settings {
+    /// The alert mode that applies to a channel: its own, else none while it
+    /// is muted, else its team's default, else every message.
+    fn alert_mode(&self, scope: &ChatScope, channel: &str) -> AlertMode {
+        let key = key(scope, channel);
+        if let Some(mode) = self.overrides.get(&key) {
+            return *mode;
+        }
+        if self.muted.contains(&key) {
+            return AlertMode::None;
+        }
+        self.teams
+            .get(&team_key(scope))
+            .copied()
+            .unwrap_or(AlertMode::All)
+    }
+}
+/// Distinguishes a field sent as `null` (`Some(None)`) from one left out
+/// (`None`, through `#[serde(default)]`).
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(deserializer).map(Some)
 }
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
@@ -37,8 +116,13 @@ pub enum Action {
         #[serde(rename = "storeId")]
         store_id: Option<String>,
         scope: Option<ChatScope>,
+        /// The channel to configure; without it, `mode` is the team default.
         channel: Option<String>,
-        mode: Option<bool>,
+        /// `null` removes the channel's own mode or the team default; left
+        /// out, the mode is unchanged.
+        #[serde(default, deserialize_with = "present")]
+        mode: Option<Option<AlertMode>>,
+        muted: Option<bool>,
     },
     TakeActivation,
     Clear {
@@ -91,6 +175,43 @@ fn key(scope: &ChatScope, channel: &str) -> String {
         digest(&[&scope.store.profile]),
         digest(&[&scope.host, &scope.actor, &scope.store.team_id, channel])
     )
+}
+/// A team's key. Its second digest covers three parts where a channel key's
+/// covers four, so the two cannot coincide.
+fn team_key(scope: &ChatScope) -> String {
+    format!(
+        "{}/{}",
+        digest(&[&scope.store.profile]),
+        digest(&[&scope.host, &scope.actor, &scope.store.team_id])
+    )
+}
+/// A key as `key` and `team_key` write it: two lowercase SHA-256 hex digests
+/// joined by `/`.
+fn valid_key(k: &str) -> bool {
+    k.len() == 129
+        && k.as_bytes()[64] == b'/'
+        && k.bytes()
+            .enumerate()
+            .all(|(i, c)| i == 64 || c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+/// Sets (`Some`) or removes (`None`) a keyed alert mode, within the bound.
+fn set_keyed(
+    modes: &mut BTreeMap<String, AlertMode>,
+    key: String,
+    mode: Option<AlertMode>,
+) -> Result<(), AgentError> {
+    match mode {
+        Some(mode) => {
+            if !modes.contains_key(&key) && modes.len() >= KEYED_LIMIT {
+                return Err(error("Local channel setting limit reached."));
+            }
+            modes.insert(key, mode);
+        }
+        None => {
+            modes.remove(&key);
+        }
+    }
+    Ok(())
 }
 fn epoch() -> Result<String, AgentError> {
     let mut bytes = [0u8; 16];
@@ -146,15 +267,15 @@ fn load(path: &std::path::Path) -> Result<Settings, AgentError> {
     }
     let settings: Settings =
         serde_json::from_slice(&bytes).map_err(|_| error("Local settings are invalid."))?;
-    if settings.overrides.len() > 4096
-        || settings.overrides.keys().any(|k| {
-            k.len() != 129
-                || k.as_bytes()[64] != b'/'
-                || !k
-                    .bytes()
-                    .enumerate()
-                    .all(|(i, c)| i == 64 || c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-        })
+    if settings.overrides.len() > KEYED_LIMIT
+        || settings.muted.len() > KEYED_LIMIT
+        || settings.teams.len() > KEYED_LIMIT
+        || !settings
+            .overrides
+            .keys()
+            .chain(&settings.muted)
+            .chain(settings.teams.keys())
+            .all(|k| valid_key(k))
     {
         return Err(error("Local settings are invalid."));
     }
@@ -300,6 +421,7 @@ pub async fn chat_local(
             scope,
             channel,
             mode,
+            muted,
         } => {
             inner.generation = None;
             inner.routes.clear();
@@ -312,21 +434,37 @@ pub async fn chat_local(
                 settings.previews = value;
             }
             if let Some(scope) = scope {
-                let ch = channel.ok_or_else(|| error("A channel is required."))?;
-                if !foks_agent_proto::chat::valid_chat_id(&ch) {
-                    return Err(error("Invalid channel."));
-                }
                 // Revalidate the catalog binding rather than accepting an alias-only key.
                 let id = store_id.ok_or_else(|| error("A verified store is required."))?;
                 verify_scope(&state, &inner, &id, &scope)?;
-                let key = key(&scope, &ch);
-                if let Some(value) = mode {
-                    if !settings.overrides.contains_key(&key) && settings.overrides.len() >= 4096 {
-                        return Err(error("Local channel setting limit reached."));
+                if let Some(ch) = channel {
+                    if !foks_agent_proto::chat::valid_chat_id(&ch) {
+                        return Err(error("Invalid channel."));
                     }
-                    settings.overrides.insert(key, value);
+                    let key = key(&scope, &ch);
+                    if let Some(mode) = mode {
+                        set_keyed(&mut settings.overrides, key.clone(), mode)?;
+                    }
+                    match muted {
+                        Some(true) => {
+                            if !settings.muted.contains(&key) && settings.muted.len() >= KEYED_LIMIT
+                            {
+                                return Err(error("Local channel setting limit reached."));
+                            }
+                            settings.muted.insert(key);
+                        }
+                        Some(false) => {
+                            settings.muted.remove(&key);
+                        }
+                        None => {}
+                    }
                 } else {
-                    settings.overrides.remove(&key);
+                    if muted.is_some() {
+                        return Err(error("A channel is required."));
+                    }
+                    if let Some(mode) = mode {
+                        set_keyed(&mut settings.teams, team_key(&scope), mode)?;
+                    }
                 }
             }
             save(&path(app)?, &settings)?;
@@ -357,7 +495,7 @@ pub async fn chat_local(
             {
                 return Err(error("Invalid local alert."));
             }
-            if inner.settings.overrides.get(&key(&scope, &channel)) == Some(&false) {
+            if inner.settings.alert_mode(&scope, &channel) == AlertMode::None {
                 return Err(error("Channel alerts are disabled."));
             }
             if inner.routes.len() >= 64 {
@@ -468,8 +606,10 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        s.overrides
-            .insert(format!("{}/{}", "a".repeat(64), "b".repeat(64)), false);
+        s.overrides.insert(
+            format!("{}/{}", "a".repeat(64), "b".repeat(64)),
+            AlertMode::None,
+        );
         save(&p, &s).unwrap();
         assert!(load(&p).unwrap().enabled);
         assert_eq!(load(&p).unwrap().overrides, s.overrides);
@@ -479,6 +619,126 @@ mod tests {
         )
         .unwrap();
         assert!(load(&p).is_err());
+    }
+
+    fn test_scope(team: &str) -> ChatScope {
+        ChatScope {
+            host: "02".to_owned() + &"ab".repeat(32),
+            actor: "01".to_owned() + &"ab".repeat(32),
+            store: foks_agent_proto::TeamStoreRef {
+                profile: "chat".into(),
+                account_alias: "owner".into(),
+                team_alias: "team".into(),
+                team_id: team.into(),
+            },
+        }
+    }
+
+    #[test]
+    fn settings_from_before_mute_load_and_stay_readable_by_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s");
+        let channel = key(&test_scope("t"), "c");
+        std::fs::write(
+            &p,
+            format!(
+                "{{\"enabled\":true,\"previews\":false,\"overrides\":{{\"{channel}\":false}}}}"
+            ),
+        )
+        .unwrap();
+        let loaded = load(&p).unwrap();
+        assert_eq!(loaded.overrides.get(&channel), Some(&AlertMode::None));
+        assert!(loaded.muted.is_empty() && loaded.teams.is_empty());
+        // Without a mute or a team default the file keeps the earlier shape.
+        save(&p, &loaded).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        assert_eq!(
+            written,
+            serde_json::json!({"enabled": true, "previews": false, "overrides": {channel.clone(): false}})
+        );
+        let mut settings = loaded;
+        settings
+            .overrides
+            .insert(channel.clone(), AlertMode::Mentions);
+        settings.muted.insert(channel.clone());
+        settings
+            .teams
+            .insert(team_key(&test_scope("t")), AlertMode::All);
+        save(&p, &settings).unwrap();
+        let reloaded = load(&p).unwrap();
+        assert_eq!(reloaded.overrides.get(&channel), Some(&AlertMode::Mentions));
+        assert!(reloaded.muted.contains(&channel));
+        assert_eq!(reloaded.teams.len(), 1);
+        std::fs::write(
+            &p,
+            b"{\"enabled\":true,\"previews\":false,\"overrides\":{},\"muted\":[\"alias\"]}",
+        )
+        .unwrap();
+        assert!(load(&p).is_err());
+        std::fs::write(
+            &p,
+            format!(
+                "{{\"enabled\":true,\"previews\":false,\"overrides\":{{\"{channel}\":\"some\"}}}}"
+            ),
+        )
+        .unwrap();
+        assert!(load(&p).is_err());
+        let many: Vec<String> = (0..=KEYED_LIMIT)
+            .map(|i| key(&test_scope("t"), &i.to_string()))
+            .collect();
+        std::fs::write(
+            &p,
+            serde_json::to_vec(&serde_json::json!({"enabled": true, "previews": false, "overrides": {}, "muted": many}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(load(&p).is_err());
+    }
+
+    #[test]
+    fn channel_mode_then_mute_then_team_default_decides_alerts() {
+        let (scope, other) = (test_scope("t"), test_scope("u"));
+        let mut settings = Settings::default();
+        assert_eq!(settings.alert_mode(&scope, "c"), AlertMode::All);
+        settings.teams.insert(team_key(&scope), AlertMode::Mentions);
+        assert_eq!(settings.alert_mode(&scope, "c"), AlertMode::Mentions);
+        assert_eq!(settings.alert_mode(&other, "c"), AlertMode::All);
+        // A muted channel raises no alerts unless it has its own mode.
+        settings.muted.insert(key(&scope, "c"));
+        assert_eq!(settings.alert_mode(&scope, "c"), AlertMode::None);
+        assert_eq!(settings.alert_mode(&scope, "d"), AlertMode::Mentions);
+        settings.overrides.insert(key(&scope, "c"), AlertMode::All);
+        assert_eq!(settings.alert_mode(&scope, "c"), AlertMode::All);
+        assert_ne!(team_key(&scope), key(&scope, ""));
+    }
+
+    #[test]
+    fn configure_tells_a_cleared_mode_from_an_unchanged_one() {
+        let parse = |value: serde_json::Value| match serde_json::from_value::<Action>(value) {
+            Ok(Action::Configure { mode, muted, .. }) => (mode, muted),
+            _ => panic!("not a configure action"),
+        };
+        assert_eq!(
+            parse(serde_json::json!({"action": "configure", "muted": true})),
+            (None, Some(true))
+        );
+        assert_eq!(
+            parse(serde_json::json!({"action": "configure", "mode": null})),
+            (Some(None), None)
+        );
+        assert_eq!(
+            parse(serde_json::json!({"action": "configure", "mode": "mentions"})),
+            (Some(Some(AlertMode::Mentions)), None)
+        );
+        assert_eq!(
+            parse(serde_json::json!({"action": "configure", "mode": false})),
+            (Some(Some(AlertMode::None)), None)
+        );
+        assert!(serde_json::from_value::<Action>(
+            serde_json::json!({"action": "configure", "mode": "everything"})
+        )
+        .is_err());
     }
 }
 
@@ -535,6 +795,8 @@ pub fn forget_profile(app: &tauri::AppHandle, profile: &str) -> Result<(), Agent
     settings
         .overrides
         .retain(|key, _| !key.starts_with(&prefix));
+    settings.muted.retain(|key| !key.starts_with(&prefix));
+    settings.teams.retain(|key, _| !key.starts_with(&prefix));
     save(&path, &settings)?;
     inner.settings = settings;
     inner.loaded = true;

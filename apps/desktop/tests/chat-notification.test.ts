@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { incoming, notificationText } from '../src/chat/notification-policy';
 import { CHAT_NOTIFICATION_TEXT_CHARS } from '../src/chat-limits';
 import {
+  channelAlerts,
   decodeLocalSession,
   notificationKey,
+  teamKey,
 } from '../src/chat/local-contract';
+import type { LocalSettings } from '../src/chat/local-contract';
+import { sha256Hex } from '../src/chat/sha256';
+import { mentionsReader, readerUsername } from '../src/chat/mentions';
+import type { AgentSnapshot } from '../src/model';
 import type { ChatMessage, ChatScope, ChatTeamRef } from '../src/chat-contract';
 import { decodedChatBridge } from './lib/decoded-chat-bridge';
 // Consumer fakes reply through the native decoder, so every ID has the form
@@ -90,29 +97,115 @@ test('notification bodies are cut to the shared bound in characters, not UTF-16 
   );
   assert.equal(alert.body, '\u{1F600}'.repeat(CHAT_NOTIFICATION_TEXT_CHARS));
 });
-test('local preference keys bind actor, host, team and channel without persisting aliases', async () => {
-  const key = await notificationKey(scope, 'c');
+test('local preference keys bind actor, host, team and channel without persisting aliases', () => {
+  const key = notificationKey(scope, 'c');
   assert.match(key, /^[a-f0-9]{64}\/[a-f0-9]{64}$/);
   for (const changed of [
     { ...scope, actor: 'other' },
     { ...scope, host: 'other' },
     { ...scope, store: { ...scope.store, team_id: 'other' } },
   ])
-    assert.notEqual(await notificationKey(changed, 'c'), key);
-  assert.notEqual(await notificationKey(scope, 'd'), key);
+    assert.notEqual(notificationKey(changed, 'c'), key);
+  assert.notEqual(notificationKey(scope, 'd'), key);
   assert.equal(
-    await notificationKey(
+    notificationKey(
       { ...scope, store: { ...scope.store, account_alias: 'renamed' } },
       'c',
     ),
     key,
   );
+  assert.notEqual(teamKey(scope), key);
+  assert.equal(teamKey(scope).split('/')[0], key.split('/')[0]);
+});
+test('local preference keys are the SHA-256 digests chat_local.rs derives', () => {
+  const digest = (parts: string[]) =>
+    createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+  const { host, actor } = scope;
+  const { profile, team_id } = scope.store;
+  assert.equal(
+    notificationKey(scope, CHANNEL),
+    `${digest([profile])}/${digest([host, actor, team_id, CHANNEL])}`,
+  );
+  assert.equal(
+    teamKey(scope),
+    `${digest([profile])}/${digest([host, actor, team_id])}`,
+  );
+  // Every padding case: one block, the length spilling into a second, and
+  // several blocks.
+  for (let length = 0; length < 300; length++) {
+    const bytes = Uint8Array.from(
+      { length },
+      (_, i) => (i * 31 + length) % 256,
+    );
+    assert.equal(
+      sha256Hex(bytes),
+      createHash('sha256').update(bytes).digest('hex'),
+    );
+  }
+});
+test('a channel alert mode is its own, else none while muted, else its team default', () => {
+  const settings: LocalSettings = {
+    enabled: true,
+    previews: false,
+    overrides: {},
+    muted: [],
+    teams: {},
+  };
+  const other = { ...scope, store: { ...scope.store, team_id: 'other' } };
+  assert.deepEqual(channelAlerts(settings, scope, CHANNEL, false), {
+    mode: 'all',
+    from: 'device',
+  });
+  settings.teams[teamKey(scope)] = 'mentions';
+  assert.deepEqual(channelAlerts(settings, scope, CHANNEL, false), {
+    mode: 'mentions',
+    from: 'team',
+  });
+  assert.equal(channelAlerts(settings, other, CHANNEL, false).mode, 'all');
+  assert.deepEqual(channelAlerts(settings, scope, CHANNEL, true), {
+    mode: 'none',
+    from: 'muted',
+  });
+  settings.overrides[notificationKey(scope, CHANNEL)] = true;
+  assert.deepEqual(channelAlerts(settings, scope, CHANNEL, true), {
+    mode: 'all',
+    from: 'channel',
+  });
+  settings.overrides[notificationKey(scope, CHANNEL)] = false;
+  assert.equal(channelAlerts(settings, scope, CHANNEL, false).mode, 'none');
+});
+test('mentions only matches the reader as an @name, as the renderer draws one', () => {
+  assert.ok(mentionsReader('ping @Priya.N about it', 'priya.n'));
+  assert.ok(mentionsReader('@priya_n.', 'priya.n'));
+  assert.ok(mentionsReader('(@lukasz)', 'Łukasz'));
+  assert.ok(!mentionsReader('priya.n without the sign', 'priya.n'));
+  assert.ok(!mentionsReader('mail priya@priya.n', 'priya.n'));
+  assert.ok(!mentionsReader('@priya.nx', 'priya.n'));
+  assert.ok(!mentionsReader('x@priya.n', 'priya.n'));
+});
+test('mentions only reads the username of the account the scope names on the store server', () => {
+  const snapshot = {
+    stores: [{ id: 's', kind: 'team', server: 'p' }],
+    accounts: [
+      { alias: 'a', server: 'q', username: 'elsewhere' },
+      { alias: 'a', server: 'p', username: 'sam.ortiz' },
+    ],
+  } as unknown as AgentSnapshot;
+  assert.equal(readerUsername(snapshot, 's', 'a'), 'sam.ortiz');
+  assert.equal(readerUsername(snapshot, 's', 'b'), null);
+  assert.equal(readerUsername(snapshot, 'gone', 'a'), null);
 });
 test('local settings decoder rejects invalid persisted identities and invalid flags', () => {
   const base = {
     epoch: 'a'.repeat(32),
     available: false,
-    settings: { enabled: false, previews: false, overrides: {} },
+    settings: {
+      enabled: false,
+      previews: false,
+      overrides: {},
+      muted: [],
+      teams: {},
+    },
   };
   assert.deepEqual(decodeLocalSession(base), base);
   assert.throws(() =>
@@ -127,6 +220,33 @@ test('local settings decoder rejects invalid persisted identities and invalid fl
       settings: { ...base.settings, overrides: { alias: true } },
     }),
   );
+  const key = notificationKey(scope, CHANNEL);
+  // The native settings leave out an empty muted set and team defaults.
+  assert.deepEqual(
+    decodeLocalSession({
+      ...base,
+      settings: { enabled: false, previews: false, overrides: { [key]: true } },
+    }).settings,
+    { ...base.settings, overrides: { [key]: true } },
+  );
+  const full = {
+    ...base,
+    settings: {
+      ...base.settings,
+      overrides: { [key]: 'mentions' },
+      muted: [key],
+      teams: { [teamKey(scope)]: false },
+    },
+  };
+  assert.deepEqual(decodeLocalSession(full), full);
+  for (const settings of [
+    { ...base.settings, overrides: { [key]: 'some' } },
+    { ...base.settings, teams: { [key]: 'all' } },
+    { ...base.settings, muted: ['alias'] },
+    { ...base.settings, muted: [key, key] },
+    { ...base.settings, muted: { [key]: true } },
+  ])
+    assert.throws(() => decodeLocalSession({ ...base, settings }));
 });
 
 test('consumer fakes reject a notification page the agent could not send', async () => {
@@ -216,7 +336,13 @@ test('consumer baselines verified history, filters own messages and never writes
     {
       epoch: 'a'.repeat(32),
       available: true,
-      settings: { enabled: true, previews: false, overrides: {} },
+      settings: {
+        enabled: true,
+        previews: false,
+        overrides: {},
+        muted: [],
+        teams: {},
+      },
     },
     () => {},
   );
@@ -310,7 +436,13 @@ test('consumer advances budgeted passes beyond 64 channels despite an always-fai
     {
       epoch: 'b'.repeat(32),
       available: true,
-      settings: { enabled: true, previews: false, overrides: {} },
+      settings: {
+        enabled: true,
+        previews: false,
+        overrides: {},
+        muted: [],
+        teams: {},
+      },
     },
     () => {},
     undefined,
@@ -383,7 +515,13 @@ test('closing consumer during history discards late authorized plaintext', async
     {
       epoch: 'b'.repeat(32),
       available: true,
-      settings: { enabled: true, previews: false, overrides: {} },
+      settings: {
+        enabled: true,
+        previews: false,
+        overrides: {},
+        muted: [],
+        teams: {},
+      },
     },
     () => {},
   );
@@ -423,7 +561,13 @@ test('activating a notification opens the Chat tab on that team and channel', as
   const session = {
     epoch: 'a'.repeat(32),
     available: true,
-    settings: { enabled: true, previews: false, overrides: {} },
+    settings: {
+      enabled: true,
+      previews: false,
+      overrides: {},
+      muted: [],
+      teams: {},
+    },
   };
   const activation = { storeId: 'team:eng', channel: CHANNEL, scope };
   let taken = false;
@@ -450,6 +594,7 @@ test('activating a notification opens the Chat tab on that team and channel', as
   const service = {
     handleError: () => false,
     openChannel: () => undefined,
+    setLocalMutes: () => {},
     subscribe: () => () => {},
     getSnapshot: () => new Map(),
   };
@@ -474,7 +619,7 @@ test('activating a notification opens the Chat tab on that team and channel', as
   }
 });
 
-test('NotificationProvider builds its consumer on the clock it is given', async () => {
+test('NotificationProvider builds its consumer on the clock it is given and applies local mutes', async () => {
   const { installDom } = await import('./lib/dom-harness');
   installDom({
     url: 'http://localhost/',
@@ -493,11 +638,19 @@ test('NotificationProvider builds its consumer on the clock it is given', async 
   const { NotificationProvider } = (await vite.ssrLoadModule(
     '/src/chat/notification-provider.tsx',
   )) as typeof import('../src/chat/notification-provider');
+  const muted = [notificationKey(scope, CHANNEL)];
   const session = {
     epoch: 'a'.repeat(32),
     available: true,
-    settings: { enabled: true, previews: false, overrides: {} },
+    settings: {
+      enabled: true,
+      previews: false,
+      overrides: {},
+      muted,
+      teams: {},
+    },
   };
+  const mutes: string[][] = [];
   const bridge = {
     chatLocal: async () => session,
     onChatNotification: async () => () => {},
@@ -509,6 +662,7 @@ test('NotificationProvider builds its consumer on the clock it is given', async 
   const service = {
     handleError: () => false,
     openChannel: () => undefined,
+    setLocalMutes: (keys: readonly string[]) => mutes.push([...keys]),
     subscribe: () => () => {},
     getSnapshot: () => new Map(),
   };
@@ -535,6 +689,8 @@ test('NotificationProvider builds its consumer on the clock it is given', async 
       }),
     );
     await ui.waitFor(() => assert.ok(reads.length > 0));
+    // The session's muted set reaches the projection the unread totals read.
+    assert.deepEqual(mutes, [muted]);
   } finally {
     ui.cleanup();
     await vite.close();
@@ -567,7 +723,13 @@ test('notification activation validates the full store binding before navigation
   const response = {
     epoch: 'aa'.repeat(16),
     available: true,
-    settings: { enabled: true, previews: false, overrides: {} },
+    settings: {
+      enabled: true,
+      previews: false,
+      overrides: {},
+      muted: [],
+      teams: {},
+    },
     activation,
   };
   assert.deepEqual(decodeLocalSession(response).activation, activation);

@@ -4,15 +4,19 @@ import { ChatSendProvider } from './send-provider';
 import { ChannelCreationProvider } from './channel-creation-provider';
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useSyncExternalStore,
 } from 'react';
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import type { AgentSnapshot } from '../model';
+import type { ChatScope } from '../chat-contract';
+import { readerUsername } from './mentions';
 import type { ChatClock } from './clock';
 import { ChatInboxService } from './inbox-service';
 import { diagnosticLog } from '../diagnostics/log';
@@ -56,6 +60,18 @@ export function ChatInboxProvider({
   useLayoutEffect(() => {
     service.onCatalogRequired = onCatalogRequired;
   }, [service, onCatalogRequired]);
+  // The reader's username for the Mentions only alert mode, read from the
+  // newest snapshot when an alert is decided, so a snapshot change does not
+  // rebuild the notification consumer.
+  const latest = useRef(snapshot);
+  useLayoutEffect(() => {
+    latest.current = snapshot;
+  }, [snapshot]);
+  const username = useCallback(
+    (storeId: string, scope: ChatScope) =>
+      readerUsername(latest.current, storeId, scope.store.account_alias),
+    [],
+  );
   useLayoutEffect(() => {
     if (enabled)
       service.updateStores(
@@ -114,6 +130,7 @@ export function ChatInboxProvider({
         service={service}
         onNavigate={onNavigate}
         clock={clock}
+        username={username}
       >
         <ChatSendProvider
           enabled={enabled}

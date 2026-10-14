@@ -643,8 +643,9 @@ that server's security keys and its own reset. Passphrase… sits beside Change�
 on the Username row (the sheet defaults to Change and switches to Set or Verify
 in place; an account whose access has stopped explains why the button is
 disabled). Preferences contains Desktop alerts — this device's desktop-alert
-and message-preview preferences, which the desktop persists locally; channel
-overrides stay in Chat's info panel, with a link here, and none of these
+and message-preview preferences, which the desktop persists locally; a
+channel's alert mode and mute stay in Chat's info panel, with a link here, and
+a team's alert default in its menu in the Chat column; none of these
 preferences sync between devices. Device: Application (version, Lock now),
 Agent (status with Retry connection while it is not ready, socket with Copy),
 FOKS data (export, import, verify online, move the data folder) and a danger
@@ -735,7 +736,8 @@ team is a heading — its mark, its name, its server and its member count — ov
 its channels, and the whole heading is the control that folds them: it carries
 `aria-expanded` and `aria-controls`, and the channels are a `group` labeled by
 the team. Folded, the heading carries the total unread count of the channels it
-hides, leaving out hidden and muted ones as the rail's count does. A search
+hides, leaving out hidden and muted ones as the rail's count does; a channel
+muted on this device counts as muted. A search
 unfolds every team while it runs and leaves the folds as they were. A heading
 click on a team with a single channel also opens that channel; the click still
 folds or unfolds the team, and that fold is stored like any other.
@@ -782,12 +784,33 @@ A channel's context menu offers Open channel; Mark as read, while the channel's
 row draws an unread count (a channel of an unreachable team draws none), which
 issues `mark-read` through the send service's request path at the newest
 position the inbox states (`lastPosition`) and applies the confirmed pointer
-the way the open conversation does; and Channel info. Renaming and deleting
+the way the open conversation does; Mute channel or Unmute channel; and
+Channel info. Renaming and deleting
 channels are not offered until channel management ships. Copying a link to a
 channel is not offered either: the app registers no URL scheme, and an in-app
 location names local store references that mean nothing on another
-installation. A team's menu offers Go to team and the add-people actions; the
-column's background offers New channel. The menu opens at the pointer, or at a
+installation. A team's menu offers Go to team, the team's alert default on this
+device as four radio items (Device setting, All new messages, Mentions only,
+None) and the add-people actions; the column's background offers New channel.
+
+A mute is kept on this device, in the native local settings beside the alert
+modes (`chat_local.rs`): the pinned server always reports a conversation's
+`muted` and `hidden` as false and the protocol has no request that sets them.
+The settings hold a set of muted channel keys and a team default per team key,
+each a pair of SHA-256 digests (`notificationKey` and `teamKey` in
+`local-contract.ts`), so the file names no alias, channel or team; each holds at
+most 4,096 entries, as the per-channel alert modes do. `ChatInboxService`
+publishes `muted` as the server's flag or this device's mute, so the row's
+dimmed look and "Muted" caption, the team and rail counts, the Alt+Shift
+steps and the screen-reader announcements follow a mute without changes of
+their own; its own state keeps the server's value. A channel's alert mode is
+its own when it has one (All new messages, Mentions only or None), else None
+while it is muted, else its team's default, else every message; the native
+side refuses a desktop alert by the same order, from the mutes it stores. Mentions only alerts for a
+message whose first 256 characters contain `@` and the reader's username at
+the word boundaries the message renderer draws a mention at, compared as
+`mentionKey` compares names. It is a text match on this device, not a protocol
+mention, which the pinned protocol does not have; a sender can write any name. The menu opens at the pointer, or at a
 focused channel row or team heading with the ContextMenu key or Shift+F10;
 dismissing it, or marking a channel read, returns focus to that row.
 
@@ -927,8 +950,9 @@ controls. The team column remains visible to allow navigating away at any time. 
 Who can read and Who can post ("Admins and owners", "Everyone on the team",
 "Members at visibility level 1 and above"); Readers, each with an avatar, the
 shell's `roleName` (never the band) and "can post" or "read only"; the
-per-device alert settings that used to be a strip above every thread; and
-"Manage in Teams". A channel that every team user can read folds its readers
+per-device alert mode, whose Default choice states the mode it gives and why
+("None while the channel is muted", "Mentions only, the team default"), and
+the Mute channel switch; and "Manage in Teams". A channel that every team user can read folds its readers
 behind one All members row; any other lists them and names the team users who
 cannot read it.
 
@@ -945,8 +969,8 @@ channel leads its header line with its reader count ("3 readers"). While the
 roster has not arrived, or after its load failed, no count is drawn, and the
 sentence states the read role alone ("Only the admins and owners of
 Engineering can read it."). Leaving,
-muting, renaming and deleting a channel have no `ChatAction`, so the panel
-does not draw them.
+renaming and deleting a channel have no `ChatAction`, so the panel does not
+draw them; the mute it offers is this device's.
 
 The composer exposes text entry and delivery actions. Attachments, an emoji
 picker and message expiry are omitted until supported. A hint line under the
@@ -1192,7 +1216,8 @@ instead, so the wait always has something behind it.
 Four things the chat redesign drafts showed are deliberately not built, because
 no `ChatAction` reaches them: reactions, "Retry all" and "Discard" over every
 pending operation at once (one attempt per operation is the rule the recovery
-model keeps), Leave / Delete / Mute / Edit description in the ⓘ panel, and a
+model keeps), Leave / Delete / Edit description in the ⓘ panel (Mute is
+there, as a setting on this device), and a
 "Join a team" button, which has no FOKS equivalent
 — a team arrives through an invitation or a per-server check for groups, both
 of which live in Teams, so the column's foot keeps the one "Create or join a

@@ -18,33 +18,13 @@ import {
   classifyNotificationChange,
   notificationView,
 } from '../src/chat/notification-changes';
-import { notificationKey } from '../src/chat/local-contract';
+import { notificationKey, teamKey } from '../src/chat/local-contract';
 import type { LocalSession } from '../src/chat/local-contract';
 
 Object.defineProperty(globalThis, 'document', {
   value: { visibilityState: 'hidden', hasFocus: () => false },
   configurable: true,
 });
-// Track real preference hashes so draining waits for the work the consumer
-// started, rather than submitting dummy WebCrypto work on every clock tick.
-const hashes = new Set<Promise<ArrayBuffer>>();
-const digest = crypto.subtle.digest.bind(crypto.subtle);
-test.before(() => {
-  test.mock.method(
-    crypto.subtle,
-    'digest',
-    (...args: Parameters<typeof digest>) => {
-      const pending = digest(...args);
-      hashes.add(pending);
-      void pending.then(
-        () => hashes.delete(pending),
-        () => hashes.delete(pending),
-      );
-      return pending;
-    },
-  );
-});
-test.after(() => test.mock.restoreAll());
 class Clock implements ChatClock {
   time = 0;
   next = 0;
@@ -66,12 +46,8 @@ class Clock implements ChatClock {
   async flush() {
     for (let round = 0; round < 10_000; round++) {
       this.run();
-      await Promise.all([...hashes]);
       await new Promise<void>((resolve) => setImmediate(resolve));
-      if (
-        hashes.size === 0 &&
-        ![...this.timers.values()].some((timer) => timer.due <= this.time)
-      )
+      if (![...this.timers.values()].some((timer) => timer.due <= this.time))
         return;
     }
     assert.fail('notification work did not settle at the current clock time');
@@ -205,7 +181,13 @@ function setup(initial = entry()) {
   const session: LocalSession = {
     epoch: 'aa'.repeat(16),
     available: true,
-    settings: { enabled: true, previews: false, overrides: {} },
+    settings: {
+      enabled: true,
+      previews: false,
+      overrides: {},
+      muted: [],
+      teams: {},
+    },
   };
   function update(patch: Partial<TeamInbox>) {
     snapshot = new Map([['store', { ...snapshot.get('store')!, ...patch }]]);
@@ -213,6 +195,7 @@ function setup(initial = entry()) {
   }
   const make = (
     limits: { queued: number; baselines: number } = NOTIFICATION_LIMITS,
+    username?: (storeId: string, scope: ChatScope) => string | null,
   ) =>
     new NotificationConsumer(
       bridge,
@@ -222,6 +205,7 @@ function setup(initial = entry()) {
       clock,
       (e) => events.push(e),
       limits,
+      username,
     );
   return {
     clock,
@@ -406,13 +390,13 @@ test('overflow rotates beyond 64 entries and retry backoff is local to the faile
 });
 test('local disable remains suppressed without rebaseline loops and reenable starts fresh', async () => {
   const f = setup(entry(['a']));
-  f.session.settings.overrides[await notificationKey(scope, 'a')] = false;
+  f.session.settings.overrides[notificationKey(scope, 'a')] = false;
   const c = f.make();
   try {
     await f.clock.flush();
     await f.clock.advance(30000);
     assert.equal(f.calls.length, 0);
-    f.session.settings.overrides[await notificationKey(scope, 'a')] = true;
+    f.session.settings.overrides[notificationKey(scope, 'a')] = true;
     f.update({ revision: 2 });
     await f.clock.flush();
     assert.equal(f.calls.length, 1);
@@ -422,6 +406,150 @@ test('local disable remains suppressed without rebaseline loops and reenable sta
     );
   } finally {
     c.stop();
+  }
+});
+/** `entry` with each conversation row's `muted` flag set as given. */
+function muted(e: TeamInbox, value: boolean): TeamInbox {
+  return {
+    ...e,
+    data: {
+      ...e.data!,
+      conversations: e.data!.conversations.map((c) => ({ ...c, muted: value })),
+    },
+  };
+}
+const displays = (alerts: unknown[]) =>
+  alerts.filter((a) => (a as { action: string }).action === 'display');
+test('a muted channel raises no alerts unless it has its own alert mode', async () => {
+  const f = setup(muted(entry(['a'], scope, 1), true));
+  f.rows.set('a', [message(2), message(1)]);
+  const c = f.make();
+  try {
+    await f.clock.flush();
+    f.update({ channelRevisions: new Map([['a', 2]]) });
+    await f.clock.advance(60_000);
+    assert.deepEqual(f.calls, []);
+    assert.equal(displays(f.alerts).length, 0);
+  } finally {
+    c.stop();
+  }
+  f.session.settings.overrides[notificationKey(scope, 'a')] = true;
+  const d = f.make();
+  try {
+    // The baseline is the row's own head, so the first read is the arrival.
+    await f.clock.flush();
+    f.update({ channelRevisions: new Map([['a', 3]]) });
+    await f.clock.flush();
+    assert.deepEqual(f.calls, ['a']);
+    assert.equal(displays(f.alerts).length, 1);
+  } finally {
+    d.stop();
+  }
+});
+test('muting a channel being watched stops its alerts, and unmuting watches it again', async () => {
+  const f = setup(entry(['a'], scope, 1));
+  // A message arrives: the row's head and the channel's revision move.
+  const arrive = (sequence: number) => {
+    f.rows.set(
+      'a',
+      Array.from({ length: sequence }, (_, i) => message(sequence - i)),
+    );
+    const e = entry(['a'], scope, sequence);
+    f.replace(
+      new Map([
+        [
+          'store',
+          {
+            ...muted(e, f.get().data!.conversations[0].muted),
+            channelRevisions: new Map([['a', sequence]]),
+          },
+        ],
+      ]),
+    );
+  };
+  const c = f.make();
+  try {
+    await f.clock.flush();
+    f.replace(new Map([['store', muted(f.get(), true)]]));
+    await f.clock.flush();
+    arrive(2);
+    await f.clock.advance(60_000);
+    assert.deepEqual(f.calls, []);
+    f.replace(new Map([['store', muted(f.get(), false)]]));
+    await f.clock.flush();
+    // Unmuted, the channel takes a fresh baseline: what arrived while it
+    // was muted does not alert.
+    assert.equal(displays(f.alerts).length, 0);
+    arrive(3);
+    await f.clock.flush();
+    assert.equal(displays(f.alerts).length, 1);
+  } finally {
+    c.stop();
+  }
+});
+test('a team default of none silences its channels; a channel mode overrides it', async () => {
+  const f = setup(entry(['a', 'b'], scope, 1));
+  f.session.settings.teams[teamKey(scope)] = false;
+  f.session.settings.overrides[notificationKey(scope, 'b')] = true;
+  f.rows.set('a', [message(2), message(1)]);
+  f.rows.set('b', [message(2), message(1)]);
+  const c = f.make();
+  try {
+    await f.clock.flush();
+    f.update({
+      channelRevisions: new Map([
+        ['a', 2],
+        ['b', 2],
+      ]),
+    });
+    await f.clock.flush();
+    assert.deepEqual(f.calls, ['b']);
+    assert.equal(displays(f.alerts).length, 1);
+  } finally {
+    c.stop();
+  }
+});
+test('mentions only alerts for messages whose text names the reader', async () => {
+  const f = setup(entry(['a'], scope, 1));
+  f.session.settings.previews = true;
+  f.session.settings.overrides[notificationKey(scope, 'a')] = 'mentions';
+  const text = (sequence: number, value: string): ChatMessage => ({
+    ...message(sequence),
+    content: { kind: 'text', text: value },
+  });
+  f.rows.set('a', [
+    text(4, 'and @Sam.Ortiz, see above'),
+    text(3, 'mail sam.ortiz@example.com'),
+    text(2, 'nothing for sam.ortiz'),
+    message(1),
+  ]);
+  const names: unknown[] = [];
+  const c = f.make(NOTIFICATION_LIMITS, (id, s) => {
+    names.push([id, s.store.account_alias]);
+    return 'sam.ortiz';
+  });
+  try {
+    await f.clock.flush();
+    f.update({ channelRevisions: new Map([['a', 2]]) });
+    await f.clock.flush();
+    assert.deepEqual(names, [['store', 'a']]);
+    assert.deepEqual(
+      displays(f.alerts).map((a) => (a as { body?: string }).body),
+      ['and @Sam.Ortiz, see above'],
+    );
+  } finally {
+    c.stop();
+  }
+  // Without the reader's username nothing matches.
+  const d = f.make();
+  try {
+    await f.clock.flush();
+    f.rows.set('a', [text(5, '@sam.ortiz again'), ...f.rows.get('a')!]);
+    f.update({ channelRevisions: new Map([['a', 3]]) });
+    await f.clock.flush();
+    assert.equal(displays(f.alerts).length, 1);
+  } finally {
+    d.stop();
   }
 });
 test('access loss waits for new authorized projection, then starts a fresh baseline', async () => {

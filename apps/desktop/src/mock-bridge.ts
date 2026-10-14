@@ -1,6 +1,7 @@
 /** A deterministic command bridge for render and browser acceptance tests. */
 
-import { notificationKey } from './chat/local-contract';
+import { notificationKey, teamKey } from './chat/local-contract';
+import type { LocalAlertMode } from './chat/local-contract';
 import { mockInvitations } from './invitation-mock';
 import { mockChat } from './chat-mock';
 import { chatMockScenario } from './chat-mock-scenarios';
@@ -201,7 +202,9 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   const notificationSettings = {
     enabled: false,
     previews: false,
-    overrides: {} as Record<string, boolean>,
+    overrides: {} as Record<string, LocalAlertMode>,
+    muted: new Set<string>(),
+    teams: {} as Record<string, LocalAlertMode>,
   };
   const appLockState = () => ({
     locked: appLocked,
@@ -1012,11 +1015,19 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           notificationSettings.enabled = action.enabled;
         if (action.previews !== undefined)
           notificationSettings.previews = action.previews;
-        if (action.scope && action.channel) {
-          const key = await notificationKey(action.scope, action.channel);
-          if (action.mode === null) delete notificationSettings.overrides[key];
-          else if (action.mode !== undefined)
-            notificationSettings.overrides[key] = action.mode;
+        if (action.scope) {
+          const [key, modes] = action.channel
+            ? [
+                notificationKey(action.scope, action.channel),
+                notificationSettings.overrides,
+              ]
+            : [teamKey(action.scope), notificationSettings.teams];
+          if (action.mode === null) delete modes[key];
+          else if (action.mode !== undefined) modes[key] = action.mode;
+          if (action.channel && action.muted !== undefined) {
+            if (action.muted) notificationSettings.muted.add(key);
+            else notificationSettings.muted.delete(key);
+          }
         }
       }
       return {
@@ -1028,6 +1039,8 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         settings: {
           ...notificationSettings,
           overrides: { ...notificationSettings.overrides },
+          muted: [...notificationSettings.muted],
+          teams: { ...notificationSettings.teams },
         },
       };
     },
