@@ -2,6 +2,7 @@
   "memberRole": { "role": "Member", "visibility": 0 },
   "teamItemCreateAccess": { "readRole": "Member:0", "writeRole": "Admin" },
   "cancelledDownload": { "saved": false },
+  "clipboardCopy": { "ok": true, "clearAfterSeconds": 30 },
   "catalog": {
     "profiles": ["foks.example", "blocked.example"],
     "stores": [

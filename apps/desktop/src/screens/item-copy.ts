@@ -9,7 +9,7 @@ import type { ToastController } from '/kit/toasts';
 import { kindOf } from '../model';
 import type { Item } from '../model';
 import { normalizeCommandError } from '../bridge';
-import type { Bridge, CopyResponse, ItemField } from '../bridge';
+import type { Bridge, ClipboardCopyResponse, ItemField } from '../bridge';
 import { itemRefOf, rememberRecent } from '../recent-favorites';
 
 /** A copy an item offers, labelled for its button and menu item. */
@@ -72,6 +72,17 @@ export const COPIED: Readonly<Record<ItemField, string>> = {
 };
 
 /**
+ * The toast after a copy: what was copied and when the host clears the
+ * clipboard, for example "Password copied · clears in 30 s".
+ */
+export function copiedMessage(
+  field: ItemField,
+  response: ClipboardCopyResponse,
+): string {
+  return `${COPIED[field]} · clears in ${response.clearAfterSeconds} s`;
+}
+
+/**
  * Copies one field of the item's current version. A login field is parsed
  * out by the host, so only that field reaches the clipboard; `value` copies
  * the whole stored text. A completed copy puts the item at the head of the
@@ -81,7 +92,7 @@ export async function copyItem(
   bridge: Bridge,
   item: Item,
   field: ItemField,
-): Promise<CopyResponse> {
+): Promise<ClipboardCopyResponse> {
   const request = {
     storeId: item.store,
     path: item.path,
@@ -115,7 +126,8 @@ export interface AnnouncedCopy {
 /**
  * A row's, the details panel's or the palette's Copy: refuses with the
  * access `problem` as a warning when there is one, copies the field, and
- * names what was copied or which field the item lacks in a toast.
+ * names in a toast what was copied and when the clipboard is cleared, or
+ * which field the item lacks.
  */
 export async function copyAndAnnounce({
   bridge,
@@ -130,8 +142,7 @@ export async function copyAndAnnounce({
     return;
   }
   try {
-    await copyItem(bridge, item, field);
-    toasts.show(COPIED[field]);
+    toasts.show(copiedMessage(field, await copyItem(bridge, item, field)));
   } catch (error) {
     const missing = missingFieldMessage(error);
     if (missing) toasts.show(missing, { tone: 'warning' });

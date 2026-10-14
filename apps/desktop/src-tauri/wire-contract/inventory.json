@@ -28,6 +28,7 @@
       "memberRole",
       "teamItemCreateAccess",
       "cancelledDownload",
+      "clipboardCopy",
       "catalog",
       "readItem"
     ],
@@ -95,6 +96,7 @@
     "CommandAck / CopyResponse": ["commandAck"],
     "MutationResponse": ["appliedMutation", "cancelledMutation"],
     "DownloadResponse": ["cancelledDownload"],
+    "ClipboardAck / ClipboardCopyResponse": ["clipboardCopy"],
     "RoleDto": ["memberRole", "catalog"],
     "CreateRoleRequest": ["teamItemCreateAccess"],
     "CatalogDto / StoreDto / ItemDto / CatalogInventoryDto": ["catalog"],

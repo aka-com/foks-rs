@@ -330,7 +330,11 @@ arguments. `list_catalog` returns profiles, stores, items, failures and
 the other facts needed by the Phase 2 shell; `read_item`,
 `copy_item_value`, `open_item_url` and `download_file` take
 `{storeId, path, version}`, and `copy_item_field` takes the same plus
-`field` (`password`, `username`, `url` or `value`). `tests/bridge.test.ts`
+`field` (`password`, `username`, `url` or `value`). Both item copies answer
+`{ok, clearAfterSeconds}`: the seconds after which the host clears the
+clipboard if it still holds the copied value (`AUTO_CLEAR_SECONDS` in
+`src-tauri/src/clipboard.rs`: 15 on Linux, 30 elsewhere), which the copy toast
+states, for example "Password copied · clears in 30 s". `tests/bridge.test.ts`
 pins the decoder side and the Rust command tests pin serialization so a drift
 fails on one side or the other. `tests/command-contract.test.ts` checks the
 command name and argument keys of every native call in `src/` against
@@ -1192,6 +1196,20 @@ app-specific: `overlay-primitives.tsx`, `menu-position.ts`, `toasts.tsx`,
 authority on what is in it and why — including why `ui/src/sheet.tsx` stayed
 behind. Reach it as `/kit/*` (a Vite alias and a tsconfig path). Application-specific models, fixtures, icons, and shell styles remain in
 `src/` to keep application logic separate from reusable UI components.
+
+`toasts.tsx` appends information toasts to a `role="status"` polite live
+region and warnings to a `role="alert"` assertive one. Both regions stay
+mounted while empty, because screen readers, VoiceOver in WebKit in
+particular, can skip a live region inserted together with its text. A toast
+is a warning only when its caller passes `tone: 'warning'`. A toast without a
+caller-given `durationMs` stays for its reading time (one second plus 60 ms a
+character), at least 4 s, 8 s for a warning, and at most 20 s; an actionable
+toast without one stays until it is dismissed. The countdown holds while the
+pointer is over the toast, while focus is inside it and while the window is
+hidden, and a released toast stays at least one more second. Render tests
+that look for a page's own status or alert exclude `#toasts` or require text,
+since the empty regions match a role query; jsdom reports `document.hidden`
+as true, so toasts in render tests do not time out unless a test sets it.
 
 The model logic is implemented exclusively in TypeScript because item kind classification
 and reader computations are client-side presentation models without protocol equivalents.

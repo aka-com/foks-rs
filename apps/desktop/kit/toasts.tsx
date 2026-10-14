@@ -4,12 +4,27 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
 
-const DEFAULT_DURATION_MS = 2_600;
+/** The shortest time an information toast stays on screen. */
+export const MIN_INFO_DURATION_MS = 4_000;
+/** The shortest time a warning stays on screen. */
+export const MIN_WARNING_DURATION_MS = 8_000;
+/** The longest time a toast without a caller-given duration stays. */
+export const MAX_DURATION_MS = 20_000;
+/**
+ * Reading time per character: about 1,000 characters a minute, or 200
+ * words of five letters and a space. One further second is allowed for
+ * noticing the toast.
+ */
+const READING_MS_PER_CHARACTER = 60;
+const NOTICE_MS = 1_000;
+/** A toast released by the pointer or focus stays at least this long. */
+const RESUME_MIN_MS = 1_000;
 const EXIT_DURATION_MS = 300;
 const MAX_VISIBLE_TOASTS = 5;
 /** How many shown messages the controller keeps for the Recent list. */
@@ -48,14 +63,25 @@ export interface ToastRecord {
 
 const NO_HISTORY: readonly ToastRecord[] = [];
 
-/** A message is a warning when its caller says so or it starts with ⚠. */
-function toastTone(
-  request: ToastOptions & { message: string },
-): ToastRecord['tone'] {
-  return request.tone === 'warning' ||
-    (request.tone === undefined && request.message.trimStart().startsWith('⚠'))
-    ? 'warning'
-    : 'info';
+function toastTone(request: ToastOptions): ToastRecord['tone'] {
+  return request.tone === 'warning' ? 'warning' : 'info';
+}
+
+/**
+ * How long a toast without a caller-given `durationMs` stays on screen: its
+ * reading time, at least {@link MIN_INFO_DURATION_MS} or, for a warning,
+ * {@link MIN_WARNING_DURATION_MS}, and at most {@link MAX_DURATION_MS}. Time
+ * while the toast is hovered, holds focus or the window is hidden does not
+ * count.
+ */
+export function toastDurationMs(
+  message: string,
+  tone: ToastRecord['tone'],
+): number {
+  const floor =
+    tone === 'warning' ? MIN_WARNING_DURATION_MS : MIN_INFO_DURATION_MS;
+  const reading = NOTICE_MS + message.length * READING_MS_PER_CHARACTER;
+  return Math.min(MAX_DURATION_MS, Math.max(floor, reading));
 }
 
 /** Explicit notification channel owned by one mounted ToastProvider. */
@@ -155,42 +181,89 @@ export function useOptionalToast(): ToastController | null {
   return useContext(ToastContext);
 }
 
+/** Whether the window is hidden, as `document.hidden` reports it. */
+function useDocumentHidden(): boolean {
+  const [hidden, setHidden] = useState(
+    () => typeof document !== 'undefined' && document.hidden,
+  );
+  useEffect(() => {
+    const update = () => setHidden(document.hidden);
+    update();
+    document.addEventListener('visibilitychange', update);
+    return () => document.removeEventListener('visibilitychange', update);
+  }, []);
+  return hidden;
+}
+
 function ToastItem({
   entry,
   dismiss,
+  hidden,
 }: {
   entry: ToastEntry;
   dismiss: (id: number) => void;
+  /** Whether the window is hidden, which holds the toast like a hover. */
+  hidden: boolean;
 }): ReactNode {
   const [visible, setVisible] = useState(false);
-  const warning = toastTone(entry) === 'warning';
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  // An actionable toast stays until it is dismissed unless its caller gives a duration.
+  const duration =
+    entry.action && entry.durationMs === undefined
+      ? null
+      : Math.max(
+          0,
+          entry.durationMs ?? toastDurationMs(entry.message, toastTone(entry)),
+        );
+  const held = hovered || focused || hidden;
+  // The time left on screen, which counts down only while the toast is not
+  // held and starts again when a deduplicated message replaces the text.
+  const remaining = useRef({ revision: entry.revision, ms: duration });
 
   useEffect(() => {
     const animationFrame = window.requestAnimationFrame(() => setVisible(true));
-    // Actionable toasts remain open indefinitely by default until dismissed or timed out by the caller.
-    if (entry.action && entry.durationMs === undefined) {
-      return () => window.cancelAnimationFrame(animationFrame);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [entry.revision]);
+
+  useEffect(() => {
+    const left = remaining.current;
+    if (left.revision !== entry.revision) {
+      left.revision = entry.revision;
+      left.ms = duration;
     }
-    const duration = Math.max(0, entry.durationMs ?? DEFAULT_DURATION_MS);
-    const hideTimer = window.setTimeout(() => setVisible(false), duration);
+    const ms = left.ms;
+    if (held || ms === null) return;
+    const startedAt = Date.now();
+    const hideTimer = window.setTimeout(() => setVisible(false), ms);
     const removeTimer = window.setTimeout(
       () => dismiss(entry.id),
-      duration + EXIT_DURATION_MS,
+      ms + EXIT_DURATION_MS,
     );
     return () => {
-      window.cancelAnimationFrame(animationFrame);
       window.clearTimeout(hideTimer);
       window.clearTimeout(removeTimer);
+      // A toast held while it fades out comes back, and one released stays
+      // long enough to be read again.
+      left.ms = Math.max(RESUME_MIN_MS, ms - (Date.now() - startedAt));
+      setVisible(true);
     };
-  }, [dismiss, entry.action, entry.durationMs, entry.id, entry.revision]);
+  }, [dismiss, duration, entry.id, entry.revision, held]);
 
   return (
     <div
       className={`toast toast-owned${visible ? ' show' : ''}`}
       data-toast-id={entry.id}
-      data-toast-tone={warning ? 'warning' : 'info'}
-      role={warning ? 'alert' : 'status'}
+      data-toast-tone={toastTone(entry)}
+      // Read whole when a deduplicated message replaces the text.
       aria-atomic="true"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget))
+          setFocused(false);
+      }}
     >
       <span className="toast-message">{entry.message}</span>
       {entry.action ? (
@@ -221,6 +294,14 @@ function ToastItem({
   );
 }
 
+/**
+ * Shows the controller's messages above the page. Information toasts are
+ * appended to a polite live region and warnings to an assertive one. Both
+ * regions stay mounted while empty, because screen readers announce text
+ * added to a region they already track and can skip a region inserted
+ * together with its text. Each region has `aria-atomic="false"`, so a new
+ * toast is read without the toasts already shown.
+ */
 export function ToastProvider({
   children,
   controller,
@@ -232,6 +313,7 @@ export function ToastProvider({
   portalRoot?: HTMLElement | null;
 }): ReactNode {
   const [entries, setEntries] = useState<ToastEntry[]>([]);
+  const hidden = useDocumentHidden();
   const dismiss = useCallback((id: number) => {
     setEntries((current) => current.filter((entry) => entry.id !== id));
   }, []);
@@ -261,11 +343,29 @@ export function ToastProvider({
     [controller],
   );
 
+  const toast = (entry: ToastEntry): ReactNode => (
+    <ToastItem key={entry.id} entry={entry} dismiss={dismiss} hidden={hidden} />
+  );
   const host = (
     <div id="toasts" className="toasts">
-      {entries.map((entry) => (
-        <ToastItem key={entry.id} entry={entry} dismiss={dismiss} />
-      ))}
+      <div
+        className="toast-region"
+        role="status"
+        aria-live="polite"
+        aria-atomic="false"
+        aria-relevant="additions text"
+      >
+        {entries.filter((entry) => toastTone(entry) === 'info').map(toast)}
+      </div>
+      <div
+        className="toast-region"
+        role="alert"
+        aria-live="assertive"
+        aria-atomic="false"
+        aria-relevant="additions text"
+      >
+        {entries.filter((entry) => toastTone(entry) === 'warning').map(toast)}
+      </div>
     </div>
   );
 

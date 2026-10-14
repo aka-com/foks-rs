@@ -138,8 +138,12 @@ test('the star adds the item to Favorites, and a copy to Recent', async () => {
   assert.equal(star.title, 'Remove from favorites');
 
   ui.fireEvent.click(r.getAllByRole('button', { name: 'Copy password' })[0]);
+  // The toast gives the host's clear time from the copy's response.
   await ui.waitFor(() =>
-    assert.match(document.body.textContent ?? '', /Password copied/),
+    assert.match(
+      document.body.textContent ?? '',
+      /Password copied · clears in 30 s/,
+    ),
   );
   // Both lists name the item by its store and dirent id, not its path.
   const ref = { store: 'acct:personal', dirent: p.subject.direntId };
@@ -610,7 +614,11 @@ test('a mismatched version is rejected and Show retries the read', async () => {
   });
   const r = ui.render(p.draw());
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
-  await ui.waitFor(() => assert.ok(r.getByRole('alert')));
+  // The toast host's assertive region is always present; wait for an alert
+  // with text.
+  await ui.waitFor(() =>
+    assert.ok(r.getAllByRole('alert').some((alert) => alert.textContent)),
+  );
   assert.ok(r.queryByText('/wrong-target', { exact: false }) === null);
   const before = reads;
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));

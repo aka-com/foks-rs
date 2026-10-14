@@ -61,6 +61,9 @@ export interface MockCopy {
 /** Every item copy made through a mock bridge, oldest first. */
 export const mockCopies: MockCopy[] = [];
 
+/** A mock item copy's response: the host's clear time outside Linux. */
+const MOCK_CLIPBOARD_COPY = { ok: true, clearAfterSeconds: 30 } as const;
+
 /** One website a mock bridge opened, with the address the host would open. */
 export interface MockOpenedSite {
   store: string;
@@ -806,7 +809,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         field: 'value',
         text: contents.get(itemKey(item)) ?? '',
       });
-      return Promise.resolve({ ok: true });
+      return Promise.resolve(MOCK_CLIPBOARD_COPY);
     },
     copyItemField: async ({ field, ...request }) => {
       const item = select(request);
@@ -818,7 +821,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           `This item has no ${FIELD_NAMES[field as keyof typeof FIELD_NAMES]}.`,
         );
       mockCopies.push({ store: item.store, path: item.path, field, text });
-      return { ok: true };
+      return MOCK_CLIPBOARD_COPY;
     },
     openItemUrl: async (request) => {
       const item = select(request);

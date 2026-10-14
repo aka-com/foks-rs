@@ -26,7 +26,7 @@ use crate::commands::types::{CommandAck, MutationDto, RoleDto};
 use crate::commands::validation::exact_profile_confirmation;
 use crate::commands::vault::{
     CatalogDto, CatalogFailureDto, CatalogInventoryDto, CatalogLocalMetadataDto, CatalogProfileDto,
-    CatalogStoreReadDto, DownloadResult, ItemDto, ReadItemDto, StoreDto,
+    CatalogStoreReadDto, ClipboardAck, DownloadResult, ItemDto, ReadItemDto, StoreDto,
 };
 use crate::commands::yubikey::{
     YubiAccountDto, YubiCardDto, YubiChangedDto, YubiEnrollmentDto, YubiFederationRefreshDto,
@@ -612,6 +612,14 @@ fn wire_contract_fixture_matches_serialized_shapes() {
     assert_eq!(
         serde_json::to_value(DownloadResult { saved: false }).unwrap(),
         fixture["cancelledDownload"]
+    );
+    assert_eq!(
+        serde_json::to_value(ClipboardAck {
+            ok: true,
+            clear_after_seconds: 30,
+        })
+        .unwrap(),
+        fixture["clipboardCopy"]
     );
     assert_eq!(
         serde_json::to_value(MutationDto { applied: true }).unwrap(),

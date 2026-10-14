@@ -64,6 +64,7 @@ import type {
 } from './servers';
 import type {
   CatalogDto,
+  ClipboardCopyResponse,
   CopyFieldRequest,
   CopyResponse,
   CreateFolderRequest,
@@ -208,13 +209,15 @@ export interface Bridge {
   listParties(storeId: StoreRef): Promise<Party[]>;
   listFederation(storeId: StoreRef): Promise<FederationEntry[]>;
   readItem(request: ItemRequest): Promise<ReadItemResponse>;
-  copyItemValue(request: ItemRequest): Promise<CopyResponse>;
+  /** Copies an item's whole stored text; as `copyItemField` with `value`. */
+  copyItemValue(request: ItemRequest): Promise<ClipboardCopyResponse>;
   /**
    * Copies one field of an item, such as only a login's password. The host
    * reads and parses the item; a field the item lacks fails with
-   * `field-missing`.
+   * `field-missing`. The response gives the seconds until the host clears
+   * the clipboard.
    */
-  copyItemField(request: CopyFieldRequest): Promise<CopyResponse>;
+  copyItemField(request: CopyFieldRequest): Promise<ClipboardCopyResponse>;
   /**
    * Opens a login's website in the default browser. The host reads the
    * item and its `url` field and opens only an http or https address; an

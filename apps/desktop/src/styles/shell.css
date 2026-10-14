@@ -887,7 +887,10 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .pair-steps .copybox .mono{font-size:15px;letter-spacing:.02em}
 
 /* Toasts */
-.toasts{position:fixed;left:0;right:0;bottom:18px;z-index:20;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
+.toasts{position:fixed;left:0;right:0;bottom:18px;z-index:20;display:flex;flex-direction:column;align-items:center;pointer-events:none}
+/* The two live regions stay mounted while empty; only regions that hold a toast are spaced apart. */
+.toast-region{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%}
+.toast-region:not(:empty)~.toast-region:not(:empty){margin-top:8px}
 .toast{display:flex;align-items:center;gap:10px;max-width:min(90%,520px);padding:7px 10px 7px 14px;border-radius:var(--radius-pill);background:var(--ink);color:var(--main-surface);font-size:13px;line-height:1.4;box-shadow:var(--shadow-menu);opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;pointer-events:auto}
 .toast.show{opacity:1;transform:none}
 .toast[data-toast-tone="warning"]{background:var(--danger-solid);color:var(--ink-inverse)}

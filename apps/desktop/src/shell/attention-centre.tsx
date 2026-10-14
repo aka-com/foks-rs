@@ -241,10 +241,8 @@ export function AttentionControl({
                   {[...recent].reverse().map((record) => (
                     <li key={record.id} className={record.tone}>
                       {/* Colour alone does not mark a warning: the row has the
-                          alert icon and a spoken prefix, unless the message
-                          opens with its own ⚠. */}
-                      {record.tone === 'warning' &&
-                      !record.message.trimStart().startsWith('⚠') ? (
+                          alert icon and a spoken prefix. */}
+                      {record.tone === 'warning' ? (
                         <>
                           <Icon name="alert" className="tone" />
                           <span className="attention-state">Warning: </span>

@@ -113,6 +113,16 @@ export interface CopyResponse {
   ok: true;
 }
 
+/**
+ * The response to an item copy. The host clears the clipboard
+ * `clearAfterSeconds` after the write unless it no longer holds the copied
+ * value.
+ */
+export interface ClipboardCopyResponse {
+  ok: true;
+  clearAfterSeconds: number;
+}
+
 export interface DownloadResponse {
   saved: boolean;
 }
@@ -486,6 +496,19 @@ export function decodeCopy(value: unknown): CopyResponse {
   const item = record(value, 'copy response');
   if (item.ok !== true) throw new Error('copy response.ok must be true');
   return { ok: true };
+}
+
+export function decodeClipboardCopy(value: unknown): ClipboardCopyResponse {
+  const item = record(value, 'clipboard copy response');
+  if (item.ok !== true)
+    throw new Error('clipboard copy response.ok must be true');
+  return {
+    ok: true,
+    clearAfterSeconds: integer(
+      item.clearAfterSeconds,
+      'clipboard copy response.clearAfterSeconds',
+    ),
+  };
 }
 
 export function decodeDownload(value: unknown): DownloadResponse {

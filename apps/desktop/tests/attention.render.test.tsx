@@ -325,21 +325,21 @@ test('a warning in Recent is marked by more than its colour', async () => {
         recent: [
           { id: 1, message: 'Saved', tone: 'info', shownAt: 0 },
           { id: 2, message: 'Sync stopped', tone: 'warning', shownAt: 0 },
-          { id: 3, message: '⚠ Restore failed', tone: 'warning', shownAt: 0 },
+          { id: 3, message: 'Restore failed', tone: 'warning', shownAt: 0 },
         ],
         onNavigate: () => undefined,
       }),
     }),
   );
   const open = await openBell();
-  // Newest first; a message that opens with ⚠ already carries its mark.
+  // Newest first; every warning carries the alert icon and spoken prefix.
   assert.deepEqual(
     [...open.querySelectorAll('.attention-recent li')].map((entry) => [
       entry.textContent?.replace(/\d\d:\d\d.*$/, ''),
       entry.querySelector('.ic') !== null,
     ]),
     [
-      ['⚠ Restore failed', false],
+      ['Warning: Restore failed', true],
       ['Warning: Sync stopped', true],
       ['Saved', false],
     ],

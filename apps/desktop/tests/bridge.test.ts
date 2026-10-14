@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import {
   decodeAccounts,
   decodeCatalog,
+  decodeClipboardCopy,
   decodeCopy,
   decodeDownload,
   decodeMutation,
@@ -319,7 +320,7 @@ test('copyItemField sends the exact version and the field to the host', async ()
       __TAURI_INTERNALS__: {
         invoke: async (command: string, args: unknown) => {
           calls.push([command, args]);
-          return { ok: true };
+          return { ok: true, clearAfterSeconds: 15 };
         },
       },
     },
@@ -333,7 +334,7 @@ test('copyItemField sends the exact version and the field to the host', async ()
         version: 4,
         field: 'password',
       }),
-      { ok: true },
+      { ok: true, clearAfterSeconds: 15 },
     );
     assert.deepEqual(calls, [
       [
@@ -739,6 +740,14 @@ test('action decoders reject partial or malformed responses', () => {
   );
   assert.deepEqual(decodeCopy({ ok: true }), { ok: true });
   assert.throws(() => decodeCopy({ ok: false }), /must be true/);
+  assert.deepEqual(decodeClipboardCopy({ ok: true, clearAfterSeconds: 15 }), {
+    ok: true,
+    clearAfterSeconds: 15,
+  });
+  assert.throws(
+    () => decodeClipboardCopy({ ok: true }),
+    /clearAfterSeconds must be a non-negative safe integer/,
+  );
   assert.deepEqual(decodeDownload({ saved: false }), { saved: false });
   assert.deepEqual(decodeMutation({ applied: true }), { applied: true });
   assert.deepEqual(decodeMutation({ applied: false }), { applied: false });
@@ -908,6 +917,10 @@ test('decoders successfully parse the full wire contract golden fixture', async 
   ]);
   assert.equal(decodeReadItem(fixture.readItem).version, 7);
   assert.deepEqual(decodeCopy(fixture.commandAck), { ok: true });
+  assert.deepEqual(decodeClipboardCopy(fixture.clipboardCopy), {
+    ok: true,
+    clearAfterSeconds: 30,
+  });
   assert.deepEqual(decodeDownload(fixture.cancelledDownload), { saved: false });
   assert.deepEqual(decodeMutation(fixture.appliedMutation), { applied: true });
   assert.deepEqual(decodeMutation(fixture.cancelledMutation), {
@@ -1967,7 +1980,7 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge, FIXTURE);
@@ -2142,7 +2155,7 @@ test('creates a notification when a server cannot be described instead of omitti
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge, FIXTURE);
@@ -2206,7 +2219,7 @@ test('loadSnapshot does not fetch team rosters for blocked profiles', async () =
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge);
@@ -2298,7 +2311,7 @@ test('loadSnapshot does not fetch members for an inactive team', async () => {
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge);

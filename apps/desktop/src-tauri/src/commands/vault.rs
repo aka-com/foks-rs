@@ -328,6 +328,25 @@ pub struct DownloadResult {
     pub saved: bool,
 }
 
+/// The acknowledgement of an item copy. The host clears the clipboard
+/// `clear_after_seconds` after the write unless it no longer holds the copied
+/// value, so the renderer can state when that happens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardAck {
+    pub ok: bool,
+    pub clear_after_seconds: u64,
+}
+
+impl ClipboardAck {
+    fn written() -> Self {
+        Self {
+            ok: true,
+            clear_after_seconds: crate::clipboard::AUTO_CLEAR_SECONDS,
+        }
+    }
+}
+
 pub(super) fn read_text(
     transport: &dyn foks_desktop::AgentTransport,
     item: &CatalogItem,
@@ -1192,7 +1211,7 @@ pub async fn copy_item_value(
     store_id: String,
     path: String,
     version: u64,
-) -> Result<CommandAck, AgentError> {
+) -> Result<ClipboardAck, AgentError> {
     copy_item_field(
         app,
         webview,
@@ -1239,7 +1258,8 @@ pub(super) fn item_field(
 
 /// Copies one field of an item, for example only the password of a login
 /// rather than its whole stored text, after an exact-version read and with
-/// clipboard hygiene. No content crosses IPC.
+/// clipboard hygiene. No content crosses IPC; the response says when the
+/// clipboard is cleared.
 #[tauri::command]
 pub async fn copy_item_field(
     app: tauri::AppHandle,
@@ -1249,7 +1269,7 @@ pub async fn copy_item_field(
     path: String,
     version: u64,
     field: ItemField,
-) -> Result<CommandAck, AgentError> {
+) -> Result<ClipboardAck, AgentError> {
     crate::applock::require_unlocked(&app)?;
     require_main_window(&webview)?;
     let item = state.selected_item(&store_id, &path, version)?;
@@ -1261,7 +1281,7 @@ pub async fn copy_item_field(
     .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))??;
     crate::clipboard::copy_with_hygiene(&app, value)
         .map_err(|error| AgentError::new("clipboard", error, true))?;
-    Ok(CommandAck { ok: true })
+    Ok(ClipboardAck::written())
 }
 
 /// The address a login's website field names, as the browser is given it.

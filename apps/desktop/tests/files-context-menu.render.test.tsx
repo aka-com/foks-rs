@@ -70,7 +70,7 @@ async function mount(accessNow?: () => number) {
     ...base,
     copyItemValue: async (request: ItemRequest) => {
       copies.push({ ...request, field: 'value' });
-      return { ok: true as const };
+      return { ok: true as const, clearAfterSeconds: 30 };
     },
     copyItemField: async (request: CopyFieldRequest) => {
       copies.push(request);
@@ -361,7 +361,13 @@ test('read actions recheck a lease that expires while the menu is open', async (
   now = lease.expiresAt + 1;
   ui.fireEvent.click(copy);
   assert.equal(mounted.copies.length, 0);
-  assert.ok(ui.screen.getByRole('alert'));
+  // The refusal is a warning toast in the assertive region.
+  assert.equal(
+    ui.within(ui.screen.getByRole('alert')).queryAllByText(/./, {
+      selector: '.toast-message',
+    }).length,
+    1,
+  );
 });
 
 test('vault and team roots expose scoped folder creation and team info without selection changes', async () => {

@@ -1260,7 +1260,12 @@ test('identity loading waits out a native mutation instead of failing setup', as
     }),
   );
   await rendered.findByText('Waiting for the current operation to finish…');
-  assert.equal(rendered.queryByRole('alert'), null);
+  // The toast host's assertive region is always present, empty.
+  assert.equal(
+    rendered.queryAllByRole('alert').filter((alert) => alert.textContent)
+      .length,
+    0,
+  );
   assert.equal(
     (
       rendered.getByRole('button', {
@@ -1302,7 +1307,12 @@ test('identity loading waits out a native mutation instead of failing setup', as
     { timeout: 1_000 },
   );
   assert.equal(refreshes, 3);
-  assert.equal(rendered.queryByRole('alert'), null);
+  // The toast host's assertive region is always present, empty.
+  assert.equal(
+    rendered.queryAllByRole('alert').filter((alert) => alert.textContent)
+      .length,
+    0,
+  );
 });
 
 test('a server added after unmount is listed on Accounts and pairs without another add', async () => {

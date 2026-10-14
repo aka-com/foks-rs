@@ -1229,6 +1229,19 @@ test('allows going back when unconfirmed setup has no resume path', async () => 
   assert.equal(mutations, 0);
 });
 
+/** The page's own alert: the toast host's assertive region is one too. */
+async function pageAlert(
+  view: import('@testing-library/react').RenderResult,
+): Promise<HTMLElement> {
+  return ui.waitFor(() => {
+    const own = view
+      .getAllByRole('alert')
+      .filter((alert) => !alert.closest('#toasts'));
+    assert.equal(own.length, 1);
+    return own[0];
+  });
+}
+
 test('keeps the missing-server warning separate from the go-back action', async () => {
   const h = await harness();
   const missingProfile = {
@@ -1246,7 +1259,7 @@ test('keeps the missing-server warning separate from the go-back action', async 
       },
     },
   );
-  const warning = await rendered.view.findByRole('alert');
+  const warning = await pageAlert(rendered.view);
   assert.ok(warning.classList.contains('warning'));
   assert.ok(
     ui
@@ -1431,7 +1444,7 @@ test('shows a missing-server warning with the different-account action for ackno
     snapshot: missingProfile,
     onRefreshSnapshot: async () => missingProfile,
   });
-  const warning = await rendered.view.findByRole('alert');
+  const warning = await pageAlert(rendered.view);
   assert.ok(warning.classList.contains('warning'));
   assert.ok(
     ui

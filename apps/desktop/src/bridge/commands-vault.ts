@@ -10,6 +10,7 @@ import { decodeCommandAck } from './core';
 import { array, nullableString } from './validation';
 import {
   decodeCatalog,
+  decodeClipboardCopy,
   decodeCopy,
   decodeDownload,
   decodeLoginExport,
@@ -80,9 +81,13 @@ export const vaultCommands: Pick<
   readItem: ({ storeId, path, version }) =>
     checked('read_item', { storeId, path, version }, decodeReadItem),
   copyItemValue: ({ storeId, path, version }) =>
-    checked('copy_item_value', { storeId, path, version }, decodeCopy),
+    checked('copy_item_value', { storeId, path, version }, decodeClipboardCopy),
   copyItemField: ({ storeId, path, version, field }) =>
-    checked('copy_item_field', { storeId, path, version, field }, decodeCopy),
+    checked(
+      'copy_item_field',
+      { storeId, path, version, field },
+      decodeClipboardCopy,
+    ),
   openItemUrl: ({ storeId, path, version }) =>
     checked('open_item_url', { storeId, path, version }, decodeCopy),
   downloadFile: ({ storeId, path, version }) =>
