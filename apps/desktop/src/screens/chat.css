@@ -1446,6 +1446,12 @@
   outline: 2px solid var(--accent-border);
   outline-offset: -2px;
 }
+/* The list's current row, reached with Tab or the arrow keys. */
+.chat-message:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 3px;
+  border-radius: var(--radius-md);
+}
 /* New-chat channel selection uses a two-column grid for team avatars and text. */
 .chat-pick .radio:has(.kico) {
   align-items: center;

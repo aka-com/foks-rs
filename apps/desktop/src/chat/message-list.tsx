@@ -14,11 +14,11 @@ import { useChatConversationContext } from './conversation-provider';
 import { HistoryRow } from './message-row';
 import { OutgoingRow } from './outgoing-row';
 import { PendingRow } from './pending-row';
-import { MessageText } from './message-text';
+import { MessageTabOrderContext, MessageText } from './message-text';
 import {
-  ToolbarTabStopContext,
+  RowTabStopContext,
   useMessageActions,
-  type ToolbarTabStop,
+  type RowTabStop,
 } from './message-actions';
 import { messageClock, messageDayKey, messageTime } from './presentation';
 import { splitThreadRows, type ThreadRow } from './thread-rows';
@@ -52,6 +52,11 @@ type Viewport = Pick<
  * history edges, the rows, and the jump to the latest message. The thread
  * owns the history window, the viewport and the read intent; this list owns
  * what it measures and draws from them.
+ *
+ * The rows take one tab stop, the current row (a roving tabindex). On a
+ * focused row, Up and Down move to the previous and next row, Home and End to
+ * the first and last row held, Enter opens the row's actions as a menu, and
+ * Esc calls `onLeave`.
  */
 export function MessageList({
   channel,
@@ -69,6 +74,7 @@ export function MessageList({
   onMarkAll,
   onKeyDown,
   onQuote,
+  onLeave,
 }: {
   channel: ChatChannel;
   /** The rows {@link threadRows} derived from the same window. */
@@ -91,6 +97,11 @@ export function MessageList({
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   /** Writes a quote into the composer; omitted where the reader cannot send. */
   onQuote?: (quote: string) => void;
+  /**
+   * Esc on a focused row: moves focus to the composer. Omitted where the
+   * reader cannot send, which leaves Esc to `onKeyDown`.
+   */
+  onLeave?: () => void;
 }): ReactNode {
   const { actor, storeId, refreshPending } = useChatConversationContext();
   const {
@@ -217,11 +228,11 @@ export function MessageList({
       : 0;
   // The rows this device has not seen in history follow the newer edge.
   const { held, unsent } = splitThreadRows(rows);
-  // One message toolbar is a tab stop: that of the row focus last entered,
-  // while focus stays in the list and the row is drawn, otherwise that of the
-  // newest row with actions. Other rows' toolbars are reached by hover, the
-  // context menu, or focus entering the row, so a Tab across the list does
-  // not stop at every message.
+  // One row is current, and it is the list's tab stop with its links and its
+  // toolbar: the row focus last entered, while focus stays in the list and
+  // the row is drawn, otherwise the newest row. Other rows are reached with
+  // the arrow keys, by pointer, or by focus entering the row, so a Tab across
+  // the list does not stop at every message.
   const [focusedRow, setFocusedRow] = useState<string | null>(null);
   // The claim lasts while focus is in the list or in a menu or popover
   // (`.menu-portal`) a row opened; focus anywhere else, or on no element,
@@ -245,22 +256,59 @@ export function MessageList({
       document.removeEventListener('focusout', onFocusOut);
     };
   }, [scroller]);
-  const actionRows = [...held, ...unsent]
+  const messageRows = [...held, ...unsent]
     .filter(
       (row) =>
         row.kind === 'message' ||
         row.kind === 'outgoing' ||
-        (row.kind === 'operation' && row.operation.text),
+        row.kind === 'operation',
     )
     .map((row) => row.key);
-  const toolbarRow =
-    focusedRow !== null && actionRows.includes(focusedRow)
+  const currentRow =
+    focusedRow !== null && messageRows.includes(focusedRow)
       ? focusedRow
-      : (actionRows.at(-1) ?? null);
-  const toolbarTabStop = useMemo<ToolbarTabStop>(
-    () => ({ current: toolbarRow, claim: setFocusedRow }),
-    [toolbarRow],
+      : (messageRows.at(-1) ?? null);
+  const rowTabStop = useMemo<RowTabStop>(
+    () => ({ current: currentRow, claim: setFocusedRow }),
+    [currentRow],
   );
+  // Keys on a focused row itself; keys in its links, toolbar and buttons are
+  // theirs. A key at either end of the rows is left to the list, which
+  // scrolls.
+  const onRowKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const row = event.target;
+    if (
+      event.defaultPrevented ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      !(row instanceof HTMLElement) ||
+      !row.matches('article.chat-message')
+    )
+      return;
+    if (event.key === 'Escape') {
+      if (!onLeave) return;
+      event.preventDefault();
+      onLeave();
+      return;
+    }
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    const rows = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('article.chat-message'),
+    );
+    const at = rows.indexOf(row);
+    const next =
+      event.key === 'Home'
+        ? rows[0]
+        : event.key === 'End'
+          ? rows.at(-1)
+          : rows[at + (event.key === 'ArrowUp' ? -1 : 1)];
+    if (!next || next === row) return;
+    event.preventDefault();
+    next.focus({ preventScroll: true });
+    next.scrollIntoView?.({ block: 'nearest' });
+  };
   const draw = (row: ThreadRow): ReactNode => {
     switch (row.kind) {
       case 'day':
@@ -336,7 +384,10 @@ export function MessageList({
           onScroll();
           measureOnScroll();
         }}
-        tabIndex={0}
+        onKeyDown={onRowKey}
+        // The current row is the list's tab stop; the list itself is one only
+        // while it draws no row, and takes focus when a control in it goes.
+        tabIndex={currentRow === null ? 0 : -1}
         aria-label="Message history"
         aria-busy={busy}
       >
@@ -390,9 +441,9 @@ export function MessageList({
             </div>
           </div>
         )}
-        <ToolbarTabStopContext.Provider value={toolbarTabStop}>
+        <RowTabStopContext.Provider value={rowTabStop}>
           {held.map(draw)}
-        </ToolbarTabStopContext.Provider>
+        </RowTabStopContext.Provider>
         {detached && (
           <div className="chat-history-edge chat-history-newer" ref={newerEdge}>
             {/* Marked busy rather than disabled while a page loads, so
@@ -411,9 +462,9 @@ export function MessageList({
             )}
           </div>
         )}
-        <ToolbarTabStopContext.Provider value={toolbarTabStop}>
+        <RowTabStopContext.Provider value={rowTabStop}>
           {unsent.map(draw)}
-        </ToolbarTabStopContext.Provider>
+        </RowTabStopContext.Provider>
       </div>
       {(!atBottom || detached) && messages.length > 0 && (
         <Button
@@ -446,25 +497,35 @@ function OperationRow({
 }): ReactNode {
   const { bridge, storeId, mentions } = useChatConversationContext();
   const op = row.operation;
-  const { open, onContextMenu, onKeyDown, onFocus, actions } =
-    useMessageActions(
-      {
-        rowKey: row.key,
-        label: 'Actions for your message',
-        text: op.text || undefined,
-      },
-      bridge,
-    );
+  const {
+    open,
+    onContextMenu,
+    onKeyDown,
+    onFocus,
+    current,
+    tabIndex,
+    actions,
+  } = useMessageActions(
+    {
+      rowKey: row.key,
+      label: 'Actions for your message',
+      text: op.text || undefined,
+    },
+    bridge,
+  );
   return (
     <article
       className={open ? 'chat-message actions-open' : 'chat-message'}
       data-operation={op.id}
+      tabIndex={tabIndex}
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
       onFocus={onFocus}
     >
       {op.text && (
-        <MessageText text={op.text} actions={bridge} mentions={mentions} />
+        <MessageTabOrderContext.Provider value={current}>
+          <MessageText text={op.text} actions={bridge} mentions={mentions} />
+        </MessageTabOrderContext.Provider>
       )}
       <PendingRow
         storeId={storeId}

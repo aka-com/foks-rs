@@ -18,7 +18,14 @@ import { CollectionStatus } from '../components/collection-status';
  * from the window header.
  */
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { ReactNode } from 'react';
 import { Icon, MenuItem, SectionLabel } from '../components';
 import {
@@ -319,6 +326,77 @@ function channelCount(listed: ListedChannel | undefined): string | null {
     : null;
 }
 
+/** A channel row the column draws, in the order it draws them. */
+interface ColumnChannel {
+  team: StoreRef;
+  channel: string;
+  /**
+   * The row draws an unread count that `teamUnread` counts: the team is
+   * reachable and the conversation is neither muted nor hidden.
+   */
+  unread: boolean;
+}
+
+/**
+ * The channel Alt+Up/Down (`unread` false) or Alt+Shift+Up/Down (`unread`
+ * true) moves to from the open channel, in the column's drawn order. A plain
+ * step stops at either end; the unread search wraps around and skips the open
+ * channel. With no open channel among the rows, the step starts at the open
+ * team's first row, or at the column's end it moves away from.
+ */
+function channelStep(
+  rows: readonly ColumnChannel[],
+  team: StoreRef | undefined,
+  channel: string | undefined,
+  direction: 1 | -1,
+  unread: boolean,
+): ColumnChannel | undefined {
+  const at = rows.findIndex(
+    (row) => row.team === team && row.channel === channel,
+  );
+  const teamStart = rows.findIndex((row) => row.team === team);
+  // A position between rows when the open channel is not one of them.
+  const from =
+    at >= 0
+      ? at
+      : teamStart >= 0
+        ? teamStart - 0.5
+        : direction > 0
+          ? -0.5
+          : rows.length - 0.5;
+  const indices = [...rows.keys()];
+  const ahead =
+    direction > 0
+      ? indices.filter((index) => index > from)
+      : indices.filter((index) => index < from).reverse();
+  if (!unread) return rows[ahead[0] ?? -1];
+  const behind =
+    direction > 0
+      ? indices.filter((index) => index < from)
+      : indices.filter((index) => index > from).reverse();
+  return [...ahead, ...behind]
+    .map((index) => rows[index])
+    .find((row) => row.unread);
+}
+
+/**
+ * Whether Alt+Up/Down in `target` belongs to the column rather than to the
+ * field: in a multi-line field only when the caret is on its first line
+ * (Up) or its last line (Down), since macOS moves the caret to a paragraph
+ * boundary with Option+Up/Down, and never in a select. Lines are the text's
+ * own line breaks.
+ */
+function caretAtEdge(target: EventTarget | null, direction: 1 | -1): boolean {
+  if (!(target instanceof Element)) return true;
+  // Alt+Down opens a select's list.
+  if (target.matches('select')) return false;
+  if (!target.matches('textarea')) return true;
+  const { value, selectionStart, selectionEnd } = target;
+  return direction < 0
+    ? !value.slice(0, selectionStart).includes('\n')
+    : !value.slice(selectionEnd).includes('\n');
+}
+
 export interface ChatTeamColumnProps {
   id?: string;
   snapshot: AgentSnapshot;
@@ -525,6 +603,9 @@ export function ChatTeamColumn({
   };
   let listed = 0;
   const teamRows: ReactNode[] = [];
+  // The channel rows drawn, in order, for Alt+Up/Down: a folded team's rows
+  // are not drawn and are skipped.
+  const drawnChannels: ColumnChannel[] = [];
   rows.forEach((row) => {
     const named = row.store.name.toLowerCase().includes(query);
     const matching = (row.channels ?? []).filter(
@@ -534,6 +615,19 @@ export function ChatTeamColumn({
     if (query && !named && !matching.length) return;
     listed += 1;
     listedChannels += matching.length;
+    if (query || !collapsedTeam(row.store.id))
+      for (const listedChannel of matching) {
+        const { conversation } = listedChannel;
+        drawnChannels.push({
+          team: row.store.id,
+          channel: listedChannel.channel.id,
+          unread:
+            row.reachable &&
+            channelCount(listedChannel) !== null &&
+            !conversation?.muted &&
+            !conversation?.hidden,
+        });
+      }
     teamRows.push(
       <TeamHeading
         key={row.store.id}
@@ -556,6 +650,39 @@ export function ChatTeamColumn({
       />,
     );
   });
+  // Alt+Up/Down opens the previous or next channel row, and Alt+Shift+Up/Down
+  // the previous or next one with unread messages. The listener is on the
+  // document, beyond a dialog's event boundary, so it does nothing while a
+  // dialog is open, as the rail's Ctrl+Tab does.
+  const step = useEffectEvent((event: KeyboardEvent): void => {
+    if (
+      (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') ||
+      !event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.defaultPrevented ||
+      anyDialogOpen()
+    )
+      return;
+    const direction = event.key === 'ArrowUp' ? -1 : 1;
+    if (!caretAtEdge(event.target, direction)) return;
+    event.preventDefault();
+    const next = channelStep(
+      drawnChannels,
+      selected,
+      activeChannel,
+      direction,
+      event.shiftKey,
+    );
+    if (next) onOpen(next.team, next.channel);
+    else if (event.shiftKey)
+      toasts?.show('No other channel has unread messages.');
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => step(event);
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
   return (
     <aside
       id={id}

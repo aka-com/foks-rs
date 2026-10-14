@@ -51,7 +51,7 @@ export interface MessageDetails {
 }
 
 export interface MessageActionOptions {
-  /** The row's key in the list's {@link ToolbarTabStop}. */
+  /** The row's key in the list's {@link RowTabStop}. */
   rowKey?: string;
   /** The toolbar's and the menu's accessible name. */
   label?: string;
@@ -64,16 +64,17 @@ export interface MessageActionOptions {
 }
 
 /**
- * The message list's one toolbar tab stop: the key of the row whose toolbar
- * Tab reaches, and the call a row makes when focus enters it. Other rows'
- * toolbars are reached by hover, the context menu, or focus entering the
- * row. Without a provider every toolbar is a tab stop.
+ * The message list's current row, its one tab stop: the key of the row Tab
+ * reaches, followed by its links and its toolbar, and the call a row makes
+ * when focus enters it. Other rows are reached with the arrow keys, Home and
+ * End from a focused row, by pointer, or by focus entering them. Without a
+ * provider every row is current.
  */
-export interface ToolbarTabStop {
+export interface RowTabStop {
   current: string | null;
   claim: (rowKey: string) => void;
 }
-export const ToolbarTabStopContext = createContext<ToolbarTabStop | null>(null);
+export const RowTabStopContext = createContext<RowTabStop | null>(null);
 
 // A quote carries the first lines of a message, each cut at a word boundary
 // near this many characters, so a long message is not pasted back whole.
@@ -128,11 +129,12 @@ export function quoteInsertion(before: string, quote: string): string {
 /**
  * The actions of one message row: a toolbar shown while the row is hovered or
  * holds focus, the same actions as a menu from a right-click, the ContextMenu
- * key or Shift+F10 within the row, and the Details popover. The row spreads
- * `onContextMenu`, `onKeyDown` and `onFocus` on its element and draws
- * `actions` inside it; `open` is set while the menu or Details is open, which
- * keeps the toolbar shown. Inside a {@link ToolbarTabStopContext} only the
- * current row's toolbar is a tab stop.
+ * key or Shift+F10 within the row or Enter on the focused row itself, and the
+ * Details popover. The row spreads `onContextMenu`, `onKeyDown` and `onFocus`
+ * on its element, sets `tabIndex` on it, and draws `actions` inside it; `open`
+ * is set while the menu or Details is open, which keeps the toolbar shown.
+ * Inside a {@link RowTabStopContext} only the current row (`current`) and its
+ * toolbar are tab stops.
  *
  * Every action works on data the row already holds. Edit, Delete, Reaction
  * and Reply message types are reserved by the protocol but the server accepts
@@ -152,10 +154,14 @@ export function useMessageActions(
   onContextMenu: (event: MouseEvent<HTMLElement>) => void;
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
   onFocus: (event: FocusEvent<HTMLElement>) => void;
+  /** Whether the row is the list's current row. */
+  current: boolean;
+  /** The row element's own `tabIndex`. */
+  tabIndex: 0 | -1;
   actions: ReactNode;
 } {
   const toasts = useOptionalToast();
-  const stop = useContext(ToolbarTabStopContext);
+  const stop = useContext(RowTabStopContext);
   const tabbable = !stop || rowKey === undefined || stop.current === rowKey;
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -326,11 +332,20 @@ export function useMessageActions(
       openMenu(event, event.clientX, event.clientY);
     },
     // The keyboard opens the same menu from anything focused in the row, at
-    // that element's corner.
+    // that element's corner. Enter opens it only from the row itself, so a
+    // link or button in the row keeps its own Enter.
     onKeyDown: (event) => {
+      const enter =
+        event.key === 'Enter' &&
+        event.target === event.currentTarget &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey;
       if (
         event.key !== 'ContextMenu' &&
-        !(event.key === 'F10' && event.shiftKey)
+        !(event.key === 'F10' && event.shiftKey) &&
+        !enter
       )
         return;
       if (!available || !fromRow(event)) return;
@@ -340,6 +355,8 @@ export function useMessageActions(
     onFocus: () => {
       if (rowKey !== undefined) stop?.claim(rowKey);
     },
+    current: tabbable,
+    tabIndex: tabbable ? 0 : -1,
     actions,
   };
 }

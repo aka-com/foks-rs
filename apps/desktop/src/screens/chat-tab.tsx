@@ -27,6 +27,7 @@ import type { Bridge } from '../bridge';
 import type { Location, NavigateOptions } from '../location';
 import { rememberChatLocation, rememberedChatRef } from '../location';
 import { useSidebarInbox } from '../chat/inbox-provider';
+import { useArrivalAnnouncement } from '../chat/arrival-announcer';
 import { listChannels, openChannel } from '../chat/presentation';
 import { ChatScreen } from './chat-screen';
 import { ChannelInfoPanel } from './chat-info';
@@ -98,6 +99,7 @@ export function ChatTab({
     id: sidebarId,
   } = useChatSidebarResize();
   const inbox = useSidebarInbox();
+  const announcement = useArrivalAnnouncement(snapshot, inbox);
   // One clock for the whole tab: the column, the pane and the fallback all
   // read availability off the moment this render started.
   const accessOptions: AvailabilityOptions = { nowSeconds: accessNow() };
@@ -232,6 +234,12 @@ export function ChatTab({
       className={showInfo ? 'chat-screen with-info' : 'chat-screen'}
     >
       {sidebarHandle}
+      {/* Messages from others that reach any channel while the window has
+          focus, by sender and channel; rendered persistently so the live
+          region exists before it changes. */}
+      <p className="offscreen" role="status">
+        {announcement}
+      </p>
       <ChatTeamColumn
         id={sidebarId}
         snapshot={snapshot}

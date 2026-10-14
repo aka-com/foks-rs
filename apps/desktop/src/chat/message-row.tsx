@@ -5,7 +5,7 @@ import {
   useMessageActions,
   type MessageActionOptions,
 } from './message-actions';
-import { MessageText } from './message-text';
+import { MessageTabOrderContext, MessageText } from './message-text';
 import { messageClock, messageDate, messageTime } from './presentation';
 import type { ThreadRow } from './thread-rows';
 import { useChatConversationContext } from './conversation-provider';
@@ -19,7 +19,9 @@ import { useChatConversationContext } from './conversation-provider';
  * belongs in `timeTitle`. A grouped row continues the previous message's run:
  * its avatar, author and time are kept for screen readers only, and anything
  * in `status` stays visible. The row's message actions
- * ({@link useMessageActions}) draw a toolbar over its top corner.
+ * ({@link useMessageActions}) draw a toolbar over its top corner. The row is
+ * focusable; only the list's current row is in the tab order, with the links
+ * in its content.
  */
 export function MessageRow({
   className,
@@ -62,6 +64,8 @@ export function MessageRow({
     onContextMenu,
     onKeyDown,
     onFocus,
+    current,
+    tabIndex,
     actions: tools,
   } = useMessageActions(
     {
@@ -82,6 +86,7 @@ export function MessageRow({
         .join(' ')}
       {...attributes}
       title={grouped ? messageTime(at) : undefined}
+      tabIndex={tabIndex}
       onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
       onFocus={onFocus}
@@ -109,7 +114,9 @@ export function MessageRow({
             )}
             {status}
           </header>
-          {children}
+          <MessageTabOrderContext.Provider value={current}>
+            {children}
+          </MessageTabOrderContext.Provider>
         </div>
         {footer}
       </div>

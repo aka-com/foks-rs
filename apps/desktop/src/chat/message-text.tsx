@@ -1,4 +1,11 @@
-import { Fragment, useId, useMemo, useState } from 'react';
+import {
+  createContext,
+  Fragment,
+  useContext,
+  useId,
+  useMemo,
+  useState,
+} from 'react';
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { Button } from '../components/button';
@@ -28,6 +35,14 @@ export function safeChatLink(value: string): string | null {
 
 type Actions = Pick<Bridge, 'copyText' | 'openChatLink'>;
 
+/**
+ * Whether the links and code-block buttons of the message text are in the tab
+ * order. The message list sets it false for every row but its current one, so
+ * Tab does not stop at the links of every message; the pointer and focus
+ * entering the row still reach them.
+ */
+export const MessageTabOrderContext = createContext(true);
+
 // A fenced block of more than `LONG_CODE_LINES` lines is drawn with its first
 // `COLLAPSED_CODE_LINES` lines and a control that shows the rest, so one long
 // log neither fills the thread nor adds a second scroll region inside it.
@@ -46,6 +61,7 @@ function CodeBlock({
   const id = useId();
   const [expanded, setExpanded] = useState(false);
   const toasts = useOptionalToast();
+  const tabIndex = useContext(MessageTabOrderContext) ? undefined : -1;
   const lines = code.split('\n');
   const long = lines.length > LONG_CODE_LINES;
   return (
@@ -62,6 +78,7 @@ function CodeBlock({
         className="chat-code-copy"
         aria-label="Copy code"
         title="Copy code"
+        tabIndex={tabIndex}
         onClick={() => {
           void actions
             .copyText(code)
@@ -77,6 +94,7 @@ function CodeBlock({
           className="chat-code-more"
           aria-controls={id}
           aria-expanded={expanded}
+          tabIndex={tabIndex}
           onClick={() => setExpanded((open) => !open)}
         >
           <Icon name="chevronDown" />
@@ -472,6 +490,7 @@ function Link({
   const [error, setError] = useState('');
   const [checking, setChecking] = useState(false);
   const toasts = useOptionalToast();
+  const inOrder = useContext(MessageTabOrderContext);
   const {
     label: drawn,
     host,
@@ -488,6 +507,7 @@ function Link({
       <a
         href={url}
         title={url}
+        tabIndex={inOrder ? undefined : -1}
         className={mismatchedHost ? 'chat-link-mismatch' : undefined}
         rel="noreferrer noopener"
         onClick={(event) => {

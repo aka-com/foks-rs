@@ -2742,6 +2742,153 @@ test('the channel menu opens from the keyboard and returns focus to its row', as
   assert.equal(ui.screen.queryByRole('menu'), null);
 });
 
+test('Alt+Up/Down steps through channel rows and Alt+Shift+Up/Down through unread ones', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const journal = await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:household' },
+    (base) => {
+      // Only #chores and the muted #quiet have unread messages.
+      const read = (inbox: Parameters<Parameters<typeof withInbox>[2]>[0]) => {
+        inbox.conversations = inbox.conversations.map((conversation) =>
+          conversation.channel.name
+            ? conversation
+            : { ...conversation, unread: '0' },
+        );
+      };
+      return withInbox(
+        withInbox(
+          withChannels(base, 'team:household', [
+            { id: '11'.repeat(16), name: 'chores', unread: '3' },
+            { id: '22'.repeat(16), name: 'deploys' },
+            { id: '33'.repeat(16), name: 'quiet', unread: '2', muted: true },
+          ]),
+          'team:household',
+          read,
+        ),
+        'team:eng',
+        read,
+      );
+    },
+  );
+  await ui.waitFor(() =>
+    assert.deepEqual(teamChannels('Household'), [
+      '#general',
+      '#chores',
+      '#deploys',
+      '#quiet',
+    ]),
+  );
+  const open = (name: string) =>
+    ui.waitFor(() =>
+      assert.equal(
+        channelRow(name, 'Household').getAttribute('aria-current'),
+        'page',
+      ),
+    );
+  ui.fireEvent.click(general('Household'));
+  await open('#general');
+  const key = (
+    key: string,
+    shiftKey = false,
+    target: Element = document.body,
+  ) => ui.fireEvent.keyDown(target, { key, altKey: true, shiftKey });
+  key('ArrowDown');
+  await open('#chores');
+  key('ArrowDown');
+  await open('#deploys');
+  key('ArrowUp');
+  await open('#chores');
+  key('ArrowUp');
+  await open('#general');
+  // Alt+Shift skips channels without unread messages and muted ones.
+  key('ArrowDown', true);
+  await open('#chores');
+  // From #chores no other channel has unread messages: the reader is told,
+  // and stays.
+  const before = journal.length;
+  key('ArrowDown', true);
+  await ui.waitFor(() =>
+    assert.ok(
+      [...document.querySelectorAll('.toast-message')].some(
+        (node) => node.textContent === 'No other channel has unread messages.',
+      ),
+    ),
+  );
+  assert.equal(journal.length, before);
+  // The unread search wraps around the column; a plain step does not.
+  key('ArrowDown');
+  await open('#deploys');
+  key('ArrowDown', true);
+  await open('#chores');
+  // In the composer the keys belong to the field unless the caret is on its
+  // first line (Up) or its last line (Down).
+  await ui.screen.findByRole('textbox', { name: 'Message' });
+  const composer = document.querySelector<HTMLTextAreaElement>(
+    'textarea[aria-label="Message"]',
+  );
+  assert.ok(composer);
+  ui.fireEvent.change(composer, { target: { value: 'one\ntwo' } });
+  composer.setSelectionRange(5, 5);
+  const moves = journal.length;
+  key('ArrowUp', false, composer);
+  assert.equal(journal.length, moves);
+  key('ArrowDown', false, composer);
+  await open('#deploys');
+  // A dialog open over the tab keeps the keys from changing the view under it.
+  ui.fireEvent.click(
+    ui.screen.getAllByRole('button', { name: 'New channel' })[0],
+  );
+  await ui.screen.findByRole('dialog');
+  const blocked = journal.length;
+  key('ArrowUp');
+  key('ArrowUp', true);
+  assert.equal(journal.length, blocked);
+});
+
+test('messages from others are announced by sender and channel while the window has focus', async (t) => {
+  t.mock.method(document, 'hasFocus', () => true);
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const clock = new Clock();
+  let arrived = false;
+  await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:eng' },
+    (base) =>
+      withInbox(base, 'team:household', (inbox) => {
+        if (!arrived) return;
+        inbox.conversations = inbox.conversations.map((c) => ({
+          ...c,
+          unread: String(BigInt(c.unread) + 2n),
+          preview: {
+            sender: 'ee'.repeat(16),
+            send_time: '1900000000000',
+            insert_time: '1900000000000',
+            content: { kind: 'text', text: 'a private body' },
+          },
+        }));
+      }),
+    clock,
+  );
+  await clock.advance(1000);
+  await ui.waitFor(() => assert.ok(general('Household')));
+  const region = () => [
+    ...document.querySelectorAll('.chat-screen > p.offscreen[role="status"]'),
+  ];
+  assert.equal(region().length, 1);
+  assert.equal(region()[0].textContent, '');
+  arrived = true;
+  // The idle resynchronization brings the arrival in.
+  await clock.advance(301_000);
+  await ui.waitFor(() =>
+    assert.match(
+      region()[0].textContent ?? '',
+      /^2 new messages in #general in Household, latest from \S+$/,
+    ),
+  );
+  assert.doesNotMatch(region()[0].textContent ?? '', /private body/);
+});
+
 test('New channel opens the Create channel sheet on the open team', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   await mount(snapshot, { kind: 'chat', ref: 'team:household' });

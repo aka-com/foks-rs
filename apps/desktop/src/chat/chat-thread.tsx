@@ -360,6 +360,11 @@ export function ChatThread({
             onMarkAll={markAll}
             onKeyDown={markOnEscape}
             onQuote={channel.writable ? quote : undefined}
+            onLeave={
+              channel.writable
+                ? () => composerField.current?.focus()
+                : undefined
+            }
           />
           {channel.writable ? (
             <Composer

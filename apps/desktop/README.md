@@ -787,6 +787,30 @@ column's background offers New channel. The menu opens at the pointer, or at a
 focused channel row or team heading with the ContextMenu key or Shift+F10;
 dismissing it, or marking a channel read, returns focus to that row.
 
+Alt+Up and Alt+Down (Option on macOS) open the previous and next channel row
+the column draws, stopping at either end; channels of a folded team are not
+drawn and are skipped, and a search limits the steps to the rows it leaves.
+Alt+Shift+Up and Alt+Shift+Down open the previous and next channel with an
+unread count that the team's badge counts, so muted and hidden channels are
+skipped; that search wraps around the column, and a toast says so when no
+other channel has unread messages. Alt+Left and Alt+Right stay back and
+forward. In the composer the keys move the caret unless it is on the draft's
+first line (Up) or last line (Down), since macOS moves the caret to a
+paragraph boundary with Option+Up/Down. The keys do nothing while a dialog is
+open, as the rail's Ctrl+Tab does.
+
+Messages from others are announced to screen readers while the window has
+focus, through a visually hidden `role="status"` element in the Chat tab:
+"New message from priya.n in #general", or "3 new messages in #general,
+latest from priya.n", with the team's name added when more than one team has
+chat. The announcement names the sender and channel only, never the text,
+whatever the notification previews setting, and names no sender when the
+newest message is not authenticated Basic text. It is read from the inbox
+projections the column draws, at most once every five seconds, with arrivals
+in between merged into the next announcement; muted, hidden, unreadable and
+stopped channels, and the reader's own messages, are not announced. Arrivals
+while the window is not focused are left to desktop alerts.
+
 Every row is built from `useSidebarInbox()` — the `TeamInbox` projections
 `ChatInboxService` already keeps and polls for each eligible team, the same
 ones the rail's badge sums — so previews, channel lists and counts arrive for
@@ -963,19 +987,24 @@ focused. Other links open directly. The check runs in the renderer only:
 `open_chat_link` receives the URL and never the label, so it validates the URL
 but cannot compare the two.
 
+The message list is one tab stop: its current row, which is the row focus
+last entered while focus stays in the list or in a menu or popover a row
+opened, and otherwise the newest row. The current row is followed in tab order
+by its links and code-block buttons and then its toolbar; other rows' links
+leave the tab order until their row is current. On a focused row, Up and Down
+move to the previous and next row, Home and End to the first and last row the
+list holds, Enter opens the row's actions as a menu, and Esc moves focus to
+the composer. The list itself takes focus only while it draws no row, or when
+a control in it goes away.
+
 Each message row carries its actions (`message-actions.tsx`) in a toolbar over
 its top corner, shown while the row is hovered or holds focus, and named after
-the message's author and time. The message list keeps one toolbar in the tab
-order: that of the row focus last entered, while focus stays in the list or in
-a menu or popover a row opened, and otherwise that of the newest row. A toolbar
-is one tab stop, and the arrow keys, Home and End move along it. A right-click
-on the row, or the ContextMenu key or Shift+F10 on anything focused in it,
-opens the same actions as a menu. The toolbar follows the row's links and code
-blocks in tab order, so Tab from them reaches it but Shift+Tab into the row
-does not. Rows themselves are not focusable yet, so a row without links or
-code blocks is reached from the keyboard only when it is the newest; moving
-between rows with the arrow keys belongs to the conversation's keyboard
-navigation, which is not built. Copy message copies the message's
+the message's author and time. Only the current row's toolbar is in the tab
+order. A toolbar is one tab stop, and the arrow keys, Home and End move along
+it. A right-click on the row, the ContextMenu key or Shift+F10 on anything
+focused in it, or Enter on the row itself opens the same actions as a menu;
+Shift+F10 and the toolbar are the keyboard routes in WKWebView on macOS, which
+has no ContextMenu key. Copy message copies the message's
 Markdown source; it is the only action on an unsent or pending message. Quote
 reply, offered only where the reader can send, writes a quote as Basic text at
 the composer's caret, on a line of its own: a `>` line with the author in bold
@@ -1004,12 +1033,13 @@ focus, so a channel left halfway stays unread from where the reader stopped.
 When more is unread than a page holds, the list ends in "Load newer messages",
 which also loads as it scrolls into view. While the first new message is below
 the list, a banner gives the unread count with Jump to first new and Mark as
-read, and Esc marks the channel read when the composer is empty. The jump
-control at the foot of a scrolled-up list counts the messages from others that
-arrived since the reader scrolled up ("2 new messages"), and reads "Jump to
-latest" otherwise. Older messages load as the reader scrolls toward the top of
-the list; "Load older messages" stays in the tab order for the keyboard and
-appears when it has focus. A conversation holds at most 400 messages, fewer
+read, and Esc marks the channel read when the composer is empty (on a focused
+message row, Esc moves to the composer first). The jump control at the foot of
+a scrolled-up list counts the messages from others that arrived since the
+reader scrolled up ("2 new messages"), and reads "Jump to latest" otherwise.
+Older messages load as the reader scrolls toward the top of the list; "Load
+older messages" stays in the tab order for the keyboard and appears when it
+has focus. A conversation holds at most 400 messages, fewer
 when they are long: paging further back drops the newest ones, after which the
 list ends in "Load newer messages", and new messages drop the oldest. Switching
 to another channel or tab and back reopens a channel at the message the reader

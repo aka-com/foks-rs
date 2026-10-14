@@ -2439,6 +2439,91 @@ test('the message list has one toolbar tab stop, on the row focus last entered',
   assert.deepEqual(stops(), [article('Third')]);
 });
 
+test('message rows rove with the arrow keys and Enter opens their actions', async () => {
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action) => {
+        const reply = await base.chat(store, action);
+        if (action.action === 'history' && reply.result.kind === 'history') {
+          const row = (sequence: string, text: string) => ({
+            id: sequence.padStart(2, '0').repeat(16),
+            sequence,
+            sender: null,
+            send_time: '1700000000000',
+            insert_time: '1700000000001',
+            content: { kind: 'text' as const, text },
+          });
+          reply.result.messages = [
+            row('1', 'Notes at https://docs.example/a'),
+            row('2', 'Second'),
+            row('3', 'Third'),
+          ];
+          reply.result.before = null;
+        }
+        return reply;
+      },
+    }),
+    false,
+  );
+  const article = (text: string) => {
+    const node = ui.screen.getByText(text).closest('article');
+    assert.ok(node);
+    return node;
+  };
+  await ui.screen.findByText('Third');
+  const first = document
+    .querySelector('a[href="https://docs.example/a"]')
+    ?.closest('article');
+  assert.ok(first);
+  const link = first.querySelector<HTMLElement>('a')!;
+  const stops = () =>
+    [...document.querySelectorAll<HTMLElement>('article.chat-message')].filter(
+      (node) => node.tabIndex === 0,
+    );
+  // The newest row is the list's one tab stop; the list itself and the links
+  // of other rows are out of the tab order.
+  assert.deepEqual(stops(), [article('Third')]);
+  assert.equal(ui.screen.getByLabelText('Message history').tabIndex, -1);
+  assert.equal(link.tabIndex, -1);
+  const third = article('Third');
+  ui.act(() => third.focus());
+  ui.fireEvent.keyDown(third, { key: 'ArrowUp' });
+  assert.equal(document.activeElement, article('Second'));
+  assert.deepEqual(stops(), [article('Second')]);
+  ui.fireEvent.keyDown(article('Second'), { key: 'Home' });
+  assert.equal(document.activeElement, first);
+  // The current row's links join the tab order.
+  assert.equal(link.tabIndex, 0);
+  ui.fireEvent.keyDown(first, { key: 'ArrowUp' });
+  assert.equal(document.activeElement, first);
+  ui.fireEvent.keyDown(first, { key: 'End' });
+  assert.equal(document.activeElement, third);
+  ui.fireEvent.keyDown(third, { key: 'ArrowDown' });
+  assert.equal(document.activeElement, third);
+  // A modified arrow is not a row move.
+  ui.fireEvent.keyDown(third, { key: 'ArrowUp', altKey: true });
+  assert.equal(document.activeElement, third);
+  // Enter on the row opens its actions; dismissing them returns to the row.
+  ui.fireEvent.keyDown(third, { key: 'Enter' });
+  const copy = await ui.screen.findByRole('menuitem', { name: 'Copy message' });
+  await ui.waitFor(() => assert.equal(document.activeElement, copy));
+  ui.fireEvent.keyDown(copy, { key: 'Escape' });
+  await ui.waitFor(() => assert.equal(document.activeElement, third));
+  // Enter on a link in a row is the link's.
+  ui.act(() => link.focus());
+  ui.fireEvent.keyDown(link, { key: 'Enter' });
+  assert.equal(ui.screen.queryByRole('menu'), null);
+  // Esc on a row moves to the composer.
+  ui.act(() => third.focus());
+  ui.fireEvent.keyDown(third, { key: 'Escape' });
+  assert.equal(
+    document.activeElement,
+    ui.screen.getByRole('textbox', { name: 'Message' }),
+  );
+  assert.deepEqual(stops(), [third]);
+});
+
 for (const offline of [true, false]) {
   test(`pending preparations can be cancelled when channels are ${offline ? 'offline' : 'restricted'}`, async () => {
     let seeded = false;
