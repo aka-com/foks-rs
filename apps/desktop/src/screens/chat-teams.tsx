@@ -326,10 +326,12 @@ function channelCount(listed: ListedChannel | undefined): string | null {
     : null;
 }
 
-/** A channel row the column draws, in the order it draws them. */
+/** A channel the column lists, in the order it lists them. */
 interface ColumnChannel {
   team: StoreRef;
   channel: string;
+  /** The row is drawn: its team is not folded, or a search overrides the fold. */
+  drawn: boolean;
   /**
    * The row draws an unread count that `teamUnread` counts: the team is
    * reachable and the conversation is neither muted nor hidden.
@@ -339,13 +341,15 @@ interface ColumnChannel {
 
 /**
  * The channel Alt+Up/Down (`unread` false) or Alt+Shift+Up/Down (`unread`
- * true) moves to from the open channel, in the column's drawn order. A plain
- * step stops at either end; the unread search wraps around and skips the open
- * channel. With no open channel among the rows, the step starts at the open
- * team's first row, or at the column's end it moves away from.
+ * true) moves to from the open channel, in the column's order. A plain step
+ * moves to the next drawn row and stops at either end; the unread search
+ * also covers the rows of folded teams, wraps around and skips the open
+ * channel. With the open channel not listed, the step starts where the open
+ * team's rows start (`teamStarts`), or at the column's end it moves away from.
  */
 function channelStep(
   rows: readonly ColumnChannel[],
+  teamStarts: ReadonlyMap<StoreRef, number>,
   team: StoreRef | undefined,
   channel: string | undefined,
   direction: 1 | -1,
@@ -354,12 +358,12 @@ function channelStep(
   const at = rows.findIndex(
     (row) => row.team === team && row.channel === channel,
   );
-  const teamStart = rows.findIndex((row) => row.team === team);
+  const teamStart = team === undefined ? undefined : teamStarts.get(team);
   // A position between rows when the open channel is not one of them.
   const from =
     at >= 0
       ? at
-      : teamStart >= 0
+      : teamStart !== undefined
         ? teamStart - 0.5
         : direction > 0
           ? -0.5
@@ -369,7 +373,8 @@ function channelStep(
     direction > 0
       ? indices.filter((index) => index > from)
       : indices.filter((index) => index < from).reverse();
-  if (!unread) return rows[ahead[0] ?? -1];
+  if (!unread)
+    return ahead.map((index) => rows[index]).find((row) => row.drawn);
   const behind =
     direction > 0
       ? indices.filter((index) => index < from)
@@ -603,10 +608,12 @@ export function ChatTeamColumn({
   };
   let listed = 0;
   const teamRows: ReactNode[] = [];
-  // The channel rows drawn, in order, for Alt+Up/Down: a folded team's rows
-  // are not drawn and are skipped.
-  const drawnChannels: ColumnChannel[] = [];
+  // Every listed channel, in order, for Alt+Up/Down, with where each team's
+  // channels start, including a team the search leaves out or that has none.
+  const columnChannels: ColumnChannel[] = [];
+  const teamStarts = new Map<StoreRef, number>();
   rows.forEach((row) => {
+    teamStarts.set(row.store.id, columnChannels.length);
     const named = row.store.name.toLowerCase().includes(query);
     const matching = (row.channels ?? []).filter(
       ({ channel }) =>
@@ -615,19 +622,20 @@ export function ChatTeamColumn({
     if (query && !named && !matching.length) return;
     listed += 1;
     listedChannels += matching.length;
-    if (query || !collapsedTeam(row.store.id))
-      for (const listedChannel of matching) {
-        const { conversation } = listedChannel;
-        drawnChannels.push({
-          team: row.store.id,
-          channel: listedChannel.channel.id,
-          unread:
-            row.reachable &&
-            channelCount(listedChannel) !== null &&
-            !conversation?.muted &&
-            !conversation?.hidden,
-        });
-      }
+    const drawn = Boolean(query) || !collapsedTeam(row.store.id);
+    for (const listedChannel of matching) {
+      const { conversation } = listedChannel;
+      columnChannels.push({
+        team: row.store.id,
+        channel: listedChannel.channel.id,
+        drawn,
+        unread:
+          row.reachable &&
+          channelCount(listedChannel) !== null &&
+          !conversation?.muted &&
+          !conversation?.hidden,
+      });
+    }
     teamRows.push(
       <TeamHeading
         key={row.store.id}
@@ -651,9 +659,10 @@ export function ChatTeamColumn({
     );
   });
   // Alt+Up/Down opens the previous or next channel row, and Alt+Shift+Up/Down
-  // the previous or next one with unread messages. The listener is on the
-  // document, beyond a dialog's event boundary, so it does nothing while a
-  // dialog is open, as the rail's Ctrl+Tab does.
+  // the previous or next one with unread messages, unfolding its team when
+  // the team is folded. The listener is on the document, beyond a dialog's
+  // event boundary, so it does nothing while a dialog is open, as the rail's
+  // Ctrl+Tab does.
   const step = useEffectEvent((event: KeyboardEvent): void => {
     if (
       (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') ||
@@ -668,14 +677,20 @@ export function ChatTeamColumn({
     if (!caretAtEdge(event.target, direction)) return;
     event.preventDefault();
     const next = channelStep(
-      drawnChannels,
+      columnChannels,
+      teamStarts,
       selected,
       activeChannel,
       direction,
       event.shiftKey,
     );
-    if (next) onOpen(next.team, next.channel);
-    else if (event.shiftKey)
+    if (next) {
+      // The unfold lasts while the column is mounted; the stored fold is left
+      // as the reader set it.
+      if (!next.drawn)
+        setFolds((prior) => new Map(prior).set(next.team, false));
+      onOpen(next.team, next.channel);
+    } else if (event.shiftKey)
       toasts?.show('No other channel has unread messages.');
   });
   useEffect(() => {

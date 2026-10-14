@@ -2846,6 +2846,77 @@ test('Alt+Up/Down steps through channel rows and Alt+Shift+Up/Down through unrea
   assert.equal(journal.length, blocked);
 });
 
+test('Alt+Shift+Up/Down reaches an unread channel in a folded team and unfolds it', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  const journal = await mount(
+    snapshot,
+    { kind: 'chat', ref: 'team:eng' },
+    (base) => {
+      const read = (inbox: Parameters<Parameters<typeof withInbox>[2]>[0]) => {
+        inbox.conversations = inbox.conversations.map((conversation) =>
+          conversation.channel.name
+            ? conversation
+            : { ...conversation, unread: '0' },
+        );
+      };
+      return withInbox(
+        withInbox(
+          withChannels(
+            withChannels(base, 'team:household', [
+              { id: '11'.repeat(16), name: 'chores', unread: '3' },
+            ]),
+            'team:eng',
+            [{ id: '44'.repeat(16), name: 'builds' }],
+          ),
+          'team:household',
+          read,
+        ),
+        'team:eng',
+        read,
+      );
+    },
+  );
+  await ui.waitFor(() =>
+    assert.deepEqual(teamChannels('Household'), ['#general', '#chores']),
+  );
+  assert.deepEqual(teamChannels('Engineering'), ['#general', '#builds']);
+  // Engineering is listed above Household.
+  assert.ok(
+    head('Engineering').compareDocumentPosition(head('Household')) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  const open = (name: string, team: string) =>
+    ui.waitFor(() =>
+      assert.equal(channelRow(name, team).getAttribute('aria-current'), 'page'),
+    );
+  const key = (key: string, shiftKey = false) =>
+    ui.fireEvent.keyDown(document.body, { key, altKey: true, shiftKey });
+  ui.fireEvent.click(general('Engineering'));
+  await open('#general', 'Engineering');
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Collapse Household' }),
+  );
+  assert.deepEqual(teamChannels('Household'), []);
+  // The folded heading counts #chores, so the unread search finds it and
+  // unfolds its team.
+  key('ArrowDown', true);
+  await open('#chores', 'Household');
+  assert.ok(ui.screen.getByRole('button', { name: 'Collapse Household' }));
+  assert.equal(document.querySelector('.toast-message'), null);
+  // With the open channel's team folded again, a plain step moves from that
+  // team's place in the column: nothing follows it, and Engineering's last
+  // row precedes it.
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Collapse Household' }),
+  );
+  const before = journal.length;
+  key('ArrowDown');
+  await settle();
+  assert.equal(journal.length, before);
+  key('ArrowUp');
+  await open('#builds', 'Engineering');
+});
+
 test('messages from others are announced by sender and channel while the window has focus', async (t) => {
   t.mock.method(document, 'hasFocus', () => true);
   const snapshot = await snapshotWithChat(['personal', 'acme']);

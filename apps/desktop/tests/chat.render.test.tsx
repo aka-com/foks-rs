@@ -2524,6 +2524,62 @@ test('message rows rove with the arrow keys and Enter opens their actions', asyn
   assert.deepEqual(stops(), [third]);
 });
 
+test("scrolled up, the first message row on screen is the list's tab stop", async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => false,
+  });
+  const channel = await busyChannel(5, 5);
+  await setup(channel.override, false);
+  await ui.screen.findByText('Message 5');
+  const article = (text: string) => {
+    const node = ui.screen.getByText(text).closest('article');
+    assert.ok(node);
+    return node;
+  };
+  const stops = () =>
+    [...document.querySelectorAll<HTMLElement>('article.chat-message')].filter(
+      (node) => node.tabIndex === 0,
+    );
+  assert.deepEqual(stops(), [article('Message 5')]);
+  const scroller = ui.screen.getByLabelText('Message history');
+  Object.defineProperty(scroller, 'scrollHeight', {
+    configurable: true,
+    value: 1_000,
+  });
+  Object.defineProperty(scroller, 'clientHeight', {
+    configurable: true,
+    value: 100,
+  });
+  scroller.getBoundingClientRect = () =>
+    ({ top: 0, bottom: 100, height: 100 }) as DOMRect;
+  // Rows of 50px, 60px apart: the third row is the first whose top is on
+  // screen.
+  const lay = (tops: number[], heights: number[]) =>
+    document
+      .querySelectorAll<HTMLElement>('article.chat-message')
+      .forEach((node, index) => {
+        const top = tops[index];
+        const height = heights[index];
+        node.getBoundingClientRect = () =>
+          ({ top, bottom: top + height, height }) as DOMRect;
+      });
+  lay([-90, -30, 30, 90, 150], [50, 50, 50, 50, 50]);
+  scroller.scrollTop = 0;
+  ui.fireEvent.scroll(scroller);
+  await ui.waitFor(() => assert.deepEqual(stops(), [article('Message 3')]));
+  assert.equal(scroller.tabIndex, -1);
+  // A row taller than the list that spans its top edge is the tab stop when
+  // no row's top is on screen.
+  lay([-90, -30, 210, 270, 330], [50, 230, 50, 50, 50]);
+  ui.fireEvent.scroll(scroller);
+  await ui.waitFor(() => assert.deepEqual(stops(), [article('Message 2')]));
+  // At the bottom of the list, the newest row is the tab stop again.
+  scroller.scrollTop = 900;
+  ui.fireEvent.scroll(scroller);
+  await ui.waitFor(() => assert.deepEqual(stops(), [article('Message 5')]));
+});
+
 for (const offline of [true, false]) {
   test(`pending preparations can be cancelled when channels are ${offline ? 'offline' : 'restricted'}`, async () => {
     let seeded = false;

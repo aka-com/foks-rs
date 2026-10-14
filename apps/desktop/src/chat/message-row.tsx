@@ -20,8 +20,8 @@ import { useChatConversationContext } from './conversation-provider';
  * its avatar, author and time are kept for screen readers only, and anything
  * in `status` stays visible. The row's message actions
  * ({@link useMessageActions}) draw a toolbar over its top corner. The row is
- * focusable; only the list's current row is in the tab order, with the links
- * in its content.
+ * focusable and carries its key in the list as `data-row`; only the list's
+ * current row is in the tab order, with the links in its content.
  */
 export function MessageRow({
   className,
@@ -84,6 +84,7 @@ export function MessageRow({
       ]
         .filter(Boolean)
         .join(' ')}
+      data-row={actions.rowKey}
       {...attributes}
       title={grouped ? messageTime(at) : undefined}
       tabIndex={tabIndex}

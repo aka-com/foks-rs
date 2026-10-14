@@ -790,10 +790,12 @@ dismissing it, or marking a channel read, returns focus to that row.
 Alt+Up and Alt+Down (Option on macOS) open the previous and next channel row
 the column draws, stopping at either end; channels of a folded team are not
 drawn and are skipped, and a search limits the steps to the rows it leaves.
-Alt+Shift+Up and Alt+Shift+Down open the previous and next channel with an
-unread count that the team's badge counts, so muted and hidden channels are
-skipped; that search wraps around the column, and a toast says so when no
-other channel has unread messages. Alt+Left and Alt+Right stay back and
+From an open channel that is not drawn, the step starts at its place in the
+column. Alt+Shift+Up and Alt+Shift+Down open the previous and next channel
+with an unread count that the team's badge counts, so muted and hidden
+channels are skipped; that search includes the channels of folded teams and
+unfolds the team it opens a channel in, wraps around the column, and a toast
+says so when no other channel has unread messages. Alt+Left and Alt+Right stay back and
 forward. In the composer the keys move the caret unless it is on the draft's
 first line (Up) or last line (Down), since macOS moves the caret to a
 paragraph boundary with Option+Up/Down. The keys do nothing while a dialog is
@@ -989,7 +991,9 @@ but cannot compare the two.
 
 The message list is one tab stop: its current row, which is the row focus
 last entered while focus stays in the list or in a menu or popover a row
-opened, and otherwise the newest row. The current row is followed in tab order
+opened; otherwise, while the list is scrolled away from its bottom, the first
+row on screen, so Tab into the list keeps the reading position; and otherwise
+the newest row. The current row is followed in tab order
 by its links and code-block buttons and then its toolbar; other rows' links
 leave the tab order until their row is current. On a focused row, Up and Down
 move to the previous and next row, Home and End to the first and last row the
@@ -1178,9 +1182,11 @@ and the ⌘K palette. A palette item result is one move rather than two:
 `navigateAndSelect` opens the store page with the item selected on it, so a
 held-back navigation cannot leave another page's item in the details panel.
 
-Two shortcuts sit on the document, where an open dialog cannot intercept them,
-so they test `anyDialogOpen()` themselves: Control-Tab in `shell/sidebar.tsx`
-and ⌘K in `shell/search-palette.tsx` do nothing while a dialog owns the window.
+Three shortcuts sit on the document, where an open dialog cannot intercept
+them, so they test `anyDialogOpen()` themselves: Control-Tab in
+`shell/sidebar.tsx`, ⌘K in `shell/search-palette.tsx`, and Alt+Up/Down and
+Alt+Shift+Up/Down in `screens/chat-teams.tsx` do nothing while a dialog owns
+the window.
 
 ## Testing
 

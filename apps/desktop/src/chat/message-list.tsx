@@ -53,10 +53,12 @@ type Viewport = Pick<
  * owns the history window, the viewport and the read intent; this list owns
  * what it measures and draws from them.
  *
- * The rows take one tab stop, the current row (a roving tabindex). On a
- * focused row, Up and Down move to the previous and next row, Home and End to
- * the first and last row held, Enter opens the row's actions as a menu, and
- * Esc calls `onLeave`.
+ * The rows take one tab stop, the current row (a roving tabindex): the row
+ * focus last entered, else the first row on screen while the list is
+ * scrolled away from its bottom, else the newest row. On a focused row, Up
+ * and Down move to the previous and next row, Home and End to the first and
+ * last row held, Enter opens the row's actions as a menu, and Esc calls
+ * `onLeave`.
  */
 export function MessageList({
   channel,
@@ -170,6 +172,13 @@ export function MessageList({
     () => measureNew(),
     [measureNew, messages, newFrom, atBottom],
   );
+  // The first row on screen, which takes the tab stop while the list is
+  // scrolled up, so Tab into the list does not scroll to the newest row.
+  const [screenRow, setScreenRow] = useState<string | null>(null);
+  const measureScreenRow = useCallback(() => {
+    const element = scroller.current;
+    setScreenRow(element ? rowOnScreen(element) : null);
+  }, [scroller]);
   // Scrolling measures once per frame.
   const measuring = useRef<number | null>(null);
   const measureOnScroll = () => {
@@ -177,6 +186,7 @@ export function MessageList({
     measuring.current = requestAnimationFrame(() => {
       measuring.current = null;
       measureNew();
+      measureScreenRow();
     });
   };
   useEffect(
@@ -230,14 +240,16 @@ export function MessageList({
   const { held, unsent } = splitThreadRows(rows);
   // One row is current, and it is the list's tab stop with its links and its
   // toolbar: the row focus last entered, while focus stays in the list and
-  // the row is drawn, otherwise the newest row. Other rows are reached with
-  // the arrow keys, by pointer, or by focus entering the row, so a Tab across
-  // the list does not stop at every message.
+  // the row is drawn; otherwise, while the list is away from its bottom, the
+  // first row on screen, which focus reaches without scrolling the list;
+  // otherwise the newest row. Other rows are reached with the arrow keys, by
+  // pointer, or by focus entering the row, so a Tab across the list does not
+  // stop at every message.
   const [focusedRow, setFocusedRow] = useState<string | null>(null);
   // The claim lasts while focus is in the list or in a menu or popover
   // (`.menu-portal`) a row opened; focus anywhere else, or on no element,
-  // returns the tab stop to the newest row. `focusin` also covers focus that
-  // moves on after the focused element was removed without a `focusout`.
+  // ends it. `focusin` also covers focus that moves on after the focused
+  // element was removed without a `focusout`.
   useEffect(() => {
     const keeps = (node: EventTarget | null) =>
       node instanceof Element &&
@@ -264,10 +276,19 @@ export function MessageList({
         row.kind === 'operation',
     )
     .map((row) => row.key);
+  // Measured again when the rows drawn change, since rows added or removed
+  // move the ones on screen.
+  const rowKeys = messageRows.join(' ');
+  useLayoutEffect(
+    () => measureScreenRow(),
+    [measureScreenRow, rowKeys, atBottom],
+  );
   const currentRow =
     focusedRow !== null && messageRows.includes(focusedRow)
       ? focusedRow
-      : (messageRows.at(-1) ?? null);
+      : !atBottom && screenRow !== null && messageRows.includes(screenRow)
+        ? screenRow
+        : (messageRows.at(-1) ?? null);
   const rowTabStop = useMemo<RowTabStop>(
     () => ({ current: currentRow, claim: setFocusedRow }),
     [currentRow],
@@ -516,6 +537,7 @@ function OperationRow({
   return (
     <article
       className={open ? 'chat-message actions-open' : 'chat-message'}
+      data-row={row.key}
       data-operation={op.id}
       tabIndex={tabIndex}
       onContextMenu={onContextMenu}
@@ -536,6 +558,31 @@ function OperationRow({
       {actions}
     </article>
   );
+}
+
+/**
+ * The `data-row` key of the first row whose top edge is within the visible
+ * area of `root`, else of the row that spans its top edge. Rows are in
+ * document order, so the search halves the list. `null` when no row is laid
+ * out on screen.
+ */
+function rowOnScreen(root: HTMLElement): string | null {
+  const rows = root.querySelectorAll<HTMLElement>('article[data-row]');
+  const { top, bottom } = root.getBoundingClientRect();
+  let low = 0;
+  let high = rows.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (rows[middle].getBoundingClientRect().top >= top) high = middle;
+    else low = middle + 1;
+  }
+  const below = rows[low]?.getBoundingClientRect();
+  if (below && below.height > 0 && below.top < bottom)
+    return rows[low].dataset.row ?? null;
+  const spanning = rows[low - 1]?.getBoundingClientRect();
+  if (spanning && spanning.height > 0 && spanning.bottom > top)
+    return rows[low - 1].dataset.row ?? null;
+  return null;
 }
 
 /** When the first new message arrived: the clock today, else the date too. */
