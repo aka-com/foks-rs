@@ -191,13 +191,6 @@ function assertSent(
   assert.equal(current.sendError, '');
 }
 
-test('production composer import aliases the canonical application-service hook', async () => {
-  const { useMessageComposer } = await vite.ssrLoadModule(
-    '/src/chat/use-message-composer.ts',
-  );
-  assert.equal(useMessageComposer, useChatComposer);
-});
-
 test('typing re-renders only the draft reader, not the thread that draws the message list', async () => {
   const h = await setup();
   let thread = 0;
@@ -480,10 +473,10 @@ test('the application service completes preparation after the composer unmounts'
 });
 
 test('history revisions append incrementally, retain older rows, and replace gaps and resets', async () => {
-  const { conversationResult } = (await vite.ssrLoadModule(
+  const { mergeHistoryPage } = (await vite.ssrLoadModule(
     '/src/chat/conversation-model.ts',
   )) as typeof import('../src/chat/conversation-model');
-  const { eventFromReply } = (await vite.ssrLoadModule(
+  const { historyEvent } = (await vite.ssrLoadModule(
     '/src/chat/conversation-events.ts',
   )) as typeof import('../src/chat/conversation-events');
   const channel: ChatChannel = {
@@ -549,15 +542,11 @@ test('history revisions append incrementally, retain older rows, and replace gap
         before: string | null,
         placement?: import('../src/chat/conversation-model').HistoryPlacement,
       ) => {
-        setHeld(
-          (previous) =>
-            conversationResult(
-              { operations: [], history: placement?.replace ? null : previous },
-              eventFromReply(
-                { action: 'history', channel: channelId, before },
-                page,
-              ),
-            ).history,
+        setHeld((previous) =>
+          mergeHistoryPage(
+            placement?.replace ? null : previous,
+            historyEvent(page, before),
+          ),
         );
       },
       [],
@@ -703,10 +692,10 @@ test('changing channels ignores the old in-flight page and starts a full load', 
 });
 
 test('a tail costs one read per arrival, and a revision that moved no position costs none', async () => {
-  const { conversationResult } = (await vite.ssrLoadModule(
+  const { mergeHistoryPage } = (await vite.ssrLoadModule(
     '/src/chat/conversation-model.ts',
   )) as typeof import('../src/chat/conversation-model');
-  const { eventFromReply } = (await vite.ssrLoadModule(
+  const { historyEvent } = (await vite.ssrLoadModule(
     '/src/chat/conversation-events.ts',
   )) as typeof import('../src/chat/conversation-events');
   const channel: ChatChannel = {
@@ -773,15 +762,11 @@ test('a tail costs one read per arrival, and a revision that moved no position c
         before: string | null,
         placement?: import('../src/chat/conversation-model').HistoryPlacement,
       ) => {
-        setHeld(
-          (previous) =>
-            conversationResult(
-              { operations: [], history: placement?.replace ? null : previous },
-              eventFromReply(
-                { action: 'history', channel: channelId, before },
-                page,
-              ),
-            ).history,
+        setHeld((previous) =>
+          mergeHistoryPage(
+            placement?.replace ? null : previous,
+            historyEvent(page, before),
+          ),
         );
       },
       [],
@@ -866,10 +851,10 @@ test('a tail costs one read per arrival, and a revision that moved no position c
 });
 
 test('an unread channel opens at its first unread row and pages forward while detached', async () => {
-  const { conversationResult } = (await vite.ssrLoadModule(
+  const { mergeHistoryPage } = (await vite.ssrLoadModule(
     '/src/chat/conversation-model.ts',
   )) as typeof import('../src/chat/conversation-model');
-  const { eventFromReply } = (await vite.ssrLoadModule(
+  const { historyEvent } = (await vite.ssrLoadModule(
     '/src/chat/conversation-events.ts',
   )) as typeof import('../src/chat/conversation-events');
   const channel: ChatChannel = {
@@ -947,27 +932,11 @@ test('an unread channel opens at its first unread row and pages forward while de
         before: string | null,
         placement: import('../src/chat/conversation-model').HistoryPlacement = {},
       ) => {
-        const event = eventFromReply(
-          { action: 'history', channel: channelId, before },
-          page,
-        );
-        assert.equal(event.kind, 'history');
-        if (event.kind !== 'history') return;
-        setHeld(
-          (previous) =>
-            conversationResult(
-              {
-                operations: [],
-                history: placement.replace ? null : previous,
-              },
-              {
-                ...event,
-                ...(placement.newer ? { newer: true as const } : {}),
-                ...(placement.detached === undefined
-                  ? {}
-                  : { detached: placement.detached }),
-              },
-            ).history,
+        setHeld((previous) =>
+          mergeHistoryPage(
+            placement.replace ? null : previous,
+            historyEvent(page, before, placement),
+          ),
         );
       },
       [],

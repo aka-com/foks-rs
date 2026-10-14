@@ -1,9 +1,7 @@
 import type { ChatMessage, ChatResult } from '../chat-contract';
-import type { ConversationEvent } from './conversation-events';
+import type { HistoryEvent } from './conversation-events';
 import { CHAT_HISTORY_BYTES, CHAT_HISTORY_ROWS } from '../chat-limits';
 import { channelIntegrity } from './errors';
-import { delivered, reconcileOperations, observeMessages } from './operations';
-import type { TrackedOperation } from './operations';
 
 export interface HistoryWindow {
   channel: string;
@@ -40,49 +38,17 @@ export type AcceptHistory = (
   placement?: HistoryPlacement,
   sources?: readonly ChatResult[],
 ) => HistoryWindow | void;
-export interface ConversationState {
-  operations: TrackedOperation[];
-  history: HistoryWindow | null;
-}
-export const emptyConversation = (): ConversationState => ({
-  operations: [],
-  history: null,
-});
-
-/** History acceptance and delivery observation commit together, or neither commits. */
-export function conversationResult(
-  state: ConversationState,
-  result: ConversationEvent,
-): ConversationState {
-  if (result.kind === 'reset') return emptyConversation();
-  if (result.kind === 'access')
-    return {
-      operations: state.operations.map((op) =>
-        result.readable.has(op.channel) ? op : { ...op, text: undefined },
-      ),
-      history:
-        state.history && result.readable.has(state.history.channel)
-          ? state.history
-          : null,
-    };
-  if (result.kind === 'status-unresolved')
-    return {
-      ...state,
-      operations: state.operations.map((op) =>
-        op.id === result.operation ? { ...op, statusUnknown: true } : op,
-      ),
-    };
-  if (result.kind !== 'history') {
-    let operations = reconcileOperations(state.operations, result);
-    if (state.history)
-      operations = observeMessages(
-        operations,
-        delivered(state.history.messages),
-      );
-    return { ...state, operations };
-  }
-  const previous =
-    state.history?.channel === result.channel ? state.history : null;
+/**
+ * Merges a verified history page into the window held for its channel and
+ * returns the new window; a window held for another channel is discarded.
+ * Throws when the page conflicts with a held row or the merged window
+ * exceeds the history limits. `held` is never modified.
+ */
+export function mergeHistoryPage(
+  held: HistoryWindow | null,
+  result: HistoryEvent,
+): HistoryWindow {
+  const previous = held?.channel === result.channel ? held : null;
   // A newer page is a range read past the held tail. It extends the window at
   // the newest end and keeps the older cursor. One that does not continue the
   // held tail, because the agent narrowed the range or the server omitted
@@ -133,22 +99,19 @@ export function conversationResult(
   const verification = new Map(reset ? [] : previous?.verification);
   for (const message of incoming) verification.set(message.id, result.missing);
   return {
-    operations: reconcileOperations(state.operations, result),
-    history: {
-      channel: result.channel,
-      messages,
-      verification,
-      before:
-        previous && (result.incremental || (newer && !reset))
-          ? previous.before
-          : reset || older || !previous?.before
-            ? result.before
-            : previous.before,
-      // A tail or incremental page reaches the head; an older page leaves
-      // the newest end where it was.
-      detached:
-        result.detached ?? (older ? (previous?.detached ?? false) : false),
-    },
+    channel: result.channel,
+    messages,
+    verification,
+    before:
+      previous && (result.incremental || (newer && !reset))
+        ? previous.before
+        : reset || older || !previous?.before
+          ? result.before
+          : previous.before,
+    // A tail or incremental page reaches the head; an older page leaves the
+    // newest end where it was.
+    detached:
+      result.detached ?? (older ? (previous?.detached ?? false) : false),
   };
 }
 

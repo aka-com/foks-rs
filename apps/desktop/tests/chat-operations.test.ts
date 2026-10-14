@@ -1,28 +1,27 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { reconcileOperations as reduceOperations } from '../src/chat/operations';
+import {
+  delivered,
+  observeMessages,
+  reconcileOperations as reduceOperations,
+} from '../src/chat/operations';
 import type {
   ChatAction,
   ChatOperation,
   ChatResult,
 } from '../src/chat-contract';
-import { eventFromReply } from '../src/chat/conversation-events';
-import {
-  conversationResult as reduceConversation,
-  emptyConversation,
-} from '../src/chat/conversation-model';
-import type { ConversationState } from '../src/chat/conversation-model';
+import { eventFromReply, historyEvent } from '../src/chat/conversation-events';
+import { mergeHistoryPage } from '../src/chat/conversation-model';
 import type { TrackedOperation } from '../src/chat/operations';
 const reconcileOperations = (
   old: TrackedOperation[],
   action: ChatAction,
   result: ChatResult,
 ) => reduceOperations(old, eventFromReply(action, result));
-const conversationResult = (
-  state: ConversationState,
-  action: ChatAction,
-  result: ChatResult,
-) => reduceConversation(state, eventFromReply(action, result));
+const page = (result: ChatResult, before: string | null = null) => {
+  if (result.kind !== 'history') throw new Error('history expected');
+  return historyEvent(result, before);
+};
 const op: ChatOperation = {
   id: 'a'.repeat(32),
   channel: 'b'.repeat(32),
@@ -115,20 +114,18 @@ test('history observation survives later ledger replies without retaining plaint
   assert.equal(refreshed[0].text, undefined);
 });
 
-test('atomic model handles history before pending and rejects conflicting pages without dropping sends', async () => {
-  const action = {
-    action: 'history',
-    channel: op.channel,
-    before: null,
-  } as const;
-  const accepted = conversationResult(emptyConversation(), action, history);
-  const state = conversationResult(
-    accepted,
-    { action: 'pending' },
-    { kind: 'pending', operations: [op] },
+test('a pending reply after accepted history keeps the send observed, and a conflicting page is refused', () => {
+  const window = mergeHistoryPage(null, page(history));
+  const rows = observeMessages(
+    reconcileOperations(
+      [],
+      { action: 'pending' },
+      { kind: 'pending', operations: [op] },
+    ),
+    delivered(window.messages),
   );
-  assert.equal(state.operations[0].observed, true);
-  assert.equal(state.history?.messages.length, 1);
+  assert.equal(rows[0].observed, true);
+  assert.equal(window.messages.length, 1);
   if (history.kind !== 'history') throw new Error('fixture');
   const conflict = {
     ...history,
@@ -137,59 +134,64 @@ test('atomic model handles history before pending and rejects conflicting pages 
       content: { kind: 'text' as const, text: 'changed' },
     })),
   };
-  assert.throws(() => conversationResult(state, action, conflict));
-  const unresolved = conversationResult(
-    state,
-    { action: 'pending' },
-    { kind: 'pending', operations: [{ ...op, id: 'e'.repeat(32) }] },
+  assert.throws(() => mergeHistoryPage(window, page(conflict)), {
+    code: 'chat-channel-integrity',
+  });
+  // A different row at a held sequence is refused, and the held window is
+  // unchanged.
+  assert.throws(
+    () =>
+      mergeHistoryPage(
+        window,
+        page({
+          ...history,
+          messages: [{ ...history.messages[0], id: 'e'.repeat(32) }],
+        }),
+      ),
+    { code: 'chat-channel-integrity' },
   );
-  assert.throws(() =>
-    conversationResult(unresolved, action, {
-      ...history,
-      messages: [{ ...history.messages[0], id: 'e'.repeat(32) }],
-    }),
-  );
-  assert.equal(
-    unresolved.operations.find((o) => o.id === 'e'.repeat(32))?.observed,
-    undefined,
-  );
+  assert.deepEqual(window.messages, history.messages);
 });
 
 test('an unverifiable row that a later read opens is replaced, not a conflict', () => {
-  const action = {
-    action: 'history',
-    channel: op.channel,
-    before: null,
-  } as const;
   if (history.kind !== 'history') throw new Error('fixture');
   const row = history.messages[0];
   const unverifiable = {
     ...history,
     messages: [{ ...row, content: { kind: 'unverifiable' as const } }],
   };
+  const action = {
+    action: 'history',
+    channel: op.channel,
+    before: null,
+  } as const;
   // An unverifiable row bearing a sent message's ID is no delivery evidence.
-  const held = conversationResult(
-    { operations: [{ ...op, text: 'hello' }], history: null },
+  const held = mergeHistoryPage(null, page(unverifiable));
+  const sends = reconcileOperations(
+    [{ ...op, text: 'hello' }],
     action,
     unverifiable,
   );
-  assert.equal(held.operations[0].observed, undefined);
-  assert.equal(held.operations[0].text, 'hello');
+  assert.equal(sends[0].observed, undefined);
+  assert.equal(sends[0].text, 'hello');
   // The reader's team view now holds the key generation the row names.
-  const opened = conversationResult(held, action, history);
-  assert.deepEqual(opened.history?.messages, history.messages);
-  assert.equal(opened.operations[0].observed, true);
+  const opened = mergeHistoryPage(held, page(history));
+  assert.deepEqual(opened.messages, history.messages);
+  assert.equal(reconcileOperations(sends, action, history)[0].observed, true);
   // A row never goes back to unverifiable, and the server's claims about an
   // unverifiable row cannot change either.
-  assert.throws(() => conversationResult(opened, action, unverifiable), {
+  assert.throws(() => mergeHistoryPage(opened, page(unverifiable)), {
     code: 'chat-channel-integrity',
   });
   assert.throws(
     () =>
-      conversationResult(held, action, {
-        ...history,
-        messages: [{ ...row, insert_time: '2' }],
-      }),
+      mergeHistoryPage(
+        held,
+        page({
+          ...history,
+          messages: [{ ...row, insert_time: '2' }],
+        }),
+      ),
     { code: 'chat-channel-integrity' },
   );
 });
@@ -203,25 +205,35 @@ test('unverifiable rows keyed by sequence coexist across pages', () => {
     insert_time: '1',
     content: { kind: 'unverifiable' as const },
   });
-  const page = (sequence: string, before: string | null): ChatResult => ({
+  const result = (sequence: string, before: string | null): ChatResult => ({
     kind: 'history',
     channel: op.channel,
     before,
     missing_predecessors: [],
     messages: [row(sequence)],
   });
-  const newest = conversationResult(
-    emptyConversation(),
-    { action: 'history', channel: op.channel, before: null },
-    page('9', '9'),
-  );
-  const both = conversationResult(
-    newest,
-    { action: 'history', channel: op.channel, before: '9' },
-    page('8', '8'),
-  );
+  const newest = mergeHistoryPage(null, page(result('9', '9')));
+  const both = mergeHistoryPage(newest, page(result('8', '8'), '9'));
   assert.deepEqual(
-    both.history?.messages.map((m) => m.id),
+    both.messages.map((m) => m.id),
     ['zero:8', 'zero:9'],
+  );
+});
+
+test('a page for another channel replaces the held window', () => {
+  const held = mergeHistoryPage(null, page(history));
+  if (history.kind !== 'history') throw new Error('fixture');
+  const other = mergeHistoryPage(
+    held,
+    page({
+      ...history,
+      channel: 'c'.repeat(32),
+      messages: [{ ...history.messages[0], id: 'd'.repeat(32) }],
+    }),
+  );
+  assert.equal(other.channel, 'c'.repeat(32));
+  assert.deepEqual(
+    other.messages.map((m) => m.id),
+    ['d'.repeat(32)],
   );
 });

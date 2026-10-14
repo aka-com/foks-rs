@@ -6,7 +6,7 @@ import type { ChatChannel, ChatMessage } from '../chat-contract';
 import type { HistoryWindow } from './conversation-model';
 import type { TrackedOperation } from './operations';
 import { useChatConversationContext } from './conversation-provider';
-import { useMessageComposer } from './use-message-composer';
+import { useChatComposer } from './use-chat-composer';
 import { phaseOf } from './send/outgoing';
 import { useChatReadIntent } from './use-chat-read-intent';
 import { useChatViewport } from './use-chat-viewport';
@@ -103,7 +103,7 @@ export function ChatThread({
     queueFull,
     cleanupError,
     service: sends,
-  } = useMessageComposer(storeId, channel, scope);
+  } = useChatComposer(storeId, channel, scope);
   const pendingKey = [
     ...outgoing
       .filter((m) => !m.observed)

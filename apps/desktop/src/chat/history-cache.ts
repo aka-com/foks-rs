@@ -2,11 +2,11 @@ import type { ChatResult, ChatScope } from '../chat-contract';
 import { CHAT_HISTORY_BYTES, CHAT_HISTORY_ROWS } from '../chat-limits';
 import type { TeamInbox } from './inbox-service';
 import {
-  conversationResult,
+  mergeHistoryPage,
   type HistoryPlacement,
   type HistoryWindow,
 } from './conversation-model';
-import { eventFromReply } from './conversation-events';
+import { historyEvent } from './conversation-events';
 import { cancelled } from './errors';
 import { sameScope } from './scope';
 import {
@@ -152,29 +152,13 @@ export class ChatHistoryCache {
   ): HistoryWindow {
     if (!this.current(binding) || page.channel !== binding.channel)
       throw cancelled();
-    const replied = eventFromReply(
-      { action: 'history', channel: page.channel, before },
-      page,
-    );
-    const event =
-      replied.kind === 'history'
-        ? {
-            ...replied,
-            ...(placement.newer ? { newer: true as const } : {}),
-            ...(placement.detached === undefined
-              ? {}
-              : { detached: placement.detached }),
-          }
-        : replied;
+    const event = historyEvent(page, before, placement);
     let result: HistoryWindow;
     try {
-      result = conversationResult(
-        {
-          operations: [],
-          history: placement.replace ? null : this.get(binding),
-        },
+      result = mergeHistoryPage(
+        placement.replace ? null : this.get(binding),
         event,
-      ).history!;
+      );
     } catch (error) {
       // A page at the newest end past the row limit starts the window over
       // from that page; for an older page the limit error propagates to the
@@ -184,10 +168,7 @@ export class ChatHistoryCache {
         (error as { code?: string } | null)?.code !== 'chat-limit'
       )
         throw error;
-      result = conversationResult(
-        { operations: [], history: null },
-        event,
-      ).history!;
+      result = mergeHistoryPage(null, event);
     }
     const history = Object.freeze({
       ...result,

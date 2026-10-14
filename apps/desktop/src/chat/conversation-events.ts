@@ -35,10 +35,34 @@ export type ConversationEvent =
     }
   | { kind: 'pending'; operations: ChatOperation[] }
   | { kind: 'channels'; channels: ChatChannel[] }
-  | { kind: 'access'; readable: ReadonlySet<string> }
-  | { kind: 'status-unresolved'; operation: string }
-  | { kind: 'reset' }
   | { kind: 'none' };
+export type HistoryEvent = Extract<ConversationEvent, { kind: 'history' }>;
+
+/**
+ * The history event for a page read with `requestBefore` as its `before`
+ * cursor. `placement` carries what only the caller that asked for the page
+ * knows: whether it is a range read past the held tail, and whether it leaves
+ * the window short of the published head.
+ */
+export function historyEvent(
+  page: Extract<ChatResult, { kind: 'history' }>,
+  requestBefore: string | null,
+  placement: { newer?: boolean; detached?: boolean } = {},
+): HistoryEvent {
+  return {
+    kind: 'history',
+    ...(page.gap === false ? { incremental: true as const } : {}),
+    ...(placement.newer ? { newer: true as const } : {}),
+    ...(placement.detached === undefined
+      ? {}
+      : { detached: placement.detached }),
+    channel: page.channel,
+    messages: page.messages,
+    before: page.before,
+    requestBefore,
+    missing: page.missing_predecessors.length > 0,
+  };
+}
 
 export function eventFromReply(
   action: ChatAction,
@@ -53,15 +77,10 @@ export function eventFromReply(
         text: result.text,
       };
     case 'history':
-      return {
-        kind: 'history',
-        ...(result.gap === false ? { incremental: true as const } : {}),
-        channel: result.channel,
-        messages: result.messages,
-        before: result.before,
-        requestBefore: action.action === 'history' ? action.before : null,
-        missing: result.missing_predecessors.length > 0,
-      };
+      return historyEvent(
+        result,
+        action.action === 'history' ? action.before : null,
+      );
     case 'operation':
       return {
         kind: 'operation',

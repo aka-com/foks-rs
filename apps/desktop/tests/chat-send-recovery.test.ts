@@ -1279,6 +1279,76 @@ test('a large failing cleanup backlog does not starve automatic uncertain-delive
   }
 });
 
+for (const outcome of ['confirmed', 'cancelled'] as const) {
+  test(`an unresolved check backs off, and a ${outcome} operation is not checked again`, async () => {
+    let rows: ChatOperation[] = [];
+    const checks: number[] = [];
+    const h = await setup({
+      chat: async (action, run) => {
+        if (action.action === 'operation-body')
+          return {
+            scope: h.scope,
+            result: {
+              kind: 'operation-body',
+              operation: action.operation,
+              channel: action.channel,
+              text: null,
+            },
+          };
+        if (action.action === 'reconcile') {
+          checks.push(h.clock.now());
+          // The first check succeeds without resolving delivery; the second
+          // settles the operation and the agent stops reporting it.
+          const operation =
+            checks.length === 1
+              ? rows[0]
+              : {
+                  ...rows[0],
+                  state: outcome,
+                  confirmation:
+                    outcome === 'confirmed'
+                      ? { kind: 'message-sent' as const, sequence: '1' }
+                      : null,
+                };
+          if (checks.length > 1) rows = [];
+          return {
+            scope: h.scope,
+            result: {
+              kind: 'operation',
+              operation: structuredClone(operation),
+            },
+          };
+        }
+        const reply = await run();
+        if (action.action === 'pending')
+          return {
+            ...reply,
+            result: { kind: 'pending', operations: structuredClone(rows) },
+          };
+        return reply;
+      },
+    });
+    rows = operations(h.channel, 'uncertain', 1);
+    const id = rows[0].id;
+    try {
+      await h.clock.advance(1000);
+      assert.equal(checks.length, 1);
+      // An explicit refresh inside the wait does not repeat the check.
+      await h.service.refresh(STORE);
+      assert.equal(checks.length, 1);
+      await h.clock.advance(20000);
+      assert.equal(checks.length, 2);
+      assert.ok(checks[1] - checks[0] >= 2000);
+      assert.equal(count(h.calls, 'attempt'), 0);
+      const held = h.service.operations(STORE).find((op) => op.id === id);
+      if (outcome === 'cancelled') assert.equal(held, undefined);
+      else assert.equal(held?.state, 'confirmed');
+    } finally {
+      h.service.stop();
+    }
+  });
+}
+
 test('verified history arriving before a submit reply is merged without another delivery', async () => {
   const gate = deferred();
   let reached = false;

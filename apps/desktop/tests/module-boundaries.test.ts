@@ -60,6 +60,44 @@ async function imports(path: string): Promise<string[]> {
   });
 }
 
+/**
+ * Every module a file names, including type-only imports and re-exports,
+ * dynamic `import()` calls and `import('...')` types.
+ */
+async function references(path: string): Promise<string[]> {
+  const source = ts.createSourceFile(
+    path,
+    await readFile(path, 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const found: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    )
+      found.push(node.moduleSpecifier.text);
+    else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments[0] &&
+      ts.isStringLiteral(node.arguments[0])
+    )
+      found.push(node.arguments[0].text);
+    else if (
+      ts.isImportTypeNode(node) &&
+      ts.isLiteralTypeNode(node.argument) &&
+      ts.isStringLiteral(node.argument.literal)
+    )
+      found.push(node.argument.literal.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
 for (const domain of ['bridge', 'navigation'])
   test(`${domain} internal modules have no runtime cycles or imports of their public facade`, async () => {
     const files = await sources(join(root, domain));
@@ -139,4 +177,35 @@ test('metadata resource services do not call secret-bearing or mutation bridge A
     };
     visit(source);
   }
+});
+
+test('every chat module is reachable from the application entry point', async () => {
+  // A module that only tests import is not what the application runs.
+  const files = await sources(root);
+  const known = new Set(files);
+  const reached = new Set<string>();
+  const pending = [join(root, 'main.tsx')];
+  for (let file = pending.pop(); file; file = pending.pop()) {
+    if (reached.has(file)) continue;
+    reached.add(file);
+    for (const specifier of await references(file)) {
+      const base = specifier.startsWith('/src/')
+        ? join(root, specifier.slice('/src/'.length))
+        : specifier.startsWith('.')
+          ? resolve(dirname(file), specifier)
+          : null;
+      if (!base) continue;
+      const target = [
+        base,
+        `${base}.ts`,
+        `${base}.tsx`,
+        join(base, 'index.ts'),
+      ].find((candidate) => known.has(candidate));
+      if (target) pending.push(target);
+    }
+  }
+  assert.deepEqual(
+    (await sources(join(root, 'chat'))).filter((file) => !reached.has(file)),
+    [],
+  );
 });
