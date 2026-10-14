@@ -95,6 +95,7 @@ const publicTypes = [
   'EditTextRequest',
   'MoveItemRequest',
   'RemoveItemRequest',
+  'CopyItemToStoreRequest',
   'RestoreTrashRequest',
   'PermanentRemoveRequest',
   'TrashEntrySelection',

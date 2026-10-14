@@ -22,6 +22,7 @@ pub(crate) mod trash;
 mod types;
 mod validation;
 pub(crate) mod vault;
+pub(crate) mod vault_copy;
 pub(crate) mod web_admin;
 pub(crate) mod yubikey;
 

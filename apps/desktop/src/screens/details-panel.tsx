@@ -77,6 +77,7 @@ import {
   useRecentFavorites,
 } from '../recent-favorites';
 import { itemActionProblem } from './store-access';
+import { copyProblem } from './item-moves';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
@@ -261,6 +262,8 @@ export interface DetailsPanelProps {
   /** Moves the item to Trash, from where it can be restored. */
   onTrash: (item: Item) => void;
   onMove?: (item: Item) => void;
+  /** Copies the item into another vault. */
+  onCopyToVault?: (item: Item) => void;
   onConflict: (
     item: Item,
     draft: string,
@@ -296,6 +299,7 @@ export function DetailsPanel({
   onClose,
   onTrash,
   onMove,
+  onCopyToVault,
   onConflict,
   onApplied,
   onCommandError,
@@ -1248,6 +1252,21 @@ export function DetailsPanel({
                   }}
                 >
                   Rename or move…
+                </Button>
+              ) : null}
+              {onCopyToVault ? (
+                <Button
+                  disabled={Boolean(readProblem ?? copyProblem(item))}
+                  title={
+                    readProblem ??
+                    copyProblem(item) ??
+                    'Copy this item into another vault'
+                  }
+                  onClick={() => {
+                    if (requireAccess()) onCopyToVault(item);
+                  }}
+                >
+                  Copy to vault…
                 </Button>
               ) : null}
               <Button

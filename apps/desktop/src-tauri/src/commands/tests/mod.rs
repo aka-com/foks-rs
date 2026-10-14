@@ -10,4 +10,5 @@ mod support;
 mod trash;
 mod validation;
 mod vault;
+mod vault_copy;
 mod yubikey;

@@ -77,6 +77,7 @@ import type {
   ReadItemResponse,
   RemoveItemRequest,
   MoveItemRequest,
+  CopyItemToStoreRequest,
   RestoreTrashRequest,
   PermanentRemoveRequest,
   EmptyTrashRequest,
@@ -218,6 +219,13 @@ export interface Bridge {
   createFolder(request: CreateFolderRequest): Promise<MutationResponse>;
   editTextItem(request: EditTextRequest): Promise<MutationResponse>;
   moveItem(request: MoveItemRequest): Promise<MutationResponse>;
+  /**
+   * Creates a copy of a secret, file or link in another store. The host reads
+   * the source at the listed version and dirent and writes the copy with a
+   * create-only precondition; the content never reaches the renderer, and
+   * the source is left unchanged.
+   */
+  copyItemToStore(request: CopyItemToStoreRequest): Promise<MutationResponse>;
   /**
    * Moves an item, or a folder with everything in it, into its read role's
    * folder under `/.trash` in the same store. Resolves with the entry's

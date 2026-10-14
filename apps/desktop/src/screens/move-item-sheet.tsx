@@ -17,6 +17,7 @@ import {
   inFolder,
   itemCount,
   joinPath,
+  nameProblem,
   parentOf,
   toFolder,
   validFolderPath,
@@ -26,16 +27,6 @@ import type { MoveCheck } from './item-moves';
 import { newFolderRoles } from './item-roles';
 import { itemActionProblem } from './store-access';
 import type { WriteWorkflow } from './write-workflows';
-
-/** Why `name` cannot name an entry, or null. */
-function nameProblem(name: string): string | null {
-  const trimmed = name.trim();
-  if (!trimmed) return 'Enter a name.';
-  if (trimmed.includes('/')) return 'A name cannot contain /.';
-  if (trimmed === '.' || trimmed === '..')
-    return 'Enter a name other than “.” or “..”.';
-  return null;
-}
 
 /**
  * Why the sheet cannot move `items`, given each item's reason or undefined:

@@ -833,6 +833,43 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       unread.add(storeId);
       return { applied: true };
     },
+    copyItemToStore: async ({
+      storeId,
+      path,
+      version,
+      direntId,
+      targetStoreId,
+      targetPath,
+      readRole,
+      writeRole,
+    }) => {
+      const item = selectBound(storeId, path, version, direntId);
+      if (targetStoreId === storeId)
+        throw failure(
+          'invalid-request',
+          'Choose another vault. Rename or move changes where an item is within its vault.',
+        );
+      if (item.kind === 'Folder')
+        throw failure(
+          'invalid-request',
+          'Folders cannot be copied to another vault. Copy the items in it one at a time.',
+        );
+      const roles = createRoles(targetStoreId, readRole, writeRole);
+      assertFree(targetStoreId, targetPath);
+      items.push({
+        ...item,
+        direntId: crypto.randomUUID().replaceAll('-', ''),
+        store: targetStoreId,
+        path: targetPath,
+        version: 1,
+        ...roles,
+      });
+      const content = contents.get(`${storeId}|${path}`);
+      if (content !== undefined)
+        contents.set(`${targetStoreId}|${targetPath}`, content);
+      unread.add(targetStoreId);
+      return { applied: true };
+    },
     trashItem: async ({ storeId, path, version, direntId }) => {
       const item = selectBound(storeId, path, version, direntId);
       if (isTrashPath(path))

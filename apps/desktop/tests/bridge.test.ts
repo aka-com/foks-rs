@@ -414,6 +414,73 @@ test('Trash commands send the bound selection and decode the new path', async ()
   }
 });
 
+test('Copy to vault sends the bound source and the target, with roles only when given', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return { applied: true };
+        },
+      },
+    },
+    configurable: true,
+  });
+  const source = {
+    storeId: 'opaque-source-ref',
+    path: '/logins/github.com',
+    version: 4,
+    direntId: '07'.repeat(16),
+  };
+  try {
+    assert.deepEqual(
+      await tauriBridge.copyItemToStore({
+        ...source,
+        targetStoreId: 'opaque-team-ref',
+        targetPath: '/shared/github.com',
+        readRole: 'Member:0',
+        writeRole: 'Admin',
+      }),
+      { applied: true },
+    );
+    await tauriBridge.copyItemToStore({
+      ...source,
+      targetStoreId: 'opaque-account-ref',
+      targetPath: '/github.com',
+    });
+    assert.deepEqual(calls, [
+      [
+        'copy_item_to_store',
+        {
+          ...source,
+          targetStoreId: 'opaque-team-ref',
+          targetPath: '/shared/github.com',
+          readRole: 'Member:0',
+          writeRole: 'Admin',
+        },
+      ],
+      [
+        'copy_item_to_store',
+        {
+          ...source,
+          targetStoreId: 'opaque-account-ref',
+          targetPath: '/github.com',
+        },
+      ],
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
 test('action decoders reject partial or malformed responses', () => {
   assert.deepEqual(
     decodeReadItem({

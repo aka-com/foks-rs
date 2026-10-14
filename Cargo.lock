@@ -1948,6 +1948,7 @@ name = "foks-desktop-app"
 version = "0.4.0"
 dependencies = [
  "block2",
+ "chacha20poly1305",
  "foks-agent-client",
  "foks-agent-proto",
  "foks-client-app",

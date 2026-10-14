@@ -1,0 +1,294 @@
+use super::support::{account_ref, phase_four_state, team_ref};
+use super::vault::{download_item, DownloadTransport, ReadTransport, READ_VALUE};
+use crate::commands::validation::DOWNLOAD_CHUNK_BYTES;
+use crate::commands::vault::store_id;
+use crate::commands::vault_copy::{
+    copy_scope, read_copy_source, selected_copy_source, write_copy, CopySource, CopyTarget,
+    SealedSpool,
+};
+use foks_agent_proto::{KvPrecondition, KvRole, KvStoreRef, KvUploadHeader, Operation};
+use foks_desktop::{CatalogItem, CatalogStoreRef};
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::sync::Mutex;
+
+fn engineering() -> CatalogStoreRef {
+    CatalogStoreRef::Team(team_ref("work.example", "personal", "engineering"))
+}
+
+fn team_target(path: &str) -> CopyTarget {
+    CopyTarget {
+        store: engineering(),
+        path: path.to_owned(),
+        read_role: KvRole::Member { visibility: 0 },
+        write_role: KvRole::Admin,
+    }
+}
+
+fn secret_item() -> CatalogItem {
+    CatalogItem {
+        store: CatalogStoreRef::Account(account_ref("foks.example", "personal")),
+        metadata: foks_agent_proto::KvEntryMetadata {
+            dirent_id: [7; 16],
+            path: "/wifi/password".to_owned(),
+            node_type: "small-file".to_owned(),
+            version: 7,
+            size: None,
+            read_role: KvRole::Owner,
+            write_role: KvRole::Owner,
+            shape: None,
+        },
+    }
+}
+
+/// Serves a large file's reads and records, in order, every read and the
+/// upload, with the bytes the upload consumed.
+struct CopyTransport {
+    source: DownloadTransport,
+    events: Mutex<Vec<&'static str>>,
+    upload: Mutex<Option<(KvUploadHeader, Vec<u8>)>>,
+    writes: Mutex<Vec<Operation>>,
+}
+
+impl CopyTransport {
+    fn new(total: u64) -> Self {
+        Self {
+            source: DownloadTransport {
+                total,
+                calls: Mutex::new(Vec::new()),
+            },
+            events: Mutex::new(Vec::new()),
+            upload: Mutex::new(None),
+            writes: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl foks_desktop::AgentTransport for CopyTransport {
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        if operation.is_mutation() {
+            self.events.lock().unwrap().push("write");
+            self.writes.lock().unwrap().push(operation);
+            return Ok(serde_json::Value::Null);
+        }
+        self.events.lock().unwrap().push("read");
+        self.source.call(operation)
+    }
+
+    fn put_kv_stream(
+        &self,
+        header: KvUploadHeader,
+        reader: &mut dyn std::io::Read,
+    ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.events.lock().unwrap().push("upload");
+        let mut content = Vec::new();
+        reader
+            .read_to_end(&mut content)
+            .map_err(|error| foks_desktop::AgentError::Transport(error.to_string()))?;
+        *self.upload.lock().unwrap() = Some((header, content));
+        Ok(serde_json::Value::Null)
+    }
+}
+
+#[test]
+fn a_large_file_is_read_whole_before_one_create_upload_into_the_target() {
+    let total = 2 * u64::from(DOWNLOAD_CHUNK_BYTES) + 5;
+    let item = download_item(total);
+    let transport = CopyTransport::new(total);
+
+    let source = read_copy_source(&transport, &item).unwrap();
+    assert!(matches!(source, CopySource::Spooled(_)));
+    write_copy(&transport, source, &team_target("/shared/large.bin")).unwrap();
+
+    // The agent admits an upload exclusively per profile, so every chunk
+    // read finishes before the upload starts.
+    let events = transport.events.lock().unwrap();
+    assert_eq!(events.last(), Some(&"upload"));
+    assert_eq!(events.iter().filter(|event| **event == "upload").count(), 1);
+    assert_eq!(
+        events.len(),
+        2 + total.div_ceil(u64::from(DOWNLOAD_CHUNK_BYTES)) as usize
+    );
+    let (header, content) = transport.upload.lock().unwrap().take().unwrap();
+    assert_eq!(
+        header.store,
+        KvStoreRef::Team(team_ref("work.example", "personal", "engineering"))
+    );
+    assert_eq!(header.path, "/shared/large.bin");
+    assert_eq!(header.total_length, total);
+    assert_eq!(header.read_role, KvRole::Member { visibility: 0 });
+    assert_eq!(header.write_role, KvRole::Admin);
+    assert_eq!(header.precondition, KvPrecondition::Create);
+    assert!(header.mkdir_p);
+    assert_eq!(content.len() as u64, total);
+    assert!(content.iter().all(|byte| *byte == 0x5a));
+    assert!(transport.writes.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_secret_is_created_inline_with_the_target_roles_and_a_create_precondition() {
+    let item = secret_item();
+    let transport = ReadTransport {
+        calls: Mutex::new(Vec::new()),
+    };
+    let source = read_copy_source(&transport, &item).unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), 1);
+
+    let writes = CopyTransport::new(0);
+    write_copy(&writes, source, &team_target("/wifi/password")).unwrap();
+
+    assert_eq!(
+        writes.writes.lock().unwrap().as_slice(),
+        &[Operation::PutKv {
+            store: KvStoreRef::Team(team_ref("work.example", "personal", "engineering")),
+            path: "/wifi/password".to_owned(),
+            content: READ_VALUE.to_vec(),
+            read_role: KvRole::Member { visibility: 0 },
+            write_role: KvRole::Admin,
+            precondition: KvPrecondition::Create,
+            mkdir_p: true,
+        }]
+    );
+    assert!(writes.upload.lock().unwrap().is_none());
+}
+
+#[test]
+fn folders_are_refused_before_any_read() {
+    let mut item = secret_item();
+    item.metadata.node_type = "directory".to_owned();
+    let transport = ReadTransport {
+        calls: Mutex::new(Vec::new()),
+    };
+    let error = read_copy_source(&transport, &item).err().unwrap();
+    assert_eq!(error.code, "invalid-request");
+    assert!(transport.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn the_spool_holds_only_sealed_chunks_and_refuses_altered_ones() {
+    let plaintext = b"correct horse battery staple ".repeat(64);
+    let mut spool = SealedSpool::new().unwrap();
+    for chunk in plaintext.chunks(500) {
+        spool.append(chunk).unwrap();
+    }
+    assert_eq!(spool.len(), plaintext.len() as u64);
+    let mut held = Vec::new();
+    let file = spool.file_mut();
+    file.seek(SeekFrom::Start(0)).unwrap();
+    file.read_to_end(&mut held).unwrap();
+    assert!(!held
+        .windows(b"battery".len())
+        .any(|window| window == b"battery"));
+
+    let mut read = Vec::new();
+    spool.into_reader().unwrap().read_to_end(&mut read).unwrap();
+    assert_eq!(read, plaintext);
+
+    let mut spool = SealedSpool::new().unwrap();
+    spool.append(b"first").unwrap();
+    spool.append(b"second").unwrap();
+    let file = spool.file_mut();
+    file.seek(SeekFrom::Start(0)).unwrap();
+    file.write_all(&[0xff]).unwrap();
+    let mut reader = spool.into_reader().unwrap();
+    assert!(reader.read_to_end(&mut Vec::new()).is_err());
+    assert!(reader.failure.is_some());
+}
+
+#[test]
+fn a_spool_read_failure_fails_the_copy_without_reporting_an_upload() {
+    let mut spool = SealedSpool::new().unwrap();
+    spool.append(&[1; 64]).unwrap();
+    let file = spool.file_mut();
+    file.seek(SeekFrom::Start(3)).unwrap();
+    file.write_all(&[0]).unwrap();
+    let transport = CopyTransport::new(0);
+    let error = write_copy(
+        &transport,
+        CopySource::Spooled(spool),
+        &team_target("/large.bin"),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "copy-buffer");
+    assert!(!error.ambiguous);
+}
+
+#[test]
+fn a_copy_reserves_one_profile_or_every_profile_when_it_crosses_servers() {
+    let state = phase_four_state(Vec::new());
+    let personal = store_id(&CatalogStoreRef::Account(account_ref(
+        "work.example",
+        "personal",
+    )));
+    let engineering = store_id(&engineering());
+    let homelab = store_id(&CatalogStoreRef::Team(team_ref(
+        "home.example",
+        "home",
+        "homelab",
+    )));
+
+    let same = copy_scope(&state, &personal, &engineering).unwrap();
+    assert_eq!(same.mutation_profile(), Some("work.example"));
+
+    let across = copy_scope(&state, &personal, &homelab).unwrap();
+    assert_eq!(across.mutation_profile(), None);
+    let _permit = across.begin_mutation().unwrap();
+    for profile in ["work.example", "home.example"] {
+        assert_eq!(
+            state
+                .for_profile(profile)
+                .unwrap()
+                .begin_mutation()
+                .err()
+                .unwrap()
+                .code,
+            "mutation-in-flight"
+        );
+    }
+
+    assert_eq!(
+        copy_scope(&state, "not a store", &homelab)
+            .err()
+            .unwrap()
+            .code,
+        "invalid-request"
+    );
+}
+
+#[test]
+fn the_source_is_bound_to_the_listed_version_and_dirent() {
+    let state = phase_four_state(Vec::new());
+    let store = CatalogStoreRef::Account(account_ref("work.example", "personal"));
+    let mut item = secret_item();
+    item.store = store.clone();
+    state
+        .catalog
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .items
+        .push(item.clone());
+    let id = store_id(&store);
+    let listed = "07".repeat(16);
+
+    assert_eq!(
+        selected_copy_source(&state, &id, "/wifi/password", 7, &listed).unwrap(),
+        item
+    );
+    for (version, dirent) in [(8, listed.as_str()), (7, &*"08".repeat(16))] {
+        assert_eq!(
+            selected_copy_source(&state, &id, "/wifi/password", version, dirent)
+                .err()
+                .unwrap()
+                .code,
+            "conflict"
+        );
+    }
+    assert_eq!(
+        selected_copy_source(&state, &id, "/missing", 7, &listed)
+            .err()
+            .unwrap()
+            .code,
+        "conflict"
+    );
+}

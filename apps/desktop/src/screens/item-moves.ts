@@ -5,6 +5,7 @@
  *
  * Moves stay within one store: `MoveKv` relinks a dirent inside a store, and
  * moving between stores would mean re-encrypting under another team's keys.
+ * Copy to vault does that instead, as a new item written by the host.
  */
 
 import { normalizeCommandError } from '../bridge';
@@ -52,6 +53,16 @@ export function validFolderPath(path: string): boolean {
 /** Whether `path` names an entry: a folder path other than the root. */
 export function validItemPath(path: string): boolean {
   return path !== '/' && validFolderPath(path);
+}
+
+/** Why `name` cannot name an entry, or null. */
+export function nameProblem(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return 'Enter a name.';
+  if (trimmed.includes('/')) return 'A name cannot contain /.';
+  if (trimmed === '.' || trimmed === '..')
+    return 'Enter a name other than “.” or “..”.';
+  return null;
 }
 
 /** "at the top level" or "in /env/prod", for messages about a folder. */
@@ -119,6 +130,15 @@ function fileOnPath(
 }
 
 /* --------------------------------------------------------------- checks -- */
+
+/** Why `item` cannot be copied to another vault at all, or undefined. */
+export function copyProblem(item: Item): string | undefined {
+  if (item.kind === 'Folder')
+    return 'Folders cannot be copied to another vault. Copy the items in it one at a time.';
+  if (isTrashPath(item.path))
+    return 'Restore this item from Trash before copying it.';
+  return undefined;
+}
 
 /**
  * What a move would do, or why it cannot be sent. `creates` names the folder

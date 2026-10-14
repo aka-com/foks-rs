@@ -32,6 +32,7 @@ export const vaultCommands: Pick<
   | 'createFolder'
   | 'editTextItem'
   | 'moveItem'
+  | 'copyItemToStore'
   | 'trashItem'
   | 'restoreTrashItem'
   | 'removeItem'
@@ -125,6 +126,30 @@ export const vaultCommands: Pick<
     checkedMutation(
       'move_item',
       { storeId, path, version, destination, direntId },
+      decodeMutation,
+    ),
+  copyItemToStore: ({
+    storeId,
+    path,
+    version,
+    direntId,
+    targetStoreId,
+    targetPath,
+    readRole,
+    writeRole,
+  }) =>
+    checkedMutation(
+      'copy_item_to_store',
+      {
+        storeId,
+        path,
+        version,
+        direntId,
+        targetStoreId,
+        targetPath,
+        ...(readRole === undefined ? {} : { readRole }),
+        ...(writeRole === undefined ? {} : { writeRole }),
+      },
       decodeMutation,
     ),
   trashItem: ({ storeId, path, version, direntId }) =>

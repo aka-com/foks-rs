@@ -118,6 +118,16 @@
       "storeId": "required",
       "version": "required"
     },
+    "copy_item_to_store": {
+      "direntId": "required",
+      "path": "required",
+      "readRole": "optional",
+      "storeId": "required",
+      "targetPath": "required",
+      "targetStoreId": "required",
+      "version": "required",
+      "writeRole": "optional"
+    },
     "copy_item_value": {
       "path": "required",
       "storeId": "required",

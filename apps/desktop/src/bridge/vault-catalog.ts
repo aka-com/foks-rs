@@ -163,6 +163,16 @@ export type MoveItemRequest = ItemRequest & {
   direntId: string;
 };
 export type RemoveItemRequest = ItemRequest & { direntId: string };
+/**
+ * Copies the selected item into another store at `targetPath`. Roles are
+ * given together for a team and omitted for a personal vault, as for a new
+ * item.
+ */
+export type CopyItemToStoreRequest = RemoveItemRequest &
+  CreateRoleRequest & {
+    targetStoreId: StoreRef;
+    targetPath: string;
+  };
 export type RestoreTrashRequest = RemoveItemRequest & { destination: string };
 export type PermanentRemoveRequest = RemoveItemRequest & {
   /**

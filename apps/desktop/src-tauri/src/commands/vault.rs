@@ -377,6 +377,58 @@ pub(super) fn download_to_path(
     item: &CatalogItem,
     destination: &Path,
 ) -> Result<(), AgentError> {
+    let parent = destination.parent().ok_or_else(|| {
+        AgentError::new(
+            "download-path",
+            "The chosen destination path has no parent folder.",
+            false,
+        )
+    })?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+        AgentError::new(
+            "download-write",
+            format!("Could not create temporary download file: {error}"),
+            true,
+        )
+    })?;
+    read_file_content(transport, item, &mut |content| {
+        temporary.write_all(content).map_err(|error| {
+            AgentError::new(
+                "download-write",
+                format!("Could not save the file: {error}"),
+                true,
+            )
+        })
+    })?;
+    temporary.as_file().sync_all().map_err(|error| {
+        AgentError::new(
+            "download-write",
+            format!("Could not finish saving the file: {error}"),
+            true,
+        )
+    })?;
+    temporary.persist(destination).map_err(|error| {
+        AgentError::new(
+            "download-write",
+            format!(
+                "Could not save the downloaded file to destination: {}",
+                error.error
+            ),
+            true,
+        )
+    })?;
+    Ok(())
+}
+
+/// Reads a File item at the catalog's version and hands its content to
+/// `sink` in order: a small file in one piece, a large file one bound chunk
+/// at a time. Each piece is zeroized after `sink` returns. Other node types
+/// are refused with `not-file`.
+pub(super) fn read_file_content(
+    transport: &dyn foks_desktop::AgentTransport,
+    item: &CatalogItem,
+    sink: &mut dyn FnMut(&[u8]) -> Result<(), AgentError>,
+) -> Result<(), AgentError> {
     let store = protocol_store(&item.store);
     let value = transport
         .call(Operation::ReadKv {
@@ -413,20 +465,6 @@ pub(super) fn download_to_path(
             true,
         ));
     }
-    let parent = destination.parent().ok_or_else(|| {
-        AgentError::new(
-            "download-path",
-            "The chosen destination path has no parent folder.",
-            false,
-        )
-    })?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
-        AgentError::new(
-            "download-write",
-            format!("Could not create temporary download file: {error}"),
-            true,
-        )
-    })?;
     match read.node_type.as_str() {
         "small-file" => {
             if read.symlink_target.is_some() {
@@ -452,14 +490,9 @@ pub(super) fn download_to_path(
                     false,
                 ));
             }
-            temporary.write_all(&content).map_err(|error| {
-                AgentError::new(
-                    "download-write",
-                    format!("Could not save the file: {error}"),
-                    true,
-                )
-            })?;
+            let write = sink(&content);
             zeroize::Zeroize::zeroize(&mut content);
+            write?;
         }
         "file" => {
             if read.content.is_some() || read.symlink_target.is_some() {
@@ -513,15 +546,9 @@ pub(super) fn download_to_path(
                     ));
                 }
                 let eof = chunk.eof;
-                let write = temporary.write_all(&chunk.content);
+                let write = sink(&chunk.content);
                 zeroize::Zeroize::zeroize(&mut chunk.content);
-                write.map_err(|error| {
-                    AgentError::new(
-                        "download-write",
-                        format!("Could not save the file: {error}"),
-                        true,
-                    )
-                })?;
+                write?;
                 offset = next;
                 if eof {
                     if item
@@ -549,23 +576,6 @@ pub(super) fn download_to_path(
             ));
         }
     }
-    temporary.as_file().sync_all().map_err(|error| {
-        AgentError::new(
-            "download-write",
-            format!("Could not finish saving the file: {error}"),
-            true,
-        )
-    })?;
-    temporary.persist(destination).map_err(|error| {
-        AgentError::new(
-            "download-write",
-            format!(
-                "Could not save the downloaded file to destination: {}",
-                error.error
-            ),
-            true,
-        )
-    })?;
     Ok(())
 }
 

@@ -359,6 +359,7 @@ pub fn run() {
             commands::vault::create_folder,
             commands::vault::edit_text_item,
             commands::vault::move_item,
+            commands::vault_copy::copy_item_to_store,
             commands::trash::trash_item,
             commands::trash::restore_trash_item,
             commands::trash::remove_item,

@@ -438,6 +438,34 @@ dirent identity and version too. The client validates them before uploading
 content and on every namespace retry, so recreation cannot redirect an open
 editor or file picker to a different entry.
 
+### Copy to another vault
+
+`MoveKv` relinks a dirent within one store, so an item cannot move to
+another vault: its content is sealed under that store's keys. Copy to vault
+writes a new item instead. `copy_item_to_store` names the source by store,
+path, version and dirent, which the host checks against its catalog as it
+does for an edit, and the target by store, path and roles. The host reads
+the source through the agent and creates the copy with a `Create`
+precondition and `mkdir_p`, so content never crosses into the renderer and
+an occupied path is refused rather than overwritten.
+
+A large file cannot be streamed from source to target. The agent admits a
+streaming upload exclusively for its profile, and a chunk read of the same
+profile waits for that admission, so reading the source while uploading
+the copy would wait on itself until the deadline. The host therefore reads
+every chunk first, with the same binding checks as a download, into an
+unlinked temporary file. Each chunk is sealed with ChaCha20-Poly1305 under a
+fresh key held only in memory, with the chunk's sequence number as its
+nonce, so the disk never holds plaintext and a chunk altered or reordered
+on disk fails the upload. The upload then reads the chunks back and opens
+them one at a time.
+
+When the stores are on different servers, the host takes its mutation
+reservation for the whole application rather than for one profile. Moving
+the original is a separate `trash_item` after the copy succeeds: two
+mutations on two stores have no common transaction, and a failure of the
+second leaves a copy and an original rather than neither.
+
 ### Trash
 
 Delete in the desktop moves an item, or a folder with everything in it,
@@ -542,7 +570,7 @@ mounting every card. It no longer imposes the former 200-card cap.
   (`record_drop_paths`, `upload_path`), `src/commands/vault.rs`
   (`read_item`, `copy_item_value`, `copy_item_field`, `download_file`),
   `src/commands/trash.rs` (`trash_item`, `restore_trash_item`, `remove_item`,
-  `empty_trash`),
+  `empty_trash`), `src/commands/vault_copy.rs` (`copy_item_to_store`),
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.

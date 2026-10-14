@@ -106,6 +106,7 @@ import type { FolderNode } from './scope';
 import {
   NO_ROWS,
   allRows,
+  copyProblem,
   dropVerdict,
   extendRows,
   itemCount,
@@ -294,6 +295,7 @@ interface RowProps {
   onDownload: (item: Item) => void;
   onTrash: (item: Item) => void;
   onMove?: (item: Item) => void;
+  onCopyToVault?: (item: Item) => void;
   accessNow: () => number;
 }
 
@@ -314,6 +316,7 @@ function Row({
   onDownload,
   onTrash,
   onMove,
+  onCopyToVault,
   accessNow,
 }: RowProps): ReactNode {
   const rowRef = useRef<HTMLDivElement>(null);
@@ -520,6 +523,14 @@ function Row({
                 onClick={choose(() => onMove(item))}
               >
                 {group > 1 ? `Move ${group} items to…` : 'Rename or move…'}
+              </MenuItem>
+            ) : null}
+            {onCopyToVault && group <= 1 ? (
+              <MenuItem
+                reason={copyProblem(item) ?? readProblem}
+                onClick={choose(() => onCopyToVault(item))}
+              >
+                Copy to vault…
               </MenuItem>
             ) : null}
             <MenuItem
@@ -858,6 +869,8 @@ export interface ItemsScreenProps {
   /** Asks to remove every entry in a store's Trash permanently. */
   onEmptyTrash?: (storeId: string) => void;
   onMove?: (item: Item) => void;
+  /** Copies an item into another vault, the same server's or another's. */
+  onCopyToVault?: (item: Item) => void;
   /**
    * Moves several items of one store: to `folder` when a drag names it, or
    * to a folder chosen in the move sheet.
@@ -965,6 +978,7 @@ export function ItemsScreen({
   onDeletePermanently,
   onEmptyTrash,
   onMove,
+  onCopyToVault,
   onMoveMany,
   onTrashMany,
   onSettings,
@@ -1546,6 +1560,9 @@ export function ItemsScreen({
     }
     if (onMove && allowAction(item, true)) onMove(item);
   };
+  const copyRow = (item: Item): void => {
+    if (onCopyToVault && allowAction(item, false)) onCopyToVault(item);
+  };
   const trashRow = (item: Item): void => {
     const group = groupOf(item);
     if (group && onTrashMany) {
@@ -1859,6 +1876,7 @@ export function ItemsScreen({
       onReveal={revealItem}
       onDownload={downloadItem}
       onMove={onMove || onMoveMany ? moveRow : undefined}
+      onCopyToVault={onCopyToVault ? copyRow : undefined}
       onTrash={trashRow}
       accessNow={accessNow}
     />

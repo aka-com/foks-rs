@@ -914,6 +914,7 @@ export function VaultShell({
                 locations.setDetails(false);
               }}
               onMove={(item) => setWorkflow({ kind: 'move', item })}
+              onCopyToVault={(item) => setWorkflow({ kind: 'copy', item })}
               onTrash={trash.moveToTrash}
               onConflict={(item, draft, operation) =>
                 setWorkflow({ kind: 'conflict', item, draft, operation })
