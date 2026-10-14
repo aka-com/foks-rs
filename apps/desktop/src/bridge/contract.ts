@@ -153,7 +153,7 @@ export interface Bridge {
   chat(
     storeId: StoreRef,
     action: ChatAction,
-    viewId?: string,
+    viewId: string,
   ): Promise<ChatReply>;
   cancelChat(viewId: string): Promise<void>;
   readonly native: boolean;

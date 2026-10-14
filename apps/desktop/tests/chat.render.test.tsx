@@ -11,6 +11,8 @@ installDom({
   body: '<div id="root"></div><div id="overlays"></div>',
   timers: true,
 });
+/** The chat view a test names when it calls the bridge directly. */
+const VIEW = 'cd'.repeat(16);
 let ui: typeof import('@testing-library/react');
 let vite: ViteDevServer;
 test.before(async () => {
@@ -159,10 +161,10 @@ test('composer suppresses IME and repeated Enter, and renders hostile text safel
   let attempts = 0;
   await setup((base) => ({
     ...base,
-    chat: async (store, action) => {
+    chat: async (store, action, view) => {
       if (action.action === 'submit-message') preparations++;
       if (action.action === 'attempt') attempts++;
-      return base.chat(store, action);
+      return base.chat(store, action, view);
     },
   }));
   const composer = ui.screen.getByRole('textbox', { name: 'Message' });
@@ -193,9 +195,9 @@ test('empty and whitespace-only messages are silent no-ops', async () => {
   let submissions = 0;
   await setup((base) => ({
     ...base,
-    chat: async (store, action) => {
+    chat: async (store, action, view) => {
       if (action.action === 'submit-message') submissions++;
-      return base.chat(store, action);
+      return base.chat(store, action, view);
     },
   }));
   const composer = ui.screen.getByRole('textbox', { name: 'Message' });
@@ -219,9 +221,9 @@ test('Option–Enter inserts a newline at the cursor without sending', async () 
   let submissions = 0;
   await setup((base) => ({
     ...base,
-    chat: async (store, action) => {
+    chat: async (store, action, view) => {
       if (action.action === 'submit-message') submissions++;
-      return base.chat(store, action);
+      return base.chat(store, action, view);
     },
   }));
   const composer = ui.screen.getByRole('textbox', {
@@ -325,19 +327,27 @@ for (const incremental of [false, true])
       );
       assert.equal(ui.screen.queryByLabelText('1 unread'), null);
       incoming = true;
-      const prepared = await direct('team:eng', {
-        action: 'prepare-message',
-        submission: '88'.repeat(16),
-        channel: 'ab'.repeat(16),
-        text: 'Arrived through live sync',
-      });
+      const prepared = await direct(
+        'team:eng',
+        {
+          action: 'prepare-message',
+          submission: '88'.repeat(16),
+          channel: 'ab'.repeat(16),
+          text: 'Arrived through live sync',
+        },
+        VIEW,
+      );
       assert.equal(prepared.result.kind, 'operation');
       if (prepared.result.kind !== 'operation')
         throw new Error('missing operation');
-      await direct('team:eng', {
-        action: 'attempt',
-        operation: prepared.result.operation.id,
-      });
+      await direct(
+        'team:eng',
+        {
+          action: 'attempt',
+          operation: prepared.result.operation.id,
+        },
+        VIEW,
+      );
       await ui.screen.findByText('Arrived through live sync');
       assert.ok(polls > 0);
       assert.equal(
@@ -417,18 +427,26 @@ test('read markers require focus and the newest displayed position', async () =>
     });
     scroller.scrollTop = 0;
     ui.fireEvent.scroll(scroller);
-    const prepared = await direct('team:eng', {
-      action: 'prepare-message',
-      submission: '99'.repeat(16),
-      channel: 'ab'.repeat(16),
-      text: 'Do not mark while reading old history',
-    });
+    const prepared = await direct(
+      'team:eng',
+      {
+        action: 'prepare-message',
+        submission: '99'.repeat(16),
+        channel: 'ab'.repeat(16),
+        text: 'Do not mark while reading old history',
+      },
+      VIEW,
+    );
     if (prepared.result.kind !== 'operation')
       throw new Error('missing operation');
-    await direct('team:eng', {
-      action: 'attempt',
-      operation: prepared.result.operation.id,
-    });
+    await direct(
+      'team:eng',
+      {
+        action: 'attempt',
+        operation: prepared.result.operation.id,
+      },
+      VIEW,
+    );
     await ui.screen.findByText('Do not mark while reading old history');
     await new Promise((resolve) => setTimeout(resolve, 400));
     assert.deepEqual(marks, ['1']);
@@ -521,8 +539,8 @@ test('lost submit reply recovers its submission without a second send', async ()
   let dropped = false;
   await setup((base) => ({
     ...base,
-    chat: async (store, action) => {
-      const reply = await base.chat(store, action);
+    chat: async (store, action, view) => {
+      const reply = await base.chat(store, action, view);
       if (
         action.action === 'submit-message' ||
         action.action === 'prepare-message'
@@ -568,12 +586,13 @@ test('ending the unlocked application during preparation never starts delivery',
   let attempts = 0;
   const rendered = await setup((base) => ({
     ...base,
-    chat: async (store, action) => {
+    chat: async (store, action, view) => {
       const result = await base.chat(
         store,
         action.action === 'submit-message'
           ? { ...action, action: 'prepare-message' }
           : action,
+        view,
       );
       if (action.action === 'submit-message') {
         prepared();
@@ -600,7 +619,7 @@ test('ending the unlocked application during preparation never starts delivery',
 test('definite preparation errors allow input correction', async () => {
   await setup((base) => ({
     ...base,
-    chat: async (store, action) => {
+    chat: async (store, action, view) => {
       if (action.action === 'prepare-channel')
         throw {
           code: 'chat-invalid-input',
@@ -609,7 +628,7 @@ test('definite preparation errors allow input correction', async () => {
           retryable: false,
           ambiguous: false,
         };
-      return base.chat(store, action);
+      return base.chat(store, action, view);
     },
   }));
   const name = await openChannelSheet();
@@ -1146,8 +1165,8 @@ test('a channel-list failure renders a single retry pane', async () => {
 test('prepending older messages preserves scroll position', async () => {
   await setup((base) => ({
     ...base,
-    chat: async (store, action) => {
-      const reply = await base.chat(store, action);
+    chat: async (store, action, view) => {
+      const reply = await base.chat(store, action, view);
       if (action.action === 'history' && reply.result.kind === 'history') {
         reply.result.messages =
           action.before === null
@@ -1204,8 +1223,8 @@ test('prepending older messages preserves scroll position', async () => {
 test('a history page with unverified predecessors warns in the conversation', async () => {
   await setup((base) => ({
     ...base,
-    chat: async (store, action) => {
-      const reply = await base.chat(store, action);
+    chat: async (store, action, view) => {
+      const reply = await base.chat(store, action, view);
       if (action.action === 'history' && reply.result.kind === 'history') {
         const original = {
           id: '03'.repeat(16),
@@ -1241,15 +1260,19 @@ for (const offline of [true, false]) {
     await setup(
       (base) => ({
         ...base,
-        chat: async (store, action) => {
+        chat: async (store, action, view) => {
           if (!seeded) {
             seeded = true;
-            await base.chat(store, {
-              action: 'prepare-message',
-              channel: 'ab'.repeat(16),
-              submission: '77'.repeat(16),
-              text: 'Cancel this preparation',
-            });
+            await base.chat(
+              store,
+              {
+                action: 'prepare-message',
+                channel: 'ab'.repeat(16),
+                submission: '77'.repeat(16),
+                text: 'Cancel this preparation',
+              },
+              view,
+            );
           }
           if (offline && action.action === 'sync-inbox')
             throw {
@@ -1259,7 +1282,7 @@ for (const offline of [true, false]) {
               retryable: true,
               ambiguous: false,
             };
-          const reply = await base.chat(store, action);
+          const reply = await base.chat(store, action, view);
           if (!offline && reply.result.kind === 'inbox')
             reply.result.channels = reply.result.channels.map((channel) => ({
               ...channel,
@@ -1285,9 +1308,9 @@ test('durable pending refresh replaces stale prepared state after lost delivery 
   let uncertain = false;
   await setup((base) => ({
     ...base,
-    chat: async (store, action) => {
+    chat: async (store, action, view) => {
       if (action.action === 'submit-message')
-        return base.chat(store, { ...action, action: 'prepare-message' });
+        return base.chat(store, { ...action, action: 'prepare-message' }, view);
       if (action.action === 'attempt') {
         uncertain = true;
         throw {
@@ -1306,7 +1329,7 @@ test('durable pending refresh replaces stale prepared state after lost delivery 
           ambiguous: false,
           retryable: true,
         };
-      const reply = await base.chat(store, action);
+      const reply = await base.chat(store, action, view);
       if (uncertain && reply.result.kind === 'pending')
         reply.result.operations = reply.result.operations.map((op) => ({
           ...op,
@@ -1473,18 +1496,26 @@ for (const permission of ['readable', 'writable'] as const) {
     );
     assert.equal(ui.screen.queryByRole('textbox', { name: 'Message' }), null);
     allowed = true;
-    const prepared = await direct('team:eng', {
-      action: 'prepare-message',
-      submission: '89'.repeat(16),
-      channel: 'ab'.repeat(16),
-      text: 'Permission changed',
-    });
+    const prepared = await direct(
+      'team:eng',
+      {
+        action: 'prepare-message',
+        submission: '89'.repeat(16),
+        channel: 'ab'.repeat(16),
+        text: 'Permission changed',
+      },
+      VIEW,
+    );
     if (prepared.result.kind !== 'operation')
       throw new Error('missing operation');
-    await direct('team:eng', {
-      action: 'attempt',
-      operation: prepared.result.operation.id,
-    });
+    await direct(
+      'team:eng',
+      {
+        action: 'attempt',
+        operation: prepared.result.operation.id,
+      },
+      VIEW,
+    );
     const composer = await ui.screen.findByRole('textbox', { name: 'Message' });
     await ui.waitFor(() => assert.equal(document.activeElement, composer));
   });

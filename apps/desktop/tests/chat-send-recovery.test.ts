@@ -16,6 +16,8 @@ import { chatIntentPersistence } from '../src/chat/intent';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 
+/** The chat view a test names when it calls the bridge directly. */
+const VIEW = 'cd'.repeat(16);
 const STORE = 'team:eng';
 const unavailable = {
   code: 'unavailable',
@@ -109,7 +111,7 @@ async function setup(hooks: Hooks = {}) {
     ),
   };
   const base = mockBridge(snapshot);
-  const reply = await base.chat(STORE, { action: 'inbox' });
+  const reply = await base.chat(STORE, { action: 'inbox' }, VIEW);
   if (reply.result.kind !== 'inbox') throw new Error('inbox expected');
   const ready: TeamInbox = {
     state: 'ready',
@@ -277,7 +279,7 @@ for (const state of ['prepared', 'uncertain'] as const) {
       chat: async (action, run) => {
         if (action.action === 'submit-message') {
           const reply = await run({ ...action, action: 'prepare-message' });
-          const pending = await h.base.chat(STORE, { action: 'pending' });
+          const pending = await h.base.chat(STORE, { action: 'pending' }, VIEW);
           if (pending.result.kind !== 'pending')
             throw new Error('pending expected');
           pending.result.operations[0].state = state;
@@ -348,7 +350,7 @@ test('a lost submit reply after its uncertain checkpoint recovers without replay
     chat: async (action, run) => {
       if (action.action === 'submit-message') {
         await run({ ...action, action: 'prepare-message' });
-        const pending = await h.base.chat(STORE, { action: 'pending' });
+        const pending = await h.base.chat(STORE, { action: 'pending' }, VIEW);
         if (pending.result.kind !== 'pending')
           throw new Error('pending expected');
         pending.result.operations[0].state = 'uncertain';
@@ -641,11 +643,15 @@ for (const committed of [false, true]) {
         assert.equal(h.service.messages(STORE, h.channel)[0].phase, 'sent');
         assert.equal(h.service.messages(STORE, h.channel)[0].id, message.id);
         assert.equal(h.service.draft(STORE, h.channel), 'new draft');
-        const history = await h.base.chat(STORE, {
-          action: 'history',
-          channel: h.channel,
-          before: null,
-        });
+        const history = await h.base.chat(
+          STORE,
+          {
+            action: 'history',
+            channel: h.channel,
+            before: null,
+          },
+          VIEW,
+        );
         assert.equal(history.result.kind, 'history');
         if (history.result.kind === 'history')
           assert.equal(
@@ -742,11 +748,15 @@ test('observed history deduplicates delivery and leaves previously returned oper
     const oldOperations = h.service.operations(STORE);
     const before = structuredClone(oldOperations);
     const sent = h.service.messages(STORE, h.channel)[0];
-    const reply = await h.base.chat(STORE, {
-      action: 'history',
-      channel: h.channel,
-      before: null,
-    });
+    const reply = await h.base.chat(
+      STORE,
+      {
+        action: 'history',
+        channel: h.channel,
+        before: null,
+      },
+      VIEW,
+    );
     if (reply.result.kind !== 'history') throw new Error('history expected');
     h.service.observeHistory(STORE, h.channel, reply.result.messages);
     h.service.observeHistory(STORE, h.channel, reply.result.messages);
@@ -776,11 +786,15 @@ test('history observation does not mutate a previously returned outgoing message
     await h.service.submit(STORE, h.channel, 'snapshot text');
     const oldMessages = h.service.messages(STORE, h.channel);
     const before = structuredClone(oldMessages);
-    const reply = await h.base.chat(STORE, {
-      action: 'history',
-      channel: h.channel,
-      before: null,
-    });
+    const reply = await h.base.chat(
+      STORE,
+      {
+        action: 'history',
+        channel: h.channel,
+        before: null,
+      },
+      VIEW,
+    );
     if (reply.result.kind !== 'history') throw new Error('history expected');
     h.service.observeHistory(STORE, h.channel, reply.result.messages);
     assert.deepEqual(oldMessages, before);
@@ -1086,11 +1100,15 @@ test('verified history arriving before a submit reply is merged without another 
         action.action === 'submit-message' &&
         reply.result.kind === 'operation'
       ) {
-        const history = await h.base.chat(STORE, {
-          action: 'history',
-          channel: action.channel,
-          before: null,
-        });
+        const history = await h.base.chat(
+          STORE,
+          {
+            action: 'history',
+            channel: action.channel,
+            before: null,
+          },
+          VIEW,
+        );
         if (history.result.kind !== 'history')
           throw new Error('history expected');
         h.service.observeHistory(
