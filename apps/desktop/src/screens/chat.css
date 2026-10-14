@@ -1007,6 +1007,19 @@
   font-size: 12px;
   color: var(--faint);
 }
+/* Above a list with older history: older pages load as the edge nears the
+   viewport, so its button is drawn only while it has keyboard focus. */
+.chat-history-fallback:not(:focus) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 /* Below a detached window: the control that pages forward, and how far the
    newest message is. */
 .chat-history-edge.chat-history-newer {

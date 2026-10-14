@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement, StrictMode, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
+import { layOutLists } from './lib/list-layout';
 import { readSource } from './lib/source';
 import type { Location } from '../src/location';
 import type { Bridge } from '../src/bridge';
@@ -1388,6 +1389,144 @@ test('an anchored open and forward pages fill ranges the agent narrowed', async 
       ['51', '26', '101', '76', '151', '126'],
     );
   });
+});
+
+/** The sequences of the message rows the list holds, in order. */
+function heldSequences(): string[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-message]')].map(
+    (row) => row.dataset.sequence ?? '',
+  );
+}
+
+test('older pages load as the top edge comes into view', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => false,
+  });
+  const channel = await busyChannel(150, 150);
+  const restore = layOutLists();
+  try {
+    await withIntersectionObserver(async () => {
+      // The top edge is in view while the list is scrolled to its top.
+      TestIntersectionObserver.onScreen = (element) =>
+        element.classList.contains('chat-history-older') &&
+        (element.closest<HTMLElement>('.chat-messages')?.scrollTop ?? 0) < 120;
+      await setup(channel.override, false);
+      await ui.screen.findByText('Message 150');
+      const scroller = ui.screen.getByLabelText('Message history');
+      // The button is kept for the keyboard and drawn only with focus.
+      assert.ok(
+        ui.screen
+          .getByRole('button', { name: 'Load older messages' })
+          .classList.contains('chat-history-fallback'),
+      );
+      for (const first of [51, 1]) {
+        scroller.scrollTop = 0;
+        ui.fireEvent.scroll(scroller);
+        TestIntersectionObserver.refresh();
+        // A page is a round trip through the mock agent, which a loaded
+        // machine running the suite in parallel can hold for over a second.
+        await ui.waitFor(
+          () => assert.equal(heldSequences()[0], String(first)),
+          { timeout: 5_000 },
+        );
+        // The row that was first on screen stays where it was, so the edge
+        // leaves the viewport until the reader reaches it again.
+        assert.equal(scroller.scrollTop, 5_000);
+      }
+      ui.screen.getByText('Beginning of the channel');
+      assert.deepEqual(
+        [
+          ...new Set(
+            channel.history.map((action) =>
+              action.action === 'history' ? action.before : '',
+            ),
+          ),
+        ],
+        [null, '101', '51'],
+      );
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('a detached window reopens where the reader left it without reading the newest page', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => false,
+  });
+  const channel = await busyChannel(130, 10);
+  const restore = layOutLists();
+  try {
+    const view = await setup(channel.override, false);
+    await ui.screen.findByText('Message 50');
+    ui.screen.getByRole('button', { name: 'Load newer messages' });
+    let scroller = ui.screen.getByLabelText('Message history');
+    scroller.scrollTop = 1_830;
+    ui.fireEvent.scroll(scroller);
+    const reads = channel.history.length;
+    view.toggleChat();
+    await ui.waitFor(() =>
+      assert.equal(ui.screen.queryByLabelText('Message history'), null),
+    );
+    view.toggleChat();
+    scroller = await ui.screen.findByLabelText('Message history');
+    // The window holds the first unread message, so it resumes rather than
+    // opening there again, and keeps the rows it held.
+    assert.equal(scroller.scrollTop, 1_830);
+    await sleep(50);
+    assert.equal(channel.history.length, reads);
+    assert.deepEqual([heldSequences()[0], heldSequences().at(-1)], ['1', '50']);
+    ui.screen.getByRole('button', { name: 'Load newer messages' });
+  } finally {
+    restore();
+  }
+});
+
+test('a channel reopens where the reader left it', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => false,
+  });
+  const channel = await busyChannel(200, 200);
+  const restore = layOutLists();
+  try {
+    const view = await setup(channel.override, false);
+    await ui.screen.findByText('Message 200');
+    let scroller = ui.screen.getByLabelText('Message history');
+    assert.equal(scroller.scrollTop, 5_000);
+    const away = async () => {
+      view.toggleChat();
+      await ui.waitFor(() =>
+        assert.equal(ui.screen.queryByLabelText('Message history'), null),
+      );
+      view.toggleChat();
+      scroller = await ui.screen.findByLabelText('Message history');
+    };
+    // Row 163 is first on screen, its top 34px above the list's.
+    scroller.scrollTop = 1_234;
+    ui.fireEvent.scroll(scroller);
+    await away();
+    assert.equal(scroller.scrollTop, 1_234);
+    ui.screen.getByRole('button', { name: 'Jump to latest' });
+    // Left at the newest end, the channel opens there again.
+    ui.fireEvent.click(
+      ui.screen.getByRole('button', { name: 'Jump to latest' }),
+    );
+    await away();
+    assert.equal(scroller.scrollTop, 5_000);
+    // The tail read on open and a later arrival land below the reader.
+    scroller.scrollTop = 1_234;
+    ui.fireEvent.scroll(scroller);
+    await away();
+    assert.equal(scroller.scrollTop, 1_234);
+    await channel.arrive(['other']);
+    await ui.screen.findByText('Message 201', undefined, { timeout: 5_000 });
+    assert.equal(scroller.scrollTop, 1_234);
+  } finally {
+    restore();
+  }
 });
 
 test('the jump control counts messages from others that arrived while scrolled up', async () => {

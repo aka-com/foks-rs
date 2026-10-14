@@ -954,8 +954,13 @@ the list, a banner gives the unread count with Jump to first new and Mark as
 read, and Esc marks the channel read when the composer is empty. The jump
 control at the foot of a scrolled-up list counts the messages from others that
 arrived since the reader scrolled up ("2 new messages"), and reads "Jump to
-latest" otherwise. `book/20-desktop.qmd` describes the history reads behind
-this.
+latest" otherwise. Older messages load as the reader scrolls toward the top of
+the list; "Load older messages" stays in the tab order for the keyboard and
+appears when it has focus. A conversation holds at most 400 messages, fewer
+when they are long: paging further back drops the newest ones, after which the
+list ends in "Load newer messages", and new messages drop the oldest. Switching
+to another channel or tab and back reopens a channel at the message the reader
+left it on. `book/20-desktop.qmd` describes the history reads behind this.
 
 Saved work that has not finished sits above the conversation in a bounded
 "Needs attention" section with the per-operation rows and their verbs; once the

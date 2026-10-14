@@ -381,13 +381,44 @@ focus moves to the message list. Scrolled up in an attached window, the
 jump control counts the messages from others that arrived since the reader
 left the bottom.
 
+Older pages load as the top of the list comes within 120 px of the
+viewport, through an `IntersectionObserver` on the edge above the first
+row. The edge keeps a "Load older messages" button, drawn only while it has
+keyboard focus, and drawn always in a webview without
+`IntersectionObserver`. While the reader is away from the bottom, the list
+holds the first row on screen at its offset whenever rows above it change,
+by measuring that row rather than the list's height, so a page that adds
+rows above and trims rows below does not move what is on screen.
+
+Each channel's window is a sliding window of at most 400 rows and 3 MiB of
+message text. A page that takes it past either bound trims the held rows
+at the far end from the page and never the page's own rows. An older page
+trims from the newest end and detaches the window, which then pages
+forward through "Load newer messages" as an anchored open does. Any other
+page trims from the oldest end and sets the older cursor to the oldest row
+kept, so paging back reads the trimmed rows again. The verification flags
+of trimmed rows go with them.
+
 The history cache is a least-recently-used map keyed by a binding of
 store, channel, scope, generation, and authority, bounded at 16 channels,
-1,000 rows, and 8 MiB. Reading an entry re-inserts it to refresh recency.
-A binding whose authority or generation has changed is simply not
-current, so a page fetched under an old role cannot be shown after the
-role changes. The row and byte limits come from the shared
-`chat-limits.json` of [Chapter 24](24-performance.qmd).
+1,000 rows, and 8 MiB across all of them. Because a channel's window is
+trimmed to 400 rows and 3 MiB, one long scrollback leaves room for the
+other channels' windows. Opening a channel or accepting a page moves its entry
+to the newest end; reading it during a render does not. A binding whose
+authority or generation has changed is simply not current, so a page
+fetched under an old role cannot be shown after the role changes. The
+cache's row and byte limits come from the shared `chat-limits.json` of
+[Chapter 24](24-performance.qmd); the per-channel window bounds are the
+desktop's own.
+
+The cache entry also keeps where the reader left the channel: the first
+message row on screen and its offset, or nothing when the list was at its
+newest end. A thread that mounts on a window still holding that row opens
+there instead of at the bottom, and keeps a detached window rather than
+replacing it with the newest page. With unread messages it resumes only
+when the window also holds the first unread message; otherwise it opens
+at the first unread message as described above. The position is dropped
+with the window when the entry is evicted or its binding retired.
 
 ## Vault edits
 

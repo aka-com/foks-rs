@@ -27,6 +27,7 @@ type History = Pick<
   | 'error'
   | 'failure'
   | 'busy'
+  | 'loading'
   | 'loaded'
   | 'initialLoading'
   | 'detached'
@@ -90,6 +91,7 @@ export function MessageList({
     error,
     failure,
     busy,
+    loading,
     loaded,
     initialLoading,
     detached,
@@ -101,6 +103,7 @@ export function MessageList({
   } = history;
   const { scroller, atBottom, onScroll, reveal } = viewport;
   const newerEdge = useRef<HTMLDivElement>(null);
+  const olderEdge = useRef<HTMLDivElement>(null);
   // Arrivals are counted against the newest row held when the reader left
   // the bottom of an attached window. A detached window counts none, since
   // it takes no incremental reads.
@@ -172,9 +175,10 @@ export function MessageList({
   );
   const showBanner =
     newFrom !== null && unread > 0 && (newBelow || newUnloaded);
-  // The banner, the newer edge and the jump button unmount once their action
-  // completes. Focus inside one when it goes moves to the list rather than
-  // to the document body. The ref cleanup runs before React removes the node.
+  // The banner, the history edges' buttons and the jump button unmount once
+  // their action completes. Focus inside one when it goes moves to the list
+  // rather than to the document body. The ref cleanup runs before React
+  // removes the node.
   const returnFocus = useCallback(
     (node: HTMLElement | null) => () => {
       if (node?.contains(document.activeElement))
@@ -187,6 +191,14 @@ export function MessageList({
     else if (newFrom !== null) void reopen(newFrom);
     scroller.current?.focus({ preventScroll: true });
   };
+  // Older pages load as the top of the list comes near the viewport. The
+  // button stays for the keyboard, and for a webview without
+  // IntersectionObserver, where it is the only way to page back.
+  const olderInView = useInView(olderEdge, scroller, before !== null, messages);
+  useEffect(() => {
+    if (olderInView && before !== null && !anchoring && !busy && !failure)
+      void load(before);
+  }, [anchoring, before, busy, failure, load, olderInView]);
   const newerInView = useInView(newerEdge, scroller, detached, messages);
   useEffect(() => {
     if (newerInView && detached && !busy && !failure) void loadNewer();
@@ -275,11 +287,27 @@ export function MessageList({
         aria-label="Message history"
         aria-busy={busy}
       >
-        <div className="chat-history-edge">
+        <div className="chat-history-edge chat-history-older" ref={olderEdge}>
           {before ? (
-            <Button size="sm" disabled={busy} onClick={() => void load(before)}>
-              Load older messages
-            </Button>
+            <>
+              {loading === 'older' && (
+                <small role="status">Loading older messages…</small>
+              )}
+              <Button
+                size="sm"
+                className={
+                  typeof IntersectionObserver === 'undefined'
+                    ? undefined
+                    : 'chat-history-fallback'
+                }
+                busy={loading === 'older'}
+                aria-disabled={busy || undefined}
+                ref={returnFocus}
+                onClick={busy ? undefined : () => void load(before)}
+              >
+                Load older messages
+              </Button>
+            </>
           ) : messages.length > 0 ? (
             <small>Beginning of the channel</small>
           ) : null}

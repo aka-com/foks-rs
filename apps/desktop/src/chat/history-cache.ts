@@ -2,9 +2,11 @@ import type { ChatResult, ChatScope } from '../chat-contract';
 import { CHAT_HISTORY_BYTES, CHAT_HISTORY_ROWS } from '../chat-limits';
 import type { TeamInbox } from './inbox-service';
 import {
+  HISTORY_WINDOW,
   mergeHistoryPage,
   type HistoryPlacement,
   type HistoryWindow,
+  type WindowLimits,
 } from './conversation-model';
 import { historyEvent } from './conversation-events';
 import { cancelled } from './errors';
@@ -24,6 +26,28 @@ export interface HistoryBinding {
   readonly authority: string;
 }
 
+/**
+ * Where the reader left a channel's message list: the first message row
+ * whose bottom is below the list's top edge, and the distance in pixels from
+ * that edge to the row's top.
+ */
+export interface ListPosition {
+  readonly message: string;
+  readonly offset: number;
+}
+
+/**
+ * The bounds of the retained history. `channels`, `rows` and `bytes` are one
+ * budget across every retained window; `window` is what each channel's
+ * window is trimmed to, so one channel cannot take the whole budget.
+ */
+export interface HistoryCacheLimits {
+  channels: number;
+  rows: number;
+  bytes: number;
+  window?: WindowLimits;
+}
+
 export class ChatHistoryCache {
   private inputs = new Map<
     string,
@@ -37,13 +61,13 @@ export class ChatHistoryCache {
   private bindings = new Map<string, Map<string, HistoryBinding>>();
   private entries = new Map<
     HistoryBinding,
-    { history: HistoryWindow; bytes: number }
+    { history: HistoryWindow; bytes: number; position?: ListPosition }
   >();
   private listeners = new Set<() => void>();
   private revision = 0;
 
   constructor(
-    private limits = {
+    private limits: HistoryCacheLimits = {
       channels: 16,
       rows: CHAT_HISTORY_ROWS,
       bytes: CHAT_HISTORY_BYTES,
@@ -91,6 +115,30 @@ export class ChatHistoryCache {
     if (!entry) return;
     this.entries.delete(binding);
     this.entries.set(binding, entry);
+  }
+  /**
+   * Where the reader left the channel's retained window, or `null` when it
+   * was left at the newest end or no window is retained.
+   */
+  position(binding: HistoryBinding | null): ListPosition | null {
+    if (!binding || !this.current(binding)) return null;
+    return this.entries.get(binding)?.position ?? null;
+  }
+  /**
+   * Records where the reader leaves the channel's retained window, `null`
+   * for its newest end. The position goes with the window: it is dropped
+   * when the window is evicted or its binding retired. A thread reads it
+   * only when it opens, so this does not publish.
+   */
+  setPosition(
+    binding: HistoryBinding | null,
+    position: ListPosition | null,
+  ): void {
+    if (!binding || !this.current(binding)) return;
+    const entry = this.entries.get(binding);
+    if (!entry) return;
+    if (position) entry.position = Object.freeze({ ...position });
+    else delete entry.position;
   }
   update(store: string, inbox: TeamInbox, generation: number): void {
     if (inbox.state !== 'ready' || !inbox.scope || !inbox.data) {
@@ -165,23 +213,12 @@ export class ChatHistoryCache {
     if (!this.current(binding) || page.channel !== binding.channel)
       throw cancelled();
     const event = historyEvent(page, before, placement);
-    let result: HistoryWindow;
-    try {
-      result = mergeHistoryPage(
-        placement.replace ? null : this.get(binding),
-        event,
-      );
-    } catch (error) {
-      // A page at the newest end past the row limit starts the window over
-      // from that page; for an older page the limit error propagates to the
-      // thread.
-      if (
-        (before !== null && !placement.newer) ||
-        (error as { code?: string } | null)?.code !== 'chat-limit'
-      )
-        throw error;
-      result = mergeHistoryPage(null, event);
-    }
+    const held = this.entries.get(binding);
+    const result = mergeHistoryPage(
+      placement.replace ? null : (held?.history ?? null),
+      event,
+      this.limits.window ?? HISTORY_WINDOW,
+    );
     const history = Object.freeze({
       ...result,
       messages: freezeDto(structuredClone(result.messages)),
@@ -196,7 +233,11 @@ export class ChatHistoryCache {
       0,
     );
     this.entries.delete(binding);
-    this.entries.set(binding, { history, bytes });
+    this.entries.set(binding, {
+      history,
+      bytes,
+      ...(held?.position ? { position: held.position } : {}),
+    });
     let rows = 0;
     let totalBytes = 0;
     for (const entry of this.entries.values()) {

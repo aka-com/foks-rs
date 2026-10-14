@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, Ref } from 'react';
 import { Icon } from '../components';
 import { ChatAlerts, failureAlert, type ChatAlert } from './chat-alerts';
@@ -91,6 +91,8 @@ export function ChatThread({
     markRead,
     acceptHistory,
     blockHistory,
+    listPosition,
+    keepListPosition,
   } = useChatConversationContext();
   const {
     setDraft,
@@ -118,8 +120,30 @@ export function ChatThread({
     BigInt(pendingRead) > BigInt(readThrough)
       ? pendingRead
       : readThrough;
+  // Also read once: the held window and where the reader left it. The thread
+  // resumes there when the window still holds that row and, with unread
+  // messages, also holds the first of them, which an anchored open would
+  // otherwise read.
+  const [resume] = useState(() => {
+    const saved = listPosition(channel.id);
+    const held = history?.channel === channel.id ? history.messages : [];
+    if (!saved || !held.some((m) => m.id === saved.message)) return null;
+    if (readPoint === null || unread === null || BigInt(unread) === 0n)
+      return saved;
+    const first = held[0];
+    const last = held.at(-1);
+    return first &&
+      last &&
+      BigInt(first.sequence) <= BigInt(readPoint) + 1n &&
+      BigInt(last.sequence) > BigInt(readPoint)
+      ? saved
+      : null;
+  });
   const [anchor] = useState(() =>
-    readPoint !== null && unread !== null && BigInt(unread) > 0n
+    resume === null &&
+    readPoint !== null &&
+    unread !== null &&
+    BigInt(unread) > 0n
       ? readPoint
       : null,
   );
@@ -140,8 +164,15 @@ export function ChatThread({
     history?.channel === channel.id ? history.messages : EMPTY_MESSAGES,
     pendingKey,
     anchorRow,
+    resume,
   );
-  const { scroller, atBottom, capture, release } = viewport;
+  const { scroller, atBottom, capture, release, position: leaving } = viewport;
+  // The list's position goes back to the history cache when the thread
+  // unmounts, so the channel reopens where the reader left it.
+  useLayoutEffect(
+    () => () => keepListPosition(channel.id, leaving()),
+    [channel.id, keepListPosition, leaving],
+  );
   const thread = useChatHistory({
     channel,
     request,
@@ -149,6 +180,7 @@ export function ChatThread({
     history,
     position,
     anchor,
+    resume: resume !== null,
     incremental: incrementalHistory,
     onAccepted: acceptHistory,
     onFatal: blockHistory,

@@ -1,7 +1,20 @@
 import type { ChatMessage, ChatResult } from '../chat-contract';
 import type { HistoryEvent } from './conversation-events';
-import { CHAT_HISTORY_BYTES, CHAT_HISTORY_ROWS } from '../chat-limits';
 import { channelIntegrity } from './errors';
+
+/**
+ * The rows and UTF-8 text bytes one channel's window is trimmed to. They sit
+ * well below the history cache's budget across channels, so one long
+ * scrollback leaves room for the other channels' windows.
+ */
+export interface WindowLimits {
+  rows: number;
+  bytes: number;
+}
+export const HISTORY_WINDOW: WindowLimits = {
+  rows: 400,
+  bytes: 3 * 1024 * 1024,
+};
 
 export interface HistoryWindow {
   channel: string;
@@ -41,12 +54,18 @@ export type AcceptHistory = (
 /**
  * Merges a verified history page into the window held for its channel and
  * returns the new window; a window held for another channel is discarded.
- * Throws when the page conflicts with a held row or the merged window
- * exceeds the history limits. `held` is never modified.
+ * Throws when the page conflicts with a held row. `held` is never modified.
+ *
+ * A window past `limits` is trimmed at the end away from the page: an older
+ * page drops held rows from the newest end and detaches the window, and any
+ * other page drops them from the oldest end and moves the older cursor to
+ * the oldest row kept. The page's own rows are never dropped, so a window
+ * holds at least the page it accepted last.
  */
 export function mergeHistoryPage(
   held: HistoryWindow | null,
   result: HistoryEvent,
+  limits: WindowLimits = HISTORY_WINDOW,
 ): HistoryWindow {
   const previous = held?.channel === result.channel ? held : null;
   // A newer page is a range read past the held tail. It extends the window at
@@ -79,40 +98,51 @@ export function mergeHistoryPage(
   const sequences = new Set(messages.map((m) => m.sequence));
   if (sequences.size !== messages.length)
     throw channelIntegrity('Conflicting messages occupy the same sequence.');
-  const bytes = messages.reduce(
-    (n, m) =>
-      n +
-      (m.content.kind === 'text'
-        ? new TextEncoder().encode(m.content.text).length
-        : 0),
-    0,
-  );
-  if (messages.length > CHAT_HISTORY_ROWS || bytes > CHAT_HISTORY_BYTES)
-    throw {
-      code: 'chat-limit',
-      message:
-        'This conversation view reached its history limit. Reopen it to load the newest messages.',
-      fatal: false,
-      retryable: false,
-      ambiguous: false,
-    };
+  let bytes = messages.reduce((n, m) => n + textBytes(m), 0);
+  const fresh = new Set(incoming.map((m) => m.id));
+  let first = 0;
+  let end = messages.length;
+  while (end - first > limits.rows || bytes > limits.bytes) {
+    const row = older ? messages[end - 1] : messages[first];
+    if (fresh.has(row.id)) break;
+    bytes -= textBytes(row);
+    if (older) end--;
+    else first++;
+  }
+  const kept = messages.slice(first, end);
   const verification = new Map(reset ? [] : previous?.verification);
   for (const message of incoming) verification.set(message.id, result.missing);
+  if (kept.length !== messages.length) {
+    const ids = new Set(kept.map((m) => m.id));
+    for (const id of verification.keys())
+      if (!ids.has(id)) verification.delete(id);
+  }
   return {
     channel: result.channel,
-    messages,
+    messages: kept,
     verification,
+    // Rows trimmed from the oldest end are read again below the oldest row
+    // kept; the agent's cursor is the lowest sequence a page holds.
     before:
-      previous && (result.incremental || (newer && !reset))
-        ? previous.before
-        : reset || older || !previous?.before
-          ? result.before
-          : previous.before,
+      first > 0 && kept[0]
+        ? kept[0].sequence
+        : previous && (result.incremental || (newer && !reset))
+          ? previous.before
+          : reset || older || !previous?.before
+            ? result.before
+            : previous.before,
     // A tail or incremental page reaches the head; an older page leaves the
-    // newest end where it was.
+    // newest end where it was, unless the trim dropped rows from it.
     detached:
-      result.detached ?? (older ? (previous?.detached ?? false) : false),
+      end < messages.length ||
+      (result.detached ?? (older ? (previous?.detached ?? false) : false)),
   };
+}
+
+function textBytes(message: ChatMessage): number {
+  return message.content.kind === 'text'
+    ? new TextEncoder().encode(message.content.text).length
+    : 0;
 }
 
 /**

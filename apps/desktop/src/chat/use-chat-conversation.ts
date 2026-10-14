@@ -24,7 +24,7 @@ import {
 } from './client';
 import { useChatSends } from './send-provider';
 import { markChannelRead } from './mark-read';
-import type { HistoryBinding } from './history-cache';
+import type { HistoryBinding, ListPosition } from './history-cache';
 import type { HistoryPlacement } from './conversation-model';
 import { useChatInbox } from './inbox-provider';
 import type { Availability } from '../model';
@@ -223,6 +223,29 @@ export function useChatConversation(
     },
     [service, storeId],
   );
+  // Read when a thread opens, during its first render, so it takes the
+  // generation that render was given rather than the ref. A thread resumes
+  // only in a window that `history` returned, and `history` returns none
+  // while access is unavailable.
+  const listPosition = useCallback(
+    (channel: string) =>
+      service.histories.position(
+        service.histories.binding(storeId, channel, accessGeneration),
+      ),
+    [accessGeneration, service, storeId],
+  );
+  const keepListPosition = useCallback(
+    (channel: string, position: ListPosition | null) =>
+      service.histories.setPosition(
+        service.histories.binding(
+          storeId,
+          channel,
+          accessGenerationRef.current,
+        ),
+        position,
+      ),
+    [service, storeId],
+  );
   const blockHistory = useCallback(
     (channel: string) => {
       service.blockChannel(storeId, channel);
@@ -351,6 +374,8 @@ export function useChatConversation(
     setOpenChannel,
     acceptHistory,
     blockHistory,
+    listPosition,
+    keepListPosition,
   };
 }
 

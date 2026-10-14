@@ -103,6 +103,8 @@ export function ChatScreen({
     acceptHistory,
     history,
     blockHistory,
+    listPosition,
+    keepListPosition,
   } = useChatConversation(
     bridge,
     store?.server ?? '',
@@ -353,6 +355,8 @@ export function ChatScreen({
             markRead={guardedMarkRead}
             acceptHistory={acceptHistory}
             blockHistory={blockHistory}
+            listPosition={listPosition}
+            keepListPosition={keepListPosition}
           >
             <ChatThread
               autofocusComposer={autofocusComposer}

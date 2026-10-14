@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import type { ChatAction, ChatReply, ChatScope } from '../chat-contract';
 import type { AcceptHistory } from './conversation-model';
+import type { ListPosition } from './history-cache';
 
 /**
  * What every channel of one team's conversation shares: the team, the
@@ -24,6 +25,10 @@ export interface ChatConversationValue {
   acceptHistory: AcceptHistory;
   /** Stops a channel whose history failed verification. */
   blockHistory: (channel: string) => void;
+  /** Where the reader left a channel's retained window, if anywhere. */
+  listPosition: (channel: string) => ListPosition | null;
+  /** Records where the reader leaves a channel; `null` at its newest end. */
+  keepListPosition: (channel: string, position: ListPosition | null) => void;
 }
 
 const Context = createContext<ChatConversationValue | null>(null);
@@ -39,6 +44,8 @@ export function ChatConversationProvider({
   markRead,
   acceptHistory,
   blockHistory,
+  listPosition,
+  keepListPosition,
   children,
 }: ChatConversationValue & { children: ReactNode }) {
   const value = useMemo(
@@ -53,6 +60,8 @@ export function ChatConversationProvider({
       markRead,
       acceptHistory,
       blockHistory,
+      listPosition,
+      keepListPosition,
     }),
     [
       bridge,
@@ -65,6 +74,8 @@ export function ChatConversationProvider({
       markRead,
       acceptHistory,
       blockHistory,
+      listPosition,
+      keepListPosition,
     ],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;

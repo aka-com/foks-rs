@@ -138,6 +138,12 @@ export interface ChatHistoryOptions {
    * unread message.
    */
   anchor?: string | null;
+  /**
+   * The thread resumes the held window where the reader left it. Read once,
+   * when the thread mounts: a detached window is then kept rather than
+   * replaced by the newest page, and pages forward on demand.
+   */
+  resume?: boolean;
   /** Whether the agent accepts `after` reads for the incremental tail. */
   incremental?: boolean;
   /**
@@ -166,6 +172,7 @@ export function useChatHistory({
   history,
   position = null,
   anchor = null,
+  resume = false,
   incremental: incrementalHistory = false,
   onAccepted,
   onFatal,
@@ -185,7 +192,9 @@ export function useChatHistory({
     [],
   );
   const error = failure?.message ?? '';
-  const [busy, setBusy] = useState(false);
+  // The read in flight, for a control that shows which one is loading.
+  const [loading, setLoading] = useState<HistoryLoad | null>(null);
+  const busy = loading !== null;
   const active = useRef(false);
   const reading = useRef(false);
   const again = useRef(false);
@@ -216,10 +225,11 @@ export function useChatHistory({
   // replaces it: a later run of the mount effect (a new request owner) then
   // reads the tail, unless this mount detached the window.
   const opening = useRef(anchor);
-  // Whether this mount accepted a page. A window detached by an earlier visit
-  // is replaced by the tail when the thread opens; one this mount detached is
-  // kept when the load is rebuilt.
-  const acceptedHere = useRef(false);
+  // Whether this mount placed the held window: it accepted a page, or resumed
+  // the window where the reader left it. A window detached by an earlier
+  // visit is otherwise replaced by the tail when the thread opens; one this
+  // mount placed is kept when the load is rebuilt.
+  const acceptedHere = useRef(resume);
   const [anchoring, setAnchoring] = useState(anchor !== null);
   // The read that failed last, for Retry, and the read a rebuilt load
   // cancelled, for the mount effect to repeat.
@@ -282,7 +292,7 @@ export function useChatHistory({
       }
       reading.current = true;
       inFlight.current = { load, cursor };
-      setBusy(true);
+      setLoading(load);
       // Read marking waits for the anchored page, as it does on open.
       if (load === 'anchor') setAnchoring(true);
       setError(null);
@@ -477,7 +487,7 @@ export function useChatHistory({
         if (current()) {
           reading.current = false;
           inFlight.current = null;
-          setBusy(false);
+          setLoading(null);
           if (load === 'anchor' || load === 'latest') setAnchoring(false);
           if (again.current) {
             again.current = false;
@@ -526,10 +536,11 @@ export function useChatHistory({
         cancelled.load !== 'incremental'
       )
         void read(cancelled.load, cancelled.cursor);
-      // A window this mount detached stays where the reader left it and
-      // pages on demand: the newest page would not continue it, and would
-      // replace it. The read the rebuild cancelled no longer clears `busy`.
-      else if (held?.detached && acceptedHere.current) setBusy(false);
+      // A window this mount detached or resumed stays where the reader left
+      // it and pages on demand: the newest page would not continue it, and
+      // would replace it. The read the rebuild cancelled no longer clears
+      // `loading`.
+      else if (held?.detached && acceptedHere.current) setLoading(null);
       else void read('tail');
     }
     return () => {
@@ -550,6 +561,8 @@ export function useChatHistory({
     failure,
     setError,
     busy,
+    /** The read in flight, or `null` when none is. */
+    loading,
     loaded: accepted !== null,
     initialLoading: !accepted && !error,
     /** The held window ends below the published head. */
