@@ -32,7 +32,9 @@ function pendingExplanation(op: ChatOperation): string {
 }
 
 /**
- * A tracked operation no outgoing message carries. The send service decides
+ * A tracked operation shown by itself rather than in an outgoing message's
+ * row: in the thread when no outgoing message carries it, and in 'Needs
+ * attention' when it is outside the open channel. The send service decides
  * which requests the operation accepts and sends them; this row only offers
  * them.
  */
@@ -66,9 +68,11 @@ export function PendingRow({
     setBusy(true);
     setError('');
     try {
-      if (action === 'deliver') await service.deliverOperation(storeId, op.id);
-      else await service.cancelOperation(storeId, op.id);
-      if (active.current) onChange();
+      const sent =
+        action === 'deliver'
+          ? await service.deliverOperation(storeId, op.id)
+          : await service.cancelOperation(storeId, op.id);
+      if (sent && active.current) onChange();
     } catch (e) {
       if (active.current) setError(failure(e));
     } finally {

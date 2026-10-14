@@ -486,23 +486,32 @@ export interface OutgoingActions {
   edit: boolean;
 }
 
-export function outgoingActions(message: OutgoingMessage): OutgoingActions {
+/**
+ * `unconfirmed` is set when the message's operation may already have reached
+ * the server for a reason the message does not record, such as a status left
+ * unknown by a failed request; the message is then checked, never edited.
+ */
+export function outgoingActions(
+  message: OutgoingMessage,
+  unconfirmed = false,
+): OutgoingActions {
   const phase = phaseOf(message);
   const state = operationOf(message)?.state;
   const retryable =
     (phase === 'not-sent' || phase === 'unconfirmed' || phase === 'paused') &&
     state !== 'rejected' &&
     state !== 'cancelled';
+  const check = unconfirmed || outcomeUnknown(message);
   return {
     retry: retryable
-      ? phase === 'unconfirmed' || outcomeUnknown(message)
+      ? phase === 'unconfirmed' || check
         ? 'check'
         : 'retry'
       : undefined,
     edit:
       (phase === 'not-sent' || phase === 'queued') &&
       !running(message) &&
-      !outcomeUnknown(message) &&
+      !check &&
       message.text !== undefined,
   };
 }

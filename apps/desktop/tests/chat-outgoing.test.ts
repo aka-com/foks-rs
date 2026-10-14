@@ -459,6 +459,18 @@ for (const [name, state, retry, edit] of actionTable)
     assert.deepEqual(outgoingActions(state), { retry, edit });
   });
 
+test('outgoing actions: an operation the device lost track of is checked, never edited', () => {
+  // The status read after the failed attempt reports the operation prepared.
+  const reported = run(attemptFailed, { type: 'status', op: op('prepared') });
+  assert.deepEqual(outgoingActions(reported), { retry: 'retry', edit: true });
+  // A later failed request left the tracked operation's status unknown, which
+  // the message itself does not record.
+  assert.deepEqual(outgoingActions(reported, true), {
+    retry: 'check',
+    edit: false,
+  });
+});
+
 test('outgoing copy shares no mutable state with the message', () => {
   const message = run(attemptFailed, {
     type: 'cleanup-failed',

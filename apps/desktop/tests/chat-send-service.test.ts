@@ -10,7 +10,7 @@ import { mockBridge } from '../src/mock-bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
 import type { ChatClock } from '../src/chat/clock';
 import type { TeamInbox } from '../src/chat/inbox-service';
-import { phaseOf } from '../src/chat/send/outgoing';
+import { operationOf, phaseOf } from '../src/chat/send/outgoing';
 import { submissionId } from '../src/chat/actions';
 import { CHAT_HISTORY_BYTES } from '../src/chat-limits';
 
@@ -739,12 +739,92 @@ test('a tracked operation with an unknown status is reconciled, never attempted 
       cancel: false,
     });
     const before = h.calls.length;
-    await h.service.cancelOperation('team:eng', id);
-    await h.service.deliverOperation('team:eng', id);
+    assert.equal(await h.service.cancelOperation('team:eng', id), false);
+    assert.equal(await h.service.deliverOperation('team:eng', id), true);
     assert.deepEqual(
       h.calls.slice(before).map((a) => a.action),
       ['reconcile'],
     );
+  } finally {
+    h.service.stop();
+  }
+});
+
+test('a recovered message whose operation lost its status is reconciled, not attempted', async () => {
+  let omit = false;
+  const h = await setup(async (_action, run) => {
+    const reply = await run();
+    // A pending reply that leaves the operation out makes its status unknown.
+    return omit && reply.result.kind === 'pending'
+      ? { ...reply, result: { ...reply.result, operations: [] } }
+      : reply;
+  });
+  try {
+    const id = await prepareOrphan(h);
+    // The recovered body becomes an outgoing message carrying the operation.
+    await h.service.request('team:eng', {
+      action: 'operation-body',
+      operation: id,
+      channel: h.channel,
+    });
+    const message = h.service
+      .messages('team:eng', h.channel)
+      .find((m) => operationOf(m)?.id === id);
+    assert.ok(message);
+    omit = true;
+    await h.service.request('team:eng', { action: 'pending' });
+    omit = false;
+    assert.equal(
+      h.service.operations('team:eng').find((o) => o.id === id)?.statusUnknown,
+      true,
+    );
+    assert.deepEqual(h.service.outgoingActions('team:eng', message), {
+      retry: 'check',
+      edit: false,
+    });
+    await assert.rejects(h.service.restoreDraft('team:eng', id));
+    const before = h.calls.length;
+    await h.service.retry('team:eng', id);
+    assert.equal(h.calls[before]?.action, 'reconcile');
+    assert.ok(!h.calls.slice(before).some((a) => a.action === 'attempt'));
+  } finally {
+    h.service.stop();
+  }
+});
+
+test('a tracked operation offers no request while its message is being sent', async () => {
+  const gate = deferred();
+  const h = await setup(async (action, run) => {
+    if (action.action === 'attempt') await gate.promise;
+    return run();
+  });
+  try {
+    const id = await prepareOrphan(h);
+    await h.service.request('team:eng', {
+      action: 'operation-body',
+      operation: id,
+      channel: h.channel,
+    });
+    assert.deepEqual(h.service.operationActions('team:eng', id), {
+      deliver: 'attempt',
+      cancel: true,
+    });
+    const retrying = h.service.retry('team:eng', id);
+    for (let turn = 0; turn < 50; turn++) {
+      if (h.calls.some((a) => a.action === 'attempt')) break;
+      await settle();
+    }
+    assert.ok(h.calls.some((a) => a.action === 'attempt'));
+    // The message's drive sends this operation's requests.
+    assert.deepEqual(h.service.operationActions('team:eng', id), {
+      cancel: false,
+    });
+    const before = h.calls.length;
+    assert.equal(await h.service.cancelOperation('team:eng', id), false);
+    assert.equal(await h.service.deliverOperation('team:eng', id), false);
+    assert.equal(h.calls.length, before);
+    gate.resolve();
+    await retrying;
   } finally {
     h.service.stop();
   }

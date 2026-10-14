@@ -12,6 +12,22 @@ const terminal = (op: ChatOperation) =>
   !['prepared', 'uncertain'].includes(op.state);
 
 /**
+ * The operation as the agent reports it, without the facts this device tracks
+ * beside it. A message holds this, so a copy of `statusUnknown` or `observed`
+ * in the message cannot go stale against the tracked operation.
+ */
+export function reportedOperation(op: ChatOperation): ChatOperation {
+  return {
+    id: op.id,
+    channel: op.channel,
+    kind: op.kind,
+    state: op.state,
+    confirmation: op.confirmation,
+    rejection_code: op.rejection_code,
+  };
+}
+
+/**
  * Whether the operation may already have reached the server: its state is
  * uncertain, its status is unknown after a failed request, or its message is
  * in accepted history. Such an operation is reconciled under its ID and never

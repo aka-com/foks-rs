@@ -30,6 +30,7 @@ import {
   operationActions,
   reconcileOperations,
   observeMessages,
+  reportedOperation,
 } from './operations';
 import type { OperationActions, TrackedOperation } from './operations';
 import { chatIntentPersistence } from './intent';
@@ -47,12 +48,14 @@ import {
   newOutgoing,
   operationOf,
   outcomeUnknown,
+  outgoingActions,
   preparationAmbiguous,
   running,
   terminal,
   transition,
   unsent,
   deliveryOf,
+  type OutgoingActions,
   type OutgoingEvent,
   type OutgoingMessage,
 } from './send/outgoing';
@@ -697,7 +700,7 @@ export class ChatSendService {
             text: result.text,
             createdAt: this.clock.now(),
             automatic: false,
-            delivery: deliveryOf(operation),
+            delivery: deliveryOf(reportedOperation(operation)),
           }),
         );
     }
@@ -913,15 +916,10 @@ export class ChatSendService {
     }
     const epoch = team.epoch;
     const generation = this.generations.get(team.profile) ?? 0;
-    // The tracked operation adds what this device learned about the
-    // operation outside the message: an unknown status or an observation.
     const checking = (op: ChatOperation) =>
       message.observed ||
       message.delivery.stage === 'uncertain' ||
-      deliveryUnconfirmed({
-        ...team.operations.find((o) => o.id === op.id),
-        ...op,
-      });
+      this.unconfirmed(team, op);
     const prepared = operationOf(message);
     this.move(message, {
       type: 'started',
@@ -1039,27 +1037,67 @@ export class ChatSendService {
     await this.drive(team, message);
   }
   /**
-   * The requests a tracked operation accepts, for a row that shows an
-   * operation no outgoing message carries.
+   * Whether `op` may already have reached the server. The state comes from
+   * `op`, which a message may hold; the tracked operation adds what this
+   * device learned outside any message: an unknown status after a failed
+   * request, or an observation in accepted history.
+   */
+  private unconfirmed(team: Team, op: ChatOperation): boolean {
+    const tracked = team.operations.find((o) => o.id === op.id);
+    return deliveryUnconfirmed({
+      state: op.state,
+      observed: tracked?.observed,
+      statusUnknown: tracked?.statusUnknown,
+    });
+  }
+  /**
+   * What the row of an outgoing message offers. Unlike `outgoingActions` on
+   * the message alone, this includes the tracked operation's unknown status,
+   * so the row offers what a drive of the message would send.
+   */
+  outgoingActions(storeId: string, message: OutgoingMessage): OutgoingActions {
+    const team = this.teams.get(storeId);
+    const op = operationOf(message);
+    return outgoingActions(
+      message,
+      !!team && !!op && this.unconfirmed(team, op),
+    );
+  }
+  /**
+   * The requests a tracked operation accepts, for a row that shows the
+   * operation rather than an outgoing message. While a message that carries
+   * the operation is being driven, that drive sends its requests and the row
+   * offers none.
    */
   operationActions(storeId: string, id: string): OperationActions {
-    const op = this.teams.get(storeId)?.operations.find((o) => o.id === id);
-    return op ? operationActions(op) : { cancel: false };
+    const team = this.teams.get(storeId);
+    const op = team?.operations.find((o) => o.id === id);
+    if (
+      !team ||
+      !op ||
+      team.messages.some((m) => operationOf(m)?.id === id && running(m))
+    )
+      return { cancel: false };
+    return operationActions(op);
   }
   /**
    * Sends the delivery request {@link operationActions} offers for a tracked
    * operation: an attempt, or a reconcile when the operation may already have
-   * reached the server. Does nothing when the operation accepts neither.
+   * reached the server. Sends nothing when the operation accepts neither, and
+   * resolves to whether a request was sent.
    */
-  deliverOperation(storeId: string, id: string): Promise<void> {
+  deliverOperation(storeId: string, id: string): Promise<boolean> {
     return this.operationRequest(
       storeId,
       id,
       this.operationActions(storeId, id).deliver,
     );
   }
-  /** Cancels a tracked operation if it accepts cancellation. */
-  cancelOperation(storeId: string, id: string): Promise<void> {
+  /**
+   * Cancels a tracked operation if it accepts cancellation, and resolves to
+   * whether a request was sent.
+   */
+  cancelOperation(storeId: string, id: string): Promise<boolean> {
     return this.operationRequest(
       storeId,
       id,
@@ -1070,10 +1108,11 @@ export class ChatSendService {
     storeId: string,
     id: string,
     action: 'attempt' | 'reconcile' | 'cancel' | undefined,
-  ): Promise<void> {
-    if (!action) return;
+  ): Promise<boolean> {
+    if (!action) return false;
     try {
       await this.request(storeId, { action, operation: id });
+      return true;
     } catch (error) {
       // A failed request leaves the operation's state unknown to this device,
       // so its status is read again before the failure is reported. The reply
@@ -1087,7 +1126,13 @@ export class ChatSendService {
   async restoreDraft(storeId: string, id: string): Promise<void> {
     const team = this.ensure(storeId);
     const message = team.messages.find((m) => m.id === id);
-    if (!message || running(message) || outcomeUnknown(message))
+    const carried = message && operationOf(message);
+    if (
+      !message ||
+      running(message) ||
+      outcomeUnknown(message) ||
+      (carried && this.unconfirmed(team, carried))
+    )
       throw problem('Check the original message before editing it.');
     if (this.draftStore.get(storeId, message.channel))
       throw problem(

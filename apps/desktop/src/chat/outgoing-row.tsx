@@ -6,7 +6,6 @@ import { useChatSendService } from './send-provider';
 import {
   cleanupErrorOf,
   operationOf,
-  outgoingActions,
   phaseOf,
   running,
   type OutgoingMessage,
@@ -53,7 +52,7 @@ export function OutgoingRow({
   // Waiting behind another message of this channel, and held in memory only.
   const queued = phase === 'queued';
   const statusLabel = statusLabels[phase];
-  const actions = outgoingActions(message);
+  const actions = service.outgoingActions(storeId, message);
   const createdAt = String(message.createdAt);
   return (
     <MessageRow
