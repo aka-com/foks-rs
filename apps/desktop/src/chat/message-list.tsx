@@ -16,7 +16,7 @@ import { OutgoingRow } from './outgoing-row';
 import { PendingRow } from './pending-row';
 import { MessageText } from './message-text';
 import { messageClock, messageDayKey, messageTime } from './presentation';
-import type { ThreadRow } from './thread-rows';
+import { splitThreadRows, type ThreadRow } from './thread-rows';
 import type { useChatHistory } from './use-chat-history';
 import type { useChatViewport } from './use-chat-viewport';
 
@@ -196,10 +196,7 @@ export function MessageList({
       ? Number(BigInt(position) - BigInt(messages.at(-1)!.sequence))
       : 0;
   // The rows this device has not seen in history follow the newer edge.
-  const unsentRow = (row: ThreadRow) =>
-    row.kind === 'outgoing' || row.kind === 'operation';
-  const held = rows.filter((row) => !unsentRow(row));
-  const unsent = rows.filter(unsentRow);
+  const { held, unsent } = splitThreadRows(rows);
   const draw = (row: ThreadRow): ReactNode => {
     switch (row.kind) {
       case 'day':

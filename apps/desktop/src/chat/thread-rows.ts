@@ -15,10 +15,17 @@ import { operationOf, type OutgoingMessage } from './send/outgoing';
  * this device has not seen in history follow them: the `outgoing` messages
  * the send service holds, with a `day` separator where an outgoing message's
  * local day differs from the row above it, then the tracked `operation`s no
- * outgoing message stands for.
+ * outgoing message stands for. {@link splitThreadRows} separates the two
+ * sections.
  */
 export type ThreadRow =
-  | { kind: 'day'; key: string; label: string }
+  | {
+      kind: 'day';
+      key: string;
+      label: string;
+      /** Whether the separator labels an unsent row rather than history. */
+      unsent: boolean;
+    }
   | { kind: 'new'; key: string }
   | {
       kind: 'message';
@@ -119,6 +126,7 @@ export function threadRows(
         kind: 'day',
         key: `day:${key}`,
         label: messageDay(message.insert_time, now),
+        unsent: false,
       });
     if (isNew) rows.push({ kind: 'new', key: 'new' });
     const avatarName = senderName(message.sender, names);
@@ -133,7 +141,9 @@ export function threadRows(
     });
   });
   // An unsent row draws its clock time, so it takes a day separator when
-  // its local day differs from the row above it.
+  // its local day differs from the row above it. With no history loaded,
+  // including while the first page loads, the first unsent row carries its
+  // own separator.
   let lastDay = messages.length
     ? messageDayKey(messages[messages.length - 1].insert_time)
     : '';
@@ -148,6 +158,7 @@ export function threadRows(
         kind: 'day',
         key: `day:outgoing:${message.id}`,
         label: messageDay(createdAt, now),
+        unsent: true,
       });
     if (day) lastDay = day;
     rows.push({
@@ -173,4 +184,24 @@ export function threadRows(
         operation,
       });
   return rows;
+}
+
+/**
+ * The rows of {@link threadRows} split where the unsent section begins: the
+ * history rows, and the unsent rows with their day separators. A detached
+ * window draws its newer-history edge between the two.
+ */
+export function splitThreadRows(rows: readonly ThreadRow[]): {
+  held: ThreadRow[];
+  unsent: ThreadRow[];
+} {
+  const start = rows.findIndex(
+    (row) =>
+      row.kind === 'outgoing' ||
+      row.kind === 'operation' ||
+      (row.kind === 'day' && row.unsent),
+  );
+  return start < 0
+    ? { held: [...rows], unsent: [] }
+    : { held: rows.slice(0, start), unsent: rows.slice(start) };
 }

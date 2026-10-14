@@ -6,6 +6,7 @@ import type { TrackedOperation } from '../src/chat/operations';
 import { senderName } from '../src/chat/presentation';
 import {
   newMessagesUnloaded,
+  splitThreadRows,
   threadRows,
   type ThreadRow,
 } from '../src/chat/thread-rows';
@@ -183,6 +184,19 @@ test('unsent rows follow history; an operation an outgoing message carries is no
   );
   const outgoing = rows.find((row) => row.kind === 'outgoing');
   assert.equal(outgoing?.kind === 'outgoing' && outgoing.avatarName, 'alice');
+  assert.deepEqual(shape(splitThreadRows(rows).unsent), [
+    'outgoing s1',
+    'outgoing s2 grouped',
+    'operation op2',
+  ]);
+  // With nothing unsent, every row is history.
+  const history = threadRows([message(1, noon)], [], [], {
+    actor: alice,
+    newFrom: null,
+    names,
+    now,
+  });
+  assert.deepEqual(splitThreadRows(history), { held: history, unsent: [] });
 });
 
 test('an unsent row from a later local day than the row above it takes a day separator', () => {
@@ -219,6 +233,16 @@ test('an unsent row from a later local day than the row above it takes a day sep
     'outgoing s3 grouped',
   ]);
   assert.equal(rows[3].key, 'day:outgoing:s2');
+  // The list draws the newer-history edge between the two sections, so an
+  // unsent row's separator stays with it, below that edge.
+  const { held, unsent } = splitThreadRows(rows);
+  assert.deepEqual(shape(held), ['day Yesterday', '1 You']);
+  assert.deepEqual(shape(unsent), [
+    'outgoing s1',
+    'day Today',
+    'outgoing s2',
+    'outgoing s3 grouped',
+  ]);
   // With no history loaded, the first unsent row carries its own day.
   assert.deepEqual(
     shape(
@@ -226,6 +250,11 @@ test('an unsent row from a later local day than the row above it takes a day sep
     ),
     ['day Today', 'outgoing s2'],
   );
+  const alone = splitThreadRows(
+    threadRows([], [later], [], { actor: alice, newFrom: null, names, now }),
+  );
+  assert.deepEqual(shape(alone.held), []);
+  assert.deepEqual(shape(alone.unsent), ['day Today', 'outgoing s2']);
 });
 
 test('a sender off the roster reads as a shortened id, and a missing one as a team member', () => {
