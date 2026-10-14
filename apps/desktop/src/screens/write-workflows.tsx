@@ -66,6 +66,7 @@ import {
 } from './item-roles';
 import { AccessBlock, storeOption, writeBlockReason } from './store-choice';
 import { CopyItemSheet } from './copy-item-sheet';
+import { ImportPasswordsSheet } from './import-passwords-sheet';
 
 export { writeBlockReason };
 
@@ -134,6 +135,11 @@ export type WriteWorkflow =
   | { kind: 'move'; item: Item }
   /** Copies an item into another vault, optionally moving the original to Trash. */
   | { kind: 'copy'; item: Item }
+  /**
+   * Imports logins from another password manager's CSV export, into
+   * `storeId` unless another vault is chosen.
+   */
+  | { kind: 'import'; storeId: StoreRef; initialFolder?: string }
   /** Several items of one store, moved together to a folder chosen next. */
   | { kind: 'move-many'; items: readonly Item[] }
   /** Moves `items` into `folder` of their store one at a time, with progress. */
@@ -1114,6 +1120,19 @@ export function WriteOverlay({
         setWorkflow={setWorkflow}
         onApplied={onApplied}
         onMutationError={onMutationError}
+        accessNow={accessNow}
+      />
+    );
+  if (workflow.kind === 'import')
+    return (
+      <ImportPasswordsSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onMutationError={onMutationError}
+        onReload={onReload}
         accessNow={accessNow}
       />
     );

@@ -539,6 +539,20 @@ export function VaultShell({
     },
     [newItemStore, newSelection, setWorkflow],
   );
+  // Import starts where New would save: the same vault and folder.
+  const startImport = useCallback((): boolean => {
+    if (!newItemStore) return false;
+    setWorkflow({
+      kind: 'import',
+      storeId: newItemStore.id,
+      ...(newSelection &&
+      newSelection.path !== '/' &&
+      !isTrashPath(newSelection.path)
+        ? { initialFolder: newSelection.path }
+        : {}),
+    });
+    return true;
+  }, [newItemStore, newSelection, setWorkflow]);
   // The shortcut and the menu do not open a sheet over another dialog; the
   // palette closes itself before its action runs.
   const openNewItem = useCallback(
@@ -566,6 +580,13 @@ export function VaultShell({
               keys: shortcutLabel('newDocument'),
               run: () => void startNewItem('Document'),
             },
+            {
+              id: 'import-passwords',
+              label: 'Import passwords',
+              detail: `Logins from a CSV export of another password manager, into ${newItemStore.name}`,
+              icon: 'download' as const,
+              run: () => void startImport(),
+            },
           ]
         : []),
       {
@@ -592,7 +613,7 @@ export function VaultShell({
         run: () => locations.navigate({ kind: 'settings' }),
       },
     ],
-    [lockFromMenu, locations, newItemStore, startNewItem],
+    [lockFromMenu, locations, newItemStore, startImport, startNewItem],
   );
   // ⌘C in the palette: the same checks and messages as a row's Copy.
   const copyFromPalette = useCallback(
@@ -810,6 +831,9 @@ export function VaultShell({
                     ? {
                         onNew: (itemKind: Exclude<KindFilter, 'All'>) =>
                           void openNewItem(itemKind),
+                        onImport: () => {
+                          if (!anyDialogOpen()) startImport();
+                        },
                         newBlocked: writeBlockReason(shown, newStore),
                       }
                     : {})}

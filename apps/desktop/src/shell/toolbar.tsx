@@ -10,12 +10,14 @@
  */
 
 import type { ReactNode } from 'react';
-import { KindIcon, MenuButton } from '../components';
+import { Icon, KindIcon, MenuButton } from '../components';
 import { KIND_LIST, kindLabel } from '../model';
 import type { KindFilter } from '../location';
 
 export interface NewItemButtonProps {
   onNew: (kind: Exclude<KindFilter, 'All'>) => void;
+  /** Opens the password import sheet, listed after the kinds. */
+  onImport?: () => void;
   /** Tooltip message explaining why item creation is disabled, if applicable. */
   reason?: string | null;
   disabled?: boolean;
@@ -24,6 +26,7 @@ export interface NewItemButtonProps {
 /** Primary button that displays a dropdown menu of item kinds to create. */
 export function NewItemButton({
   onNew,
+  onImport,
   reason = null,
   disabled = false,
 }: NewItemButtonProps): ReactNode {
@@ -55,6 +58,23 @@ export function NewItemButton({
               {kindLabel(name)}
             </button>
           ))}
+          {onImport ? (
+            <>
+              <div className="menu-separator" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                className="kind-menu-item"
+                onClick={() => {
+                  close();
+                  onImport();
+                }}
+              >
+                <Icon name="download" />
+                Import passwords…
+              </button>
+            </>
+          ) : null}
         </>
       )}
     </MenuButton>

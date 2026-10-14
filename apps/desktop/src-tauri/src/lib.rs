@@ -250,6 +250,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(AppState::new(Arc::clone(&agent)))
         .manage(commands::chat_local::LocalState::default())
+        .manage(commands::password_import::PasswordImports::default())
         .manage(Arc::new(applock::AppLock::new()))
         .manage(Arc::clone(&closing))
         .invoke_handler(tauri::generate_handler![
@@ -366,6 +367,9 @@ pub fn run() {
             commands::trash::empty_trash,
             commands::vault::import_dropped_file,
             commands::vault::pick_import_file,
+            commands::password_import::begin_password_import,
+            commands::password_import::commit_password_import,
+            commands::password_import::discard_password_import,
             commands::vault::release_import_file,
             commands::vault::replace_dropped_file,
             commands::vault::pick_and_replace_file,

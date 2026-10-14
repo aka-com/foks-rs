@@ -180,6 +180,8 @@ export interface TopbarProps {
   onToggleCollapsed?: () => void;
   /** Files: opens the new-item sheet for one kind. */
   onNew?: (kind: Exclude<KindFilter, 'All'>) => void;
+  /** Files: opens the password import sheet, from the New menu. */
+  onImport?: () => void;
   /** Why New cannot act here, as its tooltip; null when it can. */
   newBlocked?: string | null;
   /** Chat: opens the New chat sheet. */
@@ -526,6 +528,7 @@ export function Topbar({
   query,
   onQuery,
   onNew,
+  onImport,
   newBlocked = null,
   onNewChat,
   chatTeamCount,
@@ -625,7 +628,12 @@ export function Topbar({
         />
       ) : null}
       {tab === 'files' && onNew ? (
-        <NewItemButton onNew={onNew} reason={newBlocked} disabled={blocked} />
+        <NewItemButton
+          onNew={onNew}
+          {...(onImport ? { onImport } : {})}
+          reason={newBlocked}
+          disabled={blocked}
+        />
       ) : noChatTeams ? (
         // Chat starts in a team: with none, the header's own action is the
         // team, created on the Teams page where that sheet lives.

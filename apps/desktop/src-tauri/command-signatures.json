@@ -36,6 +36,7 @@
     "app_info": {},
     "app_lock_state": {},
     "auto_recover_agent": {},
+    "begin_password_import": {},
     "bot_account_request": {
       "accountAlias": "required",
       "action": "required",
@@ -96,6 +97,15 @@
       "backupAlias": "required",
       "phrase": "required",
       "profile": "required"
+    },
+    "commit_password_import": {
+      "entries": "required",
+      "folder": "required",
+      "importId": "required",
+      "onProgress": "required",
+      "readRole": "optional",
+      "storeId": "required",
+      "writeRole": "optional"
     },
     "configure_web_admin": {
       "accountAlias": "required",
@@ -203,6 +213,9 @@
     },
     "diagnostic_timings": {
       "since": "required"
+    },
+    "discard_password_import": {
+      "importId": "required"
     },
     "discover_go_profiles": {},
     "discover_groups": {

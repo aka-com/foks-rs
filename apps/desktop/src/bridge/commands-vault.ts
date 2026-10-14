@@ -7,12 +7,14 @@ import {
 } from './errors';
 import { checked, checkedMutation } from './transport';
 import { decodeCommandAck } from './core';
-import { nullableString } from './validation';
+import { array, nullableString } from './validation';
 import {
   decodeCatalog,
   decodeCopy,
   decodeDownload,
   decodeMutation,
+  decodePasswordImportOutcome,
+  decodePasswordImportPreview,
   decodeReadItem,
   decodeTrashMutation,
 } from './vault-catalog';
@@ -42,6 +44,9 @@ export const vaultCommands: Pick<
   | 'releaseImportFile'
   | 'replaceDroppedFile'
   | 'pickAndReplaceFile'
+  | 'beginPasswordImport'
+  | 'commitPasswordImport'
+  | 'discardPasswordImport'
 > = {
   listCatalog: async (onPartial, fresh = false) => {
     if (!onPartial) return checked('list_catalog', { fresh }, decodeCatalog);
@@ -219,4 +224,45 @@ export const vaultCommands: Pick<
       { storeId, path, version, direntId },
       decodeMutation,
     ),
+  beginPasswordImport: () =>
+    checked('begin_password_import', undefined, (value) =>
+      value === null ? null : decodePasswordImportPreview(value),
+    ),
+  commitPasswordImport: async (
+    { importId, entries, storeId, folder, readRole, writeRole },
+    onProgress,
+  ) => {
+    const channel = new Channel<unknown>();
+    channel.onmessage = (value) => {
+      // The resolved list repeats every outcome, so a progress message
+      // that fails to decode is only a missed update.
+      try {
+        onProgress?.(decodePasswordImportOutcome(value));
+      } catch {
+        // Ignored; see above.
+      }
+    };
+    try {
+      return await checkedMutation(
+        'commit_password_import',
+        {
+          importId,
+          entries: [...entries],
+          storeId,
+          folder,
+          ...(readRole === undefined ? {} : { readRole }),
+          ...(writeRole === undefined ? {} : { writeRole }),
+          onProgress: channel,
+        },
+        (value) =>
+          array(value, 'commit_password_import response', (entry, at) =>
+            decodePasswordImportOutcome(entry, at),
+          ),
+      );
+    } finally {
+      channel.onmessage = () => undefined;
+    }
+  },
+  discardPasswordImport: (importId) =>
+    checked('discard_password_import', { importId }, decodeCommandAck, false),
 };

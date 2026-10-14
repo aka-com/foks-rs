@@ -871,6 +871,8 @@ export interface ItemsScreenProps {
   onMove?: (item: Item) => void;
   /** Copies an item into another vault, the same server's or another's. */
   onCopyToVault?: (item: Item) => void;
+  /** Imports logins from a CSV export into a store, at `folder` when given. */
+  onImport?: (storeId: string, folder?: string) => void;
   /**
    * Moves several items of one store: to `folder` when a drag names it, or
    * to a folder chosen in the move sheet.
@@ -979,6 +981,7 @@ export function ItemsScreen({
   onEmptyTrash,
   onMove,
   onCopyToVault,
+  onImport,
   onMoveMany,
   onTrashMany,
   onSettings,
@@ -2014,17 +2017,44 @@ export function ItemsScreen({
           <small>Drop a file anywhere in this window, or pick one.</small>
           <kbd>{shortcutLabel('newDocument')}</kbd>
         </button>
-        {/* The app has no CLI import command, so this card states the one the
-            CLI already has rather than offering an action it cannot run. */}
-        <div className="card static">
-          <span className="ci">
-            <Icon name="terminal" />
-          </span>
-          <b>Import from the CLI</b>
-          <small>Bring items from an existing FOKS install.</small>
-          <span className="cli">foks kv export …</span>
-        </div>
+        {onImport ? (
+          <button
+            type="button"
+            className="card"
+            onClick={() => {
+              if (createStore && currentStoreAvailable(createStore))
+                onImport(createStore, createFolder);
+            }}
+          >
+            <span className="ci">
+              <Icon name="download" />
+            </span>
+            <b>Import passwords</b>
+            <small>
+              From a CSV export of 1Password, Bitwarden, KeePass or a browser.
+            </small>
+          </button>
+        ) : null}
       </div>
+      {/* Items live on the server, so an account already used with the FOKS
+          CLI brings its items once it is connected; there is no CLI export. */}
+      <p>
+        Already use FOKS on the command line?{' '}
+        <button
+          type="button"
+          className="lnk"
+          onClick={() =>
+            locations.navigate({
+              kind: 'settings',
+              section: 'account',
+              ...(selectedStore ? { profile: selectedStore.server } : {}),
+            })
+          }
+        >
+          Connect that account
+        </button>{' '}
+        in Settings › Account › Import from FOKS CLI, and its items appear here.
+      </p>
     </div>
   );
 

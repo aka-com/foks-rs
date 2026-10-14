@@ -38,6 +38,8 @@ import {
   decodeReadItem,
   decodeServers,
   decodeParties,
+  decodePasswordImportOutcome,
+  decodePasswordImportPreview,
   decodeFederation,
   decodeGroupDetails,
   discoverUnboundTeams,
@@ -51,7 +53,7 @@ import {
   selectBridge,
   tauriBridge,
 } from '../src/bridge';
-import type { Bridge, CatalogDto } from '../src/bridge';
+import type { Bridge, CatalogDto, PasswordImportOutcome } from '../src/bridge';
 import {
   canCreateInStore,
   PROTOCOL_CAPABILITIES,
@@ -479,6 +481,145 @@ test('Copy to vault sends the bound source and the target, with roles only when 
         configurable: true,
       });
   }
+});
+
+test('Password import sends the held id and destination and reports progress from the channel', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, Record<string, unknown> | undefined][] = [];
+  const preview = {
+    id: 'ab'.repeat(16),
+    fileName: 'export.csv',
+    entries: [
+      { name: 'Mail', folder: 'Work', document: false },
+      { name: 'GitHub', folder: '', document: true },
+    ],
+    skipped: [{ row: 4, reason: 'A note entry, not a login.' }],
+    ignoredColumns: ['login_totp'],
+  };
+  const outcomes = [
+    { index: 0, status: 'created' },
+    { index: 1, status: 'exists', message: 'Taken.' },
+  ];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (
+          command: string,
+          args: Record<string, unknown> | undefined,
+        ) => {
+          calls.push([command, args]);
+          if (command === 'begin_password_import')
+            return calls.length === 1 ? null : preview;
+          if (command === 'discard_password_import') return { ok: true };
+          const channel = args?.onProgress as {
+            onmessage: (value: unknown) => void;
+          };
+          channel.onmessage(outcomes[0]);
+          // A malformed progress message is dropped; the result has it all.
+          channel.onmessage({ index: 1, status: 'saved' });
+          channel.onmessage(outcomes[1]);
+          return outcomes;
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    assert.equal(await tauriBridge.beginPasswordImport(), null);
+    assert.deepEqual(await tauriBridge.beginPasswordImport(), preview);
+    const progress: PasswordImportOutcome[] = [];
+    assert.deepEqual(
+      await tauriBridge.commitPasswordImport(
+        {
+          importId: preview.id,
+          entries: [0, 1],
+          storeId: 'opaque-team-ref',
+          folder: '/logins',
+          readRole: 'Member:0',
+          writeRole: 'Admin',
+        },
+        (outcome) => progress.push(outcome),
+      ),
+      outcomes,
+    );
+    assert.deepEqual(progress, outcomes);
+    await tauriBridge.commitPasswordImport({
+      importId: preview.id,
+      entries: [1],
+      storeId: 'opaque-account-ref',
+      folder: '/',
+    });
+    assert.deepEqual(await tauriBridge.discardPasswordImport(preview.id), {
+      ok: true,
+    });
+    const commits = calls
+      .filter(([command]) => command === 'commit_password_import')
+      .map(([, args]) => {
+        const { onProgress, ...rest } = args ?? {};
+        assert.ok(onProgress, 'a progress channel is sent');
+        return rest;
+      });
+    assert.deepEqual(commits, [
+      {
+        importId: preview.id,
+        entries: [0, 1],
+        storeId: 'opaque-team-ref',
+        folder: '/logins',
+        readRole: 'Member:0',
+        writeRole: 'Admin',
+      },
+      {
+        importId: preview.id,
+        entries: [1],
+        storeId: 'opaque-account-ref',
+        folder: '/',
+      },
+    ]);
+    assert.deepEqual(calls.at(-1), [
+      'discard_password_import',
+      { importId: preview.id },
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
+test('password import decoders reject malformed previews and outcomes', () => {
+  const preview = {
+    id: 'id',
+    fileName: 'export.csv',
+    entries: [{ name: 'Mail', folder: '', document: false }],
+    skipped: [{ row: 2, name: 'Note', reason: 'A note entry, not a login.' }],
+    ignoredColumns: [],
+  };
+  assert.deepEqual(decodePasswordImportPreview(preview), preview);
+  for (const broken of [
+    { ...preview, entries: [{ name: 'Mail', folder: '' }] },
+    { ...preview, skipped: [{ row: '2', reason: 'x' }] },
+    { ...preview, ignoredColumns: undefined },
+    { ...preview, fileName: 3 },
+  ])
+    assert.throws(() => decodePasswordImportPreview(broken));
+  assert.deepEqual(
+    decodePasswordImportOutcome({ index: 2, status: 'failed' }),
+    {
+      index: 2,
+      status: 'failed',
+    },
+  );
+  for (const broken of [
+    { index: 2, status: 'saved' },
+    { index: -1, status: 'created' },
+    { index: 0, status: 'created', message: 4 },
+  ])
+    assert.throws(() => decodePasswordImportOutcome(broken));
 });
 
 test('action decoders reject partial or malformed responses', () => {

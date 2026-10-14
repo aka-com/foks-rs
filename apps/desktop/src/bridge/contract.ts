@@ -83,6 +83,9 @@ import type {
   EmptyTrashRequest,
   TrashMutationResponse,
   ReplaceDroppedFileRequest,
+  PasswordImportPreview,
+  PasswordImportOutcome,
+  CommitPasswordImportRequest,
 } from './vault-catalog';
 import type { YubiCommand, YubiEnrollment } from './yubikey';
 
@@ -260,6 +263,24 @@ export interface Bridge {
   pickAndReplaceFile(
     request: ItemRequest & { direntId: string },
   ): Promise<MutationResponse>;
+  /**
+   * Opens a CSV export of another password manager in the native picker and
+   * has the host parse and hold it. Resolves with the names and folders of
+   * its logins, or null when the picker is cancelled; no field value and
+   * not the file's path reaches the renderer.
+   */
+  beginPasswordImport(): Promise<PasswordImportPreview | null>;
+  /**
+   * Saves the chosen logins of a held import one at a time, each with a
+   * create-only precondition, and resolves with every outcome. `onProgress`
+   * receives each outcome as it is known.
+   */
+  commitPasswordImport(
+    request: CommitPasswordImportRequest,
+    onProgress?: (outcome: PasswordImportOutcome) => void,
+  ): Promise<PasswordImportOutcome[]>;
+  /** Drops a held import. */
+  discardPasswordImport(importId: string): Promise<CommandAck>;
   resumeGroupCreation(storeId: StoreRef): Promise<MutationResponse>;
   /**
    * Forgets the local record of a team whose creation never finished. Only a

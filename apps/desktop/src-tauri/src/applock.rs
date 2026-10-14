@@ -152,7 +152,7 @@ pub fn lock_app(
 }
 
 /// Locks the app and drops what the unlocked interval held open: the catalog,
-/// web admin windows and local chat views. The macOS menu's Lock calls this
+/// web admin windows, local chat views and a password import's parsed file. The macOS menu's Lock calls this
 /// directly, before it tells an open main window to draw the lock screen.
 pub(crate) fn lock_now(app: &AppHandle, lock: &AppLock) -> Result<LockStateDto, AgentError> {
     lock.lock()?;
@@ -160,6 +160,7 @@ pub(crate) fn lock_now(app: &AppHandle, lock: &AppLock) -> Result<LockStateDto, 
         .invalidate_catalog();
     crate::commands::web_admin::close_all(app);
     crate::commands::chat_local::conceal(app);
+    crate::commands::password_import::discard_held(app);
     Ok(lock.state())
 }
 

@@ -4,6 +4,7 @@ mod contract;
 mod enrollment;
 mod execution;
 mod groups;
+mod password_import;
 mod preparation;
 mod servers;
 mod support;

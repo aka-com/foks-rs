@@ -14,6 +14,7 @@ mod execution;
 pub(crate) mod first_run;
 pub(crate) mod groups;
 pub(crate) mod invitations;
+pub(crate) mod password_import;
 pub(crate) mod portability;
 mod preparation;
 pub(crate) mod servers;

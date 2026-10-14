@@ -64,6 +64,7 @@ async function mount(accessNow?: () => number) {
   const failures: unknown[] = [];
   const folders: { storeId: string; path: string }[] = [];
   const teamInfo: string[] = [];
+  const imports: { storeId: string; folder?: string }[] = [];
   const base = mockBridge(FIXTURE);
   const bridge = {
     ...base,
@@ -103,6 +104,8 @@ async function mount(accessNow?: () => number) {
       onNewFolder: (storeId: string, path: string) =>
         folders.push({ storeId, path }),
       onTeamInfo: (storeId: string) => teamInfo.push(storeId),
+      onImport: (storeId: string, folder?: string) =>
+        imports.push({ storeId, ...(folder ? { folder } : {}) }),
       onCommandError: (error: unknown) => failures.push(error),
     });
   }
@@ -129,6 +132,7 @@ async function mount(accessNow?: () => number) {
     failures,
     folders,
     teamInfo,
+    imports,
     snapshot: FIXTURE,
     update: (snapshot: AgentSnapshot, blocking = false) =>
       rendered.rerender(view(snapshot, blocking)),
@@ -611,4 +615,24 @@ test('the empty vault’s cards show the New shortcuts this platform uses', asyn
     ),
     ['Ctrl N', 'Ctrl Shift N'],
   );
+});
+
+test('the empty vault offers Import passwords and points an existing FOKS account to Settings', async () => {
+  const mounted = await mount();
+  mounted.update({ ...mounted.snapshot, items: [] });
+  const starter = document.querySelector<HTMLElement>('.starter');
+  assert.ok(starter);
+  // No card names a CLI command: FOKS has no `kv export`.
+  assert.doesNotMatch(starter.textContent ?? '', /foks kv|export …/);
+  ui.fireEvent.click(
+    ui.within(starter).getByRole('button', { name: /^Import passwords/ }),
+  );
+  assert.equal(mounted.imports.length, 1);
+  assert.ok(mounted.imports[0]?.storeId);
+  ui.fireEvent.click(
+    ui.within(starter).getByRole('button', { name: 'Connect that account' }),
+  );
+  const location = mounted.locations.getSnapshot().location;
+  assert.equal(location.kind, 'settings');
+  assert.equal(location.kind === 'settings' && location.section, 'account');
 });

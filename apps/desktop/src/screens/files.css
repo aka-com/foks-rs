@@ -780,11 +780,8 @@
   font-size: 12px;
   line-height: 1.35;
 }
-.folder-body .card kbd,
-.folder-body .card .cli {
-  margin-top: auto;
-}
 .folder-body .card kbd {
+  margin-top: auto;
   padding: 0 5px;
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -792,17 +789,6 @@
   font: 12px var(--sans);
   line-height: 1.5;
   color: var(--faint);
-}
-.folder-body .card .cli {
-  max-width: 100%;
-  padding: 3px 7px;
-  border-radius: 5px;
-  background: var(--chip-bg);
-  font: 12px var(--sans);
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ------------------------------------------------------- details panel */

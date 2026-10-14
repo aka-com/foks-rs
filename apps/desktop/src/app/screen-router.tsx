@@ -121,6 +121,9 @@ export function ScreenRouter({
       }
       onMove={(item) => setWorkflow({ kind: 'move', item })}
       onCopyToVault={(item) => setWorkflow({ kind: 'copy', item })}
+      onImport={(storeId, initialFolder) =>
+        setWorkflow({ kind: 'import', storeId, initialFolder })
+      }
       onMoveMany={(items, folder) =>
         setWorkflow(
           folder === undefined

@@ -471,6 +471,38 @@ source's. Moving the original is a separate `trash_item` after the copy
 succeeds: two mutations on two stores have no common transaction, and a
 failure of the second leaves a copy and an original rather than neither.
 
+### Importing passwords
+
+Neither FOKS v0.1.9 nor this implementation has a `foks kv export`, and an
+account already used with the command line needs none: its items are on its
+server and appear once the account is connected through Import from FOKS
+CLI. Logins kept in another password manager arrive as a CSV export, which
+`begin_password_import` reads in the host. The renderer receives an opaque
+id, the file's name and the name and folder of each login; the file's path
+and every user name, password, website and note stay in host memory, in
+zeroizing buffers, until the import is committed or discarded, another file
+replaces it, or the app locks.
+
+Columns are found by their header, so the CSV exports of 1Password,
+Bitwarden, KeePass, KeePassXC, LastPass and the browsers' password managers
+need no format choice. A login's name is its title, else its website's host,
+else its user name; a `/` or `%` in it is percent-encoded as the Files list
+decodes it, and a second login with the same name in the same folder takes
+a ` (2)` suffix. A folder or group column becomes folders below the chosen
+destination, without the `Root` group KeePassXC writes in every row.
+
+`commit_password_import` writes each login as one small file of `user:`,
+`password:` and `url:` lines, followed by one `note:` line per line of its
+notes. Every line is then a field line, so the agent's listing classifies
+the item as a login and Copy finds its fields, while Go FOKS clients see an
+ordinary small file. A login longer than 2,040 bytes is stored as a file and
+listed as a Document. Each write carries a `Create` precondition, so an
+occupied path is reported and left unchanged, and a login that failed or
+whose outcome is unknown can be sent again without saving it twice. The
+writes run one at a time under one mutation reservation; the first failure
+other than an occupied path ends the run, and an unknown outcome requires a
+refresh before the next write, as for any other mutation.
+
 ### Trash
 
 Delete in the desktop moves an item, or a folder with everything in it,
@@ -621,6 +653,8 @@ no agent operation and no protocol change.
   (`read_item`, `copy_item_value`, `copy_item_field`, `download_file`),
   `src/commands/trash.rs` (`trash_item`, `restore_trash_item`, `remove_item`,
   `empty_trash`), `src/commands/vault_copy.rs` (`copy_item_to_store`),
+  `src/commands/password_import.rs` (`begin_password_import`,
+  `commit_password_import`),
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.

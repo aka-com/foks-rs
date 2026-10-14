@@ -67,6 +67,37 @@ const FIELD_NAMES: Readonly<Record<Exclude<ItemField, 'value'>, string>> = {
   url: 'website',
 };
 
+/**
+ * The file the mock's password import reads, as if from a Bitwarden CSV
+ * export: two logins at the top, one of them named like a fixture login,
+ * one in a folder, and a secure note that is left out. `text` is what the
+ * host would write; the preview the renderer receives carries none of it.
+ */
+const MOCK_PASSWORD_IMPORT = {
+  fileName: 'bitwarden_export.csv',
+  entries: [
+    {
+      name: 'github.com',
+      folder: '',
+      text: 'user: satoshi\npassword: imported-gh\nurl: https://github.com',
+    },
+    {
+      name: 'Mail',
+      folder: 'Work',
+      text: 'user: ana\npassword: imported-mail\nurl: https://mail.example.com\nnote: recovery codes are in the safe',
+    },
+    {
+      name: 'Bank',
+      folder: '',
+      text: 'user: ana\npassword: imported-bank\nurl: https://bank.example.com',
+    },
+  ],
+  skipped: [
+    { row: 5, name: 'Wi-Fi codes', reason: 'A note entry, not a login.' },
+  ],
+  ignoredColumns: ['favorite', 'login_totp'],
+} as const;
+
 /** The personal account's one recovery phrase: the key the fixture phrase derives. */
 const FIXTURE_BACKUP_ID = `10${'4'.repeat(64)}`;
 
@@ -113,6 +144,8 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     }
     return item;
   };
+  // The id of the password import the mock holds, as the host holds one.
+  let heldImport: string | null = null;
   const hoverListeners = new Set<(event: { hovering: boolean }) => void>();
   const pathListeners = new Set<(paths: string[]) => void>();
   const failure = (code: string, message: string) => ({
@@ -1016,6 +1049,70 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       return { applied: true };
     },
     pickImportFile: async () => '/tmp/picked-file',
+    beginPasswordImport: async () => {
+      heldImport = crypto.randomUUID().replaceAll('-', '');
+      return {
+        id: heldImport,
+        fileName: MOCK_PASSWORD_IMPORT.fileName,
+        entries: MOCK_PASSWORD_IMPORT.entries.map(({ name, folder }) => ({
+          name,
+          folder,
+          document: false,
+        })),
+        skipped: MOCK_PASSWORD_IMPORT.skipped.map((skip) => ({ ...skip })),
+        ignoredColumns: [...MOCK_PASSWORD_IMPORT.ignoredColumns],
+      };
+    },
+    commitPasswordImport: async (
+      { importId, entries, storeId, folder, readRole, writeRole },
+      onProgress,
+    ) => {
+      if (importId !== heldImport)
+        throw failure(
+          'import-expired',
+          'This import is no longer held. Choose the file again.',
+        );
+      const roles = createRoles(storeId, readRole, writeRole);
+      return entries.map((index) => {
+        const entry = MOCK_PASSWORD_IMPORT.entries[index];
+        if (!entry)
+          throw failure('invalid-request', 'Choose logins this import holds.');
+        const path = [folder === '/' ? '' : folder, entry.folder, entry.name]
+          .filter((part, at) => at === 0 || part)
+          .join('/');
+        let outcome: {
+          index: number;
+          status: 'created' | 'exists';
+          message?: string;
+        };
+        if (items.some((item) => item.store === storeId && item.path === path))
+          outcome = {
+            index,
+            status: 'exists',
+            message: 'Something with this name is already in the vault.',
+          };
+        else {
+          items.push({
+            direntId: crypto.randomUUID().replaceAll('-', ''),
+            store: storeId,
+            path,
+            kind: 'Secret',
+            size: entry.text.length,
+            version: 1,
+            ...roles,
+          });
+          contents.set(`${storeId}|${path}`, entry.text);
+          unread.add(storeId);
+          outcome = { index, status: 'created' };
+        }
+        onProgress?.(outcome);
+        return outcome;
+      });
+    },
+    discardPasswordImport: async (importId) => {
+      if (importId === heldImport) heldImport = null;
+      return { ok: true };
+    },
     releaseImportFile: async () => ({ ok: true }),
     replaceDroppedFile: async ({ storeId, path, version, direntId }) => {
       const item = items.find(
