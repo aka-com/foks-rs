@@ -290,6 +290,8 @@ test('the composer states its keys, formats the selection and lists the formats 
       sheet.querySelector(`td .chat-message-text ${selector}`),
       selector,
     );
+  // A labelled link and a bare address.
+  assert.equal(sheet.querySelectorAll('td .chat-message-text a').length, 2);
   assert.match(sheet.textContent ?? '', /Ctrl\+B/);
   assert.equal(
     document.activeElement,

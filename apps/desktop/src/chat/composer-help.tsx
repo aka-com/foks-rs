@@ -20,8 +20,9 @@ export const FORMATTING_EXAMPLES: readonly {
   { source: '*italic*' },
   { source: '`code`' },
   { source: '[notes](https://example.com)' },
+  { source: 'https://example.com' },
   { source: '```\nkubectl get pods\n```', note: 'with a Copy code button' },
-  { source: '- item' },
+  { source: '- item', note: 'or * item' },
   { source: '1. item' },
   { source: '> quote' },
 ];
@@ -90,7 +91,7 @@ export function ComposerHelp({
         </table>
         <p className="chat-format-note">
           Links open only for http and https addresses. Styles do not nest or
-          run across lines. Anything else, such as # headings or _underscores_,
+          run across lines. Other Markdown, such as # headings or _underscores_,
           shows as typed.
         </p>
         <h4 id={keysId}>Keys</h4>

@@ -40,12 +40,32 @@ function enclosed(value: string, start: number, end: number, mark: string) {
 }
 
 /**
+ * Whether `core` starts and ends with `mark`. A `*` that starts `**` opens
+ * bold, not italic, unless a third `*` follows it.
+ */
+function wrapped(core: string, mark: string): boolean {
+  return (
+    core.length > 2 * mark.length &&
+    core.startsWith(mark) &&
+    core.endsWith(mark) &&
+    !(mark === '*' && core.startsWith('**') && !core.startsWith('***'))
+  );
+}
+
+/**
+ * A list item or quote marker, which `message-text.tsx` reads only at the
+ * start of a line and which inline markers therefore must not precede.
+ */
+const BLOCK_MARKER = /^(?:[-*] |\d+\. |> )/;
+
+/**
  * Wraps the selection in the format's markers, or removes them when the
- * selection is already wrapped in them. `message-text.tsx` reads an inline
- * style within one line only, so a selection across lines has each of its
- * non-blank lines wrapped. Surrounding whitespace stays outside the markers,
- * since `** bold **` is not read as bold. A code block puts the selected
- * lines, whole, between ``` fence lines.
+ * selection is already wrapped in them; a caret between an empty pair
+ * removes the pair. `message-text.tsx` reads an inline style within one line
+ * only, so a selection across lines is handled line by line (see
+ * {@link linesEdit}). Whitespace at the edges of the selection stays outside
+ * the markers, as it belongs to the surrounding text. A code block puts the
+ * selected lines, whole, between ``` fence lines.
  */
 export function formatEdit(
   format: ComposerFormat,
@@ -57,32 +77,14 @@ export function formatEdit(
   const mark = MARKS[format];
   const width = mark.length;
   const selected = value.slice(start, end);
-  if (selected.includes('\n')) {
-    const text = selected
-      .split('\n')
-      .map((line) => {
-        const core = line.trim();
-        if (!core) return line;
-        const lead = line.indexOf(core);
-        return `${line.slice(0, lead)}${mark}${core}${mark}${line.slice(lead + core.length)}`;
-      })
-      .join('\n');
-    return {
-      from: start,
-      to: end,
-      text,
-      selectionStart: start,
-      selectionEnd: start + text.length,
-      removed: false,
-    };
-  }
+  if (selected.includes('\n')) return linesEdit(value, start, end, mark);
   const coreStart = start + (selected.length - selected.trimStart().length);
   const coreEnd = Math.max(
     coreStart,
     end - (selected.length - selected.trimEnd().length),
   );
   const core = value.slice(coreStart, coreEnd);
-  if (core && enclosed(value, coreStart, coreEnd, mark))
+  if (enclosed(value, coreStart, coreEnd, mark))
     return {
       from: coreStart - width,
       to: coreEnd + width,
@@ -91,12 +93,7 @@ export function formatEdit(
       selectionEnd: coreEnd - width,
       removed: true,
     };
-  if (
-    core.length > 2 * width &&
-    core.startsWith(mark) &&
-    core.endsWith(mark) &&
-    !(mark === '*' && core.startsWith('**') && !core.startsWith('***'))
-  ) {
+  if (wrapped(core, mark)) {
     const inner = core.slice(width, -width);
     return {
       from: coreStart,
@@ -114,6 +111,77 @@ export function formatEdit(
     selectionStart: coreStart + width,
     selectionEnd: coreEnd + width,
     removed: false,
+  };
+}
+
+/**
+ * The inline format applied to each line of a selection across lines. Each
+ * non-blank line is wrapped after any list item or quote marker that starts
+ * it, so `- one` becomes `- **one**` and stays a list item. Fence lines and
+ * the lines between them are left as they are, since a code block shows its
+ * text as typed. When every line the format applies to is already wrapped in
+ * the markers, they are removed from each line instead; otherwise lines that
+ * are already wrapped are not wrapped again.
+ */
+function linesEdit(
+  value: string,
+  start: number,
+  end: number,
+  mark: string,
+): ComposerEdit {
+  const width = mark.length;
+  const segments = value.slice(start, end).split('\n');
+  const firstLine = value.lastIndexOf('\n', start - 1) + 1;
+  // `message-text.tsx` opens and closes a fence at each line that starts
+  // with ```, so the fence lines before the selection say whether its first
+  // line is inside one.
+  let fenced =
+    value
+      .slice(0, firstLine)
+      .split('\n')
+      .filter((line) => line.startsWith('```')).length %
+      2 ===
+    1;
+  let at = start;
+  const lines = segments.map((segment) => {
+    const segmentStart = at;
+    at += segment.length + 1;
+    const lineStart = value.lastIndexOf('\n', segmentStart - 1) + 1;
+    if (value.startsWith('```', lineStart)) {
+      fenced = !fenced;
+      return null;
+    }
+    if (fenced) return null;
+    // A selection that starts within a line takes no marker from it.
+    const block =
+      segmentStart === lineStart ? (BLOCK_MARKER.exec(segment)?.[0] ?? '') : '';
+    const rest = segment.slice(block.length);
+    const core = rest.trim();
+    if (!core) return null;
+    return { lead: block.length + rest.indexOf(core), core };
+  });
+  const applied = lines.filter((line) => line !== null);
+  const removed =
+    applied.length > 0 && applied.every(({ core }) => wrapped(core, mark));
+  const text = segments
+    .map((segment, i) => {
+      const line = lines[i];
+      if (!line) return segment;
+      const { lead, core } = line;
+      const head = segment.slice(0, lead);
+      const tail = segment.slice(lead + core.length);
+      if (removed) return `${head}${core.slice(width, -width)}${tail}`;
+      if (wrapped(core, mark)) return segment;
+      return `${head}${mark}${core}${mark}${tail}`;
+    })
+    .join('\n');
+  return {
+    from: start,
+    to: end,
+    text,
+    selectionStart: start,
+    selectionEnd: start + text.length,
+    removed,
   };
 }
 

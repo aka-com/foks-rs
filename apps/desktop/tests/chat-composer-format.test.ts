@@ -56,12 +56,18 @@ test('inline formats wrap the selection and remove markers they find around it',
   assert.equal(format('italic', '**[word]**'), '***[word]***');
   assert.equal(format('italic', '***[word]***'), '**[word]**');
   assert.equal(format('italic', '[**word**]'), '*[**word**]*');
-  // Whitespace at the edges of the selection stays outside the markers,
-  // since `** word **` is not read as bold.
+  // Whitespace at the edges of the selection belongs to the text around it
+  // and stays outside the markers.
   assert.equal(format('bold', 'a[ word ]b'), 'a **[word]** b');
-  // No selection: an empty pair with the caret between the markers.
+  // No selection: an empty pair with the caret between the markers, which
+  // the same key removes again.
   assert.equal(format('bold', 'say []'), 'say **[]**');
+  assert.equal(format('bold', 'say **[]**'), 'say []');
   assert.equal(format('code', '[]'), '`[]`');
+  assert.equal(format('code', '`[]`'), '[]');
+  assert.equal(format('italic', '*[]*'), '[]');
+  // A caret between bold markers takes an italic pair of its own.
+  assert.equal(format('italic', '**[]**'), '***[]***');
 });
 
 test('inline formats wrap each non-blank line of a selection across lines', () => {
@@ -71,6 +77,37 @@ test('inline formats wrap each non-blank line of a selection across lines', () =
   );
   const edit = formatEdit('code', 'a\nb', 0, 3);
   assert.equal(edit.removed, false);
+  // The same key again removes the markers from each line.
+  assert.equal(format('bold', '[**alpha**\n**beta**]'), '[alpha\nbeta]');
+  assert.equal(formatEdit('bold', '**a**\n**b**', 0, 11).removed, true);
+  assert.equal(format('italic', '[*a*\n *b* ]'), '[a\n b ]');
+  // Bold lines are not italic ones: italic adds its own markers.
+  assert.equal(format('italic', '[**a**\n**b**]'), '[***a***\n***b***]');
+  // With only some lines wrapped, the rest are wrapped to match.
+  assert.equal(format('bold', '[**a**\nb]'), '[**a**\n**b**]');
+});
+
+test('a format across lines keeps list and quote markers first', () => {
+  assert.equal(format('bold', '[- one\n- two]'), '[- **one**\n- **two**]');
+  assert.equal(format('bold', '[- **one**\n- **two**]'), '[- one\n- two]');
+  assert.equal(
+    format('italic', '[* one\n2. two\n> three]'),
+    '[* *one*\n2. *two*\n> *three*]',
+  );
+  // A selection that starts within a line takes no marker from it.
+  assert.equal(format('bold', '- o[ne\n- two]'), '- o[**ne**\n- **two**]');
+});
+
+test('a format across lines leaves code fences and their lines as typed', () => {
+  assert.equal(
+    format('bold', '[say\n```\nmake\n```\ndone]'),
+    '[**say**\n```\nmake\n```\n**done**]',
+  );
+  // A selection that starts inside a fence leaves the fence's remaining lines.
+  assert.equal(
+    format('bold', '```\nmake\n[run\n```\ndone]'),
+    '```\nmake\n[run\n```\n**done**]',
+  );
 });
 
 test('a code block fences the selected lines whole', () => {
