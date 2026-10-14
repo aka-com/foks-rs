@@ -2727,3 +2727,153 @@ test('clicking outside channel info dismisses it without stealing focus or toggl
     null,
   );
 });
+
+test('opening a channel keeps its retained history ahead of channels not reopened, and rendering leaves the eviction order alone', async () => {
+  const { ChatInboxProvider, useChatInbox } = (await vite.ssrLoadModule(
+    '/src/chat/inbox-provider.tsx',
+  )) as typeof import('../src/chat/inbox-provider');
+  const { useChatConversation } = (await vite.ssrLoadModule(
+    '/src/chat/use-chat-conversation.ts',
+  )) as typeof import('../src/chat/use-chat-conversation');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  type Inbox = import('../src/chat/inbox-service').ChatInboxService;
+  type Conversation = ReturnType<
+    typeof import('../src/chat/use-chat-conversation').useChatConversation
+  >;
+  type Page = Extract<
+    import('../src/chat-contract').ChatResult,
+    { kind: 'history' }
+  >;
+  // The busy scenario lists four channels in team:eng; the test uses two.
+  window.history.replaceState(null, '', '/?chat-scenario=busy');
+  try {
+    const snapshot = {
+      ...FIXTURE,
+      stores: FIXTURE.stores.filter(
+        (s) => s.kind !== 'team' || s.id === 'team:eng',
+      ),
+      servers: FIXTURE.servers.map((s) =>
+        s.profileName === 'acme'
+          ? { ...s, services: { ...s.services, chat: true } }
+          : s,
+      ),
+    };
+    const bridge = mockBridge(snapshot);
+    let service!: Inbox;
+    let conversation!: Conversation;
+    let renders = 0;
+    let read: string[] = [];
+    function Probe() {
+      service = useChatInbox().service;
+      conversation = useChatConversation(bridge, 'acme', 'team:eng');
+      renders++;
+      // Every render reads the retained windows, as ChatScreen does.
+      for (const channel of read) conversation.history(channel);
+      return null;
+    }
+    const view = ui.render(
+      createElement(ChatInboxProvider, {
+        bridge,
+        snapshot,
+        children: createElement(Probe),
+      }),
+    );
+    const channels = await ui.waitFor(() => {
+      const listed = service.getSnapshot().get('team:eng')?.data?.channels;
+      assert.ok(listed && listed.length >= 2);
+      return listed.map((channel) => channel.id);
+    });
+    const [a, b] = channels;
+    read = [a, b];
+    const page = (channel: string): Page => ({
+      kind: 'history',
+      channel,
+      before: null,
+      missing_predecessors: [],
+      messages: [
+        {
+          id: `${channel}-1`,
+          sequence: '1',
+          sender: 'actor',
+          send_time: '1',
+          insert_time: '1',
+          content: { kind: 'text', text: 'hello' },
+        },
+      ],
+    });
+    const histories = service.histories;
+    const eng = (channel: string) => histories.binding('team:eng', channel, 0);
+    // Other channels fill the cache to its default limit of 16 windows. They
+    // belong to a store the service does not synchronize, so no refresh
+    // replaces their bindings during the test.
+    const filler = Array.from({ length: 16 }, (_, i) => `filler-${i}`);
+    const scope = service.getSnapshot().get('team:eng')!.scope!;
+    histories.update(
+      'team:filler',
+      {
+        state: 'ready',
+        error: '',
+        note: '',
+        stale: false,
+        revision: 0,
+        channelRevisions: new Map(),
+        blockedChannels: new Set(),
+        scope,
+        data: {
+          kind: 'inbox',
+          cursor: '1',
+          head: '1',
+          degraded: false,
+          read_retry_pending: false,
+          previews_incomplete: false,
+          blocked_channels: [],
+          channels: filler.map((id) => ({
+            id,
+            name: id,
+            description: null,
+            admin: false,
+            readable: true,
+            writable: true,
+            read_role: 'Member (0)',
+            write_role: 'Member (0)',
+          })),
+          conversations: [],
+        },
+      },
+      0,
+    );
+    const other = (channel: string) =>
+      histories.binding('team:filler', channel, 0)!;
+    const accept = (binding: NonNullable<ReturnType<typeof eng>>, id: string) =>
+      ui.act(() => {
+        histories.accept(binding, page(id), null);
+      });
+    // Eviction order, oldest first: a, b, then 14 filler windows.
+    accept(eng(a)!, a);
+    accept(eng(b)!, b);
+    for (const id of filler.slice(0, 14)) accept(other(id), id);
+    const before = renders;
+    view.rerender(
+      createElement(ChatInboxProvider, {
+        bridge,
+        snapshot,
+        children: createElement(Probe),
+      }),
+    );
+    assert.ok(renders > before, 'the conversation rendered again');
+    // Opening b records a use; the renders above read a and b and record none.
+    ui.act(() => conversation.setOpenChannel(b));
+    for (const id of filler.slice(14)) accept(other(id), id);
+    assert.equal(conversation.history(a), null, 'a was the oldest window');
+    assert.ok(conversation.history(b), 'the opened channel is retained');
+    assert.equal(histories.get(other(filler[0])), null);
+    assert.ok(histories.get(other(filler[1])));
+  } finally {
+    window.history.replaceState(null, '', '/');
+  }
+});
