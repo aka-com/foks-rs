@@ -5,9 +5,7 @@ import type {
   ChatMessage,
   ChatOperation,
   ChatReply,
-  ChatScope,
 } from '../chat-contract';
-import { CHAT_ACTIONS } from '../chat-contract';
 import {
   CHAT_HISTORY_BYTES,
   CHAT_PENDING_ROWS,
@@ -36,15 +34,13 @@ import type { OperationActions, TrackedOperation } from './operations';
 import { chatIntentPersistence } from './intent';
 import type { ChatIntentPersistence } from './intent';
 import { sameScope } from './scope';
-import { REQUEST_RETRY, retryDelay } from './backoff';
 import { systemChatClock } from './clock';
 import type { ChatClock } from './clock';
-import { DeadlineTimer } from './deadline-timer';
 import type { ChatInboxService } from './inbox-service';
 import {
-  awaitingAccess,
   copyOutgoing,
   intentHeld,
+  move,
   newOutgoing,
   operationOf,
   outcomeUnknown,
@@ -52,14 +48,16 @@ import {
   preparationAmbiguous,
   running,
   terminal,
-  transition,
   unsent,
   deliveryOf,
   type OutgoingActions,
-  type OutgoingEvent,
   type OutgoingMessage,
 } from './send/outgoing';
 import { DraftStore } from './send/drafts';
+import { ChatRequestGateway, coalesce } from './send/gateway';
+import { recover } from './send/recovery';
+import { SendScheduler, teamHasWork } from './send/scheduler';
+import { newTeam, retire, type Team } from './send/team';
 
 type Inbox = Pick<
   ChatInboxService,
@@ -83,46 +81,6 @@ export interface ChatSendTiming {
   milliseconds: number;
   code?: string;
 }
-interface Team {
-  storeId: string;
-  profile: string;
-  scope: ChatScope | null;
-  client: ReturnType<typeof chatClient>;
-  epoch: number;
-  blocked: boolean;
-  operations: TrackedOperation[];
-  observations: Map<string, ChatMessage & { channel: string }>;
-  messages: OutgoingMessage[];
-  loaded: Set<string>;
-  loading: Map<string, Promise<void>>;
-  loadErrors: Map<string, string>;
-  checks: Map<string, { due: number; failures: number }>;
-  requests: Map<string, Promise<ChatReply>>;
-  clears: Map<string, Promise<void>>;
-  refresh?: Promise<void>;
-  due: number;
-  /**
-   * Whether a recovery has completed for this identity. Only the agent's
-   * pending list can say whether it holds operations from an earlier
-   * session, so a team that has not run one yet always has work.
-   */
-  recovered: boolean;
-  /** Whether the last recovery still had jobs to run when it stopped. */
-  jobs: boolean;
-  cleanupError: string;
-}
-/**
- * How long the tick waits while a team has work in hand. The tick itself
- * issues nothing; it lets each team's own two-second gate through.
- */
-const ACTIVE_TICK = 1000;
-/**
- * How long it waits when no team has anything for it to do. The recovery it
- * would run issues `Chat/Pending` and `Chat/CleanupPending` for every team,
- * so an idle tick is pure cost; at this cadence the service still notices
- * operations another session left behind.
- */
-const IDLE_TICK = 30_000;
 /**
  * How many messages one channel may hold behind the one it is sending. The
  * queue is this session's memory alone, so it is kept to a depth a person can
@@ -151,18 +109,49 @@ export class ChatSendService {
   private revision = 0;
   private active = false;
   private stopInbox?: () => void;
-  private timer: DeadlineTimer;
-  private cursor = 0;
-  private recoveryProfiles = new Set<string>();
   private synchronizing = false;
   private observers = new Set<(event: ChatSendTiming) => void>();
+  private gateway: ChatRequestGateway;
+  private scheduler: SendScheduler;
 
   constructor(
     private bridge: Bridge,
     private inbox: Inbox,
     private clock: ChatClock = systemChatClock,
   ) {
-    this.timer = new DeadlineTimer(clock, () => this.tick());
+    this.gateway = new ChatRequestGateway({
+      current: (team, epoch) => this.current(team, epoch),
+      available: (team) => this.available(team),
+      readable: (team, channel) => this.readable(team, channel),
+      writable: (team, channel) => this.writable(team, channel),
+      channelBlocked: (team, channel) =>
+        inbox.isChannelBlocked(team.storeId, channel),
+      generation: (profile) => this.generation(profile),
+      agentReady: () => this.snapshot?.agent.state === 'ready',
+      inbox: {
+        scope: (storeId) => inbox.getSnapshot().get(storeId)?.scope,
+        handleError: (storeId, error, channel) =>
+          inbox.handleError(storeId, error, channel),
+        invalidate: (storeId) => inbox.invalidate(storeId),
+      },
+      apply: (team, reply, action) => this.apply(team, reply, action),
+      failed: (team, action) => {
+        if (action.action === 'attempt') {
+          team.operations = team.operations.map((op) =>
+            op.id === action.operation ? { ...op, statusUnknown: true } : op,
+          );
+        }
+        this.publish();
+      },
+    });
+    this.scheduler = new SendScheduler(clock, {
+      active: () => this.active,
+      teams: () => this.teams.values(),
+      synchronize: () => this.synchronize(),
+      outstanding: (team) => this.outstanding(team),
+      current: (team) => this.current(team),
+      run: (team) => this.background(team),
+    });
   }
 
   /** Opt-in timings; an observer cannot change what the service does. */
@@ -194,14 +183,6 @@ export class ChatSendService {
     }
   }
 
-  /**
-   * The only place an outgoing message changes. The record keeps its
-   * identity, because a drive in flight holds it across its awaits.
-   */
-  private move(message: OutgoingMessage, event: OutgoingEvent) {
-    Object.assign(message, transition(message, event));
-  }
-
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
@@ -214,7 +195,7 @@ export class ChatSendService {
     // A send, a recovery or a failure changes what the tick has to do, and
     // each of them publishes; re-arming here brings the tick forward as soon
     // as there is work, without any of them having to ask.
-    this.arm();
+    this.scheduler.arm();
     for (const listener of this.listeners) listener();
   }
   start() {
@@ -222,30 +203,22 @@ export class ChatSendService {
     this.active = true;
     this.stopInbox = this.inbox.subscribe(() => this.synchronize());
     this.synchronize();
-    this.arm(true);
+    this.scheduler.arm(true);
   }
   /** Suspend agent work without discarding this window's unsaved queue. */
   pause() {
     this.active = false;
     this.stopInbox?.();
     this.stopInbox = undefined;
-    this.timer.cancel();
+    this.scheduler.cancel();
     this.publish();
   }
   stop() {
     this.pause();
-    for (const team of this.teams.values()) {
-      team.epoch++;
-      team.client.dispose();
-      team.observations.clear();
-      for (const message of team.messages)
-        this.move(message, { type: 'retired' });
-      team.messages.length = 0;
-      team.operations.length = 0;
-    }
+    for (const team of this.teams.values()) retire(team);
     this.draftStore.clearAll();
     this.teams.clear();
-    this.recoveryProfiles = new Set();
+    this.scheduler.forget();
     this.publish();
   }
   update(
@@ -261,27 +234,12 @@ export class ChatSendService {
     if (existing) return existing;
     const store = this.snapshot && storeOf(this.snapshot, storeId);
     if (!store || store.kind !== 'team') throw cancelled();
-    const team: Team = {
+    const team = newTeam({
       storeId,
       profile: store.server,
       scope: this.inbox.getSnapshot().get(storeId)?.scope ?? null,
       client: chatClient(this.bridge, store.server, storeId),
-      epoch: 0,
-      blocked: false,
-      operations: [],
-      observations: new Map(),
-      messages: [],
-      loaded: new Set(),
-      loading: new Map(),
-      loadErrors: new Map(),
-      checks: new Map(),
-      requests: new Map(),
-      clears: new Map(),
-      due: 0,
-      recovered: false,
-      jobs: false,
-      cleanupError: '',
-    };
+    });
     this.teams.set(storeId, team);
     return team;
   }
@@ -313,6 +271,17 @@ export class ChatSendService {
       ) && !this.inbox.isChannelBlocked(team.storeId, channel)
     );
   }
+  private writable(team: Team, channel: string): boolean {
+    return Boolean(
+      this.inbox
+        .getSnapshot()
+        .get(team.storeId)
+        ?.data?.channels.some((c) => c.id === channel && c.writable),
+    );
+  }
+  private generation(profile: string): number {
+    return this.generations.get(profile) ?? 0;
+  }
   private synchronize() {
     if (!this.active || this.synchronizing || !this.snapshot) return;
     this.synchronizing = true;
@@ -343,19 +312,8 @@ export class ChatSendService {
           this.snapshot.servers.find((s) => s.profileName === team.profile)
             ?.trust.status === 'blocked';
         if (removed || replaced || rejected) {
-          team.epoch++;
-          team.client.dispose();
+          retire(team);
           this.draftStore.clear(id);
-          team.observations.clear();
-          team.loaded.clear();
-          team.loadErrors.clear();
-          for (const message of team.messages)
-            this.move(message, { type: 'retired' });
-          team.messages = [];
-          team.operations = [];
-          team.recovered = false;
-          team.jobs = false;
-          team.blocked = true;
           if (replaced && !rejected)
             this.inbox.block(
               id,
@@ -394,7 +352,7 @@ export class ChatSendService {
               (m) => m.channel === channel,
             )) {
               if (message.text !== undefined) {
-                this.move(message, { type: 'revoked' });
+                move(message, { type: 'revoked' });
                 changed = true;
               }
             }
@@ -411,7 +369,7 @@ export class ChatSendService {
     // A team first known here has never been recovered, so it is work for
     // the tick. Its record alters nothing a subscriber reads, so it does not
     // publish; it only brings the tick forward from the idle wait.
-    else if (created) this.arm();
+    else if (created) this.scheduler.arm();
   }
   /**
    * Removes the team's drafts for channels other than `live`. The unlocked
@@ -449,8 +407,12 @@ export class ChatSendService {
       .filter((m) => channel === undefined || m.channel === channel)
       .map(copyOutgoing);
   }
+  /** Copies of the team's tracked operations, like {@link messages}. */
   operations(storeId: string): TrackedOperation[] {
-    return this.teams.get(storeId)?.operations ?? [];
+    return (this.teams.get(storeId)?.operations ?? []).map((op) => ({
+      ...op,
+      confirmation: op.confirmation ? { ...op.confirmation } : null,
+    }));
   }
   /**
    * How many submissions this session is the only copy of: the queued
@@ -632,11 +594,8 @@ export class ChatSendService {
           ? 'Too many messages are waiting to be sent in this channel. Your draft is kept.'
           : 'This conversation cannot accept messages yet. Your draft is kept.',
       );
-    const writable = this.inbox
-      .getSnapshot()
-      .get(storeId)
-      ?.data?.channels.find((c) => c.id === channel)?.writable;
-    if (!writable) throw problem('You cannot send messages to this channel.');
+    if (!this.writable(team, channel))
+      throw problem('You cannot send messages to this channel.');
     team.messages = team.messages.filter((m) => !m.observed || intentHeld(m));
     if (!this.canRetain(text))
       throw problem(
@@ -668,11 +627,11 @@ export class ChatSendService {
       );
       if (message) {
         const id = reply.result.operation.id;
-        this.move(message, { type: 'status', op: reply.result.operation });
+        move(message, { type: 'status', op: reply.result.operation });
         const duplicate = team.messages.find(
           (m) => m !== message && operationOf(m)?.id === id,
         );
-        if (duplicate?.observed) this.move(message, { type: 'observed' });
+        if (duplicate?.observed) move(message, { type: 'observed' });
         team.messages = team.messages.filter(
           (m) => m === message || operationOf(m)?.id !== id,
         );
@@ -690,7 +649,7 @@ export class ChatSendService {
       const message = team.messages.find(
         (m) => operationOf(m)?.id === result.operation,
       );
-      if (message) this.move(message, { type: 'body', text: result.text });
+      if (message) move(message, { type: 'body', text: result.text });
       else if (operation)
         team.messages.push(
           newOutgoing({
@@ -740,14 +699,14 @@ export class ChatSendService {
       const id = operationOf(message)?.id;
       if (id === undefined) continue;
       const op = reported.get(id);
-      if (op) this.move(message, { type: 'status', op });
+      if (op) move(message, { type: 'status', op });
       const observed = team.observations.get(id);
       if (observed) this.observeMessage(team, message, observed);
       if (
         !message.observed &&
         team.operations.some((entry) => entry.id === id && entry.observed)
       )
-        this.move(message, { type: 'observed' });
+        move(message, { type: 'observed' });
     }
     for (const [id, observed] of team.observations) {
       if (
@@ -759,115 +718,22 @@ export class ChatSendService {
     }
     this.publish();
   }
+  /**
+   * Sends a chat request for the team through the gateway, which coalesces,
+   * authorizes and reconciles it. The conversation sends every action other
+   * than history reads through here.
+   */
   request(
     storeId: string,
     action: ChatAction,
     priority: ChatWorkPriority = 'foreground',
   ): Promise<ChatReply> {
-    const team = this.ensure(storeId);
-    const key = CHAT_ACTIONS[action.action].coalesce
-      ? JSON.stringify(action)
-      : undefined;
-    if (key && team.requests.has(key)) return team.requests.get(key)!;
-    const work = this.perform(team, action, priority);
-    if (key) {
-      team.requests.set(key, work);
-      void work
-        .finally(() => {
-          if (team.requests.get(key) === work) team.requests.delete(key);
-        })
-        .catch(() => {});
-    }
-    return work;
-  }
-  private async perform(
-    team: Team,
-    action: ChatAction,
-    priority: ChatWorkPriority,
-  ): Promise<ChatReply> {
-    const epoch = team.epoch;
-    const generation = this.generations.get(team.profile) ?? 0;
-    const channel =
-      'channel' in action
-        ? action.channel
-        : 'operation' in action
-          ? team.operations.find((op) => op.id === action.operation)?.channel
-          : undefined;
-    const authorize = (phase: 'before' | 'after') => {
-      if (!this.current(team, epoch)) throw cancelled();
-      if (
-        !CHAT_ACTIONS[action.action].local &&
-        (!this.available(team) ||
-          generation !== (this.generations.get(team.profile) ?? 0) ||
-          (phase === 'before' &&
-            action.action === 'submit-message' &&
-            (!this.readable(team, action.channel) ||
-              !this.inbox
-                .getSnapshot()
-                .get(team.storeId)
-                ?.data?.channels.some(
-                  (c) => c.id === action.channel && c.writable,
-                ))))
-      )
-        throw accessChanged(
-          'Chat access changed. Saved work is kept until access returns.',
-          phase,
-        );
-      if (this.snapshot?.agent.state !== 'ready') throw cancelled();
-      if (
-        channel &&
-        !CHAT_ACTIONS[action.action].local &&
-        this.inbox.isChannelBlocked(team.storeId, channel)
-      )
-        throw channelIntegrity();
-    };
-    try {
-      const reply = await team.client.request(
-        action,
-        undefined,
-        authorize,
-        priority,
-      );
-      if (!this.current(team, epoch)) throw cancelled();
-      const trusted = this.inbox.getSnapshot().get(team.storeId)?.scope;
-      if (
-        (team.scope && !sameScope(team.scope, reply.scope)) ||
-        (trusted && !sameScope(trusted, reply.scope))
-      )
-        throw integrity();
-      team.scope = reply.scope;
-      this.apply(team, reply, action);
-      return reply;
-    } catch (error) {
-      if (this.current(team, epoch)) {
-        this.inbox.handleError(team.storeId, error, channel);
-        // Immediately invalidate the team after an interactive send is denied,
-        // matching conversation-history reads. Denials found by background
-        // synchronization retain the inbox retry delay.
-        if (normalizeCommandError(error).code === 'chat-access-denied')
-          this.inbox.invalidate(team.storeId);
-        if (action.action === 'attempt') {
-          team.operations = team.operations.map((op) =>
-            op.id === action.operation ? { ...op, statusUnknown: true } : op,
-          );
-        }
-        this.publish();
-      }
-      throw error;
-    }
+    return this.gateway.request(this.ensure(storeId), action, priority);
   }
   private clearIntent(team: Team, message: OutgoingMessage): Promise<void> {
-    const current = team.clears.get(message.id);
-    if (current) return current;
-    const work = this.removeIntent(team, message);
-    team.clears.set(message.id, work);
-    void work
-      .finally(() => {
-        if (team.clears.get(message.id) === work)
-          team.clears.delete(message.id);
-      })
-      .catch(() => {});
-    return work;
+    return coalesce(team.clears, message.id, () =>
+      this.removeIntent(team, message),
+    );
   }
   private async removeIntent(team: Team, message: OutgoingMessage) {
     if (!intentHeld(message)) return;
@@ -875,10 +741,10 @@ export class ChatSendService {
     try {
       await this.persistence(team, message.channel).clear(message.submission);
       if (!this.current(team, epoch)) return;
-      this.move(message, { type: 'intent-cleared' });
+      move(message, { type: 'intent-cleared' });
     } catch (error) {
       if (this.current(team, epoch))
-        this.move(message, { type: 'cleanup-failed', error: failure(error) });
+        move(message, { type: 'cleanup-failed', error: failure(error) });
     }
     if (this.current(team, epoch)) {
       this.publish();
@@ -905,23 +771,23 @@ export class ChatSendService {
       // Behind another message in this channel. It waits rather than failing;
       // the channel's drain starts it as soon as the one ahead is out of the
       // way, so the messages reach the agent in the order they were sent in.
-      this.move(message, { type: 'queued' });
+      move(message, { type: 'queued' });
       this.publish();
       return;
     }
     if (!this.available(team) || !this.readable(team, message.channel)) {
-      this.move(message, { type: 'waiting' });
+      move(message, { type: 'waiting' });
       this.publish();
       return;
     }
     const epoch = team.epoch;
-    const generation = this.generations.get(team.profile) ?? 0;
+    const generation = this.generation(team.profile);
     const checking = (op: ChatOperation) =>
       message.observed ||
       message.delivery.stage === 'uncertain' ||
       this.unconfirmed(team, op);
     const prepared = operationOf(message);
-    this.move(message, {
+    move(message, {
       type: 'started',
       step: !prepared ? 'save' : checking(prepared) ? 'check' : 'deliver',
     });
@@ -932,7 +798,7 @@ export class ChatSendService {
     try {
       if (!prepared) {
         if (message.text === undefined) throw cancelled();
-        this.move(message, { type: 'saving', token });
+        move(message, { type: 'saving', token });
         await this.persistence(team, message.channel, priority).save({
           submission: message.submission,
           text: message.text,
@@ -940,8 +806,8 @@ export class ChatSendService {
         if (!this.current(team, epoch)) return;
         // Acknowledged: the agent now holds a copy the next session recovers,
         // so closing the window no longer loses this submission.
-        this.move(message, { type: 'saved', token });
-        if (generation !== (this.generations.get(team.profile) ?? 0))
+        move(message, { type: 'saved', token });
+        if (generation !== this.generation(team.profile))
           throw accessChanged(
             'Chat access changed. Your saved message has been kept.',
             'before',
@@ -952,7 +818,7 @@ export class ChatSendService {
         const action = preparationAmbiguous(message)
           ? 'prepare-message'
           : 'submit-message';
-        this.move(message, { type: 'preparing', token });
+        move(message, { type: 'preparing', token });
         this.publish();
         const reply = await request({
           action,
@@ -963,7 +829,7 @@ export class ChatSendService {
         if (!this.current(team, epoch)) return;
         if (reply.result.kind !== 'operation') throw integrity();
         const op = reply.result.operation;
-        this.move(message, {
+        move(message, {
           type: 'prepared',
           token,
           op,
@@ -987,7 +853,7 @@ export class ChatSendService {
       if (delivery) {
         const reply = await delivery;
         if (this.current(team, epoch) && reply.result.kind === 'operation') {
-          this.move(message, {
+          move(message, {
             type: 'attempted',
             token,
             op: reply.result.operation,
@@ -1003,7 +869,7 @@ export class ChatSendService {
       // Nothing is cleared here. A failed save keeps the same text and
       // submission ID for an idempotent save retry, and a failed preparation
       // is ambiguous, so its saved copy stays until an operation is known.
-      this.move(message, {
+      move(message, {
         type: 'failed',
         token,
         error: failure(error),
@@ -1015,7 +881,7 @@ export class ChatSendService {
       if (op)
         void request({ action: 'status', operation: op.id }).catch(() => {});
     } finally {
-      this.move(message, { type: 'finished', token });
+      move(message, { type: 'finished', token });
       if (this.current(team, epoch)) {
         this.publish();
         // Whatever this attempt ended as, the channel may have room for the
@@ -1169,7 +1035,7 @@ export class ChatSendService {
         'The sent message does not match verified history.',
       );
     if (!message.observed) this.report(team, message, 'observed');
-    this.move(message, { type: 'observed' });
+    move(message, { type: 'observed' });
     team.operations = observeMessages(team.operations, new Set([observed.id]));
   }
   observeHistory(
@@ -1235,7 +1101,17 @@ export class ChatSendService {
   ): Promise<void> {
     const team = this.ensure(storeId);
     if (team.refresh) return team.refresh;
-    const work = this.recover(team, priority);
+    const work = recover(team, {
+      current: (epoch) => this.current(team, epoch),
+      deliverable: (channel) =>
+        this.available(team) && this.readable(team, channel),
+      now: () => this.clock.now(),
+      request: (action) => this.request(team.storeId, action, priority),
+      drain: (channel) => this.drain(team, channel, priority),
+      drive: (message) => this.drive(team, message, priority),
+      clearIntent: (message) => this.clearIntent(team, message),
+      publish: () => this.publish(),
+    });
     team.refresh = work;
     void work
       .finally(() => {
@@ -1244,274 +1120,35 @@ export class ChatSendService {
       .catch(() => {});
     return work;
   }
-  private async checkedWork(
-    team: Team,
-    key: string,
-    work: () => Promise<unknown>,
-  ) {
-    const record = team.checks.get(key);
-    if (record && record.due > this.clock.now()) return;
-    let failed = false;
-    try {
-      await work();
-    } catch {
-      failed = true;
-    }
-    const failures = failed ? Math.min((record?.failures ?? 0) + 1, 6) : 0;
-    team.checks.set(key, {
-      failures,
-      due:
-        this.clock.now() +
-        (failed ? retryDelay(failures, REQUEST_RETRY) : REQUEST_RETRY.base),
-    });
-  }
-  private async recover(team: Team, priority: ChatWorkPriority) {
-    if (!this.current(team)) return;
-    const epoch = team.epoch;
-    const request = (action: ChatAction) =>
-      this.request(team.storeId, action, priority);
-    await request({ action: 'pending' });
-    if (!this.current(team, epoch)) return;
-    const cleanup = await request({
-      action: 'cleanup-pending',
-    });
-    if (!this.current(team, epoch)) return;
-    const obligations = new Map(
-      cleanup.result.kind === 'cleanup-pending'
-        ? cleanup.result.operations.map((op) => [op.id, op])
-        : [],
-    );
-    const visited = new Set<string>();
-    for (let count = 0; count < 16 && this.current(team, epoch); count++) {
-      // A queue whose head settled between publications still has to move;
-      // the drain is a no-op for a channel that is already working.
-      for (const channel of new Set(
-        team.messages
-          .filter((m) => m.delivery.stage === 'queued')
-          .map((m) => m.channel),
-      ))
-        this.drain(team, channel, priority);
-      const jobs: { key: string; run: () => Promise<unknown> }[] = [];
-      for (const op of team.operations) {
-        if (
-          team.messages.some((m) => operationOf(m)?.id === op.id && running(m))
-        )
-          continue;
-        if (op.statusUnknown || op.state === 'uncertain')
-          jobs.push({
-            key: `status:${op.id}`,
-            run: () =>
-              request({
-                action:
-                  this.available(team) && this.readable(team, op.channel)
-                    ? 'reconcile'
-                    : 'status',
-                operation: op.id,
-              }),
-          });
-        const message = team.messages.find((m) => operationOf(m)?.id === op.id);
-        if (
-          op.kind === 'send-message' &&
-          !op.observed &&
-          !op.bodyUnavailable &&
-          op.text === undefined &&
-          message?.text === undefined &&
-          this.available(team) &&
-          this.readable(team, op.channel)
-        ) {
-          jobs.push({
-            key: `body:${op.id}`,
-            run: () =>
-              request({
-                action: 'operation-body',
-                operation: op.id,
-                channel: op.channel,
-              }),
-          });
-        }
-      }
-      for (const op of obligations.values()) {
-        jobs.push({
-          key: `cleanup:${op.id}`,
-          run: async () => {
-            try {
-              if (
-                op.state === 'rejected' &&
-                !team.messages.some((m) => operationOf(m)?.id === op.id) &&
-                this.available(team) &&
-                this.readable(team, op.channel)
-              ) {
-                await request({
-                  action: 'operation-body',
-                  operation: op.id,
-                  channel: op.channel,
-                });
-              }
-              await request({
-                action: 'finalize',
-                operation: op.id,
-              });
-              obligations.delete(op.id);
-              if (!obligations.size) team.cleanupError = '';
-            } catch (error) {
-              team.cleanupError = failure(error);
-              throw error;
-            }
-          },
-        });
-      }
-      for (const message of team.messages) {
-        if (running(message)) continue;
-        if (operationOf(message) && intentHeld(message))
-          jobs.push({
-            key: `intent:${message.id}`,
-            run: async () => {
-              await this.clearIntent(team, message);
-              if (intentHeld(message))
-                throw new Error('Local intent cleanup is pending.');
-            },
-          });
-        if (
-          message.automatic &&
-          ((!operationOf(message) && intentHeld(message)) ||
-            awaitingAccess(message)) &&
-          this.available(team) &&
-          this.readable(team, message.channel)
-        ) {
-          jobs.push({
-            key: `send:${message.id}`,
-            run: async () => {
-              await this.drive(team, message, priority);
-              if (!operationOf(message))
-                throw new Error('Preparation is still pending.');
-            },
-          });
-        }
-      }
-      // What the tick still has to come back for. A job whose check is not
-      // due yet is work in hand, not an idle team.
-      team.jobs = jobs.length > 0;
-      const eligible = jobs
-        .filter(
-          (job) =>
-            !visited.has(job.key) &&
-            (team.checks.get(job.key)?.due ?? 0) <= this.clock.now(),
-        )
-        .sort(
-          (a, b) =>
-            (team.checks.get(a.key)?.due ?? 0) -
-            (team.checks.get(b.key)?.due ?? 0),
-        );
-      const job = eligible[0];
-      if (!job) break;
-      visited.add(job.key);
-      await this.checkedWork(team, job.key, job.run);
-    }
-    const live = new Set([
-      ...team.operations.map((op) => op.id),
-      ...team.messages.map((m) => m.id),
-    ]);
-    for (const key of team.checks.keys())
-      if (!live.has(key.slice(key.indexOf(':') + 1))) team.checks.delete(key);
-    if (this.current(team, epoch)) {
-      team.recovered = true;
-      this.publish();
-    }
-  }
-  /**
-   * Whether the tick would do anything for this team: a recovery never run
-   * or in flight, jobs the last recovery left, work this session started
-   * since it, or a readable channel not opened yet. An operation the
-   * recovery has nothing left to do about is not work.
-   */
+  /** Whether the scheduler has anything to do for this team. */
   private outstanding(team: Team): boolean {
-    if (!this.current(team)) return false;
-    if (
-      !team.recovered ||
-      team.refresh !== undefined ||
-      team.jobs ||
-      team.messages.some(
-        (m) =>
-          running(m) ||
-          m.delivery.stage === 'queued' ||
-          intentHeld(m) ||
-          (m.automatic && awaitingAccess(m)),
-      ) ||
-      team.operations.some((op) => op.statusUnknown || op.state === 'uncertain')
-    )
-      return true;
     return (
-      this.available(team) &&
-      (this.inbox.getSnapshot().get(team.storeId)?.data?.channels ?? []).some(
-        (c) => c.readable && !team.loaded.has(c.id),
+      this.current(team) &&
+      teamHasWork(
+        team,
+        () =>
+          this.available(team) &&
+          (
+            this.inbox.getSnapshot().get(team.storeId)?.data?.channels ?? []
+          ).some((c) => c.readable && !team.loaded.has(c.id)),
       )
     );
   }
-  /** When the next tick could act: each team's own gate, or the idle wait. */
-  private nextTickDelay(): number {
-    const now = this.clock.now();
-    let soonest = Infinity;
-    for (const team of this.teams.values())
-      if (this.outstanding(team))
-        soonest = Math.min(soonest, Math.max(0, team.due - now));
-    return Math.min(IDLE_TICK, Math.max(ACTIVE_TICK, soonest));
-  }
   /**
-   * Arms the tick. A re-arm can only bring it forward, so a burst of
-   * publications cannot push it out indefinitely; the tick itself resets it.
+   * The scheduler's background pass: opens up to four readable channels not
+   * opened yet, so their saved messages are recovered, then recovers the
+   * team.
    */
-  private arm(reset = false) {
-    if (!this.active) {
-      this.timer.cancel();
-      return;
+  private async background(team: Team) {
+    if (this.available(team)) {
+      const channels =
+        this.inbox.getSnapshot().get(team.storeId)?.data?.channels ?? [];
+      for (const channel of channels
+        .filter((c) => c.readable && !team.loaded.has(c.id))
+        .slice(0, 4))
+        await this.open(team.storeId, channel.id, false, 'background');
     }
-    const due = this.clock.now() + this.nextTickDelay();
-    if (reset) this.timer.reset(due);
-    else this.timer.armAt(due);
-  }
-  private tick() {
-    if (!this.active) return;
-    this.synchronize();
-    const teams = [...this.teams.values()];
-    for (
-      let count = 0;
-      count < teams.length && this.recoveryProfiles.size < 4;
-      count++
-    ) {
-      const team = teams[this.cursor++ % teams.length];
-      if (
-        !this.current(team) ||
-        team.due > this.clock.now() ||
-        this.recoveryProfiles.has(team.profile)
-      )
-        continue;
-      const profiles = this.recoveryProfiles;
-      profiles.add(team.profile);
-      team.due = this.clock.now() + 2000;
-      void (async () => {
-        if (this.available(team)) {
-          const channels =
-            this.inbox.getSnapshot().get(team.storeId)?.data?.channels ?? [];
-          for (const channel of channels
-            .filter((c) => c.readable && !team.loaded.has(c.id))
-            .slice(0, 4))
-            await this.open(team.storeId, channel.id, false, 'background');
-        }
-        if (!this.current(team)) return;
-        try {
-          await this.refresh(team.storeId, 'background');
-        } catch {
-          team.due = this.clock.now() + 5000;
-        }
-      })()
-        .finally(() => {
-          profiles.delete(team.profile);
-          // The recovery is what settles whether the team still has work, so
-          // its end is where the next tick's distance is decided.
-          this.arm(true);
-        })
-        .catch(() => {});
-    }
-    this.arm(true);
+    if (!this.current(team)) return;
+    await this.refresh(team.storeId, 'background');
   }
 }

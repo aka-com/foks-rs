@@ -848,3 +848,27 @@ test('a prepared tracked operation is cancelled through the service', async () =
     h.service.stop();
   }
 });
+
+test('operations() returns copies the caller cannot change, like messages()', async () => {
+  const h = await setup();
+  try {
+    const id = await prepareOrphan(h);
+    await h.service.deliverOperation('team:eng', id);
+    const held = h.service.operations('team:eng');
+    const op = held.find((o) => o.id === id)!;
+    assert.equal(op.confirmation?.kind, 'message-sent');
+    const expected = structuredClone(h.service.operations('team:eng'));
+    op.state = 'rejected';
+    if (op.confirmation?.kind === 'message-sent')
+      op.confirmation.sequence = '0';
+    held.length = 0;
+    assert.deepEqual(h.service.operations('team:eng'), expected);
+    // Stopping the service leaves a copy the caller holds as it was.
+    const kept = h.service.operations('team:eng');
+    h.service.stop();
+    assert.deepEqual(h.service.operations('team:eng'), []);
+    assert.deepEqual(kept, expected);
+  } finally {
+    h.service.stop();
+  }
+});

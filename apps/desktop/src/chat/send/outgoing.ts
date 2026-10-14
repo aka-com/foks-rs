@@ -280,7 +280,7 @@ export function newOutgoing(input: {
 
 /**
  * The next state of one outgoing message. Pure: the send service applies
- * every change to a message through this function.
+ * every change to a message through this function, by way of {@link move}.
  */
 export function transition(
   message: OutgoingMessage,
@@ -514,4 +514,12 @@ export function outgoingActions(
       !check &&
       message.text !== undefined,
   };
+}
+
+/**
+ * Applies `event` to `message` in place. The record keeps its identity,
+ * because a drive in flight holds it across its awaits.
+ */
+export function move(message: OutgoingMessage, event: OutgoingEvent) {
+  Object.assign(message, transition(message, event));
 }
