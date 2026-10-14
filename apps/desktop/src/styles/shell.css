@@ -268,6 +268,12 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .topbar .topsearch input:focus{border:0;background:transparent;box-shadow:none}
 .topbar .topsearch input::placeholder{color:var(--faint)}
 .topbar .topsearch kbd{position:static;flex:none;margin-left:auto;top:auto;right:auto;font:12px var(--sans);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:0 5px;background:var(--btn-bg)}
+/* A visible scope: what typing in the field searches, with a × that drops it. */
+.topbar .topsearch .search-badge{flex:none;display:inline-flex;align-items:center;gap:1px;height:20px;max-width:45%;padding:0 2px 0 7px;border-radius:99px;background:var(--accent-wash-2);color:var(--accent-ink);font-size:12px;font-weight:600;white-space:nowrap}
+.topbar .topsearch .search-badge .n{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.topbar .topsearch .search-badge button{flex:none;display:grid;place-items:center;width:16px;height:16px;padding:0;border:0;border-radius:50%;background:none;color:inherit}
+.topbar .topsearch .search-badge button:hover{background:var(--accent-wash-2)}
+.topbar .topsearch .search-badge .ic{position:static;font-size:12px;color:inherit}
 .topbar .btn{flex:none}
 .topbar .btn.icon{width:30px;height:30px}
 .topbar .btn.primary{height:30px;font-size:13.25px}

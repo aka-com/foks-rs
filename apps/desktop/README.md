@@ -876,17 +876,47 @@ was hidden claim it had no channels. Named teams whose server offers no chat
 sit dimmed at the foot under "Chat unavailable" with the reason; shares are not
 listed. Unread counts are the rail's orange (`--unread`) wherever they appear.
 
-The window header's search field, scoped to the Chat tab, filters teams and
-channels by name across the whole column — a team match keeps all of that
-team's channels, a channel match keeps its team's heading and that channel —
-and says when nothing matches. The input is a `type="search"` field with its
-own accessible name rather than a wrapper `<label>`. Search match counts are
-announced via a visually hidden `role="status"` element so screen reader users
-are notified when the team list filters. It searches the "Chat unavailable"
-teams too, so it is live whenever the column lists anything, not only when a
-team has chat. There is no message-content search: the agent has no message
-index, so the conversation header's search button focuses this field rather
-than promising one.
+The window header's search field has two scopes in the Chat tab. While a
+readable channel is open, a visible badge names it ("#deploys") and the field's
+accessible name is "Find in #deploys": typing there opens that conversation's
+find bar with the text and moves focus into it. The badge's ×, or Backspace
+in the empty field, drops the badge for the rest of the visit to that channel,
+and the field then reads "Search channels" and filters teams and channels by
+name across the whole column — a team match keeps all of that team's
+channels, a channel match keeps its team's heading and that channel — and says
+when nothing matches. A name filter already in the field keeps that scope.
+Search match counts are announced via a visually hidden `role="status"`
+element so screen reader users are notified when the team list filters. It
+searches the "Chat unavailable" teams too, so it is live whenever the column
+lists anything, not only when a team has chat.
+
+Find in the conversation (`chat/find-bar.tsx`, `chat/use-chat-find.ts`) opens
+under the thread header from ⌘F (Ctrl+F on Windows and Linux) anywhere in the
+window, the thread header's "Find in channel" button, or the window header's
+field. It matches case-insensitively over the rows the open window draws, which
+the agent has already decrypted and verified, and counts from the newest match:
+"1 of 7". Enter steps to an older match and Shift+Enter to a newer one,
+wrapping at either end, and the current match scrolls to the middle of the list
+with its row marked; Esc closes the bar and returns focus to where it was.
+Matches are measured in the rendered rows, so a match may span a bold word or a
+mention but never two paragraphs, a control such as a code block's Copy, or
+screen-reader-only text. Every match is tinted and the current one drawn solid
+with the CSS Custom Highlight API, which leaves the rows' DOM alone; a webview
+without it tints the matching rows instead. With no match the bar reads "No
+matches in loaded messages", because older history has not been read, and
+offers "Search older messages (loaded back to Sep 30)". That reads up to five
+older pages (250 rows) per click, below the window, with the same history
+request as Load older messages, and keeps only a reference to each matching
+row: its sequence, sender, time and text. The window itself is not changed, so
+a search never pushes it past its row or byte bound. Cancel stops the scan and
+drops the page in flight, which the next run reads again; "Search further"
+continues from where the last run stopped, and the line states how far back the
+search reached, or that it reached the beginning of the channel. Selecting a
+found message opens the channel around it with the anchored read an unread
+channel opens with, which replaces the window rather than growing it; the
+message is marked for two seconds and takes focus. Nothing find reads is
+stored: the agent has no message index, and search across channels needs one
+the agent owns.
 
 New channel opens the Create channel sheet (`chat-new.tsx`). Every entry
 point carries that name — the topbar's New channel button, the column's "+"
@@ -953,7 +983,7 @@ the description and access line ("Member can read and write" — the visibility
 band is a FOKS internal and is not drawn, except when the read and write roles
 differ by the band alone, where the band is the only thing that tells them
 apart), and carries one Refresh that reloads the history, the channel list and
-the saved work, the search that returns to the column, Team files, and the ⓘ
+the saved work, the search button that opens the find bar, Team files, and the ⓘ
 that opens `chat-info.tsx` — rendered as a third column when space permits, and
 as an overlay covering the conversation pane below 1000px tab width to preserve
 readability at the 960px minimum window width. The overlay covers the entire
@@ -1342,11 +1372,11 @@ and the ⌘K palette. A palette item result is one move rather than two:
 `navigateAndSelect` opens the store page with the item selected on it, so a
 held-back navigation cannot leave another page's item in the details panel.
 
-Three shortcuts sit on the document, where an open dialog cannot intercept
+Four shortcuts sit on the document, where an open dialog cannot intercept
 them, so they test `anyDialogOpen()` themselves: Control-Tab in
-`shell/sidebar.tsx`, ⌘K in `shell/search-palette.tsx`, and Alt+Up/Down and
-Alt+Shift+Up/Down in `screens/chat-teams.tsx` do nothing while a dialog owns
-the window.
+`shell/sidebar.tsx`, ⌘K in `shell/search-palette.tsx`, Alt+Up/Down and
+Alt+Shift+Up/Down in `screens/chat-teams.tsx`, and ⌘F (Ctrl+F) in
+`chat/chat-thread.tsx` do nothing while a dialog owns the window.
 
 ## Testing
 

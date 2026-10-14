@@ -1116,6 +1116,246 @@
   background: var(--accent-wash-2);
   color: var(--accent-ink);
 }
+/* Find in the conversation (find-bar.tsx): the bar under the thread header,
+   the line that states what was searched, and the matches a scan of older
+   pages found. */
+.chat-find {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 16px 9px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel);
+}
+.chat-find-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.chat-find-field {
+  flex: 1 1 200px;
+  max-width: 380px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--search-border);
+  border-radius: 8px;
+  background: var(--btn-bg);
+  color: var(--muted);
+}
+.chat-find-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash-2);
+}
+.chat-find-field > .ic {
+  flex: none;
+  font-size: 15px;
+}
+.chat-find-field input {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--ink);
+  font: 13px var(--sans);
+}
+.chat-find-field input::placeholder {
+  color: var(--faint);
+}
+.chat-find-count {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.chat-find-count.none {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.chat-find .btn.icon {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--muted);
+}
+.chat-find .btn.icon:hover:not([disabled]) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.chat-find .btn.icon[disabled] {
+  opacity: 0.4;
+}
+.chat-find .btn.icon .ic {
+  font-size: 16px;
+}
+.chat-find .chat-find-close {
+  margin-left: auto;
+}
+.chat-find-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 22px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.chat-find-more .lnk {
+  font-size: 12.5px;
+  text-align: left;
+}
+.chat-find-more .btn.cap {
+  height: 22px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+.chat-find-refs {
+  display: flex;
+  flex-direction: column;
+  max-height: 172px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--main-surface);
+}
+.chat-find-refs-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px 5px;
+  background: var(--main-surface);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.chat-find-refs-head small {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--faint);
+}
+.chat-find-ref {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+  background: none;
+  text-align: left;
+  color: var(--ink);
+}
+.chat-find-ref:hover {
+  background: var(--hover);
+}
+.chat-find-ref:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
+}
+.chat-find-ref .chat-avatar {
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  font-size: 12px;
+}
+.chat-find-ref .t {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.4;
+}
+.chat-find-ref .when {
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-find-ref .when b {
+  font-weight: 650;
+  color: var(--ink);
+}
+.chat-find-ref .snip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.chat-find-ref .snip strong {
+  font-weight: 700;
+  color: var(--ink);
+}
+.chat-find-ref .go {
+  flex: none;
+  align-self: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-ink);
+}
+/* Matches in the rows (use-chat-find.ts): every match tinted and the current
+   one solid, drawn as CSS highlights so the rows' DOM is left alone; the
+   current row, the row a step lands on and the row find opened are marked
+   behind the message. A webview without CSS highlights tints the matching
+   rows instead. */
+::highlight(chat-find) {
+  background-color: color-mix(in srgb, var(--unread) 30%, transparent);
+  color: inherit;
+}
+::highlight(chat-find-current) {
+  background-color: var(--unread);
+  color: var(--ink-inverse);
+}
+.chat-message[data-find='current'],
+.chat-message[data-find-target] {
+  isolation: isolate;
+}
+.chat-message[data-find='current']::before,
+.chat-message[data-find-target]::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: -5px -8px;
+  border-radius: var(--radius-md);
+  background: var(--amber-wash);
+  box-shadow: inset 3px 0 0 var(--amber-strong);
+}
+.chat-message[data-find-flash]::before {
+  animation: chat-find-flash 0.7s ease-out;
+}
+@keyframes chat-find-flash {
+  from {
+    background: color-mix(in srgb, var(--unread) 40%, transparent);
+  }
+}
+@supports not selector(::highlight(chat-find)) {
+  .chat-message[data-find='hit'] .chat-message-text {
+    background: color-mix(in srgb, var(--unread) 10%, transparent);
+    border-radius: var(--radius-sm);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-message[data-find-flash]::before {
+    animation: none;
+  }
+}
 .chat-messages-wrap {
   position: relative;
   flex: 1;

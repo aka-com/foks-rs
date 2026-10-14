@@ -441,6 +441,19 @@ resumes only when the window also holds the first unread message;
 otherwise it opens at the first unread message as described above. The position is dropped
 with the window when the entry is evicted or its binding retired.
 
+Find in a conversation works on the same pages and stores nothing. The
+find bar matches the rows the window draws, which the agent has already
+decrypted and verified, by measuring the rendered text, and draws the
+matches with CSS highlights rather than editing the rows. "Search older
+messages" reads up to five pages below the window per click with the
+same `history` request as paging back, and keeps only a reference to each
+matching row — its sequence, sender, time and text — until the bar
+closes. Those pages never enter the window, so a search cannot push it
+past its bounds, and opening a match uses the anchored read, which
+replaces the window. The agent keeps no message index and persists no
+plaintext (see [Chapter 16](16-chat.qmd)), so search across channels
+would need an index the agent owns and a recorded change to that rule.
+
 ## Vault edits
 
 Items and folders offer Rename or move within their current vault. The target

@@ -21,6 +21,13 @@ export interface SearchFieldProps {
   kbd?: boolean;
   /** Optional search scope used in the input's accessible label. */
   scope?: string;
+  /** The input's accessible name, in place of the one `scope` makes. */
+  label?: string;
+  /**
+   * A visible scope drawn before the input, naming what typing searches, with
+   * a button that drops it. Backspace in the empty field drops it too.
+   */
+  badge?: { label: string; clearLabel: string; onClear: () => void };
   /** Whether the search input should be disabled (e.g. when the active view contains no searchable items). */
   disabled?: boolean;
   /** Additional CSS class name for custom layout and positioning. */
@@ -41,6 +48,8 @@ export function SearchField({
   shortcut = true,
   kbd = false,
   scope,
+  label: accessibleName,
+  badge,
   disabled = false,
   className,
 }: SearchFieldProps): ReactNode {
@@ -60,7 +69,7 @@ export function SearchField({
     };
   }, [shortcut]);
 
-  const label = scope ? `Search ${scope}` : placeholder;
+  const label = accessibleName ?? (scope ? `Search ${scope}` : placeholder);
   return (
     <label
       className={['search', shortcut ? '' : 'no-shortcut', className ?? '']
@@ -68,6 +77,20 @@ export function SearchField({
         .join(' ')}
     >
       <Icon name="search" />
+      {badge ? (
+        <span className="search-badge">
+          <span className="n">{badge.label}</span>
+          <button
+            type="button"
+            aria-label={badge.clearLabel}
+            title={badge.clearLabel}
+            disabled={disabled}
+            onClick={badge.onClear}
+          >
+            <Icon name="close" />
+          </button>
+        </span>
+      ) : null}
       <input
         ref={inputRef}
         type="text"
@@ -83,6 +106,9 @@ export function SearchField({
           if (event.key === 'Escape' && value) {
             event.stopPropagation();
             onChange('');
+          } else if (event.key === 'Backspace' && !value && badge) {
+            event.preventDefault();
+            badge.onClear();
           }
         }}
       />

@@ -1869,8 +1869,8 @@ const sleep = (ms: number) =>
  * unless listed in `own`, read through `read`. History follows the agent's
  * range rules: `before` reads the fifty sequences below it and `after` up to
  * fifty rows past it. Setting `state.span` narrows `before` reads to that
- * many sequences, as the agent narrows a range over its limits. `arrive` adds
- * messages and wakes the inbox.
+ * many sequences, as the agent narrows a range over its limits. `state.text`
+ * gives each message its text. `arrive` adds messages and wakes the inbox.
  */
 async function busyChannel(count: number, read: number) {
   const { FIXTURE } = (await vite.ssrLoadModule(
@@ -1888,6 +1888,7 @@ async function busyChannel(count: number, read: number) {
     own: new Set<number>(),
     wakes: 1_000,
     span: 50,
+    text: (n: number) => `Message ${n}`,
   };
   const history: ChatAction[] = [];
   const marks: string[] = [];
@@ -1898,7 +1899,7 @@ async function busyChannel(count: number, read: number) {
     sender: state.own.has(n) ? actor : other,
     send_time: '1700000000000',
     insert_time: '1700000000001',
-    content: { kind: 'text' as const, text: `Message ${n}` },
+    content: { kind: 'text' as const, text: state.text(n) },
   });
   const override = (bridge: Bridge): Bridge => {
     base = bridge;
@@ -2543,6 +2544,143 @@ for (const distinct of [false, true]) {
     }
   });
 }
+
+/**
+ * Runs `run` with a CSS highlight registry, as a webview with the CSS Custom
+ * Highlight API has; jsdom has none.
+ */
+async function withHighlights(
+  run: (highlights: Map<string, Set<Range>>) => Promise<void>,
+) {
+  const highlights = new Map<string, Set<Range>>();
+  const scope = globalThis as { CSS?: unknown; Highlight?: unknown };
+  scope.CSS = { highlights };
+  scope.Highlight = class extends Set<Range> {
+    constructor(...ranges: Range[]) {
+      super(ranges);
+    }
+  };
+  try {
+    await run(highlights);
+  } finally {
+    delete scope.CSS;
+    delete scope.Highlight;
+  }
+}
+
+test('find in the conversation matches the loaded rows, steps through them and returns focus', async () => {
+  const channel = await busyChannel(60, 60);
+  channel.state.text = (n) =>
+    n % 10 === 0 ? `Canary build ${n}` : `Message ${n}`;
+  await withHighlights(async (highlights) => {
+    await setup(channel.override, false);
+    await ui.screen.findByText('Canary build 60');
+    const composer = ui.screen.getByRole('textbox', { name: 'Message' });
+    composer.focus();
+    ui.fireEvent.keyDown(document, { key: 'f', ctrlKey: true });
+    const field = await ui.screen.findByRole('textbox', {
+      name: /^Find in #/,
+    });
+    assert.equal(document.activeElement, field);
+    ui.fireEvent.change(field, { target: { value: 'CANARY' } });
+    const current = () =>
+      document.querySelector<HTMLElement>('[data-find="current"]')?.dataset
+        .sequence;
+    // The window holds 11 to 60; the newest match is current.
+    await ui.screen.findByText('1 of 5');
+    assert.equal(current(), '60');
+    assert.equal(document.querySelectorAll('[data-find="hit"]').length, 4);
+    assert.equal(highlights.get('chat-find')?.size, 4);
+    assert.deepEqual(
+      [...(highlights.get('chat-find-current') ?? [])].map((range) =>
+        range.toString(),
+      ),
+      ['Canary'],
+    );
+    // Enter steps to older matches and Shift+Enter to newer ones, wrapping.
+    ui.fireEvent.keyDown(field, { key: 'Enter' });
+    await ui.screen.findByText('2 of 5');
+    assert.equal(current(), '50');
+    ui.fireEvent.keyDown(field, { key: 'Enter', shiftKey: true });
+    ui.fireEvent.keyDown(field, { key: 'Enter', shiftKey: true });
+    await ui.screen.findByText('5 of 5');
+    assert.equal(current(), '20');
+    // Text the window does not hold is not claimed absent from the channel.
+    ui.fireEvent.change(field, { target: { value: 'skip the canary' } });
+    await ui.screen.findByText('No matches in loaded messages');
+    ui.screen.getByRole('button', {
+      name: /^Search older messages \(loaded back to /,
+    });
+    assert.equal(current(), undefined);
+    // Escape closes the bar, clears what it drew and returns focus.
+    ui.fireEvent.keyDown(field, { key: 'Escape' });
+    await ui.waitFor(() => assert.equal(ui.screen.queryByRole('search'), null));
+    assert.equal(document.activeElement, composer);
+    assert.equal(document.querySelectorAll('[data-find]').length, 0);
+    assert.equal(highlights.size, 0);
+  });
+});
+
+test('searching older messages reads pages without growing the window and opens a match around it', async () => {
+  Object.defineProperty(document, 'hasFocus', {
+    configurable: true,
+    value: () => false,
+  });
+  const channel = await busyChannel(400, 400);
+  channel.state.text = (n) =>
+    n === 60 || n === 330 ? `Skip the canary for ${n}` : `Message ${n}`;
+  await setup(channel.override, false);
+  await ui.screen.findByText('Message 400');
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Find in channel' }),
+  );
+  const field = ui.screen.getByRole('textbox', { name: /^Find in #/ });
+  ui.fireEvent.change(field, { target: { value: 'skip the CANARY' } });
+  await ui.screen.findByText('No matches in loaded messages');
+  const reads = channel.history.length;
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: /^Search older messages/ }),
+  );
+  await ui.screen.findByText(
+    /^Searched 250 older messages back to .* · 1 match$/,
+  );
+  // Five pages below the window, read with the history request alone.
+  assert.deepEqual(
+    channel.history
+      .slice(reads)
+      .map((action) => (action.action === 'history' ? action.before : '')),
+    ['351', '301', '251', '201', '151'],
+  );
+  // The window still holds the newest page and nothing else.
+  assert.equal(heldSequences().length, 50);
+  assert.equal(heldSequences()[0], '351');
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Search further' }));
+  await ui.screen.findByText(/^Searched to the beginning of #.* · 2 matches$/);
+  assert.equal(
+    ui.screen.queryByRole('button', { name: 'Search further' }),
+    null,
+  );
+  const found = ui.screen.getByRole('group', {
+    name: 'Matches in older messages',
+  });
+  const results = [...found.querySelectorAll('button')];
+  assert.equal(results.length, 2);
+  assert.match(results[0].textContent ?? '', /Skip the canary for 330/);
+  // Opening a match reads the page around it, which replaces the window.
+  ui.fireEvent.click(results[0]);
+  await ui.waitFor(() => {
+    const row = document.querySelector<HTMLElement>('[data-sequence="330"]');
+    assert.ok(row);
+    assert.equal(row.dataset.find, 'current');
+    assert.ok(row.hasAttribute('data-find-target'));
+    assert.equal(document.activeElement, row);
+  });
+  const last = channel.history.at(-1);
+  assert.equal(last?.action === 'history' ? last.before : '', '370');
+  assert.equal(heldSequences()[0], '320');
+  ui.screen.getByText('1 of 1');
+  ui.screen.getByRole('button', { name: 'Load newer messages' });
+});
 
 test('a team the catalog no longer lists is reported as inaccessible, not as a fault', async () => {
   let failing = false;

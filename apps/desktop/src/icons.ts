@@ -12,6 +12,7 @@ import BellOff from 'lucide/dist/esm/icons/bell-off.mjs';
 import Check from 'lucide/dist/esm/icons/check.mjs';
 import ChevronDown from 'lucide/dist/esm/icons/chevron-down.mjs';
 import ChevronRight from 'lucide/dist/esm/icons/chevron-right.mjs';
+import ChevronUp from 'lucide/dist/esm/icons/chevron-up.mjs';
 import CircleAlert from 'lucide/dist/esm/icons/circle-alert.mjs';
 import CircleCheck from 'lucide/dist/esm/icons/circle-check.mjs';
 import Copy from 'lucide/dist/esm/icons/copy.mjs';
@@ -65,6 +66,7 @@ export const FOKS_ICONS = {
   search: Search,
   grid: LayoutGrid,
   chevronDown: ChevronDown,
+  chevronUp: ChevronUp,
   chevronRight: ChevronRight,
   info: Info,
   download: Download,

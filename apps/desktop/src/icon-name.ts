@@ -10,6 +10,7 @@ export type FoksIconName =
   | 'search'
   | 'grid'
   | 'chevronDown'
+  | 'chevronUp'
   | 'chevronRight'
   | 'info'
   | 'download'

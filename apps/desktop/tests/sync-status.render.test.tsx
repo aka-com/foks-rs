@@ -352,6 +352,74 @@ test('Chat with teams keeps New channel and a live field', () => {
   assert.ok(ui.screen.getByRole('button', { name: 'New channel' }));
 });
 
+test('in a channel the field finds text in it until its badge is dropped', async () => {
+  const { ChatInboxProvider } = (await vite.ssrLoadModule(
+    '/src/chat/inbox-provider.tsx',
+  )) as typeof import('../src/chat/inbox-provider');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const snapshot = {
+    ...FIXTURE,
+    servers: FIXTURE.servers.map((server) => ({
+      ...server,
+      services: { ...server.services, chat: true },
+    })),
+  };
+  const bridge = mockBridge(snapshot);
+  const reply = await bridge.chat('team:eng', {
+    action: 'sync-inbox',
+    blocked_channels: [],
+  });
+  assert.equal(reply.result.kind, 'inbox');
+  if (reply.result.kind !== 'inbox') return;
+  const channel = reply.result.conversations[0].channel;
+  const found: string[] = [];
+  const queries: string[] = [];
+  ui.render(
+    createElement(ChatInboxProvider, {
+      snapshot,
+      bridge,
+      children: createElement(Topbar, {
+        snapshot,
+        location: { kind: 'chat', ref: 'team:eng', channel: channel.id },
+        collapsed: false,
+        onNavigate: () => {},
+        query: '',
+        onQuery: (query) => queries.push(query),
+        onNewChat: () => {},
+        onFindInChannel: (text) => {
+          found.push(text);
+          return true;
+        },
+        chatTeamCount: 1,
+      }),
+    }),
+  );
+  const title = `#${channel.name || 'general'}`;
+  const field = await ui.screen.findByRole('textbox', {
+    name: `Find in ${title}`,
+  });
+  assert.equal(document.querySelector('.search-badge .n')?.textContent, title);
+  // Typing moves into the conversation's find bar, not the name filter.
+  ui.fireEvent.change(field, { target: { value: 'c' } });
+  assert.deepEqual(found, ['c']);
+  assert.deepEqual(queries, []);
+  // Dropping the badge returns the field to team and channel names.
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', {
+      name: 'Search team and channel names instead',
+    }),
+  );
+  const names = ui.screen.getByRole('textbox', {
+    name: 'Search team and channel names',
+  });
+  assert.equal(document.querySelector('.search-badge'), null);
+  ui.fireEvent.change(names, { target: { value: 'eng' } });
+  assert.deepEqual(queries, ['eng']);
+  assert.deepEqual(found, ['c']);
+});
+
 for (const location of [
   { kind: 'chat', ref: 'team:eng', channel: 'general' },
   { kind: 'settings', section: 'account', profile: 'acme' },

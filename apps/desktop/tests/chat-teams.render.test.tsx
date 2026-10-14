@@ -2285,7 +2285,8 @@ test('clicking a team heading folds it, keeps its unread total, and excludes a m
   const badge = head('Household').querySelector('.chat-unread');
   assert.equal(badge?.textContent, '3');
   assert.equal(badge?.getAttribute('aria-label'), '3 unread');
-  // Channel details are available through the icon-only information button.
+  // Find and channel details are reached through the header's icon-only
+  // buttons.
   const header = document.querySelector('.chat-thread-header');
   assert.ok(header);
   assert.deepEqual(
@@ -2293,7 +2294,7 @@ test('clicking a team heading folds it, keeps its unread total, and excludes a m
       .within(header as HTMLElement)
       .getAllByRole('button')
       .map((button) => button.getAttribute('aria-label')),
-    ['Channel info'],
+    ['Find in channel', 'Channel info'],
   );
   // Expanding restores the channel list exactly as it was.
   ui.fireEvent.click(expand);

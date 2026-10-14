@@ -507,8 +507,9 @@ export function ChatTeamColumn({
     setPreviews(shown);
     rememberChannelPreviews(shown);
   };
-  // The column searches names, not messages: the agent has no message index,
-  // so a query that matched text would be a promise the client cannot keep.
+  // The column searches names, not messages. Message text is found in the
+  // open conversation's find bar, over the rows it holds and the older pages
+  // it scans; the agent has no message index to search the column with.
   const filter = search;
   const query = filter.trim().toLowerCase();
   // The clock is the tab's, but the object it arrives in is rebuilt every

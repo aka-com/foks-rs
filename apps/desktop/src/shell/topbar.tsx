@@ -145,19 +145,19 @@ interface CrumbSegment {
   onClick?: () => void;
 }
 
-/** Computes the scope badge label for the search input based on the active location (e.g. current folder in Files, active channel in Chat, or tab name). */
+/**
+ * The scope the search input's accessible name states: the current folder in
+ * Files, else the tab's name. Chat states its own scopes: the open channel
+ * while typing finds text in it, else team and channel names.
+ */
 export function scopeLabel(
   location: Location,
   snapshot?: AgentSnapshot,
   folder = '',
-  channelName?: string,
 ): string {
   const tab = railTabOf(location);
   if (!tab) return '';
-  if (tab !== 'files') {
-    if (tab === 'chat' && channelName) return `#${channelName}`;
-    return TAB_LABEL[tab];
-  }
+  if (tab !== 'files') return TAB_LABEL[tab];
   const labels = filesFolderCrumb(snapshot, location, folder).labels;
   return labels.length ? labels[labels.length - 1] : TAB_LABEL[tab];
 }
@@ -184,6 +184,11 @@ export interface TopbarProps {
   newBlocked?: string | null;
   /** Chat: opens the Create channel sheet on the open team. */
   onNewChat?: () => void;
+  /**
+   * Chat: opens the open channel's find bar with `text`. Returns false when
+   * no conversation is mounted to take it, and the text filters names.
+   */
+  onFindInChannel?: (text: string) => boolean;
   /**
    * Chat: how many teams have chat. With none there is no conversation to
    * create and nothing to search, so the header offers the team the tab needs
@@ -528,6 +533,7 @@ export function Topbar({
   onNew,
   newBlocked = null,
   onNewChat,
+  onFindInChannel,
   chatTeamCount,
   refreshing = false,
   onRefresh,
@@ -567,11 +573,51 @@ export function Topbar({
     ? storeHues(storeNavigationOrder(snapshot))
     : new Map<string, string>();
   const tab = railTabOf(location);
-  const scope = scopeLabel(location, snapshot, folder, channelName);
+  const scope = scopeLabel(location, snapshot, folder);
   // Only the views that filter accept a query; the rest draw the field inert
   // so the header keeps its shape from page to page.
   const noChatTeams = tab === 'chat' && chatTeamCount === 0;
   const searchable = Boolean(onQuery) && !blocked && !noChatTeams;
+  // In a readable channel the field finds text in it, and its badge says so;
+  // typing moves into the conversation's find bar. The badge's ×, or
+  // Backspace in the empty field, returns the field to filtering the column's
+  // team and channel names for the rest of the visit to that channel, as does
+  // a name filter already in the field.
+  const [namesIn, setNamesIn] = useState<string | null>(null);
+  const openChannel = location.kind === 'chat' ? location.channel : undefined;
+  const findIn =
+    tab === 'chat' &&
+    searchable &&
+    onFindInChannel &&
+    open?.readable &&
+    channelName !== undefined &&
+    openChannel !== undefined &&
+    namesIn !== openChannel &&
+    !query
+      ? `#${channelName}`
+      : undefined;
+  const chatField =
+    tab !== 'chat'
+      ? null
+      : findIn
+        ? {
+            label: `Find in ${findIn}`,
+            placeholder: 'Search',
+            badge: {
+              label: findIn,
+              clearLabel: 'Search team and channel names instead',
+              onClear: () => setNamesIn(openChannel ?? null),
+            },
+            onChange: (text: string) => {
+              if (text && !onFindInChannel?.(text)) onQuery?.(text);
+            },
+          }
+        : {
+            label: 'Search team and channel names',
+            placeholder: 'Search channels',
+            badge: undefined,
+            onChange: onQuery,
+          };
   return (
     <div className="topbar" data-tauri-drag-region="">
       <nav className="crumbs" aria-label="Breadcrumb" data-tauri-drag-region="">
@@ -616,9 +662,13 @@ export function Topbar({
         <SearchField
           className="topsearch"
           scope={scope}
+          label={chatField?.label}
+          badge={chatField?.badge}
           value={query ?? ''}
-          onChange={onQuery ?? (() => undefined)}
-          placeholder="Search"
+          onChange={
+            (chatField ? chatField.onChange : onQuery) ?? (() => undefined)
+          }
+          placeholder={chatField?.placeholder ?? 'Search'}
           disabled={!searchable}
           shortcut={false}
           kbd

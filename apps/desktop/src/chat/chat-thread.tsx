@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { KeyboardEvent, ReactNode, Ref } from 'react';
 import { Icon } from '../components';
 import { ChatAlerts, failureAlert, type ChatAlert } from './chat-alerts';
@@ -20,6 +27,11 @@ import { Composer } from './thread-composer';
 import { quoteInsertion } from './message-actions';
 import { channelRoster } from './mentions';
 import { channelReadRole, type ChannelAudience } from './audience';
+import { anyDialogOpen } from '/kit/overlay-primitives';
+import { applePlatform } from './composer-format';
+import { receiveChatFind, type FindReference } from './find';
+import { FindBar } from './find-bar';
+import { useChatFind } from './use-chat-find';
 
 /**
  * One channel of the open team. The thread owns the channel's history
@@ -168,9 +180,16 @@ export function ChatThread({
       : null,
   );
   const divider = useRef<HTMLDivElement>(null);
-  // The row an anchored open scrolls to: the NEW divider, else the first row
-  // after the read pointer, which the divider omits when it is your own.
+  // A message find opened the channel around, until its page is drawn.
+  const findTarget = useRef<string | null>(null);
+  // The row an anchored open scrolls to: the message find opened the channel
+  // around, else the NEW divider, else the first row after the read pointer,
+  // which the divider omits when it is your own.
   const anchorRow = (): HTMLElement | null => {
+    if (findTarget.current !== null) {
+      const row = messageRow(viewport.scroller.current, findTarget.current);
+      if (row) return row;
+    }
     if (divider.current) return divider.current;
     const from = newFrom ?? anchor;
     if (from === null) return null;
@@ -218,8 +237,93 @@ export function ChatThread({
   } = thread;
   // A placement waits for its page; a failed read brings none.
   useEffect(() => {
-    if (failure) release();
+    if (!failure) return;
+    release();
+    findTarget.current = null;
   }, [failure, release]);
+  const find = useChatFind({
+    channel: channel.id,
+    scroller,
+    messages,
+    before,
+    request,
+    onScroll: viewport.onScroll,
+  });
+  const { show: showFind, selectRow } = find;
+  // ⌘F (Ctrl+F elsewhere) opens the find bar from anywhere in the window, as
+  // does typing in the window header's field while its badge names this
+  // channel. The shortcut sits on the document, so it tests for a dialog
+  // itself.
+  useEffect(() => {
+    if (!channel.readable) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (
+        !(applePlatform() ? event.metaKey : event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey ||
+        event.key.toLowerCase() !== 'f' ||
+        event.defaultPrevented ||
+        anyDialogOpen() ||
+        scroller.current?.closest('[inert]')
+      )
+        return;
+      event.preventDefault();
+      showFind();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    const stop = receiveChatFind(showFind);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      stop();
+    };
+  }, [channel.readable, scroller, showFind]);
+  // The message find opened is marked for two seconds and takes focus. One
+  // the window holds is revealed in place; any other opens the channel
+  // around it with the anchored read, which replaces the window rather than
+  // growing it.
+  const marked = useRef<{ row: HTMLElement; timer: number } | null>(null);
+  const markFound = useCallback((row: HTMLElement) => {
+    const last = marked.current;
+    if (last) {
+      clearTimeout(last.timer);
+      last.row.removeAttribute('data-find-target');
+    }
+    row.setAttribute('data-find-target', '');
+    row.focus({ preventScroll: true });
+    marked.current = {
+      row,
+      timer: window.setTimeout(() => {
+        row.removeAttribute('data-find-target');
+        if (marked.current?.row === row) marked.current = null;
+      }, FOUND_MARK_MS),
+    };
+  }, []);
+  useEffect(
+    () => () => {
+      if (marked.current) clearTimeout(marked.current.timer);
+    },
+    [],
+  );
+  const openFound = (reference: FindReference) => {
+    selectRow(reference.id);
+    const row = messageRow(scroller.current, reference.id);
+    if (row) {
+      viewport.reveal(row);
+      markFound(row);
+      return;
+    }
+    findTarget.current = reference.id;
+    void thread.reopen(String(BigInt(reference.sequence) - 1n));
+  };
+  useLayoutEffect(() => {
+    const id = findTarget.current;
+    if (id === null) return;
+    const row = messageRow(scroller.current, id);
+    if (row) {
+      findTarget.current = null;
+      markFound(row);
+    } else if (!anchoring) findTarget.current = null;
+  }, [anchoring, markFound, messages, scroller]);
   const { newFrom, readError, markThrough, dismissNew } = useChatReadIntent(
     channel.id,
     messages,
@@ -311,7 +415,24 @@ export function ChatThread({
         infoOpen={infoOpen}
         infoRef={infoRef}
         attention={attention}
+        onFind={
+          channel.readable
+            ? () => (find.open ? find.close() : showFind())
+            : undefined
+        }
+        findOpen={find.open}
       />
+      {channel.readable && find.open && (
+        <FindBar
+          find={find}
+          title={channelTitle(channel)}
+          oldest={messages[0]?.insert_time ?? null}
+          olderAvailable={before !== null}
+          actor={actor}
+          names={senderNames}
+          onOpen={openFound}
+        />
+      )}
       <ChatAlerts
         alerts={[
           ...alerts,
@@ -409,3 +530,13 @@ export function ChatThread({
 }
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
+
+/** How long a message find opened stays marked. */
+const FOUND_MARK_MS = 2000;
+
+/** The history row of message `id`, compared by attribute, not by selector. */
+function messageRow(root: HTMLElement | null, id: string): HTMLElement | null {
+  for (const row of root?.querySelectorAll<HTMLElement>('[data-message]') ?? [])
+    if (row.dataset.message === id) return row;
+  return null;
+}

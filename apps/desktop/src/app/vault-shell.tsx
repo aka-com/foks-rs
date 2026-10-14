@@ -63,6 +63,7 @@ import { useSearchShortcut } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
 import { Topbar } from '../shell/topbar';
 import { requestNewChat } from '../screens/chat-tab';
+import { requestChatFind } from '../chat/find';
 import { chatTeams } from '../screens/chat-teams';
 import { useAccessRuntime } from './access-runtime';
 import { AccessLifetime } from './access-lifetime';
@@ -665,6 +666,7 @@ export function VaultShell({
                   {...(here.kind === 'chat'
                     ? {
                         onNewChat: requestNewChat,
+                        onFindInChannel: requestChatFind,
                         chatTeamCount: chatTeams(shown).length,
                       }
                     : {})}
