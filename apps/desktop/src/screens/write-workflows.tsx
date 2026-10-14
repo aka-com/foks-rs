@@ -14,6 +14,7 @@ import {
   Inset,
   InsetRow,
   KindIcon,
+  PasswordInput,
   RadioCard,
   RadioGroup,
   SectionLabel,
@@ -533,6 +534,7 @@ function NewSheet({
     'item.password',
     workflow.draft?.password ?? '',
   );
+  const [passwordShown, setPasswordShown] = useState(false);
   const [website, setWebsite] = useTabSheetState(
     'item.website',
     workflow.draft?.website ?? '',
@@ -574,6 +576,10 @@ function NewSheet({
   useConcealOnInactive(
     () => setValueConcealed(true),
     itemKind === 'Document' && source === 'text' && Boolean(value),
+  );
+  useConcealOnInactive(
+    () => setPasswordShown(false),
+    itemKind === 'Password' && passwordShown,
   );
   const roleArgs = group ? { readRole, writeRole } : {};
 
@@ -749,13 +755,11 @@ function NewSheet({
     set: (next: string) => void,
     placeholder: string,
     mono = false,
-    type: 'text' | 'password' = 'text',
   ) => (
     <Field
       label={label}
       value={current}
       onChange={set}
-      type={type}
       placeholder={placeholder}
       mono={mono}
     />
@@ -853,14 +857,13 @@ function NewSheet({
                 'e.g. github.com',
               )}
               {field('User name', username, setUsername, 'username')}
-              {field(
-                'Password',
-                password,
-                setPassword,
-                'password',
-                false,
-                'password',
-              )}
+              <PasswordInput
+                value={password}
+                onChange={setPassword}
+                shown={passwordShown}
+                onShownChange={setPasswordShown}
+                context={[site, username]}
+              />
               {field(
                 'Website',
                 website,

@@ -1823,6 +1823,174 @@
   margin-top: 1px;
 }
 
+/* Password row: Show and Generate, the strength under the value, and the
+   generator panel below the row. */
+.inset .fr.pw-row .v small {
+  display: block;
+  margin-top: 1px;
+}
+.inset .fr.pw-row .a {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+.inset .fr.pw-row .a button,
+.pw-gen-preview button {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--chip-bg);
+  color: var(--chip-ink);
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.inset .fr.pw-row .a button:hover:not(:disabled),
+.pw-gen-preview button:hover {
+  background: var(--hover);
+}
+.inset .fr.pw-row .a button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.inset .fr.pw-row .a button .ic,
+.pw-gen-preview button .ic {
+  font-size: 13px;
+}
+.pw-strength {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.pw-strength.weak {
+  color: var(--amber-ink);
+  font-weight: 600;
+}
+.pw-meter {
+  display: inline-flex;
+  flex: none;
+  gap: 3px;
+}
+.pw-meter i {
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+}
+.pw-meter[data-level='1'] i:nth-child(-n + 1),
+.pw-meter[data-level='2'] i:nth-child(-n + 2) {
+  background: var(--amber-strong);
+}
+.pw-meter[data-level='3'] i:nth-child(-n + 3),
+.pw-meter[data-level='4'] i {
+  background: var(--ok-solid);
+}
+.pw-gen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface);
+  font-size: 13px;
+}
+.pw-gen .seg {
+  align-self: flex-start;
+}
+.pw-gen-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pw-gen-row label {
+  flex: none;
+  width: 76px;
+  color: var(--muted);
+}
+.pw-gen-row input[type='range'],
+.pw-gen-row select {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+.pw-gen-row select {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--btn-bg);
+  color: var(--ink);
+  font: inherit;
+}
+.pw-gen-row output {
+  flex: none;
+  width: 24px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pw-gen-sets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pw-gen-sets button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font: 12px var(--mono);
+}
+.pw-gen-sets button.on {
+  border-color: transparent;
+  background: var(--chip-bg);
+  color: var(--ink);
+}
+.pw-gen-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pw-gen-check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.pw-gen-hint {
+  margin: 0;
+  color: var(--amber-ink);
+  font-size: 12px;
+}
+.pw-gen-hint:empty {
+  display: none;
+}
+.pw-gen-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--main-surface);
+}
+.pw-gen-preview code {
+  flex: 1;
+  min-width: 0;
+  font: 12.5px var(--mono);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.pw-gen-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 /* Root mount placeholder */
 .app-loading {
   flex: 1;

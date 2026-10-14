@@ -14,6 +14,7 @@ import ChevronRight from 'lucide/dist/esm/icons/chevron-right.mjs';
 import CircleAlert from 'lucide/dist/esm/icons/circle-alert.mjs';
 import CircleCheck from 'lucide/dist/esm/icons/circle-check.mjs';
 import Copy from 'lucide/dist/esm/icons/copy.mjs';
+import Dices from 'lucide/dist/esm/icons/dices.mjs';
 import DoorOpen from 'lucide/dist/esm/icons/door-open.mjs';
 import Download from 'lucide/dist/esm/icons/download.mjs';
 import Ellipsis from 'lucide/dist/esm/icons/ellipsis.mjs';
@@ -100,6 +101,7 @@ export const FOKS_ICONS = {
   plug: Plug,
   restore: Undo2,
   lock: Lock,
+  dices: Dices,
 } as const satisfies Record<FoksIconName, IconNode>;
 
 export type { FoksIconName } from './icon-name';

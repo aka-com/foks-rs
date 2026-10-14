@@ -44,4 +44,5 @@ export type FoksIconName =
   | 'pawPrint'
   | 'plug'
   | 'restore'
-  | 'lock';
+  | 'lock'
+  | 'dices';

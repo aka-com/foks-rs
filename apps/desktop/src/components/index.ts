@@ -14,6 +14,7 @@ export * from './kind-icon';
 export * from './menus';
 export * from './notice';
 export * from './panel-sheet';
+export * from './password-input';
 export * from './radio-card';
 export * from './search-field';
 export * from './sheet';

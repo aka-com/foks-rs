@@ -20,6 +20,7 @@ import {
   Inset,
   InsetRow,
   KindIcon,
+  PasswordInput,
   SectionLabel,
   SheetDialog,
 } from '../components';
@@ -876,6 +877,16 @@ export function DetailsPanel({
   // rewrites only its line, keeping its separator; every other line is saved
   // as it was read.
   const editRows = editing && editLogin ? loginLines(editValue) : null;
+  // What a typed password should not contain: the item's name, which is the
+  // site for a login, and the user name being edited.
+  const editContext = editRows
+    ? [
+        item ? nameOf(item.path) : '',
+        ...editRows
+          .filter(({ key }) => loginFieldOf(key) === 'username')
+          .map(({ value }) => value),
+      ]
+    : [];
   const updateEditField = (index: number, value: string): void => {
     if (!editRows) return;
     setEditValue(
@@ -916,42 +927,30 @@ export function DetailsPanel({
       <Inset className="edit">
         {editRows.map(({ key: field, value }, index) => {
           const loginKey = loginFieldOf(field);
-          const secret = loginKey === 'password';
-          return (
-            // A row is a line, and editing a row never adds or removes one,
-            // so a line keeps its input when its parse changes.
+          const label =
+            FIELD_LABELS[loginKey ?? field ?? ''] ?? field ?? 'Value';
+          // A row is a line, and editing a row never adds or removes one,
+          // so a line keeps its input when its parse changes.
+          return loginKey === 'password' ? (
+            <PasswordInput
+              key={index}
+              label={label}
+              value={value}
+              onChange={(next) => updateEditField(index, next)}
+              shown={editPasswordShown}
+              onShownChange={(shown) => {
+                if (!shown || requireAccess()) setEditPasswordShown(shown);
+              }}
+              showProblem={readProblem ?? undefined}
+              showProblemId={accessDescriptionId}
+              context={editContext}
+            />
+          ) : (
             <Field
               key={index}
-              label={FIELD_LABELS[loginKey ?? field ?? ''] ?? field ?? 'Value'}
+              label={label}
               value={value}
-              type={secret && !editPasswordShown ? 'password' : 'text'}
-              placeholder={secret ? 'password' : undefined}
               onChange={(next) => updateEditField(index, next)}
-              action={
-                secret ? (
-                  <button
-                    className="value-action"
-                    aria-label={editPasswordShown ? 'Hide' : 'Show'}
-                    type="button"
-                    disabled={!editPasswordShown && Boolean(readProblem)}
-                    title={
-                      (!editPasswordShown ? readProblem : undefined) ??
-                      (editPasswordShown ? 'Hide' : 'Show')
-                    }
-                    aria-describedby={
-                      !editPasswordShown && readProblem
-                        ? accessDescriptionId
-                        : undefined
-                    }
-                    onClick={() => {
-                      if (editPasswordShown || requireAccess())
-                        setEditPasswordShown((shown) => !shown);
-                    }}
-                  >
-                    <Icon name={editPasswordShown ? 'eyeOff' : 'eye'} />
-                  </button>
-                ) : undefined
-              }
             />
           );
         })}

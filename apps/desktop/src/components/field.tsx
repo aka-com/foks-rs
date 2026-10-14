@@ -24,6 +24,15 @@ export interface FieldProps {
   action?: ReactNode;
   /** A quiet note after the input. */
   hint?: ReactNode;
+  /** Extra classes on the row. */
+  className?: string;
+  /** Ids of elements that describe the input. */
+  describedBy?: string;
+  /**
+   * Entered exactly, as a password is: no spelling correction,
+   * capitalization or autofill, also while it is shown as text.
+   */
+  verbatim?: boolean;
 }
 
 export function Field({
@@ -38,17 +47,26 @@ export function Field({
   max,
   action,
   hint,
+  className,
+  describedBy,
+  verbatim = false,
 }: FieldProps): ReactNode {
   return (
     <InsetRow
       label={label}
       valueClass={mono ? 'mono' : undefined}
       action={action}
+      className={className}
     >
       <input
         type={type}
         disabled={disabled}
         aria-label={label}
+        aria-describedby={describedBy}
+        spellCheck={verbatim ? false : undefined}
+        autoCorrect={verbatim ? 'off' : undefined}
+        autoCapitalize={verbatim ? 'off' : undefined}
+        autoComplete={verbatim ? 'off' : undefined}
         className={mono ? 'mono' : undefined}
         placeholder={placeholder}
         min={min}

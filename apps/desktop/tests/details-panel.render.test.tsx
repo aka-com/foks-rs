@@ -627,7 +627,7 @@ test('a login edits in structured fields and serializes through the existing dra
   assert.equal(password.getAttribute('placeholder'), 'password');
   assert.equal(r.queryByRole('textbox', { name: 'Contents' }), null);
 
-  ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show password' }));
   assert.equal(password.getAttribute('type'), 'text');
   ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
   ui.fireEvent.change(password, { target: { value: 'correct horse' } });
@@ -636,6 +636,45 @@ test('a login edits in structured fields and serializes through the existing dra
   await ui.waitFor(() => assert.match(saved, /username: satoshi-next/));
   assert.match(saved, /password: correct horse/);
   assert.match(saved, /url: https:\/\/github\.com\/login/);
+});
+
+test('the login editor generates a password into its own line', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  let saved = '';
+  p.bridge.editTextItem = async (request) => {
+    saved = request.value;
+    return { applied: true };
+  };
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const password = (await r.findByLabelText('Password')) as HTMLInputElement;
+
+  // A typed password naming the site is warned about; Save stays enabled.
+  ui.fireEvent.change(password, { target: { value: 'github-2024' } });
+  assert.ok(r.getByText('Weak · contains the site or user name'));
+
+  ui.fireEvent.click(r.getByRole('button', { name: 'Generate' }));
+  const panel = r.getByRole('group', { name: 'Generate a password' });
+  const generated =
+    ui.within(panel).getByLabelText('Generated password').textContent ?? '';
+  assert.ok(generated.length >= 8);
+  ui.fireEvent.click(
+    ui.within(panel).getByRole('button', { name: 'Use password' }),
+  );
+  assert.equal(password.value, generated);
+  // The generated value is still masked until Show.
+  assert.equal(password.type, 'password');
+  assert.match(r.getByText(/ bits$/).textContent ?? '', /^(Good|Strong) · /);
+
+  ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
+  await ui.waitFor(() => assert.ok(saved));
+  const lines = saved.split('\n');
+  assert.equal(lines.filter((line) => line.startsWith('password: ')).length, 1);
+  assert.ok(lines.includes(`password: ${generated}`));
+  assert.ok(lines.includes('url: https://github.com/login'));
 });
 
 test('background version changes retain the draft and its original write precondition', async () => {
@@ -1172,7 +1211,7 @@ test('the login editor masks the line Copy reads as the password and keeps other
   const password = await r.findByLabelText('Password');
   assert.equal(password.getAttribute('type'), 'password');
   assert.equal((password as HTMLInputElement).value, 'x ');
-  ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show password' }));
   assert.equal(password.getAttribute('type'), 'text');
 
   // Losing focus covers every row, not only the password.
