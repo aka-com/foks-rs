@@ -211,7 +211,9 @@ writes and `shape: other` otherwise, and the bit travels through
 pages, and the host's `ItemDto`. It is agent IPC only and never reaches the
 Go wire. The renderer lists a small file with `shape: login` as a Password
 wherever it is filed; a catalog entry without a shape, from an agent that
-predates the field, falls back to the `/logins/` folder.
+predates the field, falls back to the `/logins/` folder. Such a Password
+may hold no `password:` line, so its rows, its palette entry and its
+details panel also offer Copy value.
 
 Copy on a login reaches the clipboard one field at a time.
 `copy_item_field` reads the exact listed version, selects the password,

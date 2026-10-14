@@ -16,21 +16,40 @@ export interface CopyAction {
   label: string;
 }
 
+/** The label of each field's Copy button and menu item. */
+export const COPY_LABELS: Readonly<Record<ItemField, string>> = {
+  password: 'Copy password',
+  username: 'Copy user name',
+  url: 'Copy website',
+  value: 'Copy value',
+};
+
+const copyOf = (field: ItemField): CopyAction => ({
+  field,
+  label: COPY_LABELS[field],
+});
+
 const PASSWORD_COPIES: readonly CopyAction[] = [
-  { field: 'password', label: 'Copy password' },
-  { field: 'username', label: 'Copy user name' },
+  copyOf('password'),
+  copyOf('username'),
 ];
-const VALUE_COPIES: readonly CopyAction[] = [
-  { field: 'value', label: 'Copy value' },
+const VALUE_COPIES: readonly CopyAction[] = [copyOf('value')];
+// A Password known only by its `/logins/` path, from an agent that lists no
+// shape, may not hold `password:` lines, so it also offers its whole text.
+const UNSHAPED_PASSWORD_COPIES: readonly CopyAction[] = [
+  ...PASSWORD_COPIES,
+  ...VALUE_COPIES,
 ];
 
 /**
  * The copies a row offers: a Password's password and user name, a text
  * Document's whole value, and none for a file, which is downloaded instead.
+ * A Password whose listing has no shape also offers its whole value.
  */
 export function copyActions(item: Item): readonly CopyAction[] {
   if (item.kind === 'File') return [];
-  return kindOf(item) === 'Password' ? PASSWORD_COPIES : VALUE_COPIES;
+  if (kindOf(item) !== 'Password') return VALUE_COPIES;
+  return item.shape === undefined ? UNSHAPED_PASSWORD_COPIES : PASSWORD_COPIES;
 }
 
 /** The toast after a copy, naming only what was copied. */

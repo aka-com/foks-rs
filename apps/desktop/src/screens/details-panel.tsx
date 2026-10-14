@@ -31,6 +31,7 @@ import {
   fmtSize,
   formatRole,
   initials,
+  isBlankLine,
   kindLabel,
   kindOf,
   LOGIN_FIELDS,
@@ -69,7 +70,7 @@ import type {
 } from '../bridge';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import { copyAndAnnounce } from './item-copy';
+import { COPY_LABELS, copyAndAnnounce } from './item-copy';
 import {
   isFavorite,
   itemRefOf,
@@ -80,21 +81,22 @@ import { itemActionProblem } from './store-access';
 import { copyProblem } from './item-moves';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 
-const FIELD_LABELS: Readonly<Record<string, string>> = {
-  user: 'User name',
-  username: 'User name',
-  password: 'Password',
-  url: 'Website',
-  website: 'Website',
-  ssid: 'Network',
-};
+const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
+  ['user', 'User name'],
+  ['username', 'User name'],
+  ['password', 'Password'],
+  ['url', 'Website'],
+  ['website', 'Website'],
+  ['ssid', 'Network'],
+]);
 
-/** The accessible name of each login field's Copy button. */
-const COPY_LABELS: Readonly<Record<LoginFieldName, string>> = {
-  username: 'Copy user name',
-  password: 'Copy password',
-  url: 'Copy website',
-};
+/**
+ * The label of a login line's key: a known field's name, or the key itself.
+ * A map lookup, so a key such as `constructor` is not read from a prototype.
+ */
+function fieldLabel(key: string): string {
+  return FIELD_LABELS.get(key) ?? key;
+}
 
 const MASK = '••••••••••••';
 const systemAccessNow = (): number => Date.now() / 1000;
@@ -154,13 +156,18 @@ function roleText(wire: RoleWire): string {
 }
 
 /**
- * Whether the structured login editor opens for this text: it has a line the
- * host would copy as the password, which the editor masks. Other text opens
- * in the textarea. The choice is made once, when the edit opens, so typing
- * never swaps one editor for the other.
+ * The lines the structured login editor lists, by index, or null when the
+ * text opens in the textarea. The editor opens for text with a line the host
+ * would copy as the password, which the editor masks, and lists every line
+ * but blank ones: typing into a blank line would add a line that is not a
+ * field line, and the agent would then list the item as a Document. Blank
+ * lines are still saved as they were read. Both choices are made once, when
+ * the edit opens, so typing never swaps editors or removes a row.
  */
-function editsAsLogin(text: string): boolean {
-  return loginLines(text).some(({ key }) => loginFieldOf(key) === 'password');
+function loginEditLines(text: string): readonly number[] | null {
+  const lines = loginLines(text);
+  if (!lines.some(({ key }) => loginFieldOf(key) === 'password')) return null;
+  return lines.flatMap((line, index) => (isBlankLine(line) ? [] : [index]));
 }
 
 /** One row of a login's Fields section. */
@@ -183,7 +190,7 @@ interface LoginRow {
 function loginRows(shown: string | null): LoginRow[] {
   const rows: LoginRow[] = LOGIN_FIELDS.map((field) => ({
     id: field,
-    label: FIELD_LABELS[field] ?? field,
+    label: fieldLabel(field),
     field,
     value: shown === null ? null : loginField(shown, field),
   }));
@@ -192,7 +199,7 @@ function loginRows(shown: string | null): LoginRow[] {
     if (loginFieldOf(key) !== null || !value) return;
     rows.push({
       id: `line:${index}`,
-      label: key === null ? 'Text' : (FIELD_LABELS[key] ?? key),
+      label: key === null ? 'Text' : fieldLabel(key),
       field: null,
       value,
     });
@@ -350,8 +357,11 @@ export function DetailsPanel({
   const accessDescriptionId = useId();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
-  // Whether the open edit uses the structured login editor; see editsAsLogin.
-  const [editLogin, setEditLogin] = useState(false);
+  // The lines the open edit's structured login editor lists, or null for the
+  // textarea; see loginEditLines.
+  const [editLoginLines, setEditLoginLines] = useState<
+    readonly number[] | null
+  >(null);
   const [editPasswordShown, setEditPasswordShown] = useState(false);
   const [editContentConcealed, setEditContentConcealed] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -576,8 +586,8 @@ export function DetailsPanel({
     if (appliedDraft.current === resumeDraft.epoch) return;
     appliedDraft.current = resumeDraft.epoch;
     setEditValue(resumeDraft.value);
-    setEditLogin(
-      kindOf(item) === 'Password' && editsAsLogin(resumeDraft.value),
+    setEditLoginLines(
+      kindOf(item) === 'Password' ? loginEditLines(resumeDraft.value) : null,
     );
     setEditContentConcealed(false);
     editBaseline.current = null;
@@ -765,7 +775,7 @@ export function DetailsPanel({
     if (!request || !requireAccess(true)) return;
     setEditError(null);
     if (fileMode) {
-      setEditLogin(false);
+      setEditLoginLines(null);
       setEditContentConcealed(false);
       editBaseline.current = '';
       editTarget.current = item;
@@ -795,7 +805,7 @@ export function DetailsPanel({
       if (!current()) return;
       const opened = response.value;
       setEditValue(opened);
-      setEditLogin(kind === 'Password' && editsAsLogin(opened));
+      setEditLoginLines(kind === 'Password' ? loginEditLines(opened) : null);
       setEditContentConcealed(false);
       editBaseline.current = opened;
       editTarget.current = item;
@@ -810,7 +820,7 @@ export function DetailsPanel({
       if (typed.code === 'not-text' && item.kind === 'Secret') {
         setBinaryFile(true);
         setRead(null);
-        setEditLogin(false);
+        setEditLoginLines(null);
         setEditContentConcealed(false);
         editBaseline.current = '';
         editTarget.current = item;
@@ -883,10 +893,17 @@ export function DetailsPanel({
     }
   };
 
-  // One row per stored line, split by the rules Copy follows. Changing a row
+  // One row per listed line, split by the rules Copy follows. Changing a row
   // rewrites only its line, keeping its separator; every other line is saved
   // as it was read.
-  const editRows = editing && editLogin ? loginLines(editValue) : null;
+  const editLines = editing && editLoginLines ? loginLines(editValue) : null;
+  const editRows =
+    editLines && editLoginLines
+      ? editLoginLines.flatMap((index) => {
+          const line = editLines[index];
+          return line ? [{ ...line, index }] : [];
+        })
+      : null;
   // What a typed password should not contain: the item's name, which is the
   // site for a login, and the user name being edited.
   const editContext = editRows
@@ -898,9 +915,9 @@ export function DetailsPanel({
       ]
     : [];
   const updateEditField = (index: number, value: string): void => {
-    if (!editRows) return;
+    if (!editLines) return;
     setEditValue(
-      editRows
+      editLines
         .map(({ key, separator, raw }, candidate) => {
           if (candidate !== index) return raw;
           const line =
@@ -935,10 +952,14 @@ export function DetailsPanel({
       </Inset>
     ) : inlineEditing && editRows ? (
       <Inset className="edit">
-        {editRows.map(({ key: field, value }, index) => {
+        {editRows.map(({ key: field, value, index }) => {
           const loginKey = loginFieldOf(field);
           const label =
-            FIELD_LABELS[loginKey ?? field ?? ''] ?? field ?? 'Value';
+            loginKey !== null
+              ? fieldLabel(loginKey)
+              : field !== null
+                ? fieldLabel(field)
+                : 'Value';
           // A row is a line, and editing a row never adds or removes one,
           // so a line keeps its input when its parse changes.
           return loginKey === 'password' ? (
@@ -1218,7 +1239,24 @@ export function DetailsPanel({
                   }
                   onClick={() => void copyField('password')}
                 >
-                  Copy password
+                  {COPY_LABELS.password}
+                </Button>
+              ) : null}
+              {displayKind === 'Password' &&
+              !fileMode &&
+              item.shape === undefined ? (
+                // Known as a Password by its path alone, the text may hold
+                // no `password:` line; this copies it whole.
+                <Button
+                  icon="copy"
+                  disabled={Boolean(readProblem)}
+                  title={readProblem ?? 'Copy the whole text'}
+                  aria-describedby={
+                    readProblem ? accessDescriptionId : undefined
+                  }
+                  onClick={() => void copyField('value')}
+                >
+                  {COPY_LABELS.value}
                 </Button>
               ) : null}
               <Button

@@ -101,10 +101,15 @@ export function loginField(text: string, field: LoginFieldName): string | null {
   return line?.value ? line.value : null;
 }
 
+/** Whether a line is blank: not a field line, and only ASCII whitespace. */
+export function isBlankLine({ key, raw }: LoginLine): boolean {
+  return key === null && BLANK.test(raw);
+}
+
 /** The shape the agent's listing reports for a small file with this text. */
 export function shapeOf(text: string): ItemShape {
   const lines = loginLines(text);
-  return lines.every(({ key, raw }) => key !== null || BLANK.test(raw)) &&
+  return lines.every((line) => line.key !== null || isBlankLine(line)) &&
     lines.some(({ key }) => key === 'password')
     ? 'login'
     : 'other';

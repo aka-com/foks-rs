@@ -1207,18 +1207,26 @@ test('a login saved outside /logins/ is a Password by its listed shape', async (
   assert.match(saved, /^password: graf-77$/m);
 });
 
-/** Mounts the panel on one extra login with `text` as its stored value. */
-async function setupLogin(text: string) {
+/**
+ * Mounts the panel on one extra login with `text` as its stored value. An
+ * unshaped login is listed as an agent that predates the shape field lists
+ * it, so only its `/logins/` path makes it a Password.
+ */
+async function setupLogin(
+  text: string,
+  { path = '/wifi/cabin', shaped = true } = {},
+) {
   const p = await setup();
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
   const login = {
     ...p.subject,
-    path: '/wifi/cabin',
+    path,
     direntId: '0000000000000000000000000000002f',
     shape: 'login' as const,
   };
+  if (!shaped) delete (login as Partial<typeof login>).shape;
   const snapshot = {
     ...p.props.snapshot,
     items: [...p.props.snapshot.items, login],
@@ -1289,4 +1297,63 @@ test('a Password whose text has no password line edits in the concealable textar
   assert.equal(r.queryByLabelText('Password'), null);
   ui.fireEvent(window, new Event('blur'));
   assert.equal(r.queryByRole('textbox', { name: 'Contents' }), null);
+});
+
+test('a login line keyed by an Object.prototype name is listed and edited under its key', async () => {
+  const p = await setupLogin(
+    'user: a\npassword: b\nconstructor: x\ntoString: y',
+  );
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show user name' }));
+  await r.findByText('a');
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show constructor' }));
+  assert.ok(r.getByText('x'));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show tostring' }));
+  assert.ok(r.getByText('y'));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const constructorField = await r.findByLabelText('constructor');
+  assert.equal((constructorField as HTMLInputElement).value, 'x');
+  assert.equal((r.getByLabelText('toString') as HTMLInputElement).value, 'y');
+});
+
+test('the login editor lists no blank lines and saves them as stored', async () => {
+  const p = await setupLogin('user: a\n\npassword: b\nurl: c\n');
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const username = await r.findByLabelText('User name');
+  assert.equal(r.queryByLabelText('Value'), null);
+  assert.equal(r.getAllByRole('textbox').length, 2);
+  ui.fireEvent.change(username, { target: { value: 'z' } });
+  ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
+  await ui.waitFor(() => assert.equal(p.saved.length, 1));
+  assert.equal(p.saved[0], 'user: z\n\npassword: b\nurl: c\n');
+});
+
+test('a Password known only by its /logins/ path also copies its whole value', async () => {
+  const p = await setupLogin('hunter2', {
+    path: '/logins/legacy.example',
+    shaped: false,
+  });
+  const { mockCopies } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const before = mockCopies.length;
+  const r = ui.render(p.draw());
+  assert.ok(r.getAllByRole('button', { name: 'Copy password' }).length);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Copy value' }));
+  await ui.waitFor(() => assert.equal(mockCopies.length - before, 1));
+  assert.deepEqual(
+    mockCopies.slice(before).map(({ field, text }) => [field, text]),
+    [['value', 'hunter2']],
+  );
+  assert.match(document.body.textContent ?? '', /Value copied/);
+});
+
+test('a Password with a listed shape offers no whole-value copy', async () => {
+  const p = await setupLogin('user: a\npassword: b', {
+    path: '/logins/current.example',
+  });
+  const r = ui.render(p.draw());
+  assert.ok(r.getAllByRole('button', { name: 'Copy password' }).length);
+  assert.equal(r.queryByRole('button', { name: 'Copy value' }), null);
 });
