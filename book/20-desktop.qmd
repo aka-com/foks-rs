@@ -41,8 +41,9 @@ tracking, and bounded background work.
 ```
 
 The renderer is treated as untrusted. It renders a catalog of names,
-types, and sizes; it asks for one value at a time; and it receives that
-value only through the single content-returning command. The host is
+types, sizes, and whether each small file holds a login; it asks for one
+value at a time; and it receives that value only through the single
+content-returning command. The host is
 privileged but holds no long-lived secrets: it forwards requests to the
 agent and moves bytes between the agent and the disk or clipboard. The
 agent, described in [Chapter 19](19-agent.qmd), is a separate process that
@@ -195,6 +196,36 @@ tool on the machine. The host's `copy_with_hygiene` does three things:
 
 The exit handler performs one best-effort clear before the process ends.
 
+## Logins
+
+FOKS v0.1.9 has no login type. The desktop stores a login as an ordinary
+small file of UTF-8 `key: value` lines, `user: …`, `password: …` and
+`url: …`, so Go clients read and write it as any other value.
+
+The catalog marks which small files are logins without carrying their
+contents. A metadata listing already fetches and opens every small-file
+node to authenticate it. Before it zeroizes that plaintext, `foks-client`
+records one bit, `shape: login` when a line's key is exactly `password` and
+`shape: other` otherwise, and the bit travels through `KvCatalogReport`, the
+agent's `KvEntryMetadata` and its retained catalog pages, and the host's
+`ItemDto`. It is agent IPC only and never reaches the Go wire. The renderer
+lists a small file with `shape: login` as a Password wherever it is filed;
+a catalog entry without a shape, from an agent that predates the field,
+falls back to the `/logins/` folder.
+
+Copy on a login reaches the clipboard one field at a time.
+`copy_item_field` reads the exact listed version, selects the password,
+user name or website line in the host, and passes only that value to
+`copy_with_hygiene`; the other lines are dropped with the zeroizing read
+buffer. A line splits at its first `:`, keys and values are trimmed, `user`
+and `username` name the user name, `url` and `website` name the website,
+and the first line naming a field wins. A field that is absent or empty
+fails with `field-missing` instead of copying something else. Both the
+listing's classification and the host's field selection use
+`foks_client::kv::login`, so an item listed as a login is one whose
+password line the host can find. `copy_item_value` still copies a text
+document's whole value.
+
 ## Files: drag-and-drop, upload, and download
 
 A web `<input type="file">` reads bytes into a JavaScript buffer. FOKS
@@ -346,13 +377,15 @@ mounting every card. It no longer imposes the former 200-card cap.
   ACL resolution test), `src/applock.rs` and `src/applock/polkit.rs`,
   `src/clipboard.rs`, `src/dragdrop.rs`, `src/commands/context.rs`
   (`record_drop_paths`, `upload_path`), `src/commands/vault.rs`
-  (`read_item`, `copy_item_value`, `download_file`),
+  (`read_item`, `copy_item_value`, `copy_item_field`, `download_file`),
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.
 - `apps/desktop/src/chat`: `notification-consumer.ts`,
   `use-chat-history.ts`, `history-cache.ts`; `apps/desktop/src/chat-contract.ts`.
 - `foks-desktop`: `lib.rs` (size constants, streaming), `tests/backend_transcript.rs`.
+- `foks-client`: `src/kv/login.rs` (login layout and shape), `src/kv/sync.rs`
+  (where a metadata listing computes the shape).
 
 ## Further reading
 

@@ -143,7 +143,9 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Download' }), null);
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Copy value' }), null);
   assert.ok(ui.screen.getByRole('menuitem', { name: 'Copy user name' }));
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Copy password' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Copy password' }),
+  );
   assert.deepEqual(mounted.copies, [
     {
       storeId: 'acct:personal',

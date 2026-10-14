@@ -80,6 +80,8 @@ const publicTypes = [
   'AccountDto',
   'CatalogFailureDto',
   'ItemRequest',
+  'ItemField',
+  'CopyFieldRequest',
   'ReadItemResponse',
   'CopyResponse',
   'DownloadResponse',

@@ -275,6 +275,63 @@ test('decodeCatalog enforces schema validation and rejects malformed fields', ()
   );
 });
 
+test('decodeCatalog carries a small file shape only as login or other', () => {
+  const withShape = (shape: unknown) =>
+    decodeCatalog({ ...catalog, items: [{ ...catalog.items[0], shape }] });
+  assert.equal(withShape('login').items[0]?.shape, 'login');
+  assert.equal(withShape('other').items[0]?.shape, 'other');
+  // An agent that predates the field omits it; the key stays absent.
+  assert.equal('shape' in withShape(undefined).items[0], false);
+  for (const shape of ['text', 'Login', null, 1])
+    assert.throws(() => withShape(shape), /shape is not login or other/);
+});
+
+test('copyItemField sends the exact version and the field to the host', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return { ok: true };
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    assert.deepEqual(
+      await tauriBridge.copyItemField({
+        storeId: 'opaque-store-ref',
+        path: '/work/github.com',
+        version: 4,
+        field: 'password',
+      }),
+      { ok: true },
+    );
+    assert.deepEqual(calls, [
+      [
+        'copy_item_field',
+        {
+          storeId: 'opaque-store-ref',
+          path: '/work/github.com',
+          version: 4,
+          field: 'password',
+        },
+      ],
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
 test('action decoders reject partial or malformed responses', () => {
   assert.deepEqual(
     decodeReadItem({

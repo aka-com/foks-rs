@@ -347,7 +347,10 @@ test('login fields follow the host parser: aliases, trimming, first line wins', 
   assert.equal(loginField(stored, 'password'), 'hx7:Qm2');
   // An empty value is absent, as `field-missing` reports it.
   assert.equal(loginField(stored, 'url'), null);
-  assert.equal(loginField('website: https://a.example', 'url'), 'https://a.example');
+  assert.equal(
+    loginField('website: https://a.example', 'url'),
+    'https://a.example',
+  );
   assert.equal(shapeOf(stored), 'login');
   assert.equal(shapeOf('user: a\npassword: \nurl: '), 'login');
   for (const text of [

@@ -1011,7 +1011,13 @@ export function DetailsPanel({
                 </>
               }
             >
-              {!visible ? MASK : value ? value : <span className="dim">Not set</span>}
+              {!visible ? (
+                MASK
+              ) : value ? (
+                value
+              ) : (
+                <span className="dim">Not set</span>
+              )}
             </InsetRow>
           );
         })}

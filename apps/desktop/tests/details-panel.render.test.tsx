@@ -994,13 +994,15 @@ test('outside clicks close details while clicks inside and dialog interactions d
 
 test('a login lists each field masked and shows only the field asked for', async () => {
   let reads = 0;
-  const p = await setup(undefined, (item) => item.path === '/logins/github.com');
-  const read = p.bridge.readItem;
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
   p.props.bridge = {
     ...p.props.bridge,
     readItem: async (request) => {
       reads++;
-      return read(request);
+      return p.bridge.readItem(request);
     },
   };
   const r = ui.render(p.draw());
@@ -1023,7 +1025,10 @@ test('a login lists each field masked and shows only the field asked for', async
 });
 
 test('login copies put only the chosen field on the clipboard', async () => {
-  const p = await setup(undefined, (item) => item.path === '/logins/github.com');
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
   const { mockCopies } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');

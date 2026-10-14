@@ -306,8 +306,12 @@ test('a row names its item, its folder, and the actions its kind allows', async 
   // A value the panel reads as text copies and reveals; a file node
   // downloads. The row decides the same way the details panel does, so a
   // text Secret filed as a "Document" is not offered Download here and Copy
-  // there.
-  assert.deepEqual(actionsOf(login), ['Copy', 'Reveal']);
+  // there. A login copies one field at a time, never its whole text.
+  assert.deepEqual(actionsOf(login), [
+    'Copy password',
+    'Copy user name',
+    'Reveal',
+  ]);
   const named = (name: string): Element => {
     const node = rows.find(
       (candidate) => candidate.querySelector('.name .nm')?.textContent === name,
@@ -322,7 +326,7 @@ test('a row names its item, its folder, and the actions its kind allows', async 
     secretDocument.querySelector('.cell.kind')?.textContent,
     'Document',
   );
-  assert.deepEqual(actionsOf(secretDocument), ['Copy', 'Reveal']);
+  assert.deepEqual(actionsOf(secretDocument), ['Copy value', 'Reveal']);
   const fileDocument = named('passport-scan.pdf');
   assert.equal(
     fileDocument.querySelector('.cell.kind')?.textContent,

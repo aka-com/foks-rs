@@ -69,7 +69,8 @@
         "size": 42,
         "version": 7,
         "read": { "role": "Member", "visibility": -16384 },
-        "write": { "role": "Admin" }
+        "write": { "role": "Admin" },
+        "shape": "other"
       }
     ],
     "failures": [
