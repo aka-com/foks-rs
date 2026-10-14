@@ -1148,7 +1148,18 @@ access) and reads "Saved work" when none of them remains. The chip opens a
 popover that lists each operation with its channel, saved text, state and
 verbs, and Jump for a message in a channel the reader can open; Esc closes it
 and returns focus to the chip. Once the last of it is accounted for the chip
-says "All caught up" rather than disappearing without a word. When the team's server check-in has lapsed the
+says "All caught up" rather than disappearing without a word. A channel whose
+content could not be verified shows "Channel stopped" under its own header,
+with "Recheck channel" and "Copy diagnostic details". Recheck removes the
+channel from the blocked set the desktop sends with `sync-inbox`
+(`ChatInboxService.unblockChannel`) and synchronizes the team again: the agent
+reports the channel in `blocked_channels` again if it still detects the
+conflict, and otherwise the thread reads its history and verifies it from the
+start, where hard-state anchors still catch an equivocating server. A channel
+stopped again after a recheck says when it was checked. "Chat stopped", the
+account-wide quarantine, still needs a new chat session, which the next unlock
+starts; it offers Copy diagnostic details, which carries the error code and
+the agent's own description of the failed check that the pane does not show. When the team's server check-in has lapsed the
 column stays and the pane carries the notice, with "Check in" opening that
 server in Settings › Servers; every other unavailable state is stated without
 an action, because no button in Chat resolves it, and "Open another team" is

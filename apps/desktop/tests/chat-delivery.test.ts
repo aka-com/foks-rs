@@ -11,6 +11,7 @@ import {
 } from '../src/chat/delivery';
 import { chatErrorText } from '../src/chat/error-copy';
 import { failure } from '../src/chat/actions';
+import { chatDiagnostic } from '../src/chat/diagnostic';
 import {
   newOutgoing,
   transition,
@@ -201,4 +202,39 @@ test('chat failures from the agent show the copy table, not the agent text', () 
     chatErrorText({ ...agent, code: 'server-unavailable', message: 'Offline' }),
     'Offline',
   );
+});
+
+test('diagnostic details name where chat stopped, and the agent detail only there', () => {
+  const at = Date.UTC(2026, 9, 14, 9, 30);
+  assert.equal(
+    chatDiagnostic({
+      team: 'Engineering',
+      teamId: 'ff01',
+      server: 'acme.example',
+      channel: 'ab'.repeat(16),
+      code: 'chat-channel-integrity',
+      at,
+    }),
+    [
+      'FOKS chat: channel stopped',
+      'Team: Engineering (ff01)',
+      'Server: acme.example',
+      `Channel: ${'ab'.repeat(16)}`,
+      'Error code: chat-channel-integrity',
+      'Time: 2026-10-14T09:30:00.000Z',
+    ].join('\n'),
+  );
+  const session = chatDiagnostic({
+    team: 'Engineering',
+    server: 'acme.example',
+    code: 'chat-integrity',
+    detail: 'chat integrity check failed: team host mismatch',
+    at,
+  });
+  assert.match(session, /^FOKS chat: chat stopped\n/);
+  assert.match(
+    session,
+    /\nDetail: chat integrity check failed: team host mismatch\n/,
+  );
+  assert.doesNotMatch(session, /Channel:/);
 });

@@ -9,9 +9,12 @@ import { ThreadHeader } from '../chat/thread-header';
 import {
   channelTitle,
   listChannels,
+  messageClock,
   openChannel,
   partyNames,
 } from '../chat/presentation';
+import { chatDiagnostic } from '../chat/diagnostic';
+import { useOptionalToast } from '/kit/toasts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { Button, Icon, Notice } from '../components';
@@ -95,6 +98,7 @@ export function ChatScreen({
     loading,
     resyncing,
     blocked,
+    blockedFailure,
     blockedChannels,
     channelRevisions,
     actor,
@@ -107,6 +111,7 @@ export function ChatScreen({
     acceptHistory,
     history,
     blockHistory,
+    recheckChannel,
     listPosition,
     keepListPosition,
   } = useChatConversation(
@@ -247,6 +252,31 @@ export function ChatScreen({
       ? store
       : undefined;
   const empty = !loading && !listed.length && !error;
+  const toasts = useOptionalToast();
+  // When the reader last rechecked each stopped channel, so a channel the
+  // recheck stops again says so rather than reading as unchanged.
+  const [rechecked, setRechecked] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
+  const copyDiagnostic = (stopped?: string) => {
+    if (!store) return;
+    void bridge
+      .copyText(
+        chatDiagnostic({
+          team: store.name,
+          teamId: scope?.store.team_id,
+          server: serverDisplayLabelForStore(agentSnapshot, store),
+          channel: stopped,
+          code: stopped
+            ? 'chat-channel-integrity'
+            : (blockedFailure?.code ?? 'chat-integrity'),
+          detail: stopped ? undefined : blockedFailure?.message,
+          at: Date.now(),
+        }),
+      )
+      .then(() => toasts?.show('Diagnostic details copied'))
+      .catch(() => toasts?.show('Could not copy', { tone: 'warning' }));
+  };
   // Whether this conversation has carried saved work since it was opened, so
   // the chip can say it was accounted for rather than simply vanishing.
   const [recovered, setRecovered] = useState(false);
@@ -372,9 +402,15 @@ export function ChatScreen({
         <Notice severity="crit" title="Chat stopped">
           <p role="alert">{blocked}</p>
           <p>
-            Check the account and server connection, then lock and unlock FOKS
-            to start a new chat session.
+            Chat for this account stays stopped until a new chat session starts:
+            lock and unlock FOKS to start one. Vault items and files are not
+            affected.
           </p>
+          <div className="chat-locked-actions">
+            <Button onClick={() => copyDiagnostic()}>
+              Copy diagnostic details
+            </Button>
+          </div>
         </Notice>
       </div>
     ) : !team ? (
@@ -399,15 +435,35 @@ export function ChatScreen({
               attention={attention}
             />
             <div className="empty">
+              <span className="big">
+                <Icon name="shield" />
+              </span>
               <h2>Channel stopped</h2>
               <p role="alert">
-                Content in this channel could not be verified. Other channels
-                remain available.
+                Content in {channelTitle(channel)} could not be verified, so its
+                messages are not shown. Other channels remain available.
               </p>
-              <p>
-                Check the account and server connection, then lock and unlock
-                FOKS to revalidate this channel.
+              <p role="status">
+                {rechecked.has(channel.id)
+                  ? `Checked again at ${messageClock(String(rechecked.get(channel.id)))}. The content still could not be verified.`
+                  : 'Recheck channel reads its history again and verifies it from the start.'}
               </p>
+              <div className="chat-locked-actions">
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    setRechecked((old) =>
+                      new Map(old).set(channel.id, Date.now()),
+                    );
+                    recheckChannel(channel.id);
+                  }}
+                >
+                  Recheck channel
+                </Button>
+                <Button onClick={() => copyDiagnostic(channel.id)}>
+                  Copy diagnostic details
+                </Button>
+              </div>
             </div>
           </>
         ) : channel ? (

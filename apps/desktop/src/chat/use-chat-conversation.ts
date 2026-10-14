@@ -50,6 +50,10 @@ export function useChatConversation(
   const historyBindings = useRef(new WeakMap<ChatResult, HistoryBinding>());
   const [failure, setFailure] = useState<CommandError | null>(null);
   const [blocked, setBlocked] = useState('');
+  // The failure that stopped the session, for its diagnostic details.
+  const [blockedFailure, setBlockedFailure] = useState<CommandError | null>(
+    null,
+  );
   const fatal = useRef('');
   // Read by history reads and acceptance, which run after the commit that
   // rendered them, never during a render.
@@ -150,6 +154,7 @@ export function useChatConversation(
             owner.current = null;
             fatal.current = chatErrorText(typed);
             setBlocked(fatal.current);
+            setBlockedFailure(typed);
             service.histories.clear(storeId);
           }
           if (typed.code === 'chat-access-denied') service.invalidate(storeId);
@@ -243,6 +248,13 @@ export function useChatConversation(
       ),
     [service, storeId],
   );
+  // The reader's Recheck of a stopped channel: the inbox withdraws its block
+  // and synchronizes again, and the thread that mounts reads the channel's
+  // history from the start.
+  const recheckChannel = useCallback(
+    (channel: string) => service.unblockChannel(storeId, channel),
+    [service, storeId],
+  );
   const blockHistory = useCallback(
     (channel: string) => {
       service.blockChannel(storeId, channel);
@@ -318,10 +330,11 @@ export function useChatConversation(
       cancelHistory();
       fatal.current = inbox.error;
       setBlocked(inbox.error);
+      setBlockedFailure(inbox.failure ?? null);
     }
     if (inbox?.state === 'unavailable' || inbox?.state === 'loading')
       cancelHistory();
-  }, [inbox?.state, inbox?.error, cancelHistory]);
+  }, [inbox?.state, inbox?.error, inbox?.failure, cancelHistory]);
   return {
     channels: inbox?.data?.channels ?? [],
     channelsKnown: inbox?.state === 'ready' && Boolean(inbox.data),
@@ -359,6 +372,7 @@ export function useChatConversation(
       !inbox.error &&
       service.isInvalidated(storeId),
     blocked,
+    blockedFailure,
     blockedChannels: inbox?.blockedChannels ?? EMPTY_BLOCKED,
     revision: inbox?.revision ?? 0,
     channelRevisions: inbox?.channelRefreshRevisions ?? inbox?.channelRevisions,
@@ -371,6 +385,7 @@ export function useChatConversation(
     setOpenChannel,
     acceptHistory,
     blockHistory,
+    recheckChannel,
     listPosition,
     keepListPosition,
   };

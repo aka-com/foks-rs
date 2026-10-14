@@ -812,6 +812,47 @@ test('channel quarantine survives late sync and soft reset without blocking sibl
   f.service.stop();
 });
 
+test('a rechecked channel is synchronized again without its block, and the agent can report it again', async () => {
+  const f = fixture();
+  const original = f.bridge.chat.bind(f.bridge);
+  const id = 'ab'.repeat(16);
+  const exclusions: string[][] = [];
+  let conflicting = false;
+  f.bridge.chat = async (store, action, view) => {
+    const reply = await original(store, action, view);
+    if (
+      store === 't0' &&
+      action.action === 'sync-inbox' &&
+      reply.result.kind === 'inbox'
+    ) {
+      exclusions.push(action.blocked_channels ?? []);
+      if (conflicting) reply.result.blocked_channels = [id];
+    }
+    return reply;
+  };
+  await f.clock.advance(500);
+  f.service.blockChannel('t0', id);
+  assert.ok(f.service.isChannelBlocked('t0', id));
+  const syncs = f.syncs.length;
+  f.service.unblockChannel('t0', id);
+  // The block is withdrawn at once, so the pane mounts the thread, whose
+  // history read verifies the channel from the start.
+  assert.equal(f.service.isChannelBlocked('t0', id), false);
+  await f.clock.advance(500);
+  assert.ok(f.syncs.length > syncs);
+  assert.deepEqual(exclusions.at(-1), []);
+  assert.equal(f.service.isChannelBlocked('t0', id), false);
+  // The agent still detecting the conflict blocks the channel again.
+  conflicting = true;
+  f.service.blockChannel('t0', id);
+  f.service.unblockChannel('t0', id);
+  await f.clock.advance(500);
+  assert.ok(f.service.isChannelBlocked('t0', id));
+  // A sibling team is untouched.
+  assert.equal(f.service.isChannelBlocked('t1', id), false);
+  f.service.stop();
+});
+
 test('an unrefreshed profile asks for one catalog refresh per profile, not one per team or retry', async () => {
   const f = fixture();
   const requested: string[] = [];

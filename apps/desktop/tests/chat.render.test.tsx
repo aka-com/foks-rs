@@ -808,9 +808,65 @@ test('the integrity mock scenario shows degraded, stopped, muted and hidden stat
         )!,
       );
       await ui.screen.findByRole('heading', { name: 'Channel stopped' });
+      // The stopped pane keeps the channel's header and offers a recheck in
+      // place of locking FOKS.
+      assert.ok(ui.screen.getByRole('heading', { name: '#incidents' }));
+      assert.equal(ui.screen.queryByText(/lock and unlock/), null);
+      ui.fireEvent.click(
+        ui.screen.getByRole('button', { name: 'Recheck channel' }),
+      );
+      // The agent reports the channel again, so it stops again and says so.
+      await ui.screen.findByText(
+        /^Checked again at .+\. The content still could not be verified\.$/,
+      );
+      assert.ok(
+        ui.screen.getByRole('button', { name: 'Copy diagnostic details' }),
+      );
     },
     true,
   );
+});
+
+test('a recheck reopens a channel whose history verifies again', async () => {
+  const id = 'ab'.repeat(16);
+  let fail = true;
+  const exclusions: string[][] = [];
+  await setup(
+    (base) => ({
+      ...base,
+      chat: async (store, action, view) => {
+        if (action.action === 'sync-inbox')
+          exclusions.push(action.blocked_channels ?? []);
+        if (action.action === 'history' && action.channel === id && fail) {
+          fail = false;
+          throw {
+            code: 'chat-channel-integrity',
+            message:
+              'chat channel content integrity check failed: predecessor contradiction',
+            retryable: false,
+            fatal: true,
+            ambiguous: false,
+            origin: 'invoke',
+          };
+        }
+        return base.chat(store, action, view);
+      },
+    }),
+    false,
+  );
+  await ui.screen.findByRole('heading', { name: 'Channel stopped' });
+  // The agent's description of the failed check is for diagnostics only.
+  assert.equal(ui.screen.queryByText(/predecessor contradiction/), null);
+  await ui.waitFor(() => assert.ok(exclusions.at(-1)?.includes(id)));
+  ui.fireEvent.click(
+    ui.screen.getByRole('button', { name: 'Recheck channel' }),
+  );
+  await ui.screen.findByText('Team chat is ready.');
+  assert.equal(
+    ui.screen.queryByRole('heading', { name: 'Channel stopped' }),
+    null,
+  );
+  await ui.waitFor(() => assert.equal(exclusions.at(-1)?.includes(id), false));
 });
 
 test('the failures mock scenario shows ledger operations and a saved-message load error', async () => {

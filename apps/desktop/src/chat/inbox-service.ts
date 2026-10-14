@@ -592,6 +592,32 @@ export class ChatInboxService {
       );
     }
   }
+  /**
+   * Withdraws this desktop's block of a channel, at the reader's Recheck,
+   * and synchronizes the team again. The block is only the set the desktop
+   * sends with `sync-inbox`: the agent reports the channel in
+   * `blocked_channels` again if it still detects the conflict, and the next
+   * history read verifies the channel from the start, where hard-state
+   * anchors still catch an equivocating server. A team whose account is
+   * quarantined is left alone; that takes a new chat session.
+   */
+  unblockChannel(id: string, channel: string) {
+    for (const account of this.accounts.values()) {
+      const team = account.teams.get(id);
+      if (!team || account.blocked || !team.blocked.delete(channel)) continue;
+      const old = this.snapshot.get(id) ?? initial();
+      this.publish(
+        id,
+        {
+          ...old,
+          blockedChannels: new Set(team.blocked),
+          revision: old.revision + 1,
+        },
+        'channel-block',
+      );
+      this.invalidate(id);
+    }
+  }
   block(id: string, message: string) {
     this.handleError(id, integrity(message));
   }
