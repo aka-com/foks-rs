@@ -3,8 +3,12 @@ import {
   encodeFirstRunCheckpoint,
   type FirstRunCheckpoint,
 } from './first-run-state';
+import {
+  readStorageOrThrow,
+  STORAGE_KEYS,
+  writeStorageOrThrow,
+} from './platform/device-storage';
 
-const KEY = 'foks.setup-recovery.v1';
 export interface RetainedSetup {
   readonly id: string;
   readonly checkpoint: FirstRunCheckpoint;
@@ -12,7 +16,7 @@ export interface RetainedSetup {
 
 /** Nonsecret references to native operation records and agent operations, not execution authority. */
 export function retainedSetups(): RetainedSetup[] {
-  const raw = window.localStorage.getItem(KEY);
+  const raw = readStorageOrThrow(STORAGE_KEYS.setupRecovery);
   if (!raw) return [];
   const parsed: unknown = JSON.parse(raw);
   if (!Array.isArray(parsed))
@@ -35,8 +39,8 @@ export function retainedSetups(): RetainedSetup[] {
 }
 
 function save(entries: RetainedSetup[]): void {
-  window.localStorage.setItem(
-    KEY,
+  writeStorageOrThrow(
+    STORAGE_KEYS.setupRecovery,
     JSON.stringify(
       entries.map((entry) => ({
         id: entry.id,

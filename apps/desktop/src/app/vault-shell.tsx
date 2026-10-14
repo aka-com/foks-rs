@@ -16,11 +16,12 @@ import type { AppLockState, Bridge, ItemField } from '../bridge';
 import { useChatMigration } from '../chat/migration';
 import { ChatInboxProvider } from '../chat/inbox-provider';
 import { DeviceCacheContext } from '../device-cache';
-import { FIRST_RUN_PROGRESS_EVENT } from '../first-run-operations';
 import {
-  FIRST_RUN_CHECKPOINT_KEY,
+  FIRST_RUN_PROGRESS_EVENT,
+  storedFirstRunCheckpoint,
+} from '../first-run-operations';
+import {
   completedFirstRunSteps,
-  decodeFirstRunCheckpoint,
   firstRunNextStep,
   firstRunStepCount,
   type FirstRunCheckpoint,
@@ -123,11 +124,8 @@ import { ShellSearch } from './shell-search';
 import { useWindowRuntime } from './window-runtime';
 
 function incompleteFirstRunCheckpoint(): FirstRunCheckpoint | null {
-  if (typeof window === 'undefined') return null;
   try {
-    const checkpoint = decodeFirstRunCheckpoint(
-      window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
-    );
+    const checkpoint = storedFirstRunCheckpoint();
     return checkpoint &&
       completedFirstRunSteps(checkpoint) < firstRunStepCount(checkpoint)
       ? checkpoint

@@ -10,7 +10,8 @@
  * writes `testedAt`; the three-token check when a phrase is created does not.
  */
 
-const STORAGE_KEY = 'foks.recoveryPhraseTests';
+import { STORAGE_KEYS, storedRecord } from './platform/device-storage';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** A phrase last tested longer ago than this is due for another test. */
@@ -29,15 +30,6 @@ function time(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? value
     : undefined;
-}
-
-function rawRecords(): string | null {
-  try {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem(STORAGE_KEY);
-  } catch {
-    return null;
-  }
 }
 
 function parse(raw: string | null): Stored {
@@ -63,35 +55,20 @@ function parse(raw: string | null): Stored {
   }
 }
 
-/** Whether the records were stored; blocked or full storage refuses them. */
-function writeAll(value: Stored): boolean {
-  try {
-    if (typeof window === 'undefined') return false;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-let cached: { raw: string | null; records: Stored } | undefined;
-const listeners = new Set<() => void>();
+const records = storedRecord(STORAGE_KEYS.recoveryPhraseTests, parse, (value) =>
+  JSON.stringify(value),
+);
 
 /**
  * The current records. The value is reused while the stored text is
  * unchanged, so React can compare snapshots by identity.
  */
 export function recoveryPhraseTests(): Stored {
-  const raw = rawRecords();
-  if (!cached || cached.raw !== raw) cached = { raw, records: parse(raw) };
-  return cached.records;
+  return records.read();
 }
 
 export function subscribeRecoveryPhraseTests(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return records.subscribe(listener);
 }
 
 function update(
@@ -100,9 +77,8 @@ function update(
 ): boolean {
   const all = { ...recoveryPhraseTests() };
   all[backupId] = change(all[backupId] ?? {});
-  const stored = writeAll(all);
-  for (const listener of listeners) listener();
-  return stored;
+  // Whether the records were stored; blocked or full storage refuses them.
+  return records.write(all);
 }
 
 /**

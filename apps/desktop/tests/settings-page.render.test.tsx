@@ -34,7 +34,36 @@ test.before(async () => {
   });
 });
 
-test.afterEach(() => ui.cleanup());
+test.afterEach(() => {
+  ui.cleanup();
+  window.localStorage.clear();
+});
+
+const INVITATION_LABELS = 'foks.invitationLabels';
+
+/** Stores one invitee label for each profile, as invitation-labels.ts does. */
+function seedInvitationLabels(profiles: readonly string[]): void {
+  window.localStorage.setItem(
+    INVITATION_LABELS,
+    JSON.stringify(
+      Object.fromEntries(
+        profiles.map((profile) => [
+          `${profile}/main/op`,
+          { label: `${profile} invitee`, role: 'member', created: 1 },
+        ]),
+      ),
+    ),
+  );
+}
+
+/** The profiles whose invitee labels remain stored. */
+function labelledProfiles(): string[] {
+  return Object.keys(
+    JSON.parse(
+      window.localStorage.getItem(INVITATION_LABELS) ?? '{}',
+    ) as object,
+  ).map((key) => key.split('/')[0]);
+}
 test.after(async () => vite.close());
 
 async function fixture(): Promise<AgentSnapshot> {
@@ -822,6 +851,7 @@ test('a profile address opens that server instead of the page', async () => {
 test('server removal deletes its local credentials after exact-name confirmation', async () => {
   const calls: Array<[string, string]> = [];
   const messages: string[] = [];
+  seedInvitationLabels(['personal', 'acme']);
   const rendered = await renderSettings(await fixture(), {
     where: { profile: 'personal' },
     decorate: (bridge) => ({
@@ -861,6 +891,8 @@ test('server removal deletes its local credentials after exact-name confirmation
   });
   await ui.waitFor(() => assert.deepEqual(calls, [['personal', 'personal']]));
   assert.deepEqual(messages, ['Removed Personal server and its credentials']);
+  // The webview's records of the removed profile go with it.
+  assert.deepEqual(labelledProfiles(), ['acme']);
 });
 
 test('server removal remains available after an identity mismatch', async () => {
@@ -1347,6 +1379,7 @@ test('a reset that fails part way reloads every preview', async () => {
   let attempts = 0;
   let previews = 0;
   const reported: unknown[] = [];
+  seedInvitationLabels(['personal', 'acme', 'partner']);
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'mac' },
     decorate: (bridge) => ({
@@ -1391,6 +1424,8 @@ test('a reset that fails part way reloads every preview', async () => {
   // The run stopped where it failed and said so; it did not report success.
   assert.equal(reported.length, 1);
   assert.equal(attempts, 2);
+  // Only the profile whose reset succeeded lost its webview records.
+  assert.deepEqual(labelledProfiles(), ['acme', 'partner']);
 });
 
 test('device notification preferences are reachable without a channel and recover denied permission', async () => {

@@ -17,6 +17,11 @@
  */
 
 import { BIP39_ENGLISH } from './bip39-english';
+import {
+  readStorage,
+  STORAGE_KEYS,
+  writeStorage,
+} from './platform/device-storage';
 
 export type GeneratorMode = 'characters' | 'passphrase';
 export type CharacterSet = 'upper' | 'lower' | 'digits' | 'symbols';
@@ -347,8 +352,6 @@ export function typedPasswordStrength(
   };
 }
 
-const POLICY_KEY = 'passwordGenerator';
-
 function clampInteger(
   value: unknown,
   range: { min: number; max: number },
@@ -406,20 +409,10 @@ export function parseGeneratorPolicy(text: string | null): GeneratorPolicy {
 }
 
 export function storedGeneratorPolicy(): GeneratorPolicy {
-  try {
-    return typeof window === 'undefined'
-      ? DEFAULT_GENERATOR_POLICY
-      : parseGeneratorPolicy(window.localStorage.getItem(POLICY_KEY));
-  } catch {
-    return DEFAULT_GENERATOR_POLICY;
-  }
+  return parseGeneratorPolicy(readStorage(STORAGE_KEYS.passwordGenerator));
 }
 
 export function rememberGeneratorPolicy(policy: GeneratorPolicy): void {
-  try {
-    if (typeof window !== 'undefined')
-      window.localStorage.setItem(POLICY_KEY, JSON.stringify(policy));
-  } catch {
-    // Restricted storage must not prevent generating a password.
-  }
+  // Restricted storage must not prevent generating a password.
+  writeStorage(STORAGE_KEYS.passwordGenerator, JSON.stringify(policy));
 }

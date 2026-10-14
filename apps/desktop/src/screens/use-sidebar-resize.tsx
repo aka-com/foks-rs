@@ -1,11 +1,17 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode, RefObject } from 'react';
 
+import {
+  readStorage,
+  writeStorage,
+  type DeviceStorageKey,
+} from '../platform/device-storage';
+
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
 interface SidebarResizeOptions {
-  storageKey: string;
+  storageKey: DeviceStorageKey;
   cssVariable: `--${string}`;
   className: string;
   label: string;
@@ -38,14 +44,10 @@ export function useSidebarResize<T extends HTMLElement = HTMLElement>({
   reservedWidth = 320,
 }: SidebarResizeOptions): SidebarResize<T> {
   const readWidth = (): number | null => {
-    try {
-      const value = Number(window.localStorage.getItem(storageKey));
-      return Number.isFinite(value) && value > 0
-        ? clamp(value, minWidth, maxWidth)
-        : null;
-    } catch {
-      return null;
-    }
+    const value = Number(readStorage(storageKey));
+    return Number.isFinite(value) && value > 0
+      ? clamp(value, minWidth, maxWidth)
+      : null;
   };
   const ref = useRef<T>(null);
   const id = useId();
@@ -81,14 +83,9 @@ export function useSidebarResize<T extends HTMLElement = HTMLElement>({
   const responsiveDefault =
     available > 0 && available <= compactAt ? compactWidth : defaultWidth;
   const width = clamp(preferred ?? responsiveDefault, min, max);
-  const save = (value: number | null) => {
-    try {
-      if (value === null) window.localStorage.removeItem(storageKey);
-      else window.localStorage.setItem(storageKey, String(value));
-    } catch {
-      // Storage can be unavailable; resizing still works for this mount.
-    }
-  };
+  // Storage can be unavailable; resizing still works for this mount.
+  const save = (value: number | null) =>
+    writeStorage(storageKey, value === null ? null : String(value));
   const finish = (commit: boolean) => {
     const active = drag.current;
     if (!active) return;

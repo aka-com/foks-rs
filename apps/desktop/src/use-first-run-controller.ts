@@ -4,16 +4,18 @@ import type { AgentSnapshot } from './model';
 import type { Location } from './location';
 import { reconcileSetup, resolveSetupEntry } from './first-run-controller';
 import { updateRetainedSetup } from './first-run-recovery';
-import { FIRST_RUN_PROGRESS_EVENT } from './first-run-operations';
 import {
-  FIRST_RUN_CHECKPOINT_KEY,
+  FIRST_RUN_PROGRESS_EVENT,
+  storedFirstRunCheckpoint,
+} from './first-run-operations';
+import {
   normalizeFirstRunCheckpoint,
-  decodeFirstRunCheckpoint,
   encodeFirstRunCheckpoint,
   isFirstRunState,
   transitionFirstRun,
   type FirstRunCheckpoint,
 } from './first-run-state';
+import { STORAGE_KEYS, writeStorageOrThrow } from './platform/device-storage';
 
 /** Owns the wizard checkpoint, its navigation projection, and authoritative updates. */
 export function useFirstRunController({
@@ -51,8 +53,8 @@ export function useFirstRunController({
       setCheckpoint(next);
       try {
         if (next.account) updateRetainedSetup(previous, next);
-        window.localStorage.setItem(
-          FIRST_RUN_CHECKPOINT_KEY,
+        writeStorageOrThrow(
+          STORAGE_KEYS.firstRun,
           encodeFirstRunCheckpoint(next),
         );
       } catch {
@@ -94,9 +96,7 @@ export function useFirstRunController({
     const update = () => {
       const current = checkpointRef.current;
       if (!current.provisioning) return;
-      const next = decodeFirstRunCheckpoint(
-        window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
-      );
+      const next = storedFirstRunCheckpoint();
       if (
         next &&
         next.profile?.hostId === current.profile?.hostId &&

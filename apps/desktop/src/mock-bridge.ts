@@ -28,10 +28,8 @@ import {
   parseTrashName,
   trashStamp,
 } from './model/trash';
-import {
-  decodeFirstRunCheckpoint,
-  FIRST_RUN_CHECKPOINT_KEY,
-} from './first-run-state';
+import { decodeFirstRunCheckpoint } from './first-run-state';
+import { readStorage, STORAGE_KEYS } from './platform/device-storage';
 
 export class VersionMismatchError extends Error {
   constructor(
@@ -415,9 +413,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   }
   const restoreFirstRunAccount = (): void => {
     if (typeof window === 'undefined') return;
-    const saved = decodeFirstRunCheckpoint(
-      window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
-    );
+    const saved = decodeFirstRunCheckpoint(readStorage(STORAGE_KEYS.firstRun));
     if (!saved?.profile) return;
     // The preview simulates persisted native state after a successful mutation.
     // Keep its host binding and profile IDs consistent with the real DTOs.

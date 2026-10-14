@@ -54,6 +54,7 @@ import {
 } from '../location';
 import type { Location, NavigateOptions, SettingsSection } from '../location';
 import { useSheetGuard } from '../navigation-guard';
+import { purgeProfiles } from '../platform/device-storage';
 import { useMetadataQuery, useMetadataRepository } from '../query-hooks';
 import { appInfoQuery } from '../resources/application';
 import {
@@ -1036,6 +1037,9 @@ function ResetMacSheet({
                       server.profileName,
                       preview.token,
                     );
+                    // The native reset forgets the profile's chat-local
+                    // state; this removes the webview's records of it.
+                    purgeProfiles([server.profileName]);
                     done += 1;
                   }
                   await onDone(done);
@@ -1065,6 +1069,10 @@ function ResetMacSheet({
         <InsetRow label="Unaffected">
           Remote accounts and all other enrolled devices remain active. Only
           data stored locally on this Mac is erased.
+        </InsetRow>
+        <InsetRow label="App records">
+          For each server reset, this app also erases its setup progress,
+          invitation labels, Recent and Favorites entries, and exposure reviews.
         </InsetRow>
         <InsetRow label="Accounts on this Mac">
           {stores.length

@@ -5,11 +5,10 @@ import { resolveSetupEntry, setupActions } from '../../first-run-controller';
 import {
   persistFirstRun,
   provisioningInFlight,
+  storedFirstRunCheckpoint,
 } from '../../first-run-operations';
 import { clearRetainedSetups, retainSetup } from '../../first-run-recovery';
 import {
-  FIRST_RUN_CHECKPOINT_KEY,
-  decodeFirstRunCheckpoint,
   initialFirstRun,
   isFirstRunState,
   type FirstRunCheckpoint,
@@ -96,14 +95,7 @@ export function initialCheckpoint(
   automaticEntry: boolean,
 ): FirstRunCheckpoint {
   const path: FirstRunPath = location.path ?? 'invited';
-  let saved: FirstRunCheckpoint | null = null;
-  try {
-    saved = decodeFirstRunCheckpoint(
-      window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
-    );
-  } catch {
-    /* unavailable storage */
-  }
+  const saved = storedFirstRunCheckpoint();
   const queryState =
     typeof window === 'undefined'
       ? null

@@ -1,3 +1,9 @@
+import {
+  readStorage,
+  STORAGE_KEYS,
+  writeStorage,
+} from './platform/device-storage';
+
 export type InvitationGrantRole = 'member' | 'admin' | 'owner';
 
 export interface InvitationLabel {
@@ -6,14 +12,11 @@ export interface InvitationLabel {
   created: number;
 }
 
-const STORAGE_KEY = 'foks.invitationLabels';
-
 type Stored = Record<string, InvitationLabel>;
 
 function readAll(): Stored {
   try {
-    if (typeof window === 'undefined') return {};
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = readStorage(STORAGE_KEYS.invitationLabels);
     if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
@@ -25,12 +28,7 @@ function readAll(): Stored {
 }
 
 function writeAll(value: Stored): void {
-  try {
-    if (typeof window !== 'undefined')
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
-  } catch {
-    return;
-  }
+  writeStorage(STORAGE_KEYS.invitationLabels, JSON.stringify(value));
 }
 
 function key(profile: string, account: string, operationId: string): string {

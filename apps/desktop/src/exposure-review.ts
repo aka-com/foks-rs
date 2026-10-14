@@ -60,8 +60,7 @@ import type {
   StoreRef,
 } from './model';
 import { failureOutcome } from './operation-outcome';
-
-const STORAGE_KEY = 'foks.exposureReviews';
+import { STORAGE_KEYS, storedRecord } from './platform/device-storage';
 
 /** Reviews beyond this many are dropped, oldest first. */
 export const REVIEW_LIMIT = 50;
@@ -337,58 +336,32 @@ function parse(raw: string | null): readonly ExposureReview[] {
   }
 }
 
-function rawRecords(): string | null {
-  try {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem(STORAGE_KEY);
-  } catch {
-    return null;
-  }
+function encode(value: readonly ExposureReview[]): string {
+  // The id is derived from scope and party, so it is not stored.
+  return JSON.stringify(
+    value.map((review) => ({
+      scope: review.scope,
+      party: review.party,
+      name: review.name,
+      cause: review.cause,
+      at: review.at,
+      entries: review.entries,
+    })),
+  );
 }
 
-/** Whether the reviews were stored; blocked or full storage refuses them. */
-function writeAll(value: readonly ExposureReview[]): boolean {
-  try {
-    if (typeof window === 'undefined') return false;
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      // The id is derived from scope and party, so it is not stored.
-      JSON.stringify(
-        value.map((review) => ({
-          scope: review.scope,
-          party: review.party,
-          name: review.name,
-          cause: review.cause,
-          at: review.at,
-          entries: review.entries,
-        })),
-      ),
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-let cached:
-  { raw: string | null; value: readonly ExposureReview[] } | undefined;
-const listeners = new Set<() => void>();
+const records = storedRecord(STORAGE_KEYS.exposureReviews, parse, encode);
 
 /**
  * The stored reviews, most recent first. The value is reused while the
  * stored text is unchanged, so React can compare snapshots by identity.
  */
 export function exposureReviews(): readonly ExposureReview[] {
-  const raw = rawRecords();
-  if (!cached || cached.raw !== raw) cached = { raw, value: parse(raw) };
-  return cached.value;
+  return records.read();
 }
 
 export function subscribeExposureReviews(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return records.subscribe(listener);
 }
 
 const NONE: readonly ExposureReview[] = [];
@@ -405,9 +378,7 @@ export function useExposureReviews(): readonly ExposureReview[] {
 function update(
   change: (current: readonly ExposureReview[]) => readonly ExposureReview[],
 ): boolean {
-  const stored = writeAll(change(exposureReviews()));
-  for (const listener of listeners) listener();
-  return stored;
+  return records.write(change(exposureReviews()));
 }
 
 function sameEntry(

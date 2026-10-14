@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react';
 
+import {
+  readStorage,
+  STORAGE_KEYS,
+  writeStorage,
+} from './platform/device-storage';
+
 export type OnboardingTip = 'add-password' | 'setup-checklist';
 const EVENT = 'foks-onboarding-tip-change';
-const keyFor = (tip: OnboardingTip) => `onboarding.dismissed.${tip}`;
+const keyFor = (tip: OnboardingTip) =>
+  tip === 'add-password'
+    ? STORAGE_KEYS.dismissedAddPasswordTip
+    : STORAGE_KEYS.dismissedSetupChecklistTip;
 
 function read(tip: OnboardingTip): boolean {
-  try {
-    return window.localStorage.getItem(keyFor(tip)) === 'true';
-  } catch {
-    return false;
-  }
+  return readStorage(keyFor(tip)) === 'true';
 }
 
 /** Local display preferences, independent of account setup completion. */
@@ -23,7 +28,7 @@ export function useDismissedOnboardingTip(tip: OnboardingTip) {
       if (detail.tip === tip) setDismissed(detail.dismissed);
     };
     const stored = (event: StorageEvent) => {
-      if (event.key === null || event.key === keyFor(tip))
+      if (event.key === null || event.key === keyFor(tip).name)
         setDismissed(read(tip));
     };
     window.addEventListener(EVENT, changed);
@@ -34,12 +39,8 @@ export function useDismissedOnboardingTip(tip: OnboardingTip) {
     };
   }, [tip]);
   const update = (value: boolean) => {
-    try {
-      if (value) window.localStorage.setItem(keyFor(tip), 'true');
-      else window.localStorage.removeItem(keyFor(tip));
-    } catch {
-      /* Keep the preference for this mounted session. */
-    }
+    // A refused write keeps the preference for this mounted session.
+    writeStorage(keyFor(tip), value ? 'true' : null);
     setDismissed(value);
     window.dispatchEvent(
       new CustomEvent(EVENT, { detail: { tip, dismissed: value } }),

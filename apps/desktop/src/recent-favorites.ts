@@ -27,8 +27,7 @@
 import { useSyncExternalStore } from 'react';
 
 import type { Item, StoreRef } from './model';
-
-const STORAGE_KEY = 'foks.recentFavorites';
+import { STORAGE_KEYS, storedRecord } from './platform/device-storage';
 
 /** How many recently used items are kept. */
 export const RECENT_LIMIT = 10;
@@ -94,42 +93,20 @@ function parse(raw: string | null): RecentFavorites {
   }
 }
 
-function rawRecords(): string | null {
-  try {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem(STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function writeAll(value: RecentFavorites): void {
-  try {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
-  } catch {
-    return;
-  }
-}
-
-let cached: { raw: string | null; value: RecentFavorites } | undefined;
-const listeners = new Set<() => void>();
+const stored = storedRecord(STORAGE_KEYS.recentFavorites, parse, (value) =>
+  JSON.stringify(value),
+);
 
 /**
  * The current lists. The value is reused while the stored text is unchanged,
  * so React can compare snapshots by identity.
  */
 export function recentFavorites(): RecentFavorites {
-  const raw = rawRecords();
-  if (!cached || cached.raw !== raw) cached = { raw, value: parse(raw) };
-  return cached.value;
+  return stored.read();
 }
 
 export function subscribeRecentFavorites(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+  return stored.subscribe(listener);
 }
 
 /** The current lists, re-read whenever one of them changes. */
@@ -142,8 +119,7 @@ export function useRecentFavorites(): RecentFavorites {
 }
 
 function update(change: (current: RecentFavorites) => RecentFavorites): void {
-  writeAll(change(recentFavorites()));
-  for (const listener of listeners) listener();
+  stored.write(change(recentFavorites()));
 }
 
 /** Moves the item to the head of Recent, keeping {@link RECENT_LIMIT}. */
