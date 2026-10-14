@@ -232,9 +232,10 @@ arguments. `list_catalog` returns profiles, stores, items, failures and
 `blockedProfiles`; `list_servers`, `list_parties` and `list_federation` supply
 the other facts needed by the Phase 2 shell; `read_item`,
 `copy_item_value`, `copy_item_path` and `download_file` take
-`{storeId, path, version}`. `tests/bridge.test.ts` pins the decoder side and
-the Rust command tests pin serialization so a drift fails on one side or the
-other.
+`{storeId, path, version}`, and `copy_item_field` takes the same plus
+`field` (`password`, `username`, `url` or `value`). `tests/bridge.test.ts`
+pins the decoder side and the Rust command tests pin serialization so a drift
+fails on one side or the other.
 
 Phase 3 adds `create_text_item`, `create_link`, `edit_text_item`,
 `remove_item`, dropped/native-picker file import and exact-version file

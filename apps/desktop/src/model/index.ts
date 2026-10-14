@@ -7,6 +7,7 @@
 export * from './types';
 export * from './roles';
 export * from './kinds';
+export * from './login';
 export * from './readers';
 export * from './format';
 export * from './lease';

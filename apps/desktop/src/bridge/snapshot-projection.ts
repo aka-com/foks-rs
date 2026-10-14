@@ -925,10 +925,14 @@ async function projectCatalogCounted(
   }
   const items: Item[] = response.items
     .filter((item) => availableStores.has(item.store))
-    .map((item) => ({
-      ...(bridge.native ? {} : baseItems.get(itemKey(item))),
-      ...item,
-    }));
+    .map((item) => {
+      // Every field comes from the response, as in production; only a mock
+      // Link keeps its fixture target, which no catalog response carries.
+      const target = bridge.native
+        ? undefined
+        : baseItems.get(itemKey(item))?.target;
+      return target === undefined ? { ...item } : { ...item, target };
+    });
   const itemKeys = new Set(items.map(itemKey));
   for (const item of base?.items ?? []) {
     const store = storesById.get(item.store);
@@ -944,7 +948,6 @@ async function projectCatalogCounted(
     )
       continue;
     const metadata = { ...item };
-    delete metadata.value;
     delete metadata.target;
     items.push(bridge.native ? metadata : item);
   }

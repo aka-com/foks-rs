@@ -29,9 +29,12 @@ import {
   fmtSize,
   formatRole,
   initials,
-  isLogin,
   kindLabel,
   kindOf,
+  LOGIN_FIELDS,
+  loginField,
+  loginFieldOf,
+  loginLines,
   nameOf,
   parseRole,
   partiesOf,
@@ -44,15 +47,27 @@ import {
   storeOf,
   usernameOf,
 } from '../model';
-import type { Item, Party, RoleWire, Store, AgentSnapshot } from '../model';
+import type {
+  Item,
+  LoginFieldName,
+  Party,
+  RoleWire,
+  Store,
+  AgentSnapshot,
+} from '../model';
 import { AccountMark } from './account-switcher';
 import type { NavigationGuard, Selection } from '../location';
 import { useNavigationGuard } from '../navigation-guard';
 import { normalizeCommandError } from '../bridge';
-import type { Bridge, ItemRequest, ReadItemResponse } from '../bridge';
+import type {
+  Bridge,
+  ItemField,
+  ItemRequest,
+  ReadItemResponse,
+} from '../bridge';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import { editableValue } from './edit-value';
+import { COPIED, copyItem, missingFieldMessage } from './item-copy';
 import { itemActionProblem } from './store-access';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 
@@ -61,7 +76,15 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   username: 'User name',
   password: 'Password',
   url: 'Website',
+  website: 'Website',
   ssid: 'Network',
+};
+
+/** The accessible name of each login field's Copy button. */
+const COPY_LABELS: Readonly<Record<LoginFieldName, string>> = {
+  username: 'Copy user name',
+  password: 'Copy password',
+  url: 'Copy website',
 };
 
 const MASK = '••••••••••••';
@@ -131,42 +154,41 @@ function parseFields(value: string): [string | null, string][] {
   });
 }
 
-interface PasswordField {
-  field: string | null;
-  value: string;
-  secret: boolean;
+/** One row of a login's Fields section. */
+interface LoginRow {
+  /** Identifies the row's Show state: a login field, or `line:<index>`. */
+  id: string;
+  label: string;
+  /** The field the host copies for this row; null for other lines. */
+  field: LoginFieldName | null;
+  /** Null before a read, and for a login field the text lacks. */
+  value: string | null;
 }
 
 /**
- * Maps raw or masked password values to displayable field rows.
+ * The rows a login lists: user name, password and website always, each
+ * masked until shown, then after a read any other line, such as a Wi-Fi
+ * network name, in stored order. Values come from `loginField`, the parser
+ * the host's field copy follows, so a row and its Copy agree.
  */
-function passwordFields(
-  masked: string | undefined,
-  shown: string | null,
-): PasswordField[] {
-  if (shown !== null) {
-    const learned = parseFields(shown);
-    if (learned.some(([field]) => field === 'password')) {
-      return learned.map(([field, value]) => ({
-        field,
-        value,
-        secret: field === 'password',
-      }));
-    }
-    if (!masked) return [{ field: null, value: shown, secret: true }];
-    return parseFields(masked).map(([field, value]) => ({
-      field,
-      value: field === 'password' ? shown : value,
-      secret: field === 'password',
-    }));
-  }
-  if (!masked)
-    return [{ field: 'password', value: '••••••••••', secret: true }];
-  return parseFields(masked).map(([field, value]) => ({
+function loginRows(shown: string | null): LoginRow[] {
+  const rows: LoginRow[] = LOGIN_FIELDS.map((field) => ({
+    id: field,
+    label: FIELD_LABELS[field] ?? field,
     field,
-    value: field === 'password' ? '••••••••••' : value,
-    secret: field === 'password',
+    value: shown === null ? null : loginField(shown, field),
   }));
+  if (shown === null) return rows;
+  loginLines(shown).forEach(({ key, value }, index) => {
+    if (loginFieldOf(key) !== null || !value) return;
+    rows.push({
+      id: `line:${index}`,
+      label: key === null ? 'Text' : (FIELD_LABELS[key] ?? key),
+      field: null,
+      value,
+    });
+  });
+  return rows;
 }
 
 /** Renders the store icon or avatar, matching the style used in the browser tree and list rows. */
@@ -307,6 +329,9 @@ export function DetailsPanel({
     | { key: string; state: 'error'; message: string }
     | null
   >(null);
+  // The login rows shown while `read` holds the text; any other row stays
+  // masked. Meaningless while nothing is shown.
+  const [revealed, setRevealed] = useState<readonly string[]>([]);
   const toasts = useToast();
   const accessDescriptionId = useId();
   const [editing, setEditing] = useState(false);
@@ -487,7 +512,12 @@ export function DetailsPanel({
     const requested = revealRequest === `${item.store}|${item.path}`;
     if (!requested) return;
     onRevealHandled?.();
-    if (read?.key !== key) void show();
+    // Reveal on a login shows its password, the field the list offers.
+    const current = read?.key === key;
+    setRevealed((fields) =>
+      current ? [...new Set([...fields, 'password'])] : ['password'],
+    );
+    if (!current) void show();
   }, [item, key, onRevealHandled, read?.key, revealRequest, show]);
 
   // Revealed values and plaintext edit drafts are covered without abandoning
@@ -500,7 +530,7 @@ export function DetailsPanel({
       if (
         editing &&
         item &&
-        !isLogin(item) &&
+        kindOf(item) !== 'Password' &&
         item.kind !== 'File' &&
         !binaryFile
       )
@@ -557,8 +587,9 @@ export function DetailsPanel({
   useEffect(() => {
     if (editing || !focusActionsOnClose.current) return;
     focusActionsOnClose.current = false;
+    // Back to Edit, the control that opened the editor.
     editorRef.current
-      ?.querySelector<HTMLElement>('.detail-actions button')
+      ?.querySelector<HTMLElement>('.detail-actions [data-edit-action]')
       ?.focus();
   }, [editing]);
 
@@ -692,14 +723,30 @@ export function DetailsPanel({
     !readProblem && activeRead?.state === 'shown' ? activeRead.value : null;
   const readError = activeRead?.state === 'error' ? activeRead.message : null;
   const reading = activeRead?.state === 'loading';
-  const copyValue = async (): Promise<void> => {
-    if (!request || !requireAccess()) return;
+  const copyField = async (field: ItemField): Promise<void> => {
+    if (!requireAccess()) return;
     try {
-      await bridge.copyItemValue(request);
-      toasts.show(`${kind === 'Password' ? 'Password' : 'Value'} copied`);
+      await copyItem(bridge, item, field);
+      toasts.show(COPIED[field]);
     } catch (error) {
-      onCommandError(error, item);
+      const missing = missingFieldMessage(error);
+      if (missing) toasts.show(missing, { tone: 'warning' });
+      else onCommandError(error, item);
     }
+  };
+  // Showing one login row reads the item once; the text then stays in
+  // `read` while any row is shown, and later rows reveal without a read.
+  const showRow = (id: string): void => {
+    const held = shownValue !== null || reading;
+    setRevealed((fields) => (held ? [...new Set([...fields, id])] : [id]));
+    if (!held) void show();
+  };
+  const hideRow = (id: string): void => {
+    const remaining = revealed.filter((field) => field !== id);
+    setRevealed(remaining);
+    if (remaining.length) return;
+    concealEpoch.current += 1;
+    setRead(null);
   };
 
   const beginEdit = async (): Promise<void> => {
@@ -733,7 +780,7 @@ export function DetailsPanel({
       );
       assertExactRead(request, response);
       if (!current()) return;
-      const opened = editableValue(item, response.value);
+      const opened = response.value;
       setEditValue(opened);
       setEditContentConcealed(false);
       editBaseline.current = opened;
@@ -821,7 +868,8 @@ export function DetailsPanel({
     }
   };
 
-  const editFields = editing && isLogin(item) ? parseFields(editValue) : [];
+  const editFields =
+    editing && kind === 'Password' ? parseFields(editValue) : [];
   const updateEditField = (index: number, value: string): void => {
     setEditValue(
       editFields
@@ -834,7 +882,7 @@ export function DetailsPanel({
   };
 
   const preview =
-    inlineEditing && isLogin(item) ? (
+    inlineEditing && kind === 'Password' ? (
       <Inset className="edit">
         {editFields.map(([field, value], index) => {
           const secret = field?.toLowerCase() === 'password';
@@ -905,83 +953,74 @@ export function DetailsPanel({
       </Inset>
     ) : kind === 'Password' && !fileMode ? (
       <Inset variant="preview">
-        {passwordFields(item.value, shownValue).map(
-          ({ field, value, secret }, index) =>
-            secret ? (
-              <InsetRow
-                key={index}
-                label={FIELD_LABELS[field ?? ''] ?? field ?? 'Value'}
-                className="rev"
-                valueClass={shownValue === null ? 'mask' : 'value-text'}
-                action={
-                  shownValue === null ? (
-                    <>
-                      <button
-                        className="value-action"
-                        aria-label={reading ? 'Reading…' : 'Show'}
-                        type="button"
-                        disabled={reading || Boolean(readProblem)}
-                        title={readProblem ?? (reading ? 'Reading…' : 'Show')}
-                        aria-describedby={
-                          readProblem ? accessDescriptionId : undefined
-                        }
-                        onClick={() => void show()}
-                      >
-                        <Icon name="eye" />
-                      </button>
-                      <button
-                        className="value-action"
-                        aria-label="Copy"
-                        type="button"
-                        disabled={Boolean(readProblem)}
-                        title={readProblem ?? 'Copy'}
-                        aria-describedby={
-                          readProblem ? accessDescriptionId : undefined
-                        }
-                        onClick={() => void copyValue()}
-                      >
-                        <Icon name="copy" />
-                      </button>
-                    </>
+        {loginRows(shownValue).map(({ id, label, field, value }) => {
+          const visible = shownValue !== null && revealed.includes(id);
+          const name = label.toLowerCase();
+          const absent = shownValue !== null && field !== null && !value;
+          return (
+            <InsetRow
+              key={id}
+              label={label}
+              className="rev"
+              valueClass={visible ? 'value-text' : 'mask'}
+              action={
+                <>
+                  {visible ? (
+                    <button
+                      title="Hide"
+                      className="value-action"
+                      aria-label={`Hide ${name}`}
+                      type="button"
+                      onClick={() => hideRow(id)}
+                    >
+                      <Icon name="eyeOff" />
+                    </button>
                   ) : (
-                    <>
-                      <button
-                        title="Hide"
-                        className="value-action"
-                        aria-label="Hide"
-                        type="button"
-                        onClick={() => {
-                          concealEpoch.current += 1;
-                          setRead(null);
-                        }}
-                      >
-                        <Icon name="eyeOff" />
-                      </button>
-                      <button
-                        className="value-action"
-                        aria-label="Copy"
-                        type="button"
-                        disabled={Boolean(readProblem)}
-                        title={readProblem ?? 'Copy'}
-                        aria-describedby={
-                          readProblem ? accessDescriptionId : undefined
-                        }
-                        onClick={() => void copyValue()}
-                      >
-                        <Icon name="copy" />
-                      </button>
-                    </>
-                  )
-                }
-              >
-                {shownValue === null ? MASK : value}
-              </InsetRow>
-            ) : (
-              <InsetRow key={index} label={FIELD_LABELS[field ?? ''] ?? field}>
-                {value}
-              </InsetRow>
-            ),
-        )}
+                    <button
+                      className="value-action"
+                      aria-label={reading ? 'Reading…' : `Show ${name}`}
+                      type="button"
+                      disabled={reading || Boolean(readProblem)}
+                      title={readProblem ?? (reading ? 'Reading…' : 'Show')}
+                      aria-describedby={
+                        readProblem ? accessDescriptionId : undefined
+                      }
+                      onClick={() => showRow(id)}
+                    >
+                      <Icon name="eye" />
+                    </button>
+                  )}
+                  {field ? (
+                    <button
+                      className="value-action"
+                      aria-label={COPY_LABELS[field]}
+                      type="button"
+                      disabled={Boolean(readProblem) || absent}
+                      title={
+                        readProblem ??
+                        (absent ? `No ${name} saved` : COPY_LABELS[field])
+                      }
+                      aria-describedby={
+                        readProblem ? accessDescriptionId : undefined
+                      }
+                      onClick={() => void copyField(field)}
+                    >
+                      <Icon name="copy" />
+                    </button>
+                  ) : null}
+                </>
+              }
+            >
+              {!visible ? (
+                MASK
+              ) : value ? (
+                value
+              ) : (
+                <span className="dim">Not set</span>
+              )}
+            </InsetRow>
+          );
+        })}
       </Inset>
     ) : kind === 'Document' && !fileMode ? (
       <Inset variant="preview">
@@ -1014,7 +1053,7 @@ export function DetailsPanel({
                   aria-describedby={
                     readProblem ? accessDescriptionId : undefined
                   }
-                  onClick={() => void copyValue()}
+                  onClick={() => void copyField('value')}
                 >
                   <Icon name="copy" />
                 </button>
@@ -1042,7 +1081,7 @@ export function DetailsPanel({
                   aria-describedby={
                     readProblem ? accessDescriptionId : undefined
                   }
-                  onClick={() => void copyValue()}
+                  onClick={() => void copyField('value')}
                 >
                   <Icon name="copy" />
                 </button>
@@ -1132,7 +1171,22 @@ export function DetailsPanel({
                   Download
                 </Button>
               ) : null}
+              {displayKind === 'Password' && !fileMode ? (
+                <Button
+                  variant="primary"
+                  icon="copy"
+                  disabled={Boolean(readProblem)}
+                  title={readProblem ?? 'Copy only the password'}
+                  aria-describedby={
+                    readProblem ? accessDescriptionId : undefined
+                  }
+                  onClick={() => void copyField('password')}
+                >
+                  Copy password
+                </Button>
+              ) : null}
               <Button
+                data-edit-action
                 icon={fileMode ? 'refresh' : 'pencil'}
                 disabled={Boolean(writeProblem) || saving}
                 title={

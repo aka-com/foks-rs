@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createElement, useSyncExternalStore } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import type { AgentSnapshot, Item } from '../src/model';
-import type { ItemRequest } from '../src/bridge';
+import type { CopyFieldRequest, ItemRequest } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -52,18 +52,25 @@ async function mount(accessNow?: () => number) {
     ...INITIAL_STATE,
     location: { kind: 'all' },
   });
-  const copies: ItemRequest[] = [];
+  // Every copy requested, with the field it asked for; `value` is the whole
+  // text through copyItemValue.
+  const copies: CopyFieldRequest[] = [];
   const downloads: ItemRequest[] = [];
   const reveals: Item[] = [];
   const deletions: Item[] = [];
   const failures: unknown[] = [];
   const folders: { storeId: string; path: string }[] = [];
   const teamInfo: string[] = [];
+  const base = mockBridge(FIXTURE);
   const bridge = {
-    ...mockBridge(FIXTURE),
+    ...base,
     copyItemValue: async (request: ItemRequest) => {
-      copies.push(request);
+      copies.push({ ...request, field: 'value' });
       return { ok: true as const };
+    },
+    copyItemField: async (request: CopyFieldRequest) => {
+      copies.push(request);
+      return base.copyItemField(request);
     },
     downloadFile: async (request: ItemRequest) => {
       downloads.push(request);
@@ -134,9 +141,18 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
   assert.equal(mounted.locations.getSnapshot().selection, null);
   assert.equal(mounted.copies.length, 0);
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Download' }), null);
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Copy' }));
+  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Copy value' }), null);
+  assert.ok(ui.screen.getByRole('menuitem', { name: 'Copy user name' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Copy password' }),
+  );
   assert.deepEqual(mounted.copies, [
-    { storeId: 'acct:personal', path: '/logins/github.com', version: 9 },
+    {
+      storeId: 'acct:personal',
+      path: '/logins/github.com',
+      version: 9,
+      field: 'password',
+    },
   ]);
   assert.equal(ui.screen.queryByRole('menu'), null);
   await ui.waitFor(() => assert.ok(document.activeElement === password));
@@ -149,11 +165,68 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
     path: '/logins/github.com',
   });
 
+  ui.fireEvent.contextMenu(row('DATABASE_URL'));
+  assert.equal(
+    ui.screen.queryByRole('menuitem', { name: 'Copy password' }),
+    null,
+  );
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Copy value' }));
+  assert.equal(mounted.copies[1]?.field, 'value');
+  assert.equal(mounted.copies[1]?.path, '/env/prod/DATABASE_URL');
+
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Copy' }), null);
+  assert.equal(
+    ui.screen.queryAllByRole('menuitem', { name: /^Copy/ }).length,
+    0,
+  );
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Download' }));
   assert.equal(mounted.downloads[0]?.path, '/documents/passport-scan.pdf');
   assert.equal(mounted.failures.length, 0);
+});
+
+test('row copies name the field, and a login without it gets a warning', async () => {
+  const mounted = await mount();
+  const github = row('github.com');
+  ui.fireEvent.click(
+    ui.within(github).getByRole('button', {
+      name: 'Copy user name github.com',
+    }),
+  );
+  await ui.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /User name copied/),
+  );
+  // The guest network stores a network name and a password, no user name.
+  ui.fireEvent.click(
+    ui.within(row('guest-password')).getByRole('button', {
+      name: 'Copy user name guest-password',
+    }),
+  );
+  await ui.waitFor(() =>
+    assert.match(
+      document.body.textContent ?? '',
+      /This item has no user name\./,
+    ),
+  );
+  assert.deepEqual(
+    mounted.copies.map(({ path, field }) => [path, field]),
+    [
+      ['/logins/github.com', 'username'],
+      ['/wifi/guest-password', 'username'],
+    ],
+  );
+  assert.equal(mounted.failures.length, 0);
+  // A text Document offers its whole value instead.
+  assert.ok(
+    ui.within(row('DATABASE_URL')).getByRole('button', {
+      name: 'Copy value DATABASE_URL',
+    }),
+  );
+  assert.equal(
+    ui.within(row('DATABASE_URL')).queryByRole('button', {
+      name: 'Copy password DATABASE_URL',
+    }),
+    null,
+  );
 });
 
 test('details and deletion target the context item, not the current selection', async () => {
@@ -226,7 +299,7 @@ test('read actions recheck a lease that expires while the menu is open', async (
   assert.equal(lease.status, 'required');
   if (lease.status !== 'required') return;
   ui.fireEvent.contextMenu(row('production-token'));
-  const copy = ui.screen.getByRole('menuitem', { name: 'Copy' });
+  const copy = ui.screen.getByRole('menuitem', { name: 'Copy value' });
   assert.equal(copy.getAttribute('aria-disabled'), null);
   now = lease.expiresAt + 1;
   ui.fireEvent.click(copy);
@@ -316,9 +389,12 @@ test('grid cards keep item selection, quick actions, and keyboard context menus'
   ui.fireEvent.keyDown(password, { key: ' ' });
   assert.equal(password.getAttribute('aria-pressed'), 'true');
   ui.fireEvent.click(
-    ui.within(password).getByRole('button', { name: 'Copy github.com' }),
+    ui.within(password).getByRole('button', {
+      name: 'Copy password github.com',
+    }),
   );
   assert.equal(mounted.copies[0]?.path, '/logins/github.com');
+  assert.equal(mounted.copies[0]?.field, 'password');
   ui.fireEvent.keyDown(password, { key: 'F10', shiftKey: true });
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Reveal' }));
   assert.equal(mounted.reveals[0]?.path, '/logins/github.com');

@@ -2,8 +2,13 @@
  * Client-side item classification and display metadata.
  *
  * Classifies filesystem nodes into two user-facing product kinds:
- *   - Password: Secret node containing a password field or located under `/logins/`
+ *   - Password: Secret node the agent's listing reports as `shape: 'login'`
+ *     (a `password:` line), or, when no shape was reported, one under `/logins/`
  *   - Document: any other Secret node, and every File node
+ *
+ * The shape is computed by the agent from plaintext it opens during the
+ * listing and then discards, so a login saved in any folder is a Password
+ * without the renderer reading it, and no field value reaches the catalog.
  *
  * The v0.1.9 KV format stores every value up to 2,040 bytes as one `small-file`
  * node whether it was typed into the app or brought in from disk, so a note
@@ -48,21 +53,21 @@ export function kindLabel(kind: keyof typeof KINDS): string {
 /** The filter order the kind segmented control uses. */
 export const KIND_LIST = Object.keys(KINDS) as (keyof typeof KINDS)[];
 
-const PASSWORD_LINE = /^password:/m;
-
 /** The kind a person reads this item as. */
-export function kindOf(item: Pick<Item, 'kind' | 'path' | 'value'>): ItemKind {
+export function kindOf(item: Pick<Item, 'kind' | 'path' | 'shape'>): ItemKind {
   if (item.kind === 'Folder') return 'Folder';
   if (
     item.kind === 'Secret' &&
-    (PASSWORD_LINE.test(item.value ?? '') || item.path.startsWith('/logins/'))
+    (item.shape === undefined
+      ? item.path.startsWith('/logins/')
+      : item.shape === 'login')
   )
     return 'Password';
   return 'Document';
 }
 
 /** A Password that is also filed under `/logins/` — the site-tile case. */
-export function isLogin(item: Pick<Item, 'kind' | 'path' | 'value'>): boolean {
+export function isLogin(item: Pick<Item, 'kind' | 'path' | 'shape'>): boolean {
   return kindOf(item) === 'Password' && item.path.startsWith('/logins/');
 }
 

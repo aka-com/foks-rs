@@ -5,6 +5,8 @@
  * corresponding to the backend agent command schema.
  */
 
+import type { ItemShape } from './login';
+
 /* ---------------------------------------------------------------- roles -- */
 
 /**
@@ -91,8 +93,11 @@ export interface Item {
   version: number;
   read: RoleWire;
   write: RoleWire;
-  /** Masked placeholder shown before Show; absent on File and Folder nodes. */
-  value?: string;
+  /**
+   * Whether a Secret holds a login, as the agent's listing reported it.
+   * Absent when no listing classified it; the value itself is never here.
+   */
+  shape?: ItemShape;
   /** Symlink target, on a Link. */
   target?: string;
 }

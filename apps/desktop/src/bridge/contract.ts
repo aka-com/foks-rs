@@ -64,6 +64,7 @@ import type {
 } from './servers';
 import type {
   CatalogDto,
+  CopyFieldRequest,
   CopyResponse,
   CreateFolderRequest,
   CreateLinkRequest,
@@ -200,6 +201,12 @@ export interface Bridge {
   listFederation(storeId: StoreRef): Promise<FederationEntry[]>;
   readItem(request: ItemRequest): Promise<ReadItemResponse>;
   copyItemValue(request: ItemRequest): Promise<CopyResponse>;
+  /**
+   * Copies one field of an item, such as only a login's password. The host
+   * reads and parses the item; a field the item lacks fails with
+   * `field-missing`.
+   */
+  copyItemField(request: CopyFieldRequest): Promise<CopyResponse>;
   copyItemPath(request: ItemRequest): Promise<CopyResponse>;
   downloadFile(request: ItemRequest): Promise<DownloadResponse>;
   createTextItem(request: CreateTextRequest): Promise<MutationResponse>;
