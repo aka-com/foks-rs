@@ -7,6 +7,7 @@ import { kindOf } from '../model';
 import type { Item } from '../model';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, CopyResponse, ItemField } from '../bridge';
+import { itemRefOf, rememberRecent } from '../recent-favorites';
 
 /** A copy an item offers, labelled for its button and menu item. */
 export interface CopyAction {
@@ -42,9 +43,10 @@ export const COPIED: Readonly<Record<ItemField, string>> = {
 /**
  * Copies one field of the item's current version. A login field is parsed
  * out by the host, so only that field reaches the clipboard; `value` copies
- * the whole stored text.
+ * the whole stored text. A completed copy puts the item at the head of the
+ * ⌘K palette's Recent list.
  */
-export function copyItem(
+export async function copyItem(
   bridge: Bridge,
   item: Item,
   field: ItemField,
@@ -54,9 +56,11 @@ export function copyItem(
     path: item.path,
     version: item.version,
   };
-  return field === 'value'
+  const response = await (field === 'value'
     ? bridge.copyItemValue(request)
-    : bridge.copyItemField({ ...request, field });
+    : bridge.copyItemField({ ...request, field }));
+  rememberRecent(itemRefOf(item));
+  return response;
 }
 
 /** The message for a copy refused because the item lacks the field. */

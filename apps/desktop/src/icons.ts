@@ -43,6 +43,7 @@ import Search from 'lucide/dist/esm/icons/search.mjs';
 import Send from 'lucide/dist/esm/icons/send.mjs';
 import Server from 'lucide/dist/esm/icons/server.mjs';
 import Settings from 'lucide/dist/esm/icons/settings.mjs';
+import Star from 'lucide/dist/esm/icons/star.mjs';
 import ShieldCheck from 'lucide/dist/esm/icons/shield-check.mjs';
 import Terminal from 'lucide/dist/esm/icons/terminal.mjs';
 import Trash from 'lucide/dist/esm/icons/trash.mjs';
@@ -102,6 +103,7 @@ export const FOKS_ICONS = {
   restore: Undo2,
   lock: Lock,
   dices: Dices,
+  star: Star,
 } as const satisfies Record<FoksIconName, IconNode>;
 
 export type { FoksIconName } from './icon-name';

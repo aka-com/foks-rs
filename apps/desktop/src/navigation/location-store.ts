@@ -420,6 +420,32 @@ export class LocationStore {
     );
   }
 
+  /**
+   * Opens `location` with `folder` open in its tree, as one guarded move, for
+   * the ⌘K palette's folder results. Navigating resets the open folder, so a
+   * separate `setFolder` after a navigation that a guard holds back would
+   * open the folder on the page the reader is still on.
+   */
+  navigateToFolder(
+    location: Location,
+    folder: string,
+    options: NavigateOptions = {},
+  ): void {
+    const apply = (): void => {
+      this.dispatch({
+        type: 'navigate',
+        location: this.accountLocation(location),
+        ...(options.replace ? { replace: true } : {}),
+      });
+      this.dispatch({ type: 'folder', folder });
+    };
+    this.guarded(
+      { kind: 'navigate', location: this.resolvedLocation(location) },
+      apply,
+      options,
+    );
+  }
+
   select(
     selection: Selection,
     options: GuardedOptions & { closeDetails?: boolean } = {},

@@ -3,8 +3,13 @@ import type { CollectionReadiness } from '../model';
 import { useMemo, type ReactNode } from 'react';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import type { Location } from '../location';
+import type { ItemField } from '../bridge';
 import type { AgentSnapshot } from '../model';
-import { SearchPalette, type SearchChannel } from '../shell/search-palette';
+import {
+  SearchPalette,
+  type SearchAction,
+  type SearchChannel,
+} from '../shell/search-palette';
 
 /**
  * Mounts the search palette inside the chat inbox provider to share cached
@@ -16,12 +21,18 @@ export function ShellSearch({
   onClose,
   onNavigate,
   onOpenItem,
+  onOpenFolder,
+  onCopyItem,
+  actions,
 }: {
   snapshot: AgentSnapshot;
   open: boolean;
   onClose: () => void;
   onNavigate: (location: Location) => void;
   onOpenItem: (store: string, path: string) => void;
+  onOpenFolder: (store: string, path: string) => void;
+  onCopyItem: (store: string, path: string, field: ItemField) => void;
+  actions: readonly SearchAction[];
 }): ReactNode {
   const inbox = useSidebarInbox();
   const channels = useMemo(() => {
@@ -44,6 +55,9 @@ export function ShellSearch({
       onClose={onClose}
       onNavigate={onNavigate}
       onOpenItem={onOpenItem}
+      onOpenFolder={onOpenFolder}
+      onCopyItem={onCopyItem}
+      actions={actions}
       channels={channels}
       channelReadiness={combineReadiness(
         snapshot.stores

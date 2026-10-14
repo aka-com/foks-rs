@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './icon';
+import { isMac } from './shortcut-label';
 
 export interface SearchFieldProps {
   value: string;
@@ -25,13 +26,6 @@ export interface SearchFieldProps {
   disabled?: boolean;
   /** Additional CSS class name for custom layout and positioning. */
   className?: string;
-}
-
-function isMac(): boolean {
-  if (typeof navigator === 'undefined') return true;
-  return /Mac|iPhone|iPad/i.test(
-    `${navigator.platform} ${navigator.userAgent}`,
-  );
 }
 
 export function SearchField({

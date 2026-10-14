@@ -127,7 +127,11 @@
   line-height: 1.3;
 }
 .pal-hit .t b {
+  display: block;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pal-hit .t b em {
   font-style: normal;
@@ -146,6 +150,29 @@
   flex: none;
   color: var(--muted);
   font-size: 12px;
+}
+/* A favorite's star, after its name */
+.pal-hit .t b .pal-star {
+  margin-left: 5px;
+  font-size: 12px;
+  vertical-align: -1px;
+  color: var(--amber-strong);
+  fill: currentColor;
+}
+/* The highlighted row's keys beyond Enter */
+.pal-keys {
+  flex: none;
+  display: inline-flex;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.pal-hit kbd {
+  font: 12px var(--sans);
+  background: var(--btn-bg);
+  border: 1px solid var(--line-mid);
+  border-radius: 4px;
+  padding: 0 5px;
 }
 .pal-none {
   margin: 0;
@@ -180,6 +207,11 @@
   border-radius: 4px;
   padding: 0 5px;
 }
-.pal-foot .grow {
+.pal-note {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
 }

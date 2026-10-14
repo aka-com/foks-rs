@@ -70,6 +70,12 @@ import type {
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { COPIED, copyItem, missingFieldMessage } from './item-copy';
+import {
+  isFavorite,
+  itemRefOf,
+  toggleFavorite,
+  useRecentFavorites,
+} from '../recent-favorites';
 import { itemActionProblem } from './store-access';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 
@@ -336,6 +342,7 @@ export function DetailsPanel({
   // masked. Meaningless while nothing is shown.
   const [revealed, setRevealed] = useState<readonly string[]>([]);
   const toasts = useToast();
+  const recentFavorites = useRecentFavorites();
   const accessDescriptionId = useId();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
@@ -1137,6 +1144,8 @@ export function DetailsPanel({
 
   const folderTrail = prefixOf(item.path).split('/').filter(Boolean);
   const where = [store?.name ?? item.store, ...folderTrail].join(' › ');
+  const itemRef = itemRefOf(item);
+  const favorite = isFavorite(recentFavorites, itemRef);
 
   return (
     <>
@@ -1151,6 +1160,18 @@ export function DetailsPanel({
             <h2>{nameOf(item.path)}</h2>
             <small title={displayPath(item.path)}>{where}</small>
           </span>
+          {itemRef ? (
+            <button
+              type="button"
+              className={favorite ? 'x fav on' : 'x fav'}
+              title={favorite ? 'Remove from favorites' : 'Add to favorites'}
+              aria-label="Favorite"
+              aria-pressed={favorite}
+              onClick={() => toggleFavorite(itemRef)}
+            >
+              <Icon name="star" />
+            </button>
+          ) : null}
           <button
             type="button"
             className="x"

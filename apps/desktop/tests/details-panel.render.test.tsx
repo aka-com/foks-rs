@@ -102,9 +102,13 @@ for (const kind of ['Secret', 'File'] as const) {
     };
     rendered.rerender(p.draw());
     const close = rendered.getByRole('button', { name: 'Close' });
+    // Favorite is a setting on this device and reads nothing from the vault.
+    const favorite = rendered.getByRole('button', { name: 'Favorite' });
     const actions = rendered
       .getAllByRole('button')
-      .filter((button) => button !== close) as HTMLButtonElement[];
+      .filter(
+        (button) => button !== close && button !== favorite,
+      ) as HTMLButtonElement[];
     assert.ok(actions.length > 0);
     for (const button of actions) {
       assert.equal(button.disabled, true);
@@ -115,8 +119,39 @@ for (const kind of ['Secret', 'File'] as const) {
       );
     }
     assert.equal((close as HTMLButtonElement).disabled, false);
+    assert.equal((favorite as HTMLButtonElement).disabled, false);
   });
 }
+
+test('the star adds the item to Favorites, and a copy to Recent', async () => {
+  window.localStorage.clear();
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  const r = ui.render(p.draw());
+  const star = r.getByRole('button', { name: 'Favorite' });
+  assert.equal(star.getAttribute('aria-pressed'), 'false');
+  assert.equal(star.title, 'Add to favorites');
+  ui.fireEvent.click(star);
+  assert.equal(star.getAttribute('aria-pressed'), 'true');
+  assert.equal(star.title, 'Remove from favorites');
+
+  ui.fireEvent.click(r.getAllByRole('button', { name: 'Copy password' })[0]);
+  await ui.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /Password copied/),
+  );
+  // Both lists name the item by its store and dirent id, not its path.
+  const ref = { store: 'acct:personal', dirent: p.subject.direntId };
+  assert.deepEqual(
+    JSON.parse(window.localStorage.getItem('foks.recentFavorites') ?? '{}'),
+    { recent: [ref], favorites: [ref] },
+  );
+
+  ui.fireEvent.click(star);
+  assert.equal(star.getAttribute('aria-pressed'), 'false');
+  window.localStorage.clear();
+});
 
 test('an open edit disables Save after access loss without discarding the draft or removing controls', async () => {
   const p = await setup(

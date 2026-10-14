@@ -1318,6 +1318,25 @@ test('an item opens its page and selects on it, or neither', async () => {
   });
 });
 
+test('a folder opens its page and its tree folder together, or neither', async () => {
+  const store = new LocationStore();
+  store.registerGuard(prompting());
+  const { answer, prompter } = prompts();
+  store.setPrompter(prompter);
+  store.navigateToFolder({ kind: 'store', ref: 'team:eng' }, '/deploy');
+  // The folder is not opened on the page the reader is still on.
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  assert.equal(store.getSnapshot().folder, '');
+  answer(0, true);
+  await settled();
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'store',
+    ref: 'team:eng',
+  });
+  // The navigation resets the folder; the folder arrives after it.
+  assert.equal(store.getSnapshot().folder, '/deploy');
+});
+
 test('a chat channel returns to its team inbox, whose back target is disabled', () => {
   const parent = parentLocation({
     kind: 'chat',

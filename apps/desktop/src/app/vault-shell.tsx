@@ -11,7 +11,8 @@ import {
 import { anyDialogOpen, OverlayProvider } from '/kit/overlay-primitives';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import type { AgentLifecycleController } from '../agent-lifecycle';
-import type { Bridge } from '../bridge';
+import type { Bridge, ItemField } from '../bridge';
+import { shortcutLabel } from '../components/shortcut-label';
 import { useChatMigration } from '../chat/migration';
 import { ChatInboxProvider } from '../chat/inbox-provider';
 import { DeviceCacheContext } from '../device-cache';
@@ -57,7 +58,14 @@ import {
 import { DetailsPanel } from '../screens/details-panel';
 import { FirstRunExperience } from '../screens/first-run-screen';
 import { unroutedNotices } from '../screens/account-section';
-import { ALL_ITEMS, folderSelection, listsItems } from '../screens/scope';
+import {
+  ALL_ITEMS,
+  folderKey,
+  folderSelection,
+  listsItems,
+} from '../screens/scope';
+import { COPIED, copyItem, missingFieldMessage } from '../screens/item-copy';
+import { itemActionProblem } from '../screens/store-access';
 import { teamRequestsBadge, useTeamRequestCounts } from '../operation-queries';
 import {
   initialWriteWorkflow,
@@ -65,6 +73,7 @@ import {
   type WriteWorkflow,
 } from '../screens/write-workflows';
 import { useSearchShortcut } from '../shell/search-palette';
+import type { SearchAction } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
 import { Topbar } from '../shell/topbar';
 import { requestNewChat } from '../screens/chat-tab';
@@ -481,7 +490,7 @@ export function VaultShell({
         : (document.getElementById('overlays') ?? document.body),
     [],
   );
-  const lockFromMenu = () => {
+  const lockFromMenu = useCallback(() => {
     void onLock().then(
       (locked) => {
         if (!locked)
@@ -489,27 +498,29 @@ export function VaultShell({
       },
       (error: unknown) => commandError(error),
     );
-  };
+  }, [commandError, onLock, toasts]);
 
   // Render takeover overlays as siblings of the main grid so they remain
   // interactive while the grid is inert. The adjacent rail and topbar use the
   // same disabled styling as `BlockedShell`.
   const block = shellBlock(agentLifecycle);
   const chrome = shellChrome(block, agentLifecycle.state, shown.agent.state);
-  const openNewItem = useCallback(
+  // New works on a Files page whose store this account can write, from ⌘N,
+  // the native menu and the palette's Actions alike.
+  const newItemStore =
+    !chrome.blocked &&
+    filesHere &&
+    newStore &&
+    !writeBlockReason(shown, newStore)
+      ? newStore
+      : null;
+  const startNewItem = useCallback(
     (itemKind: Exclude<KindFilter, 'All'>): boolean => {
-      if (
-        chrome.blocked ||
-        !filesHere ||
-        !newStore ||
-        writeBlockReason(shown, newStore) ||
-        anyDialogOpen()
-      )
-        return false;
+      if (!newItemStore) return false;
       setWorkflow({
         kind: 'new',
         itemKind,
-        storeId: newStore.id,
+        storeId: newItemStore.id,
         // Nothing is created in Trash; New saves at the vault's top level.
         ...(newSelection &&
         newSelection.path !== '/' &&
@@ -519,7 +530,76 @@ export function VaultShell({
       });
       return true;
     },
-    [chrome.blocked, filesHere, newSelection, newStore, setWorkflow, shown],
+    [newItemStore, newSelection, setWorkflow],
+  );
+  // The shortcut and the menu do not open a sheet over another dialog; the
+  // palette closes itself before its action runs.
+  const openNewItem = useCallback(
+    (itemKind: Exclude<KindFilter, 'All'>): boolean =>
+      !anyDialogOpen() && startNewItem(itemKind),
+    [startNewItem],
+  );
+  const paletteActions = useMemo(
+    (): SearchAction[] => [
+      ...(newItemStore
+        ? [
+            {
+              id: 'new-password',
+              label: 'New password',
+              detail: `A login, API key or any secret value in ${newItemStore.name}`,
+              icon: 'key' as const,
+              keys: shortcutLabel('N'),
+              run: () => void startNewItem('Password'),
+            },
+            {
+              id: 'new-document',
+              label: 'Add a document',
+              detail: `A file or a text value in ${newItemStore.name}`,
+              icon: 'upload' as const,
+              keys: shortcutLabel('N', true),
+              run: () => void startNewItem('Document'),
+            },
+          ]
+        : []),
+      {
+        id: 'lock',
+        label: 'Lock',
+        detail: 'Lock the app now',
+        icon: 'lock',
+        run: lockFromMenu,
+      },
+      {
+        id: 'settings',
+        label: 'Settings',
+        detail: 'Account, preferences and storage',
+        icon: 'settings',
+        run: () => locations.navigate({ kind: 'settings' }),
+      },
+    ],
+    [lockFromMenu, locations, newItemStore, startNewItem],
+  );
+  // ⌘C in the palette: the same checks and messages as a row's Copy.
+  const copyFromPalette = useCallback(
+    (storeId: string, path: string, field: ItemField): void => {
+      const item = shown.items.find(
+        (candidate) => candidate.store === storeId && candidate.path === path,
+      );
+      if (!item) return;
+      const problem = itemActionProblem(shown, item, false, accessNow());
+      if (problem) {
+        toasts.show(problem, { tone: 'warning' });
+        return;
+      }
+      void copyItem(bridge, item, field).then(
+        () => toasts.show(COPIED[field]),
+        (error: unknown) => {
+          const missing = missingFieldMessage(error);
+          if (missing) toasts.show(missing, { tone: 'warning' });
+          else commandError(error, item);
+        },
+      );
+    },
+    [accessNow, bridge, commandError, shown, toasts],
   );
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -841,6 +921,14 @@ export function VaultShell({
                 { store: storeId, path },
               )
             }
+            onOpenFolder={(storeId, path) =>
+              locations.navigateToFolder(
+                { kind: 'store', ref: storeId },
+                folderKey(true, storeId, path),
+              )
+            }
+            onCopyItem={copyFromPalette}
+            actions={paletteActions}
           />
         </ChatInboxProvider>
       </div>

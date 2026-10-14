@@ -593,6 +593,7 @@ details.dd li b{color:var(--ink-2)}
 .details .dh .kic{width:30px;height:30px;font-size:18px}
 .details .x{width:26px;height:26px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);flex:none}
 .details .x:hover{background:var(--hover)}
+.details .dh .fav.on{color:var(--amber-strong)}.details .dh .fav.on .ic{fill:currentColor}
 .details .scroll{flex:1;min-height:0;overflow:auto;padding:12px 16px 16px}
 .prev{padding:0;margin-bottom:4px}
 .prev .irow{display:flex;align-items:center;gap:8px;min-height:38px;padding:6px 12px;border-top:1px solid var(--line-soft);font-size:13px}
