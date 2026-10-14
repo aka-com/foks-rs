@@ -35,6 +35,7 @@ import {
   InsetRow,
   Notice,
   SectionLabel,
+  SecurityKeyPinField,
 } from './index';
 
 export function MembershipRequests({
@@ -469,16 +470,12 @@ export function MembershipRequests({
       ) : null}
       {needPin ? (
         <Inset className="form">
-          <InsetRow label="Security key PIN">
-            <input
-              type="password"
-              autoComplete="off"
-              maxLength={32}
-              value={pin}
-              disabled={busy}
-              onChange={(e) => setPin(e.target.value)}
-            />
-          </InsetRow>
+          <SecurityKeyPinField
+            value={pin}
+            disabled={busy}
+            onChange={setPin}
+            refusal={error}
+          />
         </Inset>
       ) : null}
       <SectionLabel

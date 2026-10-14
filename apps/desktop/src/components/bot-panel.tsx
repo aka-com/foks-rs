@@ -4,8 +4,19 @@ import type { WorkflowOperation } from '../model/workflow-availability';
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
+import {
+  securityKeyPinProblem,
+  validSecurityKeyPin,
+} from '../security-key-pin';
 import type { BotAction, BotEnrollment } from '../bot-contract';
-import { Button, Inset, InsetRow, PanelSheet, SegmentedControl } from './index';
+import {
+  Button,
+  Inset,
+  InsetRow,
+  PanelSheet,
+  SecurityKeyPinField,
+  SegmentedControl,
+} from './index';
 import type { PanelPresentation } from './index';
 
 type BotPane = 'enroll' | 'load' | 'revoke';
@@ -68,8 +79,10 @@ export function BotPanel({
       active.current = '';
     };
   }, [owner]);
+  // A PIN the card would refuse is not sent; the field names the problem.
+  const pinInvalid = securityKeyPinProblem(pin) !== null;
   const run = async (action: BotAction, selected = account) => {
-    if (busy) return;
+    if (busy || ('pin' in action && pinInvalid)) return;
     setBusy(true);
     setError('');
     const supplied = pin || null;
@@ -115,16 +128,13 @@ export function BotPanel({
   const visibilityValid =
     Number.isInteger(visibility) && visibility >= -32768 && visibility <= 32767;
   const pinField = (
-    <InsetRow label="Security key PIN (enrolled keys only)">
-      <input
-        type="password"
-        autoComplete="off"
-        value={pin}
-        maxLength={32}
-        disabled={busy}
-        onChange={(e) => setPin(e.target.value)}
-      />
-    </InsetRow>
+    <SecurityKeyPinField
+      label="Security key PIN (enrolled keys only)"
+      value={pin}
+      disabled={busy}
+      onChange={setPin}
+      refusal={error}
+    />
   );
   const paneActions: ReactNode =
     pane === 'enroll' ? (
@@ -139,7 +149,12 @@ export function BotPanel({
         <Button
           variant="primary"
           title={eligibility('prepare').title}
-          disabled={busy || eligibility('prepare').disabled || !visibilityValid}
+          disabled={
+            busy ||
+            eligibility('prepare').disabled ||
+            !visibilityValid ||
+            pinInvalid
+          }
           onClick={() =>
             void run({
               action: 'prepare',
@@ -177,7 +192,7 @@ export function BotPanel({
       <Button
         variant="danger"
         title={eligibility('revoke').title}
-        disabled={busy || eligibility('revoke').disabled}
+        disabled={busy || eligibility('revoke').disabled || pinInvalid}
         onClick={() => {
           setRevokeConfirmed(false);
           void run({ action: 'revoke', device_id: target, pin: null });
@@ -327,7 +342,7 @@ export function BotPanel({
                   disabled={
                     busy ||
                     eligibility('attempt').disabled ||
-                    (p.hardware_required && !pin)
+                    (p.hardware_required && !validSecurityKeyPin(pin))
                   }
                   onClick={() =>
                     void run({
@@ -361,7 +376,7 @@ export function BotPanel({
                 disabled={
                   busy ||
                   eligibility('status').disabled ||
-                  (p.hardware_required && !pin)
+                  (p.hardware_required && !validSecurityKeyPin(pin))
                 }
                 onClick={() =>
                   void run({

@@ -3,6 +3,7 @@ import type {
   ProvisionYubiDeviceRequest,
   YubiCommand,
 } from '../../bridge';
+import { validSecurityKeyRetries } from '../../security-key-pin';
 
 export function createEnrollmentCommand(
   draft: Omit<CreateYubiAccountRequest, 'email'>,
@@ -49,7 +50,5 @@ export function validEnrollmentAttempts(
   pinAttempts: number,
   pukAttempts: number,
 ): boolean {
-  return [pinAttempts, pukAttempts].every(
-    (attempts) => Number.isInteger(attempts) && attempts > 0 && attempts <= 255,
-  );
+  return [pinAttempts, pukAttempts].every(validSecurityKeyRetries);
 }

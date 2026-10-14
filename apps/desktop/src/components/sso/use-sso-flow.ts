@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Bridge } from '../../bridge';
 import { normalizeCommandError } from '../../bridge';
+import { securityKeyPinProblem } from '../../security-key-pin';
 import type { SsoAction, SsoProgress } from '../../sso-contract';
 import { useWorkflowAccess } from '../../workflow-context';
 
@@ -219,7 +220,10 @@ export function useSsoFlow({
     );
   const serialValid = /^[1-9][0-9]{0,9}$/.test(serial);
   const beginDisabled =
-    blocked || resumeOnly || (!login && hardware && (!serialValid || !pin));
+    blocked ||
+    resumeOnly ||
+    (hardware && securityKeyPinProblem(pin) !== null) ||
+    (!login && hardware && (!serialValid || !pin));
   const hardwareRequired = progress?.state === 'hardware-verification-required';
   const browserAvailable = Boolean(operation?.browserAvailable);
 

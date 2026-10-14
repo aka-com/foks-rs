@@ -86,7 +86,13 @@ named team it administers, picked from a list), then the sent request with
 its state. Request membership prepares and submits in one press; a request
 that stays prepared, or whose submission went unanswered, is finished from
 the sheet's Resume a pending request list. A security key PIN is asked for
-only when the agent requires one. A group that needs attention says so on its own row,
+only when the agent requires one. Every security-key PIN and PUK input is the
+shared `SecurityKeyPinField`, which names a value outside the `foks_yubi` rule
+(six to eight printable ASCII characters) before it is sent; enrollment retry
+counts are limited to the same one to fifteen attempts. The agent reports a
+refused or blocked PIN only as `operation-failed` text, so the field reads the
+remaining attempts from that text and states them, or that the PIN is blocked,
+under the input instead of asking for the PIN as if none had been tried. A group that needs attention says so on its own row,
 not a second time under it. On the team page, everything that did not finish
 is one band: it counts the incomplete membership changes (interrupted member
 additions and role changes, invitations left unsent, approvals cut short) and

@@ -19,6 +19,7 @@ export * from './radio-card';
 export * from './search-field';
 export * from './sheet';
 export * from './section-label';
+export * from './security-key-pin-field';
 export * from './segmented-control';
 export * from './tabs';
 export * from './toggle';

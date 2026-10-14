@@ -455,6 +455,101 @@ test('Invite new user asks for the security key PIN only when the key requires i
   assert.deepEqual(received.at(-1), ['attempt', '123456']);
 });
 
+test('Invite new user keeps a PIN refusal and states the attempts left', async () => {
+  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
+    '/src/components/invite-new-user-sheet.tsx',
+  )) as typeof import('../src/components/invite-new-user-sheet');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const team = FIXTURE.stores.find(
+    (store): store is TeamStore => store.kind === 'team',
+  );
+  assert.ok(team);
+  const received: Array<string | null> = [];
+  const operation = { operation_id: 'd'.repeat(32), state: 'prepared' };
+  // The agent reports a refused PIN as `operation-failed` with the
+  // foks_yubi error text.
+  const refusals = [
+    'Hardware key PIN was rejected; 1 attempt(s) remain',
+    'Hardware key PIN is blocked',
+  ];
+  const bridge = {
+    ...mockBridge(FIXTURE),
+    invitation: async (
+      _p: string,
+      _a: string,
+      a: InvitationAction,
+      pin: string | null,
+    ): Promise<InvitationReply> => {
+      if (a.action === 'list') return [];
+      if (a.action === 'create') return operation;
+      received.push(pin);
+      if (!pin) return { ...operation, hardware_required: true };
+      throw {
+        code: 'operation-failed',
+        message: refusals.shift(),
+        retryable: false,
+        ambiguous: false,
+        fatal: false,
+      };
+    },
+  };
+  const r = ui.render(
+    await overlay(
+      createElement(InviteNewUserSheet, {
+        bridge,
+        team,
+        serverLabel: 'Example',
+        onClose: () => {},
+      }),
+    ),
+  );
+  ui.fireEvent.click(r.getByText('Create invitation'));
+  await ui.waitFor(() => assert.ok(r.getByLabelText('Security key PIN')));
+  const finish = () => r.getByText('Finish creating').closest('button')!;
+
+  // A value the card would refuse is named and not sent.
+  ui.fireEvent.change(r.getByLabelText('Security key PIN'), {
+    target: { value: '12345' },
+  });
+  assert.ok(r.getByText('Use 6 to 8 characters.'));
+  assert.equal(finish().disabled, true);
+
+  ui.fireEvent.change(r.getByLabelText('Security key PIN'), {
+    target: { value: '111111' },
+  });
+  assert.equal(finish().disabled, false);
+  ui.fireEvent.click(finish());
+  await ui.waitFor(() =>
+    assert.equal(
+      r.getByRole('alert').textContent,
+      'Hardware key PIN was rejected; 1 attempt(s) remain',
+    ),
+  );
+  const note = r.getByText(/^1 attempt left\. Another incorrect PIN blocks/);
+  assert.equal(
+    r.getByLabelText('Security key PIN').getAttribute('aria-describedby'),
+    note.id,
+  );
+
+  ui.fireEvent.change(r.getByLabelText('Security key PIN'), {
+    target: { value: '222222' },
+  });
+  ui.fireEvent.click(finish());
+  await ui.waitFor(() =>
+    assert.equal(
+      r.getByRole('alert').textContent,
+      'Hardware key PIN is blocked',
+    ),
+  );
+  assert.ok(r.getByText(/^The PIN is blocked\. Unblock it with the PUK/));
+  assert.deepEqual(received, [null, '111111', '222222']);
+});
+
 test('a resumed hardware-key request can receive its PIN on step one', async () => {
   const { InvitationPanel } = (await vite.ssrLoadModule(
     '/src/components/invitation-panel.tsx',

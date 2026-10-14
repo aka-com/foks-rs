@@ -1911,6 +1911,24 @@
   color: var(--amber-ink);
   font-weight: 600;
 }
+
+/* Security-key PIN row: the PIN rule and the attempts left after a refusal,
+   under the input. */
+.inset .fr .v small.pin-note {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.inset .fr .v small.pin-note.warn {
+  color: var(--amber-ink);
+  font-weight: 600;
+}
+.inset .fr .v small.pin-note.crit {
+  color: var(--danger-text);
+  font-weight: 600;
+}
 .pw-meter {
   display: inline-flex;
   flex: none;

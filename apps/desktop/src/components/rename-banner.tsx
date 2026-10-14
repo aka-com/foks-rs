@@ -7,10 +7,12 @@ import type { RenameStatus } from '../rename-status';
 import { useWorkflowAccess } from '../workflow-context';
 import { useSheetGuard } from '../navigation-guard';
 import { normalizeCommandError } from '../bridge';
+import { validSecurityKeyPin } from '../security-key-pin';
 import { Band } from './notice';
 import { Button } from './button';
-import { Inset, InsetRow } from './inset';
+import { Inset } from './inset';
 import { PanelSheet } from './panel-sheet';
+import { SecurityKeyPinField } from './security-key-pin-field';
 import type { PanelPresentation } from './panel-sheet';
 
 /** Status text and available actions. */
@@ -202,7 +204,7 @@ export function RenameUnlockSheet({
       : null,
   );
   const submit = async () => {
-    if (!pin || status.busy) return;
+    if (!validSecurityKeyPin(pin) || status.busy) return;
     setRefused(null);
     try {
       access.require('account-rename', { profile, account });
@@ -238,7 +240,9 @@ export function RenameUnlockSheet({
           </Button>
           <Button
             variant="primary"
-            disabled={status.busy || eligibility.disabled || !pin}
+            disabled={
+              status.busy || eligibility.disabled || !validSecurityKeyPin(pin)
+            }
             title={
               eligibility.title ??
               (!pin ? 'Enter the security key PIN to continue.' : undefined)
@@ -254,16 +258,12 @@ export function RenameUnlockSheet({
     >
       <p>Enter the enrolled security key’s PIN to authorize this action.</p>
       <Inset className="form">
-        <InsetRow label="Security key PIN">
-          <input
-            type="password"
-            autoComplete="off"
-            value={pin}
-            maxLength={32}
-            disabled={status.busy || eligibility.disabled}
-            onChange={(e) => setPin(e.target.value)}
-          />
-        </InsetRow>
+        <SecurityKeyPinField
+          value={pin}
+          disabled={status.busy || eligibility.disabled}
+          onChange={setPin}
+          refusal={status.error}
+        />
       </Inset>
       {(refused ?? status.error) && (
         <p role="alert" className="crit">

@@ -25,6 +25,7 @@ import {
   RadioCard,
   RadioGroup,
   SectionLabel,
+  SecurityKeyPinField,
 } from './index';
 import type { PanelPresentation } from './index';
 import { serverDisplayLabel } from '../model';
@@ -393,16 +394,12 @@ export function InvitationPanel({
   ) : null;
   const pinRow = needPin ? (
     <Inset className="form">
-      <InsetRow label="Security key PIN">
-        <input
-          type="password"
-          autoComplete="off"
-          maxLength={32}
-          value={pin}
-          disabled={busy}
-          onChange={(event) => setPin(event.target.value)}
-        />
-      </InsetRow>
+      <SecurityKeyPinField
+        value={pin}
+        disabled={busy}
+        onChange={setPin}
+        refusal={error}
+      />
     </Inset>
   ) : null;
   const glyph = (

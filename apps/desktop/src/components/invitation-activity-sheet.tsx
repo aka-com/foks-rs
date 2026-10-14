@@ -27,9 +27,9 @@ import {
   Chip,
   Icon,
   Inset,
-  InsetRow,
   PanelSheet,
   SectionLabel,
+  SecurityKeyPinField,
   SegmentedControl,
 } from './index';
 
@@ -465,16 +465,12 @@ export function InvitationActivitySheet({
       ) : null}
       {needPin ? (
         <Inset className="form">
-          <InsetRow label="Security key PIN">
-            <input
-              type="password"
-              autoComplete="off"
-              maxLength={32}
-              value={pin}
-              disabled={busy}
-              onChange={(e) => setPin(e.target.value)}
-            />
-          </InsetRow>
+          <SecurityKeyPinField
+            value={pin}
+            disabled={busy}
+            onChange={setPin}
+            refusal={error}
+          />
         </Inset>
       ) : null}
       <CollectionStatus

@@ -1,0 +1,14 @@
+{
+  "comment": "PIN and PUK rule, retry range and refusal messages of foks_yubi, checked by the crate's tests and by apps/desktop/tests/security-key-pin.test.ts.",
+  "pin": {
+    "accepted": ["123456", "1234567", "12345678", "pin-42", "!#$%&'()", "~~~~~~", "Ab3$Zz9!"],
+    "rejected": ["", "12345", "123456789", "123 456", "123456\t", "1234é", "éééé", "12345\u0000", "١٢٣٤٥٦"]
+  },
+  "retries": { "min": 1, "max": 15 },
+  "refusals": [
+    { "message": "hardware key PIN was rejected; 2 attempt(s) remain", "kind": "rejected", "remaining": 2 },
+    { "message": "hardware key PIN was rejected; 1 attempt(s) remain", "kind": "rejected", "remaining": 1 },
+    { "message": "hardware key PIN was rejected; 0 attempt(s) remain", "kind": "blocked", "remaining": 0 },
+    { "message": "hardware key PIN is blocked", "kind": "blocked" }
+  ]
+}

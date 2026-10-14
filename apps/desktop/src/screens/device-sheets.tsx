@@ -58,9 +58,14 @@ import {
   InsetRow,
   RadioCard,
   RadioGroup,
+  SecurityKeyPinField,
   SheetDialog,
 } from '../components';
 import type { AccountStore, AgentSnapshot } from '../model';
+import {
+  SECURITY_KEY_RETRY_RANGE,
+  validSecurityKeyPin,
+} from '../security-key-pin';
 import {
   accountExposure,
   entriesOf,
@@ -926,8 +931,8 @@ export function EnrollSheet({
               !alias.trim() ||
               !username.trim() ||
               !shownName.trim() ||
-              !pin ||
-              !puk ||
+              !validSecurityKeyPin(pin) ||
+              !validSecurityKeyPin(puk) ||
               signing === null ||
               pq === null ||
               signing === pq ||
@@ -1002,12 +1007,11 @@ export function EnrollSheet({
             setDeviceName(next);
           }}
         />
-        <Field label="Card PIN" value={pin} onChange={setPin} type="password" />
-        <Field
+        <SecurityKeyPinField label="Card PIN" value={pin} onChange={setPin} />
+        <SecurityKeyPinField
           label="Unlock code"
           value={puk}
           onChange={setPuk}
-          type="password"
         />
         <InsetRow label="Invite">
           <input
@@ -1035,8 +1039,8 @@ export function EnrollSheet({
           <InsetRow label="PIN tries">
             <input
               type="number"
-              min={1}
-              max={255}
+              min={SECURITY_KEY_RETRY_RANGE.min}
+              max={SECURITY_KEY_RETRY_RANGE.max}
               value={pinAttempts}
               onChange={(event) => setPinAttempts(Number(event.target.value))}
             />
@@ -1044,8 +1048,8 @@ export function EnrollSheet({
           <InsetRow label="PUK tries">
             <input
               type="number"
-              min={1}
-              max={255}
+              min={SECURITY_KEY_RETRY_RANGE.min}
+              max={SECURITY_KEY_RETRY_RANGE.max}
               value={pukAttempts}
               onChange={(event) => setPukAttempts(Number(event.target.value))}
             />
@@ -1111,8 +1115,8 @@ export function ProvisionSheet({
     cards.some((card) => card.serial === serial) &&
     targetAlias.trim() &&
     deviceName.trim() &&
-    pin &&
-    puk,
+    validSecurityKeyPin(pin) &&
+    validSecurityKeyPin(puk),
   );
   return (
     <DeviceSheetFrame
@@ -1186,12 +1190,11 @@ export function ProvisionSheet({
             </select>
           </InsetRow>
         ) : null}
-        <Field label="Card PIN" value={pin} onChange={setPin} type="password" />
-        <Field
+        <SecurityKeyPinField label="Card PIN" value={pin} onChange={setPin} />
+        <SecurityKeyPinField
           label="Unlock code"
           value={puk}
           onChange={setPuk}
-          type="password"
         />
       </Inset>
     </DeviceSheetFrame>
@@ -1242,10 +1245,16 @@ export function YubiActionSheet({
   ].includes(action);
   const needsConfirmation =
     action === 'set-passphrase' || action === 'change-passphrase';
+  // The second value is a PIN or PUK unless the action sets a passphrase.
+  const otherIsCredential = ['change-pin', 'unblock', 'change-puk'].includes(
+    action,
+  );
   const valid = Boolean(
     alias &&
-    (!needsPin || action === 'resume-rotation' || pin) &&
-    (!needsOther || other) &&
+    (!needsPin ||
+      (action === 'resume-rotation' && !pin) ||
+      validSecurityKeyPin(pin)) &&
+    (!needsOther || (otherIsCredential ? validSecurityKeyPin(other) : other)) &&
     (!needsConfirmation || other === confirmation),
   );
   const firstLabel =
@@ -1344,22 +1353,24 @@ export function YubiActionSheet({
           <b>{alias || 'No key enrolled'}</b>
         </InsetRow>
         {needsPin ? (
-          <InsetRow label={firstLabel}>
-            <input
-              type="password"
-              value={pin}
-              onChange={(event) => setPin(event.target.value)}
-            />
-          </InsetRow>
+          <SecurityKeyPinField
+            label={firstLabel}
+            value={pin}
+            onChange={setPin}
+          />
         ) : null}
-        {needsOther ? (
+        {needsOther && otherIsCredential ? (
+          <SecurityKeyPinField
+            label={otherLabel}
+            value={other}
+            onChange={setOther}
+          />
+        ) : needsOther ? (
           <InsetRow label={otherLabel}>
             <input
               type="password"
               value={other}
-              placeholder={
-                otherLabel === 'Passphrase' ? 'Enter a passphrase' : undefined
-              }
+              placeholder="Enter a passphrase"
               onChange={(event) => setOther(event.target.value)}
             />
           </InsetRow>

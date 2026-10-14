@@ -2,10 +2,12 @@
 
 import type { ReactNode } from 'react';
 import type { Bridge } from '../../bridge';
+import { validSecurityKeyPin } from '../../security-key-pin';
 import { Button } from '../button';
 import { Icon } from '../icon';
 import { Inset, InsetRow } from '../inset';
 import { PanelSheet } from '../panel-sheet';
+import { SecurityKeyPinField } from '../security-key-pin-field';
 import type { PanelPresentation } from '../panel-sheet';
 import { SsoOutcome, SsoStateChip, SsoStatus } from './sso-status';
 import { useSsoFlow } from './use-sso-flow';
@@ -38,17 +40,13 @@ export function SsoSignInSheet({
     </p>
   ) : null;
   const pinRow = (
-    <InsetRow label="Security key PIN">
-      <input
-        type="password"
-        autoComplete="off"
-        placeholder="Unlocks the enrolled key"
-        maxLength={32}
-        value={flow.pin}
-        disabled={blocked}
-        onChange={(event) => flow.setPin(event.target.value)}
-      />
-    </InsetRow>
+    <SecurityKeyPinField
+      placeholder="Unlocks the enrolled key"
+      value={flow.pin}
+      disabled={blocked}
+      onChange={flow.setPin}
+      refusal={error}
+    />
   );
   const glyph = (
     <span className="kico invite">
@@ -115,7 +113,9 @@ export function SsoSignInSheet({
       <Button
         variant="primary"
         title={flow.eligibility.title}
-        disabled={blocked || (flow.hardwareRequired && !flow.pin)}
+        disabled={
+          blocked || (flow.hardwareRequired && !validSecurityKeyPin(flow.pin))
+        }
         onClick={flow.finish}
       >
         Finish sign-in
