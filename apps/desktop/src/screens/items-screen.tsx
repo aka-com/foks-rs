@@ -578,7 +578,7 @@ function FolderRow({
       onClick={onSelect}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
-        if (event.key !== 'Enter' && event.key !== ' ') return;
+        if (!matchesShortcut(event, 'rowOpen')) return;
         event.preventDefault();
         onSelect();
       }}
@@ -1770,10 +1770,7 @@ export function ItemsScreen({
     if (!entry || !event.currentTarget.contains(entry)) return;
     const index = navKeys.indexOf(entry.dataset.navKey ?? '');
     if (index < 0) return;
-    if (
-      !cardLayout &&
-      (event.key === 'ArrowRight' || event.key === 'ArrowLeft')
-    ) {
+    if (!cardLayout && matchesShortcut(event, 'rowActions')) {
       // In the list, Left and Right move between a row and its own actions.
       const stops = [
         entry,
@@ -2278,11 +2275,7 @@ export function ItemsScreen({
             event.preventDefault();
         }}
         onKeyDown={(event) => {
-          if (
-            event.key !== 'ContextMenu' &&
-            !(event.key === 'F10' && event.shiftKey)
-          )
-            return;
+          if (!matchesShortcut(event, 'treeMenu')) return;
           const bounds = (event.target as HTMLElement).getBoundingClientRect();
           if (showFolderMenu(event.target, bounds.left, bounds.bottom)) {
             event.preventDefault();

@@ -1,7 +1,8 @@
 /**
  * The shell's keyboard shortcut sheet and the Lock shortcut: Ctrl / or ?
  * opens the sheet, which lists the registry with this platform's keys; Ctrl L
- * and the macOS menu's Lock lock the app.
+ * and the macOS menu's Lock lock the app, the menu's Lock whatever the window
+ * shows.
  */
 
 import assert from 'node:assert/strict';
@@ -152,22 +153,84 @@ test('Ctrl L locks the app from any page', async () => {
   await rendered.findByRole('button', { name: 'Unlock' });
 });
 
-test('the macOS menu’s Lock locks the app through the same path', async () => {
-  let locks = 0;
-  let menuLock: (() => void) | undefined;
-  const rendered = await mount({
+/**
+ * A native bridge whose `onLockMenu` stands in for the macOS menu's Lock:
+ * `menuLock()` arms the lock, as the host does, and emits the event.
+ */
+function menuLockBridge(overrides: Partial<Bridge> = {}) {
+  let locked = false;
+  let listener: (() => void) | undefined;
+  const overridden: Partial<Bridge> = {
     native: true,
-    lockApp: async () => {
-      locks += 1;
-      return { locked: true, available: true, mechanism: 'password' };
+    appLockState: async () => ({
+      locked,
+      available: true,
+      mechanism: 'password',
+    }),
+    onLockMenu: async (next) => {
+      listener = next;
+      return () => {
+        if (listener === next) listener = undefined;
+      };
     },
-    onLockMenu: async (listener) => {
-      menuLock = listener;
-      return () => {};
+    ...overrides,
+  };
+  return {
+    overrides: overridden,
+    listening: () => listener !== undefined,
+    menuLock: () => {
+      locked = true;
+      listener?.();
+    },
+  };
+}
+
+test('the macOS menu’s Lock, which the host arms, shows the lock screen', async () => {
+  const menu = menuLockBridge();
+  const rendered = await mount(menu.overrides);
+  await ui.waitFor(() => assert.ok(menu.listening()));
+  ui.act(() => menu.menuLock());
+  await rendered.findByRole('button', { name: 'Unlock' });
+});
+
+async function bootWithoutSnapshot(overrides: Partial<Bridge>) {
+  const { App } = (await vite.ssrLoadModule(
+    '/src/app-root.tsx',
+  )) as typeof import('../src/app-root');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  return ui.render(
+    createElement(App, { bridge: { ...mockBridge(FIXTURE), ...overrides } }),
+  );
+}
+
+test('the macOS menu’s Lock shows the lock screen over the loading screen', async () => {
+  // The agent never reports, so the window stays on the loading screen.
+  const menu = menuLockBridge({ agentStatus: () => new Promise(() => {}) });
+  const rendered = await bootWithoutSnapshot(menu.overrides);
+  await rendered.findByRole('status');
+  await ui.waitFor(() => assert.ok(menu.listening()));
+  ui.act(() => menu.menuLock());
+  await rendered.findByRole('dialog', { name: 'FOKS is locked' });
+});
+
+test('the macOS menu’s Lock shows the lock screen over a boot error', async () => {
+  const menu = menuLockBridge({
+    agentStatus: async () => {
+      throw new Error('The agent status failed.');
     },
   });
-  await ui.waitFor(() => assert.ok(menuLock));
-  ui.act(() => menuLock?.());
-  await ui.waitFor(() => assert.equal(locks, 1));
-  await rendered.findByRole('button', { name: 'Unlock' });
+  const rendered = await bootWithoutSnapshot(menu.overrides);
+  await rendered.findByRole('alertdialog', { name: 'FOKS could not start' });
+  await ui.waitFor(() => assert.ok(menu.listening()));
+  ui.act(() => menu.menuLock());
+  await rendered.findByRole('dialog', { name: 'FOKS is locked' });
+  assert.equal(
+    rendered.queryByRole('alertdialog', { name: 'FOKS could not start' }),
+    null,
+  );
 });

@@ -90,8 +90,11 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     let settings = MenuItemBuilder::with_id(SETTINGS_MENU_ID, "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
+    // Where the platform cannot authenticate, Lock is disabled and ⌘L reaches
+    // the window, whose shell says why the app cannot lock.
     let lock = MenuItemBuilder::with_id(LOCK_MENU_ID, "Lock")
         .accelerator("CmdOrCtrl+L")
+        .enabled(app.state::<Arc<applock::AppLock>>().state().available)
         .build(app)?;
     let new_window = MenuItemBuilder::with_id(NEW_WINDOW_MENU_ID, "New Window").build(app)?;
     let new_password = MenuItemBuilder::with_id(NEW_PASSWORD_MENU_ID, "New Password")
@@ -128,17 +131,18 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
         }
         if event.id() == LOCK_MENU_ID {
             use tauri::Emitter as _;
-            // The renderer locks through `lock_app` and draws the lock
-            // screen. With no main window there is nothing to draw, so the
-            // host locks, and the next window starts on the lock screen.
-            let result = match app.get_webview_window(MAIN) {
-                Some(window) => window
-                    .emit(LOCK_EVENT, ())
-                    .map_err(|error| error.to_string()),
-                None => applock::lock_now(app, &app.state::<Arc<applock::AppLock>>())
-                    .map(|_| ())
-                    .map_err(|error| error.message),
-            };
+            // The host locks, so the lock holds whatever the window shows,
+            // or with no main window open, when the next window starts on
+            // the lock screen. The event makes an open window read the lock
+            // state back and draw the lock screen.
+            let result = applock::lock_now(app, &app.state::<Arc<applock::AppLock>>())
+                .map_err(|error| error.message)
+                .and_then(|_| match app.get_webview_window(MAIN) {
+                    Some(window) => window
+                        .emit(LOCK_EVENT, ())
+                        .map_err(|error| error.to_string()),
+                    None => Ok(()),
+                });
             if let Err(error) = result {
                 tracing::error!(%error, "Failed to lock from the application menu");
             }

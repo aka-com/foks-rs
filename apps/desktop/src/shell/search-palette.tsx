@@ -37,7 +37,12 @@ import {
 } from '/kit/overlay-primitives';
 import { Icon } from '../components/icon';
 import type { FoksIconName } from '../icons';
-import { matchesShortcut, shortcutLabel } from '../shortcuts';
+import {
+  chordLabel,
+  listedChords,
+  matchesShortcut,
+  shortcutLabel,
+} from '../shortcuts';
 import { GroupMark } from '../screens/group-mark';
 import { copyActions } from '../screens/item-copy';
 import type { CopyAction } from '../screens/item-copy';
@@ -628,7 +633,10 @@ export interface SearchPaletteProps {
 /** The keyboard hints along the foot, which never change. */
 function footKeys(): { keys: readonly string[]; label: string }[] {
   return [
-    { keys: ['↑', '↓'], label: 'move' },
+    {
+      keys: listedChords('paletteMove').map((chord) => chordLabel(chord)),
+      label: 'move',
+    },
     { keys: [shortcutLabel('paletteOpen')], label: 'open' },
     { keys: [shortcutLabel('paletteKind')], label: 'next kind' },
   ];
@@ -861,14 +869,13 @@ function SearchSheet({
       toggleFavorite(highlighted.ref);
       return;
     }
-    if (event.key === 'ArrowDown') {
+    if (matchesShortcut(event, 'paletteMove')) {
       event.preventDefault();
-      setActive(Math.min(selected + 1, results.length - 1));
-      return;
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setActive(Math.max(selected - 1, 0));
+      setActive(
+        event.key === 'ArrowUp'
+          ? Math.max(selected - 1, 0)
+          : Math.min(selected + 1, results.length - 1),
+      );
       return;
     }
     if (matchesShortcut(event, 'paletteOpen')) {

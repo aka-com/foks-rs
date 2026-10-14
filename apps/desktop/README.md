@@ -199,17 +199,20 @@ virtual window to mount the target first. In the list, Right and Left move
 between a row and its Copy, Reveal or Download buttons; in the card view
 they move between cards, whose actions are in the row menu (Shift+F10 or the
 ContextMenu key; list rows name it in `aria-keyshortcuts`). Enter opens
-details, ⌘C copies a Password's password or a text Document's value and ⇧⌘C
-a Password's user name (the commands the row's Copy buttons call), F2 opens
-Rename or move, and Delete or ⌘Backspace moves the row to Trash. The focused row stays mounted, one line beyond the window's edge,
-when the list scrolls away from it, and focus returning to it scrolls the
-list back to its place. A store's Trash list is the same kind of `grid`,
-whose Right and Left reach Restore and Delete permanently. The vaults and
-the teams in the folder tree are each a `tree` with one tab stop: Up and
-Down move between drawn rows, Right opens a folder or moves into it, Left
-closes it or moves to its parent, and Enter selects. A store is a parent
-when it draws Trash, even with no folders. A team's settings are in its row
-menu as well as behind the gear its row shows on hover.
+details (on a folder row, the folder), ⌘C copies a Password's password or a
+text Document's value and ⇧⌘C a Password's user name (the commands the row's
+Copy buttons call), F2 opens Rename or move, and Delete or ⌘Backspace moves
+the row to Trash. The focused row stays mounted, one line beyond the
+window's edge, when the list scrolls away from it, and focus returning to it
+scrolls the list back to its place. A store's Trash list is the same kind of
+`grid`, whose Right and Left reach Restore and Delete permanently; Enter
+shows where the entry is stored, and Delete or ⌘Backspace deletes it
+permanently. The vaults and the teams in the folder tree are each a `tree`
+with one tab stop: Up and Down move between drawn rows, Right opens a folder
+or moves into it, Left closes it or moves to its parent, Enter selects, and
+Shift+F10 or the ContextMenu key opens the folder's menu. A store is a
+parent when it draws Trash, even with no folders. A team's settings are in
+its row menu as well as behind the gear its row shows on hover.
 
 Delete moves an item, or a folder with everything in it, into the vault's
 Trash: `/.trash/<role-tag>/` in the same store, one folder per read role,
@@ -373,7 +376,7 @@ authenticated in the catalog.
 | `src/recovery-phrase-tests.ts`| When each recovery phrase last matched a typed copy on this device, and its snooze: times only, under the `foks.recoveryPhraseTests` `localStorage` key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `src/password-generator.ts`| Password and passphrase generation for the login editors: `crypto.getRandomValues` with rejection sampling, exact entropy for generated values, common-weakness warnings for typed ones, and the last settings under the `passwordGenerator` `localStorage` key. |
 | `src/recent-favorites.ts`| The ⌘K palette's Recent (the last 10 items opened from it or copied anywhere) and Favorites (up to 100), as store refs and dirent ids, never item names or paths, under the `foks.recentFavorites` `localStorage` key; follows a move made in the app to the item's new dirent id. |
-| `src/shortcuts.ts`         | The keyboard shortcut registry: each command's keys, label and scope, matched by every listener and drawn by every hint. See [Keyboard shortcuts](#keyboard-shortcuts). |
+| `src/shortcuts.ts`         | The keyboard shortcut registry: each command's keys, label and scope, matched by the shortcut listeners and drawn by their hints. See [Keyboard shortcuts](#keyboard-shortcuts).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `src/icons.ts`             | The mock's 48 icons as structured data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `src/components/icon.tsx`  | `<Icon name size />`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `src/styles/shell.css`     | `wave6/shell.css` copied in full, minus the shared tokens.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -500,29 +503,39 @@ the old id, is shown in its place.
 ### Keyboard shortcuts
 
 `src/shortcuts.ts` lists every keyboard shortcut once: the command's label,
-where it applies (anywhere, the Files list, the folder tree, the search
-palette or Settings › Servers) and its key combinations. The listeners in
-the shell, the Files screen, the palette and the Servers page match key
-presses with `matchesShortcut`, and the hints (the header's search field,
-the empty vault's cards, the palette's Actions and row keys) draw keys with
-`shortcutLabel`, which writes `⇧⌘N` on macOS and `Ctrl Shift N` elsewhere. A
-`mod` chord takes ⌘ or Ctrl on every platform; Ctrl+Tab, ⌘[ and Alt+Left
-name one physical key, and ⌘[ is listed on macOS only. The entries for the
-arrow keys in the Files list and the folder tree describe the keys
+where it applies (anywhere, the Files list, the Trash list, the folder tree,
+the search palette or Settings › Servers) and its key combinations. The
+listeners in the shell, the Files screen, the Trash list, the palette and
+the Servers page match key presses with `matchesShortcut`, and the hints
+(the header's search field, the empty vault's cards, the palette's Actions,
+row keys and footer) draw keys with `shortcutLabel` or `chordLabel`, which
+write `⇧⌘N` on macOS and `Ctrl Shift N` elsewhere. A `mod` chord takes ⌘ or
+Ctrl on every platform; Ctrl+Tab, ⌘[ and Alt+Left name one physical key, and
+⌘[ is listed on macOS only. Every other modifier must be up, so Shift+Delete
+on a row does nothing. The entries for the arrow keys in the Files list, the
+Trash list and the folder tree describe the keys
 `src/screens/files-keyboard.ts` maps, and `tests/shortcuts.test.ts` checks
-that each one moves focus.
+that each one moves focus. The keys inside a control (tabs, menus, pickers,
+the rail's resize handle, the recovery phrase fields) follow that control's
+ARIA pattern and are not in the registry.
 
 ⌘/ (Ctrl / elsewhere), `?` outside a text field, or Keyboard shortcuts in
 the palette's Actions opens `shell/shortcut-sheet.tsx`, which lists the
 registry by scope with this platform's keys. ⌘L locks the app from any page,
-through the same path as the account menu's Lock.
+through the same path as the account menu's Lock. It also locks while a
+sheet is open, which the account menu cannot reach, and the lock discards
+the sheet's unsaved contents without the sheet's own discard prompt.
 
 The macOS application menu carries Settings… (⌘,), Lock (⌘L), New Password
 (⌘N) and Add Document (⇧⌘N), and `tests/shortcuts.test.ts` checks the
-accelerators in `src-tauri/src/lib.rs` against the registry. Its Lock emits
-`foks://lock` to the main window, which locks through `lock_app`; with no
-main window open, the host locks itself and the next window starts on the
-lock screen.
+accelerators in `src-tauri/src/lib.rs` against the registry. Its Lock arms
+the lock in the host and then emits `foks://lock` to the main window, if one
+is open. `useAppBootstrap` listens for the event whatever the window shows
+(the shell, the loading screen of a boot, or a boot error), reads the lock
+state back and shows the lock screen; with no main window open, the next
+window starts on it. Where the platform cannot authenticate, the menu item
+is disabled and ⌘L reaches the window, whose shell says that the app cannot
+lock.
 
 ### Blocking states
 

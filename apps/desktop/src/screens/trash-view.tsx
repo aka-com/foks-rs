@@ -23,6 +23,7 @@ import {
 } from '../model';
 import type { AgentSnapshot, Store, TrashEntry } from '../model';
 import type { Bridge } from '../bridge';
+import { matchesShortcut } from '../shortcuts';
 import { gridFocusTarget, rovingKey } from './files-keyboard';
 import { itemActionProblem } from './store-access';
 import { useTrashOrigins } from './trash-origins';
@@ -82,7 +83,7 @@ export function TrashView({
     if (!(target instanceof HTMLElement)) return;
     const row = target.closest<HTMLElement>('[data-trash-path]');
     if (!row || !event.currentTarget.contains(row)) return;
-    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+    if (matchesShortcut(event, 'trashActions')) {
       // Left and Right move between a row and its enabled actions.
       const stops = [
         row,
@@ -211,13 +212,11 @@ export function TrashView({
                 onClick={() => setSelectedPath(entry.item.path)}
                 onKeyDown={(event) => {
                   if (event.target !== event.currentTarget) return;
-                  if (event.key === 'Enter' || event.key === ' ') {
+                  if (matchesShortcut(event, 'trashSelect')) {
                     event.preventDefault();
                     setSelectedPath(entry.item.path);
                   } else if (
-                    (event.key === 'Delete' ||
-                      (event.key === 'Backspace' &&
-                        (event.metaKey || event.ctrlKey))) &&
+                    matchesShortcut(event, 'trashDelete') &&
                     !problem
                   ) {
                     event.preventDefault();

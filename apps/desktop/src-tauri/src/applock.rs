@@ -153,7 +153,7 @@ pub fn lock_app(
 
 /// Locks the app and drops what the unlocked interval held open: the catalog,
 /// web admin windows and local chat views. The macOS menu's Lock calls this
-/// directly when no main window is open to run `lock_app`.
+/// directly, before it tells an open main window to draw the lock screen.
 pub(crate) fn lock_now(app: &AppHandle, lock: &AppLock) -> Result<LockStateDto, AgentError> {
     lock.lock()?;
     app.state::<crate::commands::AppState>()

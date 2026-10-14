@@ -626,8 +626,10 @@ export function VaultShell({
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [openNewItem]);
-  // Lock works from any page and over any sheet, as the account menu's Lock
-  // does; ⌘L types nothing, so a text field gives up nothing to it.
+  // Lock works from any page and over any open sheet, whose unsaved contents
+  // the lock discards; ⌘L types nothing, so a text field gives up nothing to
+  // it. The macOS menu's Lock is handled in `useAppBootstrap`, which is
+  // mounted whatever the window shows.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!matchesShortcut(event, 'lock')) return;
@@ -656,22 +658,6 @@ export function VaultShell({
       stop?.();
     };
   }, [bridge, openNewItem]);
-  useEffect(() => {
-    if (!bridge.native) return;
-    let disposed = false;
-    let stop: (() => void) | undefined;
-    void bridge
-      .onLockMenu(lockFromMenu)
-      .then((unlisten) => {
-        if (disposed) unlisten();
-        else stop = unlisten;
-      })
-      .catch(() => undefined);
-    return () => {
-      disposed = true;
-      stop?.();
-    };
-  }, [bridge, lockFromMenu]);
   const chatMigration = useChatMigration(
     bridge,
     agentLifecycle.state === 'ready' && agentCatalogReady && !chrome.blocked,

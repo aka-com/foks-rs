@@ -142,6 +142,33 @@ test('each key listed for moving through the Files list moves focus', () => {
     assert.notEqual(gridFocusTarget(chord.key, cards), null, chord.key);
 });
 
+test('each key listed for moving through the Trash list moves focus', () => {
+  // The Trash list is one column; its Right and Left reach the row's
+  // buttons, which the Trash view handles and its render test walks.
+  const list = { index: 5, count: 20, columns: 1, page: 4 };
+  for (const chord of SHORTCUTS.trashMove.chords)
+    assert.notEqual(gridFocusTarget(chord.key, list), null, chord.key);
+  for (const chord of SHORTCUTS.trashActions.chords)
+    assert.equal(gridFocusTarget(chord.key, list), null, chord.key);
+});
+
+test('a key that runs a command takes no modifier the chord does not name', () => {
+  assert.ok(matchesShortcut(press('Delete'), 'trashDelete'));
+  assert.ok(
+    matchesShortcut(press('Backspace', { metaKey: true }), 'trashDelete'),
+  );
+  assert.ok(
+    !matchesShortcut(press('Delete', { shiftKey: true }), 'trashDelete'),
+  );
+  assert.ok(!matchesShortcut(press('Backspace'), 'trashDelete'));
+  assert.ok(matchesShortcut(press('F10', { shiftKey: true }), 'treeMenu'));
+  assert.ok(!matchesShortcut(press('F10'), 'treeMenu'));
+  assert.ok(matchesShortcut(press('ArrowDown'), 'paletteMove'));
+  assert.ok(
+    !matchesShortcut(press('ArrowDown', { shiftKey: true }), 'paletteMove'),
+  );
+});
+
 test('each key listed for the folder tree acts on it', () => {
   const node = (path: string, folders: FolderNode[] = []): FolderNode => ({
     name: path.split('/').pop() ?? '',

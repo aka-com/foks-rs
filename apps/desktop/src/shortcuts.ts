@@ -4,17 +4,20 @@
  * it. The listeners match keys with `matchesShortcut`, the hints draw them
  * with `shortcutLabel`, and the shortcut sheet lists the registry, so a
  * shortcut's keys are written once. The entries for moving focus in the
- * Files list and the folder tree describe the keys `screens/files-keyboard.ts`
- * maps; their tests check that each listed key moves focus.
+ * Files list, the Trash list and the folder tree describe the keys
+ * `screens/files-keyboard.ts` maps; their tests check that each listed key
+ * moves focus.
  */
 
 /** Where a shortcut applies, in the order the sheet lists the groups. */
-export type ShortcutScope = 'app' | 'files' | 'tree' | 'search' | 'servers';
+export type ShortcutScope =
+  'app' | 'files' | 'trash' | 'tree' | 'search' | 'servers';
 
 export const SHORTCUT_SCOPES: readonly { id: ShortcutScope; label: string }[] =
   [
     { id: 'app', label: 'Anywhere' },
     { id: 'files', label: 'Files list' },
+    { id: 'trash', label: 'Trash list' },
     { id: 'tree', label: 'Folder tree' },
     { id: 'search', label: 'Search palette' },
     { id: 'servers', label: 'Settings › Servers' },
@@ -60,6 +63,17 @@ const MOVE_KEYS: readonly Chord[] = [
   { key: 'ArrowDown' },
   { key: 'Home' },
   { key: 'End' },
+];
+
+const ROW_MOVE_KEYS: readonly Chord[] = [
+  ...MOVE_KEYS,
+  { key: 'PageUp' },
+  { key: 'PageDown' },
+];
+
+const MENU_KEYS: readonly Chord[] = [
+  { key: 'F10', shift: true },
+  { key: 'ContextMenu' },
 ];
 
 export const SHORTCUTS = {
@@ -134,7 +148,7 @@ export const SHORTCUTS = {
   rowMove: {
     label: 'Move between rows',
     scope: 'files',
-    chords: [...MOVE_KEYS, { key: 'PageUp' }, { key: 'PageDown' }],
+    chords: ROW_MOVE_KEYS,
   },
   rowActions: {
     label: 'Move to a row’s buttons, or between cards',
@@ -142,7 +156,7 @@ export const SHORTCUTS = {
     chords: [{ key: 'ArrowRight' }, { key: 'ArrowLeft' }],
   },
   rowOpen: {
-    label: 'Show details',
+    label: 'Show details, or open a folder',
     scope: 'files',
     chords: [{ key: 'Enter' }, { key: ' ' }],
   },
@@ -174,7 +188,7 @@ export const SHORTCUTS = {
   rowMenu: {
     label: 'Open the row menu',
     scope: 'files',
-    chords: [{ key: 'F10', shift: true }, { key: 'ContextMenu' }],
+    chords: MENU_KEYS,
   },
   rowToggle: {
     label: 'Add the row to the chosen rows, or remove it',
@@ -202,6 +216,26 @@ export const SHORTCUTS = {
     scope: 'files',
     chords: [{ key: 'Escape' }],
   },
+  trashMove: {
+    label: 'Move between rows',
+    scope: 'trash',
+    chords: ROW_MOVE_KEYS,
+  },
+  trashActions: {
+    label: 'Move to a row’s Restore and Delete permanently buttons',
+    scope: 'trash',
+    chords: [{ key: 'ArrowRight' }, { key: 'ArrowLeft' }],
+  },
+  trashSelect: {
+    label: 'Show where the entry is stored',
+    scope: 'trash',
+    chords: [{ key: 'Enter' }, { key: ' ' }],
+  },
+  trashDelete: {
+    label: 'Delete permanently',
+    scope: 'trash',
+    chords: [{ key: 'Delete' }, { key: 'Backspace', mod: true }],
+  },
   treeMove: {
     label: 'Move between folders',
     scope: 'tree',
@@ -221,6 +255,11 @@ export const SHORTCUTS = {
     label: 'Show the folder',
     scope: 'tree',
     chords: [{ key: 'Enter' }, { key: ' ' }],
+  },
+  treeMenu: {
+    label: 'Open the folder menu',
+    scope: 'tree',
+    chords: MENU_KEYS,
   },
   paletteMove: {
     label: 'Move between results',

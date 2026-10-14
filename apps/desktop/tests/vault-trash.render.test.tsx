@@ -304,6 +304,16 @@ test('the Trash list is a grid with one tab stop that the arrow keys walk', asyn
   ui.fireEvent.keyDown(rows[0], { key: 'Enter' });
   assert.equal(rows[0].getAttribute('aria-selected'), 'true');
   assert.equal(rows[1].getAttribute('aria-selected'), 'false');
+  // Delete permanently takes Delete or ⌘Backspace with no other modifier,
+  // as the registry lists it.
+  ui.fireEvent.keyDown(rows[0], { key: 'Delete', shiftKey: true });
+  ui.fireEvent.keyDown(rows[0], { key: 'Backspace' });
+  assert.equal(rendered.queryByRole('alertdialog'), null);
+  ui.fireEvent.keyDown(rows[0], { key: 'Backspace', ctrlKey: true });
+  const sheet = await rendered.findByRole('alertdialog');
+  assert.ok(
+    ui.within(sheet).getByRole('button', { name: 'Delete permanently' }),
+  );
 });
 
 test('a folder moves to Trash whole, restores whole, and Empty Trash removes every entry', async () => {

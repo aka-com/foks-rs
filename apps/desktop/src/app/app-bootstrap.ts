@@ -482,6 +482,41 @@ export function useAppBootstrap(
     return true;
   }, [activeBridge, retireBoot]);
 
+  // The macOS menu's Lock. The host arms the lock before it emits
+  // `foks://lock`, so the lock holds whatever the window shows: the shell,
+  // the loading screen of a boot in progress, or a boot error. The window
+  // reads the lock state back and shows the lock screen.
+  useEffect(() => {
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void (async () => {
+      const selected = bridge ?? (await selectBridge());
+      if (disposed || !selected.native) return;
+      const unlisten = await selected.onLockMenu(() => {
+        void selected.appLockState().then(
+          (next) => {
+            if (disposed || !next.locked) return;
+            retireBoot();
+            setActiveBridge(selected);
+            setLoaded(null);
+            setLockState(next);
+            setLockError(null);
+            // A boot error belongs to the boot the lock retired; unlocking
+            // starts a new one.
+            setLoadError(null);
+          },
+          () => undefined,
+        );
+      });
+      if (disposed) unlisten();
+      else stop = unlisten;
+    })().catch(() => undefined);
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [bridge, retireBoot]);
+
   const unlock = (): void => {
     if (!activeBridge) return;
     setUnlocking(true);

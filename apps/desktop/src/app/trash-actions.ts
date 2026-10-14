@@ -320,7 +320,6 @@ export function useTrashActions({
     );
     const timer = window.setTimeout(() => {
       const pending = pendingUndo.current;
-      // A text field keeps its own ⌘Z.
       if (
         busy.current ||
         undoing.current ||
@@ -383,6 +382,7 @@ export function useTrashActions({
       if (
         !pending ||
         !matchesShortcut(event, 'undoTrash') ||
+        // A text field keeps its own ⌘Z.
         typingTarget(event.target) ||
         anyDialogOpen()
       )
