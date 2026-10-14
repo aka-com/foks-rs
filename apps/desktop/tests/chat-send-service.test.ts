@@ -10,6 +10,7 @@ import { mockBridge } from '../src/mock-bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
 import type { ChatClock, TeamInbox } from '../src/chat/inbox-service';
 import { phaseOf } from '../src/chat/send/outgoing';
+import { CHAT_HISTORY_BYTES } from '../src/chat-limits';
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -455,14 +456,80 @@ test('drafts for a team the service has not been handed yet are empty, not a fai
   try {
     // A location can name a team one render before the provider hands the
     // service the snapshot that holds it; that render reads no drafts.
-    assert.doesNotThrow(() => service.drafts('team:not-yet'));
-    assert.equal(service.drafts('team:not-yet').size, 0);
-    assert.equal(service.drafts('acct:personal').size, 0);
-    const drafts = service.drafts('team:eng');
-    drafts.set('channel', 'text');
-    assert.equal(service.drafts('team:eng').get('channel'), 'text');
+    assert.equal(service.draft('team:not-yet', 'channel'), '');
+    assert.equal(service.draft('acct:personal', 'channel'), '');
+    assert.doesNotThrow(() => service.retainDrafts('team:not-yet', new Set()));
+    const stop = service.subscribeDraft('team:not-yet', 'channel', () => {});
+    stop();
   } finally {
     service.stop();
+  }
+});
+
+test('a draft change notifies its own channel and is not a publication', async () => {
+  const h = await setup();
+  try {
+    let publications = 0;
+    const stopPublications = h.service.subscribe(() => publications++);
+    const seen: string[] = [];
+    const stopOwn = h.service.subscribeDraft('team:eng', h.channel, () =>
+      seen.push(h.service.draft('team:eng', h.channel)),
+    );
+    let other = 0;
+    const stopOther = h.service.subscribeDraft(
+      'team:eng',
+      'other',
+      () => other++,
+    );
+    const timers = h.clock.timers.size;
+    h.service.setDraft('team:eng', h.channel, 'h');
+    h.service.setDraft('team:eng', h.channel, 'hi');
+    // The same text again changes nothing.
+    h.service.setDraft('team:eng', h.channel, 'hi');
+    h.service.setDraft('team:eng', h.channel, '');
+    assert.deepEqual(seen, ['h', 'hi', '']);
+    assert.equal(other, 0);
+    // Typing neither re-renders the service's subscribers nor re-arms the tick.
+    assert.equal(publications, 0);
+    assert.equal(h.clock.timers.size, timers);
+    h.service.setDraft('team:eng', 'other', 'elsewhere');
+    // A channel the team no longer lists loses its draft, and its composer
+    // hears so.
+    h.service.retainDrafts('team:eng', new Set([h.channel]));
+    assert.equal(h.service.draft('team:eng', 'other'), '');
+    assert.equal(other, 2);
+    stopPublications();
+    stopOwn();
+    stopOther();
+  } finally {
+    h.service.stop();
+  }
+});
+
+test('all drafts share one byte quota, and a refused draft keeps the last text', async () => {
+  const h = await setup();
+  try {
+    // Three bytes per character: the quota counts UTF-8, not characters.
+    const half = '\u20ac'.repeat(Math.floor(CHAT_HISTORY_BYTES / 6));
+    h.service.setDraft('team:eng', h.channel, half);
+    h.service.setDraft('team:eng', 'other', half);
+    assert.throws(
+      () => h.service.setDraft('team:eng', 'third', '\u20ac'.repeat(1000)),
+      { message: /Draft storage is full/ },
+    );
+    assert.equal(h.service.draft('team:eng', 'third'), '');
+    assert.throws(
+      () =>
+        h.service.setDraft('team:eng', 'other', half + '\u20ac'.repeat(1000)),
+      { message: /Draft storage is full/ },
+    );
+    assert.equal(h.service.draft('team:eng', 'other'), half);
+    // Replacing a draft counts it once: shortening one frees its bytes.
+    h.service.setDraft('team:eng', 'other', 'short');
+    h.service.setDraft('team:eng', 'third', '\u20ac'.repeat(1000));
+    assert.equal(h.service.draft('team:eng', 'third').length, 1000);
+  } finally {
+    h.service.stop();
   }
 });
 

@@ -1,20 +1,54 @@
-import { useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import type { ChatChannel, ChatScope } from '../chat-contract';
 import { CHAT_TEXT_BYTES } from '../chat-limits';
 import { failure } from './actions';
-import { useChatSends } from './send-provider';
+import { useChatSendService, useChatSends } from './send-provider';
 
 export const TEXT_LIMIT_LABEL = `${CHAT_TEXT_BYTES / 1024} KiB`;
 
 /**
- * Drafts held above the thread, keyed by channel. The thread remounts on every
- * channel, so the text of the channel being left has to be written somewhere
- * that outlives it; the application-owned send service owns the map for each
- * team and keeps it through ordinary navigation.
+ * The channel's draft and its size against the text limit. Drafts are held
+ * above the thread, keyed by channel: the thread remounts on every channel,
+ * so the text of the channel being left has to be written somewhere that
+ * outlives it. The application-owned send service holds them and keeps them
+ * through ordinary navigation.
+ *
+ * Only the caller of this hook re-renders when the draft changes: the send
+ * service reports a draft change to that channel's subscribers alone, not
+ * through its revision.
  */
-export type ChannelDrafts = Map<string, string>;
+export function useChatDraft(storeId: string, channel: string) {
+  const service = useChatSendService();
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      service.subscribeDraft(storeId, channel, listener),
+    [service, storeId, channel],
+  );
+  const read = () => service.draft(storeId, channel);
+  const draft = useSyncExternalStore(subscribe, read, read);
+  const draftBytes = useMemo(
+    () => new TextEncoder().encode(draft).length,
+    [draft],
+  );
+  return {
+    draft,
+    draftBytes,
+    overLimit: draftBytes > CHAT_TEXT_BYTES,
+    nearLimit: draftBytes > CHAT_TEXT_BYTES * 0.75,
+  };
+}
 
-/** The application service owns immutable submissions beyond the composer mount. */
+/**
+ * The application service owns immutable submissions beyond the composer
+ * mount. This hook does not read the draft, so its caller does not re-render
+ * while the user types; {@link useChatDraft} reads it.
+ */
 export function useChatComposer(
   /** The team this conversation belongs to, as the location addresses it. */
   storeId: string,
@@ -33,23 +67,23 @@ export function useChatComposer(
    * The service retains drafts beyond this mount, so leaving the channel
    * does not require a component-owned navigation guard.
    */
-  // The thread is keyed on the channel, but reads the current draft from its
-  // application owner instead of retaining a separate copy in this mount.
-  const draft = service.draft(storeId, channel.id);
-  const draftBytes = new TextEncoder().encode(draft).length;
   // Another channel of the same team keeps the draft: the service's map
   // outlives the channel switch, so there is nothing to ask about.
   // Leaving chat, or switching team, also leaves the service mounted.
   const setDraft = (text: string) => {
     try {
       service.setDraft(storeId, channel.id, text);
-      setSendError('');
+      // Only an error being cleared re-renders the caller.
+      if (sendError) setSendError('');
     } catch (error) {
       setSendError(failure(error));
     }
   };
   /** Returns whether the draft was submitted. */
   const send = (): boolean => {
+    // Read when sending rather than when rendering, so that typing does not
+    // re-render this hook's caller.
+    const draft = service.draft(storeId, channel.id);
     if (!draft.trim()) return false;
     setSendError('');
     // An acknowledged local intent survives navigation before preparation.
@@ -68,13 +102,9 @@ export function useChatComposer(
   // registers neither a navigation guard nor a component-owned request.
   const loadError = service.loadError(storeId, channel.id);
   return {
-    draft,
-    draftBytes,
     setDraft,
     send,
     sendError,
-    overLimit: draftBytes > CHAT_TEXT_BYTES,
-    nearLimit: draftBytes > CHAT_TEXT_BYTES * 0.75,
     canSend: channel.writable && service.canSubmit(storeId, channel.id),
     loadError,
     retryLoad: () => {

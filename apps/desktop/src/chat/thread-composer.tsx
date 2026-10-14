@@ -1,36 +1,41 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { Icon } from '../components';
-import { TEXT_LIMIT_LABEL } from './use-chat-composer';
+import { TEXT_LIMIT_LABEL, useChatDraft } from './use-chat-composer';
 
 /**
  * The message field and Send button of a channel the reader can write to.
  * Every key goes to `onKeyDown` first; then Enter sends, and Shift+Enter or
  * Alt+Enter inserts a line break.
+ *
+ * The composer reads the channel's draft itself, so a keystroke re-renders
+ * the composer alone and not the thread or its message list.
  */
 export function Composer({
+  storeId,
+  channel,
   placeholder,
-  draft,
   setDraft,
-  draftBytes,
   canSend,
-  overLimit,
-  nearLimit,
   onSend,
   onKeyDown,
   autofocus,
 }: {
+  /** The team, as the location addresses it. */
+  storeId: string;
+  /** The channel whose draft the field edits. */
+  channel: string;
   placeholder: string;
-  draft: string;
   setDraft: (text: string) => void;
-  draftBytes: number;
   canSend: boolean;
-  overLimit: boolean;
-  nearLimit: boolean;
   onSend: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   autofocus?: (element: HTMLTextAreaElement) => void;
 }): ReactNode {
+  const { draft, draftBytes, overLimit, nearLimit } = useChatDraft(
+    storeId,
+    channel,
+  );
   const field = useComposerSize(draft);
   useEffect(() => {
     if (canSend && field.current) autofocus?.(field.current);

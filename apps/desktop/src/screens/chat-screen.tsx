@@ -27,7 +27,7 @@ import type { AgentSnapshot, AvailabilityOptions, StoreRef } from '../model';
 import type { Location } from '../location';
 import { useChatConversation } from '../chat/use-chat-conversation';
 import { lastPosition } from '../chat/snapshots';
-import { useChatSends } from '../chat/send-provider';
+import { useChatSendService } from '../chat/send-provider';
 import { cancelled } from '../chat/errors';
 import { chatTeams } from './chat-teams';
 
@@ -65,7 +65,7 @@ export function ChatScreen({
   /** Opens the tab's Create channel sheet on this team. */
   onNewChat?: () => void;
 }): ReactNode {
-  const { service: sends } = useChatSends();
+  const sends = useChatSendService();
   const autofocusComposer = useComposerAutofocus(location.channel);
   const store = storeOf(agentSnapshot, location.ref);
   const access = useCallback(
@@ -133,16 +133,18 @@ export function ChatScreen({
   // Navigation can remount this pane without discarding any other draft.
   // Incomplete inbox data cannot establish that a channel was removed.
   // Lock and identity changes are handled by the application send service.
-  const drafts = sends.drafts(location.ref);
+  // This pane reads no draft while rendering, so typing does not re-render it.
   // A channel that is no longer listed cannot be returned to. Its draft is
   // dropped rather than held for an address that no longer resolves; an empty
   // list is only acted on once the channels are known.
   const channelIds = listed.map(({ channel }) => channel.id).join('\n');
   useEffect(() => {
     if (!channelsKnown) return;
-    const live = new Set(channelIds ? channelIds.split('\n') : []);
-    for (const id of [...drafts.keys()]) if (!live.has(id)) drafts.delete(id);
-  }, [channelIds, drafts, channelsKnown]);
+    sends.retainDrafts(
+      location.ref,
+      new Set(channelIds ? channelIds.split('\n') : []),
+    );
+  }, [channelIds, sends, location.ref, channelsKnown]);
   const storeId = store?.id ?? '';
   // Resolve our own identity from the account even before the roster arrives.
   const ownName = agentSnapshot.accounts.find(

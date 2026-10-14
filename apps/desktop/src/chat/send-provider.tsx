@@ -106,7 +106,8 @@ export function useChatSends() {
 /**
  * The send service for a caller that only issues requests through it. Unlike
  * `useChatSends` it does not subscribe, so the caller does not re-render on
- * each publication, which includes every change to a composer's draft.
+ * each publication. Neither hook re-renders on a draft change, which the
+ * service reports to that channel's subscribers alone (`useChatDraft`).
  */
 export function useChatSendService(): ChatSendService {
   const service = useContext(Context);

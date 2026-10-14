@@ -9,7 +9,10 @@ import type {
   ChatReply,
   ChatScope,
 } from '../src/chat-contract';
-import type { useChatComposer as Hook } from '../src/chat/use-chat-composer';
+import type {
+  useChatComposer as Hook,
+  useChatDraft as DraftHook,
+} from '../src/chat/use-chat-composer';
 import type { useChatHistory as HistoryHook } from '../src/chat/use-chat-history';
 import { phaseOf, running } from '../src/chat/send/outgoing';
 
@@ -17,6 +20,7 @@ installDom({ act: true, timers: true });
 let ui: typeof import('@testing-library/react');
 let vite: ViteDevServer;
 let useChatComposer: typeof Hook;
+let useChatDraft: typeof DraftHook;
 let useChatHistory: typeof HistoryHook;
 test.before(async () => {
   ui = await import('@testing-library/react');
@@ -25,7 +29,7 @@ test.before(async () => {
     appType: 'custom',
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
-  ({ useChatComposer } = await vite.ssrLoadModule(
+  ({ useChatComposer, useChatDraft } = await vite.ssrLoadModule(
     '/src/chat/use-chat-composer.ts',
   ));
   ({ useChatHistory } = await vite.ssrLoadModule(
@@ -93,7 +97,16 @@ async function setup(
     },
   };
   let current!: ReturnType<typeof Hook>;
+  let draft!: ReturnType<typeof DraftHook>;
   let history!: ReturnType<typeof HistoryHook>;
+  // How often each layer has rendered: the thread's send state, which also
+  // holds the message list, and the field that reads the draft.
+  const renders = { thread: 0, draft: 0 };
+  function Draft({ channel }: { channel: ChatChannel }) {
+    renders.draft++;
+    draft = useChatDraft(storeId, channel.id);
+    return createElement('span', null, draft.draft);
+  }
   function Composer({
     channel,
     scope,
@@ -101,6 +114,7 @@ async function setup(
     channel: ChatChannel;
     scope: ChatScope;
   }) {
+    renders.thread++;
     current = useChatComposer(storeId, channel, scope);
     const service = current.service;
     const request = useCallback(
@@ -108,7 +122,7 @@ async function setup(
       [service],
     );
     history = useChatHistory(channel, request);
-    return createElement('span', null, current.draft);
+    return createElement(Draft, { channel });
   }
   function Conversation() {
     const { snapshot: inbox } = useChatInbox();
@@ -132,8 +146,9 @@ async function setup(
   });
   return {
     get current() {
-      return current;
+      return { ...current, ...draft };
     },
+    renders,
     get history() {
       return history;
     },
@@ -162,7 +177,7 @@ async function setup(
 }
 
 function assertSent(
-  current: ReturnType<typeof Hook>,
+  current: Pick<ReturnType<typeof Hook>, 'messages' | 'canSend' | 'sendError'>,
   count: number,
   canSend = true,
 ) {
@@ -181,6 +196,33 @@ test('production composer import aliases the canonical application-service hook'
     '/src/chat/use-message-composer.ts',
   );
   assert.equal(useMessageComposer, useChatComposer);
+});
+
+test('typing re-renders only the draft reader, not the thread that draws the message list', async () => {
+  const h = await setup();
+  let thread = 0;
+  let draft = 0;
+  // A synchronous act renders what the change updates before it returns, and
+  // lets no background reply in, so the counts are the change's alone.
+  for (const text of ['h', 'he', 'hel', 'he']) {
+    const before = { ...h.renders };
+    ui.act(() => h.current.setDraft(text));
+    thread += h.renders.thread - before.thread;
+    draft += h.renders.draft - before.draft;
+    await ui.act(async () => {});
+  }
+  assert.equal(h.current.draft, 'he');
+  assert.equal(h.current.draftBytes, 2);
+  assert.equal(draft, 4);
+  // The thread subscribes to the send service's revision; a draft change is
+  // not a publication, so it does not render again.
+  assert.equal(thread, 0);
+  // Sending still reads the current draft.
+  await ui.act(async () => {
+    assert.equal(h.current.send(), true);
+  });
+  await ui.waitFor(() => assertSent(h.current, 1));
+  assert.equal(h.current.draft, '');
 });
 
 test('confirmed delivery finishes while delayed history holds intent cleanup', async () => {

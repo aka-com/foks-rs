@@ -46,6 +46,7 @@ import {
   type OutgoingEvent,
   type OutgoingMessage,
 } from './send/outgoing';
+import { DraftStore } from './send/drafts';
 
 type Inbox = Pick<
   ChatInboxService,
@@ -79,7 +80,6 @@ interface Team {
   operations: TrackedOperation[];
   observations: Map<string, ChatMessage & { channel: string }>;
   messages: OutgoingMessage[];
-  drafts: Map<string, string>;
   loaded: Set<string>;
   loading: Map<string, Promise<void>>;
   loadErrors: Map<string, string>;
@@ -135,6 +135,12 @@ export class ChatSendService {
   private snapshot?: AgentSnapshot;
   private generations: ReadonlyMap<string, number> = new Map();
   private teams = new Map<string, Team>();
+  /**
+   * Every team's drafts. A draft change notifies only its channel's
+   * subscribers and does not publish, so typing neither re-renders the
+   * service's subscribers nor re-arms the tick.
+   */
+  private draftStore = new DraftStore(CHAT_HISTORY_BYTES);
   private listeners = new Set<() => void>();
   private revision = 0;
   private active = false;
@@ -226,13 +232,13 @@ export class ChatSendService {
     for (const team of this.teams.values()) {
       team.epoch++;
       team.client.dispose();
-      team.drafts.clear();
       team.observations.clear();
       for (const message of team.messages)
         this.move(message, { type: 'retired' });
       team.messages.length = 0;
       team.operations.length = 0;
     }
+    this.draftStore.clearAll();
     this.teams.clear();
     this.recoveryProfiles = new Set();
     this.publish();
@@ -260,7 +266,6 @@ export class ChatSendService {
       operations: [],
       observations: new Map(),
       messages: [],
-      drafts: new Map(),
       loaded: new Set(),
       loading: new Map(),
       loadErrors: new Map(),
@@ -331,7 +336,7 @@ export class ChatSendService {
         if (removed || replaced || rejected) {
           team.epoch++;
           team.client.dispose();
-          team.drafts.clear();
+          this.draftStore.clear(id);
           team.observations.clear();
           team.loaded.clear();
           team.loadErrors.clear();
@@ -362,7 +367,7 @@ export class ChatSendService {
               .map((c) => c.id),
           );
           for (const channel of revoked) {
-            if (team.drafts.delete(channel)) changed = true;
+            this.draftStore.delete(id, channel);
             team.loaded.delete(channel);
             // A queued message exists only in this session, and a revoked
             // channel takes its text with the drafts. Nothing is left to send
@@ -396,47 +401,31 @@ export class ChatSendService {
     if (changed) this.publish();
   }
   /**
-   * The team's unsent messages, keyed by channel. The unlocked shell owns the
-   * map, so drafts outlive conversation and team navigation.
+   * Removes the team's drafts for channels other than `live`. The unlocked
+   * shell owns the drafts, so they outlive conversation and team navigation;
+   * a channel that is no longer listed cannot be returned to, so its draft is
+   * not held for an address that no longer resolves.
    */
-  drafts(storeId: string): Map<string, string> {
-    const existing = this.teams.get(storeId);
-    if (existing) return existing.drafts;
-    // A team this service's snapshot does not hold yet: the provider hands
-    // the service a new snapshot after the first render that names a team
-    // in it, so that render reads no drafts rather than failing the page.
-    const store = this.snapshot && storeOf(this.snapshot, storeId);
-    return store?.kind === 'team'
-      ? this.ensure(storeId).drafts
-      : new Map<string, string>();
+  retainDrafts(storeId: string, live: ReadonlySet<string>) {
+    this.draftStore.retain(storeId, live);
   }
   draft(storeId: string, channel: string): string {
-    return this.teams.get(storeId)?.drafts.get(channel) ?? '';
+    return this.draftStore.get(storeId, channel);
+  }
+  /**
+   * Calls `listener` whenever the channel's draft changes. Draft changes are
+   * not publications: {@link subscribe} does not report them.
+   */
+  subscribeDraft(storeId: string, channel: string, listener: () => void) {
+    return this.draftStore.subscribe(storeId, channel, listener);
   }
   setDraft(storeId: string, channel: string, text: string) {
     const team = this.ensure(storeId);
     if (team.blocked) throw integrity();
-    const bytes = new TextEncoder().encode(text).length;
-    const kept = [...this.teams.values()].reduce(
-      (sum, t) =>
-        sum +
-        [...t.drafts].reduce(
-          (n, [id, body]) =>
-            n +
-            (t === team && id === channel
-              ? 0
-              : new TextEncoder().encode(body).length),
-          0,
-        ),
-      0,
-    );
-    if (bytes + kept > CHAT_HISTORY_BYTES)
+    if (!this.draftStore.set(storeId, channel, text))
       throw problem(
         'Draft storage is full. Send or clear another draft before adding more text.',
       );
-    if (text) team.drafts.set(channel, text);
-    else team.drafts.delete(channel);
-    this.publish();
   }
   messages(storeId: string, channel?: string): readonly OutgoingMessage[] {
     return (this.teams.get(storeId)?.messages ?? [])
@@ -644,7 +633,8 @@ export class ChatSendService {
       createdAt: this.clock.now(),
     });
     team.messages.push(message);
-    if (team.drafts.get(channel) === text) team.drafts.delete(channel);
+    if (this.draftStore.get(storeId, channel) === text)
+      this.draftStore.delete(storeId, channel);
     this.publish();
     // A channel already working on a message queues this one and returns at
     // once, so the composer is free for the next message either way.
@@ -1048,7 +1038,7 @@ export class ChatSendService {
     const message = team.messages.find((m) => m.id === id);
     if (!message || running(message) || outcomeUnknown(message))
       throw problem('Check the original message before editing it.');
-    if (team.drafts.get(message.channel))
+    if (this.draftStore.get(storeId, message.channel))
       throw problem(
         'Your current draft is kept. Clear it before restoring this message.',
       );

@@ -19,9 +19,10 @@ import { Composer } from './thread-composer';
 
 /**
  * One channel of the open team. The thread owns the channel's history
- * window, viewport, read intent and composer state, and draws them through
- * {@link ThreadHeader}, {@link MessageList} and {@link Composer}. What every
- * channel of the team shares comes from the conversation provider.
+ * window, viewport, read intent and send state, and draws them through
+ * {@link ThreadHeader}, {@link MessageList} and {@link Composer}. The
+ * composer reads the draft itself, so typing does not re-render the thread.
+ * What every channel of the team shares comes from the conversation provider.
  */
 export function ChatThread({
   autofocusComposer,
@@ -92,13 +93,9 @@ export function ChatThread({
     blockHistory,
   } = useChatConversationContext();
   const {
-    draft,
     setDraft,
     sendError,
-    draftBytes,
     send,
-    overLimit,
-    nearLimit,
     canSend,
     loadError,
     retryLoad,
@@ -212,7 +209,7 @@ export function ChatThread({
       // menus and dialogs.
       !(event.target instanceof Node) ||
       !event.currentTarget.contains(event.target) ||
-      draft !== '' ||
+      sends.draft(storeId, channel.id) !== '' ||
       // Nothing to mark or dismiss, or already marked through the same
       // message: leave Escape to the shell's handler.
       (unreadCount === 0 && !divider.current) ||
@@ -296,13 +293,11 @@ export function ChatThread({
           />
           {channel.writable ? (
             <Composer
+              storeId={storeId}
+              channel={channel.id}
               placeholder={`Message ${channelTitle(channel)}`}
-              draft={draft}
               setDraft={setDraft}
-              draftBytes={draftBytes}
               canSend={canSend}
-              overLimit={overLimit}
-              nearLimit={nearLimit}
               onSend={sendLatest}
               onKeyDown={markOnEscape}
               autofocus={autofocusComposer}

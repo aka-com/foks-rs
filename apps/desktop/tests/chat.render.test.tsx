@@ -237,6 +237,47 @@ test('Option–Enter inserts a newline at the cursor without sending', async () 
   assert.equal(submissions, 0);
 });
 
+test('typing in the composer draws no message row again', async () => {
+  await setup();
+  const composer = ui.screen.getByRole('textbox', { name: 'Message' });
+  assert.ok(composer instanceof window.HTMLTextAreaElement);
+  assert.ok(document.querySelector('.chat-messages time'));
+  // Every message row formats its time while it renders, so counting the
+  // formatters made counts the rows drawn. A change event is a discrete
+  // event: React renders what it updates before the dispatch returns, so
+  // counting only during the dispatch leaves out renders that background
+  // recovery and inbox polls cause between keystrokes.
+  const Format = Intl.DateTimeFormat;
+  let counting = false;
+  let formatters = 0;
+  Intl.DateTimeFormat = function (
+    ...args: ConstructorParameters<typeof Format>
+  ) {
+    if (counting) formatters++;
+    return new Format(...args);
+  } as typeof Format;
+  try {
+    for (const value of ['d', 'dr', 'dra', 'draft']) {
+      counting = true;
+      try {
+        ui.fireEvent.change(composer, { target: { value } });
+      } finally {
+        counting = false;
+      }
+      assert.equal(composer.value, value);
+      await ui.act(async () => {});
+    }
+    assert.equal(formatters, 0);
+  } finally {
+    Intl.DateTimeFormat = Format;
+  }
+  // The composer follows its own draft.
+  assert.equal(
+    ui.screen.getByRole('button', { name: 'Send' }).hasAttribute('disabled'),
+    false,
+  );
+});
+
 test('the composer exposes only supported actions', async () => {
   await setup();
   for (const label of [
@@ -367,7 +408,14 @@ test('the failures mock scenario shows ledger operations and a saved-message loa
   await withScenario(
     'failures',
     async () => {
-      await ui.screen.findByText('Rotating the staging certificates tonight.');
+      // The operations' texts arrive with the recovery the send service's
+      // tick runs, which is due a second after the team is first known and
+      // so can land just past a query's default one-second wait.
+      await ui.screen.findByText(
+        'Rotating the staging certificates tonight.',
+        undefined,
+        { timeout: 3_000 },
+      );
       await ui.screen.findByText('Can someone confirm the 2.4 tag?');
       await ui.screen.findByText(/Delivery unconfirmed/);
       const rejected = (
