@@ -9,7 +9,8 @@ import {
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import type { AgentSnapshot } from '../model';
-import type { ChatClock, ChatInboxService } from './inbox-service';
+import type { ChatClock } from './clock';
+import type { ChatInboxService } from './inbox-service';
 import { ChatSendService } from './send-service';
 import { diagnosticLog, hashId } from '../diagnostics/log';
 

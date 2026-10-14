@@ -4,11 +4,9 @@ import type { ChatMessage } from '../chat-contract';
 import { CHAT_NOTIFICATION_TEXT_CHARS, CHAT_PAGE_ROWS } from '../chat-limits';
 import { chatClient, channelIntegrity, integrity } from './client';
 import { sameScope, channelWorkKey } from './scope';
-import {
-  systemChatClock,
-  type ChatClock,
-  type ChatInboxService,
-} from './inbox-service';
+import { systemChatClock, type ChatClock } from './clock';
+import { DeadlineTimer } from './deadline-timer';
+import type { ChatInboxService } from './inbox-service';
 import type { LocalSession } from './local-contract';
 import { notificationKey } from './local-contract';
 import { incoming, notificationText } from './notification-policy';
@@ -107,8 +105,7 @@ export class NotificationConsumer {
   private jobs = new Map<string, Job>();
   private admission;
   private stopped = false;
-  private timer: unknown;
-  private timerDue = Infinity;
+  private timer: DeadlineTimer;
   private off: () => void;
   private offAdmission: () => void;
   private cursor = 0;
@@ -127,6 +124,7 @@ export class NotificationConsumer {
     private limits: { queued: number; baselines: number } = NOTIFICATION_LIMITS,
   ) {
     this.admission = notificationAdmission(bridge);
+    this.timer = new DeadlineTimer(clock, () => this.scan());
     this.off = service.subscribe(() => this.kick());
     this.offAdmission = this.admission.subscribe(() => this.kick());
     this.kick();
@@ -144,8 +142,7 @@ export class NotificationConsumer {
     this.generation++;
     this.off();
     this.offAdmission();
-    this.clock.cancel(this.timer);
-    this.timer = undefined;
+    this.timer.cancel();
     for (const job of this.jobs.values()) {
       job.controller.abort();
       job.client.dispose();
@@ -156,15 +153,7 @@ export class NotificationConsumer {
   }
   private kick(delay = 0) {
     if (this.stopped) return;
-    const due = Math.max(this.clock.now() + delay, this.nextPass);
-    if (this.timer !== undefined && this.timerDue <= due) return;
-    this.clock.cancel(this.timer);
-    this.timerDue = due;
-    this.timer = this.clock.later(() => {
-      this.timer = undefined;
-      this.timerDue = Infinity;
-      this.scan();
-    }, due - this.clock.now());
+    this.timer.armAt(Math.max(this.clock.now() + delay, this.nextPass));
   }
   private discard(p: Progress) {
     this.progress.delete(p.key);

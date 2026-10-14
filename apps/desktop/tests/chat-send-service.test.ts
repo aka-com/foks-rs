@@ -8,7 +8,8 @@ import {
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
-import type { ChatClock, TeamInbox } from '../src/chat/inbox-service';
+import type { ChatClock } from '../src/chat/clock';
+import type { TeamInbox } from '../src/chat/inbox-service';
 import { phaseOf } from '../src/chat/send/outgoing';
 import { CHAT_HISTORY_BYTES } from '../src/chat-limits';
 

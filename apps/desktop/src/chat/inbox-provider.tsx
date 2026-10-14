@@ -13,8 +13,8 @@ import {
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import type { AgentSnapshot } from '../model';
+import type { ChatClock } from './clock';
 import { ChatInboxService } from './inbox-service';
-import type { ChatClock } from './inbox-service';
 import { diagnosticLog } from '../diagnostics/log';
 import { recordInboxTiming } from './inbox-timing';
 const Context = createContext<ChatInboxService | null>(null);
@@ -113,6 +113,7 @@ export function ChatInboxProvider({
         bridge={bridge}
         service={service}
         onNavigate={onNavigate}
+        clock={clock}
       >
         <ChatSendProvider
           enabled={enabled}

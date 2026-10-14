@@ -10,7 +10,8 @@ import type {
   ChatOperation,
   ChatReply,
 } from '../src/chat-contract';
-import type { ChatClock, TeamInbox } from '../src/chat/inbox-service';
+import type { ChatClock } from '../src/chat/clock';
+import type { TeamInbox } from '../src/chat/inbox-service';
 import { ChatSendService } from '../src/chat/send-service';
 import { chatIntentPersistence } from '../src/chat/intent';
 import { FIXTURE } from '../src/fixture';

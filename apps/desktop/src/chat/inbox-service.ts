@@ -5,6 +5,8 @@ import type { ChatReply, ChatResult, ChatScope } from '../chat-contract';
 import { chatAvailable } from '../model';
 import type { AvailabilityOptions, TeamStore, AgentSnapshot } from '../model';
 import { cancelled as cancelledAccess, chatClient, integrity } from './client';
+import { systemChatClock } from './clock';
+import { DeadlineTimer } from './deadline-timer';
 import { ChatHistoryCache } from './history-cache';
 import {
   accountKey,
@@ -37,12 +39,6 @@ export interface TeamInbox {
   /** Conservative invalidation for active threads on degraded Basic projections. */
   channelRefreshRevisions?: ReadonlyMap<string, number>;
   blockedChannels: ReadonlySet<string>;
-}
-export interface ChatClock {
-  now(): number;
-  later(fn: () => void, delay: number): unknown;
-  cancel(timer: unknown): void;
-  random(): number;
 }
 /**
  * Poll/sync/arrival timings and publication phases, in milliseconds. Carries
@@ -91,12 +87,6 @@ export type ChatInboxTiming =
       code?: string;
     }
   | { kind: 'arrival'; store: string; milliseconds: number };
-export const systemChatClock: ChatClock = {
-  now: () => Date.now(),
-  later: (fn, delay) => setTimeout(fn, delay),
-  cancel: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
-  random: Math.random,
-};
 interface Team {
   generation: number;
   binding: string;
@@ -181,6 +171,14 @@ const DEGRADED_REFRESH_MAX_MS = 60_000;
  */
 const RESYNC_IDLE_MS = 300_000;
 const RESYNC_SHORT_MS = 25_000;
+/**
+ * The least time between two requests of the same kind for a team or an
+ * account when nothing else sets a later deadline: after a poll returns, and
+ * after a request the agent cancelled or retired. A cancelled or retired
+ * request changes no deadline of its own, so without this floor an agent that
+ * answers every request that way would be asked again at once.
+ */
+const REQUEST_FLOOR_MS = 250;
 const initial = (): TeamInbox => ({
   state: 'loading',
   error: '',
@@ -203,7 +201,8 @@ export class ChatInboxService {
   private polls = 0;
   private running = false;
   private visible = true;
-  private timer: unknown;
+  /** Armed for the earliest moment a pass could start or release work. */
+  private timer: DeadlineTimer;
   private epoch = 0;
   /**
    * Told when a team's read answers that its profile's vault has not been
@@ -224,7 +223,9 @@ export class ChatInboxService {
     private bridge: Bridge,
     private clock = systemChatClock,
     private capacity = 4,
-  ) {}
+  ) {
+    this.timer = new DeadlineTimer(clock, () => this.drain());
+  }
   getSnapshot = () => this.snapshot;
   /** Opt-in timings; an observer cannot change what the service does. */
   observe(observer: (event: ChatInboxTiming) => void): () => void {
@@ -357,8 +358,10 @@ export class ChatInboxService {
     // on a timer it armed for the interval that channel had reached, and
     // presenting it is exactly the moment that interval no longer applies.
     // The published snapshot is unchanged, so a renderer that reads it
-    // re-renders nothing.
+    // re-renders nothing. The inbox's own deferred refresh for the channel
+    // waits on the same interval, so the next pass is recomputed as well.
     for (const listener of this.listeners) listener();
+    this.kick();
   }
   openChannel(id: string): string | undefined {
     return this.open.get(id);
@@ -366,7 +369,7 @@ export class ChatInboxService {
   stop() {
     this.running = false;
     this.epoch++;
-    this.clock.cancel(this.timer);
+    this.timer.cancel();
     for (const client of this.jobs.keys()) client.dispose();
     this.jobs.clear();
     this.accounts.clear();
@@ -771,11 +774,30 @@ export class ChatInboxService {
       return true;
     };
   }
+  /** Whether `flushDegraded` may act on the team's published projection. */
+  private flushable(team: Team): boolean {
+    if (team.quarantine || !this.accessValid(team)) return false;
+    const old = this.snapshot.get(team.store.id);
+    return old?.state === 'ready' && !old.stale && !!old.data?.degraded;
+  }
+  /** When the earliest coalesced invalidation `flushDegraded` holds is due. */
+  private degradedDue(team: Team): number {
+    if (!this.flushable(team)) return Infinity;
+    const open = this.open.get(team.store.id);
+    let due = Infinity;
+    for (const [channel, state] of team.degraded)
+      if (state.pending)
+        due = Math.min(
+          due,
+          state.at +
+            (channel === open ? DEGRADED_REFRESH_BASE_MS : state.interval),
+        );
+    return due;
+  }
   /** Release coalesced invalidations without another inbox RPC. */
   private flushDegraded(team: Team) {
-    if (team.quarantine || !this.accessValid(team)) return;
-    const old = this.snapshot.get(team.store.id);
-    if (old?.state !== 'ready' || old.stale || !old.data?.degraded) return;
+    if (!this.flushable(team)) return;
+    const old = this.snapshot.get(team.store.id)!;
     const admit = this.degradedAdmission(team, () => false);
     let revisions: Map<string, number> | undefined;
     for (const [channel, state] of team.degraded) {
@@ -801,11 +823,31 @@ export class ChatInboxService {
       retry + Math.floor((this.clock.random() * retry) / 4),
     );
   }
+  /** Runs a pass as soon as possible. */
   private kick() {
     if (!this.running) return;
-    this.clock.cancel(this.timer);
-    this.timer = this.clock.later(() => this.drain(), 0);
+    this.timer.armAt(this.clock.now());
   }
+  /** A team a pass may synchronize once its due time has come. */
+  private syncable(team: Team): boolean {
+    return (
+      !team.quarantine &&
+      this.accessValid(team) &&
+      !team.busy &&
+      (this.visible || team.dirty)
+    );
+  }
+  /**
+   * Starts every synchronization and poll that is due, then arms the timer
+   * for the earliest moment another one could be, or arms nothing.
+   *
+   * Only time is waited for here. Work that is held back by something other
+   * than time is started by the event that releases it, each of which runs a
+   * pass: a synchronization or poll ending (which frees the team, the
+   * profile's single background job and the poll capacity), an invalidation,
+   * a poll bump, a store update, a visibility change and a change of the open
+   * channel.
+   */
   private drain() {
     if (!this.running) return;
     const now = this.clock.now();
@@ -814,23 +856,11 @@ export class ChatInboxService {
       const teams = [...account.teams.values()];
       for (const team of teams) this.flushDegraded(team);
       const team = teams.find(
-        (candidate) =>
-          !candidate.quarantine &&
-          this.accessValid(candidate) &&
-          !candidate.busy &&
-          candidate.due <= now &&
-          (this.visible || candidate.dirty),
+        (candidate) => this.syncable(candidate) && candidate.due <= now,
       );
       if (team && !this.profiles.has(team.store.server))
         void this.sync(account, team);
-      const canonical = teams
-        .filter(
-          (candidate) =>
-            !candidate.quarantine &&
-            this.accessValid(candidate) &&
-            this.snapshot.get(candidate.store.id)?.state !== 'unavailable',
-        )
-        .sort((a, b) => a.store.id.localeCompare(b.store.id))[0];
+      const canonical = this.canonical(account);
       if (
         canonical &&
         !account.busy &&
@@ -843,10 +873,46 @@ export class ChatInboxService {
         void this.poll(account, canonical);
       }
     }
-    this.timer = this.clock.later(
-      () => this.drain(),
-      this.visible ? 250 : 2_000,
-    );
+    this.timer.armAt(this.nextDeadline(now));
+  }
+  /** The team whose view carries the account's poll, if any may. */
+  private canonical(account: Account): Team | undefined {
+    return [...account.teams.values()]
+      .filter(
+        (candidate) =>
+          !candidate.quarantine &&
+          this.accessValid(candidate) &&
+          this.snapshot.get(candidate.store.id)?.state !== 'unavailable',
+      )
+      .sort((a, b) => a.store.id.localeCompare(b.store.id))[0];
+  }
+  /**
+   * The earliest future moment a pass could act: a poll or synchronization
+   * coming due, a team's access expiring, or a coalesced degraded refresh
+   * being released. Work blocked on a running job, the profile's background
+   * job or the poll capacity is excluded, because the job's end runs a pass.
+   */
+  private nextDeadline(now: number): number {
+    let next = Infinity;
+    const later = (due: number | undefined) => {
+      if (due !== undefined && due > now) next = Math.min(next, due);
+    };
+    for (const account of this.accounts.values()) {
+      if (account.blocked) continue;
+      if (
+        !account.busy &&
+        this.polls < this.capacity &&
+        this.canonical(account)
+      )
+        later(account.due);
+      for (const team of account.teams.values()) {
+        if (this.syncable(team) && !this.profiles.has(team.store.server))
+          later(team.due);
+        if (!team.quarantine) later(team.accessExpiresAt);
+        later(this.degradedDue(team));
+      }
+    }
+    return next;
   }
   private async sync(account: Account, team: Team) {
     const epoch = this.epoch;
@@ -949,6 +1015,8 @@ export class ChatInboxService {
         code: error.code,
       });
       if (!this.valid(account, team, epoch, generation)) return;
+      // Every recovery that sets a deadline of its own replaces this one.
+      team.due = Math.max(team.due, this.clock.now() + REQUEST_FLOOR_MS);
       if (this.handleError(team.store.id, error)) return;
       const old = this.snapshot.get(team.store.id) ?? initial();
       this.publish(
@@ -970,6 +1038,9 @@ export class ChatInboxService {
       if (epoch === this.epoch) {
         team.busy = false;
         this.profiles.delete(team.store.server);
+        // Releasing the team and the profile's background job admits work
+        // that no deadline covers, such as a sibling team due meanwhile.
+        this.kick();
       }
     }
   }
@@ -1051,7 +1122,7 @@ export class ChatInboxService {
           t.due = 0;
         }
       account.failure = undefined;
-      account.due = this.clock.now() + 250;
+      account.due = this.clock.now() + REQUEST_FLOOR_MS;
     } catch (cause) {
       const error = normalizeCommandError(cause);
       this.report({
@@ -1063,10 +1134,9 @@ export class ChatInboxService {
         code: error.code,
       });
       if (!this.valid(account, team, epoch, generation)) return;
-      if (error.code === 'cancelled') {
-        account.due = 0;
-        return;
-      }
+      // Every recovery that sets a deadline of its own replaces this one.
+      account.due = Math.max(account.due, this.clock.now() + REQUEST_FLOOR_MS);
+      if (error.code === 'cancelled') return;
       if (this.handleError(team.store.id, error)) return;
       // Nothing reports arrivals while the poll is down, so the teams of this
       // account go back to the short cadence rather than waiting out an idle
@@ -1088,6 +1158,9 @@ export class ChatInboxService {
         account.pollTeam = undefined;
         account.busy = false;
         this.polls--;
+        // Frees the account's poll and a poll slot another account may be
+        // waiting on.
+        this.kick();
       }
     }
   }

@@ -474,6 +474,73 @@ test('activating a notification opens the Chat tab on that team and channel', as
   }
 });
 
+test('the notification consumer schedules on the clock the inbox provider passes', async () => {
+  const { installDom } = await import('./lib/dom-harness');
+  installDom({
+    url: 'http://localhost/',
+    body: '<div id="root"></div>',
+    timers: true,
+    act: true,
+  });
+  const ui = await import('@testing-library/react');
+  const { createElement } = await import('react');
+  const { createServer } = await import('vite');
+  const vite = await createServer({
+    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
+    appType: 'custom',
+    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
+  });
+  const { NotificationProvider } = (await vite.ssrLoadModule(
+    '/src/chat/notification-provider.tsx',
+  )) as typeof import('../src/chat/notification-provider');
+  const session = {
+    epoch: 'a'.repeat(32),
+    available: true,
+    settings: { enabled: true, previews: false, overrides: {} },
+  };
+  const bridge = {
+    chatLocal: async () => session,
+    onChatNotification: async () => () => {},
+    chat: async () => {
+      throw new Error('no channel is listed');
+    },
+    cancelChat: async () => {},
+  };
+  const service = {
+    handleError: () => false,
+    openChannel: () => undefined,
+    subscribe: () => () => {},
+    getSnapshot: () => new Map(),
+  };
+  // A consumer built with the default clock reads the wall clock and never
+  // calls this one.
+  const reads: number[] = [];
+  const clock = {
+    now: () => {
+      reads.push(1);
+      return 1_000;
+    },
+    later: () => 0,
+    cancel: () => {},
+    random: () => 0,
+  };
+  try {
+    ui.render(
+      createElement(NotificationProvider, {
+        bridge: bridge as unknown as import('../src/bridge').Bridge,
+        service:
+          service as unknown as import('../src/chat/inbox-service').ChatInboxService,
+        clock,
+        children: null,
+      }),
+    );
+    await ui.waitFor(() => assert.ok(reads.length > 0));
+  } finally {
+    ui.cleanup();
+    await vite.close();
+  }
+});
+
 test('notification activation validates the full store binding before navigation', () => {
   const store = {
     profile: 'p',

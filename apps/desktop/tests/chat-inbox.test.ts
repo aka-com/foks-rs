@@ -4,7 +4,8 @@ import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { cancelled } from '../src/chat/client';
 import { ChannelCreationController } from '../src/chat/channel-creation';
 import { ChatInboxService } from '../src/chat/inbox-service';
-import type { ChatClock, ChatInboxTiming } from '../src/chat/inbox-service';
+import type { ChatClock } from '../src/chat/clock';
+import type { ChatInboxTiming } from '../src/chat/inbox-service';
 import type { Bridge } from '../src/bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
 import type { TeamStore, AgentSnapshot } from '../src/model';
@@ -48,12 +49,14 @@ class Clock implements ChatClock {
   async advance(ms: number) {
     const end = this.time + ms;
     for (;;) {
+      // Settle pending continuations before the next timer, as an event loop
+      // does: a reply that lands may arm an earlier timer than any armed now.
+      for (let i = 0; i < 30; i++) await Promise.resolve();
       const next = [...this.tasks].sort((a, b) => a[1].due - b[1].due)[0];
       if (!next || next[1].due > end) break;
       this.time = next[1].due;
       this.tasks.delete(next[0]);
       next[1].fn();
-      for (let i = 0; i < 30; i++) await Promise.resolve();
     }
     this.time = end;
   }
@@ -919,23 +922,99 @@ test('showing the window again resynchronizes every team once', async () => {
   f.service.stop();
 });
 
-test('a hidden window drains every two seconds rather than every quarter second', async () => {
-  const f = fixture();
-  await f.clock.advance(500);
-  const delays = () => {
-    const seen: number[] = [];
-    const before = f.clock.time;
-    for (const task of f.clock.tasks.values()) seen.push(task.due - before);
-    return seen;
-  };
-  assert.deepEqual(delays(), [250]);
-  f.service.setVisible(false);
-  await f.clock.advance(0);
-  assert.deepEqual(delays(), [2_000]);
-  f.service.setVisible(true);
-  await f.clock.advance(0);
-  assert.deepEqual(delays(), [250]);
-  f.service.stop();
+test('an idle inbox arms no timer earlier than its next resynchronization or access expiry', async () => {
+  const f = fixture(1);
+  const deadlines = () => [...f.clock.tasks.values()].map((task) => task.due);
+  try {
+    await f.clock.advance(500);
+    assert.equal(f.syncs.length, 1);
+    // The poll is waiting on the agent, which wakes the service when it
+    // returns, so the only deadline is the idle resynchronization.
+    assert.equal(f.waits.size, 1);
+    assert.deepEqual(deadlines(), [300_000]);
+    // A hidden window resynchronizes only on a poll bump, so nothing is due.
+    f.service.setVisible(false);
+    await f.clock.advance(0);
+    assert.deepEqual(deadlines(), []);
+    f.service.setVisible(true);
+    await f.clock.advance(0);
+    assert.equal(f.syncs.length, 2);
+    assert.deepEqual(deadlines(), [300_500]);
+    // A check-in that lapses sooner is the earlier deadline.
+    f.service.updateStores({
+      ...f.snapshot,
+      servers: f.snapshot.servers.map((server) => ({
+        ...server,
+        compatibility: {
+          status: 'required' as const,
+          capabilities: PROTOCOL_CAPABILITIES,
+          expiresAt: 100,
+        },
+      })),
+    });
+    await f.clock.advance(0);
+    assert.deepEqual(deadlines(), [100_000]);
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('a team is synchronized at its deadline rather than at a fixed interval', async () => {
+  const f = fixture(1);
+  // A failed synchronization retries after 250 ms plus up to a quarter of
+  // that as jitter: 281 ms with this draw.
+  f.clock.random = () => 0.5;
+  f.fail.add('t0');
+  try {
+    await f.clock.advance(0);
+    assert.equal(f.syncs.length, 1);
+    await f.clock.advance(280);
+    assert.equal(f.syncs.length, 1);
+    await f.clock.advance(1);
+    assert.equal(f.syncs.length, 2);
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('a team held back by a sibling synchronization on its profile starts when that one ends', async () => {
+  const f = fixture(2);
+  try {
+    // Both teams are due at once, but a profile runs one synchronization at a
+    // time; the second starts as the first ends, with no time passing.
+    await f.clock.advance(0);
+    assert.deepEqual(f.syncs, ['t0', 't1']);
+    assert.equal(f.clock.time, 0);
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('opening a backed-off degraded channel releases its deferred refresh at once', async () => {
+  const f = fixture(1);
+  f.inbox.channels = ['open', 'quiet'];
+  f.inbox.degraded = true;
+  f.service.setOpenChannel('t0', 'open');
+  const quiet = () =>
+    f.service.getSnapshot().get('t0')!.channelRefreshRevisions!.get('quiet')!;
+  try {
+    await f.clock.advance(500);
+    // Twenty-five seconds of bumps one second apart back the quiet channel
+    // off to a twenty-second wait, last released ten seconds in.
+    for (let step = 0; step < 25; step++) {
+      f.service.invalidate('t0');
+      await f.clock.advance(1_000);
+    }
+    const before = quiet();
+    await f.clock.advance(0);
+    assert.equal(quiet(), before, 'the quiet channel is still backed off');
+    // Presenting it holds it to the base interval, which has long passed.
+    f.service.setOpenChannel('t0', 'quiet');
+    await f.clock.advance(0);
+    assert.equal(quiet(), before + 1);
+  } finally {
+    f.service.stop();
+  }
 });
 
 test('polls, synchronizations and arrivals are timed for diagnostics without channels or text', async () => {

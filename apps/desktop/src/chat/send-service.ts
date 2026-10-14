@@ -29,8 +29,10 @@ import type { TrackedOperation } from './operations';
 import { chatIntentPersistence } from './intent';
 import type { ChatIntentPersistence } from './intent';
 import { sameScope } from './scope';
-import { systemChatClock } from './inbox-service';
-import type { ChatClock, ChatInboxService } from './inbox-service';
+import { systemChatClock } from './clock';
+import type { ChatClock } from './clock';
+import { DeadlineTimer } from './deadline-timer';
+import type { ChatInboxService } from './inbox-service';
 import {
   awaitingAccess,
   copyOutgoing,
@@ -139,9 +141,7 @@ export class ChatSendService {
   private revision = 0;
   private active = false;
   private stopInbox?: () => void;
-  private timer: unknown;
-  /** When the armed tick is due, so a re-arm can only bring it forward. */
-  private timerDue = Infinity;
+  private timer: DeadlineTimer;
   private cursor = 0;
   private recoveryProfiles = new Set<string>();
   private synchronizing = false;
@@ -151,7 +151,9 @@ export class ChatSendService {
     private bridge: Bridge,
     private inbox: Inbox,
     private clock: ChatClock = systemChatClock,
-  ) {}
+  ) {
+    this.timer = new DeadlineTimer(clock, () => this.tick());
+  }
 
   /** Opt-in timings; an observer cannot change what the service does. */
   observe(observer: (event: ChatSendTiming) => void): () => void {
@@ -217,8 +219,7 @@ export class ChatSendService {
     this.active = false;
     this.stopInbox?.();
     this.stopInbox = undefined;
-    this.clock.cancel(this.timer);
-    this.timerDue = Infinity;
+    this.timer.cancel();
     this.publish();
   }
   stop() {
@@ -1359,19 +1360,12 @@ export class ChatSendService {
    */
   private arm(reset = false) {
     if (!this.active) {
-      this.clock.cancel(this.timer);
-      this.timerDue = Infinity;
+      this.timer.cancel();
       return;
     }
-    const delay = this.nextTickDelay();
-    const due = this.clock.now() + delay;
-    if (!reset && due >= this.timerDue) return;
-    this.clock.cancel(this.timer);
-    this.timerDue = due;
-    this.timer = this.clock.later(() => {
-      this.timerDue = Infinity;
-      void this.tick();
-    }, delay);
+    const due = this.clock.now() + this.nextTickDelay();
+    if (reset) this.timer.reset(due);
+    else this.timer.armAt(due);
   }
   private tick() {
     if (!this.active) return;

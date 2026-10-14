@@ -7,11 +7,8 @@ import type {
   ChatReply,
   ChatScope,
 } from '../src/chat-contract';
-import type {
-  ChatClock,
-  ChatInboxService,
-  TeamInbox,
-} from '../src/chat/inbox-service';
+import type { ChatClock } from '../src/chat/clock';
+import type { ChatInboxService, TeamInbox } from '../src/chat/inbox-service';
 import {
   NotificationConsumer,
   NOTIFICATION_LIMITS,

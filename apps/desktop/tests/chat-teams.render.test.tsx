@@ -14,7 +14,7 @@ import { readSource } from './lib/source';
 import type { Location } from '../src/location';
 import type { AgentSnapshot } from '../src/model';
 import type { Bridge } from '../src/bridge';
-import type { ChatClock } from '../src/chat/inbox-service';
+import type { ChatClock } from '../src/chat/clock';
 
 /** The inbox service's clock, driven by the test rather than by the wall. */
 class Clock implements ChatClock {

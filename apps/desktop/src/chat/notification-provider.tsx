@@ -15,6 +15,7 @@ import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import type { ChatScope } from '../chat-contract';
 import type { FoksIconName } from '../icons';
+import type { ChatClock } from './clock';
 import type { ChatInboxService } from './inbox-service';
 import type { LocalAction, LocalSession } from './local-contract';
 import { NotificationConsumer } from './notification-consumer';
@@ -39,11 +40,14 @@ export function NotificationProvider({
   service,
   children,
   onNavigate,
+  clock,
 }: {
   bridge: Bridge;
   service: ChatInboxService;
   children: ReactNode;
   onNavigate?: (location: Location) => void;
+  /** The inbox service's clock, so the consumer's deadlines share its time. */
+  clock?: ChatClock;
 }) {
   const [session, setSession] = useState<LocalSession | null>(null),
     [error, setError] = useState(''),
@@ -79,7 +83,7 @@ export function NotificationProvider({
       service,
       session,
       setError,
-      undefined,
+      clock,
       (event) => {
         // A pass is timed and counted; the messages it read are not named.
         if (event.kind === 'pass')
@@ -114,7 +118,7 @@ export function NotificationProvider({
         .chatLocal({ action: 'end', epoch: session.epoch })
         .catch(() => {});
     };
-  }, [bridge, service, session]);
+  }, [bridge, service, session, clock]);
   useEffect(() => {
     if (!session || !onNavigate) return;
     let active = true;
