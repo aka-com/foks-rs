@@ -7,14 +7,16 @@
  * the account; both stop later reads only. A credential the party already
  * read stays valid wherever it is used until it is changed there. Before the
  * write, the sheet lists what the party could read; once the write succeeds,
- * {@link recordExposure} keeps that list as a review, and a band on the team
- * page or on Devices leads to it until every entry is marked.
+ * or fails without showing whether it was applied, {@link withExposureReview}
+ * keeps that list as a review, and a band on the team page or on Devices
+ * leads to it until every entry is marked.
  *
  * The list is a lower bound. It is computed from this account's catalog, so
  * an item this account cannot list is not in it; Trash entries and folders
  * are not in it either. A member's list is the items whose read role the
  * member's role admits; a device's list is every item in every store of its
- * account, since the device held the account's keys.
+ * account, since the device held the account's keys. A store whose items
+ * cannot be listed is left out of a device's list and named in the sheet.
  *
  * A review is stored under the `foks.exposureReviews` `localStorage` key,
  * which persists while the app is locked. Each entry holds an item's
@@ -46,6 +48,7 @@ import {
   itemsReadiness,
   kindOf,
   readersOf,
+  storeAvailability,
 } from './model';
 import type {
   AgentSnapshot,
@@ -53,8 +56,10 @@ import type {
   Item,
   Party,
   RoleWire,
+  Store,
   StoreRef,
 } from './model';
+import { failureOutcome } from './operation-outcome';
 
 const STORAGE_KEY = 'foks.exposureReviews';
 
@@ -124,26 +129,77 @@ export function loweredReads(
   );
 }
 
-/** The stores an account holds: its own and its teams on the same server. */
-function accountStoreRefs(
+/**
+ * The stores an account holds: its own and its teams on the same server. A
+ * team whose setup has not completed (`active: false`) is left out: the
+ * catalog does not read its items, and no device of the account read them.
+ */
+function accountStores(
   snapshot: AgentSnapshot,
   account: { server: string; account: string },
-): StoreRef[] {
-  return snapshot.stores
-    .filter(
-      (store) =>
-        store.server === account.server && store.account === account.account,
-    )
-    .map((store) => store.id);
+): Store[] {
+  return snapshot.stores.filter(
+    (store) =>
+      store.server === account.server &&
+      store.account === account.account &&
+      !(store.kind === 'team' && !store.active),
+  );
 }
 
-/** Every catalog item in every store of the account a device belonged to. */
-export function accountReads(
+/** What a removed device could read, as far as this account can list it. */
+export interface AccountExposure {
+  /**
+   * `loading` while the account's teams or any of its stores' items are
+   * still being read; `unavailable` when no store's items could be listed;
+   * otherwise `ready`, with the items of the stores that were listed.
+   */
+  readiness: CollectionReadiness;
+  /** Every catalog item in the listed stores; empty unless `ready`. */
+  items: Item[];
+  /** The stores whose items could not be listed, so are not in `items`. */
+  unlisted: StoreRef[];
+  /** The account's team list could not be read, so a team may be missing. */
+  teamsUnlisted: boolean;
+}
+
+/**
+ * Every catalog item in every store of the account a device belonged to,
+ * since the device held the account's keys. A store whose items cannot be
+ * listed is named in `unlisted` rather than withholding the other stores'
+ * items; the list is a lower bound either way.
+ */
+export function accountExposure(
   snapshot: AgentSnapshot,
   account: { server: string; account: string },
-): Item[] {
-  const stores = new Set(accountStoreRefs(snapshot, account));
-  return catalog(snapshot).filter((item) => stores.has(item.store));
+): AccountExposure {
+  const teams = inventoryReadiness(snapshot, 'teams', account.server);
+  let loading = teams === 'loading';
+  const listed = new Set<StoreRef>();
+  const unlisted: StoreRef[] = [];
+  for (const store of accountStores(snapshot, account)) {
+    if (listed.has(store.id) || unlisted.includes(store.id)) continue;
+    const readiness = itemsReadiness(snapshot, store.id);
+    if (readiness === 'loading') loading = true;
+    // `catalog` leaves out the items of a store it cannot read, so such a
+    // store is unlisted even when its items were read.
+    else if (
+      readiness === 'ready' &&
+      storeAvailability(snapshot, store).available
+    )
+      listed.add(store.id);
+    else unlisted.push(store.id);
+  }
+  const teamsUnlisted = teams === 'unavailable';
+  if (loading)
+    return { readiness: 'loading', items: [], unlisted: [], teamsUnlisted };
+  if (!listed.size)
+    return { readiness: 'unavailable', items: [], unlisted, teamsUnlisted };
+  return {
+    readiness: 'ready',
+    items: catalog(snapshot).filter((item) => listed.has(item.store)),
+    unlisted,
+    teamsUnlisted,
+  };
 }
 
 /** Whether the team's items and roster are read, so a member's list is whole. */
@@ -154,22 +210,6 @@ export function memberExposureReadiness(
   return combineReadiness([
     itemsReadiness(snapshot, store),
     groupDetailReadiness(snapshot, store, 'roster'),
-  ]);
-}
-
-/**
- * Whether the account's teams and every one of its stores' items are read,
- * so a device's list is whole.
- */
-export function accountExposureReadiness(
-  snapshot: AgentSnapshot,
-  account: { server: string; account: string },
-): CollectionReadiness {
-  return combineReadiness([
-    inventoryReadiness(snapshot, 'teams', account.server),
-    ...accountStoreRefs(snapshot, account).map((store) =>
-      itemsReadiness(snapshot, store),
-    ),
   ]);
 }
 
@@ -379,10 +419,11 @@ function sameEntry(
 
 /**
  * Keeps a review of `entries` for the party, after its access ended. A
- * review already kept for the same party and scope keeps its entries, with
- * their versions and marks, and gains the new ones; the review moves to the
- * front. Nothing is stored for an empty list. Returns whether the review was
- * stored.
+ * review already kept for the same party and scope is merged: an entry in
+ * the new list replaces the kept one, taking its version and dropping its
+ * mark, since the party could read the item again; a kept entry absent from
+ * the new list stays as it was. The review moves to the front. Nothing is
+ * stored for an empty list. Returns whether the review was stored.
  */
 export function recordExposure(
   review: Omit<ExposureReview, 'id' | 'at'>,
@@ -392,18 +433,47 @@ export function recordExposure(
   const id = reviewId(review.scope, review.party);
   return update((current) => {
     const previous = current.find((seen) => seen.id === id);
-    const kept = previous?.entries ?? [];
     const merged = [
-      ...kept,
-      ...review.entries.filter(
-        (entry) => !kept.some((seen) => sameEntry(seen, entry)),
+      ...(previous?.entries ?? []).filter(
+        (seen) => !review.entries.some((entry) => sameEntry(seen, entry)),
       ),
+      ...review.entries.map((entry) => ({
+        store: entry.store,
+        dirent: entry.dirent,
+        version: entry.version,
+      })),
     ];
     return [
       { ...review, id, at, entries: merged },
       ...current.filter((seen) => seen.id !== id),
     ].slice(0, REVIEW_LIMIT);
   });
+}
+
+/**
+ * Runs `write`, the change that ends the party's access, and keeps `review`
+ * once it succeeds. A failure whose outcome is unknown
+ * ({@link failureOutcome}) keeps the review too: the change may have been
+ * applied, after which the party is no longer in the roster or the device
+ * list and the sheet that computed the list cannot be opened for it again.
+ * A review of a change that was not applied is one the user can clear.
+ * `onUnstored` runs when storage refuses the review.
+ */
+export async function withExposureReview<T>(
+  review: Omit<ExposureReview, 'id' | 'at'>,
+  write: () => Promise<T>,
+  onUnstored: () => void,
+): Promise<T> {
+  let value: T;
+  try {
+    value = await write();
+  } catch (error) {
+    if (failureOutcome(error) === 'unknown' && !recordExposure(review))
+      onUnstored();
+    throw error;
+  }
+  if (!recordExposure(review)) onUnstored();
+  return value;
 }
 
 /** Sets or, with `null`, clears the mark on one entry of a review. */

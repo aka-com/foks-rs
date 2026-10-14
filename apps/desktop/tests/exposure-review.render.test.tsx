@@ -11,6 +11,7 @@ import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
+import type { Bridge } from '../src/bridge';
 import type { AgentSnapshot, Item } from '../src/model';
 
 installDom({
@@ -84,6 +85,16 @@ async function teamPage(
   snapshot: AgentSnapshot,
   ref: string,
   opened: Item[] = [],
+  {
+    overrides = {},
+    failures,
+    tab = 'settings',
+  }: {
+    overrides?: Partial<Bridge>;
+    /** Collects mutation failures; without it, a failure fails the test. */
+    failures?: unknown[];
+    tab?: 'settings' | 'people';
+  } = {},
 ) {
   const { GroupSettingsScreen } = (await vite.ssrLoadModule(
     '/src/screens/groups-screen.tsx',
@@ -95,15 +106,16 @@ async function teamPage(
     await providers(
       createElement(GroupSettingsScreen, {
         snapshot,
-        bridge: mockBridge(snapshot),
-        location: { kind: 'group-settings', ref, tab: 'settings' },
+        bridge: { ...mockBridge(snapshot), ...overrides },
+        location: { kind: 'group-settings', ref, tab },
         onNavigate: () => {},
         onApplied: async () => {},
         onError: (error: unknown) => {
           throw error;
         },
         onMutationError: async (error: unknown) => {
-          throw error;
+          if (!failures) throw error;
+          failures.push(error);
         },
         onOpenItem: (item: Item) => opened.push(item),
       }),
@@ -369,8 +381,8 @@ test('lowering a role lists only the items the new role no longer admits', async
   );
 });
 
-test('removing a device lists every item of its account and keeps the review', async () => {
-  const snapshot = await fixture();
+/** Devices for the personal account, with the Remove device sheet open. */
+async function removeDeviceSheet(snapshot: AgentSnapshot) {
   const { DevicesScreen } = (await vite.ssrLoadModule(
     '/src/screens/devices-screen.tsx',
   )) as typeof import('../src/screens/devices-screen');
@@ -413,6 +425,21 @@ test('removing a device lists every item of its account and keeps the review', a
   const input = document.querySelector<HTMLInputElement>('.sheet input');
   assert.ok(input);
   const name = input.placeholder.replace(/^type /, '');
+  const remove = async () => {
+    ui.fireEvent.change(input, { target: { value: name } });
+    await ui.act(async () => {
+      ui.fireEvent.click(
+        rendered.getByRole('button', { name: 'Remove device' }),
+      );
+    });
+  };
+  return { rendered, device, name, page, remove };
+}
+
+test('removing a device lists every item of its account and keeps the review', async () => {
+  const snapshot = await fixture();
+  const { rendered, device, name, page, remove } =
+    await removeDeviceSheet(snapshot);
   const list = rendered.getByRole('list', { name: `Items ${name} could read` });
   // Six rows, Passwords first, and a count of the rest.
   assert.deepEqual(listed(list).slice(0, 4), [
@@ -426,10 +453,7 @@ test('removing a device lists every item of its account and keeps the review', a
     list.querySelector('.exposure-row.more')?.textContent,
     'and 3 more items',
   );
-  ui.fireEvent.change(input, { target: { value: name } });
-  await ui.act(async () => {
-    ui.fireEvent.click(rendered.getByRole('button', { name: 'Remove device' }));
-  });
+  await remove();
   const [review] = stored();
   assert.ok(review);
   assert.equal(review.scope, 'acct:personal');
@@ -446,4 +470,194 @@ test('removing a device lists every item of its account and keeps the review', a
       name: `Review items ${name} could read`,
     }),
   );
+});
+
+test('a team whose items cannot be listed is named, and the account’s items are kept', async () => {
+  const fixtureSnapshot = await fixture();
+  const snapshot: AgentSnapshot = {
+    ...fixtureSnapshot,
+    storeInventory: fixtureSnapshot.storeInventory.map((entry) =>
+      entry.store === 'team:household'
+        ? { ...entry, status: 'unavailable' as const }
+        : entry,
+    ),
+  };
+  const { rendered, name, remove } = await removeDeviceSheet(snapshot);
+  const sheet = rendered.getByRole('alertdialog');
+  assert.match(
+    sheet.textContent ?? '',
+    /Items in Household could not be listed and are not included\./,
+  );
+  const list = rendered.getByRole('list', { name: `Items ${name} could read` });
+  assert.equal(listed(list).includes('netflix'), false);
+  await remove();
+  const [review] = stored();
+  assert.ok(review);
+  assert.deepEqual(
+    [...new Set(review.entries.map((entry) => entry.store))],
+    ['acct:personal'],
+  );
+  assert.equal(review.entries.length, 6);
+});
+
+test('a removal that is refused keeps no review; one with an unknown outcome does', async () => {
+  const snapshot = await fixture();
+  const refusal = {
+    code: 'permission-denied',
+    message: 'The server refused the change.',
+    retryable: false,
+    ambiguous: false,
+    fatal: false,
+  };
+  for (const [error, kept] of [
+    [refusal, 0],
+    [
+      {
+        ...refusal,
+        code: 'agent-lost',
+        message: 'The agent stopped.',
+        ambiguous: true,
+      },
+      1,
+    ],
+  ] as const) {
+    const failures: unknown[] = [];
+    const rendered = await teamPage(snapshot, 'team:household', [], {
+      overrides: {
+        removeGroupMember: async () => {
+          throw error;
+        },
+      },
+      failures,
+    });
+    const dialog = await openRemoval(rendered, 'sam');
+    await ui.act(async () => {
+      ui.fireEvent.click(
+        ui.within(dialog).getByRole('button', { name: 'Remove and rekey' }),
+      );
+    });
+    assert.equal(failures.length, 1);
+    assert.equal(stored().length, kept);
+    ui.cleanup();
+    window.localStorage.clear();
+  }
+});
+
+test('marking an entry keeps focus on its row, and closing drops a fully marked review', async () => {
+  const snapshot = await fixture();
+  window.localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify([
+      {
+        scope: 'team:household',
+        party: 'p',
+        name: 'sam',
+        cause: 'removed',
+        at: Date.UTC(2026, 0, 2),
+        entries: [
+          {
+            store: 'team:household',
+            dirent: '0000000000000000000000000000000e',
+            version: 0,
+          },
+        ],
+      },
+    ]),
+  );
+  const rendered = await teamPage(snapshot, 'team:household', []);
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Review…' }));
+  });
+  const sheet = rendered.getByRole('dialog', {
+    name: 'Review items sam could read',
+  });
+  const rotated = ui
+    .within(sheet)
+    .getByRole('button', { name: 'Mark netflix rotated' });
+  rotated.focus();
+  await ui.act(async () => {
+    ui.fireEvent.click(rotated);
+  });
+  assert.equal(
+    document.activeElement,
+    ui
+      .within(sheet)
+      .getByRole('button', { name: 'Clear the Rotated mark on netflix' }),
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(document.activeElement as HTMLElement);
+  });
+  assert.equal(
+    document.activeElement,
+    ui.within(sheet).getByRole('button', { name: 'Open netflix' }),
+  );
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(sheet).getByRole('button', { name: 'Mark netflix not needed' }),
+    );
+  });
+  assert.equal(stored().length, 1);
+  // Escape closes the sheet as Done does, and drops the marked review.
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(document.activeElement ?? sheet, { key: 'Escape' });
+  });
+  assert.equal(
+    rendered.queryByRole('dialog', { name: 'Review items sam could read' }),
+    null,
+  );
+  assert.deepEqual(stored(), []);
+});
+
+test('removing a federated team lists what it could read and keeps it for review', async () => {
+  const fixtureSnapshot = await fixture();
+  const snapshot: AgentSnapshot = {
+    ...fixtureSnapshot,
+    federation: fixtureSnapshot.federation.map((entry) => ({
+      ...entry,
+      active: true,
+    })),
+  };
+  const homelab = snapshot.parties.find(
+    (party) =>
+      party.store === 'team:eng' && party.team_name?.startsWith('homelab'),
+  );
+  assert.ok(homelab);
+  const rendered = await teamPage(snapshot, 'team:eng', [], { tab: 'people' });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      rendered.getByRole('button', { name: 'Actions for homelab' }),
+    );
+  });
+  const remove = [
+    ...document.querySelectorAll<HTMLButtonElement>('.menu button'),
+  ].find((node) =>
+    (node.textContent ?? '').trim().endsWith('Remove federated team…'),
+  );
+  assert.ok(remove);
+  await ui.act(async () => {
+    ui.fireEvent.click(remove);
+  });
+  const dialog = rendered.getByRole('alertdialog', {
+    name: 'Remove homelab from Engineering?',
+  });
+  const list = ui
+    .within(dialog)
+    .getByRole('list', { name: 'Items homelab could read' });
+  assert.equal(listed(list).includes('production-token'), false);
+  assert.ok(listed(list).length > 0);
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(dialog).getByRole('checkbox'));
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Remove and rekey' }),
+    );
+  });
+  const [review] = stored();
+  assert.ok(review);
+  assert.equal(review.scope, 'team:eng');
+  assert.equal(review.party, homelab.party_id_hex);
+  assert.equal(review.name, 'homelab');
+  assert.equal(review.cause, 'removed');
+  assert.equal(review.entries.length, listed(list).length);
 });

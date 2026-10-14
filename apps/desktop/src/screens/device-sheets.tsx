@@ -62,14 +62,14 @@ import {
 } from '../components';
 import type { AccountStore, AgentSnapshot } from '../model';
 import {
-  accountExposureReadiness,
-  accountReads,
+  accountExposure,
   entriesOf,
   exposureOrder,
-  recordExposure,
+  withExposureReview,
 } from '../exposure-review';
 import { deviceAlertRegistry } from './device-alert';
-import { ExposureSummary } from './exposure-review';
+import { ExposureSummary, unstoredReview } from './exposure-review';
+import { useToast } from '/kit/toasts';
 
 /** A YubiKey command that is one sheet of typed values. */
 export type SimpleYubiAction =
@@ -1578,12 +1578,14 @@ export function RemoveDeviceSheet({
   );
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
+  const toasts = useToast();
   const expected = device.name ?? device.id;
   // The device held the account's keys, so it could read every item in the
-  // account's own store and its teams. The list waits for all of them.
-  const readiness = accountExposureReadiness(snapshot, store);
-  const exposed =
-    readiness === 'ready' ? exposureOrder(accountReads(snapshot, store)) : [];
+  // account's own store and its teams. The list waits while any of them is
+  // being read, and names a store whose items could not be listed.
+  const exposure = accountExposure(snapshot, store);
+  const readiness = exposure.readiness;
+  const exposed = exposureOrder(exposure.items);
   // Removing a device is a write the agent has already been given.
   useSheetGuard(
     busy
@@ -1624,14 +1626,17 @@ export function RemoveDeviceSheet({
               void controller
                 .run(
                   async () => {
-                    await removeDevice(bridge, access, store, device.id);
-                    recordExposure({
-                      scope: store.id,
-                      party: device.id,
-                      name: expected,
-                      cause: 'device-removed',
-                      entries,
-                    });
+                    await withExposureReview(
+                      {
+                        scope: store.id,
+                        party: device.id,
+                        name: expected,
+                        cause: 'device-removed',
+                        entries,
+                      },
+                      () => removeDevice(bridge, access, store, device.id),
+                      () => toasts.show(unstoredReview(expected)),
+                    );
                   },
                   onDone,
                   onError,
@@ -1664,6 +1669,8 @@ export function RemoveDeviceSheet({
         empty="This account has no items this device could read."
         items={exposed}
         readiness={readiness}
+        unlisted={exposure.unlisted}
+        teamsUnlisted={exposure.teamsUnlisted}
       />
     </DeviceSheetFrame>
   );

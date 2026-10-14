@@ -7,13 +7,14 @@ import {
   exposureOrder,
   memberExposureReadiness,
   memberReads,
-  recordExposure,
+  withExposureReview,
 } from '../../exposure-review';
 import { groupDetailFailure, partyName } from '../../model';
 import type { Party } from '../../model';
 import { markProfileRostersStale } from '../../roster-staleness';
-import { ExposureSummary } from '../exposure-review';
+import { ExposureSummary, unstoredReview } from '../exposure-review';
 import { GroupMark } from '../group-mark';
+import { useToast } from '/kit/toasts';
 import {
   canTarget,
   DetailUnavailable,
@@ -32,6 +33,7 @@ export function RemoveMemberSheet({
   onMutationError,
 }: GroupSheetBaseProps & { target: Party | null }): ReactNode {
   const { busy, write } = useSheetWrite(onApplied, onClose);
+  const toasts = useToast();
   const requiredFailure = groupDetailFailure(snapshot, store.id, 'roster');
   const name = target ? partyName(target) : 'them';
   const title = `Remove ${name} from ${store.name}?`;
@@ -51,17 +53,21 @@ export function RemoveMemberSheet({
       title,
       async () => {
         markProfileRostersStale(store.server);
-        await bridge.removeGroupMember({
-          storeId: store.id,
-          username: target.username!,
-        });
-        recordExposure({
-          scope: store.id,
-          party: target.party_id_hex,
-          name,
-          cause: 'removed',
-          entries,
-        });
+        await withExposureReview(
+          {
+            scope: store.id,
+            party: target.party_id_hex,
+            name,
+            cause: 'removed',
+            entries,
+          },
+          () =>
+            bridge.removeGroupMember({
+              storeId: store.id,
+              username: target.username!,
+            }),
+          () => toasts.show(unstoredReview(name)),
+        );
         return { profile: store.server };
       },
       (error) => onMutationError(error),

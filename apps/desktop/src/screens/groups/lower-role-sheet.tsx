@@ -18,12 +18,12 @@ import {
   exposureOrder,
   loweredReads,
   memberExposureReadiness,
-  recordExposure,
+  withExposureReview,
 } from '../../exposure-review';
 import { groupDetailFailure, parseRole, partyName } from '../../model';
 import type { Party } from '../../model';
 import { markProfileRostersStale } from '../../roster-staleness';
-import { ExposureSummary } from '../exposure-review';
+import { ExposureSummary, unstoredReview } from '../exposure-review';
 import { GroupMark } from '../group-mark';
 import {
   canTarget,
@@ -35,6 +35,7 @@ import {
   VisibilityStepper,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
+import { useToast } from '/kit/toasts';
 
 export function LowerRoleSheet({
   snapshot,
@@ -52,6 +53,7 @@ export function LowerRoleSheet({
     setDemotion(target ? demotionFor(target) : null);
   }, [target]);
   const { busy, write } = useSheetWrite(onApplied, onClose);
+  const toasts = useToast();
   const requiredFailure = groupDetailFailure(snapshot, store.id, 'roster');
   const name = target ? partyName(target) : 'them';
   const title = `Lower ${target ? `${name}’s` : 'their'} role`;
@@ -83,18 +85,22 @@ export function LowerRoleSheet({
       title,
       async () => {
         markProfileRostersStale(store.server);
-        await bridge.demoteGroupMember({
-          storeId: store.id,
-          username: target.username!,
-          destination: demotion,
-        });
-        recordExposure({
-          scope: store.id,
-          party: target.party_id_hex,
-          name,
-          cause: 'lowered',
-          entries,
-        });
+        await withExposureReview(
+          {
+            scope: store.id,
+            party: target.party_id_hex,
+            name,
+            cause: 'lowered',
+            entries,
+          },
+          () =>
+            bridge.demoteGroupMember({
+              storeId: store.id,
+              username: target.username!,
+              destination: demotion,
+            }),
+          () => toasts.show(unstoredReview(name)),
+        );
         return { profile: store.server };
       },
       (error) => onMutationError(error),

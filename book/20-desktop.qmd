@@ -575,26 +575,35 @@ removing a device ends its access to the account. Each change stops later
 reads only. A credential the party already read, such as an API token or a
 Wi-Fi password, stays valid where it is used until it is changed there.
 
-The Remove, Lower role and Remove device sheets therefore list, before the
-write, the items the party could read: for a member, the team's items whose
-read role the member's role admits; for a lowered member, those the new
-role no longer admits; for a device, every item in its account's own store
-and in the account's teams, since the device held the account's keys. The
-list comes from this account's catalog, so it is a lower bound: an item this
-account cannot list, a Trash entry and a folder are not in it, and the sheet
-says so. The sheet waits until the store's items, and for a member the
-roster, have been read; if they cannot be read, the change can still be made,
-but no list is kept.
+The Remove, Lower role, Remove federated team and Remove device sheets
+therefore list, before the write, the items the party could read: for a
+member or a federated team, the team's items whose read role its role
+admits; for a lowered member, those the new role no longer admits; for a
+device, every item in its account's own store and in the account's teams,
+since the device held the account's keys. A team whose setup has not
+completed is not included, since no device read its items. The list comes
+from this account's catalog, so it is a lower bound: an item this account
+cannot list, a Trash entry and a folder are not in it, and the sheet says so.
+The sheet waits until the store's items, and for a member the roster, have
+been read. If a member's team cannot be read, the change can still be made,
+but no list is kept. A device's list leaves out only the stores whose items
+could not be listed and names them.
 
-Once the write reports success, the list is kept on this device as a
-review, and the team page or Devices shows a band until each entry is
-marked Rotated or Not needed. The review sheet opens an item in Files, where
-Edit can generate a new password. An entry whose item has a higher version
-than at the change reads "Changed since removal" ("Changed since role
-change" after a demotion): any write raises the
-version, so the user confirms rotation rather than the app assuming it. An
-entry whose dirent id is no longer listed, because the item was moved,
-renamed or removed, reads "Not listed".
+Once the write reports success, or fails in a way that does not show whether
+it was applied (the agent connection was lost, for example), the list is kept
+on this device as a review; after such a failure the party may already be
+gone from the roster or the device list, and the sheet could not be opened
+for it again. A later change for the same party and team adds to that review;
+an item listed again replaces its earlier entry and mark, since the party
+could read it again. The team page or Devices shows a band until each entry
+is marked Rotated or Not needed, and closing the review sheet with every
+entry marked removes the review. The review sheet opens an item in Files,
+where Edit can generate a new password. An entry whose item has a higher
+version than at the change reads "Changed since removal" ("Changed since role
+change" after a demotion): any write raises the version, so the user confirms
+rotation rather than the app assuming it. An entry whose dirent id is no
+longer listed, because the item was moved, renamed or removed, reads "Not
+listed". If storage refuses a review, a notice says so.
 
 Reviews are kept in the webview's local storage under
 `foks.exposureReviews`, which persists while the app is locked. A review holds

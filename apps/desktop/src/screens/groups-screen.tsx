@@ -95,8 +95,20 @@ import { GroupMark } from './group-mark';
 import { manageReason } from './group-model';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
-import { memberReads, useExposureReviews } from '../exposure-review';
-import { ExposureReviewBands, ExposureReviewSheet } from './exposure-review';
+import {
+  entriesOf,
+  exposureOrder,
+  memberExposureReadiness,
+  memberReads,
+  useExposureReviews,
+  withExposureReview,
+} from '../exposure-review';
+import {
+  ExposureReviewBands,
+  ExposureReviewSheet,
+  ExposureSummary,
+  unstoredReview,
+} from './exposure-review';
 
 type Tab = GroupSettingsTab;
 export type GroupSheetKind =
@@ -691,6 +703,7 @@ function MembersTab({
 }
 
 function FederationRemovalSheet({
+  snapshot,
   bridge,
   store,
   entry,
@@ -698,6 +711,7 @@ function FederationRemovalSheet({
   onApplied,
   onMutationError,
 }: {
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   store: Extract<Store, { kind: 'team' }>;
   entry: FederationEntry;
@@ -713,8 +727,25 @@ function FederationRemovalSheet({
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const toasts = useToast();
+  const name = entry.remote_team_alias;
+  // The remote team is a party of this team's roster. What its members could
+  // read through it is listed before the write and kept for review after it,
+  // as for a removed member.
+  const party = partiesOf(snapshot, store.id).find(
+    (candidate) =>
+      candidate.party_kind !== 'user' &&
+      candidate.party_id_hex === entry.remote_team_id_hex &&
+      (!candidate.scoped_host_id_hex ||
+        candidate.scoped_host_id_hex === entry.remote_host_id_hex),
+  );
+  const readiness = memberExposureReadiness(snapshot, store.id);
+  const exposed =
+    party && readiness === 'ready'
+      ? exposureOrder(memberReads(snapshot, party))
+      : [];
   const apply = async (): Promise<void> => {
-    if (!confirmed || busy || !entry.active) return;
+    if (!confirmed || busy || !entry.active || readiness === 'loading') return;
+    const entries = entriesOf(exposed);
     setBusy(true);
     try {
       const result = await attemptMutation(
@@ -724,11 +755,22 @@ function FederationRemovalSheet({
           // read back must not reuse the roster it holds even if the agent's
           // catalog has not yet caught up with that sequence.
           markProfileRostersStale(store.server);
-          return bridge.removeFederatedGroup({
-            storeId: store.id,
-            remoteHostIdHex: entry.remote_host_id_hex,
-            remoteTeamIdHex: entry.remote_team_id_hex,
-          });
+          return withExposureReview(
+            {
+              scope: store.id,
+              party: party?.party_id_hex ?? entry.remote_team_id_hex,
+              name,
+              cause: 'removed',
+              entries,
+            },
+            () =>
+              bridge.removeFederatedGroup({
+                storeId: store.id,
+                remoteHostIdHex: entry.remote_host_id_hex,
+                remoteTeamIdHex: entry.remote_team_id_hex,
+              }),
+            () => toasts.show(unstoredReview(name)),
+          );
         },
         () =>
           onApplied(
@@ -761,7 +803,9 @@ function FederationRemovalSheet({
           <Button
             variant="primary"
             danger
-            disabled={busy || !confirmed || !entry.active}
+            disabled={
+              busy || !confirmed || !entry.active || readiness === 'loading'
+            }
             onClick={() => void apply()}
           >
             Remove and rekey
@@ -792,6 +836,16 @@ function FederationRemovalSheet({
         />
         Remove every member of {entry.remote_team_alias} and rotate keys
       </label>
+      {entry.active ? (
+        <ExposureSummary
+          snapshot={snapshot}
+          name={name}
+          heading={`Items ${name} could read`}
+          empty={`${name} cannot read any item this account can list.`}
+          items={exposed}
+          readiness={readiness}
+        />
+      ) : null}
     </SheetDialog>
   );
 }
@@ -1836,6 +1890,7 @@ export function GroupSettingsScreen({
           </div>
           {removalEntry ? (
             <FederationRemovalSheet
+              snapshot={snapshot}
               bridge={bridge}
               store={store}
               entry={removalEntry}

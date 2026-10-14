@@ -77,21 +77,63 @@ test('a lower role lists only the items it no longer admits', () => {
   );
 });
 
+const personal = { server: 'personal', account: 'personal' };
+
 test('a device reads every item in its account and the account’s teams', () => {
-  const items = exposure.accountReads(FIXTURE, {
-    server: 'personal',
-    account: 'personal',
-  });
-  const stores = new Set(items.map((item) => item.store));
+  const exposed = exposure.accountExposure(FIXTURE, personal);
+  assert.equal(exposed.readiness, 'ready');
+  const stores = new Set(exposed.items.map((item) => item.store));
   assert.deepEqual([...stores].sort(), ['acct:personal', 'team:household']);
-  assert.equal(items.length, 9);
-  assert.equal(
-    exposure.accountExposureReadiness(FIXTURE, {
-      server: 'personal',
-      account: 'personal',
-    }),
-    'ready',
+  assert.equal(exposed.items.length, 9);
+  assert.deepEqual(exposed.unlisted, []);
+  assert.equal(exposed.teamsUnlisted, false);
+});
+
+test('a team whose setup has not completed is not waited for or named', () => {
+  // The native catalog does not read an inactive team's items, so its read
+  // stays unfinished and the projection reports it unavailable.
+  const unread: AgentSnapshot = {
+    ...FIXTURE,
+    storeInventory: FIXTURE.storeInventory.map((entry) =>
+      entry.store === 'team:homelab'
+        ? { ...entry, status: 'unavailable' as const }
+        : entry,
+    ),
+  };
+  const exposed = exposure.accountExposure(unread, personal);
+  assert.equal(exposed.readiness, 'ready');
+  assert.equal(exposed.items.length, 9);
+  assert.deepEqual(exposed.unlisted, []);
+});
+
+test('a store whose items cannot be listed is named, not the whole list dropped', () => {
+  const failed: AgentSnapshot = {
+    ...FIXTURE,
+    storeInventory: FIXTURE.storeInventory.map((entry) =>
+      entry.store === 'team:household'
+        ? { ...entry, status: 'unavailable' as const }
+        : entry,
+    ),
+  };
+  const exposed = exposure.accountExposure(failed, personal);
+  assert.equal(exposed.readiness, 'ready');
+  assert.deepEqual(exposed.unlisted, ['team:household']);
+  assert.deepEqual(
+    [...new Set(exposed.items.map((item) => item.store))],
+    ['acct:personal'],
   );
+  // With no store listed, there is nothing to keep.
+  const none: AgentSnapshot = {
+    ...failed,
+    storeInventory: failed.storeInventory.map((entry) =>
+      entry.store === 'acct:personal'
+        ? { ...entry, status: 'unavailable' as const }
+        : entry,
+    ),
+  };
+  const empty = exposure.accountExposure(none, personal);
+  assert.equal(empty.readiness, 'unavailable');
+  assert.deepEqual(empty.items, []);
 });
 
 test('the list waits while a store’s items are still being read', () => {
@@ -108,10 +150,7 @@ test('the list waits while a store’s items are still being read', () => {
     'loading',
   );
   assert.equal(
-    exposure.accountExposureReadiness(loading, {
-      server: 'personal',
-      account: 'personal',
-    }),
+    exposure.accountExposure(loading, personal).readiness,
     'loading',
   );
   assert.equal(exposure.memberExposureReadiness(loading, 'team:eng'), 'ready');
@@ -191,7 +230,7 @@ test('an empty list keeps no review', () => {
   assert.deepEqual(exposure.exposureReviews(), []);
 });
 
-test('a later change for the same party keeps earlier versions and marks', () => {
+test('a later change for the same party replaces re-exposed entries and keeps the rest', () => {
   const base = {
     scope: 'team:eng',
     party: 'p1',
@@ -200,10 +239,16 @@ test('a later change for the same party keeps earlier versions and marks', () =>
   exposure.recordExposure({
     ...base,
     cause: 'lowered',
-    entries: [{ store: 'team:eng', dirent: 'a', version: 3 }],
+    entries: [
+      { store: 'team:eng', dirent: 'a', version: 3 },
+      { store: 'team:eng', dirent: 'c', version: 2 },
+    ],
   });
   const id = exposure.reviewId('team:eng', 'p1');
   exposure.markExposure(id, { store: 'team:eng', dirent: 'a' }, 'rotated');
+  exposure.markExposure(id, { store: 'team:eng', dirent: 'c' }, 'not-needed');
+  // The member is raised and lowered again: `a` was readable again, at a
+  // later version, so its earlier mark no longer holds. `c` was not.
   exposure.recordExposure({
     ...base,
     cause: 'removed',
@@ -216,13 +261,80 @@ test('a later change for the same party keeps earlier versions and marks', () =>
   assert.equal(reviews.length, 1);
   assert.equal(reviews[0]?.cause, 'removed');
   assert.deepEqual(reviews[0]?.entries, [
-    { store: 'team:eng', dirent: 'a', version: 3, mark: 'rotated' },
+    { store: 'team:eng', dirent: 'c', version: 2, mark: 'not-needed' },
+    { store: 'team:eng', dirent: 'a', version: 5 },
     { store: 'team:eng', dirent: 'b', version: 1 },
   ]);
-  exposure.markExposure(id, { store: 'team:eng', dirent: 'a' }, null);
+  assert.equal(reviews[0] && exposure.openEntries(reviews[0]), 2);
+  exposure.markExposure(id, { store: 'team:eng', dirent: 'c' }, null);
   assert.equal(exposure.exposureReviews()[0]?.entries[0]?.mark, undefined);
   exposure.dismissExposure(id);
   assert.deepEqual(exposure.exposureReviews(), []);
+});
+
+test('a review is kept after a write that succeeds or whose outcome is unknown', async () => {
+  const review = {
+    scope: 'team:eng',
+    party: 'p1',
+    name: 'dana',
+    cause: 'removed' as const,
+    entries: [{ store: 'team:eng', dirent: 'a', version: 3 }],
+  };
+  const unstored: string[] = [];
+  const onUnstored = () => unstored.push('unstored');
+  // A typed rejection: the change was not applied, so nothing is kept.
+  const rejected = {
+    code: 'permission-denied',
+    message: 'no',
+    retryable: false,
+    ambiguous: false,
+    fatal: false,
+    origin: 'response',
+  };
+  await assert.rejects(
+    exposure.withExposureReview(
+      review,
+      async () => {
+        throw rejected;
+      },
+      onUnstored,
+    ),
+  );
+  assert.deepEqual(exposure.exposureReviews(), []);
+  // A lost agent: the change may have been applied, so the list is kept.
+  await assert.rejects(
+    exposure.withExposureReview(
+      review,
+      async () => {
+        throw { ...rejected, code: 'agent-lost', ambiguous: true };
+      },
+      onUnstored,
+    ),
+  );
+  assert.equal(exposure.exposureReviews().length, 1);
+  window.localStorage.clear();
+  assert.equal(
+    await exposure.withExposureReview(review, async () => 'done', onUnstored),
+    'done',
+  );
+  assert.equal(exposure.exposureReviews().length, 1);
+  assert.deepEqual(unstored, []);
+  // Storage that refuses the write is reported, and the write's value kept.
+  const prototype = Object.getPrototypeOf(window.localStorage) as Storage;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'setItem');
+  assert.ok(descriptor);
+  prototype.setItem = () => {
+    throw new Error('Storage is full');
+  };
+  try {
+    assert.equal(
+      await exposure.withExposureReview(review, async () => 'done', onUnstored),
+      'done',
+    );
+  } finally {
+    Object.defineProperty(prototype, 'setItem', descriptor);
+  }
+  assert.deepEqual(unstored, ['unstored']);
 });
 
 test('malformed stored reviews and entries are dropped', () => {
