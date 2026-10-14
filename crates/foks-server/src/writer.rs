@@ -454,6 +454,11 @@ mod tests {
                 .execute_batch(&format!("DROP INDEX {index}"))
                 .unwrap();
         }
+        connection
+            .execute_batch(include_str!(
+                "../../foks-server-db/tests/fixtures/remove_kv_accounting.sql"
+            ))
+            .unwrap();
         connection.execute_batch("DROP TRIGGER rt_membership_insert; DROP TRIGGER rt_membership_delete; DROP TRIGGER rt_membership_update; DROP TRIGGER rt_team_access_update; ALTER TABLE rt_user_inboxes DROP COLUMN reconcile_dirty; PRAGMA user_version=43;").unwrap();
         let guard = DatabaseWriterGuard::acquire(&path).unwrap();
         assert!(Writer::start(path.clone(), Default::default(), 2).is_err());

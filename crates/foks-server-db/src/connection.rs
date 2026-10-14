@@ -19,6 +19,33 @@ pub struct ReadDatabase {
     pub(crate) config: Config,
 }
 
+/// Opens additional readers for one already validated database and configuration.
+///
+/// Construction validates legacy capacity invariants once. Subsequent opens
+/// check file identity and schema, while the writer enforces capacity on every
+/// mutation. The database must not be modified by out-of-band SQL while this
+/// opener is in use; a different configuration requires a new opener.
+#[derive(Clone)]
+pub struct ReadDatabaseOpener {
+    identity: DatabasePathIdentity,
+    config: Config,
+}
+
+impl ReadDatabaseOpener {
+    pub fn new(path: impl AsRef<Path>, config: Config) -> Result<Self> {
+        let identity = DatabasePathIdentity::existing(path.as_ref())?;
+        let database = ReadDatabase::open(identity.path(), config.clone())?;
+        identity.recheck()?;
+        drop(database);
+        Ok(Self { identity, config })
+    }
+
+    pub fn open(&self) -> Result<ReadDatabase> {
+        self.identity.recheck()?;
+        ReadDatabase::open_identity(&self.identity, self.config.clone())
+    }
+}
+
 /// Stable identity for a regular, single-link SQLite database path.
 ///
 /// Server startup captures this before taking the adjacent writer lock and
@@ -213,6 +240,13 @@ impl Database {
 impl ReadDatabase {
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
         let identity = DatabasePathIdentity::existing(path.as_ref())?;
+        let database = Self::open_identity(&identity, config)?;
+        crate::kv::validate_kv_tree_capacity(&database.connection, &database.config)?;
+        Ok(database)
+    }
+
+    fn open_identity(identity: &DatabasePathIdentity, config: Config) -> Result<Self> {
+        identity.recheck()?;
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW;
@@ -220,7 +254,6 @@ impl ReadDatabase {
         identity.recheck()?;
         configure_reader(&connection, &config)?;
         schema::validate_connection(&connection)?;
-        crate::kv::validate_kv_tree_capacity(&connection, &config)?;
         Ok(Self { connection, config })
     }
 

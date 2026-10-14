@@ -3,7 +3,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 48;
+pub const SCHEMA_VERSION: i64 = 49;
 
 const SCHEMA: &str = concat!(
     include_str!("schema/core.sql"),
@@ -22,6 +22,7 @@ const SCHEMA: &str = concat!(
     include_str!("schema/capabilities.sql"),
     include_str!("schema/federation.sql"),
     include_str!("schema/kv.sql"),
+    include_str!("schema/kv_accounting.sql"),
     include_str!("schema/realtime.sql"),
     include_str!("schema/realtime_invalidation.sql"),
     include_str!("schema/waitlist.sql"),
@@ -41,71 +42,74 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         return Ok(());
     }
-    if application_id == APPLICATION_ID && matches!(version, 43..=47) {
+    if application_id == APPLICATION_ID && matches!(version, 43..=48) {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Recheck under the write lock: another opener may already have upgraded.
         let application_id =
             transaction.pragma_query_value(None, "application_id", |r| r.get(0))?;
         let version = transaction.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if application_id == APPLICATION_ID && matches!(version, 43..=47) {
-            if version == 43 {
-                transaction.execute_batch(
-                    "ALTER TABLE rt_user_inboxes ADD COLUMN reconcile_dirty INTEGER NOT NULL
+        if application_id == APPLICATION_ID && matches!(version, 43..=48) {
+            if version <= 47 {
+                if version == 43 {
+                    transaction.execute_batch(
+                        "ALTER TABLE rt_user_inboxes ADD COLUMN reconcile_dirty INTEGER NOT NULL
                      DEFAULT 1 CHECK (reconcile_dirty IN (0,1));",
-                )?;
-                transaction.execute_batch(include_str!("schema/realtime_invalidation.sql"))?;
-                transaction.execute(
-                    "UPDATE rt_user_inboxes SET reconcile_dirty=1,
+                    )?;
+                    transaction.execute_batch(include_str!("schema/realtime_invalidation.sql"))?;
+                    transaction.execute(
+                        "UPDATE rt_user_inboxes SET reconcile_dirty=1,
                      reconcile_after=NULL,reconcile_memberships=NULL",
-                    [],
-                )?;
-            }
-            if version <= 44 {
-                // A failed index build also rolls back the version-43
-                // reconciliation work.
-                transaction.execute_batch(include_str!("schema/expiry_indexes.sql"))?;
-            }
-            let has_fence: bool = transaction.query_row(
-                "SELECT EXISTS(
+                        [],
+                    )?;
+                }
+                if version <= 44 {
+                    // A failed index build also rolls back the version-43
+                    // reconciliation work.
+                    transaction.execute_batch(include_str!("schema/expiry_indexes.sql"))?;
+                }
+                let has_fence: bool = transaction.query_row(
+                    "SELECT EXISTS(
                     SELECT 1 FROM pragma_table_info('sso_policy') WHERE name='fence'
                 )",
-                [],
-                |row| row.get(0),
-            )?;
-            if has_fence {
-                transaction.execute_batch(
-                    "ALTER TABLE sso_policy RENAME COLUMN fence TO blocked_reason;",
+                    [],
+                    |row| row.get(0),
                 )?;
-            }
-            let has_admission_hash: bool = transaction.query_row(
-                "SELECT EXISTS(
+                if has_fence {
+                    transaction.execute_batch(
+                        "ALTER TABLE sso_policy RENAME COLUMN fence TO blocked_reason;",
+                    )?;
+                }
+                let has_admission_hash: bool = transaction.query_row(
+                    "SELECT EXISTS(
                     SELECT 1 FROM pragma_table_info('sso_sessions')
                     WHERE name='admission_hash'
                 )",
-                [],
-                |row| row.get(0),
-            )?;
-            if has_admission_hash {
-                transaction.execute_batch(
-                    "DROP INDEX sso_session_admission;
+                    [],
+                    |row| row.get(0),
+                )?;
+                if has_admission_hash {
+                    transaction.execute_batch(
+                        "DROP INDEX sso_session_admission;
                      ALTER TABLE sso_sessions
                      RENAME COLUMN admission_hash TO source_hash;
                      CREATE INDEX sso_session_source
                      ON sso_sessions(host, source_hash, expires_at_ms);
                      ALTER TABLE sso_identity_challenges
                      RENAME COLUMN admission_hash TO source_hash;",
-                )?;
-            }
-            // Version 48 changes the SSO provider fingerprint and the
-            // authenticated-encryption domains. Old browser flows cannot be
-            // resumed and old account links must be established again under
-            // the new provider identity.
-            transaction.execute_batch(
-                "DELETE FROM sso_binding_receipts;
+                    )?;
+                }
+                // Version 48 changes the SSO provider fingerprint and the
+                // authenticated-encryption domains. Old browser flows cannot be
+                // resumed and old account links must be established again under
+                // the new provider identity.
+                transaction.execute_batch(
+                    "DELETE FROM sso_binding_receipts;
                  DELETE FROM sso_identity_challenges;
                  DELETE FROM sso_access;
                  DELETE FROM sso_sessions;",
-            )?;
+                )?;
+            }
+            transaction.execute_batch(include_str!("schema/kv_accounting.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else {
             validate(application_id, version)?;

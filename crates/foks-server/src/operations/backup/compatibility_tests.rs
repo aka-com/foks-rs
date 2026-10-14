@@ -57,7 +57,14 @@ fn bootstrap_input() -> BootstrapInput {
 // Reconstruct the same predecessor schemas exercised by server-db's migration
 // tests, rather than changing only user_version on the current schema.
 fn predecessor(connection: &Connection, version: i64) {
-    assert!((43..=48).contains(&version));
+    assert!((43..=SCHEMA_VERSION).contains(&version));
+    if version <= 48 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_kv_accounting.sql"
+            ))
+            .unwrap();
+    }
     if version <= 44 {
         for index in [
             "names_reservation_expiry",
@@ -174,7 +181,7 @@ fn supported_backup_schemas_validate_and_restore_without_changing_originals() {
         .unwrap()
         .unwrap()
         .probe_response;
-    for version in 43..=48 {
+    for version in 43..=SCHEMA_VERSION {
         let backup_root = temporary.path().join(format!("backup-{version}"));
         let artifacts = fixture.backup(&backup_root);
         let connection = Connection::open(&artifacts.database).unwrap();
@@ -205,7 +212,7 @@ fn supported_backup_schemas_validate_and_restore_without_changing_originals() {
             &destination.join("server.sqlite"),
             &destination.join("keys"),
             &expected_probe,
-            if version == SCHEMA_VERSION { 1 } else { 0 },
+            if version >= 48 { 1 } else { 0 },
         );
     }
 }
@@ -220,7 +227,7 @@ fn backup_wal_is_recovered_only_in_private_copy_and_included_in_restore() {
         .unwrap()
         .unwrap()
         .probe_response;
-    for version in [47, 48] {
+    for version in [47, 48, SCHEMA_VERSION] {
         let root = temporary.path().join(format!("backup-{version}"));
         let artifacts = fixture.backup(&root);
         // Keep this idle writer open so the committed WAL is not checkpointed on
@@ -260,7 +267,7 @@ fn backup_wal_is_recovered_only_in_private_copy_and_included_in_restore() {
             &destination.join("server.sqlite"),
             &destination.join("keys"),
             &expected_probe,
-            if version == SCHEMA_VERSION { 1 } else { 0 },
+            if version >= 48 { 1 } else { 0 },
         );
     }
 }

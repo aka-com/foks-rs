@@ -535,8 +535,7 @@ impl Database {
         }
         let (count, maximum_offset, encrypted_bytes): (i64, Option<i64>, i64) = transaction
             .query_row(
-                "SELECT count(*), max(clear_offset), coalesce(sum(length(ciphertext)), 0)
-                 FROM kv_file_chunks WHERE uid = ?1 AND file_id = ?2",
+                KV_UPLOAD_USAGE_SQL,
                 params![mutation.uid, mutation.file_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
@@ -1368,26 +1367,10 @@ fn ensure_kv_capacity(
     added_bytes: usize,
     added_objects: u64,
 ) -> Result<()> {
-    let (stored_bytes, stored_objects): (i64, i64) = connection.query_row(
-        "SELECT
-           coalesce((SELECT sum(length(exact_directory)) FROM kv_directories WHERE uid = ?1), 0) +
-           coalesce((SELECT sum(length(exact_root)) FROM kv_roots WHERE uid = ?1), 0) +
-           coalesce((SELECT sum(length(exact_node)) FROM kv_nodes WHERE uid = ?1), 0) +
-           coalesce((SELECT sum(length(exact_dirent)) FROM kv_dirents WHERE uid = ?1), 0) +
-           coalesce((SELECT sum(length(exact_metadata)) FROM kv_file_uploads WHERE uid = ?1), 0) +
-           coalesce((SELECT sum(length(ciphertext) + length(exact_upload_chunk))
-                     FROM kv_file_chunks WHERE uid = ?1), 0) +
-           coalesce((SELECT count(*) * 64 FROM kv_locks WHERE uid = ?1), 0),
-           (SELECT count(*) FROM kv_directories WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_roots WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_nodes WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_dirents WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_file_uploads WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_file_chunks WHERE uid = ?1) +
-           (SELECT count(*) FROM kv_locks WHERE uid = ?1)",
-        [uid],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
+    let (stored_bytes, stored_objects): (i64, i64) =
+        connection.query_row(KV_NAMESPACE_USAGE_SQL, [uid], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
     let next_bytes = crate::error::unsigned(stored_bytes)?
         .checked_add(u64::try_from(added_bytes).map_err(|_| Error::IntegerRange)?)
         .ok_or(Error::IntegerRange)?;
@@ -1409,13 +1392,10 @@ fn ensure_kv_tree_capacity(
     added_directories: u64,
     added_dirents: u64,
 ) -> Result<()> {
-    let (directories, dirents): (i64, i64) = connection.query_row(
-        "SELECT
-           (SELECT count(*) FROM kv_directory_heads WHERE uid = ?1),
-           (SELECT count(*) FROM kv_dirent_heads WHERE uid = ?1)",
-        [uid],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
+    let (directories, dirents): (i64, i64) =
+        connection.query_row(KV_TREE_USAGE_SQL, [uid], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
     let next_directories = crate::error::unsigned(directories)?
         .checked_add(added_directories)
         .ok_or(Error::IntegerRange)?;
@@ -1457,4 +1437,88 @@ pub(crate) fn validate_kv_tree_capacity(
         return Err(Error::QuotaExceeded);
     }
     Ok(())
+}
+
+const KV_UPLOAD_USAGE_SQL: &str = "SELECT chunk_count,
+                    (SELECT clear_offset FROM kv_file_chunks
+                     WHERE uid = ?1 AND file_id = ?2 ORDER BY clear_offset DESC LIMIT 1),
+                    chunk_bytes
+                 FROM kv_file_uploads WHERE uid = ?1 AND file_id = ?2";
+const KV_NAMESPACE_USAGE_SQL: &str =
+    "SELECT accounted_bytes, accounted_objects FROM kv_namespaces WHERE namespace_id = ?1";
+const KV_TREE_USAGE_SQL: &str =
+    "SELECT directory_count, dirent_count FROM kv_namespaces WHERE namespace_id = ?1";
+
+#[cfg(test)]
+mod accounting_scaling_tests {
+    use super::*;
+    use rusqlite::{Connection, StatementStatus};
+
+    #[test]
+    fn production_usage_queries_have_bounded_vm_work_with_retained_history() {
+        let mut c = Connection::open_in_memory().unwrap();
+        crate::schema::initialize(&mut c).unwrap();
+        c.execute_batch("PRAGMA foreign_keys=ON;
+            INSERT INTO kv_namespaces(namespace_id,party_kind,host_id) VALUES(zeroblob(33),1,zeroblob(33));
+            INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),1,3,0,1,0,X'01');
+            INSERT INTO kv_directory_heads VALUES(zeroblob(33),zeroblob(16),1);
+            INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(zeroblob(33),zeroblob(16),X'01',0,0);").unwrap();
+        let mut costs = Vec::new();
+        for size in [1_i64, 100, 10000] {
+            let tx = c.transaction().unwrap();
+            for version in 1..=size {
+                // One current dirent, many retained historical versions.
+                tx.execute("INSERT OR IGNORE INTO kv_dirents VALUES(zeroblob(33),zeroblob(16),zeroblob(16),?1,1,zeroblob(17),zeroblob(32),0,X'01')", [version]).unwrap();
+            }
+            tx.execute("INSERT INTO kv_dirent_heads VALUES(zeroblob(33),zeroblob(16),zeroblob(16),?1) ON CONFLICT(uid,parent_id,dirent_id) DO UPDATE SET version=excluded.version", [size]).unwrap();
+            // Grow live head cardinality too: the prior count(heads) queries
+            // must fail this guard even though history has just one main head.
+            for number in 1..=size {
+                let mut id = [0_u8; 16];
+                id[..8].copy_from_slice(&number.to_be_bytes());
+                tx.execute(
+                    "INSERT OR IGNORE INTO kv_directories VALUES(zeroblob(33),?1,1,3,0,1,0,X'01')",
+                    [id],
+                )
+                .unwrap();
+                tx.execute(
+                    "INSERT OR IGNORE INTO kv_directory_heads VALUES(zeroblob(33),?1,1)",
+                    [id],
+                )
+                .unwrap();
+                tx.execute("INSERT OR IGNORE INTO kv_dirents VALUES(zeroblob(33),zeroblob(16),?1,1,1,zeroblob(17),zeroblob(32),0,X'01')", [id]).unwrap();
+                tx.execute(
+                    "INSERT OR IGNORE INTO kv_dirent_heads VALUES(zeroblob(33),zeroblob(16),?1,1)",
+                    [id],
+                )
+                .unwrap();
+            }
+
+            for offset in 0..size.min(512) {
+                tx.execute("INSERT OR IGNORE INTO kv_file_chunks VALUES(zeroblob(33),zeroblob(16),?1,X'01',0,X'02')", [offset]).unwrap();
+            }
+            tx.commit().unwrap();
+            let mut current = Vec::new();
+            // These are the exact private constants used by admission above;
+            // reverting the production queries to aggregate scans fails here.
+            for sql in [
+                KV_NAMESPACE_USAGE_SQL,
+                KV_TREE_USAGE_SQL,
+                KV_UPLOAD_USAGE_SQL,
+            ] {
+                let mut statement = c.prepare(sql).unwrap();
+                if sql == KV_UPLOAD_USAGE_SQL {
+                    let _: i64 = statement
+                        .query_row(params![[0_u8; 33], [0_u8; 16]], |r| r.get(0))
+                        .unwrap();
+                } else {
+                    let _: i64 = statement.query_row([[0_u8; 33]], |r| r.get(0)).unwrap();
+                }
+                current.push(statement.get_status(StatementStatus::VmStep));
+            }
+            costs.push(current);
+        }
+        assert_eq!(costs[0], costs[1]);
+        assert_eq!(costs[1], costs[2]);
+    }
 }

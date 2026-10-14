@@ -411,7 +411,7 @@ integrity-checked database, and exact declared key set, and requires empty
 destination paths.
 
 Restore and retention validation also accept the same prior schemas as server
-startup (43 through 47, upgraded to 48). They copy the database and any WAL into
+startup (43 through 48, upgraded to 49). They copy the database and any WAL into
 a private temporary directory, apply the normal transactional migrations,
 checkpoint, and validate that copy. Restore installs the migrated database;
 validation never opens or changes the original snapshot in SQLite. Retention

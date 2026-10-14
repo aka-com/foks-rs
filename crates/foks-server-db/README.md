@@ -21,16 +21,16 @@ device/inode identity; unsupported filesystem identity semantics fail closed.
 The server writer retains its adjacent path lock and rechecks the captured
 identity and link count under that lock before opening SQLite.
 
-The schema is pre-release v1, currently SQLite schema version 48. Fresh creation
+The schema is pre-release v1, currently SQLite schema version 49. Fresh creation
 and writer upgrades use the same index definitions.
 
 `Database::open` (including the server writer's identity-checked open) upgrades
-versions 43 through 47 in one immediate transaction. Version 43 receives the
+versions 43 through 48 in one immediate transaction. Version 43 receives the
 inbox reconciliation column and triggers; versions 43 and 44 receive the seven
 expiry indexes. Older SSO schemas rename `fence` to `blocked_reason` and
 `admission_hash` to `source_hash` when those columns are present. Version 48 also
 changes the SSO provider fingerprint and authenticated-encryption domains, so
-the upgrade removes existing browser sessions, access rows, identity challenges,
+upgrades from version 47 or earlier remove existing browser sessions, access rows, identity challenges,
 and authorization-binding records. Users must relink under the new provider
 identity. These changes and the version stamp commit together; any error leaves
 the previous schema and data intact. Index creation can take time and disk/WAL
@@ -39,8 +39,23 @@ controlled writer restart and retain a backup. No upgrade runs inside recurring
 maintenance.
 
 `Database::open_existing` and `ReadDatabase::open` validate only: they refuse 43
-through 47 until the writer has upgraded them. All validating paths reject
+through 48 until the writer has upgraded them. All validating paths reject
 foreign, future and unsupported older versions. Upgraded files and backups
 cannot be opened by older binaries; there is no downgrade path. Other
 incompatible pre-release changes may still require replacement unless an
 explicit migration is provided.
+
+Schema 49 backfills namespace byte/object and synchronization-head counters,
+and upload chunk byte/count counters, in the schema migration transaction.
+SQLite triggers maintain these counters across writes, deletions, cascades,
+and rollback; quota charging is unchanged. Runtime quota checks use indexed
+counter lookups instead of rescanning retained history. Upload ordering uses
+an indexed last-offset lookup. Migration still scans existing contents once
+and needs to complete before the server can accept traffic.
+
+`ReadDatabase::open` continues to validate stored synchronization limits.
+`ReadDatabaseOpener` validates once and opens additional readers with the same
+configuration and checked file identity, avoiding those scans when the server
+read pool grows. Only the repository writer may modify a database while an
+opener is live; out-of-band SQL or a configuration change requires a fresh
+validating opener.

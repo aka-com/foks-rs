@@ -129,8 +129,15 @@ fn schema_objects(connection: &Connection) -> Vec<(String, String, Option<String
         .unwrap()
 }
 
+fn remove_accounting(connection: &Connection) {
+    connection
+        .execute_batch(include_str!("fixtures/remove_kv_accounting.sql"))
+        .unwrap();
+}
+
 fn predecessor(connection: &Connection, version: i64) {
-    assert!(matches!(version, 43..=47));
+    assert!(matches!(version, 43..=48));
+    remove_accounting(connection);
     if version <= 44 {
         for name in EXPIRY_INDEXES {
             connection
@@ -187,7 +194,7 @@ fn writer_upgrades_supported_predecessors_and_preserves_data_and_index_definitio
         })
     };
     let expected = indexes(&reference);
-    for version in [43, 44, 45, 46, 47] {
+    for version in [43, 44, 45, 46, 47, 48] {
         let test = common::TestDatabase::new();
         let path = test.path.clone();
         drop(test.database);
@@ -270,7 +277,7 @@ fn version_48_upgrade_expires_old_sso_envelopes_and_requires_relinking() {
          VALUES(zeroblob(33),X'010101010101010101010101010101010101010101010101010101010101010101',
              zeroblob(32),0,1,1,1000);",
     ).unwrap();
-    connection.pragma_update(None, "user_version", 47).unwrap();
+    predecessor(&connection, 47);
 
     drop(Database::open(&path, Config::default()).unwrap());
     for table in [
@@ -437,4 +444,57 @@ fn every_validating_open_rejects_foreign_future_and_unsupported_old_files_withou
             application_id
         );
     }
+}
+
+#[test]
+fn accounting_upgrade_backfills_history_and_preserves_version_48_sso() {
+    let test = common::TestDatabase::new();
+    let c = Connection::open(&test.path).unwrap();
+    predecessor(&c, 48);
+    c.execute_batch("INSERT INTO kv_namespaces VALUES(zeroblob(33),1,zeroblob(33));
+        INSERT INTO kv_nodes VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,X'010203');
+        INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),1,3,0,1,0,X'0102');
+        INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),2,3,0,1,0,X'010203');
+        INSERT INTO kv_directory_heads VALUES(zeroblob(33),zeroblob(16),2);
+        INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(zeroblob(33),zeroblob(16),X'01',0,0);
+        INSERT INTO kv_file_chunks VALUES(zeroblob(33),zeroblob(16),0,X'0102',0,X'010203');
+        INSERT INTO sso_identity_challenges(challenge,claim_hash,source_hash,expires_at_ms) VALUES(zeroblob(32),zeroblob(32),zeroblob(32),1000);").unwrap();
+    drop(test.database);
+    drop(Database::open(&test.path, Config::default()).unwrap());
+    assert_eq!(c.query_row("SELECT accounted_bytes,accounted_objects,directory_count,dirent_count FROM kv_namespaces", [], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?))).unwrap(),(14,5,1,0));
+    assert_eq!(
+        c.query_row(
+            "SELECT chunk_count,chunk_bytes FROM kv_file_uploads",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        )
+        .unwrap(),
+        (1, 2)
+    );
+    assert_eq!(
+        c.query_row("SELECT count(*) FROM sso_identity_challenges", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn failed_accounting_upgrade_rolls_back_backfill_and_ddl() {
+    let test = common::TestDatabase::new();
+    let c = Connection::open(&test.path).unwrap();
+    predecessor(&c, 48);
+    c.execute_batch("INSERT INTO kv_namespaces VALUES(zeroblob(33),1,zeroblob(33)); CREATE TRIGGER kv_file_chunks_upload_update AFTER UPDATE ON kv_file_chunks BEGIN SELECT 1; END;").unwrap();
+    let before = schema_objects(&c);
+    drop(test.database);
+    assert!(Database::open(&test.path, Config::default()).is_err());
+    assert_eq!(schema_objects(&c), before);
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        48
+    );
+    c.execute_batch("DROP TRIGGER kv_file_chunks_upload_update;")
+        .unwrap();
+    drop(Database::open(&test.path, Config::default()).unwrap());
 }

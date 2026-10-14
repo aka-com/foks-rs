@@ -242,7 +242,8 @@ mod tests {
             "PRAGMA foreign_keys=ON;
             INSERT INTO names(normalized_name,reservation_token,reservation_sequence,expires_at)
                 VALUES(x'61',zeroblob(17),1,1);
-            INSERT INTO kv_namespaces VALUES(zeroblob(33), 1, zeroblob(33));
+            INSERT INTO kv_namespaces(namespace_id,party_kind,host_id)
+                VALUES(zeroblob(33), 1, zeroblob(33));
             INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at)
                 VALUES(zeroblob(33),zeroblob(16),x'00',1,1);
             INSERT INTO kv_file_chunks VALUES(zeroblob(33),zeroblob(16),0,zeroblob(12),0,x'00');",

@@ -9,7 +9,7 @@ pub(crate) struct ReadPool {
 }
 
 struct Inner {
-    config: ReadDatabaseConfig,
+    opener: foks_server_db::ReadDatabaseOpener,
     maximum_connections: usize,
     state: Mutex<State>,
 }
@@ -31,10 +31,11 @@ impl ReadPool {
                 "maximum read connections must be greater than zero",
             ));
         }
-        let database = foks_server_db::ReadDatabase::open(&config.path, config.database.clone())?;
+        let opener = foks_server_db::ReadDatabaseOpener::new(&config.path, config.database)?;
+        let database = opener.open()?;
         Ok(Self {
             inner: Arc::new(Inner {
-                config,
+                opener,
                 maximum_connections,
                 state: Mutex::new(State {
                     idle: vec![database],
@@ -58,10 +59,7 @@ impl ReadPool {
         state.open_connections += 1;
         drop(state);
 
-        match foks_server_db::ReadDatabase::open(
-            &self.inner.config.path,
-            self.inner.config.database.clone(),
-        ) {
+        match self.inner.opener.open() {
             Ok(database) => Ok(ReadLease {
                 pool: Arc::clone(&self.inner),
                 database: Some(database),
