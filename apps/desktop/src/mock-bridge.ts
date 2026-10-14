@@ -158,9 +158,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   const contents = new Map(
     items.map((item) => [
       itemKey(item),
-      item.kind === 'Link'
-        ? (item.target ?? '')
-        : (snapshot.plaintext[itemKey(item)] ?? ''),
+      snapshot.plaintext[itemKey(item)] ?? '',
     ]),
   );
   const select = (request: ItemRequest) => {
@@ -836,10 +834,6 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       mockOpenedSites.push({ store: item.store, path: item.path, url });
       return { ok: true };
     },
-    copyItemPath: (request) => {
-      select(request);
-      return Promise.resolve({ ok: true });
-    },
     downloadFile: (request): Promise<DownloadResponse> => {
       select(request);
       return Promise.resolve({ saved: true });
@@ -857,22 +851,6 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
         ...roles,
       });
       contents.set(`${storeId}|${path}`, value);
-      return { applied: true };
-    },
-    createLink: async ({ storeId, path, target, readRole, writeRole }) => {
-      assertFree(storeId, path);
-      const roles = createRoles(storeId, readRole, writeRole);
-      items.push({
-        direntId: crypto.randomUUID().replaceAll('-', ''),
-        store: storeId,
-        path,
-        kind: 'Link',
-        size: target.length,
-        version: 1,
-        ...roles,
-        target,
-      });
-      contents.set(`${storeId}|${path}`, target);
       return { applied: true };
     },
     createFolder: async ({ storeId, path, readRole, writeRole }) => {

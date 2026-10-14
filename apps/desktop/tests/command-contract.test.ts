@@ -11,7 +11,9 @@ import ts from 'typescript';
 // reads each argument from the camelCase key of its parameter name, so a
 // renamed command or parameter otherwise fails only at runtime. A reference to
 // invoke or a transport wrapper that is not the callee of a recorded call, such
-// as a value passed on or `checked.call(...)`, fails the test.
+// as a value passed on or `checked.call(...)`, fails the test. A Bridge method
+// that only its wrapper and the mock bridge mention leaves its command
+// reachable from the renderer with no feature behind it, which fails too.
 
 type Presence = 'required' | 'optional';
 type Keys = Map<string, Presence>;
@@ -32,6 +34,8 @@ const app = fileURLToPath(new URL('../', import.meta.url));
 const source = join(app, 'src');
 const transport = join(source, 'bridge', 'transport.ts');
 const yubikey = join(source, 'bridge', 'yubikey.ts');
+const contract = join(source, 'bridge', 'contract.ts');
+const mock = join(source, 'mock-bridge.ts');
 
 async function manifest(): Promise<Manifest> {
   return JSON.parse(
@@ -164,13 +168,12 @@ function location(node: ts.Node): string {
  * the files of those that pass a command chosen at runtime. `unchecked` lists
  * the other references to `invoke` and the transport wrappers.
  */
-function callSites(): {
+function callSites(compiled: ts.Program): {
   literal: Site[];
   dynamic: string[];
   yubi: Site[];
   unchecked: string[];
 } {
-  const compiled = program();
   const checker = compiled.getTypeChecker();
   const literal: Site[] = [];
   const dynamic: string[] = [];
@@ -261,7 +264,49 @@ function problems(sites: Site[], { commands }: Manifest): string[] {
   });
 }
 
-const sites = callSites();
+/**
+ * The Bridge methods that no file in src/ refers to apart from the contract,
+ * the bridge/commands-*.ts wrappers and the mock bridge. A method is referred
+ * to when an identifier in another file resolves to its declaration in the
+ * Bridge interface, as the property in `bridge.readItem(...)` does.
+ */
+function uncalledBridgeMethods(compiled: ts.Program): string[] {
+  const checker = compiled.getTypeChecker();
+  const bridge = compiled
+    .getSourceFile(contract)!
+    .statements.find(
+      (statement): statement is ts.InterfaceDeclaration =>
+        ts.isInterfaceDeclaration(statement) &&
+        statement.name.text === 'Bridge',
+    );
+  assert.ok(bridge, 'bridge/contract.ts declares Bridge');
+  const methods = new Set<ts.Node>(bridge.members);
+  const called = new Set<ts.Node>();
+  for (const file of compiled.getSourceFiles()) {
+    const name = file.fileName;
+    if (
+      !name.startsWith(source) ||
+      name === contract ||
+      name === mock ||
+      /\/bridge\/commands-[^/]+\.ts$/.test(name)
+    )
+      continue;
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node))
+        for (const declaration of checker.getSymbolAtLocation(node)
+          ?.declarations ?? [])
+          if (methods.has(declaration)) called.add(declaration);
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+  }
+  return bridge.members
+    .filter((member) => !called.has(member))
+    .map((member) => member.name?.getText() ?? '');
+}
+
+const compiled = program();
+const sites = callSites(compiled);
 
 test('only the transport and runYubi choose a native command at runtime', () => {
   assert.deepEqual(sites.dynamic, [
@@ -292,6 +337,16 @@ test('every registered command is called from the renderer', async () => {
     ),
     [],
   );
+});
+
+test('every bridge method has a caller besides its wrapper and the mock', () => {
+  // These predate the check. Remove an entry when its method gains a caller
+  // or is deleted together with its native command.
+  assert.deepEqual(uncalledBridgeMethods(compiled), [
+    'listParties',
+    'listFederation',
+    'verifyAccountPassphrase',
+  ]);
 });
 
 test('a renamed command, parameter or optional parameter is reported', async () => {

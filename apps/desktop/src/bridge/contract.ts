@@ -67,7 +67,6 @@ import type {
   CopyFieldRequest,
   CopyResponse,
   CreateFolderRequest,
-  CreateLinkRequest,
   CreateTextRequest,
   DownloadResponse,
   EditTextRequest,
@@ -223,10 +222,8 @@ export interface Bridge {
    * with `website-unsupported`. The address is not returned.
    */
   openItemUrl(request: ItemRequest): Promise<CopyResponse>;
-  copyItemPath(request: ItemRequest): Promise<CopyResponse>;
   downloadFile(request: ItemRequest): Promise<DownloadResponse>;
   createTextItem(request: CreateTextRequest): Promise<MutationResponse>;
-  createLink(request: CreateLinkRequest): Promise<MutationResponse>;
   createFolder(request: CreateFolderRequest): Promise<MutationResponse>;
   editTextItem(request: EditTextRequest): Promise<MutationResponse>;
   moveItem(request: MoveItemRequest): Promise<MutationResponse>;

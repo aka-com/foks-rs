@@ -639,7 +639,7 @@ fn item_role_strings_are_strict_and_account_defaults_cannot_be_overridden() {
 }
 
 #[test]
-fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
+fn team_create_edit_folder_and_remove_transcripts_bind_roles_and_guards() {
     let team = foks_agent_proto::TeamStoreRef {
         profile: "foks.example".to_owned(),
         account_alias: "personal".to_owned(),
@@ -679,16 +679,6 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
     foks_desktop::AgentTransport::call(
         &transport,
         set_create_operation_roles(
-            foks_desktop::create_kv_symlink_operation(&store, "/docs", "/shared/docs").unwrap(),
-            read_role,
-            write_role,
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    foks_desktop::AgentTransport::call(
-        &transport,
-        set_create_operation_roles(
             foks_desktop::create_kv_directory_operation(&store, "/folder").unwrap(),
             read_role,
             write_role,
@@ -696,6 +686,17 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
         .unwrap(),
     )
     .unwrap();
+    // The app creates no symlinks, so the create-role setter refuses one.
+    assert_eq!(
+        set_create_operation_roles(
+            foks_desktop::create_kv_symlink_operation(&store, "/docs", "/shared/docs").unwrap(),
+            read_role,
+            write_role,
+        )
+        .unwrap_err()
+        .code,
+        "invalid-builder"
+    );
     execute_kv_mutation(
         &transport,
         foks_desktop::edit_kv_file_mutation(&item, b"changed".to_vec()).unwrap(),
@@ -715,15 +716,6 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
                 store: KvStoreRef::Team(team.clone()),
                 path: "/new".to_owned(),
                 content: b"new".to_vec(),
-                read_role: KvRole::Member { visibility: 0 },
-                write_role: KvRole::Admin,
-                precondition: KvPrecondition::Create,
-                mkdir_p: true,
-            },
-            Operation::PutKvSymlink {
-                store: KvStoreRef::Team(team.clone()),
-                path: "/docs".to_owned(),
-                target: "/shared/docs".to_owned(),
                 read_role: KvRole::Member { visibility: 0 },
                 write_role: KvRole::Admin,
                 precondition: KvPrecondition::Create,

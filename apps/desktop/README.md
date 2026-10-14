@@ -330,7 +330,7 @@ The Rust contract uses Rust field names in responses and camelCase Tauri
 arguments. `list_catalog` returns profiles, stores, items, failures and
 `blockedProfiles`; `list_servers`, `list_parties` and `list_federation` supply
 the other facts needed by the Phase 2 shell; `read_item`,
-`copy_item_value`, `copy_item_path`, `open_item_url` and `download_file` take
+`copy_item_value`, `open_item_url` and `download_file` take
 `{storeId, path, version}`, and `copy_item_field` takes the same plus
 `field` (`password`, `username`, `url` or `value`). `tests/bridge.test.ts`
 pins the decoder side and the Rust command tests pin serialization so a drift
@@ -340,9 +340,13 @@ command name and argument keys of every native call in `src/` against
 registered commands; an argument the Rust command requires must not be
 optional or possibly `undefined` on the TypeScript side. A reference to
 `invoke` or a transport wrapper that is not the callee of a checked call, such
-as `checked.call(...)` or a wrapper passed as a value, fails the test.
+as `checked.call(...)` or a wrapper passed as a value, fails the test. The
+same file also fails when a `Bridge` method other than the few it lists has no
+reference outside its `src/bridge/commands-*.ts` wrapper and the mock bridge,
+so a registered command does not stay reachable from the renderer without a
+feature that calls it.
 
-Phase 3 adds `create_text_item`, `create_link`, `edit_text_item`,
+Phase 3 adds `create_text_item`, `edit_text_item`,
 `remove_item`, dropped/native-picker file import and exact-version file
 replacement, `resume_group_creation` and `abandon_group_creation`, the local
 forgetting of a group whose creation can no longer be finished. Rust-originated
@@ -432,8 +436,9 @@ decoder, including the canonical 68-character Yubi identity.
 
 Phase 7 group-item integration extends the create commands with paired
 `readRole` / `writeRole` inputs for group stores; account-store creates omit
-both and retain their native Owner defaults. `create_link` is the product Link
-operation over a protocol symlink. Folder creation exists at the native
+both and retain their native Owner defaults. The app creates no protocol
+symlinks, and the catalog decoder drops the `Link` entries the agent reports
+for existing ones after validating them. Folder creation exists at the native
 boundary for protocol completeness but is not exposed as a fifth product kind.
 Edit, replacement and removal send no role arguments and preserve the roles
 authenticated in the catalog.

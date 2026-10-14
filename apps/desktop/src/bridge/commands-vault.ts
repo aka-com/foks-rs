@@ -29,10 +29,8 @@ export const vaultCommands: Pick<
   | 'copyItemValue'
   | 'copyItemField'
   | 'openItemUrl'
-  | 'copyItemPath'
   | 'downloadFile'
   | 'createTextItem'
-  | 'createLink'
   | 'createFolder'
   | 'editTextItem'
   | 'moveItem'
@@ -87,8 +85,6 @@ export const vaultCommands: Pick<
     checked('copy_item_field', { storeId, path, version, field }, decodeCopy),
   openItemUrl: ({ storeId, path, version }) =>
     checked('open_item_url', { storeId, path, version }, decodeCopy),
-  copyItemPath: ({ storeId, path, version }) =>
-    checked('copy_item_path', { storeId, path, version }, decodeCopy),
   downloadFile: ({ storeId, path, version }) =>
     checked('download_file', { storeId, path, version }, decodeDownload),
   createTextItem: ({ storeId, path, value, readRole, writeRole }) =>
@@ -98,18 +94,6 @@ export const vaultCommands: Pick<
         storeId,
         path,
         value,
-        ...(readRole === undefined ? {} : { readRole }),
-        ...(writeRole === undefined ? {} : { writeRole }),
-      },
-      decodeMutation,
-    ),
-  createLink: ({ storeId, path, target, readRole, writeRole }) =>
-    checkedMutation(
-      'create_link',
-      {
-        storeId,
-        path,
-        target,
         ...(readRole === undefined ? {} : { readRole }),
         ...(writeRole === undefined ? {} : { writeRole }),
       },

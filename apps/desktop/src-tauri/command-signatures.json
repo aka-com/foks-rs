@@ -123,11 +123,6 @@
       "storeId": "required",
       "version": "required"
     },
-    "copy_item_path": {
-      "path": "required",
-      "storeId": "required",
-      "version": "required"
-    },
     "copy_item_to_store": {
       "direntId": "required",
       "path": "required",
@@ -167,13 +162,6 @@
       "kind": "required",
       "name": "required",
       "teamAlias": "required"
-    },
-    "create_link": {
-      "path": "required",
-      "readRole": "optional",
-      "storeId": "required",
-      "target": "required",
-      "writeRole": "optional"
     },
     "create_text_item": {
       "path": "required",

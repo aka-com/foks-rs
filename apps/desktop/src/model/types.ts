@@ -75,14 +75,17 @@ export type Store = AccountStore | TeamStore;
 
 /* ---------------------------------------------------------------- items -- */
 
-/** The KV node type, as the agent reports it. */
-export type NodeKind = 'Secret' | 'File' | 'Folder' | 'Link';
+/**
+ * The KV node type, as the agent reports it. The agent also reports a protocol
+ * symlink as `Link`; the catalog decoder drops those, so no item carries it.
+ */
+export type NodeKind = 'Secret' | 'File' | 'Folder';
 
 /** The kind rule's reading of a node — client-side, no protocol meaning. */
 export type ItemKind = 'Password' | 'Document' | 'Folder';
 
 /** The node type a `NodeKind` is a reading of. */
-export type NodeType = 'small_file' | 'file' | 'symlink' | 'directory';
+export type NodeType = 'small_file' | 'file' | 'directory';
 
 export interface Item {
   direntId: string;
@@ -98,8 +101,6 @@ export interface Item {
    * Absent when no listing classified it; the value itself is never here.
    */
   shape?: ItemShape;
-  /** Symlink target, on a Link. */
-  target?: string;
 }
 
 /* -------------------------------------------------------------- parties -- */

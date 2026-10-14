@@ -89,7 +89,6 @@ const publicTypes = [
   'KvRoleInput',
   'CreateRoleRequest',
   'CreateTextRequest',
-  'CreateLinkRequest',
   'CreateFolderRequest',
   'CreateFileRequest',
   'EditTextRequest',

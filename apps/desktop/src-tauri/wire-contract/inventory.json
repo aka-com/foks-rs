@@ -143,7 +143,6 @@
       "CatalogFailureDto",
       "ItemRequest",
       "CreateTextRequest",
-      "CreateLinkRequest",
       "CreateFolderRequest / CreateFileRequest",
       "EditTextRequest",
       "RemoveItemRequest",

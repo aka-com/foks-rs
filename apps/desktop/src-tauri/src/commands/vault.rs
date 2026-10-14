@@ -656,11 +656,6 @@ fn set_create_operation_roles_in_place(
             write_role: operation_write,
             ..
         }
-        | Operation::PutKvSymlink {
-            read_role: operation_read,
-            write_role: operation_write,
-            ..
-        }
         | Operation::MkdirKv {
             read_role: operation_read,
             write_role: operation_write,
@@ -1327,23 +1322,6 @@ pub async fn open_item_url(
 }
 
 #[tauri::command]
-pub fn copy_item_path(
-    app: tauri::AppHandle,
-    webview: tauri::Webview,
-    state: State<'_, AppState>,
-    store_id: String,
-    path: String,
-    version: u64,
-) -> Result<CommandAck, AgentError> {
-    crate::applock::require_unlocked(&app)?;
-    require_main_window(&webview)?;
-    let item = state.selected_item(&store_id, &path, version)?;
-    crate::clipboard::copy_with_hygiene(&app, Zeroizing::new(item.metadata.path))
-        .map_err(|error| AgentError::new("clipboard", error, true))?;
-    Ok(CommandAck { ok: true })
-}
-
-#[tauri::command]
 pub fn copy_text(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -1428,38 +1406,6 @@ pub async fn create_text_item(
     let mutation = set_create_mutation_roles(mutation, read_role, write_role)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_kv_mutation(&state, mutation, MutationKind::Create).await
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn create_link(
-    app: tauri::AppHandle,
-    webview: tauri::Webview,
-    state: State<'_, AppState>,
-    store_id: String,
-    path: String,
-    target: String,
-    read_role: Option<String>,
-    write_role: Option<String>,
-) -> Result<MutationDto, AgentError> {
-    let unlocked = crate::applock::unlocked_generation(&app)?;
-    require_main_window(&webview)?;
-    let state = state.for_store(&store_id)?;
-    let _permit = prepare_catalog_mutation(&state).await?;
-    let store = state.selected_create_store(&store_id)?;
-    let (read_role, write_role) =
-        create_item_roles(&store, read_role.as_deref(), write_role.as_deref())?;
-    let target = Zeroizing::new(target);
-    let operation = foks_desktop::create_kv_symlink_operation(&store, &path, target.as_str())
-        .map_err(invalid_request)?;
-    let operation = set_create_operation_roles(operation, read_role, write_role)?;
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_kv_mutation(
-        &state,
-        KvAccountMutation::Inline(operation),
-        MutationKind::Create,
-    )
-    .await
 }
 
 #[tauri::command]

@@ -137,12 +137,6 @@ export interface CreateTextRequest extends CreateRoleRequest {
   value: string;
 }
 
-export interface CreateLinkRequest extends CreateRoleRequest {
-  storeId: StoreRef;
-  path: string;
-  target: string;
-}
-
 export interface CreateFolderRequest extends CreateRoleRequest {
   storeId: StoreRef;
   path: string;
@@ -333,16 +327,30 @@ function decodeStore(value: unknown, at: string): StoreDto {
   };
 }
 
-function decodeItem(value: unknown, at: string): ItemDto {
+const NODE_KINDS: readonly string[] = [
+  'Secret',
+  'File',
+  'Folder',
+] satisfies NodeKind[];
+
+function isNodeKind(kind: string): kind is NodeKind {
+  return NODE_KINDS.includes(kind);
+}
+
+/**
+ * Decodes one catalog item, or `null` for a protocol symlink. The agent
+ * reports a symlink as `Link`; its fields are validated like any other node's,
+ * and then it is dropped, because the app neither shows nor creates symlinks.
+ */
+function decodeItem(value: unknown, at: string): ItemDto | null {
   const item = record(value, at);
   const kind = string(item.kind, `${at}.kind`);
-  if (!['Secret', 'File', 'Folder', 'Link'].includes(kind)) {
+  if (kind !== 'Link' && !isNodeKind(kind)) {
     throw new Error(`${at}.kind is not a FOKS node kind`);
   }
-  return {
+  const decoded = {
     store: string(item.store, `${at}.store`),
     path: string(item.path, `${at}.path`),
-    kind: kind as NodeKind,
     direntId: string(item.direntId, `${at}.direntId`),
     size: nullableInteger(item.size, `${at}.size`),
     version: integer(item.version, `${at}.version`),
@@ -350,6 +358,7 @@ function decodeItem(value: unknown, at: string): ItemDto {
     write: decodeRole(item.write, `${at}.write`),
     ...decodeShape(item.shape, `${at}.shape`),
   };
+  return isNodeKind(kind) ? { ...decoded, kind } : null;
 }
 
 function decodeShape(value: unknown, at: string): { shape?: ItemShape } {
@@ -452,9 +461,8 @@ export function decodeCatalog(value: unknown): CatalogDto {
     stores: array(item.stores, 'stores', decodeStore),
     knownStores: array(item.knownStores, 'knownStores', decodeStore),
     inventory: array(item.inventory, 'inventory', decodeInventory),
-    // Symlinks are a protocol node the app no longer shows or creates.
     items: array(item.items, 'items', decodeItem).filter(
-      (entry) => entry.kind !== 'Link',
+      (entry): entry is ItemDto => entry !== null,
     ),
     failures: array(item.failures, 'failures', decodeFailure),
     blockedProfiles: array(item.blockedProfiles, 'blockedProfiles', string),

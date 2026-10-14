@@ -888,9 +888,6 @@ async function projectCatalogCounted(
         federation: state('federation'),
       };
     });
-  const baseItems = new Map(
-    (base?.items ?? []).map((item) => [itemKey(item), item]),
-  );
   // The item filters below ask the same questions of a store once per item it
   // holds. Both answers are per store, so they are settled here, after the
   // inventory rewrite above has put a still-loading store's status back to
@@ -925,14 +922,7 @@ async function projectCatalogCounted(
   }
   const items: Item[] = response.items
     .filter((item) => availableStores.has(item.store))
-    .map((item) => {
-      // Every field comes from the response, as in production; only a mock
-      // Link keeps its fixture target, which no catalog response carries.
-      const target = bridge.native
-        ? undefined
-        : baseItems.get(itemKey(item))?.target;
-      return target === undefined ? { ...item } : { ...item, target };
-    });
+    .map((item) => ({ ...item }));
   const itemKeys = new Set(items.map(itemKey));
   for (const item of base?.items ?? []) {
     const store = storesById.get(item.store);
@@ -947,9 +937,7 @@ async function projectCatalogCounted(
       inventoryByStore.get(item.store)?.status === 'available'
     )
       continue;
-    const metadata = { ...item };
-    delete metadata.target;
-    items.push(bridge.native ? metadata : item);
+    items.push(item);
   }
   const withFreshness = (snapshot: AgentSnapshot): AgentSnapshot => ({
     ...snapshot,

@@ -291,6 +291,26 @@ test('decodeCatalog carries a small file shape only as login or other', () => {
     assert.throws(() => withShape(shape), /shape is not login or other/);
 });
 
+test('decodeCatalog validates a protocol symlink and then drops it', () => {
+  const link = { ...catalog.items[0], path: '/docs', kind: 'Link' };
+  assert.deepEqual(
+    decodeCatalog({ ...catalog, items: [link, catalog.items[0]] }).items,
+    catalog.items,
+  );
+  assert.throws(
+    () => decodeCatalog({ ...catalog, items: [{ ...link, version: 3.5 }] }),
+    /version must be a non-negative safe integer/,
+  );
+  assert.throws(
+    () =>
+      decodeCatalog({
+        ...catalog,
+        items: [{ ...catalog.items[0], kind: 'Symlink' }],
+      }),
+    /kind is not a FOKS node kind/,
+  );
+});
+
 test('copyItemField sends the exact version and the field to the host', async () => {
   const previousWindow = globalThis.window;
   const calls: [string, unknown][] = [];
@@ -1948,7 +1968,6 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
       throw new Error('not used');
     },
     copyItemValue: async () => ({ ok: true }),
-    copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge, FIXTURE);
@@ -2124,7 +2143,6 @@ test('creates a notification when a server cannot be described instead of omitti
       throw new Error('not used');
     },
     copyItemValue: async () => ({ ok: true }),
-    copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge, FIXTURE);
@@ -2189,7 +2207,6 @@ test('loadSnapshot does not fetch team rosters for blocked profiles', async () =
       throw new Error('not used');
     },
     copyItemValue: async () => ({ ok: true }),
-    copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge);
@@ -2282,7 +2299,6 @@ test('loadSnapshot does not fetch members for an inactive team', async () => {
       throw new Error('not used');
     },
     copyItemValue: async () => ({ ok: true }),
-    copyItemPath: async () => ({ ok: true }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge);
@@ -2915,24 +2931,17 @@ test('group item creation requires and preserves explicit read and write permiss
     readRole: 'Member:-32768',
     writeRole: 'Admin',
   });
-  await bridge.createLink({
-    storeId: 'team:eng',
-    path: '/shared/link',
-    target: '/shared/text',
-    readRole: 'Admin',
-    writeRole: 'Member:32767',
-  });
   await bridge.importDroppedFile({
     storeId: 'team:eng',
     path: '/shared/file',
     sourcePath: '/tmp/file',
     readRole: 'Member:0',
-    writeRole: 'Admin',
+    writeRole: 'Member:32767',
   });
   await bridge.createFolder({
     storeId: 'team:eng',
     path: '/shared/folder',
-    readRole: 'Owner',
+    readRole: 'Admin',
     writeRole: 'Owner',
   });
   const created = (await bridge.listCatalog()).items.filter(
@@ -2947,18 +2956,13 @@ test('group item creation requires and preserves explicit read and write permiss
         write: { role: 'Admin' },
       },
       {
-        path: '/shared/link',
-        read: { role: 'Admin' },
+        path: '/shared/file',
+        read: { role: 'Member', visibility: 0 },
         write: { role: 'Member', visibility: 32767 },
       },
       {
-        path: '/shared/file',
-        read: { role: 'Member', visibility: 0 },
-        write: { role: 'Admin' },
-      },
-      {
         path: '/shared/folder',
-        read: { role: 'Owner' },
+        read: { role: 'Admin' },
         write: { role: 'Owner' },
       },
     ],
