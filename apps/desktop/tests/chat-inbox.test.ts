@@ -48,7 +48,10 @@ class Clock implements ChatClock {
   };
   async advance(ms: number) {
     const end = this.time + ms;
-    for (;;) {
+    for (let fired = 0; ; fired++) {
+      // A service that re-arms for the current time on every pass would
+      // otherwise keep this loop running without advancing the clock.
+      assert.ok(fired < 10_000, 'timers keep firing without time passing');
       // Settle pending continuations before the next timer, as an event loop
       // does: a reply that lands may arm an earlier timer than any armed now.
       for (let i = 0; i < 30; i++) await Promise.resolve();
@@ -102,6 +105,7 @@ function fixture(count = 2) {
   const fail = new Set<string>();
   const denied = new Set<string>();
   const unrefreshed = new Set<string>();
+  const retired = new Set<string>();
   let head = '1';
   const scope = (store: TeamStore) => ({
     store: {
@@ -142,6 +146,14 @@ function fixture(count = 2) {
           code: 'io',
           message: 'offline',
           retryable: true,
+          fatal: false,
+          ambiguous: false,
+        };
+      if (retired.has(id))
+        throw {
+          code: 'agent-request-retired',
+          message: 'retired',
+          retryable: false,
           fatal: false,
           ambiguous: false,
         };
@@ -217,6 +229,7 @@ function fixture(count = 2) {
     fail,
     denied,
     unrefreshed,
+    retired,
     bump,
     waits,
     snapshot,
@@ -985,6 +998,37 @@ test('a team held back by a sibling synchronization on its profile starts when t
     await f.clock.advance(0);
     assert.deepEqual(f.syncs, ['t0', 't1']);
     assert.equal(f.clock.time, 0);
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('a retired synchronization is retried no sooner than the request floor', async () => {
+  const f = fixture(1);
+  f.retired.add('t0');
+  try {
+    // A retired request sets no deadline of its own; the 250 ms floor is what
+    // spaces the retries, at 0, 250, 500, 750 and 1000 ms.
+    await f.clock.advance(1_000);
+    assert.equal(f.syncs.length, 5);
+  } finally {
+    f.service.stop();
+  }
+});
+
+test('a cancelled poll is retried no sooner than the request floor', async () => {
+  const f = fixture(1);
+  try {
+    await f.clock.advance(0);
+    assert.equal(f.polls.length, 1);
+    // Cancel every poll as soon as it is waiting, for one second.
+    for (let step = 0; step < 100; step++) {
+      for (const view of [...f.waits.keys()]) await f.bridge.cancelChat(view);
+      await f.clock.advance(10);
+    }
+    // The first poll was cancelled at 0 ms; its successors start at 250, 500,
+    // 750 and 1000 ms.
+    assert.equal(f.polls.length, 5);
   } finally {
     f.service.stop();
   }

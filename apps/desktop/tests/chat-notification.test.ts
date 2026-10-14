@@ -474,7 +474,7 @@ test('activating a notification opens the Chat tab on that team and channel', as
   }
 });
 
-test('the notification consumer schedules on the clock the inbox provider passes', async () => {
+test('NotificationProvider builds its consumer on the clock it is given', async () => {
   const { installDom } = await import('./lib/dom-harness');
   installDom({
     url: 'http://localhost/',

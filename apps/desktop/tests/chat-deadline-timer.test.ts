@@ -87,3 +87,20 @@ test('the callback may arm the timer again', () => {
   assert.deepEqual(fired, [100, 200, 300]);
   assert.equal(timer.deadline, Infinity);
 });
+
+test('a deadline beyond the longest host delay is reached in steps', () => {
+  const clock = new Clock();
+  const longest = 2_147_483_647;
+  const fired: number[] = [];
+  const timer = new DeadlineTimer(clock, () => fired.push(clock.now()));
+  const due = 2 * longest + 1_000;
+  timer.armAt(due);
+  assert.deepEqual(clock.dues(), [longest]);
+  assert.equal(timer.deadline, due);
+  clock.advance(longest);
+  assert.deepEqual(fired, []);
+  assert.deepEqual(clock.dues(), [2 * longest]);
+  assert.equal(timer.deadline, due);
+  clock.advance(longest + 1_000);
+  assert.deepEqual(fired, [due]);
+});

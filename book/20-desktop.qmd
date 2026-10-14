@@ -297,18 +297,20 @@ nothing is due; other wake-ups come from inbox publications or admission
 releases. Baselines are seeded from the inbox projection's own head when it
 is not degraded, costing no request.
 
-The inbox service and the send service schedule the same way, each through
-one `DeadlineTimer` on the shell's clock. A request to wake can only move
-the timer's deadline earlier, so a burst of events cannot postpone work.
+The inbox service and the send service each schedule through one
+`DeadlineTimer` on the shell's clock. A request to wake can only move the
+timer's deadline earlier, so a burst of events cannot postpone work. The
+send service always keeps a tick armed, between 1 s and an idle 30 s.
 After each pass, the inbox arms for the earliest of: an account's next
 poll, a team's next synchronization (an idle visible team resynchronizes
 every five minutes; a hidden one waits for a poll to report a change), a
 team's check-in expiry, and the next deferred refresh of a degraded
 channel. Work that is waiting on something other than time starts from the
-event that releases it. The end of a synchronization or poll frees the
-team, the profile's single background job and a poll slot. Opening a
-channel shortens its degraded wait. An idle inbox therefore arms one timer
-minutes away instead of waking four times a second.
+event that releases it. The end of a synchronization frees the team and
+the profile's single background job; the end of a poll frees the account
+for its next poll and a poll slot. Opening a channel shortens its degraded
+wait. An idle inbox therefore arms one timer minutes away instead of waking
+four times a second.
 
 ## History paging
 
