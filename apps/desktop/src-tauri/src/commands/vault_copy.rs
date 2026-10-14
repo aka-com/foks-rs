@@ -11,9 +11,10 @@
 //! A large file is read whole before the upload starts. The agent admits an
 //! upload exclusively per profile, so chunk reads from the same profile would
 //! wait behind the upload that consumes them. Until the upload reads them
-//! back, the chunks are held in an unlinked temporary file, each sealed with
-//! ChaCha20-Poly1305 under a key that exists only in this process's memory,
-//! with the chunk's sequence number as its nonce.
+//! back, the chunks are held in an unlinked file in the system temporary
+//! directory, each sealed with ChaCha20-Poly1305 under a key that exists only
+//! in this process's memory, with the chunk's sequence number as its nonce.
+//! A file larger than the free space there is refused before it is read.
 
 use crate::agent::AgentError;
 use crate::commands::context::AppState;
@@ -22,16 +23,15 @@ use crate::commands::execution::{
 };
 use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutation};
 use crate::commands::types::MutationDto;
-use crate::commands::validation::{invalid_request, require_main_window};
-use crate::commands::vault::{
-    create_item_roles, read_file_content, set_create_mutation_roles, set_create_operation_roles,
-};
+use crate::commands::validation::{invalid_request, require_main_window, DOWNLOAD_CHUNK_BYTES};
+use crate::commands::vault::{create_item_roles, read_file_content, set_create_mutation_roles};
 use chacha20poly1305::aead::{Aead as _, KeyInit as _};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use foks_agent_proto::KvRole;
-use foks_desktop::{CatalogItem, CatalogStoreRef, KvAccountMutation, KvItemValue};
+use foks_desktop::{CatalogItem, CatalogStoreRef};
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::path::Path;
 use tauri::State;
 use zeroize::Zeroizing;
 
@@ -51,8 +51,6 @@ pub(super) struct CopyTarget {
 pub(super) enum CopySource {
     /// A small file's bytes, written back inline.
     File(Zeroizing<Vec<u8>>),
-    /// A link's target.
-    Link(Zeroizing<String>),
     /// A large file's chunks, sealed in a temporary file.
     Spooled(SealedSpool),
 }
@@ -81,6 +79,29 @@ fn chunk_nonce(index: usize) -> Nonce {
     let mut nonce = [0u8; 12];
     nonce[..8].copy_from_slice(&(index as u64).to_le_bytes());
     Nonce::from(nonce)
+}
+
+/// Refuses to spool a `size`-byte file into `directory` when it has only
+/// `available` bytes free: the sealed chunks take the plaintext's size and
+/// one tag per download chunk. Checking first keeps a copy from failing
+/// partway through the read.
+pub(super) fn require_spool_space(
+    size: u64,
+    available: u64,
+    directory: &Path,
+) -> Result<(), AgentError> {
+    let needed = size + size.div_ceil(u64::from(DOWNLOAD_CHUNK_BYTES)) * TAG_BYTES as u64;
+    if needed <= available {
+        return Ok(());
+    }
+    Err(AgentError::new(
+        "copy-buffer",
+        format!(
+            "Copying this {size}-byte file needs {needed} bytes in the temporary folder {}, which has {available} bytes free.",
+            directory.display()
+        ),
+        true,
+    ))
 }
 
 impl SealedSpool {
@@ -186,8 +207,9 @@ impl std::io::Read for SpoolReader {
 }
 
 /// Reads the content a copy of `item` needs. A secret or small file is held
-/// in memory and a link's target likewise; a large file is sealed into a
-/// [`SealedSpool`]. Folders are refused.
+/// in memory; a large file is sealed into a [`SealedSpool`]. Folders and
+/// links are refused: the renderer lists neither as copyable, and a link's
+/// target names a path in its own store.
 pub(super) fn read_copy_source(
     transport: &dyn foks_desktop::AgentTransport,
     item: &CatalogItem,
@@ -202,21 +224,16 @@ pub(super) fn read_copy_source(
             Ok(CopySource::File(content))
         }
         "file" => {
+            let directory = std::env::temp_dir();
+            // When the free space cannot be read, the copy is attempted and
+            // a write that runs out of space fails it.
+            if let Ok(available) = fs2::available_space(&directory) {
+                require_spool_space(item.metadata.size.unwrap_or(0), available, &directory)?;
+            }
             let mut spool = SealedSpool::new()?;
             read_file_content(transport, item, &mut |piece| spool.append(piece))?;
             Ok(CopySource::Spooled(spool))
         }
-        "symlink" => match foks_desktop::read_catalog_item(transport, item)
-            .map_err(AgentError::from_desktop)?
-            .value
-        {
-            KvItemValue::Symlink(target) => Ok(CopySource::Link(target)),
-            _ => Err(AgentError::new(
-                "invalid-response",
-                "The agent returned file content for a link.",
-                false,
-            )),
-        },
         "directory" => Err(invalid_request(
             "Folders cannot be copied to another vault. Copy the items in it one at a time.",
         )),
@@ -242,21 +259,6 @@ pub(super) fn write_copy(
             let mutation =
                 set_create_mutation_roles(mutation, target.read_role, target.write_role)?;
             execute_kv_mutation(transport, mutation, MutationKind::Create)
-        }
-        CopySource::Link(link) => {
-            let operation = foks_desktop::create_kv_symlink_operation(
-                &target.store,
-                &target.path,
-                link.as_str(),
-            )
-            .map_err(invalid_request)?;
-            let operation =
-                set_create_operation_roles(operation, target.read_role, target.write_role)?;
-            execute_kv_mutation(
-                transport,
-                KvAccountMutation::Inline(operation),
-                MutationKind::Create,
-            )
         }
         CopySource::Spooled(spool) => {
             let mut header =
@@ -302,41 +304,34 @@ pub(super) fn copy_scope(
     }
 }
 
-/// The catalog item a copy reads: the listed version of the listed dirent.
-pub(super) fn selected_copy_source(
+/// Where a copy of `item` lands, resolved before anything is read: a store
+/// other than the item's own that this account can create in, the roles that
+/// store takes, and a valid path in it.
+pub(super) fn copy_target(
     state: &AppState,
-    store: &str,
-    path: &str,
-    version: u64,
-    dirent_id: &str,
-) -> Result<CatalogItem, AgentError> {
-    let stale = || {
-        AgentError::new(
-            "conflict",
-            "This item changed or was removed. Refresh the vault before copying it.",
-            false,
-        )
-    };
-    let item =
-        state
-            .selected_item(store, path, version)
-            .map_err(|error| match error.code.as_str() {
-                "item-version-mismatch" | "item-not-found" => stale(),
-                _ => error,
-            })?;
-    let listed: String = item
-        .metadata
-        .dirent_id
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    if listed != dirent_id {
-        return Err(stale());
+    item: &CatalogItem,
+    target_store_id: &str,
+    path: String,
+    read_role: Option<&str>,
+    write_role: Option<&str>,
+) -> Result<CopyTarget, AgentError> {
+    let store = state.selected_create_store(target_store_id)?;
+    if store == item.store {
+        return Err(invalid_request(
+            "Choose another vault. Rename or move changes where an item is within its vault.",
+        ));
     }
-    Ok(item)
+    let (read_role, write_role) = create_item_roles(&store, read_role, write_role)?;
+    foks_desktop::create_kv_file_upload(&store, &path, 0).map_err(invalid_request)?;
+    Ok(CopyTarget {
+        store,
+        path,
+        read_role,
+        write_role,
+    })
 }
 
-/// Copies a secret, file or link into another vault at `target_path`, with
+/// Copies a secret or file into another vault at `target_path`, with
 /// the given roles in a team. The source is read at the catalog's version
 /// and left unchanged.
 #[tauri::command]
@@ -358,23 +353,15 @@ pub async fn copy_item_to_store(
     require_main_window(&webview)?;
     let state = copy_scope(&state, &store_id, &target_store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
-    let item = selected_copy_source(&state, &store_id, &path, version, &dirent_id)?;
-    let store = state.selected_create_store(&target_store_id)?;
-    if store == item.store {
-        return Err(invalid_request(
-            "Choose another vault. Rename or move changes where an item is within its vault.",
-        ));
-    }
-    let (read_role, write_role) =
-        create_item_roles(&store, read_role.as_deref(), write_role.as_deref())?;
-    // Validate the destination before reading anything.
-    foks_desktop::create_kv_file_upload(&store, &target_path, 0).map_err(invalid_request)?;
-    let target = CopyTarget {
-        store,
-        path: target_path,
-        read_role,
-        write_role,
-    };
+    let item = state.selected_bound_item(&store_id, &path, version, &dirent_id, "copying")?;
+    let target = copy_target(
+        &state,
+        &item,
+        &target_store_id,
+        target_path,
+        read_role.as_deref(),
+        write_role.as_deref(),
+    )?;
     let transport = state.agent.transport();
     let source =
         tauri::async_runtime::spawn_blocking(move || read_copy_source(transport.as_ref(), &item))

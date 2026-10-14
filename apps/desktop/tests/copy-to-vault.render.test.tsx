@@ -1,8 +1,8 @@
 /**
  * Copy to vault in the running shell: an item copied from the details panel
  * or the row menu into another vault with the roles chosen in the sheet, the
- * original kept or moved to Trash afterwards, and a Trash failure reported
- * with the copy kept.
+ * original kept or moved to Trash afterwards, a Trash failure reported with
+ * the copy kept, and the refresh an ambiguous copy asks for.
  */
 
 import assert from 'node:assert/strict';
@@ -17,6 +17,7 @@ import type {
 } from '../src/bridge';
 import type { LocationStore } from '../src/location';
 import { installDom } from './lib/dom-harness';
+import { workflowScope } from './lib/workflow-scope';
 
 installDom({
   url: 'http://localhost/',
@@ -288,4 +289,80 @@ test('the row menu opens Copy to vault for that row', async () => {
   );
   const dialog = await rendered.findByRole('dialog', { name: 'Copy to vault' });
   assert.match(dialog.textContent ?? '', /Copy github\.com from Personal/);
+});
+
+/**
+ * The refresh scope the sheet asks for after an ambiguous copy to `vault`:
+ * the item whose server is refreshed, or `undefined` for every server. The
+ * sheet is rendered alone, since the mock refreshes the whole catalog either
+ * way.
+ */
+async function ambiguousCopyScope(vault: string): Promise<string | undefined> {
+  const { CopyItemSheet } = (await vite.ssrLoadModule(
+    '/src/screens/copy-item-sheet.tsx',
+  )) as typeof import('../src/screens/copy-item-sheet');
+  const { FIXTURE } = (await vite.ssrLoadModule(
+    '/src/fixture.ts',
+  )) as typeof import('../src/fixture');
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const { OverlayProvider } = (await vite.ssrLoadModule(
+    '/kit/overlay-primitives.tsx',
+  )) as typeof import('../kit/overlay-primitives');
+  const item = FIXTURE.items.find(
+    (entry) => entry.store === VAULT && entry.path === ITEM,
+  );
+  assert.ok(item);
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    copyItemToStore: async () => {
+      throw {
+        code: 'deadline-exceeded',
+        message: 'The agent did not answer in time.',
+        retryable: false,
+        ambiguous: true,
+        fatal: false,
+      };
+    },
+  };
+  const scopes: (string | undefined)[] = [];
+  const sheet = createElement(CopyItemSheet, {
+    snapshot: FIXTURE,
+    bridge,
+    item,
+    setWorkflow: () => {},
+    onApplied: async () => {},
+    onMutationError: async (_failure, options) => {
+      scopes.push(options?.item?.path);
+    },
+    accessNow: () => Math.floor(Date.now() / 1000),
+  });
+  const portalRoot = document.getElementById('overlays');
+  assert.ok(portalRoot);
+  const rendered = ui.render(
+    createElement(OverlayProvider, {
+      backgroundRef: { current: null },
+      portalRoot,
+      children: await workflowScope(vite, sheet, FIXTURE),
+    }),
+  );
+  const dialog = await rendered.findByRole('dialog', { name: 'Copy to vault' });
+  await chooseVault(dialog, vault);
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Copy' }));
+  });
+  await ui.waitFor(() => assert.equal(scopes.length, 1));
+  assert.match(dialog.textContent ?? '', /did not answer in time/);
+  return scopes[0];
+}
+
+test('an ambiguous copy to another server refreshes every server', async () => {
+  // The copy held the application-wide reservation, and the source's server
+  // does not hold the vault the copy may have reached.
+  assert.equal(await ambiguousCopyScope('Engineering'), undefined);
+});
+
+test('an ambiguous copy within one server refreshes that server', async () => {
+  assert.equal(await ambiguousCopyScope('Household'), ITEM);
 });

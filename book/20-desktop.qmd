@@ -458,13 +458,18 @@ unlinked temporary file. Each chunk is sealed with ChaCha20-Poly1305 under a
 fresh key held only in memory, with the chunk's sequence number as its
 nonce, so the disk never holds plaintext and a chunk altered or reordered
 on disk fails the upload. The upload then reads the chunks back and opens
-them one at a time.
+them one at a time. The temporary directory therefore needs free space for
+the whole file, and where it is a tmpfs that space is memory; the host
+compares the file's listed size with the free space before the first read
+and refuses a copy that would not fit.
 
 When the stores are on different servers, the host takes its mutation
-reservation for the whole application rather than for one profile. Moving
-the original is a separate `trash_item` after the copy succeeds: two
-mutations on two stores have no common transaction, and a failure of the
-second leaves a copy and an original rather than neither.
+reservation for the whole application rather than for one profile. An
+ambiguous outcome then blocks every later change until a complete listing
+of every profile, so the renderer refreshes all servers rather than the
+source's. Moving the original is a separate `trash_item` after the copy
+succeeds: two mutations on two stores have no common transaction, and a
+failure of the second leaves a copy and an original rather than neither.
 
 ### Trash
 

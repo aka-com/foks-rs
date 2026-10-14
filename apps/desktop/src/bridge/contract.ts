@@ -220,7 +220,7 @@ export interface Bridge {
   editTextItem(request: EditTextRequest): Promise<MutationResponse>;
   moveItem(request: MoveItemRequest): Promise<MutationResponse>;
   /**
-   * Creates a copy of a secret, file or link in another store. The host reads
+   * Creates a copy of a secret or file in another store. The host reads
    * the source at the listed version and dirent and writes the copy with a
    * create-only precondition; the content never reaches the renderer, and
    * the source is left unchanged.

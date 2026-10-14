@@ -174,9 +174,9 @@ remain fixed through concurrent-write retries. Deleting and recreating the same
 path cannot redirect a stale selection to the replacement, even when its numeric
 version is the same.
 
-Copy to vault…, in the details panel and the row menu, copies a secret, file
-or link into another vault: a personal login into a team, or a file from one
-team to another, on the same server or a different one. The sheet takes the
+Copy to vault…, in the details panel and the row menu, copies a secret or
+file into another vault: a personal login into a team, or a file from one team
+to another, on the same server or a different one. The sheet takes the
 destination vault (vaults this account cannot write to are listed but off), a
 folder of its tree, a name, and in a team the read and write roles with the
 same readable-by preview as a new item; a destination on another server is
@@ -337,13 +337,18 @@ direntId}`, and removes them all in one mutation.
 `copy_item_to_store` takes the source selection `{storeId, path, version,
 direntId}`, a `targetStoreId` and `targetPath`, and in a team target both
 `readRole` and `writeRole`. It reads the source at that version and dirent,
-refuses folders and the source's own store, and creates the copy with a
-`Create` precondition, so an occupied path fails with `already-exists`. A
-large file is read whole before the upload, since the agent admits an upload
-exclusively per profile; until then its chunks are held in an unlinked
-temporary file, each sealed with ChaCha20-Poly1305 under a key held only in
-memory. The mutation reservation covers the source's profile as well when
-the two stores are on different servers.
+refuses folders, links and the source's own store, and creates the copy
+with a `Create` precondition, so an occupied path fails with
+`already-exists`. A large file is read whole before the upload, since the
+agent admits an upload exclusively per profile; until then its chunks are
+held in an unlinked file in the system temporary directory, each sealed with
+ChaCha20-Poly1305 under a key held only in memory. That directory needs free
+space for the whole file (on a Linux system where `/tmp` is a tmpfs, this is
+memory or swap); a file larger than its free space fails with `copy-buffer`
+before it is read. The mutation reservation covers the source's profile as
+well when the two stores are on different servers, and after an ambiguous
+copy across servers the sheet refreshes every server, since a refresh of one
+profile neither reads the destination nor releases that reservation.
 
 Phase 4 adds `list_accounts`, `create_group`, member add/promote/demote/remove and their
 resumable continuations, federated admission/re-run, and `copy_text`. Each

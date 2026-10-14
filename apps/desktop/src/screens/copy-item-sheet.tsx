@@ -65,7 +65,7 @@ function initialFolder(
 }
 
 /**
- * Copies one secret, file or link into another vault, such as a personal
+ * Copies one secret or file into another vault, such as a personal
  * login into a team. The host reads the item and writes the copy, so its
  * content does not pass through this sheet. The copy takes the roles chosen
  * here in a team. Moving the original to Trash afterwards is a second step:
@@ -195,7 +195,13 @@ export function CopyItemSheet({
             : typed.message,
       );
       setUncertain(Boolean(typed.ambiguous) || typed.code === 'conflict');
-      await onMutationError(failure, { item, report: false });
+      // A copy across servers holds the application-wide reservation, which
+      // only a refresh of every server releases after an uncertain write;
+      // the source's server alone would not read the destination either.
+      await onMutationError(
+        failure,
+        otherServer ? { report: false } : { item, report: false },
+      );
       setSaving(false);
       return;
     }

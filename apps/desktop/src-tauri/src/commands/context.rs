@@ -1806,19 +1806,7 @@ impl AppState {
         dirent_id: &str,
     ) -> Result<CatalogItem, AgentError> {
         let item = self.selected_mutation_item(store, path, version)?;
-        let expected: String = item
-            .metadata
-            .dirent_id
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        if dirent_id != expected {
-            return Err(AgentError::new(
-                "conflict",
-                "This item was replaced. Refresh the vault before modifying it.",
-                false,
-            ));
-        }
+        require_listed_dirent(&item, dirent_id, "modifying")?;
         Ok(item)
     }
 
@@ -1828,26 +1816,53 @@ impl AppState {
         path: &str,
         version: u64,
     ) -> Result<CatalogItem, AgentError> {
-        match self.selected_item(store, path, version) {
-            Ok(item) => match self.selected_store(store)?.1 {
-                Some(false) => Err(AgentError::new(
-                    "inactive-group",
-                    "This group is inactive. Complete its setup before modifying it.",
-                    false,
-                )),
-                Some(true) | None => Ok(item),
-            },
-            Err(error)
-                if error.code == "item-version-mismatch" || error.code == "item-not-found" =>
-            {
-                Err(AgentError::new(
-                    "conflict",
-                    "This item changed or was removed. Refresh the vault before modifying it.",
-                    false,
-                ))
-            }
-            Err(error) => Err(error),
+        let item = self.selected_current_item(store, path, version, "modifying")?;
+        match self.selected_store(store)?.1 {
+            Some(false) => Err(AgentError::new(
+                "inactive-group",
+                "This group is inactive. Complete its setup before modifying it.",
+                false,
+            )),
+            Some(true) | None => Ok(item),
         }
+    }
+
+    /// The listed version of the listed dirent at `path`, for a command that
+    /// reads the item without changing it, so an inactive group is not
+    /// refused. `action` completes the refresh message of a `conflict`.
+    pub(super) fn selected_bound_item(
+        &self,
+        store: &str,
+        path: &str,
+        version: u64,
+        dirent_id: &str,
+        action: &str,
+    ) -> Result<CatalogItem, AgentError> {
+        let item = self.selected_current_item(store, path, version, action)?;
+        require_listed_dirent(&item, dirent_id, action)?;
+        Ok(item)
+    }
+
+    /// [`Self::selected_item`], with a changed or missing item reported as a
+    /// `conflict` that asks for a refresh before `action` it.
+    fn selected_current_item(
+        &self,
+        store: &str,
+        path: &str,
+        version: u64,
+        action: &str,
+    ) -> Result<CatalogItem, AgentError> {
+        self.selected_item(store, path, version)
+            .map_err(|error| match error.code.as_str() {
+                "item-version-mismatch" | "item-not-found" => AgentError::new(
+                    "conflict",
+                    format!(
+                        "This item changed or was removed. Refresh the vault before {action} it."
+                    ),
+                    false,
+                ),
+                _ => error,
+            })
     }
 
     pub(crate) fn record_drop_paths(&self, paths: &[PathBuf]) -> Vec<String> {
@@ -2020,6 +2035,30 @@ impl AppState {
         }
         self.reserve_mutation(true)
     }
+}
+
+/// Refuses `item` with a `conflict` unless its dirent is `dirent_id`, the one
+/// the renderer selected, so that an item recreated at the same path and
+/// version is not used in its place.
+fn require_listed_dirent(
+    item: &CatalogItem,
+    dirent_id: &str,
+    action: &str,
+) -> Result<(), AgentError> {
+    let listed: String = item
+        .metadata
+        .dirent_id
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if dirent_id == listed {
+        return Ok(());
+    }
+    Err(AgentError::new(
+        "conflict",
+        format!("This item was replaced. Refresh the vault before {action} it."),
+        false,
+    ))
 }
 
 fn failure_profile(failure: &foks_desktop::CatalogFailure) -> &str {

@@ -3,12 +3,14 @@ use super::vault::{download_item, DownloadTransport, ReadTransport, READ_VALUE};
 use crate::commands::validation::DOWNLOAD_CHUNK_BYTES;
 use crate::commands::vault::store_id;
 use crate::commands::vault_copy::{
-    copy_scope, read_copy_source, selected_copy_source, write_copy, CopySource, CopyTarget,
-    SealedSpool,
+    copy_scope, copy_target, read_copy_source, require_spool_space, write_copy, CopySource,
+    CopyTarget, SealedSpool,
 };
 use foks_agent_proto::{KvPrecondition, KvRole, KvStoreRef, KvUploadHeader, Operation};
 use foks_desktop::{CatalogItem, CatalogStoreRef};
+use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::path::Path;
 use std::sync::Mutex;
 
 fn engineering() -> CatalogStoreRef {
@@ -152,15 +154,41 @@ fn a_secret_is_created_inline_with_the_target_roles_and_a_create_precondition() 
 }
 
 #[test]
-fn folders_are_refused_before_any_read() {
-    let mut item = secret_item();
-    item.metadata.node_type = "directory".to_owned();
-    let transport = ReadTransport {
-        calls: Mutex::new(Vec::new()),
-    };
-    let error = read_copy_source(&transport, &item).err().unwrap();
-    assert_eq!(error.code, "invalid-request");
-    assert!(transport.calls.lock().unwrap().is_empty());
+fn folders_and_links_are_refused_before_any_read() {
+    for node_type in ["directory", "symlink"] {
+        let mut item = secret_item();
+        item.metadata.node_type = node_type.to_owned();
+        let transport = ReadTransport {
+            calls: Mutex::new(Vec::new()),
+        };
+        let error = read_copy_source(&transport, &item).err().unwrap();
+        assert_eq!(error.code, "invalid-request", "{node_type}");
+        assert!(transport.calls.lock().unwrap().is_empty(), "{node_type}");
+    }
+}
+
+#[test]
+fn a_file_larger_than_the_free_temporary_space_is_refused_before_any_read() {
+    let total = 2 * u64::from(DOWNLOAD_CHUNK_BYTES) + 5;
+    // The plaintext and one tag for each of the three chunks.
+    let needed = total + 3 * 16;
+    let directory = Path::new("/tmp");
+    require_spool_space(total, needed, directory).unwrap();
+    let error = require_spool_space(total, needed - 1, directory).unwrap_err();
+    assert_eq!(error.code, "copy-buffer");
+    assert!(error.message.contains(&needed.to_string()));
+    require_spool_space(0, 0, directory).unwrap();
+}
+
+/// Flips the low bit of the byte at `offset`, so the held ciphertext always
+/// changes whatever the random key made it.
+fn flip_byte(file: &mut File, offset: u64) {
+    let mut byte = [0u8];
+    file.seek(SeekFrom::Start(offset)).unwrap();
+    file.read_exact(&mut byte).unwrap();
+    byte[0] ^= 0x01;
+    file.seek(SeekFrom::Start(offset)).unwrap();
+    file.write_all(&byte).unwrap();
 }
 
 #[test]
@@ -186,9 +214,7 @@ fn the_spool_holds_only_sealed_chunks_and_refuses_altered_ones() {
     let mut spool = SealedSpool::new().unwrap();
     spool.append(b"first").unwrap();
     spool.append(b"second").unwrap();
-    let file = spool.file_mut();
-    file.seek(SeekFrom::Start(0)).unwrap();
-    file.write_all(&[0xff]).unwrap();
+    flip_byte(spool.file_mut(), 0);
     let mut reader = spool.into_reader().unwrap();
     assert!(reader.read_to_end(&mut Vec::new()).is_err());
     assert!(reader.failure.is_some());
@@ -198,9 +224,7 @@ fn the_spool_holds_only_sealed_chunks_and_refuses_altered_ones() {
 fn a_spool_read_failure_fails_the_copy_without_reporting_an_upload() {
     let mut spool = SealedSpool::new().unwrap();
     spool.append(&[1; 64]).unwrap();
-    let file = spool.file_mut();
-    file.seek(SeekFrom::Start(3)).unwrap();
-    file.write_all(&[0]).unwrap();
+    flip_byte(spool.file_mut(), 3);
     let transport = CopyTransport::new(0);
     let error = write_copy(
         &transport,
@@ -272,12 +296,15 @@ fn the_source_is_bound_to_the_listed_version_and_dirent() {
     let listed = "07".repeat(16);
 
     assert_eq!(
-        selected_copy_source(&state, &id, "/wifi/password", 7, &listed).unwrap(),
+        state
+            .selected_bound_item(&id, "/wifi/password", 7, &listed, "copying")
+            .unwrap(),
         item
     );
     for (version, dirent) in [(8, listed.as_str()), (7, &*"08".repeat(16))] {
         assert_eq!(
-            selected_copy_source(&state, &id, "/wifi/password", version, dirent)
+            state
+                .selected_bound_item(&id, "/wifi/password", version, dirent, "copying")
                 .err()
                 .unwrap()
                 .code,
@@ -285,10 +312,48 @@ fn the_source_is_bound_to_the_listed_version_and_dirent() {
         );
     }
     assert_eq!(
-        selected_copy_source(&state, &id, "/missing", 7, &listed)
+        state
+            .selected_bound_item(&id, "/missing", 7, &listed, "copying")
             .err()
             .unwrap()
             .code,
         "conflict"
     );
+}
+
+#[test]
+fn the_target_is_checked_before_the_source_is_read() {
+    let state = phase_four_state(Vec::new());
+    let mut item = secret_item();
+    item.store = CatalogStoreRef::Account(account_ref("work.example", "personal"));
+    let engineering_id = store_id(&engineering());
+    let roles = (Some("Member:0"), Some("Admin"));
+
+    let target = copy_target(
+        &state,
+        &item,
+        &engineering_id,
+        "/wifi/password".to_owned(),
+        roles.0,
+        roles.1,
+    )
+    .unwrap();
+    assert_eq!(target.store, engineering());
+    assert_eq!(target.path, "/wifi/password");
+    assert_eq!(target.read_role, KvRole::Member { visibility: 0 });
+    assert_eq!(target.write_role, KvRole::Admin);
+
+    // The item's own store, a path the upload would refuse, and a team
+    // without roles are each refused here, before read_copy_source runs.
+    let refusals = [
+        (store_id(&item.store), "/wifi/password", (None, None)),
+        (engineering_id.clone(), "wifi/password", roles),
+        (engineering_id.clone(), "/wifi/password", (None, None)),
+    ];
+    for (store, path, (read, write)) in refusals {
+        let error = copy_target(&state, &item, &store, path.to_owned(), read, write)
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "invalid-request", "{store} {path}");
+    }
 }
