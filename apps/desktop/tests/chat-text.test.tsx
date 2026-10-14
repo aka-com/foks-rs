@@ -10,6 +10,7 @@ let labelHosts: typeof import('../src/chat/message-text').labelHosts;
 let chatLinkDisplay: typeof import('../src/chat/message-text').chatLinkDisplay;
 let trimBareUrl: typeof import('../src/chat/message-text').trimBareUrl;
 let chatMentions: typeof import('../src/chat/mentions').chatMentions;
+let mentionKey: typeof import('../src/chat/mentions').mentionKey;
 let relativeMessageTime: typeof import('../src/chat/presentation').relativeMessageTime;
 let ToastProvider: typeof import('../kit/toasts').ToastProvider;
 let ToastController: typeof import('../kit/toasts').ToastController;
@@ -21,7 +22,9 @@ test.before(async () => {
   });
   ({ MessageText, safeChatLink, labelHosts, chatLinkDisplay, trimBareUrl } =
     await vite.ssrLoadModule('/src/chat/message-text.tsx'));
-  ({ chatMentions } = await vite.ssrLoadModule('/src/chat/mentions.ts'));
+  ({ chatMentions, mentionKey } = await vite.ssrLoadModule(
+    '/src/chat/mentions.ts',
+  ));
   ({ relativeMessageTime } = await vite.ssrLoadModule(
     '/src/chat/presentation.ts',
   ));
@@ -502,6 +505,33 @@ test('a bare URL is a link without the punctuation that ends its sentence', () =
     trimBareUrl('https://example.com/[a]'),
     'https://example.com/[a]',
   );
+  // CJK sentence punctuation and unmatched full-width closers end the URL.
+  assert.equal(
+    trimBareUrl('https://example.com/path」。'),
+    'https://example.com/path',
+  );
+  assert.equal(
+    trimBareUrl('https://example.com/「a」'),
+    'https://example.com/「a」',
+  );
+  // A trailing `_` is trimmed only when a `_` precedes the URL.
+  assert.equal(trimBareUrl('https://example.com/a_'), 'https://example.com/a_');
+  assert.equal(
+    trimBareUrl('https://example.com_.', true),
+    'https://example.com',
+  );
+  const emphasized = messageMarkup(
+    'x _https://example.com_ y https://example.com/path。',
+  );
+  assert.match(
+    emphasized,
+    /x _<a href="https:\/\/example\.com\/" title="https:\/\/example\.com\/" rel="noreferrer noopener"><bdi>https:\/\/example\.com<\/bdi><\/a>_ y /,
+  );
+  assert.match(
+    emphasized,
+    /<a href="https:\/\/example\.com\/path"[^>]*><bdi>https:\/\/example\.com\/path<\/bdi><\/a>。<\/p>/,
+  );
+  assert.doesNotMatch(emphasized, /chat-link-mismatch/);
 });
 
 test('a bare URL passes the same checks as a link destination', () => {
@@ -533,6 +563,11 @@ test('bare-URL and mention scanning is linear in the text length', () => {
     `https://example.com/${')'.repeat(64000)}`,
     `https://example.com/${'.'.repeat(64000)}`,
     `@a${'.'.repeat(64000)}`,
+    `@a${'.'.repeat(64000)}b`,
+    `@a${'-'.repeat(64000)}b`,
+    `@a${'.-'.repeat(32000)}b`,
+    `https://example.com/${'。'.repeat(64000)}`,
+    `_https://example.com/${'_'.repeat(64000)}`,
     '@a '.repeat(21000),
   ]) {
     const started = performance.now();
@@ -548,9 +583,10 @@ test('blank lines separate paragraphs; single line breaks do not', () => {
     /^<div class="chat-message-text"><p>one<\/p><p>two<\/p><\/div>/,
   );
   const html = messageMarkup(
-    '\n\none\n\n\ntwo\n\n- a\n- b\n\n> q\n\n```\nx\n```\n',
+    '\n\none\n\n\ntwo\n \n- a\n- b\n\t\n> q\r\n\r\n```\r\nx\r\n```\r\n',
   );
-  // Leading blank lines draw nothing; a run of blank lines is one gap.
+  // Leading blank lines draw nothing; a run of blank lines is one gap. A
+  // line of only whitespace is blank, and CRLF line ends read as LF.
   assert.ok(
     html.startsWith(
       '<div class="chat-message-text"><p>one</p><p class="chat-gap">two</p>' +
@@ -593,9 +629,18 @@ test('@names on the roster are drawn as mentions, the reader as a mention of the
   );
   assert.match(
     html,
-    /<p><span class="chat-mention self" title="Mentions you">@satoshi<\/span> and <span class="chat-mention">@Priya\.N<\/span>\. ask @nobody, mail bob@priya\.n, <span class="chat-mention">@łukasz<\/span><\/p>/,
+    /<p><span class="chat-mention self" title="Mentions you">@satoshi<span class="offscreen">, mentions you<\/span><\/span> and <span class="chat-mention">@Priya\.N<\/span>\. ask @nobody, mail bob@priya\.n, <span class="chat-mention">@łukasz<\/span><\/p>/,
   );
   assert.match(html, /<li><span class="chat-mention">@priya_n<\/span><\/li>/);
+  // Letters FOKS flattens to ASCII compare equal in either direction.
+  const flattened = messageMarkup(
+    '@lukasz @Łukasz @straus @strauß',
+    chatMentions(['Łukasz', 'straus'], null),
+  );
+  assert.equal((flattened.match(/class="chat-mention"/g) ?? []).length, 4);
+  assert.equal(mentionKey('Łukasz'), mentionKey('lukasz'));
+  assert.equal(mentionKey('strauß'), mentionKey('Straus'));
+  assert.equal(mentionKey('bjørn.æ'), 'bjorn_a');
   // Without the roster, @names are text.
   assert.doesNotMatch(messageMarkup('@satoshi'), /chat-mention/);
   // A mention is text styling only: code and link labels keep their text.

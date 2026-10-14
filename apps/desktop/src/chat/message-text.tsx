@@ -548,29 +548,45 @@ function Link({
   );
 }
 
+/** Closing brackets a bare URL may end in, each with its opening bracket. */
+const URL_BRACKETS = new Map([
+  [')', '('],
+  [']', '['],
+  ['\uFF09', '\uFF08'], // full-width parentheses
+  ['\uFF3D', '\uFF3B'], // full-width square brackets
+  ['\u300D', '\u300C'], // corner brackets
+  ['\u300F', '\u300E'], // white corner brackets
+  ['\u3011', '\u3010'], // black lenticular brackets
+]);
+
 /**
  * A bare URL without the punctuation that ends the sentence around it: any
- * trailing `.`, `,`, `;`, `:`, `!`, `?`, `'` or `"`, and a trailing `)` or `]`
- * that closes nothing the URL opened (`(see https://example.com/a_(b))` keeps
- * the URL's own `)`). Linear in the URL's length.
+ * trailing `.`, `,`, `;`, `:`, `!`, `?`, `'` or `"`, the CJK sentence
+ * punctuation `。`, `、`, `，`, `．`, `！`, `？`, `：` and `；`, a trailing `_`
+ * when the URL follows a `_` (`_https://example.com_`), and a trailing
+ * closing bracket (ASCII, full-width or CJK corner and lenticular) that closes
+ * nothing the URL opened (`(see https://example.com/a_(b))` keeps the URL's
+ * own `)`). Linear in the URL's length.
  */
-export function trimBareUrl(url: string): string {
-  let parens = 0,
-    brackets = 0;
-  for (const c of url)
-    if (c === '(') parens++;
-    else if (c === ')') parens--;
-    else if (c === '[') brackets++;
-    else if (c === ']') brackets--;
+export function trimBareUrl(url: string, underscored = false): string {
+  // Per opening bracket: openings minus closings in the whole URL.
+  const open = new Map<string, number>();
+  for (const opener of URL_BRACKETS.values()) open.set(opener, 0);
+  for (const c of url) {
+    const opener = URL_BRACKETS.get(c);
+    if (opener !== undefined) open.set(opener, (open.get(opener) ?? 0) - 1);
+    else if (open.has(c)) open.set(c, (open.get(c) ?? 0) + 1);
+  }
+  const trailing = `.,;:!?'"\u3002\u3001\uFF0C\uFF0E\uFF01\uFF1F\uFF1A\uFF1B${
+    underscored ? '_' : ''
+  }`;
   let end = url.length;
   while (end > 0) {
     const c = url[end - 1];
-    if (`.,;:!?'"`.includes(c)) end--;
-    else if (c === ')' && parens < 0) {
-      parens++;
-      end--;
-    } else if (c === ']' && brackets < 0) {
-      brackets++;
+    const opener = URL_BRACKETS.get(c);
+    if (trailing.includes(c)) end--;
+    else if (opener !== undefined && (open.get(opener) ?? 0) < 0) {
+      open.set(opener, (open.get(opener) ?? 0) + 1);
       end--;
     } else break;
   }
@@ -617,15 +633,20 @@ function inline(
         ),
       );
     } else if (token.startsWith('@')) {
-      // A name does not end in `.`, `_` or `-`; those end the sentence.
-      const name = token.slice(1).replace(/[._-]+$/u, '');
-      used = name.length + 1;
+      // A name does not end in `.`, `_` or `-`; those end the sentence. A
+      // backward scan, since a trailing-separator regex backtracks on a long
+      // separator run followed by a name character.
+      let end = token.length;
+      while (end > 2 && '._-'.includes(token[end - 1])) end--;
+      const name = token.slice(1, end);
+      used = end;
       const key = mentionKey(name);
       parts.push(
         mentions?.members.has(key) ? (
           key === mentions.self ? (
             <span key={at} className="chat-mention self" title="Mentions you">
               @{name}
+              <span className="offscreen">, mentions you</span>
             </span>
           ) : (
             <span key={at} className="chat-mention">
@@ -637,7 +658,7 @@ function inline(
         ),
       );
     } else {
-      const bare = trimBareUrl(token);
+      const bare = trimBareUrl(token, text[at - 1] === '_');
       used = bare.length;
       const url = safeChatLink(bare);
       parts.push(
@@ -665,7 +686,7 @@ export function MessageText({
     null,
   );
   const toasts = useOptionalToast();
-  const lines = text.split('\n');
+  const lines = text.split(/\r?\n/);
   const blocks: ReactNode[] = [];
   if (text.length <= 65536 && lines.length <= 512) {
     // Set by blank lines between blocks: the next block is drawn after a
@@ -726,7 +747,7 @@ export function MessageText({
             {inline(line.slice(2), actions, mentions)}
           </blockquote>,
         );
-      else if (line)
+      else if (line.trim())
         blocks.push(
           <p key={i} className={className}>
             {inline(line, actions, mentions)}

@@ -901,24 +901,27 @@ Leaving, muting, renaming and deleting a channel have no `ChatAction`, so the
 panel does not draw them.
 
 The composer exposes text entry and delivery actions. Attachments, an emoji
-picker and message expiry are omitted until supported. Under
-it, a hint line offers only the markup the thread renders (`**bold**`,
-`*italics*`, `` `code` ``, `> quote`, `- list`, `[label](https://…)`); mentions
-are not among them.
+picker and message expiry are omitted until supported.
 
-`message-text.tsx` renders that subset without recursion: markup inside a
-token stays text. A bare `http://` or `https://` URL that does not continue a
-word is a link once trailing `.`, `,`, `;`, `:`, `!`, `?`, `'` and `"`, and a
-`)` or `]` that closes nothing opened in the URL, are left as text
-(`trimBareUrl`); it then passes `safeChatLink` and is drawn like a
-`[label](url)` link whose label is the URL text. One or more blank lines
-between blocks start a new paragraph (a 12px gap); single line breaks do not.
+`message-text.tsx` renders a Markdown subset (`**bold**`, `*italics*`,
+`` `code` ``, fenced code blocks, `> quote`, `- list`, `1. list`,
+`[label](https://…)`) without recursion: markup inside a token stays text. A
+bare `http://` or `https://` URL that does not continue a word is a link once
+trailing sentence punctuation (`.`, `,`, `;`, `:`, `!`, `?`, `'`, `"` and the
+CJK `。`, `、`, `，`, `．`, `！`, `？`, `：`, `；`), a closing bracket that closes
+nothing opened in the URL, and a `_` when a `_` precedes the URL are left as
+text (`trimBareUrl`); it then passes `safeChatLink` and is drawn like a
+`[label](url)` link whose label is the URL text. One or more blank or
+whitespace-only lines between blocks start a new paragraph (a 12px gap);
+single line breaks do not, and CRLF line ends read as LF.
 Lists are indented inside the text column. A fenced code block is drawn on a
 surface with a copy button that appears while the block is hovered or holds
 focus; a block of more than 20 lines shows its first 12 and Show all N lines.
-An `@name` is drawn as a mention when the name, compared lower case with
-combining marks removed and `.` and `-` read as `_`, is a username on the
-team's roster, and as a highlighted mention when it is the reader's own
+An `@name` is drawn as a mention when the name, compared as FOKS v0.1.9
+username normalization compares it (lower case, `ł`, `ø`, `æ`, `ß` and the
+other `flatten_unicode` letters replaced, combining marks removed, `.` and `-`
+read as `_`), is a username on the team's roster, and as a highlighted mention
+with offscreen text "mentions you" when it is the reader's own
 (`mentions.ts`). This is styling of Basic text only: a mention raises no
 notification and is not counted, and mentions as a protocol feature remain
 deferred (ISSUES.md).

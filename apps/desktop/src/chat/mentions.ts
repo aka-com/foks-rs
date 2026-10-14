@@ -11,13 +11,37 @@ export interface ChatMentions {
 }
 
 /**
- * The form a username is compared in: lower case, with combining marks
- * removed and `.` and `-` read as `_`, as FOKS username normalization treats
- * them, so `@Priya.N` and `@priya_n` both name `priya.n`.
+ * Letters that FOKS v0.1.9 username normalization replaces before it removes
+ * combining marks (`flatten_unicode` in `crates/foks-verify/src/user.rs`).
+ * Without this, `ł`, `ø`, `æ` and `ß` keep their non-ASCII form.
+ */
+const FLATTEN: Readonly<Record<string, string>> = {
+  ą: 'a',
+  ć: 'c',
+  ę: 'e',
+  ł: 'l',
+  ń: 'n',
+  ó: 'o',
+  ś: 's',
+  ż: 'z',
+  ź: 'z',
+  ø: 'o',
+  æ: 'a',
+  ß: 's',
+};
+
+/**
+ * The form a username is compared in, following FOKS v0.1.9 username
+ * normalization: lower case, the {@link FLATTEN} letters replaced, combining
+ * marks removed and `.` and `-` read as `_`. So `@Priya.N` and `@priya_n`
+ * both name `priya.n`, and `@lukasz` names `Łukasz`. The validity checks
+ * (ASCII only, length) are not applied; a name that fails them matches no
+ * roster username.
  */
 export function mentionKey(name: string): string {
   return name
     .toLowerCase()
+    .replace(/[ąćęłńóśżźøæß]/gu, (c) => FLATTEN[c] ?? c)
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
     .replace(/[.-]/g, '_');
