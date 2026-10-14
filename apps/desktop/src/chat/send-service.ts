@@ -23,7 +23,7 @@ import {
 } from './client';
 import { cancelled } from './errors';
 import { eventFromReply } from './conversation-events';
-import { reconcileOperations, observeMessages } from './operations';
+import { delivered, reconcileOperations, observeMessages } from './operations';
 import type { TrackedOperation } from './operations';
 import { chatIntentPersistence } from './intent';
 import type { ChatIntentPersistence } from './intent';
@@ -1095,10 +1095,8 @@ export class ChatSendService {
   ) {
     const team = this.teams.get(storeId);
     if (!team || !this.current(team)) return;
-    // An unverifiable row's ID is an unauthenticated claim, so it is no
-    // evidence that a message of this client's was delivered.
-    const messages = rows.filter((m) => m.content.kind !== 'unverifiable');
-    const ids = new Set(messages.map((m) => m.id));
+    const ids = delivered(rows);
+    const messages = rows.filter((m) => ids.has(m.id));
     if (team.messages.some((m) => m.channel === channel && !operationOf(m))) {
       for (const message of messages)
         team.observations.set(message.id, {

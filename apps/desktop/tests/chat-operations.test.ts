@@ -100,10 +100,10 @@ test('pending omission preserves unknown send but does not recheck terminal stat
   );
 });
 test('history observation survives later ledger replies without retaining plaintext', () => {
-  const rows = reconcileOperations(
+  if (history.kind !== 'history') throw new Error('fixture');
+  const rows = observeMessages(
     [{ ...op, text: 'hello' }],
-    { action: 'history', channel: op.channel, before: null },
-    history,
+    delivered(history.messages),
   );
   const refreshed = reconcileOperations(
     rows,
@@ -160,24 +160,21 @@ test('an unverifiable row that a later read opens is replaced, not a conflict', 
     ...history,
     messages: [{ ...row, content: { kind: 'unverifiable' as const } }],
   };
-  const action = {
-    action: 'history',
-    channel: op.channel,
-    before: null,
-  } as const;
   // An unverifiable row bearing a sent message's ID is no delivery evidence.
   const held = mergeHistoryPage(null, page(unverifiable));
-  const sends = reconcileOperations(
+  const sends = observeMessages(
     [{ ...op, text: 'hello' }],
-    action,
-    unverifiable,
+    delivered(unverifiable.messages),
   );
   assert.equal(sends[0].observed, undefined);
   assert.equal(sends[0].text, 'hello');
   // The reader's team view now holds the key generation the row names.
   const opened = mergeHistoryPage(held, page(history));
   assert.deepEqual(opened.messages, history.messages);
-  assert.equal(reconcileOperations(sends, action, history)[0].observed, true);
+  assert.equal(
+    observeMessages(sends, delivered(history.messages))[0].observed,
+    true,
+  );
   // A row never goes back to unverifiable, and the server's claims about an
   // unverifiable row cannot change either.
   assert.throws(() => mergeHistoryPage(opened, page(unverifiable)), {

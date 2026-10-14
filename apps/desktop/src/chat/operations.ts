@@ -56,10 +56,6 @@ export function reconcileOperations(
     });
     return bound([...rows, ...incoming.values()]);
   }
-  // This event is dispatched only after the entire page is accepted into history.
-  if (result.kind === 'history') {
-    return observeMessages(old, delivered(result.messages));
-  }
   if (result.kind === 'channels')
     return old.filter(
       (op) =>
