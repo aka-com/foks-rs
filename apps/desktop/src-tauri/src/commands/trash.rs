@@ -70,6 +70,9 @@ pub struct TrashMutationDto {
 /// account cannot create it. The renderer then offers permanent removal.
 pub(super) const TRASH_UNAVAILABLE: &str = "trash-unavailable";
 
+/// The code the agent reports a write refused by role with.
+const ROLE_REFUSAL: &str = "operation-failed";
+
 /// One Trash entry named by the renderer, as `empty_trash` takes it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -85,8 +88,10 @@ pub(super) struct TrashStep {
     pub(super) operation: Operation,
     pub(super) kind: MutationKind,
     pub(super) failure: Option<&'static str>,
-    /// The code a definite, non-transient refusal of this write is reported
-    /// with, in place of the agent's.
+    /// The code a refusal of this write by role is reported with, in place
+    /// of the agent's. The agent reports a role refusal, from the server or
+    /// from a missing role key, as `operation-failed`; every other code
+    /// (quota, credentials, a concurrent creation) keeps its own recovery.
     pub(super) refusal: Option<&'static str>,
     /// Whether the write only removes an `.origin` file after the plan's
     /// main writes. Its failure leaves the command applied: an `.origin`
@@ -678,7 +683,7 @@ pub(super) fn execute_trash_plan(
                 error.message = format!("{context} {}", error.message);
             }
             if let Some(code) = step.refusal {
-                if !error.retryable && error.code != "already-exists" {
+                if error.code == ROLE_REFUSAL {
                     error.code = code.to_owned();
                 }
             }

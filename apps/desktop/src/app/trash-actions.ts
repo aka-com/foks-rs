@@ -11,6 +11,7 @@ import { normalizeCommandError, type Bridge } from '../bridge';
 import type { LocationStore } from '../location';
 import {
   nameOf,
+  ownsTeam,
   storeOf,
   trashEntries,
   trashEntryExpired,
@@ -29,6 +30,13 @@ export const UNDO_DURATION_MS = 8_000;
 
 /** How often automatic emptying looks at one store's Trash again. */
 const AUTO_EMPTY_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * How long the catalog stays unchanged before automatic emptying starts.
+ * Every completed change publishes a new catalog, so the job does not take
+ * the host's single mutation permit right after one.
+ */
+const AUTO_EMPTY_QUIET_MS = 3_000;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -98,12 +106,19 @@ export function useTrashActions({
   accessNow: () => number;
 }): TrashActions {
   const pendingUndo = useRef<{ run: () => void; until: number } | null>(null);
+  // A Trash action the person started; a second one started meanwhile is
+  // ignored.
   const busy = useRef(false);
+  const undoing = useRef(false);
+  // Automatic emptying while it holds the host's mutation permit. A Trash
+  // action started meanwhile waits for it rather than being refused.
+  const emptying = useRef<Promise<void> | null>(null);
   const autoEmptied = useRef(new Map<string, number>());
 
   const restoreTo = useCallback(
     async (item: Item, destination: string): Promise<void> => {
       const profile = storeOf(shown, item.store)?.server;
+      await emptying.current;
       try {
         await bridge.restoreTrashItem({
           storeId: item.store,
@@ -178,6 +193,7 @@ export function useTrashActions({
   const undo = useCallback(
     (original: Item, trashPath: string) => {
       pendingUndo.current = null;
+      undoing.current = true;
       void (async () => {
         // The toast outlives the snapshot it was shown with: find the entry
         // in a current catalog, which the host's selection also requires.
@@ -190,7 +206,11 @@ export function useTrashActions({
           return;
         }
         await restoreItem(next, entry, original.path);
-      })().catch((error: unknown) => mutationError(error, { item: original }));
+      })()
+        .catch((error: unknown) => mutationError(error, { item: original }))
+        .finally(() => {
+          undoing.current = false;
+        });
     },
     [mutationError, refreshSnapshot, restoreItem, toasts],
   );
@@ -220,6 +240,7 @@ export function useTrashActions({
       const name = nameOf(item.path);
       void (async () => {
         let path: string;
+        await emptying.current;
         try {
           ({ path } = await bridge.trashItem({
             storeId: item.store,
@@ -229,9 +250,10 @@ export function useTrashActions({
           }));
         } catch (error) {
           const { code } = normalizeCommandError(error);
-          if (code === 'trash-unavailable') {
+          if (code === 'trash-unavailable' && !ownsTeam(shown, item.store)) {
             // The roster did not show that this account cannot create
-            // Trash, but the host's attempt found it.
+            // Trash, but the host's attempt found it. An owner's refusal
+            // has another cause and is reported as it is.
             await mutationError(error, { report: false });
             deleteWithoutTrash(item);
           } else if (code === 'conflict') {
@@ -294,46 +316,74 @@ export function useTrashActions({
 
   // Automatic emptying, when this device opts in: entries deleted longer ago
   // than the chosen age are removed permanently, one store at a time, and
-  // only those this account can change. It waits while a dialog is open or
-  // another Trash action runs, so it does not hold the mutation permit then.
+  // only those this account can change. It starts once the catalog has been
+  // unchanged for a short time and skips while a dialog is open, a Trash
+  // action or an Undo runs, or an Undo is offered, so it does not take the
+  // host's mutation permit next to a change the person makes.
   useEffect(() => {
     const days = storedTrashAutoEmpty();
-    if (days === null || busy.current || anyDialogOpen()) return;
-    const now = Date.now();
-    for (const store of shown.stores) {
-      const last = autoEmptied.current.get(store.id);
-      if (last !== undefined && now - last < AUTO_EMPTY_INTERVAL_MS) continue;
-      const expired = trashEntries(shown, store.id).filter(
-        (entry) =>
-          trashEntryExpired(entry, now, days * DAY_MS) &&
-          !itemActionProblem(shown, entry.item, true, accessNow()),
-      );
-      if (!expired.length) continue;
-      autoEmptied.current.set(store.id, now);
-      busy.current = true;
-      void bridge
-        .emptyTrash({
-          storeId: store.id,
-          entries: expired.map(({ item }) => ({
-            path: item.path,
-            version: item.version,
-            direntId: item.direntId,
-          })),
-        })
-        .then(
-          () =>
-            refresh(
-              `Deleted ${expired.length} ${expired.length === 1 ? 'entry' : 'entries'} permanently from Trash in ${store.name}: they were deleted more than ${days} days ago.`,
-              store.server,
-            ),
-          (error: unknown) => mutationError(error, { report: false }),
-        )
-        .catch((error: unknown) => mutationError(error, { report: false }))
-        .finally(() => {
-          busy.current = false;
-        });
-      return;
-    }
+    if (days === null) return;
+    const offered = pendingUndo.current;
+    const delay = Math.max(
+      AUTO_EMPTY_QUIET_MS,
+      offered ? offered.until - Date.now() : 0,
+    );
+    const timer = window.setTimeout(() => {
+      const pending = pendingUndo.current;
+      if (
+        busy.current ||
+        undoing.current ||
+        emptying.current ||
+        (pending && Date.now() <= pending.until) ||
+        anyDialogOpen()
+      )
+        return;
+      const now = Date.now();
+      for (const store of shown.stores) {
+        const last = autoEmptied.current.get(store.id);
+        if (last !== undefined && now - last < AUTO_EMPTY_INTERVAL_MS) continue;
+        const expired = trashEntries(shown, store.id).filter(
+          (entry) =>
+            trashEntryExpired(entry, now, days * DAY_MS) &&
+            !itemActionProblem(shown, entry.item, true, accessNow()),
+        );
+        if (!expired.length) continue;
+        autoEmptied.current.set(store.id, now);
+        // The job ends after the refresh that follows it: the host
+        // discards the store's catalog when it writes, so a Trash action
+        // waiting for the job selects its item in a catalog read again.
+        const job = bridge
+          .emptyTrash({
+            storeId: store.id,
+            entries: expired.map(({ item }) => ({
+              path: item.path,
+              version: item.version,
+              direntId: item.direntId,
+            })),
+          })
+          .then(
+            () =>
+              refresh(
+                `Deleted ${expired.length} ${expired.length === 1 ? 'entry' : 'entries'} permanently from Trash in ${store.name}: they were deleted more than ${days} days ago.`,
+                store.server,
+              ),
+            (error: unknown) => {
+              // Another change held the permit: try again at the next
+              // catalog change rather than an hour later.
+              if (normalizeCommandError(error).code === 'mutation-in-flight')
+                autoEmptied.current.delete(store.id);
+              return mutationError(error, { report: false });
+            },
+          )
+          .catch((error: unknown) => mutationError(error, { report: false }))
+          .finally(() => {
+            if (emptying.current === job) emptying.current = null;
+          });
+        emptying.current = job;
+        return;
+      }
+    }, delay);
+    return () => window.clearTimeout(timer);
   }, [accessNow, bridge, mutationError, refresh, shown]);
 
   useEffect(() => {

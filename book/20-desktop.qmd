@@ -409,8 +409,11 @@ needs.
 Only an owner can create `/.trash` at the top level, because team roots are
 owner-writable. Until an owner has moved any item to Trash, a member who is
 not an owner cannot move items there. When the roster shows that, or the
-host's attempt to create `/.trash` is refused (`trash-unavailable`), Delete
-opens the permanent-delete confirmation for the item instead and says why.
+host's attempt to create `/.trash` is refused by role (`trash-unavailable`)
+and the roster does not show this account as an owner, Delete opens the
+permanent-delete confirmation for the item instead and says why. Any other
+failure to create `/.trash`, such as an exhausted quota or expired
+credentials, keeps its own code and is reported as it is.
 `remove_item` removes an item outside Trash only on that explicit request,
 and only for a file in a team whose fully read catalog has no `/.trash`;
 folders can be deleted only through Trash. The team's Trash view states the
@@ -454,7 +457,11 @@ Trash is emptied by hand unless a device opts in. Settings › Preferences ›
 Trash can empty it automatically after 30 or 90 days, a choice kept in that
 device's local storage. While the app runs, it removes the entries older
 than that which this account can change, through `empty_trash`, one store
-at a time and at most hourly per store, and not while a dialog is open.
+at a time and at most hourly per store. It starts only after the catalog has
+been unchanged for three seconds, and not while a dialog is open, a Trash
+action or an Undo runs, or an Undo is offered. A move to Trash or a restore
+started while it runs waits for it instead of being refused for the host's
+single mutation permit.
 
 Go FOKS clients and the CLI list `.trash` as an ordinary folder. The layout
 needs no protocol or storage change, and a Go client can restore an entry

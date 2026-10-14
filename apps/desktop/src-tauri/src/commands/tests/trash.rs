@@ -653,15 +653,30 @@ fn a_team_member_who_cannot_create_trash_is_told_so_by_code() {
     assert!(error
         .message
         .starts_with("Trash could not be created at the top level of this vault."));
-    // A transient failure or a concurrent creation keeps its own code.
-    assert_eq!(
-        refused(foks_agent_proto::ErrorCode::ServerUnavailable).code,
-        "server-unavailable"
-    );
-    assert_eq!(
-        refused(foks_agent_proto::ErrorCode::Conflict).code,
-        "already-exists"
-    );
+    // A transient failure, a concurrent creation, and any definite failure
+    // that is not a role refusal keep their own code and recovery.
+    for (code, slug) in [
+        (
+            foks_agent_proto::ErrorCode::ServerUnavailable,
+            "server-unavailable",
+        ),
+        (foks_agent_proto::ErrorCode::Conflict, "already-exists"),
+        (foks_agent_proto::ErrorCode::QuotaExceeded, "quota-exceeded"),
+        (
+            foks_agent_proto::ErrorCode::CredentialsRequired,
+            "credentials-required",
+        ),
+        (
+            foks_agent_proto::ErrorCode::ReauthenticationRequired,
+            "reauthentication-required",
+        ),
+        (
+            foks_agent_proto::ErrorCode::CapabilityDenied,
+            "capability-denied",
+        ),
+    ] {
+        assert_eq!(refused(code).code, slug);
+    }
 
     // In an account, the owner always can, so the code is never replaced.
     let own = secret(&account(), "/a", 1);

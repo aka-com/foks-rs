@@ -488,19 +488,33 @@ test('a member who cannot set up a team Trash is offered permanent deletion inst
   );
 });
 
-test('the host refusing to create a team Trash also leads to permanent deletion', async () => {
+const TRASH_REFUSED = {
+  code: 'trash-unavailable',
+  message:
+    'Trash could not be created at the top level of this vault. In a team, only an owner can create it.',
+  retryable: false,
+  ambiguous: false,
+  fatal: false,
+};
+
+test('the host refusing to create a team Trash leads a non-owner to permanent deletion', async () => {
+  // The catalog shows a `/.trash` that is gone by the time the host moves
+  // the item, and only an owner can create it again.
   const { rendered } = await mount({
-    vault: 'team:household',
-    path: '/wifi/guest-password',
+    vault: 'team:eng',
+    path: '/deploy/staging-token',
+    setup: async (base) => {
+      await base.createFolder({
+        storeId: 'team:eng',
+        path: '/.trash',
+        readRole: 'Member:0',
+        writeRole: 'Owner',
+      });
+      await base.listCatalog();
+    },
     decorate: () => ({
       trashItem: async () => {
-        throw {
-          code: 'trash-unavailable',
-          message: 'Trash could not be created at the top level of this vault.',
-          retryable: false,
-          ambiguous: false,
-          fatal: false,
-        };
+        throw TRASH_REFUSED;
       },
     }),
   });
@@ -510,6 +524,46 @@ test('the host refusing to create a team Trash also leads to permanent deletion'
   const sheet = await rendered.findByRole('alertdialog');
   assert.match(sheet.textContent ?? '', /Trash is not set up in this team yet/);
 });
+
+test('an owner whose team Trash cannot be created sees the error, not permanent deletion', async () => {
+  const { rendered } = await mount({
+    vault: 'team:household',
+    path: '/wifi/guest-password',
+    decorate: () => ({
+      trashItem: async () => {
+        throw TRASH_REFUSED;
+      },
+    }),
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Move to Trash' }));
+  });
+  await ui.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /Trash could not be created/),
+  );
+  assert.equal(rendered.queryByRole('alertdialog'), null);
+});
+
+/** Automatic emptying starts once the catalog has been quiet this long. */
+const AUTO_EMPTY_WAIT_MS = 3_000 + 2_000;
+
+/** An expired entry in the personal Trash, filed there by `setup`. */
+async function fileExpiredEntry(base: Bridge) {
+  const item = (await base.listCatalog()).items.find(
+    (candidate) =>
+      candidate.store === 'acct:personal' &&
+      candidate.path === '/ssh/id_ed25519',
+  );
+  assert.ok(item);
+  await base.moveItem({
+    storeId: 'acct:personal',
+    path: item.path,
+    version: item.version,
+    direntId: item.direntId,
+    destination: '/.trash/owner/20200101T000000~%2Fssh%2Fid_ed25519',
+  });
+  await base.listCatalog();
+}
 
 test('automatic emptying, when chosen on this device, removes entries past the chosen age', async () => {
   window.localStorage.setItem('trashAutoEmptyDays', '30');
@@ -522,24 +576,12 @@ test('automatic emptying, when chosen on this device, removes entries past the c
           '/documents/passport-scan.pdf',
         );
         assert.ok(recent);
-        const item = (await base.listCatalog()).items.find(
-          (candidate) =>
-            candidate.store === 'acct:personal' &&
-            candidate.path === '/ssh/id_ed25519',
-        );
-        assert.ok(item);
-        await base.moveItem({
-          storeId: 'acct:personal',
-          path: item.path,
-          version: item.version,
-          direntId: item.direntId,
-          destination: '/.trash/owner/20200101T000000~%2Fssh%2Fid_ed25519',
-        });
-        await base.listCatalog();
+        await fileExpiredEntry(base);
       },
     });
-    await ui.waitFor(() =>
-      assert.match(toasts(), /Deleted 1 entry permanently from Trash/),
+    await ui.waitFor(
+      () => assert.match(toasts(), /Deleted 1 entry permanently from Trash/),
+      { timeout: AUTO_EMPTY_WAIT_MS },
     );
     const left = (await paths()).filter((path) =>
       path.startsWith('/.trash/owner/'),
@@ -548,6 +590,48 @@ test('automatic emptying, when chosen on this device, removes entries past the c
     assert.match(left[0], /%2Fdocuments%2Fpassport-scan\.pdf$/);
     assert.ok(rendered);
   } finally {
+    window.localStorage.removeItem('trashAutoEmptyDays');
+  }
+});
+
+test('Move to Trash during automatic emptying runs after it instead of being ignored', async () => {
+  window.localStorage.setItem('trashAutoEmptyDays', '30');
+  let release = () => {};
+  let started = false;
+  const order: string[] = [];
+  try {
+    const { rendered, paths } = await mount({
+      setup: fileExpiredEntry,
+      decorate: (base) => ({
+        emptyTrash: async (request) => {
+          started = true;
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          order.push('empty');
+          return base.emptyTrash(request);
+        },
+        trashItem: (request) => {
+          order.push('trash');
+          return base.trashItem(request);
+        },
+      }),
+    });
+    await ui.waitFor(() => assert.ok(started), { timeout: AUTO_EMPTY_WAIT_MS });
+    await ui.act(async () => {
+      ui.fireEvent.click(
+        rendered.getByRole('button', { name: 'Move to Trash' }),
+      );
+    });
+    assert.deepEqual(order, []);
+    await ui.act(async () => release());
+    await ui.waitFor(() =>
+      assert.match(toasts(), /Moved github\.com to Trash/),
+    );
+    assert.deepEqual(order, ['empty', 'trash']);
+    assert.ok(!(await paths()).includes(PATH));
+  } finally {
+    release();
     window.localStorage.removeItem('trashAutoEmptyDays');
   }
 });

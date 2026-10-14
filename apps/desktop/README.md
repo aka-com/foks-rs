@@ -261,8 +261,8 @@ reloads the catalog, never replaying the interrupted write.
 `trash_item` and `restore_trash_item` take `{storeId, path, version,
 direntId}`, the second also a `destination` outside Trash, and answer
 `{applied, path}` with the path the entry now has. `trash_item` fails with
-`trash-unavailable` when a team has no `/.trash` and this account cannot
-create it, and with `trash-name-taken` when the same path was moved to Trash
+`trash-unavailable` when a team has no `/.trash` and the attempt to create
+it is refused by role (any other failure keeps its own code), and with `trash-name-taken` when the same path was moved to Trash
 within the same second. `remove_item` takes the same selection and
 `outsideTrash`; it removes an entry in `/.trash`, recursively for a folder,
 or with `outsideTrash` a file in a team that has no `/.trash`.

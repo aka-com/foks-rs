@@ -645,6 +645,12 @@ export function trashUnavailable(
   return own !== null && !admits(own, 'Owner');
 }
 
+/** Whether the roster shows this account as an owner of a team. */
+export function ownsTeam(snapshot: AgentSnapshot, ref: StoreRef): boolean {
+  const own = ownTeamRole(snapshot, ref);
+  return own !== null && admits(own, 'Owner');
+}
+
 /**
  * Items keyed by the snapshot they were read from.
  *
