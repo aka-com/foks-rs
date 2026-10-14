@@ -19,6 +19,7 @@ import { CHAT_PAGE_ROWS } from '../chat-limits';
 import { diagnosticLog, hashId, outcomeForCode } from '../diagnostics/log';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
+const EMPTY_VERIFICATION: ReadonlyMap<string, boolean> = new Map();
 
 /**
  * What a history read is for. `tail` reads the newest page and `incremental`
@@ -557,6 +558,8 @@ export function useChatHistory({
     messages,
     before,
     missing,
+    /** Per held message, whether its page reported unchecked predecessors. */
+    verification: accepted?.verification ?? EMPTY_VERIFICATION,
     error,
     failure,
     setError,

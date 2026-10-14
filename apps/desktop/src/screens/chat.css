@@ -1047,6 +1047,149 @@
 .chat-avatar {
   margin-top: 2px;
 }
+/* A message's actions (message-actions.tsx): a toolbar over the row's top
+   corner, shown while the row is hovered, holds focus, or has its menu or
+   details open. Hidden by opacity rather than visibility, so it stays in the
+   tab order and focus reaching it shows it. */
+.chat-message {
+  position: relative;
+}
+.chat-actions {
+  position: absolute;
+  z-index: 2;
+  top: -12px;
+  right: 0;
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--main-surface);
+  box-shadow: var(--shadow-xs);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.chat-message:hover > .chat-actions,
+.chat-message:focus-within > .chat-actions,
+.chat-message.actions-open > .chat-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.chat-actions button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+}
+.chat-actions button:hover,
+.chat-actions button[aria-expanded='true'] {
+  background: var(--hover);
+  color: var(--ink);
+}
+.chat-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.chat-actions .ic {
+  font-size: 15px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-actions {
+    transition: none;
+  }
+}
+.chat-details {
+  width: min(320px, calc(100vw - 16px));
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--main-surface);
+  box-shadow: var(--shadow-menu);
+  font-size: 13px;
+}
+.chat-details-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.chat-details-head h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+.chat-details-head button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+}
+.chat-details-head button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.chat-details dl {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 8px;
+}
+.chat-details dl > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+.chat-details dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-details dd {
+  margin: 0;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.chat-details dd small {
+  color: var(--muted);
+}
+.chat-details-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 7px 9px;
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+.chat-details-check .ic {
+  flex: none;
+  margin-top: 1px;
+  font-size: 15px;
+}
+.chat-details-check.ok {
+  background: var(--ok-wash);
+}
+.chat-details-check.ok .ic {
+  color: var(--ok-ink);
+}
+.chat-details-check.warn {
+  background: var(--amber-wash);
+}
+.chat-details-check.warn .ic {
+  color: var(--amber-strong);
+}
 .chat-message-body {
   flex: 1;
   min-width: 0;

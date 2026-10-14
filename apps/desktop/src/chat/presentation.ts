@@ -359,6 +359,19 @@ export function messageTime(milliseconds: string): string {
 }
 
 /**
+ * A message time with the date and seconds, for a message's details: two
+ * clocks a minute apart in the row can be told apart here.
+ */
+export function messageTimeWithSeconds(milliseconds: string): string {
+  const date = messageDate(milliseconds);
+  if (!date) return `Time ${milliseconds}`;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  }).format(date);
+}
+
+/**
  * The clock beside a message: the hour and minute alone, "9:12 AM" where the
  * locale is twelve-hour. The day is carried once per run of messages by the
  * separator above them, so no row repeats it and no row carries seconds, which

@@ -84,6 +84,25 @@ test('history rows carry a separator per local day and group runs within it', ()
   ]);
 });
 
+test('a message row carries the verification of the page that loaded it', () => {
+  const rows = threadRows([message(1, noon), message(2, noon)], [], [], {
+    actor: null,
+    newFrom: null,
+    names,
+    verification: new Map([['m2', true]]),
+    now,
+  });
+  assert.deepEqual(
+    rows.flatMap((row) =>
+      row.kind === 'message' ? [[row.message.id, row.incomplete]] : [],
+    ),
+    [
+      ['m1', false],
+      ['m2', true],
+    ],
+  );
+});
+
 test('the reader reads as You and the NEW divider starts a fresh run', () => {
   const rows = threadRows(
     [

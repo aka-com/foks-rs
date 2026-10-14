@@ -15,6 +15,7 @@ import { HistoryRow } from './message-row';
 import { OutgoingRow } from './outgoing-row';
 import { PendingRow } from './pending-row';
 import { MessageText } from './message-text';
+import { useMessageActions } from './message-actions';
 import { messageClock, messageDayKey, messageTime } from './presentation';
 import { splitThreadRows, type ThreadRow } from './thread-rows';
 import type { useChatHistory } from './use-chat-history';
@@ -63,6 +64,7 @@ export function MessageList({
   memberCount,
   onMarkAll,
   onKeyDown,
+  onQuote,
 }: {
   channel: ChatChannel;
   /** The rows {@link threadRows} derived from the same window. */
@@ -83,6 +85,8 @@ export function MessageList({
   memberCount?: number;
   onMarkAll: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+  /** Writes a quote into the composer; omitted where the reader cannot send. */
+  onQuote?: (quote: string) => void;
 }): ReactNode {
   const { actor, storeId, refreshPending } = useChatConversationContext();
   const {
@@ -230,7 +234,7 @@ export function MessageList({
           </div>
         );
       case 'message':
-        return <HistoryRow row={row} key={row.key} />;
+        return <HistoryRow row={row} key={row.key} onQuote={onQuote} />;
       case 'outgoing':
         return (
           <OutgoingRow
@@ -389,8 +393,17 @@ function OperationRow({
 }): ReactNode {
   const { bridge, storeId, mentions } = useChatConversationContext();
   const op = row.operation;
+  const { open, onContextMenu, onKeyDown, actions } = useMessageActions(
+    { text: op.text || undefined },
+    bridge,
+  );
   return (
-    <article className="chat-message" data-operation={op.id}>
+    <article
+      className={open ? 'chat-message actions-open' : 'chat-message'}
+      data-operation={op.id}
+      onContextMenu={onContextMenu}
+      onKeyDown={onKeyDown}
+    >
       {op.text && (
         <MessageText text={op.text} actions={bridge} mentions={mentions} />
       )}
@@ -400,6 +413,7 @@ function OperationRow({
         channelName={undefined}
         onChange={onChange}
       />
+      {actions}
     </article>
   );
 }

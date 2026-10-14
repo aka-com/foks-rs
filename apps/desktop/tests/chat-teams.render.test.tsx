@@ -357,7 +357,7 @@ test('the tab with no conversation opens the most recent one', async () => {
   assert.equal(general('Engineering').getAttribute('aria-current'), null);
 });
 
-test('message copy is available only from the right-click menu', async () => {
+test('message copy is offered by the message toolbar and the right-click menu', async () => {
   const snapshot = await snapshotWithChat(['personal', 'acme']);
   const copied: string[] = [];
   await mount(
@@ -382,13 +382,21 @@ test('message copy is available only from the right-click menu', async () => {
   });
   const text = message.querySelector('p')?.textContent;
   assert.ok(text);
-  assert.equal(ui.screen.queryByRole('button', { name: 'Copy message' }), null);
+  const row = message.closest('article');
+  assert.ok(row);
+  const toolbar = ui.within(row).getByRole('toolbar', {
+    name: 'Message actions',
+  });
+  ui.fireEvent.click(
+    ui.within(toolbar).getByRole('button', { name: 'Copy message' }),
+  );
+  await ui.waitFor(() => assert.deepEqual(copied, [text]));
   ui.fireEvent.contextMenu(message, { clientX: 120, clientY: 80 });
   const copy = await ui.screen.findByRole('menuitem', { name: 'Copy message' });
   ui.fireEvent.click(copy);
   assert.equal(ui.screen.queryByRole('menu'), null);
-  await ui.waitFor(() => assert.deepEqual(copied, [text]));
-  assert.ok(await ui.screen.findByText('Copied'));
+  await ui.waitFor(() => assert.deepEqual(copied, [text, text]));
+  assert.ok((await ui.screen.findAllByText('Copied')).length > 0);
 });
 
 test('with no message anywhere the tab opens the first team that has chat', async () => {

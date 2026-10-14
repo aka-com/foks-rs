@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode, RefObject } from 'react';
 import { Icon } from '../components';
 import { TEXT_LIMIT_LABEL, useChatDraft } from './use-chat-composer';
 
@@ -20,6 +20,7 @@ export function Composer({
   onSend,
   onKeyDown,
   autofocus,
+  fieldRef,
 }: {
   /** The team, as the location addresses it. */
   storeId: string;
@@ -31,12 +32,16 @@ export function Composer({
   onSend: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   autofocus?: (element: HTMLTextAreaElement) => void;
+  /** The caller's handle on the message field, which Quote reply writes to. */
+  fieldRef?: RefObject<HTMLTextAreaElement | null>;
 }): ReactNode {
   const { draft, draftBytes, overLimit, nearLimit } = useChatDraft(
     storeId,
     channel,
   );
-  const field = useComposerSize(draft);
+  const ownField = useRef<HTMLTextAreaElement>(null);
+  const field = fieldRef ?? ownField;
+  useComposerSize(draft, field);
   useEffect(() => {
     if (canSend && field.current) autofocus?.(field.current);
   }, [autofocus, canSend, field]);
@@ -107,11 +112,13 @@ function resizeComposer(element: HTMLTextAreaElement): void {
   element.style.height = `${element.scrollHeight + border}px`;
 }
 
-function useComposerSize(draft: string) {
-  const ref = useRef<HTMLTextAreaElement>(null);
+function useComposerSize(
+  draft: string,
+  ref: RefObject<HTMLTextAreaElement | null>,
+): void {
   useLayoutEffect(() => {
     if (ref.current) resizeComposer(ref.current);
-  }, [draft]);
+  }, [draft, ref]);
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
@@ -125,6 +132,5 @@ function useComposerSize(draft: string) {
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
-  return ref;
+  }, [ref]);
 }

@@ -1,5 +1,10 @@
 import type { ReactNode } from 'react';
 import { AccountMark } from '../screens/account-switcher';
+import {
+  quoteReply,
+  useMessageActions,
+  type MessageActionOptions,
+} from './message-actions';
 import { MessageText } from './message-text';
 import { messageClock, messageDate, messageTime } from './presentation';
 import type { ThreadRow } from './thread-rows';
@@ -13,7 +18,8 @@ import { useChatConversationContext } from './conversation-provider';
  * Every row draws its time with {@link messageClock}; a relative age, if any,
  * belongs in `timeTitle`. A grouped row continues the previous message's run:
  * its avatar, author and time are kept for screen readers only, and anything
- * in `status` stays visible.
+ * in `status` stays visible. The row's message actions
+ * ({@link useMessageActions}) draw a toolbar over its top corner.
  */
 export function MessageRow({
   className,
@@ -27,6 +33,7 @@ export function MessageRow({
   status,
   footer,
   attributes,
+  actions = {},
   children,
 }: {
   /** Classes beside `chat-message` and `grouped`. */
@@ -45,15 +52,31 @@ export function MessageRow({
   /** Shown below the content: a delivery failure and its actions. */
   footer?: ReactNode;
   attributes?: Partial<Record<`data-${string}`, string>>;
+  /** What the row's message actions offer; none without it. */
+  actions?: MessageActionOptions;
   children: ReactNode;
 }): ReactNode {
+  const { bridge } = useChatConversationContext();
+  const {
+    open,
+    onContextMenu,
+    onKeyDown,
+    actions: tools,
+  } = useMessageActions(actions, bridge);
   return (
     <article
-      className={['chat-message', className, grouped && 'grouped']
+      className={[
+        'chat-message',
+        className,
+        grouped && 'grouped',
+        open && 'actions-open',
+      ]
         .filter(Boolean)
         .join(' ')}
       {...attributes}
       title={grouped ? messageTime(at) : undefined}
+      onContextMenu={onContextMenu}
+      onKeyDown={onKeyDown}
     >
       <AccountMark name={avatarName} className="chat-avatar" />
       <div className="chat-message-body">
@@ -82,6 +105,7 @@ export function MessageRow({
         </div>
         {footer}
       </div>
+      {tools}
     </article>
   );
 }
@@ -89,11 +113,15 @@ export function MessageRow({
 /** A message the history window holds. */
 export function HistoryRow({
   row,
+  onQuote,
 }: {
   row: Extract<ThreadRow, { kind: 'message' }>;
+  /** Inserts a quote into the composer; omitted where the reader cannot send. */
+  onQuote?: (quote: string) => void;
 }): ReactNode {
   const { bridge, mentions } = useChatConversationContext();
   const m = row.message;
+  const text = m.content.kind === 'text' ? m.content.text : undefined;
   return (
     <MessageRow
       grouped={row.grouped}
@@ -104,6 +132,25 @@ export function HistoryRow({
       at={m.insert_time}
       timeTitle={`Sent ${messageTime(m.send_time)} · Message #${m.sequence}`}
       attributes={{ 'data-message': m.id, 'data-sequence': m.sequence }}
+      actions={{
+        text,
+        onQuote:
+          onQuote && text !== undefined
+            ? () =>
+                onQuote(
+                  quoteReply(row.avatarName, m.insert_time, text, mentions),
+                )
+            : undefined,
+        details: {
+          sender: row.avatarName,
+          own: row.own,
+          unverifiable: m.content.kind === 'unverifiable',
+          received: m.insert_time,
+          sent: m.send_time,
+          sequence: m.sequence,
+          incomplete: row.incomplete,
+        },
+      }}
     >
       {m.content.kind === 'text' ? (
         <MessageText

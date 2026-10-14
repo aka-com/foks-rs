@@ -1,10 +1,9 @@
-import { useId, useMemo, useState } from 'react';
+import { Fragment, useId, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { Button } from '../components/button';
 import { Icon } from '../components/icon';
 import { SheetDialog } from '../components/sheet';
-import { ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useOptionalToast } from '/kit/toasts';
 import { mentionKey, type ChatMentions } from './mentions';
 
@@ -682,10 +681,6 @@ export function MessageText({
   /** The names an `@name` is drawn as a mention of; none without it. */
   mentions?: ChatMentions;
 }) {
-  const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(
-    null,
-  );
-  const toasts = useOptionalToast();
   const lines = text.split(/\r?\n/);
   const blocks: ReactNode[] = [];
   if (text.length <= 65536 && lines.length <= 512) {
@@ -741,13 +736,26 @@ export function MessageText({
             </ul>
           ),
         );
-      } else if (line.startsWith('> '))
+      } else if (line.startsWith('> ')) {
+        // Consecutive quote lines are one quote, as a quote reply writes them.
+        const start = i,
+          quoted: ReactNode[] = [];
+        do {
+          quoted.push(
+            <Fragment key={i}>
+              {i > start && <br />}
+              {inline(lines[i].slice(2), actions, mentions)}
+            </Fragment>,
+          );
+          i++;
+        } while (i < lines.length && lines[i].startsWith('> '));
+        i--;
         blocks.push(
-          <blockquote key={i} className={className}>
-            {inline(line.slice(2), actions, mentions)}
+          <blockquote key={start} className={className}>
+            {quoted}
           </blockquote>,
         );
-      else if (line.trim())
+      } else if (line.trim())
         blocks.push(
           <p key={i} className={className}>
             {inline(line, actions, mentions)}
@@ -760,48 +768,11 @@ export function MessageText({
       gap = false;
     }
   }
+  // Copy message and the other message actions belong to the row that draws
+  // this text (`message-actions.tsx`).
   return (
-    <>
-      <div
-        className="chat-message-text"
-        onContextMenu={(event) => {
-          // A link's Check this link sheet is portaled out of this element,
-          // but React still bubbles its events here.
-          if (!event.currentTarget.contains(event.target as Node)) return;
-          event.preventDefault();
-          setMenuPoint({ x: event.clientX, y: event.clientY });
-        }}
-      >
-        {blocks.length ? blocks : <p>{text}</p>}
-      </div>
-      {menuPoint ? (
-        <ContextMenu
-          point={menuPoint}
-          className="menu-portal"
-          onClose={() => setMenuPoint(null)}
-        >
-          <Menu
-            className="menu"
-            initialFocus="first"
-            onClose={() => setMenuPoint(null)}
-          >
-            <button
-              type="button"
-              onClick={() => {
-                setMenuPoint(null);
-                void actions
-                  .copyText(text)
-                  .then(() => toasts?.show('Copied'))
-                  .catch(() =>
-                    toasts?.show('Could not copy', { tone: 'warning' }),
-                  );
-              }}
-            >
-              Copy message
-            </button>
-          </Menu>
-        </ContextMenu>
-      ) : null}
-    </>
+    <div className="chat-message-text">
+      {blocks.length ? blocks : <p>{text}</p>}
+    </div>
   );
 }

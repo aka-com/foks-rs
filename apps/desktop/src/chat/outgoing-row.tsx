@@ -71,6 +71,10 @@ export function OutgoingRow({
         'data-submission': message.submission,
         'data-operation': op?.id,
       }}
+      // Copy only: the message is not in history yet, so it has no sequence
+      // or server time to detail, and quoting your own unsent text is not
+      // offered.
+      actions={{ text: message.text }}
       status={
         sending ? (
           <span

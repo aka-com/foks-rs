@@ -17,6 +17,7 @@ import { newMessagesUnloaded, threadRows } from './thread-rows';
 import { ThreadHeader } from './thread-header';
 import { MessageList } from './message-list';
 import { Composer } from './thread-composer';
+import { quoteInsertion } from './message-actions';
 
 /**
  * One channel of the open team. The thread owns the channel's history
@@ -197,8 +198,16 @@ export function ChatThread({
     onFatal: blockHistory,
     onLoading: capture,
   });
-  const { messages, before, missing, failure, busy, detached, anchoring } =
-    thread;
+  const {
+    messages,
+    before,
+    missing,
+    verification,
+    failure,
+    busy,
+    detached,
+    anchoring,
+  } = thread;
   // A placement waits for its page; a failed read brings none.
   useEffect(() => {
     if (failure) release();
@@ -220,6 +229,7 @@ export function ChatThread({
     newFrom,
     newUnloaded,
     names: senderNames,
+    verification,
     keyOf: (m) => sends.messageKey(storeId, m.id),
   });
   // Marks through the newest message the inbox published, which a detached
@@ -234,6 +244,22 @@ export function ChatThread({
       markedAll.current = newest;
     }
     if (position !== null || !detached) dismissNew();
+  };
+  // Quote reply writes at the composer's caret, or where the caret was when
+  // the field lost focus, and leaves the caret after the quote.
+  const composerField = useRef<HTMLTextAreaElement>(null);
+  const quote = (text: string) => {
+    const field = composerField.current;
+    if (!field) return;
+    const at = field.selectionStart;
+    field.setRangeText(
+      quoteInsertion(field.value.slice(0, at), text),
+      at,
+      at,
+      'end',
+    );
+    setDraft(field.value);
+    field.focus();
   };
   // A message sent from a detached window belongs after rows it has not
   // loaded, so sending reads the newest page first.
@@ -333,6 +359,7 @@ export function ChatThread({
             memberCount={memberCount}
             onMarkAll={markAll}
             onKeyDown={markOnEscape}
+            onQuote={channel.writable ? quote : undefined}
           />
           {channel.writable ? (
             <Composer
@@ -344,6 +371,7 @@ export function ChatThread({
               onSend={sendLatest}
               onKeyDown={markOnEscape}
               autofocus={autofocusComposer}
+              fieldRef={composerField}
             />
           ) : (
             <p className="chat-quiet">

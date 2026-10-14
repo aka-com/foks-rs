@@ -963,6 +963,28 @@ focused. Other links open directly. The check runs in the renderer only:
 `open_chat_link` receives the URL and never the label, so it validates the URL
 but cannot compare the two.
 
+Each message row carries its actions (`message-actions.tsx`) in a toolbar over
+its top corner, shown while the row is hovered or holds focus. The toolbar is
+one tab stop, and the arrow keys, Home and End move along it. A right-click on
+the row, or the ContextMenu key or Shift+F10 on anything focused in it, opens
+the same actions as a menu. Copy message copies the message's Markdown source;
+it is the only action on an unsent or pending message. Quote reply, offered
+only where the reader can send, writes a quote as Basic text at the composer's
+caret, on a line of its own: a `>` line with the author in bold (as `@name`
+when the name is on the team's roster) and the message's clock time, then its
+first two non-blank lines as `>` lines without fence lines, each cut near 100
+characters, an ellipsis where text was left out, and a blank line for the
+reply. Consecutive `>` lines render as one quote. No Reply message type is
+sent. Message details lists the sender ("Claimed sender" for a message that
+could not be decrypted or verified), the server's receive time, the sender's
+clock and the sequence number, and the verification of the history page that
+loaded the message: the agent reports `missing_predecessors` per page, so the
+wording names that page and claims no result for the one message. Edit,
+Delete, Reaction and Reply are reserved message types that the server does
+not accept, so no action is drawn for them. Copy link waits for a message
+identifier that means the same message to another member: a store reference
+is local to this Mac, and no URI scheme routes a link back into the app.
+
 A channel with unread messages opens at the first of them, with the NEW divider
 30% down the list and the ten messages before it above, rather than at the
 newest message. A message counts as read once its row has been at least half on

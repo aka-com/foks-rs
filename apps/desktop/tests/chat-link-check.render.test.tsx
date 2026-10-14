@@ -21,6 +21,7 @@ installDom({
 let ui: typeof import('@testing-library/react');
 let vite: ViteDevServer;
 let MessageText: typeof import('../src/chat/message-text').MessageText;
+let useMessageActions: typeof import('../src/chat/message-actions').useMessageActions;
 let overlays: typeof import('../kit/overlay-primitives');
 let toasts: typeof import('../kit/toasts');
 
@@ -32,6 +33,9 @@ test.before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
   ({ MessageText } = await vite.ssrLoadModule('/src/chat/message-text.tsx'));
+  ({ useMessageActions } = await vite.ssrLoadModule(
+    '/src/chat/message-actions.tsx',
+  ));
   overlays = (await vite.ssrLoadModule(
     '/kit/overlay-primitives.tsx',
   )) as typeof import('../kit/overlay-primitives');
@@ -44,6 +48,23 @@ test.after(async () => vite.close());
 
 const SPOOF =
   'Sign in at [https://bank.example/login](https://evil.example/x) or read [the notes](https://docs.example/n).';
+
+/** The text in a row that carries Copy message, as a message row does. */
+function Row({
+  text,
+  actions,
+}: {
+  text: string;
+  actions: Parameters<typeof MessageText>[0]['actions'];
+}) {
+  const row = useMessageActions({ text }, actions);
+  return createElement(
+    'article',
+    { onContextMenu: row.onContextMenu, onKeyDown: row.onKeyDown },
+    createElement(MessageText, { text, actions }),
+    row.actions,
+  );
+}
 
 function mount(text = SPOOF) {
   const opened: string[] = [];
@@ -72,7 +93,7 @@ function mount(text = SPOOF) {
       children: createElement(overlays.OverlayProvider, {
         backgroundRef: { current: null },
         portalRoot,
-        children: createElement(MessageText, { text, actions }),
+        children: createElement(Row, { text, actions }),
       }),
     }),
   );
@@ -187,7 +208,7 @@ test('each link names its destination host to assistive technology once', () => 
     assert.equal(suffix.getAttribute('aria-hidden'), 'true');
 });
 
-test('a context menu inside the sheet does not open the message menu', async () => {
+test('a context menu inside the sheet does not open the row menu', async () => {
   mount();
   ui.fireEvent.click(link(/bank\.example/));
   const sheet = dialog();
@@ -195,17 +216,13 @@ test('a context menu inside the sheet does not open the message menu', async () 
   ui.fireEvent.contextMenu(sheet.querySelector('code')!);
   await settle();
   assert.equal(
-    [...document.querySelectorAll('button')].some(
-      (node) => node.textContent === 'Copy message',
-    ),
-    false,
+    ui.screen.queryByRole('menu', { name: 'Message actions' }),
+    null,
   );
   ui.fireEvent.contextMenu(document.querySelector('.chat-message-text p')!);
   await settle();
   assert.ok(
-    [...document.querySelectorAll('button')].some(
-      (node) => node.textContent === 'Copy message',
-    ),
-    'the message text itself still opens the menu',
+    ui.screen.getByRole('menuitem', { name: 'Copy message' }),
+    'the message text itself still opens the row menu',
   );
 });

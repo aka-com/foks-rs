@@ -37,6 +37,7 @@ import PawPrint from 'lucide/dist/esm/icons/paw-print.mjs';
 import Pencil from 'lucide/dist/esm/icons/pencil.mjs';
 import Plug from 'lucide/dist/esm/icons/plug.mjs';
 import Plus from 'lucide/dist/esm/icons/plus.mjs';
+import Quote from 'lucide/dist/esm/icons/quote.mjs';
 import RefreshCw from 'lucide/dist/esm/icons/refresh-cw.mjs';
 import Search from 'lucide/dist/esm/icons/search.mjs';
 import Send from 'lucide/dist/esm/icons/send.mjs';
@@ -96,6 +97,7 @@ export const FOKS_ICONS = {
   panelLeftOpen: PanelLeftOpen,
   pawPrint: PawPrint,
   plug: Plug,
+  quote: Quote,
 } as const satisfies Record<FoksIconName, IconNode>;
 
 export type { FoksIconName } from './icon-name';

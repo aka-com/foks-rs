@@ -224,6 +224,124 @@ test('@names on the team roster are drawn as mentions in history and in sent mes
   assert.equal(sent.className, 'chat-mention');
   assert.ok(sent.closest('.chat-outgoing'));
 });
+test('message actions copy, quote into the composer and show details', async () => {
+  const copied: string[] = [];
+  await setup((base) => ({
+    ...base,
+    copyText: async (text) => {
+      copied.push(text);
+      return { ok: true };
+    },
+  }));
+  const row = ui.screen.getByText('Team chat is ready.').closest('article');
+  assert.ok(row);
+  const toolbar = ui.within(row).getByRole('toolbar', {
+    name: 'Message actions',
+  });
+  const tools = ui.within(toolbar).getAllByRole('button');
+  // No action is drawn for the reserved Edit, Delete, Reaction and Reply
+  // types, enabled or not.
+  assert.deepEqual(
+    tools.map((node) => node.getAttribute('aria-label')),
+    ['Copy message', 'Quote reply', 'Message details'],
+  );
+  // The toolbar is one tab stop; the arrow keys move along it.
+  assert.deepEqual(
+    tools.map((node) => node.tabIndex),
+    [0, -1, -1],
+  );
+  ui.act(() => tools[0].focus());
+  ui.fireEvent.keyDown(tools[0], { key: 'ArrowRight' });
+  assert.equal(document.activeElement, tools[1]);
+  assert.deepEqual(
+    tools.map((node) => node.tabIndex),
+    [-1, 0, -1],
+  );
+  ui.fireEvent.keyDown(tools[1], { key: 'End' });
+  assert.equal(document.activeElement, tools[2]);
+
+  ui.fireEvent.click(tools[0]);
+  await ui.waitFor(() => assert.deepEqual(copied, ['Team chat is ready.']));
+
+  // Quote reply writes at the caret, on a line of its own, and leaves the
+  // caret after the quote in the focused composer.
+  const composer = ui.screen.getByRole<HTMLTextAreaElement>('textbox', {
+    name: 'Message',
+  });
+  ui.fireEvent.change(composer, { target: { value: 'Thanks' } });
+  composer.setSelectionRange(6, 6);
+  ui.fireEvent.click(tools[1]);
+  assert.match(
+    composer.value,
+    /^Thanks\n> \*\*[^*\n]+\*\* · [^\n]+\n> Team chat is ready\.\n\n$/,
+  );
+  assert.equal(document.activeElement, composer);
+  assert.equal(composer.selectionStart, composer.value.length);
+  ui.fireEvent.keyDown(composer, { key: 'Enter' });
+  // Sent as Basic text, the quote is drawn as one quote.
+  const quote = await ui.waitFor(() => {
+    const node = document.querySelector('.chat-outgoing blockquote');
+    assert.ok(node);
+    return node;
+  });
+  assert.match(quote.textContent ?? '', /Team chat is ready\.$/);
+  assert.equal(quote.querySelectorAll('br').length, 1);
+
+  // Details lists the sender, both clocks and the sequence, and states the
+  // check of the page that loaded the message.
+  ui.fireEvent.click(tools[2]);
+  const details = await ui.screen.findByRole('dialog', {
+    name: 'Message details',
+  });
+  assert.equal(tools[2].getAttribute('aria-expanded'), 'true');
+  assert.ok(row.classList.contains('actions-open'));
+  const terms = [...details.querySelectorAll('dt')].map((n) => n.textContent);
+  assert.deepEqual(terms, ['Sent by', 'Received', 'Sender clock', 'Sequence']);
+  assert.equal(
+    details.querySelectorAll('dd')[3].textContent,
+    row.getAttribute('data-sequence'),
+  );
+  assert.ok(
+    ui
+      .within(details)
+      .getByText('The history page that loaded this message was checked.'),
+  );
+  const close = ui.within(details).getByRole('button', {
+    name: 'Close details',
+  });
+  assert.equal(document.activeElement, close);
+  ui.fireEvent.keyDown(close, { key: 'Escape' });
+  await ui.waitFor(() =>
+    assert.equal(
+      ui.screen.queryByRole('dialog', { name: 'Message details' }),
+      null,
+    ),
+  );
+  assert.equal(document.activeElement, tools[2]);
+
+  // The right-click menu and Shift+F10 offer the same actions.
+  ui.fireEvent.contextMenu(ui.screen.getByText('Team chat is ready.'), {
+    clientX: 40,
+    clientY: 50,
+  });
+  const menu = await ui.screen.findByRole('menu', { name: 'Message actions' });
+  assert.deepEqual(
+    ui
+      .within(menu)
+      .getAllByRole('menuitem')
+      .map((node) => node.textContent),
+    ['Copy message', 'Quote reply', 'Message details'],
+  );
+  ui.fireEvent.keyDown(menu, { key: 'Escape' });
+  await ui.waitFor(() => assert.equal(ui.screen.queryByRole('menu'), null));
+  ui.act(() => tools[0].focus());
+  ui.fireEvent.keyDown(tools[0], { key: 'F10', shiftKey: true });
+  ui.fireEvent.click(
+    await ui.screen.findByRole('menuitem', { name: 'Message details' }),
+  );
+  assert.ok(await ui.screen.findByRole('dialog', { name: 'Message details' }));
+});
+
 test('empty and whitespace-only messages are silent no-ops', async () => {
   let submissions = 0;
   await setup((base) => ({
@@ -2112,6 +2230,22 @@ test('a history page with unverified predecessors warns in the conversation', as
     },
   }));
   assert.ok(ui.screen.getByText(/incomplete verification/));
+  // Details states the check of the page, not a result for the message.
+  const row = ui.screen.getByText('Next message').closest('article');
+  assert.ok(row);
+  ui.fireEvent.click(
+    ui.within(row).getByRole('button', { name: 'Message details' }),
+  );
+  const details = await ui.screen.findByRole('dialog', {
+    name: 'Message details',
+  });
+  assert.ok(
+    ui
+      .within(details)
+      .getByText(
+        'Earlier messages on the history page that loaded this message could not be checked.',
+      ),
+  );
   // What happens to that warning across later pages is the retained window's
   // own behaviour, covered in chat-history-cache.test.ts.
 });
@@ -2166,6 +2300,26 @@ test('an unverifiable message renders as one placeholder row and leaves the chan
   assert.equal(article.classList.contains('grouped'), false);
   assert.ok(ui.screen.getByText('Before it'));
   assert.ok(ui.screen.getByText('After it'));
+  // Such a row has no text to copy or quote, and its sender is a claim.
+  assert.deepEqual(
+    ui
+      .within(article)
+      .getAllByRole('button')
+      .map((node) => node.getAttribute('aria-label')),
+    ['Message details'],
+  );
+  ui.fireEvent.click(
+    ui.within(article).getByRole('button', { name: 'Message details' }),
+  );
+  const details = await ui.screen.findByRole('dialog', {
+    name: 'Message details',
+  });
+  assert.ok(ui.within(details).getByText('Claimed sender'));
+  assert.ok(
+    ui
+      .within(details)
+      .getByText('This message could not be decrypted or verified.'),
+  );
   assert.equal(
     ui.screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message' })
       .disabled,
@@ -2508,6 +2662,14 @@ test('read-only projection keeps history and removes composer', async () => {
   }));
   assert.ok(ui.screen.queryByRole('textbox', { name: 'Message' }) === null);
   assert.ok(ui.screen.getByText('Team chat is ready.'));
+  // Without a composer there is nothing to quote into.
+  const row = ui.screen.getByText('Team chat is ready.').closest('article');
+  assert.ok(row);
+  assert.ok(ui.within(row).getByRole('button', { name: 'Copy message' }));
+  assert.equal(
+    ui.within(row).queryByRole('button', { name: 'Quote reply' }),
+    null,
+  );
 });
 
 test('uncertain send retains body in thread and merges once after delivery checking', async () => {

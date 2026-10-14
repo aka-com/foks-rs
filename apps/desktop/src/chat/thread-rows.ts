@@ -38,6 +38,11 @@ export type ThreadRow =
       avatarName: string;
       /** Whether the row continues the previous message's run. */
       grouped: boolean;
+      /**
+       * Whether the history page that loaded the message reported earlier
+       * messages it could not check.
+       */
+      incomplete: boolean;
     }
   | {
       kind: 'outgoing';
@@ -60,6 +65,11 @@ export interface ThreadRowOptions {
   newUnloaded?: boolean;
   /** Display names by party identifier. */
   names: ReadonlyMap<string, string>;
+  /**
+   * Per message ID, whether the page that loaded it reported earlier
+   * messages it could not check (`HistoryWindow.verification`).
+   */
+  verification?: ReadonlyMap<string, boolean>;
   /** The key of a history row; the thread passes the send service's key. */
   keyOf?: (message: ChatMessage) => string;
   /** The current time, which the day separators are labelled against. */
@@ -98,6 +108,7 @@ export function threadRows(
     newFrom,
     newUnloaded = false,
     names,
+    verification,
     keyOf = (message) => message.id,
     now = Date.now(),
   }: ThreadRowOptions,
@@ -138,6 +149,7 @@ export function threadRows(
       author: own ? 'You' : avatarName,
       avatarName,
       grouped: !isNew && !newDay && continuesMessageGroup(previous, message),
+      incomplete: verification?.get(message.id) ?? false,
     });
   });
   // An unsent row draws its clock time, so it takes a day separator when

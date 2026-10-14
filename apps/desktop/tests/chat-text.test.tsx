@@ -12,6 +12,9 @@ let trimBareUrl: typeof import('../src/chat/message-text').trimBareUrl;
 let chatMentions: typeof import('../src/chat/mentions').chatMentions;
 let mentionKey: typeof import('../src/chat/mentions').mentionKey;
 let relativeMessageTime: typeof import('../src/chat/presentation').relativeMessageTime;
+let messageClock: typeof import('../src/chat/presentation').messageClock;
+let quoteReply: typeof import('../src/chat/message-actions').quoteReply;
+let quoteInsertion: typeof import('../src/chat/message-actions').quoteInsertion;
 let ToastProvider: typeof import('../kit/toasts').ToastProvider;
 let ToastController: typeof import('../kit/toasts').ToastController;
 test.before(async () => {
@@ -25,8 +28,11 @@ test.before(async () => {
   ({ chatMentions, mentionKey } = await vite.ssrLoadModule(
     '/src/chat/mentions.ts',
   ));
-  ({ relativeMessageTime } = await vite.ssrLoadModule(
+  ({ relativeMessageTime, messageClock } = await vite.ssrLoadModule(
     '/src/chat/presentation.ts',
+  ));
+  ({ quoteReply, quoteInsertion } = await vite.ssrLoadModule(
+    '/src/chat/message-actions.tsx',
   ));
   ({ ToastProvider, ToastController } =
     await vite.ssrLoadModule('/kit/toasts.tsx'));
@@ -596,6 +602,52 @@ test('blank lines separate paragraphs; single line breaks do not', () => {
     ),
     html,
   );
+});
+
+test('consecutive quote lines are one quote', () => {
+  assert.match(
+    messageMarkup('> **@lee** · 9:14\n> first *line*\n> second\nreply'),
+    /^<div class="chat-message-text"><blockquote><strong>@lee<\/strong> · 9:14<br\/>first <em>line<\/em><br\/>second<\/blockquote><p>reply<\/p><\/div>/,
+  );
+  // A blank line between them starts a second quote.
+  assert.equal(
+    (messageMarkup('> one\n\n> two').match(/<blockquote/g) ?? []).length,
+    2,
+  );
+});
+
+test('a quote reply is Basic text naming the author and the first lines', () => {
+  const at = '1700000000001';
+  const clock = messageClock(at);
+  const mentions = chatMentions(['priya.n'], 'satoshi');
+  assert.equal(
+    quoteReply('priya.n', at, 'Deploy is done.\nChecks are green.', mentions),
+    `> **@priya.n** · ${clock}\n> Deploy is done.\n> Checks are green.\n\n`,
+  );
+  // A name off the roster, such as a shortened party ID, is not written as
+  // an @name.
+  assert.equal(
+    quoteReply('01cdcdcd', at, 'hi', mentions),
+    `> **01cdcdcd** · ${clock}\n> hi\n\n`,
+  );
+  // Fence lines, blank lines and one level of quoting are left out; a third
+  // line is cut and the quote ends in an ellipsis.
+  assert.equal(
+    quoteReply('lee', at, '> earlier\n\n```\ncode\n```\nthird'),
+    `> **lee** · ${clock}\n> earlier\n> code…\n\n`,
+  );
+  // A long line is cut at a word boundary, counted in characters.
+  const long = `${'word '.repeat(30)}end`;
+  const quoted = quoteReply('lee', at, long).split('\n')[1];
+  assert.ok(quoted.endsWith('word…'), quoted);
+  assert.ok(Array.from(quoted).length <= 102, quoted);
+  const emoji = '😀'.repeat(150);
+  const cut = quoteReply('lee', at, emoji).split('\n')[1];
+  assert.equal(cut, `> ${'😀'.repeat(99)}…`);
+  // The quote starts on a line of its own.
+  assert.equal(quoteInsertion('', '> q\n\n'), '> q\n\n');
+  assert.equal(quoteInsertion('Thanks', '> q\n\n'), '\n> q\n\n');
+  assert.equal(quoteInsertion('Thanks\n', '> q\n\n'), '> q\n\n');
 });
 
 test('a code block has one copy button and collapses past twenty lines', () => {

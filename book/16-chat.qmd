@@ -360,7 +360,8 @@ current implementation, not as design goals:
   attachments are disabled** in production builds. The message-type
   enumeration reserves values for edits, deletions, reactions, attachments
   and replies, and the extended channel format described above is the
-  substrate they will use.
+  substrate they will use. The desktop app's Quote reply writes a Markdown
+  quote into an ordinary Basic message; it does not send the Reply type.
 - Message text is bounded at 65,536 bytes; inbox previews are truncated to
   512 bytes on the way into the agent's cache.
 
