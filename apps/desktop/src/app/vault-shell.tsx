@@ -230,6 +230,7 @@ export function VaultShell({
     refreshingSnapshot,
     hardwareRefresh,
     refreshSnapshot,
+    reloadCatalog,
     refresh,
     refreshAll,
   } = catalog;
@@ -853,6 +854,7 @@ export function VaultShell({
         commandError={commandError}
         mutationError={mutationError}
         refreshSnapshot={refreshSnapshot}
+        reloadCatalog={reloadCatalog}
         restoreTrash={trash.restoreTo}
         setResumeDraft={setResumeDraft}
         setConcealSignal={setConcealSignal}

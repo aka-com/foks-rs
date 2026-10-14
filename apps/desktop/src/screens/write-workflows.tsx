@@ -68,6 +68,7 @@ import { NavigationPrompt, useSheetGuard } from '../navigation-guard';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '/kit/toasts';
+import type { ToastOptions } from '/kit/toasts';
 import { itemActionProblem } from './store-access';
 import { useTrashOrigins } from './trash-origins';
 import {
@@ -145,6 +146,16 @@ export type WriteWorkflow =
   | { kind: 'bulk-move'; items: readonly Item[]; folder: string }
   /** Moves `items` to their stores' Trash one at a time, with progress. */
   | { kind: 'bulk-trash'; items: readonly Item[] }
+  /**
+   * Moves Trash entries back to where `items` were, one at a time, with
+   * progress: the Undo of a bulk-trash run. `trash[i]` is the path in Trash
+   * of `items[i]`.
+   */
+  | {
+      kind: 'bulk-restore';
+      items: readonly Item[];
+      trash: readonly string[];
+    }
   /**
    * Permanently removes an entry in Trash, or with `outsideTrash` an item in
    * a team whose Trash this account cannot set up.
@@ -1208,7 +1219,11 @@ export function WriteOverlay({
   bridge: Bridge;
   workflow: WriteWorkflow;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (message: string, profile?: string) => Promise<void>;
+  onApplied: (
+    message: string,
+    profile?: string,
+    options?: ToastOptions,
+  ) => Promise<void>;
   onError: (error: unknown, item?: Item) => void;
   onMutationError: MutationFailureHandler;
   /**
@@ -1229,8 +1244,11 @@ export function WriteOverlay({
   ) => Promise<void>;
   /** Moves a Trash entry to `destination`, outside Trash. */
   onRestoreTrash: (item: Item, destination: string) => Promise<void>;
-  /** Reads the catalog again and resolves with it, for moves in steps. */
-  onReload: () => Promise<AgentSnapshot>;
+  /**
+   * Reads the catalog of `profile` again, or of every profile without one,
+   * and resolves with it, for moves in steps.
+   */
+  onReload: (profile?: string) => Promise<AgentSnapshot>;
   accessNow?: () => number;
 }): ReactNode {
   if (!workflow) return null;
@@ -1287,9 +1305,15 @@ export function WriteOverlay({
         accessNow={accessNow}
       />
     );
-  if (workflow.kind === 'bulk-move' || workflow.kind === 'bulk-trash')
+  if (
+    workflow.kind === 'bulk-move' ||
+    workflow.kind === 'bulk-trash' ||
+    workflow.kind === 'bulk-restore'
+  )
     return (
+      // The Undo of a bulk-trash run replaces it with a run of its own.
       <BulkProgressSheet
+        key={workflow.kind}
         snapshot={snapshot}
         bridge={bridge}
         workflow={workflow}

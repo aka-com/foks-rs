@@ -4,7 +4,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react';
-import type { ToastController } from '/kit/toasts';
+import type { ToastController, ToastOptions } from '/kit/toasts';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import type { LocationStore } from '../location';
 import { nameOf, storeOf, type AgentSnapshot, type Item } from '../model';
@@ -98,6 +98,7 @@ export function ShellOverlays({
   commandError,
   mutationError,
   refreshSnapshot,
+  reloadCatalog,
   restoreTrash,
   setResumeDraft,
   setConcealSignal,
@@ -114,10 +115,16 @@ export function ShellOverlays({
   accessNow: () => number;
   workflow: WriteWorkflow;
   setWorkflow: Dispatch<SetStateAction<WriteWorkflow>>;
-  refresh: (message: string, profile?: string) => Promise<void>;
+  refresh: (
+    message: string,
+    profile?: string,
+    options?: ToastOptions,
+  ) => Promise<void>;
   commandError: CommandErrorHandler;
   mutationError: MutationFailureHandler;
   refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
+  /** Reads one profile's catalog again, or every profile's without one. */
+  reloadCatalog: (profile?: string) => Promise<AgentSnapshot>;
   restoreTrash: (item: Item, destination: string) => Promise<void>;
   setResumeDraft: Dispatch<SetStateAction<ResumeDraft | null>>;
   setConcealSignal: Dispatch<SetStateAction<number>>;
@@ -190,7 +197,7 @@ export function ShellOverlays({
           else toasts.show('This item was already deleted elsewhere.');
         }}
         onRestoreTrash={restoreTrash}
-        onReload={() => refreshSnapshot()}
+        onReload={reloadCatalog}
         onDiscardConflict={() => {
           setWorkflow(null);
           setResumeDraft(null);

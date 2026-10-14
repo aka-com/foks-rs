@@ -408,9 +408,10 @@ satisfy an older selection.
 Several items chosen together, or dragged onto a folder, move as separate
 `MoveKv` mutations, one at a time; there is no batched form. The host retires
 a store's catalog after every write and selects the item of the next request
-in a catalog it has read, so the desktop reads the catalog again before each
-item and sends the current version of the same dirent; an item whose path now
-holds another dirent is not sent. Each item's outcome is reported on its own.
+in a catalog it has read, so the desktop reads the catalog of the store's
+profile again before each item and sends the current version of the same
+dirent; an item whose path now holds another dirent is not sent. Each item's
+outcome is reported on its own.
 A failure whose request certainly did not run, such as a refused admission
 while another write held the mutation permit, can be retried; an ambiguous
 one cannot, because the item may already have moved.
@@ -429,8 +430,9 @@ destroyed, so Delete asks for no confirmation. The toast it shows offers
 Undo for eight seconds, and ⌘Z does the same while it shows. A child that
 another device adds to a folder while it is moved goes with the folder,
 which a recursive delete could not promise. Several items moved to Trash
-together are sent one at a time, as several items are moved, and are restored
-from the Trash view; the toast offers no Undo for them.
+together are sent one at a time, as several items are moved. Their Undo
+restores the entries one at a time in the same way, each to the path its
+item had; an entry whose original path holds a new entry stays in Trash.
 
 Dirent names are sealed under the key of the directory that holds them, so
 one shared Trash folder would expose the names of owner-only items to

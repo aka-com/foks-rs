@@ -16,6 +16,7 @@ import {
   trashEntries,
   trashEntryExpired,
   trashUnavailable,
+  UNDO_DURATION_MS,
   type AgentSnapshot,
   type Item,
   type TrashEntry,
@@ -24,9 +25,6 @@ import type { MutationFailureHandler } from '../mutation-recovery';
 import { itemActionProblem } from '../screens/store-access';
 import type { WriteWorkflow } from '../screens/write-workflows';
 import { storedTrashAutoEmpty } from '../trash-auto-empty';
-
-/** How long the Undo of a move to Trash is offered. */
-export const UNDO_DURATION_MS = 8_000;
 
 /** How often automatic emptying looks at one store's Trash again. */
 const AUTO_EMPTY_INTERVAL_MS = 60 * 60 * 1000;

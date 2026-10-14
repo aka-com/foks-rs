@@ -161,6 +161,9 @@ export function checkMove(
   const folder = parentOf(destination);
   const problem = folderProblem(snapshot, item.store, folder);
   if (problem) return { ok: false, problem };
+  // The name is Trash's own at the top level, whether or not Trash exists.
+  if (isTrashPath(destination))
+    return { ok: false, problem: TRASH_DESTINATION };
   if (entryAt(snapshot, item.store, destination))
     return {
       ok: false,
@@ -366,6 +369,11 @@ export interface BulkAction {
   ) => { status: 'skipped' | 'refused'; message: string } | null;
   /** Sends one request and resolves with the row's message. */
   apply: (item: Item) => Promise<string>;
+  /**
+   * The current catalog entry a row acts on. Without it, the entry at the
+   * row's path with the row's dirent id.
+   */
+  locate?: (item: Item, snapshot: AgentSnapshot) => Item | undefined;
 }
 
 /** Moving rows into `folder` of their store, keeping their names. */
@@ -432,12 +440,14 @@ export async function runBulk({
         set(rest, 'failed', `Not started: ${message}`);
       return current;
     }
-    const fresh = snapshot.items.find(
-      (item) =>
-        item.store === row.item.store &&
-        item.path === row.item.path &&
-        item.direntId === row.item.direntId,
-    );
+    const fresh = action.locate
+      ? action.locate(row.item, snapshot)
+      : snapshot.items.find(
+          (item) =>
+            item.store === row.item.store &&
+            item.path === row.item.path &&
+            item.direntId === row.item.direntId,
+        );
     if (!fresh) {
       set(
         index,

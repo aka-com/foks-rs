@@ -179,19 +179,26 @@ Several rows of the list can be chosen with ⌘-click, Shift-click, ⌘A,
 offers Move to… and Move to Trash, and the row menu and the Delete key act on
 all of them. Dragging rows (with pointer events, since the window's native drop
 handler is reserved for files from the operating system) onto a folder of the
-same vault in the tree or the list moves them there. Several items are sent one
-`move_item` or `trash_item` at a time: each write retires the host's catalog of
-its store, so the catalog is read again before each item, and an item whose
-entry was replaced meanwhile is not sent. A progress sheet lists each outcome;
-it closes with a toast when everything moved, and otherwise offers Retry failed
-for the items whose request certainly did not run.
+same vault in the tree or the list moves them there. A group in which this
+account can change only some items still moves: the move sheet names the
+items that stay, and the progress sheet lists each as not moved. Several items
+are sent one `move_item` or `trash_item` at a time: each write retires the
+host's catalog of its store, so that store's profile catalog is read again
+before each item, and an item whose entry was replaced meanwhile is not sent.
+A progress sheet lists each outcome; it closes with a toast when everything
+moved, and otherwise offers Retry failed for the items whose request certainly
+did not run. Clearing the chosen rows, or moving all of them away, returns
+focus to the anchor row or to the row now in the first one's place.
 
 Delete moves an item, or a folder with everything in it, into the vault's
 Trash: `/.trash/<role-tag>/` in the same store, one folder per read role,
 chosen by the most restrictive read role on the item's path, through
 `MoveKv`. It asks for no confirmation; its toast offers Undo for eight
-seconds, and ⌘Z does the same. Several rows moved to Trash together have no
-Undo and are restored from Trash. Each vault's Trash row lists its entries,
+seconds, and ⌘Z does the same. Several rows moved to Trash together are
+offered Undo by their toast, or by the progress sheet when some stayed, which
+restores each entry to its original path one `restore_trash_item` at a time;
+an entry whose original path is taken again stays in Trash. ⌘Z undoes only a
+single row's move. Each vault's Trash row lists its entries,
 restores them (as a `(restored)` copy when the original path is taken) and
 deletes them permanently, which the host allows only inside `/.trash`. The
 exception is a team where no owner has created `/.trash` yet: a member who is

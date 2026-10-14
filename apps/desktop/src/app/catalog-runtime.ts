@@ -184,6 +184,21 @@ export function useCatalogRuntime({
   );
 
   /**
+   * Reads one profile's catalog again and resolves with the snapshot that
+   * includes it, for changes made in steps that each need a current catalog.
+   * Without a profile, or when a scoped read is unavailable, it reads every
+   * profile's catalog.
+   */
+  const reloadCatalog = useCallback(
+    async (profile?: string): Promise<AgentSnapshot> => {
+      if (await reloadProfile(profileRefresh, profile))
+        return latestRef.current;
+      return refreshSnapshot();
+    },
+    [refreshSnapshot],
+  );
+
+  /**
    * Refreshes the affected profile after a mutation when possible; otherwise
    * reloads the full catalog. Both paths report catalog freshness failures.
    */
@@ -276,6 +291,7 @@ export function useCatalogRuntime({
     catalogCoordinator,
     publishSnapshot,
     refreshSnapshot,
+    reloadCatalog,
     refresh,
     refreshAll,
   };

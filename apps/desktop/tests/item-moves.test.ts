@@ -101,6 +101,9 @@ test('one item: rename, move, a folder to create, and the refusals', () => {
   assert.match(refusal('/loose-b'), /loose-b is already at the top level/);
   assert.match(refusal('relative'), /starts with \//);
   assert.match(refusal('/.trash/owner/loose-a'), /Move to Trash/);
+  // The VAULT has no Trash yet; its name stays reserved for one.
+  assert.match(refusal('/.trash'), /Move to Trash/);
+  assert.match(refusal('/.trash', item('/env/token')), /Move to Trash/);
   assert.match(refusal('/notes.txt/loose-a'), /\/notes\.txt is an item/);
   assert.match(
     refusal('/env/prod/env', item('/env', 'Folder')),

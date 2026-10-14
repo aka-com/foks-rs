@@ -1,8 +1,8 @@
 /**
  * Organising Files in the running shell: the move sheet's folder tree and
  * its New folder, several rows chosen with ⌘-click, Shift-click or ⌘A and
- * moved or sent to Trash one request at a time with per-item outcomes, and
- * rows dragged onto a folder of the tree.
+ * moved or sent to Trash one request at a time with per-item outcomes and
+ * an Undo for Trash, and rows dragged onto a folder of the tree.
  */
 
 import assert from 'node:assert/strict';
@@ -12,6 +12,7 @@ import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge, MoveItemRequest } from '../src/bridge';
 import type { LocationStore } from '../src/location';
+import type { AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -39,16 +40,26 @@ test.after(async () => vite.close());
 const VAULT = 'acct:personal';
 
 /**
- * The app open on the personal vault's /logins folder, or on one item's
- * details. `decorate` replaces bridge calls; `moves` records every move
- * request that reaches the mock.
+ * The app open on a vault's folder (the personal vault's /logins unless
+ * given), or on one item's details. `adjust` changes the fixture; `decorate`
+ * replaces bridge calls; `moves` records every move request that reaches the
+ * mock.
  */
 async function mount({
   decorate = () => ({}),
   selection,
+  vault = VAULT,
+  folder = '/logins',
+  shown = 'github.com',
+  adjust = (snapshot) => snapshot,
 }: {
   decorate?: (base: Bridge) => Partial<Bridge>;
   selection?: string;
+  vault?: string;
+  folder?: string;
+  /** A row listed once the app is open. */
+  shown?: string;
+  adjust?: (snapshot: AgentSnapshot) => AgentSnapshot;
 } = {}) {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
@@ -62,7 +73,8 @@ async function mount({
   const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
     '/src/location.ts',
   )) as typeof import('../src/location');
-  const base = mockBridge(FIXTURE);
+  const fixture = adjust(FIXTURE);
+  const base = mockBridge(fixture);
   const moves: MoveItemRequest[] = [];
   const decorated = decorate(base);
   const bridge: Bridge = {
@@ -75,19 +87,19 @@ async function mount({
   };
   const store: LocationStore = new LocationStore({
     ...INITIAL_STATE,
-    location: { kind: 'store', ref: VAULT },
-    folder: '/logins',
+    location: { kind: 'store', ref: vault },
+    folder,
     ...(selection
-      ? { selection: { store: VAULT, path: selection }, details: true }
+      ? { selection: { store: vault, path: selection }, details: true }
       : {}),
   });
   const rendered = ui.render(
-    createElement(App, { snapshot: FIXTURE, bridge, store }),
+    createElement(App, { snapshot: fixture, bridge, store }),
   );
-  await ui.waitFor(() => assert.ok(listRow('github.com')));
+  await ui.waitFor(() => assert.ok(listRow(shown)));
   const paths = async () =>
     (await base.listCatalog()).items
-      .filter((item) => item.store === VAULT)
+      .filter((item) => item.store === vault)
       .map((item) => item.path);
   return { rendered, store, base, paths, moves };
 }
@@ -336,6 +348,125 @@ test('⌘A chooses every row and Delete moves each to Trash', async () => {
   );
 });
 
+test('Undo after several rows moved to Trash restores each to where it was', async () => {
+  const { rendered, paths } = await mount();
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(listRow('github.com'), { key: 'a', metaKey: true });
+  });
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(listRow('github.com'), { key: 'Delete' });
+  });
+  await ui.waitFor(() => assert.match(toasts(), /Moved 2 items to Trash/));
+  assert.ok(!(await paths()).includes('/logins/github.com'));
+  const undo = [
+    ...document.querySelectorAll<HTMLButtonElement>('.toast-action'),
+  ].find((button) => button.textContent === 'Undo');
+  assert.ok(undo, 'the toast offers Undo');
+  await ui.act(async () => {
+    ui.fireEvent.click(undo);
+  });
+  await ui.waitFor(() => assert.match(toasts(), /Restored 2 items/));
+  const now = await paths();
+  assert.ok(now.includes('/logins/github.com'));
+  assert.ok(now.includes('/logins/fastmail.com'));
+  assert.equal(rendered.queryByRole('dialog'), null);
+});
+
+test('Undo leaves an entry in Trash when its original path is taken again', async () => {
+  const { rendered, base, paths } = await mount();
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(listRow('github.com'), { key: 'a', metaKey: true });
+  });
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(listRow('github.com'), { key: 'Delete' });
+  });
+  await ui.waitFor(() => assert.match(toasts(), /Moved 2 items to Trash/));
+  // Another session creates an item where github.com was.
+  await base.createFolder({ storeId: VAULT, path: '/logins/github.com' });
+  const undo = [
+    ...document.querySelectorAll<HTMLButtonElement>('.toast-action'),
+  ].find((button) => button.textContent === 'Undo');
+  assert.ok(undo);
+  await ui.act(async () => {
+    ui.fireEvent.click(undo);
+  });
+  const progress = await rendered.findByRole('dialog', {
+    name: 'Restored 1 of 2 items',
+  });
+  assert.match(progress.textContent ?? '', /1 not restored/);
+  assert.match(
+    progress.textContent ?? '',
+    /Something named github\.com is already in \/logins/,
+  );
+  assert.ok((await paths()).includes('/logins/fastmail.com'));
+});
+
+test('a group where only some items can change moves those and lists the others as not moved', async () => {
+  const TEAM = 'team:eng';
+  const { rendered, paths } = await mount({
+    vault: TEAM,
+    folder: '/deploy',
+    shown: 'staging-token',
+    // This account is an Admin of Engineering: of the two Owner-only
+    // tokens, one becomes changeable by Admins.
+    adjust: (snapshot) => ({
+      ...snapshot,
+      items: snapshot.items.map((item) =>
+        item.store === TEAM && item.path === '/deploy/staging-token'
+          ? { ...item, write: 'Admin' }
+          : item,
+      ),
+    }),
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(listRow('production-token'), { metaKey: true });
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(listRow('staging-token'), { metaKey: true });
+  });
+  const moveTo = ui
+    .within(selectionBar())
+    .getByRole('button', { name: 'Move to…' });
+  assert.equal(moveTo.hasAttribute('disabled'), false);
+  ui.fireEvent.click(moveTo);
+  const dialog = await rendered.findByRole('dialog', { name: 'Move 2 items' });
+  assert.match(
+    dialog.textContent ?? '',
+    /production-token will not move\. You do not have permission to change this item\./,
+  );
+  assert.equal(ui.within(dialog).queryByRole('alert'), null);
+  ui.fireEvent.click(treeItem(dialog, 'release'));
+  const move = ui.within(dialog).getByRole('button', { name: 'Move' });
+  assert.equal(move.hasAttribute('disabled'), false);
+  await ui.act(async () => {
+    ui.fireEvent.click(move);
+  });
+  const progress = await rendered.findByRole('dialog', {
+    name: 'Moved 1 of 2 items to /release',
+  });
+  assert.match(progress.textContent ?? '', /1 not moved/);
+  const now = await paths();
+  assert.ok(now.includes('/release/staging-token'));
+  assert.ok(now.includes('/deploy/production-token'));
+});
+
+test('Clear returns focus to the anchor row', async () => {
+  await mount();
+  await chooseBoth();
+  const clear = ui
+    .within(selectionBar())
+    .getByRole('button', { name: 'Clear' });
+  clear.focus();
+  await ui.act(async () => {
+    ui.fireEvent.click(clear);
+  });
+  assert.equal(
+    document.querySelector('[role="toolbar"][aria-label="Selected items"]'),
+    null,
+  );
+  assert.equal(document.activeElement, listRow('fastmail.com'));
+});
+
 test('Escape clears the chosen rows', async () => {
   await mount();
   await chooseBoth();
@@ -390,6 +521,27 @@ test('dragging chosen rows onto a tree folder moves them there', async () => {
     ['/ssh/fastmail.com', '/ssh/github.com'],
   );
   assert.ok((await paths()).includes('/ssh/github.com'));
+});
+
+test('a drag in progress ends when the list unmounts', async () => {
+  const { rendered, moves } = await mount();
+  const target = document.querySelector<HTMLElement>(
+    `.tpane [data-folder-store="${VAULT}"][data-folder-path="/ssh"]`,
+  );
+  (document as { elementFromPoint?: unknown }).elementFromPoint = () => target;
+  ui.fireEvent.pointerDown(listRow('github.com'), {
+    button: 0,
+    clientX: 10,
+    clientY: 10,
+  });
+  await ui.act(async () => {
+    ui.fireEvent.pointerMove(window, { clientX: 40, clientY: 60 });
+  });
+  assert.ok(document.body.classList.contains('dragging-rows'));
+  rendered.unmount();
+  assert.equal(document.body.classList.contains('dragging-rows'), false);
+  ui.fireEvent.pointerUp(window, { clientX: 40, clientY: 60 });
+  assert.equal(moves.length, 0);
 });
 
 test('a press without movement is a click, not a drag', async () => {

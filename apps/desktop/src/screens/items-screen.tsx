@@ -12,8 +12,12 @@ import { CollectionStatus } from '../components/collection-status';
  * (shown when viewing multiple stores), and Size.
  */
 
-import { Fragment, useLayoutEffect, useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type {
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  RefObject,
+} from 'react';
 import { useToast } from '/kit/toasts';
 import { anyDialogOpen, ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
@@ -291,6 +295,7 @@ function Row({
         )}
         role="button"
         tabIndex={0}
+        data-row-key={rowKey(item)}
         aria-pressed={selected}
         aria-haspopup="menu"
         onClick={(event) => {
@@ -319,7 +324,8 @@ function Row({
             event.key === 'Delete' ||
             (event.key === 'Backspace' && (event.metaKey || event.ctrlKey))
           ) {
-            // Moving to Trash can be undone, so the key asks for nothing more.
+            // Moving to Trash can be undone, for several chosen rows as for
+            // one, so the key asks for nothing more.
             event.preventDefault();
             onTrash(item);
             return;
@@ -748,6 +754,54 @@ function underFolder(path: string, folder: string): boolean {
   return folder === '/' || path === folder || path.startsWith(`${folder}/`);
 }
 
+/**
+ * Returns focus to the list once the chosen rows are gone together with the
+ * control that had it: Clear, or a move of every chosen row, unmounts the
+ * selection bar and its focused button. Focus goes to the anchor row, else
+ * to the row now at the first chosen row's place. A sheet that is still open
+ * keeps focus until it closes.
+ */
+function ChosenRowsFocus({
+  count,
+  anchor,
+  first,
+  listed,
+  body,
+}: {
+  count: number;
+  anchor: string | null;
+  /** The list index of the first chosen row. */
+  first: number;
+  listed: readonly string[];
+  body: RefObject<HTMLDivElement | null>;
+}): null {
+  const pending = useRef<{ anchor: string | null; index: number } | null>(null);
+  useEffect(() => {
+    if (count) {
+      pending.current = { anchor, index: first };
+      return;
+    }
+    const last = pending.current;
+    if (!last || anyDialogOpen()) return;
+    pending.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const key =
+      last.anchor && listed.includes(last.anchor)
+        ? last.anchor
+        : listed[Math.min(Math.max(last.index, 0), listed.length - 1)];
+    const element = body.current;
+    const rows = [
+      ...(element?.querySelectorAll<HTMLElement>('[data-row-key]') ?? []),
+    ];
+    const target =
+      rows.find((row) => row.dataset.rowKey === key) ??
+      element?.querySelector<HTMLElement>('[tabindex="0"], button');
+    target?.focus();
+  });
+  return null;
+}
+
 export function ItemsScreen({
   snapshot,
   bridge,
@@ -787,6 +841,9 @@ export function ItemsScreen({
   // Set when a drag ends, so the click that follows the release is not read
   // as a selection.
   const suppressClick = useRef(false);
+  // Ends the drag in progress, if any; an unmount ends it unapplied.
+  const endDrag = useRef<((drop: boolean) => void) | null>(null);
+  useEffect(() => () => endDrag.current?.(false), []);
   const toasts = useToast();
   const [view, setView] = useState<FilesView>(storedFilesView);
   const [folderMenu, setFolderMenu] = useState<{
@@ -1337,6 +1394,7 @@ export function ItemsScreen({
       });
     };
     const finish = (drop: boolean): void => {
+      endDrag.current = null;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
@@ -1365,6 +1423,7 @@ export function ItemsScreen({
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
     window.addEventListener('keydown', onKey, true);
+    endDrag.current = finish;
   };
   const dropOn = (storeId: string, path: string): 'ok' | 'no' | undefined =>
     drag?.target === `${storeId}|${path}`
@@ -1766,6 +1825,13 @@ export function ItemsScreen({
 
   return (
     <div className="drop-area">
+      <ChosenRowsFocus
+        count={chosen.length}
+        anchor={chosenRows.anchor}
+        first={chosen[0] ? listedKeys.indexOf(rowKey(chosen[0])) : -1}
+        listed={listedKeys}
+        body={bodyRef}
+      />
       {dropZone}
       <div
         ref={sidebar.ref}

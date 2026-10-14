@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Button, Field, Inset, SectionLabel, SheetDialog } from '../components';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
-import { nameOf, storeOf } from '../model';
+import { isTrashPath, nameOf, storeOf } from '../model';
 import type { AgentSnapshot, Item } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useSheetGuard } from '../navigation-guard';
@@ -37,6 +37,37 @@ function nameProblem(name: string): string | null {
 }
 
 /**
+ * Why the sheet cannot move `items`, given each item's reason or undefined:
+ * one item's reason, and of several only a reason all of them have. The
+ * progress sheet refuses the others one by one, as it does for a drag.
+ */
+function blockingProblem(
+  problems: readonly (string | undefined)[],
+): string | undefined {
+  return problems.length === 1 || problems.every(Boolean)
+    ? problems.find(Boolean)
+    : undefined;
+}
+
+/**
+ * Names the chosen items a move of several leaves where they are, and why.
+ * `problems` holds each item's reason, or undefined for one that moves.
+ */
+function leftOutNote(
+  items: readonly Item[],
+  problems: readonly (string | undefined)[],
+): string | null {
+  const left = items.filter((_, index) => problems[index]);
+  const reason = problems.find(Boolean);
+  if (!left.length || !reason) return null;
+  if (left.length === 1)
+    return `${nameOf(left[0].path)} will not move. ${reason}`;
+  const names = left.slice(0, 3).map((item) => nameOf(item.path));
+  const more = left.length - names.length;
+  return `${left.length} items will not move: ${names.join(', ')}${more ? ` and ${more} more` : ''}. The progress sheet lists the reason for each.`;
+}
+
+/**
  * Renames one item or moves it, or moves several items of one store, to a
  * folder of the same store. The folder comes from the store's tree, where
  * New folder creates one in place, or from a typed path behind the Path
@@ -60,8 +91,8 @@ export function MoveSheet({
   setWorkflow: (workflow: WriteWorkflow) => void;
   onApplied: (message: string, profile?: string) => Promise<void>;
   onMutationError: MutationFailureHandler;
-  /** Reads the catalog again and resolves with it. */
-  onReload: () => Promise<AgentSnapshot>;
+  /** Reads the catalog of `profile` again and resolves with it. */
+  onReload: (profile?: string) => Promise<AgentSnapshot>;
   accessNow: () => number;
 }): ReactNode {
   const first = items[0];
@@ -104,9 +135,11 @@ export function MoveSheet({
     folderExists(snapshot, store.id, destinationFolder, known)
       ? destinationFolder
       : null;
-  const problem = items
-    .map((item) => itemActionProblem(snapshot, item, true, accessNow()))
-    .find(Boolean);
+  const problems = items.map((item) =>
+    itemActionProblem(snapshot, item, true, accessNow()),
+  );
+  const problem = blockingProblem(problems);
+  const leftOut = problem ? null : leftOutNote(items, problems);
   const moving = items
     .filter((item) => item.kind === 'Folder')
     .map((item) => item.path);
@@ -139,6 +172,10 @@ export function MoveSheet({
       return;
     }
     const path = joinPath(parentForNew, newFolder.trim());
+    if (isTrashPath(path)) {
+      setError('Trash uses this name at the top level. Enter another name.');
+      return;
+    }
     if (
       known.includes(path) ||
       snapshot.items.some(
@@ -177,9 +214,9 @@ export function MoveSheet({
 
   const submit = async (): Promise<void> => {
     if (busy || uncertain || !check.ok) return;
-    const blocked = items
-      .map((item) => itemActionProblem(snapshot, item, true, accessNow()))
-      .find(Boolean);
+    const blocked = blockingProblem(
+      items.map((item) => itemActionProblem(snapshot, item, true, accessNow())),
+    );
     if (blocked) {
       setError(blocked);
       return;
@@ -213,7 +250,7 @@ export function MoveSheet({
       // A folder created from this sheet retired the host's catalog of the
       // store, and the host selects the item in a catalog it has read.
       if (check.creates || known.length) {
-        const next = await onReload();
+        const next = await onReload(store.server);
         const fresh = next.items.find(
           (item) =>
             item.store === single.store &&
@@ -398,6 +435,7 @@ export function MoveSheet({
           />
         </Inset>
       ) : null}
+      {leftOut ? <p>{leftOut}</p> : null}
       {problem || error ? <p role="alert">{problem ?? error}</p> : null}
     </SheetDialog>
   );

@@ -17,6 +17,9 @@ import type { AgentSnapshot, Item, RoleWire, StoreRef } from './types';
 /** The folder that holds every role's Trash folder in a store. */
 export const TRASH_ROOT = '/.trash';
 
+/** How long the Undo of a move to Trash is offered. */
+export const UNDO_DURATION_MS = 8_000;
+
 /** The suffix of the small file that records a hashed entry's original path. */
 export const ORIGIN_SUFFIX = '.origin';
 
