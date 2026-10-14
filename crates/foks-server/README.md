@@ -351,7 +351,8 @@ edits or deletion must add transactional invalidation or equivalent fanout.
 
 Defaults are enforced before authoritative KV writes:
 
-- 64 KiB per encoded small node;
+- 64 KiB per encoded small node at the database layer; public small-file RPCs
+  enforce the Go-compatible 2 KiB plaintext plus authenticator boundary;
 - at most 64 dirents per mutation batch and 1,000 entries per list page;
 - 9 MiB per stored encrypted chunk and 512 chunks per upload;
 - the client-compatible 1 GiB cleartext file ceiling, allowing up to just over
@@ -368,18 +369,99 @@ Passphrase history is limited to 4,096 generations. Login state is limited to
 4,096 live challenges globally and eight per UID; five bad proofs within the
 default ten-minute window temporarily rate-limit that UID.
 
-Namespace accounting charges encoded bytes actually stored, including upload
-envelopes and ciphertext duplication. Tombstone/history versions remain
+Namespace accounting preserves the inline representation charge, including upload
+envelopes and ciphertext duplication, even when chunks are stored externally.
+Transactional counters avoid rescanning namespace history for each mutation. Tombstone/history versions remain
 charged until a future authenticated compactor can prove they are reclaimable.
 SQLite, filesystem, WAL, backup, and key-directory overhead means operators
 must reserve more disk than the configured database limit.
 
 No throughput number is a product claim yet. The single writer, `FULL`
 synchronous WAL commits, repeated reachable-tree version-vector construction,
-and namespace quota scans are expected to be the first saturation points.
+and whole-database validation on cold startup remain saturation candidates.
 Benchmark reports must state hardware, SQLite settings, dataset shape, p50/p95/
 p99 latency, writer saturation, reader latency, WAL growth, and checkpoint
 cost before quoting capacity.
+
+## External encrypted chunks
+
+Large encrypted file chunks can live outside SQLite without changing go-foks
+RPCs, encryption, padding, exact upload retries, or usage replies. Small-file payloads (the Go-compatible 2 KiB plaintext boundary), directory
+entries, file metadata and authoritative identity state remain in SQLite. Larger
+text notes also use the chunk path. Mixed inline/external rows are supported; enabling a store affects
+new uploads and does not copy existing files during startup.
+
+Add one store table to the installation TOML used by `serve-config`:
+
+```toml
+[chunk_store]
+kind = "s3"
+bucket = "foks-chunks"
+region = "auto" # Use the actual region for AWS S3.
+endpoint = "https://ACCOUNT_ID.r2.cloudflarestorage.com"
+prefix = "tenant-unique-namespace"
+timeout_seconds = 10
+```
+
+Use a distinct, stable prefix per installation. Static credentials use `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
+optional `AWS_SESSION_TOKEN`; do not put secrets in the TOML. The backend also
+supports its object-store library's environment-configured web identity,
+container credentials and instance-metadata fallback; it does not load general
+AWS shared profiles. Grant object GET and conditional PUT in the chosen prefix. Objects
+must remain immutable and readable. Endpoint HTTPS is mandatory except an
+explicit `allow_http_loopback = true` for literal loopback HTTP test endpoints.
+Conditional creation must be supported; there is no overwrite fallback.
+
+For a local filesystem instead:
+
+```toml
+[chunk_store]
+kind = "filesystem"
+directory = "/srv/foks/chunks"
+```
+
+The filesystem implementation fsyncs objects and directories, rejects symlink
+leaves, and verifies existing objects. It cannot bound a hung filesystem call.
+S3 uses one deadline across each operation, retries and verification reads. That
+deadline alone does not bound the complete RPC: queuing, SQLite and client
+retries also count toward the 15-second hosted target.
+
+Object publication precedes the SQLite commit; authorization, ordering and quota
+are checked again before commit. An interrupted or rejected commit can leave an
+unreferenced object. **There is no object garbage collector in this release.**
+Objects remain after upload cleanup or removal of their SQLite references. Do
+not configure bucket lifecycle deletion. Monitor physical object growth; current
+quota charging does not include orphan objects. History pruning and deletion
+need coordinated writers, reads and backups before they are safe to enable.
+
+To convert existing inline chunks, stop the server and run:
+
+```sh
+foks-server externalize-chunks --config /srv/foks/server.toml
+```
+
+The command takes the installation writer lock and commits each reference only
+after object publication. It is resumable after interruption. It leaves freed
+SQLite pages available for reuse; it does not vacuum or shrink the database.
+Keep the selected store and prefix stable. Startup fails if external references
+exist with no configured store; a wrong/missing object fails on access.
+
+Library and scheduled backups fetch external chunks into the private SQLite
+snapshot before publishing its completeness manifest. Completed backups remain
+self-contained and restore without the original store. Missing/corrupt objects
+fail backup creation. Hydration requires temporary disk and database capacity
+for the original duplicated inline representation and can be slow; it is not a
+15-second failover path. Scheduled shutdown checks cancellation between chunks.
+
+For the standalone `serve` and `backup` commands, `--chunk-store-config PATH`
+accepts a separate TOML file containing the same settings **without** the
+`[chunk_store]` table header. Supply it to `backup` for an external source;
+omitting it fails rather than publishing a backup that depends on the bucket.
+Restore does not need this flag.
+
+Separating chunk storage does not replicate or fence SQLite. Qualify the actual
+object provider and metadata replication/failover deployment together. Local
+mock tests establish API behavior, not S3/R2 durability across an AZ failure.
 
 ## Backup, restore, and integrity
 
@@ -411,7 +493,7 @@ integrity-checked database, and exact declared key set, and requires empty
 destination paths.
 
 Restore and retention validation also accept the same prior schemas as server
-startup (43 through 48, upgraded to 49). They copy the database and any WAL into
+startup (43 through 49, upgraded to 50). They copy the database and any WAL into
 a private temporary directory, apply the normal transactional migrations,
 checkpoint, and validate that copy. Restore installs the migrated database;
 validation never opens or changes the original snapshot in SQLite. Retention

@@ -28,7 +28,7 @@ fn assert_accounting(connection: &Connection) {
             ("kv_file_uploads", "length(exact_metadata)"),
             (
                 "kv_file_chunks",
-                "length(ciphertext) + length(exact_upload_chunk)",
+                "coalesce(external_ciphertext_bytes,length(ciphertext)) + coalesce(external_encoded_bytes,length(exact_upload_chunk))",
             ),
             ("kv_locks", "64"),
         ] {
@@ -61,7 +61,7 @@ fn assert_accounting(connection: &Connection) {
         let stored: (i64,i64,i64,i64) = connection.query_row("SELECT accounted_bytes,accounted_objects,directory_count,dirent_count FROM kv_namespaces WHERE namespace_id=?1", [&uid], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
         assert_eq!(stored, (bytes, objects, directories, dirents));
     }
-    let mismatches: i64 = connection.query_row("SELECT count(*) FROM kv_file_uploads u WHERE chunk_count != (SELECT count(*) FROM kv_file_chunks c WHERE c.uid=u.uid AND c.file_id=u.file_id) OR chunk_bytes != (SELECT coalesce(sum(length(ciphertext)),0) FROM kv_file_chunks c WHERE c.uid=u.uid AND c.file_id=u.file_id)", [], |r| r.get(0)).unwrap();
+    let mismatches: i64 = connection.query_row("SELECT count(*) FROM kv_file_uploads u WHERE chunk_count != (SELECT count(*) FROM kv_file_chunks c WHERE c.uid=u.uid AND c.file_id=u.file_id) OR chunk_bytes != (SELECT coalesce(sum(coalesce(external_ciphertext_bytes,length(ciphertext))),0) FROM kv_file_chunks c WHERE c.uid=u.uid AND c.file_id=u.file_id)", [], |r| r.get(0)).unwrap();
     assert_eq!(mismatches, 0);
 }
 
@@ -79,7 +79,7 @@ fn accounting_tracks_history_updates_rollback_and_cascades() {
         INSERT INTO kv_dirents VALUES(zeroblob(33),zeroblob(16),zeroblob(16),2,2,zeroblob(17),zeroblob(32),0,X'010203');
         INSERT INTO kv_dirent_heads VALUES(zeroblob(33),zeroblob(16),zeroblob(16),2);
         INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(zeroblob(33),zeroblob(16),X'0102',0,0);
-        INSERT INTO kv_file_chunks VALUES(zeroblob(33),zeroblob(16),0,X'010203',0,X'01020304');
+        INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk) VALUES(zeroblob(33),zeroblob(16),0,X'010203',0,X'01020304');
         INSERT INTO kv_locks VALUES(zeroblob(33),zeroblob(16),zeroblob(16),zeroblob(16),0);").unwrap();
     assert_accounting(&c);
     c.execute_batch("UPDATE kv_roots SET exact_root=X'01020304'; UPDATE kv_directory_heads SET version=1; UPDATE kv_dirent_heads SET version=1; UPDATE kv_file_chunks SET ciphertext=X'0102',exact_upload_chunk=X'01'; UPDATE kv_file_uploads SET exact_metadata=X'01020304';").unwrap();

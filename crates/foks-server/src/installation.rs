@@ -15,6 +15,8 @@ const MAXIMUM_CONFIG_BYTES: u64 = 64 * 1024;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InstallationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_store: Option<crate::chunks::ChunkStoreConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_admin: Option<crate::web_admin::WebAdminConfig>,
     #[serde(default)]
     pub vhost_management_host: String,
@@ -38,6 +40,9 @@ pub struct InstallationConfig {
 
 impl InstallationConfig {
     pub fn validate(&self) -> crate::Result<()> {
+        if let Some(store) = &self.chunk_store {
+            store.validate()?;
+        }
         validate_hostname(&self.canonical_name)?;
         crate::config::validate_vhost_management_host(&self.vhost_management_host)?;
         if let Some(admin) = &self.web_admin {
@@ -166,6 +171,7 @@ pub fn initialize(
     write_new_file(&probe_certificate_der, certificate.der(), 0o644)?;
 
     let config = InstallationConfig {
+        chunk_store: None,
         vhost_management_host: String::new(),
         oidc: None,
         web_admin: None,

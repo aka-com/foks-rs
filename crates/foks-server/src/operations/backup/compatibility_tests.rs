@@ -58,6 +58,13 @@ fn bootstrap_input() -> BootstrapInput {
 // tests, rather than changing only user_version on the current schema.
 fn predecessor(connection: &Connection, version: i64) {
     assert!((43..=SCHEMA_VERSION).contains(&version));
+    if version <= 49 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_external_kv_chunks.sql"
+            ))
+            .unwrap();
+    }
     if version <= 48 {
         connection
             .execute_batch(include_str!(

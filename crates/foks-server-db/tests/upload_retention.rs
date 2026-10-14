@@ -142,8 +142,8 @@ fn overwritten_and_unlinked_versions_remain_readable() {
                 .kv_file_chunk(&UID, &file, 0)
                 .unwrap()
                 .unwrap()
-                .ciphertext,
-            b"ciphertext"
+                .payload,
+            foks_server_db::KvChunkPayload::Inline(b"ciphertext".to_vec())
         );
     }
 }

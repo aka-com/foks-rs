@@ -92,14 +92,34 @@ pub(crate) fn dispatch(
     reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     clock: &Arc<dyn foks_server_db::Clock>,
+    chunk_store: Option<&dyn crate::chunks::ChunkStore>,
 ) -> Result<Response, RpcStatus> {
+    if route == RouteId::KvStoreGetEncryptedChunk {
+        let chunk = {
+            let snapshot = reader.snapshot().map_err(|_| RpcStatus::TransactionRetry)?;
+            let authority = resolve_authority(argument, principal, &snapshot, clock)?;
+            get_encrypted_chunk(argument, &snapshot, &authority)?
+        }; // Release the SQLite snapshot before object-store I/O.
+        let offset = chunk.offset;
+        let final_chunk = chunk.final_chunk;
+        let ciphertext = crate::chunk_storage::ciphertext(chunk, chunk_store)
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+        return Ok(Response::Data(
+            foks_proto::KvEncryptedChunk {
+                ciphertext,
+                offset,
+                final_chunk,
+            }
+            .encode()
+            .map_err(|_| RpcStatus::TransactionRetry)?,
+        ));
+    }
     if matches!(
         route,
         RouteId::KvStoreGetRoot
             | RouteId::KvStoreGet
             | RouteId::KvStoreGetDir
             | RouteId::KvStoreGetNode
-            | RouteId::KvStoreGetEncryptedChunk
             | RouteId::KvStoreList
             | RouteId::KvStoreCacheCheck
             | RouteId::KvStoreUsage
@@ -111,9 +131,6 @@ pub(crate) fn dispatch(
             RouteId::KvStoreGet => get(argument, &snapshot, &authority),
             RouteId::KvStoreGetDir => get_directory(argument, &snapshot, &authority),
             RouteId::KvStoreGetNode => get_node(argument, &snapshot, &authority),
-            RouteId::KvStoreGetEncryptedChunk => {
-                get_encrypted_chunk(argument, &snapshot, &authority)
-            }
             RouteId::KvStoreList => list(argument, &snapshot, &authority),
             RouteId::KvStoreCacheCheck => cache_check(argument, &snapshot, &authority),
             RouteId::KvStoreUsage => usage(argument, &snapshot, &authority),
@@ -123,9 +140,11 @@ pub(crate) fn dispatch(
     let authority = resolve_authority(argument, principal, reader, clock)?;
     match route {
         RouteId::KvStoreMkdir => mkdir(argument, principal, reader, writer, &authority),
-        RouteId::KvStoreFileUploadInit => file_upload_init(argument, principal, writer, &authority),
+        RouteId::KvStoreFileUploadInit => {
+            file_upload_init(argument, principal, writer, &authority, chunk_store)
+        }
         RouteId::KvStoreFileUploadChunk => {
-            file_upload_chunk(argument, principal, writer, &authority)
+            file_upload_chunk(argument, principal, writer, &authority, chunk_store)
         }
         RouteId::KvStorePutSmallFileOrSymlink => {
             put_small_file_or_symlink(argument, principal, reader, writer, &authority)
@@ -373,6 +392,7 @@ fn file_upload_init(
     principal: &Principal,
     writer: &WriterHandle,
     authority: &KvAuthority,
+    chunk_store: Option<&dyn crate::chunks::ChunkStore>,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 4)?;
     let file_id = fixed_16(&fields[1], "KV file ID")?;
@@ -389,6 +409,7 @@ fn file_upload_init(
         principal,
         writer,
         authority,
+        chunk_store,
     )
 }
 
@@ -397,6 +418,7 @@ fn file_upload_chunk(
     principal: &Principal,
     writer: &WriterHandle,
     authority: &KvAuthority,
+    chunk_store: Option<&dyn crate::chunks::ChunkStore>,
 ) -> Result<Response, RpcStatus> {
     let fields = fields(argument, 3)?;
     put_file_chunk(
@@ -406,6 +428,7 @@ fn file_upload_chunk(
         principal,
         writer,
         authority,
+        chunk_store,
     )
 }
 
@@ -416,38 +439,93 @@ fn put_file_chunk(
     principal: &Principal,
     writer: &WriterHandle,
     authority: &KvAuthority,
+    chunk_store: Option<&dyn crate::chunks::ChunkStore>,
 ) -> Result<Response, RpcStatus> {
     let exact_chunk = encode(value).map_err(bad_arguments)?;
     let chunk = foks_proto::KvUploadChunk::decode(&exact_chunk).map_err(bad_arguments)?;
     if chunk.ciphertext.is_empty() || chunk.ciphertext.len() > 9 * 1024 * 1024 {
         return Err(bad_arguments("KV upload chunk size is out of range"));
     }
-    let final_size = chunk
-        .final_upload
-        .as_ref()
-        .map(|final_upload| final_upload.size);
-    let uid = authority.party.clone();
-    let device = principal.device_id().to_vec();
-    let write_authority = authority.clone();
+    let upload = Arc::new(PendingFileChunk {
+        uid: authority.party.clone(),
+        file_id,
+        exact_metadata,
+        chunk,
+        exact_chunk,
+    });
+    let digest = chunk_store.map(|_| crate::chunks::chunk_digest(&upload.exact_chunk));
+    if let Some(store) = chunk_store {
+        // Admission is checked before uploading, then checked again at commit.
+        // A racing revocation or quota change can leave an unreferenced object.
+        write_file_chunk(
+            writer,
+            authority,
+            principal.device_id(),
+            upload.clone(),
+            digest,
+            true,
+        )?;
+        store
+            .put(
+                &digest.expect("configured store has digest"),
+                &upload.exact_chunk,
+            )
+            .map_err(|_| RpcStatus::TransactionRetry)?;
+    }
+    write_file_chunk(
+        writer,
+        authority,
+        principal.device_id(),
+        upload,
+        digest,
+        false,
+    )?;
+    Ok(Response::Void)
+}
+
+struct PendingFileChunk {
+    uid: Vec<u8>,
+    file_id: [u8; 16],
+    exact_metadata: Option<Vec<u8>>,
+    chunk: foks_proto::KvUploadChunk,
+    exact_chunk: Vec<u8>,
+}
+
+fn write_file_chunk(
+    writer: &WriterHandle,
+    authority: &KvAuthority,
+    credential: &[u8],
+    upload: Arc<PendingFileChunk>,
+    digest: Option<[u8; 32]>,
+    preflight: bool,
+) -> Result<(), RpcStatus> {
+    let device = credential.to_vec();
+    let authority = authority.clone();
     writer
-        .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
-            if !kv_write_is_current(database, &write_authority, &device, now)? {
+        .call_with_current_time(Arc::clone(&authority.clock), move |database, now| {
+            if !kv_write_is_current(database, &authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
-            database.put_kv_file_chunk(&foks_server_db::KvFileChunkMutation {
-                uid: &uid,
-                file_id: &file_id,
-                exact_metadata: exact_metadata.as_deref(),
-                offset: chunk.offset,
-                ciphertext: &chunk.ciphertext,
-                final_size,
-                exact_chunk: &exact_chunk,
+            let mutation = foks_server_db::KvFileChunkMutation {
+                uid: &upload.uid,
+                file_id: &upload.file_id,
+                exact_metadata: upload.exact_metadata.as_deref(),
+                offset: upload.chunk.offset,
+                ciphertext: &upload.chunk.ciphertext,
+                final_size: upload.chunk.final_upload.as_ref().map(|value| value.size),
+                exact_chunk: &upload.exact_chunk,
                 now,
-            })?;
+            };
+            if preflight {
+                database.preflight_kv_file_chunk(&mutation)?;
+            } else if let Some(digest) = digest {
+                database.put_kv_file_chunk_external(&mutation, &digest)?;
+            } else {
+                database.put_kv_file_chunk(&mutation)?;
+            }
             Ok(())
         })
-        .map_err(map_upload_error)?;
-    Ok(Response::Void)
+        .map_err(map_upload_error)
 }
 
 fn put_small_file_or_symlink(
@@ -647,7 +725,7 @@ fn get_encrypted_chunk(
     argument: &[u8],
     reader: &foks_server_db::ReadSnapshot<'_>,
     authority: &KvAuthority,
-) -> Result<Response, RpcStatus> {
+) -> Result<foks_server_db::StoredKvFileChunk, RpcStatus> {
     let fields = fields(argument, 3)?;
     let id = fixed_16(&fields[1], "KV file ID")?;
     let Value::Unsigned(offset) = &fields[2] else {
@@ -665,14 +743,7 @@ fn get_encrypted_chunk(
         .kv_file_chunk(&uid, &id, *offset)
         .map_err(|_| RpcStatus::TransactionRetry)?
         .ok_or(RpcStatus::KvNoEnt)?;
-    let response = foks_proto::KvEncryptedChunk {
-        ciphertext: chunk.ciphertext,
-        offset: chunk.offset,
-        final_chunk: chunk.final_chunk,
-    };
-    Ok(Response::Data(
-        response.encode().map_err(|_| RpcStatus::TransactionRetry)?,
-    ))
+    Ok(chunk)
 }
 
 fn get_directory(

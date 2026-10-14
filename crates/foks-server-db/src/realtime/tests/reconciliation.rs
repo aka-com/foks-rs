@@ -245,6 +245,11 @@ fn membership_rollback_and_foreign_parties_do_not_invalidate_or_create_inboxes()
 fn legacy(f: &mut Fixture) {
     f.db.connection
         .execute_batch(include_str!(
+            "../../../tests/fixtures/remove_external_kv_chunks.sql"
+        ))
+        .unwrap();
+    f.db.connection
+        .execute_batch(include_str!(
             "../../../tests/fixtures/remove_kv_accounting.sql"
         ))
         .unwrap();

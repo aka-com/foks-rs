@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("encrypted chunk storage failed: {0}")]
+    Chunk(&'static str),
     #[error("SSO flow failed: {0}")]
     Sso(&'static str),
     #[error(transparent)]

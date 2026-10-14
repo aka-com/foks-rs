@@ -18,6 +18,8 @@ mod idempotency;
 mod identity;
 mod invites;
 mod kv;
+mod kv_objects;
+pub use kv_objects::{ExternalKvChunk, KvChunkKey, KvChunkPayload, StoredKvChunkObject};
 mod log_upload;
 mod maintenance;
 mod merkle;

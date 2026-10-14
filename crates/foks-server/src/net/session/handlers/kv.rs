@@ -30,6 +30,7 @@ impl Operations for ServerData {
             &database,
             self.writer.as_ref().ok_or(RpcStatus::Unsupported)?,
             &self.clock,
+            self.chunk_store.as_deref(),
         )
     }
 }

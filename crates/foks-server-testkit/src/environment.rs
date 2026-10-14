@@ -20,6 +20,7 @@ pub(crate) struct EnvironmentInner {
     pub(crate) addresses: Mutex<Option<foks_server::ServerAddresses>>,
     pub(crate) running: Mutex<bool>,
     pub(crate) writer: Mutex<Option<foks_server::WriterHandle>>,
+    pub(crate) chunk_store: Mutex<Option<Arc<dyn foks_server::chunks::ChunkStore>>>,
 }
 
 #[derive(Clone)]
@@ -82,6 +83,7 @@ impl TestEnvironment {
                 addresses: Mutex::new(addresses),
                 running: Mutex::new(false),
                 writer: Mutex::new(None),
+                chunk_store: Mutex::new(None),
             }),
         })
     }
@@ -131,6 +133,65 @@ impl TestEnvironment {
     }
     pub fn start_server(&self) -> foks_server::Result<crate::InProcessServer> {
         crate::InProcessServer::start(self.clone())
+    }
+
+    /// Select external chunks for a stopped fixture, including an existing
+    /// inline installation. Keep the same store when restarting that fixture.
+    pub fn set_chunk_store(
+        &self,
+        store: Arc<dyn foks_server::chunks::ChunkStore>,
+    ) -> foks_server::Result<()> {
+        let running = self
+            .inner
+            .running
+            .lock()
+            .expect("test server lifecycle lock");
+        if *running {
+            return Err(foks_server::Error::Config(
+                "test chunk store requires a stopped server",
+            ));
+        }
+        *self
+            .inner
+            .chunk_store
+            .lock()
+            .expect("test chunk store lock") = Some(store);
+        Ok(())
+    }
+
+    /// Build a filesystem backend within the fixture's isolated directory.
+    pub fn filesystem_chunk_store(
+        &self,
+    ) -> foks_server::Result<Arc<dyn foks_server::chunks::ChunkStore>> {
+        foks_server::chunks::ChunkStoreConfig::Filesystem {
+            directory: self.root().join("chunks"),
+        }
+        .build()
+    }
+
+    pub fn use_filesystem_chunks(&self) -> foks_server::Result<()> {
+        self.set_chunk_store(self.filesystem_chunk_store()?)
+    }
+
+    /// Model an omitted backend configuration on restart without changing any
+    /// database rows or client trust state.
+    pub fn clear_chunk_store(&self) -> foks_server::Result<()> {
+        let running = self
+            .inner
+            .running
+            .lock()
+            .expect("test server lifecycle lock");
+        if *running {
+            return Err(foks_server::Error::Config(
+                "test chunk store requires a stopped server",
+            ));
+        }
+        *self
+            .inner
+            .chunk_store
+            .lock()
+            .expect("test chunk store lock") = None;
+        Ok(())
     }
 
     #[doc(hidden)]

@@ -99,7 +99,10 @@ fn incomplete_uploads_are_hidden_and_final_chunks_replay_exactly() {
         b"metadata"
     );
     let stored = reader.kv_file_chunk(&UID, &file, 4).unwrap().unwrap();
-    assert_eq!(stored.ciphertext, b"de");
+    assert_eq!(
+        stored.payload,
+        foks_server_db::KvChunkPayload::Inline(b"de".to_vec())
+    );
     assert!(stored.final_chunk);
     assert!(matches!(
         test.database.put_kv_file_chunk(&KvFileChunkMutation {

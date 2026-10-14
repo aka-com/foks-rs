@@ -15,6 +15,7 @@ use crate::Writer;
 use crate::{Config, ReadDatabaseConfig, Result, SessionLimits};
 
 pub struct StandaloneConfig {
+    pub chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
     pub web_admin: Option<crate::web_admin::WebAdminConfig>,
     pub vhost_management_host: String,
     pub oidc: Option<(crate::sso::OidcOperatorConfig, foks_oidc::NetworkPolicy)>,
@@ -45,6 +46,7 @@ pub struct RunningStandaloneServer {
     // Drop first so the backup thread cannot outlive the shared key-provider
     // lock held by `server` and race an offline rotation.
     backup: Option<crate::operations::BackupScheduler>,
+    chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
     web_admin_http: Option<crate::web_admin::WebAdminHttpServer>,
     oidc_http: Option<crate::sso::OidcHttpServer>,
     server: RunningServer,
@@ -209,6 +211,9 @@ fn read_validated_backup_artifacts(
     // Database::open is the single authority on which prior schemas migrate.
     // Unsupported versions still fail; no backup-specific migration is added.
     let migrated = foks_server_db::Database::open(&database_path, database_config.clone())?;
+    if migrated.has_external_chunks()? {
+        return Err(crate::Error::Chunk("backup is not self-contained"));
+    }
     if migrated.checkpoint()?.outcome() != foks_server_db::CheckpointOutcome::Complete {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
             "backup migration checkpoint incomplete",
@@ -425,6 +430,25 @@ pub fn backup_standalone_installation(
     destination: impl AsRef<Path>,
     database_config: foks_server_db::Config,
 ) -> Result<BackupArtifacts> {
+    backup_standalone_installation_with_chunk_store(
+        database_path,
+        key_directory,
+        root_key,
+        destination,
+        database_config,
+        None,
+    )
+}
+
+/// Creates a self-contained backup, materializing any external encrypted chunks.
+pub fn backup_standalone_installation_with_chunk_store(
+    database_path: impl AsRef<Path>,
+    key_directory: impl AsRef<Path>,
+    root_key: [u8; 32],
+    destination: impl AsRef<Path>,
+    database_config: foks_server_db::Config,
+    chunk_store: Option<&dyn crate::chunks::ChunkStore>,
+) -> Result<BackupArtifacts> {
     let source = foks_server_db::ReadDatabase::open(&database_path, database_config.clone())?;
     if !source.integrity_check()? {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
@@ -493,6 +517,8 @@ pub fn backup_standalone_installation(
         &stored.key_manifest,
         &host_key_files,
         database_config,
+        chunk_store,
+        None,
         |backup_database| {
             source.online_backup(backup_database)?;
             Ok(())
@@ -500,12 +526,15 @@ pub fn backup_standalone_installation(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_backup(
     destination: &Path,
     source_key_directory: &Path,
     manifest: &[u8],
     host_key_files: &HostKeyBackupFiles,
     database_config: foks_server_db::Config,
+    chunk_store: Option<&dyn crate::chunks::ChunkStore>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
     backup_database: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<BackupArtifacts> {
     std::fs::create_dir(destination)?;
@@ -539,6 +568,12 @@ pub(crate) fn create_backup(
     }
     std::fs::File::open(&key_directory)?.sync_all()?;
     backup_database(&database)?;
+    crate::chunk_storage::hydrate_backup(
+        &database,
+        database_config.clone(),
+        chunk_store,
+        cancelled,
+    )?;
     let backup_check = foks_server_db::ReadDatabase::open(&database, database_config)?;
     if !backup_check.integrity_check()? {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
@@ -546,6 +581,9 @@ pub(crate) fn create_backup(
         )));
     }
     drop(backup_check);
+    if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+        return Err(crate::Error::Chunk("backup cancelled"));
+    }
     // Publish the manifest last; its presence is the durable completeness
     // marker for an otherwise possibly partial crash artifact.
     let key_manifest = destination.join("key-manifest.txt");
@@ -638,6 +676,8 @@ impl RunningStandaloneServer {
             &manifest,
             &host_key_files,
             self.database_config.clone(),
+            self.chunk_store.as_deref(),
+            None,
             |backup_database| {
                 source.online_backup(backup_database)?;
                 Ok(())
@@ -825,6 +865,11 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         database_config.clone(),
         config.maximum_pending_writes,
     )?;
+    if config.chunk_store.is_none() && writer.call(|db| Ok(db.has_external_chunks()?))? {
+        return Err(crate::Error::Chunk(
+            "external references require a configured chunk store",
+        ));
+    }
     let bootstrap_keys = Arc::clone(&keys);
     let bootstrap_input = input.clone();
     let bootstrap = writer.call(move |database| {
@@ -916,6 +961,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     );
     let server = RunningServer::start_bound(
         Config {
+            chunk_store: config.chunk_store.clone(),
             vhost_management_host: config.vhost_management_host.clone(),
             sso,
             web_admin,
@@ -957,6 +1003,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
                 key_directory.clone(),
                 bootstrap.key_manifest.encode(),
                 database_config.clone(),
+                config.chunk_store.clone(),
                 Arc::clone(&config.clock),
                 Arc::clone(&metrics),
             )
@@ -964,6 +1011,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         .transpose()?;
     management.mark_ready();
     Ok(RunningStandaloneServer {
+        chunk_store: config.chunk_store,
         web_admin_http,
         oidc_http,
         backup,

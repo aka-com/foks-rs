@@ -103,7 +103,7 @@ pub struct StoredKvFile {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredKvFileChunk {
-    pub ciphertext: Vec<u8>,
+    pub payload: crate::KvChunkPayload,
     pub offset: u64,
     pub final_chunk: bool,
 }
@@ -455,6 +455,42 @@ impl Database {
     }
 
     pub fn put_kv_file_chunk(&mut self, mutation: &KvFileChunkMutation<'_>) -> Result<()> {
+        self.put_kv_file_chunk_impl(mutation, None, true)
+    }
+
+    /// Validates admission without retaining upload/chunk changes or reserving
+    /// quota. External I/O may follow; the eventual commit must recheck admission.
+    pub fn preflight_kv_file_chunk(&mut self, mutation: &KvFileChunkMutation<'_>) -> Result<()> {
+        self.put_kv_file_chunk_impl(mutation, None, false)
+    }
+
+    /// The caller must durably publish the immutable object before this commit.
+    pub fn put_kv_file_chunk_external(
+        &mut self,
+        mutation: &KvFileChunkMutation<'_>,
+        digest: &[u8; 32],
+    ) -> Result<()> {
+        crate::kv_objects::validate_encoded_chunk(
+            mutation.exact_chunk,
+            mutation.ciphertext,
+            mutation.offset,
+            mutation.final_size.is_some(),
+            Some(*digest),
+        )?;
+        let decoded = foks_proto::KvUploadChunk::decode(mutation.exact_chunk)
+            .map_err(|_| Error::Invalid("external KV chunk encoding"))?;
+        if decoded.final_upload.as_ref().map(|value| value.size) != mutation.final_size {
+            return Err(Error::Invalid("external KV chunk final size"));
+        }
+        self.put_kv_file_chunk_impl(mutation, Some(digest), true)
+    }
+
+    fn put_kv_file_chunk_impl(
+        &mut self,
+        mutation: &KvFileChunkMutation<'_>,
+        digest: Option<&[u8; 32]>,
+        commit: bool,
+    ) -> Result<()> {
         const MAXIMUM_CHUNK_BYTES: usize = 9 * 1024 * 1024;
         // A full 1 GiB cleartext file can expand to just over 2 GiB because
         // the v0.1.9 chunk format pads each 4 MiB clear chunk to 8 MiB.
@@ -511,20 +547,24 @@ impl Database {
             }
             (Some((_, complete, false)), _) => complete,
         };
-        let existing: Option<Vec<u8>> = transaction
+        let existing: Option<(Vec<u8>, Option<Vec<u8>>)> = transaction
             .query_row(
-                "SELECT exact_upload_chunk FROM kv_file_chunks
+                "SELECT exact_upload_chunk, external_digest FROM kv_file_chunks
                  WHERE uid = ?1 AND file_id = ?2 AND clear_offset = ?3",
                 params![
                     mutation.uid,
                     mutation.file_id,
                     sql_integer(mutation.offset)?
                 ],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if let Some(existing) = existing {
-            return if existing == mutation.exact_chunk {
+        if let Some((existing, external_digest)) = existing {
+            let matches = match external_digest {
+                Some(stored) => stored == crate::kv_objects::chunk_digest(mutation.exact_chunk),
+                None => existing == mutation.exact_chunk,
+            };
+            return if matches {
                 Ok(())
             } else {
                 Err(Error::KvConflict)
@@ -567,17 +607,33 @@ impl Database {
                 .ok_or(Error::IntegerRange)?,
             1,
         )?;
+        if !commit {
+            return Ok(());
+        }
+        let external = digest.is_some();
         transaction.execute(
             "INSERT INTO kv_file_chunks
-             (uid, file_id, clear_offset, ciphertext, final_chunk, exact_upload_chunk)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (uid, file_id, clear_offset, ciphertext, final_chunk, exact_upload_chunk,
+              external_digest, external_ciphertext_bytes, external_encoded_bytes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 mutation.uid,
                 mutation.file_id,
                 sql_integer(mutation.offset)?,
-                mutation.ciphertext,
+                if external {
+                    &[][..]
+                } else {
+                    mutation.ciphertext
+                },
                 i64::from(mutation.final_size.is_some()),
-                mutation.exact_chunk,
+                if external {
+                    &[][..]
+                } else {
+                    mutation.exact_chunk
+                },
+                digest.map(|value| value.as_slice()),
+                external.then_some(mutation.ciphertext.len() as i64),
+                external.then_some(mutation.exact_chunk.len() as i64),
             ],
         )?;
         transaction.execute(
@@ -935,20 +991,22 @@ fn kv_file_chunk(
     id: &[u8; 16],
     offset: u64,
 ) -> Result<Option<StoredKvFileChunk>> {
-    let stored: Option<(Vec<u8>, i64)> = connection
-        .query_row(
-            "SELECT c.ciphertext, c.final_chunk FROM kv_file_chunks c
-             JOIN kv_file_uploads f ON f.uid = c.uid AND f.file_id = c.file_id
-             WHERE c.uid = ?1 AND c.file_id = ?2 AND c.clear_offset = ?3
-               AND f.complete = 1 AND f.reclaiming = 0",
-            params![uid, id, sql_integer(offset)?],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    Ok(stored.map(|(ciphertext, final_chunk)| StoredKvFileChunk {
-        ciphertext,
+    let mut statement = connection.prepare(
+        "SELECT c.ciphertext, c.external_digest, c.external_ciphertext_bytes,
+                c.external_encoded_bytes, c.final_chunk
+         FROM kv_file_chunks c
+         JOIN kv_file_uploads f ON f.uid = c.uid AND f.file_id = c.file_id
+         WHERE c.uid = ?1 AND c.file_id = ?2 AND c.clear_offset = ?3
+           AND f.complete = 1 AND f.reclaiming = 0",
+    )?;
+    let mut rows = statement.query(params![uid, id, sql_integer(offset)?])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    Ok(Some(StoredKvFileChunk {
+        payload: crate::kv_objects::payload_from_row(row, 0)?,
         offset,
-        final_chunk: final_chunk != 0,
+        final_chunk: row.get(4)?,
     }))
 }
 
@@ -1275,8 +1333,8 @@ fn kv_usage(connection: &rusqlite::Connection, uid: &[u8]) -> Result<foks_proto:
         |row| row.get(0),
     )?;
     let (large_chunks, large_bytes): (i64, i64) = connection.query_row(
-        "SELECT count(*), coalesce(sum(length(ciphertext)), 0)
-         FROM kv_file_chunks WHERE uid = ?1",
+        "SELECT coalesce(sum(chunk_count), 0), coalesce(sum(chunk_bytes), 0)
+         FROM kv_file_uploads WHERE uid = ?1",
         [uid],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
@@ -1495,7 +1553,7 @@ mod accounting_scaling_tests {
             }
 
             for offset in 0..size.min(512) {
-                tx.execute("INSERT OR IGNORE INTO kv_file_chunks VALUES(zeroblob(33),zeroblob(16),?1,X'01',0,X'02')", [offset]).unwrap();
+                tx.execute("INSERT OR IGNORE INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk) VALUES(zeroblob(33),zeroblob(16),?1,X'01',0,X'02')", [offset]).unwrap();
             }
             tx.commit().unwrap();
             let mut current = Vec::new();

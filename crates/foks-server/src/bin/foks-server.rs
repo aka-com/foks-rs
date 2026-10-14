@@ -48,6 +48,11 @@ enum Command {
     },
     /// Creates a validated online backup of an installation.
     Backup(BackupArguments),
+    /// Moves inline encrypted chunks to the configured store; stop the server first.
+    ExternalizeChunks {
+        #[arg(long)]
+        config: PathBuf,
+    },
     /// Installs a validated backup into an empty installation.
     Restore(RestoreArguments),
     /// Atomically rewraps installation keys under a new operator root key.
@@ -275,6 +280,11 @@ struct InitArguments {
 #[derive(clap::Args)]
 struct ServeArguments {
     #[arg(skip)]
+    chunk_store: Option<foks_server::chunks::ChunkStoreConfig>,
+    /// TOML chunk-store settings (the contents of an installation's chunk_store table).
+    #[arg(long)]
+    chunk_store_config: Option<PathBuf>,
+    #[arg(skip)]
     web_admin: Option<foks_server::web_admin::WebAdminConfig>,
     #[arg(long, default_value = "")]
     vhost_management_host: String,
@@ -336,6 +346,9 @@ struct ServeArguments {
 
 #[derive(clap::Args)]
 struct BackupArguments {
+    /// Required when the source database contains external chunk references.
+    #[arg(long)]
+    chunk_store_config: Option<PathBuf>,
     #[arg(long)]
     database: PathBuf,
     #[arg(long)]
@@ -387,6 +400,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Status { config } => status(config),
         Command::ClientBootstrap { config, output } => client_bootstrap(config, output),
         Command::Backup(arguments) => backup(arguments),
+        Command::ExternalizeChunks { config } => externalize_chunks(config),
         Command::Restore(arguments) => restore(arguments),
         Command::RotateOperatorRoot(arguments) => rotate_operator_root(arguments),
         Command::BeginHostKeyRotation { config } => rotate_host_key(config),
@@ -521,6 +535,8 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config = foks_server::installation::load_config(path)?;
     foks_server::installation::validate_artifacts(&config)?;
     serve(ServeArguments {
+        chunk_store: config.chunk_store,
+        chunk_store_config: None,
         oidc: config.oidc,
         web_admin: config.web_admin,
         vhost_management_host: config.vhost_management_host,
@@ -620,6 +636,12 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
     let now_microseconds =
         u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
     let server = foks_server::start_standalone(StandaloneConfig {
+        chunk_store: match (&arguments.chunk_store, &arguments.chunk_store_config) {
+            (Some(config), None) => Some(config.build()?),
+            (None, Some(path)) => Some(load_chunk_store(path)?.build()?),
+            (None, None) => None,
+            (Some(_), Some(_)) => return Err("specify one chunk-store configuration".into()),
+        },
         vhost_management_host: arguments.vhost_management_host,
         web_admin: arguments.web_admin,
         oidc: arguments
@@ -684,13 +706,52 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
 
 fn backup(arguments: BackupArguments) -> Result<(), Box<dyn std::error::Error>> {
     let root_key = read_root_key_file(&arguments.root_key_file)?;
-    foks_server::backup_standalone_installation(
+    let store = arguments
+        .chunk_store_config
+        .as_deref()
+        .map(load_chunk_store)
+        .transpose()?
+        .map(|config| config.build())
+        .transpose()?;
+    foks_server::backup_standalone_installation_with_chunk_store(
         arguments.database,
         arguments.key_directory,
         *root_key,
         arguments.destination,
         foks_server_db::Config::default(),
+        store.as_deref(),
     )?;
+    Ok(())
+}
+
+fn load_chunk_store(
+    path: &Path,
+) -> Result<foks_server::chunks::ChunkStoreConfig, Box<dyn std::error::Error>> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(65_537)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 65_536 {
+        return Err("chunk-store configuration is too large".into());
+    }
+    let config: foks_server::chunks::ChunkStoreConfig =
+        toml::from_str(std::str::from_utf8(&bytes)?)?;
+    config.validate()?;
+    Ok(config)
+}
+
+fn externalize_chunks(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(path)?;
+    let store = config
+        .chunk_store
+        .ok_or("installation has no chunk-store configuration")?
+        .build()?;
+    let converted = foks_server::externalize_chunks(
+        &config.database,
+        foks_server_db::Config::default(),
+        store.as_ref(),
+    )?;
+    println!("externalized {converted} encrypted chunks");
     Ok(())
 }
 

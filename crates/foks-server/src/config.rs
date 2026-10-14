@@ -7,6 +7,7 @@ use crate::{Entropy, RateLimitConfig, WriterHandle};
 
 #[derive(Clone)]
 pub struct Config {
+    pub chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
     pub vhost_management_host: String,
     pub web_admin: Option<Arc<crate::web_admin::WebAdminService>>,
     pub sso: Option<Arc<crate::sso::SsoService>>,

@@ -29,6 +29,7 @@ use crate::{Entropy, Result, SessionLimits, WriterHandle};
 
 #[derive(Clone)]
 pub(crate) struct ServerData {
+    chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
     vhost_management_host: String,
     web_admin: Option<Arc<crate::web_admin::WebAdminService>>,
     sso: Option<Arc<crate::sso::SsoService>>,
@@ -145,13 +146,20 @@ impl ServerData {
                 .read_database
                 .clone()
                 .map(|database| {
-                    crate::read_pool::ReadPool::new(
+                    let pool = crate::read_pool::ReadPool::new(
                         database,
                         config.limits.maximum_read_connections,
-                    )
+                    )?;
+                    if config.chunk_store.is_none() && pool.checkout()?.has_external_chunks()? {
+                        return Err(crate::Error::Chunk(
+                            "external references require a configured chunk store",
+                        ));
+                    }
+                    Ok(pool)
                 })
                 .transpose()?,
             writer: config.writer.clone(),
+            chunk_store: config.chunk_store.clone(),
             clock: Arc::clone(&config.clock),
             entropy: Arc::clone(&config.entropy),
             key_provider: config.key_provider.clone(),

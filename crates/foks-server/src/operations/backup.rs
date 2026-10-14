@@ -15,6 +15,7 @@ pub(crate) struct BackupScheduler {
 }
 
 struct BackupSource {
+    chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
     database_path: PathBuf,
     key_directory: PathBuf,
     manifest: Vec<u8>,
@@ -23,12 +24,14 @@ struct BackupSource {
 }
 
 impl BackupScheduler {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
         schedule: BackupSchedule,
         database_path: PathBuf,
         source_key_directory: PathBuf,
         manifest: Vec<u8>,
         database_config: foks_server_db::Config,
+        chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
         clock: Arc<dyn foks_server_db::Clock>,
         metrics: Arc<ServerMetrics>,
     ) -> Result<Self> {
@@ -43,6 +46,7 @@ impl BackupScheduler {
         let cancelled = Arc::new(AtomicBool::new(false));
         let thread_cancelled = Arc::clone(&cancelled);
         let source = BackupSource {
+            chunk_store,
             database_path,
             key_directory: source_key_directory,
             manifest,
@@ -125,6 +129,8 @@ fn run_backup(
         &source.manifest,
         &host_key_files,
         source.database_config.clone(),
+        source.chunk_store.as_deref(),
+        Some(cancelled),
         |backup_database| {
             database.online_backup_until(backup_database, || cancelled.load(Ordering::Acquire))?;
             Ok(())

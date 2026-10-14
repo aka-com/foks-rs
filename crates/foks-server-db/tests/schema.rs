@@ -131,13 +131,22 @@ fn schema_objects(connection: &Connection) -> Vec<(String, String, Option<String
 
 fn remove_accounting(connection: &Connection) {
     connection
+        .execute_batch(include_str!("fixtures/remove_external_kv_chunks.sql"))
+        .unwrap();
+    connection
         .execute_batch(include_str!("fixtures/remove_kv_accounting.sql"))
         .unwrap();
 }
 
 fn predecessor(connection: &Connection, version: i64) {
-    assert!(matches!(version, 43..=48));
-    remove_accounting(connection);
+    assert!(matches!(version, 43..=49));
+    if version <= 48 {
+        remove_accounting(connection);
+    } else {
+        connection
+            .execute_batch(include_str!("fixtures/remove_external_kv_chunks.sql"))
+            .unwrap();
+    }
     if version <= 44 {
         for name in EXPIRY_INDEXES {
             connection
@@ -194,7 +203,7 @@ fn writer_upgrades_supported_predecessors_and_preserves_data_and_index_definitio
         })
     };
     let expected = indexes(&reference);
-    for version in [43, 44, 45, 46, 47, 48] {
+    for version in [43, 44, 45, 46, 47, 48, 49] {
         let test = common::TestDatabase::new();
         let path = test.path.clone();
         drop(test.database);
@@ -457,7 +466,7 @@ fn accounting_upgrade_backfills_history_and_preserves_version_48_sso() {
         INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),2,3,0,1,0,X'010203');
         INSERT INTO kv_directory_heads VALUES(zeroblob(33),zeroblob(16),2);
         INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(zeroblob(33),zeroblob(16),X'01',0,0);
-        INSERT INTO kv_file_chunks VALUES(zeroblob(33),zeroblob(16),0,X'0102',0,X'010203');
+        INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk) VALUES(zeroblob(33),zeroblob(16),0,X'0102',0,X'010203');
         INSERT INTO sso_identity_challenges(challenge,claim_hash,source_hash,expires_at_ms) VALUES(zeroblob(32),zeroblob(32),zeroblob(32),1000);").unwrap();
     drop(test.database);
     drop(Database::open(&test.path, Config::default()).unwrap());
@@ -496,5 +505,62 @@ fn failed_accounting_upgrade_rolls_back_backfill_and_ddl() {
     );
     c.execute_batch("DROP TRIGGER kv_file_chunks_upload_update;")
         .unwrap();
+    drop(Database::open(&test.path, Config::default()).unwrap());
+}
+
+#[test]
+fn external_chunk_migration_preserves_inline_payload_and_accounting() {
+    let test = common::TestDatabase::new();
+    let c = Connection::open(&test.path).unwrap();
+    predecessor(&c, 49);
+    c.execute_batch("INSERT INTO kv_namespaces(namespace_id,party_kind,host_id) VALUES(zeroblob(33),1,zeroblob(33));
+        INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(zeroblob(33),zeroblob(16),X'01',0,0);
+        INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk) VALUES(zeroblob(33),zeroblob(16),0,X'0102',0,X'010203');").unwrap();
+    drop(test.database);
+    let database = Database::open(&test.path, Config::default()).unwrap();
+    assert!(!database.has_external_chunks().unwrap());
+    let chunk = database.next_kv_chunk(None, false).unwrap().unwrap();
+    assert_eq!(chunk.exact_chunk, Some(vec![1, 2, 3]));
+    assert_eq!(
+        chunk.chunk.payload,
+        foks_server_db::KvChunkPayload::Inline(vec![1, 2])
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT accounted_bytes,accounted_objects FROM kv_namespaces",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        )
+        .unwrap(),
+        (6, 2)
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT chunk_count,chunk_bytes FROM kv_file_uploads",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        )
+        .unwrap(),
+        (1, 2)
+    );
+}
+
+#[test]
+fn failed_external_chunk_migration_rolls_back_new_columns_and_indexes() {
+    let test = common::TestDatabase::new();
+    let c = Connection::open(&test.path).unwrap();
+    predecessor(&c, 49);
+    c.execute_batch("CREATE INDEX kv_chunks_inline ON kv_file_chunks(clear_offset);")
+        .unwrap();
+    let before = schema_objects(&c);
+    drop(test.database);
+    assert!(Database::open(&test.path, Config::default()).is_err());
+    assert_eq!(schema_objects(&c), before);
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        49
+    );
+    c.execute_batch("DROP INDEX kv_chunks_inline;").unwrap();
     drop(Database::open(&test.path, Config::default()).unwrap());
 }

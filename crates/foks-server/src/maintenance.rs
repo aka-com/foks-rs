@@ -246,7 +246,8 @@ mod tests {
                 VALUES(zeroblob(33), 1, zeroblob(33));
             INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at)
                 VALUES(zeroblob(33),zeroblob(16),x'00',1,1);
-            INSERT INTO kv_file_chunks VALUES(zeroblob(33),zeroblob(16),0,zeroblob(12),0,x'00');",
+            INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk)
+                VALUES(zeroblob(33),zeroblob(16),0,zeroblob(12),0,x'00');",
         )
         .unwrap();
         drop(seed);

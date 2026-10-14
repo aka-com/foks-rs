@@ -26,6 +26,10 @@ foks-verify = { workspace = true }
 getrandom = { workspace = true }
 libc = { workspace = true }
 lru = { workspace = true }
+object_store = { version = "=0.14.2", default-features = false, features = ["aws"] }
+futures-util = "0.3"
+sha2 = { workspace = true }
+reqwest = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
 rusqlite = { workspace = true }

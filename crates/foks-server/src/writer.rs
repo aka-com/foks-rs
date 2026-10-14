@@ -456,6 +456,11 @@ mod tests {
         }
         connection
             .execute_batch(include_str!(
+                "../../foks-server-db/tests/fixtures/remove_external_kv_chunks.sql"
+            ))
+            .unwrap();
+        connection
+            .execute_batch(include_str!(
                 "../../foks-server-db/tests/fixtures/remove_kv_accounting.sql"
             ))
             .unwrap();

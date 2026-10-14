@@ -6,10 +6,22 @@ use foks_server_testkit::TestEnvironment;
 
 #[test]
 fn official_go_client_completes_the_standalone_flow() {
+    go_client_standalone_flow(false);
+}
+
+#[test]
+fn official_go_client_completes_the_external_chunks_flow() {
+    go_client_standalone_flow(true);
+}
+
+fn go_client_standalone_flow(external_chunks: bool) {
     let Some(oracle) = std::env::var_os("FOKS_GO_ORACLE_DIR").map(PathBuf::from) else {
         return;
     };
     let environment = TestEnvironment::new().unwrap();
+    if external_chunks {
+        environment.use_filesystem_chunks().unwrap();
+    }
     environment
         .set_invite_regime(InviteRegime::Optional)
         .unwrap();

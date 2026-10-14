@@ -7,6 +7,8 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod chunk_storage;
+pub mod chunks;
 mod config;
 mod diagnostics;
 mod entropy;
@@ -31,6 +33,7 @@ pub mod sso;
 mod standalone;
 mod writer;
 
+pub use chunk_storage::externalize_chunks;
 pub use config::{Config, ReadDatabaseConfig, SessionLimits};
 pub use diagnostics::{SessionDiagnostics, SessionErrorClass, StderrSessionDiagnostics};
 pub use entropy::{Entropy, OsEntropy};
@@ -44,8 +47,9 @@ pub use metrics::{
 pub use net::{start, RunningServer, ServerAddresses};
 pub use rate_limit::RateLimitConfig;
 pub use standalone::{
-    backup_standalone_installation, restore_backup, start_standalone, BackupArtifacts,
-    BackupSchedule, RunningStandaloneServer, StandaloneConfig,
+    backup_standalone_installation, backup_standalone_installation_with_chunk_store,
+    restore_backup, start_standalone, BackupArtifacts, BackupSchedule, RunningStandaloneServer,
+    StandaloneConfig,
 };
 pub use writer::{DatabaseWriterGuard, GuardedDatabase, Writer, WriterHandle, WriterMetrics};
 
