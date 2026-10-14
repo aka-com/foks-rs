@@ -91,6 +91,11 @@ fn signup_commit_with_lost_or_partial_response_reconciles_without_replay() {
         drop(protected);
         drop(client);
 
+        // The operation journal and server idempotency result must survive
+        // reconstruction on both sides after an ambiguous response.
+        server.shutdown().unwrap();
+        let server = environment.start_server().unwrap();
+
         let reconstructed = TestClient::new(&environment, client_id).unwrap();
         let uid = EntityId::from_bytes(operation.subject_id).unwrap();
         let device_id = EntityId::from_bytes(operation.scope_id).unwrap();

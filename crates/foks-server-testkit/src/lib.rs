@@ -11,6 +11,7 @@ mod config;
 mod environment;
 pub mod oidc;
 mod process;
+mod recovery;
 mod scheduling;
 
 pub use account::TestAccountSpec;
@@ -19,4 +20,5 @@ pub use client::TestClient;
 pub use environment::{TestEnvironment, TestFault, TestProfile};
 pub use foks_server::web_admin::WebAdminConfig;
 pub use process::{InProcessServer, IsolatedTestServer, ProbeOverrideServer};
+pub use recovery::RecoveryLedger;
 pub use scheduling::WriterQueuePressure;
