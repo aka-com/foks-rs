@@ -548,6 +548,15 @@ fn website_url_opens_only_http_and_https_addresses() {
         ("github.com/login", "https://github.com/login"),
         (" example.com:8443 ", "https://example.com:8443/"),
         ("HTTPS://Example.com", "https://example.com/"),
+        // A `://` after the host, here in a sign-in redirect, is not a scheme.
+        (
+            "accounts.example.com/signin?continue=https://mail.example.com/",
+            "https://accounts.example.com/signin?continue=https://mail.example.com/",
+        ),
+        (
+            "https://example.com/a?next=https://b",
+            "https://example.com/a?next=https://b",
+        ),
     ] {
         assert_eq!(
             website_url(field).map(|url| url.to_string()).as_deref(),

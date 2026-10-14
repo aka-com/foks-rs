@@ -649,40 +649,47 @@ export function VaultShell({
       startNewItem,
     ],
   );
-  // ⌘C in the palette: the same checks and messages as a row's Copy.
-  const copyFromPalette = useCallback(
-    (storeId: string, path: string, field: ItemField): void => {
+  // The palette row's item and the access problem a row's Copy would report
+  // for it, or undefined for an item no longer listed.
+  const paletteItem = useCallback(
+    (storeId: string, path: string) => {
       const item = shown.items.find(
         (candidate) => candidate.store === storeId && candidate.path === path,
       );
-      if (!item) return;
+      return item
+        ? { item, problem: itemActionProblem(shown, item, false, accessNow()) }
+        : undefined;
+    },
+    [accessNow, shown],
+  );
+  // ⌘C in the palette: the same checks and messages as a row's Copy.
+  const copyFromPalette = useCallback(
+    (storeId: string, path: string, field: ItemField): void => {
+      const target = paletteItem(storeId, path);
+      if (!target) return;
       void copyAndAnnounce({
         bridge,
-        item,
+        ...target,
         field,
         toasts,
-        problem: itemActionProblem(shown, item, false, accessNow()),
         onError: commandError,
       });
     },
-    [accessNow, bridge, commandError, shown, toasts],
+    [bridge, commandError, paletteItem, toasts],
   );
   // ⌘O in the palette: the same access check as a copy.
   const openWebsiteFromPalette = useCallback(
     (storeId: string, path: string): void => {
-      const item = shown.items.find(
-        (candidate) => candidate.store === storeId && candidate.path === path,
-      );
-      if (!item) return;
+      const target = paletteItem(storeId, path);
+      if (!target) return;
       void openWebsiteAndAnnounce({
         bridge,
-        item,
+        ...target,
         toasts,
-        problem: itemActionProblem(shown, item, false, accessNow()),
         onError: commandError,
       });
     },
-    [accessNow, bridge, commandError, shown, toasts],
+    [bridge, commandError, paletteItem, toasts],
   );
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {

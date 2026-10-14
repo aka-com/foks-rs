@@ -1270,12 +1270,20 @@ pub async fn copy_item_field(
 }
 
 /// The address a login's website field names, as the browser is given it.
-/// A value with no scheme, such as `example.com/login`, is taken as https.
-/// Only an address [`super::chat::safe_external_url`] accepts is returned: an
-/// http or https URL with a host and no user name or password.
+/// A value with no scheme, such as `example.com/login`, is taken as https; a
+/// value has a scheme only when the text before its first `://` is one
+/// (`[A-Za-z][A-Za-z0-9+.-]*`), so a `://` in a path or query, as in
+/// `example.com/signin?next=https://app.example.com/`, does not count. Only an
+/// address [`super::chat::safe_external_url`] accepts is returned: an http or
+/// https URL with a host and no user name or password.
 pub(super) fn website_url(field: &str) -> Option<url::Url> {
     let field = field.trim();
-    if field.contains("://") {
+    let has_scheme = field.split_once("://").is_some_and(|(scheme, _)| {
+        let mut chars = scheme.chars();
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    if has_scheme {
         super::chat::safe_external_url(field)
     } else {
         super::chat::safe_external_url(&format!("https://{field}"))

@@ -73,15 +73,18 @@ export const mockOpenedSites: MockOpenedSite[] = [];
 
 /**
  * The address the host's `website_url` would open for a website field, or
- * `null` for one it refuses: a bare host is taken as https, and only an http
- * or https address with a host and no credentials is accepted.
+ * `null` for one it refuses: a value whose text before its first `://` is not
+ * a scheme is taken as https, and only an http or https address with a host
+ * and no credentials is accepted.
  */
 function mockWebsiteUrl(field: string): string | null {
   const trimmed = field.trim();
   if (/\s/.test(trimmed)) return null;
   try {
     const url = new URL(
-      trimmed.includes('://') ? trimmed : `https://${trimmed}`,
+      /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(trimmed)
+        ? trimmed
+        : `https://${trimmed}`,
     );
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
     if (!url.hostname || url.username || url.password) return null;
