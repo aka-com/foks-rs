@@ -887,38 +887,41 @@ it, a hint line offers only the markup the thread renders (`**bold**`,
 are not among them.
 
 A `[label](url)` link in a message carries its full URL as a tooltip, and unless
-the label is the URL itself (up to the case of ASCII letters and a final `/`) it
-is followed by the destination host in parentheses, as `new URL(url).hostname`
-gives it, so an internationalized host appears in its `xn--` form. The link's
-accessible name ends with ", opens" and that host, and the visible copy is
-hidden from assistive technology. `labelHosts` in `message-text.tsx` reads every
-host name in the label, including both sides of an `@`, names wrapped in quotes,
-brackets or punctuation, and a name after a `?@` or `#@` that ends a URL's
-authority (`https://bank.example#@evil.example`), in time linear in the label's
-length. It reads the label with invisible characters removed (format characters
-such as U+200B, and other default ignorable code points such as U+034F and the
-variation selectors, but not the Hangul fillers, which many fonts draw as a
-blank), and it takes U+3002, U+FF0E, U+FF61, U+FE52 and U+2024 as full stops, so
-none of these can hide a host. The label is drawn without its bidirectional
-formatting characters (U+061C, U+200E, U+200F, U+202A..U+202E, U+2066..U+2069),
-so the order the reader sees is the order that was compared, and the host after
-it is isolated left to right. A path-less name ending in a file extension that
-is not also a top-level domain (`index.html`, `Node.js`, also `vite.config.ts`
-and `paypal.com.js`) is not read as a host. A name ending in `java`, `md`,
-`mov`, `py`, `rs`, `sh` or `zip`, extensions that are also top-level domains, is
-read as a file name only when the text before the extension holds an upper-case
+the label is the URL itself (up to the case of ASCII letters and a final `/`)
+and names no other host, it is followed by the destination host in parentheses,
+as `new URL(url).hostname` gives it, so an internationalized host appears in its
+`xn--` form. The link's accessible name ends with ", opens" and that host, and
+the visible copy is hidden from assistive technology. `labelHosts` in
+`message-text.tsx` reads every host name in the label, including both sides of
+an `@`, names wrapped in quotes, brackets or punctuation, and a name, with or
+without a scheme, after a `?@` or `#@` that ends a URL's authority or a leading
+host name (`https://bank.example#@evil.example`,
+`bank.example/?@https://evil.example`), in time linear in the label's length. It
+reads the label with invisible characters removed (format characters such as
+U+200B, and other default ignorable code points such as U+034F and the variation
+selectors, but not the Hangul fillers, which many fonts draw as a blank), and it
+takes U+3002, U+FF0E, U+FF61, U+FE52 and U+2024 as full stops, so none of these
+can hide a host. The label is drawn without its bidirectional formatting
+characters (U+061C, U+200E, U+200F, U+202A..U+202E, U+2066..U+2069), so the
+order the reader sees is the order that was compared, and the host after it is
+isolated left to right. A path-less name ending in a file extension that is not
+also a top-level domain (`index.html`, `Node.js`, also `vite.config.ts` and
+`paypal.com.js`) is not read as a host. A name ending in `java`, `md`, `mov`,
+`py`, `rs`, `sh` or `zip`, extensions that are also top-level domains, is read
+as a file name only when the text before the extension holds an upper-case
 letter or an underscore after a letter or digit (`README.md`, `setup_env.sh`),
 with the extension compared without regard to case; `docs.rs`, `get.sh` and
 `_docs.rs_` are read as hosts. A label that writes a host in that form, such as
 `Docs.rs` or `PayPal.zip` for a link to another host, therefore raises no
 warning; the destination host after the link is the remaining indication of
-where it opens. When any of those hosts differs from the destination host,
-ignoring one leading `www.`, the link is drawn with a warning underline and
-icon, and a click raises Check this link, which names both hosts and the full
-URL and offers Copy link, Open anyway and Cancel, with Cancel focused. Other
-links open directly. The check runs in the renderer only: `open_chat_link`
-receives the URL and never the label, so it validates the URL but cannot compare
-the two.
+where it opens. A name whose first label is `www` (`www.PayPal.zip`,
+`www.index.html`) is always read as a host. When any of those hosts differs
+from the destination host, ignoring one leading `www.`, the link is drawn with a
+warning underline and icon, and a click raises Check this link, which names both
+hosts and the full URL and offers Copy link, Open anyway and Cancel, with Cancel
+focused. Other links open directly. The check runs in the renderer only:
+`open_chat_link` receives the URL and never the label, so it validates the URL
+but cannot compare the two.
 
 A channel with unread messages opens at the first of them, with the NEW divider
 30% down the list and the ten messages before it above, rather than at the

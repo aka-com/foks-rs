@@ -122,6 +122,21 @@ test('a link label that is the destination URL carries no host suffix or warning
   }
 });
 
+test('a label that is the destination URL but names another host carries the host suffix', () => {
+  const url = 'https://evil.example/#@bank.example';
+  assert.deepEqual(chatLinkDisplay(url, url), {
+    label: url,
+    host: 'evil.example',
+    showHost: true,
+    mismatchedHost: 'bank.example',
+  });
+  const html = messageMarkup(`[${url}](${url})`);
+  assert.match(
+    html,
+    /<span class="offscreen">, opens evil\.example<\/span><\/a><bdi dir="ltr" aria-hidden="true" class="chat-link-host mismatch">\(evil\.example\)<\/bdi>/,
+  );
+});
+
 test('a label that differs from the URL only in the case of ASCII letters carries no host suffix', () => {
   for (const label of ['HTTPS://BANK.EXAMPLE', 'https://Bank.Example/'])
     assert.equal(
@@ -239,6 +254,7 @@ test('label hosts are read from words that read as URLs or host names', () => {
     ['config.yaml', []],
     ['https://index.html', ['index.html']],
     ['index.html/x', ['index.html']],
+    ['www.index.html', ['www.index.html']],
     // An extension that is also a top-level domain makes a file name only
     // after a stem with an upper-case letter or an inner underscore, compared
     // without regard to case.
@@ -256,6 +272,7 @@ test('label hosts are read from words that read as URLs or host names', () => {
     ['_docs.rs_', ['docs.rs']],
     ['README.md/x', ['readme.md']],
     ['https://README.md', ['readme.md']],
+    ['www.PayPal.zip', ['www.paypal.zip']],
     ['security.center@bank.example', ['security.center', 'bank.example']],
     // Non-ASCII punctuation and suffixes around a host.
     ["bank.example's portal", ['bank.example']],
@@ -280,6 +297,17 @@ test('label hosts are read from words that read as URLs or host names', () => {
     // to a reader who takes the host to follow the last `@`.
     ['https://bank.example?@evil.example', ['bank.example', 'evil.example']],
     ['https://bank.example/#@evil.example', ['bank.example', 'evil.example']],
+    ['https://bank.example\\?@evil.example', ['bank.example', 'evil.example']],
+    [
+      'https://bank.example#@https://evil.example',
+      ['bank.example', 'evil.example'],
+    ],
+    ['bank.example#@evil.example', ['bank.example', 'evil.example']],
+    ['bank.example?@evil.example', ['bank.example', 'evil.example']],
+    ['bank.example/#@evil.example', ['bank.example', 'evil.example']],
+    ['bank.example#@https://evil.example', ['bank.example', 'evil.example']],
+    ['bank.example/?to=a@evil.example', ['bank.example']],
+    ['x#@evil.example', []],
     ['https://bank.example/?next=@evil.example', ['bank.example']],
     ['https://bank.example/?to=a@evil.example', ['bank.example']],
     ['https://mastodon.social/@user', ['mastodon.social']],
@@ -433,6 +461,8 @@ test('reading the hosts of a long label takes linear time', () => {
     'a_a.md_'.repeat(9000),
     `x_${'a.md.'.repeat(12800)}`,
     `https://bank.example#@${'a.'.repeat(32000)}bb`,
+    `bank.example#@${'a.'.repeat(32000)}bb`,
+    `https://bank.example#@${'a'.repeat(64000)}`,
   ]) {
     const started = performance.now();
     labelHosts(label);

@@ -137,10 +137,12 @@ const STEM_RUN = new RegExp(`[${LABEL_CHARS}${STOPS}_]+`, 'gu');
 // letter, or an underscore after a letter, mark or digit. A leading
 // underscore, as in `_docs.rs_`, is emphasis rather than part of a name.
 const STEM_MARK = /\p{Lu}|(?<=[\p{L}\p{M}\p{N}])_/u;
-// `?@` or `#@` directly after an authority, or after one `/` that follows
-// it, and the text up to the next `/`, `?`, `#` or `\`, which a reader who
-// takes the host to follow the last `@` reads as the host.
-const QUERY_AT = /^\/?[?#]@([^/?#\\]*)/u;
+// `?@` or `#@` directly after an authority, or after one `/` or `\` that
+// follows it, then an optional scheme, and the text up to the next `/`, `?`,
+// `#` or `\`, which a reader who takes the host to follow the last `@` reads
+// as the host (`bank.example#@evil.example`,
+// `bank.example#@https://evil.example`).
+const QUERY_AT = /^[/\\]?[?#]@(?:[a-z][a-z\d+.-]*:[/\\]+)?([^/?#\\]*)/iu;
 
 function normalHost(host: string): string {
   try {
@@ -233,16 +235,17 @@ function dottedNames(text: string): DottedName[] {
 
 /**
  * A test of whether a dotted name read from the path-less word `word` is a
- * file or product name rather than a host. Its last label is a file
- * extension that is not a top-level domain, or one that is and the stem
- * before it, within one run of `STEM_RUN` characters, holds a `STEM_MARK`.
- * The test is applied to names in the order `dottedNames` gives them, and
+ * file or product name rather than a host. Its first label is not `www`, and
+ * its last label is a file extension that is not a top-level domain, or one
+ * that is and the stem before it, within one run of `STEM_RUN` characters,
+ * holds a `STEM_MARK`. The test is applied to names in the order `dottedNames` gives them, and
  * reads `word` at most once.
  */
 function fileNameTest(word: string): (name: DottedName) => boolean {
   let stems: { end: number; mark: number }[] | undefined;
   let stem = 0;
   return ({ labels, lastAt }) => {
+    if (labels[0].toLowerCase() === 'www') return false;
     const extension = labels[labels.length - 1].toLowerCase();
     if (FILE_EXTENSIONS.has(extension)) return true;
     if (!TLD_FILE_EXTENSIONS.has(extension)) return false;
@@ -258,6 +261,12 @@ function fileNameTest(word: string): (name: DottedName) => boolean {
   };
 }
 
+/** The dotted names after a `?@` or `#@` that starts `tail` (`QUERY_AT`). */
+function queryAtHosts(tail: string): string[] {
+  const queryAt = QUERY_AT.exec(tail);
+  return queryAt ? dottedNames(queryAt[1]).map(nameHost) : [];
+}
+
 /**
  * The hosts one whitespace-separated word of a label names. After a scheme,
  * that is every host named before the scheme (`paypal.com/x:/evil.example`),
@@ -267,16 +276,21 @@ function fileNameTest(word: string): (name: DottedName) => boolean {
  * `#@` that ends the authority (`https://bank.example#@evil.example`).
  * Without a scheme, it is every dotted name before the first `/`, `\`, `?` or
  * `#`, except a file or product name (`fileNameTest`) in a word that is
- * nothing else.
+ * nothing else, and, when there is one, every dotted name after a `?@` or
+ * `#@` that ends it (`bank.example#@evil.example`).
  */
 function wordHosts(word: string, wholeWord = true): string[] {
   const scheme = SCHEME.exec(word);
   if (!scheme) {
     const authority = word.split(AUTHORITY_END, 1)[0];
     const names = dottedNames(authority);
-    if (!wholeWord || authority !== word) return names.map(nameHost);
-    const fileName = fileNameTest(word);
-    return names.filter((name) => !fileName(name)).map(nameHost);
+    if (authority === word && wholeWord) {
+      const fileName = fileNameTest(word);
+      return names.filter((name) => !fileName(name)).map(nameHost);
+    }
+    const hosts = names.map(nameHost);
+    if (hosts.length) hosts.push(...queryAtHosts(word.slice(authority.length)));
+    return hosts;
   }
   const rest = word.slice(scheme.index + scheme[0].length);
   const authority = rest.split(AUTHORITY_END, 1)[0];
@@ -289,8 +303,7 @@ function wordHosts(word: string, wholeWord = true): string[] {
     );
     if (named) hosts.push(hostName(named[0].split(SEPARATOR)));
   }
-  const queryAt = QUERY_AT.exec(rest.slice(authority.length));
-  if (queryAt) hosts.push(...dottedNames(queryAt[1]).map(nameHost));
+  hosts.push(...queryAtHosts(rest.slice(authority.length)));
   // The text before the scheme's `:` holds no scheme, since this one is the
   // leftmost, and is followed by the rest of the URL.
   const before = word.slice(0, scheme.index + scheme[0].indexOf(':'));
@@ -329,7 +342,7 @@ export interface ChatLinkDisplay {
   host: string;
   /**
    * False only when the label is the destination URL itself, up to the case
-   * of ASCII letters and a final `/`.
+   * of ASCII letters and a final `/`, and names no other host.
    */
   showHost: boolean;
   /**
@@ -347,12 +360,13 @@ export function chatLinkDisplay(label: string, href: string): ChatLinkDisplay {
   // ASCII one leaves the host suffix in place.
   const text = drawn.trim().replace(/[A-Z]+/g, (upper) => upper.toLowerCase());
   const url = href.replace(/[A-Z]+/g, (upper) => upper.toLowerCase());
+  const mismatchedHost =
+    labelHosts(label).find((named) => !sameHost(named, host)) ?? null;
   return {
     label: drawn,
     host,
-    showHost: text !== url && `${text}/` !== url,
-    mismatchedHost:
-      labelHosts(label).find((named) => !sameHost(named, host)) ?? null,
+    showHost: mismatchedHost !== null || (text !== url && `${text}/` !== url),
+    mismatchedHost,
   };
 }
 
