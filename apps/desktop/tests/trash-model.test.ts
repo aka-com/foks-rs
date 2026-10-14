@@ -6,11 +6,15 @@ import {
   catalog,
   encodeOriginalPath,
   isTrashPath,
+  originPath,
+  ownersOnly,
   parseTrashName,
   restoredCopyPath,
   trashEntries,
+  trashEntryExpired,
   trashEntryLabel,
   trashStamp,
+  trashUnavailable,
 } from '../src/model';
 import type { AgentSnapshot, Item } from '../src/model';
 
@@ -115,5 +119,80 @@ test('a restored copy takes the first free "(restored)" name', () => {
   assert.equal(
     restoredCopyPath('/a', () => false),
     '/a (restored)',
+  );
+});
+
+test('an entry is owners-only by the read role of the Trash folder it is filed in', () => {
+  const member = (path: string, kind: Item['kind'] = 'Secret'): Item => ({
+    ...item(path, kind),
+    store: 'team:household',
+    read: 'Member · visibility 0',
+    write: 'Member · visibility 0',
+  });
+  const snapshot: AgentSnapshot = {
+    ...FIXTURE,
+    items: [
+      ...FIXTURE.items,
+      member('/.trash', 'Folder'),
+      { ...member('/.trash/owner', 'Folder'), read: 'Owner', write: 'Owner' },
+      // A member-read item from an owner-only folder is filed by that folder.
+      member(`/.trash/owner/${STAMP}~%2Fdeeds%2Fnote`),
+      member('/.trash/member-0', 'Folder'),
+      member(`/.trash/member-0/${STAMP}~%2Fwifi`),
+    ],
+  };
+  const [first, second] = trashEntries(snapshot, 'team:household');
+  assert.equal(first.folderRead, 'Owner');
+  assert.equal(ownersOnly(first), true);
+  assert.equal(second.folderRead, 'Member · visibility 0');
+  assert.equal(ownersOnly(second), false);
+});
+
+test('origin files, expiry and an unavailable team Trash are read conservatively', () => {
+  assert.equal(originPath('/notes/long'), '/notes/long');
+  assert.equal(originPath('notes/long'), null);
+  assert.equal(originPath('/a\n/b'), null);
+
+  const [entry] = trashEntries(
+    {
+      ...FIXTURE,
+      items: [item(`/.trash/owner/${STAMP}~%2Fa`), item('/.trash/owner/x')],
+    },
+    'acct:personal',
+  ).filter((candidate) => candidate.deletedAt !== null);
+  const day = 24 * 60 * 60 * 1000;
+  assert.equal(trashEntryExpired(entry, AT + 30 * day, 30 * day), true);
+  assert.equal(trashEntryExpired(entry, AT + 29 * day, 30 * day), false);
+
+  // team:eng lists this account as an Admin and has no /.trash; owners and
+  // accounts can always create it.
+  assert.equal(trashUnavailable(FIXTURE, 'team:eng'), true);
+  assert.equal(trashUnavailable(FIXTURE, 'team:household'), false);
+  assert.equal(trashUnavailable(FIXTURE, 'acct:personal'), false);
+  assert.equal(
+    trashUnavailable(
+      {
+        ...FIXTURE,
+        items: [
+          ...FIXTURE.items,
+          { ...item('/.trash', 'Folder'), store: 'team:eng' },
+        ],
+      },
+      'team:eng',
+    ),
+    false,
+  );
+  // A roster that does not list this account says nothing either way.
+  assert.equal(
+    trashUnavailable(
+      {
+        ...FIXTURE,
+        parties: FIXTURE.parties.filter(
+          (party) => !(party.store === 'team:eng' && party.label === 'you'),
+        ),
+      },
+      'team:eng',
+    ),
+    false,
   );
 });

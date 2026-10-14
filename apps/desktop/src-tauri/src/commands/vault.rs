@@ -365,7 +365,7 @@ pub(super) fn read_text(
     })
 }
 
-fn protocol_store(store: &CatalogStoreRef) -> KvStoreRef {
+pub(super) fn protocol_store(store: &CatalogStoreRef) -> KvStoreRef {
     match store {
         CatalogStoreRef::Account(store) => KvStoreRef::Account(store.clone()),
         CatalogStoreRef::Team(store) => KvStoreRef::Team(store.clone()),

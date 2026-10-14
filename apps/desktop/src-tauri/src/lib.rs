@@ -328,6 +328,7 @@ pub fn run() {
             commands::trash::trash_item,
             commands::trash::restore_trash_item,
             commands::trash::remove_item,
+            commands::trash::empty_trash,
             commands::vault::import_dropped_file,
             commands::vault::pick_import_file,
             commands::vault::release_import_file,

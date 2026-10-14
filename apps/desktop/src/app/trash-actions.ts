@@ -12,15 +12,29 @@ import type { LocationStore } from '../location';
 import {
   nameOf,
   storeOf,
+  trashEntries,
+  trashEntryExpired,
+  trashUnavailable,
   type AgentSnapshot,
   type Item,
   type TrashEntry,
 } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
+import { itemActionProblem } from '../screens/store-access';
 import type { WriteWorkflow } from '../screens/write-workflows';
+import { storedTrashAutoEmpty } from '../trash-auto-empty';
 
 /** How long the Undo of a move to Trash is offered. */
 export const UNDO_DURATION_MS = 8_000;
+
+/** How often automatic emptying looks at one store's Trash again. */
+const AUTO_EMPTY_INTERVAL_MS = 60 * 60 * 1000;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Why a folder cannot be deleted in a team whose Trash is not set up. */
+const FOLDER_WITHOUT_TRASH =
+  'Folders can be deleted only through Trash, which is not set up in this team yet. An owner sets it up by moving any item to Trash.';
 
 export interface TrashActions {
   /** Moves an item, or a folder with its contents, to Trash, offering Undo. */
@@ -67,6 +81,7 @@ export function useTrashActions({
   toasts,
   locations,
   setWorkflow,
+  accessNow,
 }: {
   bridge: Bridge;
   shown: AgentSnapshot;
@@ -80,9 +95,11 @@ export function useTrashActions({
   toasts: ToastController;
   locations: LocationStore;
   setWorkflow: Dispatch<SetStateAction<WriteWorkflow>>;
+  accessNow: () => number;
 }): TrashActions {
   const pendingUndo = useRef<{ run: () => void; until: number } | null>(null);
   const busy = useRef(false);
+  const autoEmptied = useRef(new Map<string, number>());
 
   const restoreTo = useCallback(
     async (item: Item, destination: string): Promise<void> => {
@@ -178,9 +195,27 @@ export function useTrashActions({
     [mutationError, refreshSnapshot, restoreItem, toasts],
   );
 
+  /**
+   * Offers a member who cannot set up a team's Trash permanent deletion of
+   * the item instead, after confirmation. Folders are deleted only through
+   * Trash.
+   */
+  const deleteWithoutTrash = useCallback(
+    (item: Item) => {
+      if (item.kind === 'Folder')
+        toasts.show(FOLDER_WITHOUT_TRASH, { tone: 'warning' });
+      else setWorkflow({ kind: 'delete', item, outsideTrash: true });
+    },
+    [setWorkflow, toasts],
+  );
+
   const moveToTrash = useCallback(
     (item: Item) => {
       if (busy.current) return;
+      if (trashUnavailable(shown, item.store)) {
+        deleteWithoutTrash(item);
+        return;
+      }
       busy.current = true;
       const name = nameOf(item.path);
       void (async () => {
@@ -193,7 +228,13 @@ export function useTrashActions({
             direntId: item.direntId,
           }));
         } catch (error) {
-          if (normalizeCommandError(error).code === 'conflict') {
+          const { code } = normalizeCommandError(error);
+          if (code === 'trash-unavailable') {
+            // The roster did not show that this account cannot create
+            // Trash, but the host's attempt found it.
+            await mutationError(error, { report: false });
+            deleteWithoutTrash(item);
+          } else if (code === 'conflict') {
             // Changed or already gone: a refresh tells which.
             await mutationError(error, { report: false });
             const next = await refreshSnapshot(true);
@@ -210,14 +251,27 @@ export function useTrashActions({
           } else await mutationError(error, { item });
           return;
         }
-        const run = () => undo(item, path);
-        pendingUndo.current = { run, until: Date.now() + UNDO_DURATION_MS };
+        // The toast's button and ⌘Z share one Undo; whichever comes first
+        // runs it, and ⌘Z replaces the toast so its button is gone.
+        const dedupeKey = `trash-undo:${item.store}|${path}`;
+        let undone = false;
+        const run = (fromKeyboard = false) => {
+          if (undone) return;
+          undone = true;
+          if (fromKeyboard) toasts.show(`Restoring ${name}…`, { dedupeKey });
+          undo(item, path);
+        };
+        pendingUndo.current = {
+          run: () => run(true),
+          until: Date.now() + UNDO_DURATION_MS,
+        };
         await refresh(
           `Moved ${name} to Trash`,
           storeOf(shown, item.store)?.server,
           {
-            action: { label: 'Undo', onAction: run },
+            action: { label: 'Undo', onAction: () => run() },
             durationMs: UNDO_DURATION_MS,
+            dedupeKey,
           },
         );
       })()
@@ -226,8 +280,61 @@ export function useTrashActions({
           busy.current = false;
         });
     },
-    [bridge, mutationError, refresh, refreshSnapshot, shown, toasts, undo],
+    [
+      bridge,
+      deleteWithoutTrash,
+      mutationError,
+      refresh,
+      refreshSnapshot,
+      shown,
+      toasts,
+      undo,
+    ],
   );
+
+  // Automatic emptying, when this device opts in: entries deleted longer ago
+  // than the chosen age are removed permanently, one store at a time, and
+  // only those this account can change. It waits while a dialog is open or
+  // another Trash action runs, so it does not hold the mutation permit then.
+  useEffect(() => {
+    const days = storedTrashAutoEmpty();
+    if (days === null || busy.current || anyDialogOpen()) return;
+    const now = Date.now();
+    for (const store of shown.stores) {
+      const last = autoEmptied.current.get(store.id);
+      if (last !== undefined && now - last < AUTO_EMPTY_INTERVAL_MS) continue;
+      const expired = trashEntries(shown, store.id).filter(
+        (entry) =>
+          trashEntryExpired(entry, now, days * DAY_MS) &&
+          !itemActionProblem(shown, entry.item, true, accessNow()),
+      );
+      if (!expired.length) continue;
+      autoEmptied.current.set(store.id, now);
+      busy.current = true;
+      void bridge
+        .emptyTrash({
+          storeId: store.id,
+          entries: expired.map(({ item }) => ({
+            path: item.path,
+            version: item.version,
+            direntId: item.direntId,
+          })),
+        })
+        .then(
+          () =>
+            refresh(
+              `Deleted ${expired.length} ${expired.length === 1 ? 'entry' : 'entries'} permanently from Trash in ${store.name}: they were deleted more than ${days} days ago.`,
+              store.server,
+            ),
+          (error: unknown) => mutationError(error, { report: false }),
+        )
+        .catch((error: unknown) => mutationError(error, { report: false }))
+        .finally(() => {
+          busy.current = false;
+        });
+      return;
+    }
+  }, [accessNow, bridge, mutationError, refresh, shown]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {

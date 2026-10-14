@@ -173,12 +173,17 @@ replacement, even when its numeric version is the same.
 
 Delete moves an item, or a folder with everything in it, into the vault's
 Trash: `/.trash/<role-tag>/` in the same store, one folder per read role,
-through `MoveKv`. It asks for no confirmation; its toast offers Undo for eight
+chosen by the most restrictive read role on the item's path, through
+`MoveKv`. It asks for no confirmation; its toast offers Undo for eight
 seconds, and ⌘Z does the same. Each vault's Trash row lists its entries,
 restores them (as a `(restored)` copy when the original path is taken) and
-deletes them permanently, which the host allows only inside `/.trash`. Go
-clients list `.trash` as an ordinary folder. See the Trash section of
-`book/20-desktop.qmd` for the layout and entry names.
+deletes them permanently, which the host allows only inside `/.trash`. The
+exception is a team where no owner has created `/.trash` yet: a member who is
+not an owner is offered permanent deletion of a file after confirmation, and
+cannot delete folders. Empty Trash removes the entries this account can
+change; Settings › Preferences can empty Trash automatically after 30 or 90
+days on one device. Go clients list `.trash` as an ordinary folder. See the
+Trash section of `book/20-desktop.qmd` for the layout and entry names.
 
 **Unsupported operations:** Link editing is not supported directly; links must be
 deleted and recreated. Invitation revocation, expiry and requester withdrawal
@@ -255,9 +260,14 @@ reloads the catalog, never replaying the interrupted write.
 
 `trash_item` and `restore_trash_item` take `{storeId, path, version,
 direntId}`, the second also a `destination` outside Trash, and answer
-`{applied, path}` with the path the entry now has. `remove_item` takes the
-same selection and removes only an entry in `/.trash`, recursively for a
-folder.
+`{applied, path}` with the path the entry now has. `trash_item` fails with
+`trash-unavailable` when a team has no `/.trash` and this account cannot
+create it, and with `trash-name-taken` when the same path was moved to Trash
+within the same second. `remove_item` takes the same selection and
+`outsideTrash`; it removes an entry in `/.trash`, recursively for a folder,
+or with `outsideTrash` a file in a team that has no `/.trash`.
+`empty_trash` takes `{storeId, entries}`, each entry `{path, version,
+direntId}`, and removes them all in one mutation.
 
 Phase 4 adds `list_accounts`, `create_group`, member add/promote/demote/remove and their
 resumable continuations, federated admission/re-run, and `copy_text`. Each

@@ -14,7 +14,7 @@ import {
   storeOf,
 } from './readers';
 import { admits } from './roles';
-import { isTrashPath } from './trash';
+import { TRASH_ROOT, isTrashPath } from './trash';
 import { serverDisplayLabelForStore } from './server-name';
 import { serverDisplayLabel, PROTOCOL_CAPABILITIES } from './types';
 import type {
@@ -25,6 +25,7 @@ import type {
   Item,
   Notification,
   ProtocolCapability,
+  RoleWire,
   Server,
   Store,
   StoreRef,
@@ -582,6 +583,21 @@ export function chatAvailable(
   return storeOperationAvailability(snapshot, store, 'chat', options).available;
 }
 
+/**
+ * The local user's role in a team, or `null` when the roster does not list
+ * exactly one active membership for it.
+ */
+function ownTeamRole(snapshot: AgentSnapshot, ref: StoreRef): RoleWire | null {
+  const own = partiesOf(snapshot, ref).filter(
+    (party) =>
+      party.label === 'you' &&
+      party.party_kind === 'user' &&
+      party.locally_manageable &&
+      federatedMembershipActive(snapshot, party, ref),
+  );
+  return own.length === 1 ? own[0].destination_role : null;
+}
+
 /** Returns whether the current user has permission to create items in this store. */
 export function canCreateInStore(
   snapshot: AgentSnapshot,
@@ -591,14 +607,7 @@ export function canCreateInStore(
   const store = storeOf(snapshot, ref);
   if (!store || !storeReadable(snapshot, store.id, options)) return false;
   if (store.kind === 'account') return true;
-  const own = partiesOf(snapshot, store.id).filter(
-    (party) =>
-      party.label === 'you' &&
-      party.party_kind === 'user' &&
-      party.locally_manageable &&
-      federatedMembershipActive(snapshot, party, store.id),
-  );
-  return own.length === 1;
+  return ownTeamRole(snapshot, store.id) !== null;
 }
 
 /** Returns whether the local authenticated user has permission to edit the specified item. */
@@ -610,14 +619,30 @@ export function canChangeItem(
   const store = storeOf(snapshot, item.store);
   if (!store || !canCreateInStore(snapshot, store.id, options)) return false;
   if (store.kind === 'account') return true;
-  const own = partiesOf(snapshot, store.id).filter(
-    (party) =>
-      party.label === 'you' &&
-      party.party_kind === 'user' &&
-      party.locally_manageable &&
-      federatedMembershipActive(snapshot, party, store.id),
-  );
-  return own.length === 1 && admits(own[0].destination_role, item.write);
+  const own = ownTeamRole(snapshot, store.id);
+  return own !== null && admits(own, item.write);
+}
+
+/**
+ * Whether this account cannot move items to Trash in a store: a team with
+ * no `/.trash`, which only an owner can create because team roots are
+ * owner-writable, and a roster that shows this account is not an owner.
+ * Such a member is offered permanent deletion instead.
+ */
+export function trashUnavailable(
+  snapshot: AgentSnapshot,
+  ref: StoreRef,
+): boolean {
+  const store = storeOf(snapshot, ref);
+  if (store?.kind !== 'team') return false;
+  if (
+    snapshot.items.some(
+      (item) => item.store === store.id && item.path === TRASH_ROOT,
+    )
+  )
+    return false;
+  const own = ownTeamRole(snapshot, store.id);
+  return own !== null && !admits(own, 'Owner');
 }
 
 /**

@@ -78,6 +78,8 @@ import type {
   RemoveItemRequest,
   MoveItemRequest,
   RestoreTrashRequest,
+  PermanentRemoveRequest,
+  EmptyTrashRequest,
   TrashMutationResponse,
   ReplaceDroppedFileRequest,
 } from './vault-catalog';
@@ -228,9 +230,15 @@ export interface Bridge {
   ): Promise<TrashMutationResponse>;
   /**
    * Permanently removes an entry in Trash, recursively for a folder. The host
-   * refuses items outside Trash.
+   * refuses items outside Trash unless `outsideTrash` asks for a file in a
+   * team that has no Trash yet.
    */
-  removeItem(request: RemoveItemRequest): Promise<MutationResponse>;
+  removeItem(request: PermanentRemoveRequest): Promise<MutationResponse>;
+  /**
+   * Permanently removes the given entries of one store's Trash in a single
+   * host mutation, with their `.origin` files and any left without an entry.
+   */
+  emptyTrash(request: EmptyTrashRequest): Promise<MutationResponse>;
   importDroppedFile(
     request: ImportDroppedFileRequest,
   ): Promise<MutationResponse>;

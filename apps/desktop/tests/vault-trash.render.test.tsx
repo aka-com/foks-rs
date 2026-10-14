@@ -1,8 +1,10 @@
 /**
  * Vault Trash in the running shell: Delete moves an item or a folder into
  * Trash with Undo, the Trash view restores entries (as a copy when the
- * original path is taken), and only entries in Trash are deleted
- * permanently.
+ * original path is taken, and from a hashed entry's `.origin` file), and
+ * only entries in Trash are deleted permanently, except in a team whose
+ * Trash this account cannot set up. Empty Trash and the optional automatic
+ * emptying remove only the entries this account can change.
  */
 
 import assert from 'node:assert/strict';
@@ -36,8 +38,21 @@ test.after(async () => vite.close());
 
 const PATH = '/logins/github.com';
 
-/** The app open on the personal vault's GitHub login, details showing. */
-async function mount(decorate: (base: Bridge) => Partial<Bridge> = () => ({})) {
+/**
+ * The app open on one item with its details showing: by default the
+ * personal vault's GitHub login. `setup` changes the mock's vault first.
+ */
+async function mount({
+  decorate = () => ({}),
+  setup,
+  vault = 'acct:personal',
+  path = PATH,
+}: {
+  decorate?: (base: Bridge) => Partial<Bridge>;
+  setup?: (base: Bridge) => Promise<void>;
+  vault?: string;
+  path?: string;
+} = {}) {
   const { App } = (await vite.ssrLoadModule(
     '/src/app-root.tsx',
   )) as typeof import('../src/app-root');
@@ -51,20 +66,37 @@ async function mount(decorate: (base: Bridge) => Partial<Bridge> = () => ({})) {
     '/src/location.ts',
   )) as typeof import('../src/location');
   const base = mockBridge(FIXTURE);
+  await setup?.(base);
   const bridge: Bridge = { ...base, ...decorate(base) };
   const store: LocationStore = new LocationStore({
     ...INITIAL_STATE,
-    location: { kind: 'store', ref: 'acct:personal' },
-    selection: { store: 'acct:personal', path: PATH },
+    location: { kind: 'store', ref: vault },
+    selection: { store: vault, path },
     details: true,
   });
   const rendered = ui.render(
     createElement(App, { snapshot: FIXTURE, bridge, store }),
   );
   await rendered.findByRole('button', { name: 'Move to Trash' });
+  if (setup) {
+    // The shell starts from the fixture; read what `setup` changed.
+    const [refresh] = rendered.getAllByRole('button', {
+      name: /— refresh vaults, teams/,
+    });
+    await ui.act(async () => {
+      ui.fireEvent.click(refresh);
+    });
+    await ui.waitFor(() =>
+      assert.equal(
+        rendered.queryAllByRole('button', { name: /— refreshing vaults/ })
+          .length,
+        0,
+      ),
+    );
+  }
   const paths = async () =>
     (await base.listCatalog()).items
-      .filter((item) => item.store === 'acct:personal')
+      .filter((item) => item.store === vault)
       .map((item) => item.path);
   return { rendered, store, base, paths };
 }
@@ -281,3 +313,241 @@ async function trashGithubFromTrashView(
   await ui.act(async () => store.setFolder('/.trash'));
   await ui.waitFor(() => assert.ok(trashRow('github.com')));
 }
+
+/** Moves an item to Trash through the mock, as another session would. */
+async function trashThrough(base: Bridge, vault: string, path: string) {
+  const item = (await base.listCatalog()).items.find(
+    (candidate) => candidate.store === vault && candidate.path === path,
+  );
+  assert.ok(item, `${path} is in ${vault}`);
+  const moved = await base.trashItem({
+    storeId: vault,
+    path,
+    version: item.version,
+    direntId: item.direntId,
+  });
+  // The host's catalog is read again before the next selection.
+  await base.listCatalog();
+  return moved.path;
+}
+
+test('⌘Z replaces the Undo toast, so its button cannot restore a second time', async () => {
+  let restores = 0;
+  const { rendered, paths } = await mount({
+    decorate: (base) => ({
+      restoreTrashItem: (request) => {
+        restores += 1;
+        return base.restoreTrashItem(request);
+      },
+    }),
+  });
+  await trashGithub(rendered);
+  await ui.act(async () => {
+    ui.fireEvent.keyDown(document.body, { key: 'z', metaKey: true });
+  });
+  await ui.waitFor(async () => assert.ok((await paths()).includes(PATH)));
+  assert.equal(
+    [...document.querySelectorAll('.toast-action')].some(
+      (button) => button.textContent === 'Undo',
+    ),
+    false,
+  );
+  assert.equal(restores, 1);
+});
+
+test('a name already in Trash is reported with the host message, not as a changed item', async () => {
+  const { rendered } = await mount({
+    decorate: () => ({
+      trashItem: async () => {
+        throw {
+          code: 'trash-name-taken',
+          message:
+            'An entry with the same name is already in Trash. Try again in a second.',
+          retryable: false,
+          ambiguous: false,
+          fatal: false,
+        };
+      },
+    }),
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Move to Trash' }));
+  });
+  await ui.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /Try again in a second/),
+  );
+  assert.doesNotMatch(toasts(), /changed by another user/);
+});
+
+test('a hashed entry shows the name and location its .origin file records, and restores there', async () => {
+  const long = `/notes/${'n'.repeat(240)}`;
+  const { rendered, store, paths } = await mount({
+    setup: async (base) => {
+      await base.createTextItem({
+        storeId: 'acct:personal',
+        path: long,
+        value: 'kept',
+      });
+      await base.listCatalog();
+      await trashThrough(base, 'acct:personal', long);
+    },
+  });
+  const trashed = (await paths()).filter((path) =>
+    path.startsWith('/.trash/owner/'),
+  );
+  assert.equal(trashed.length, 2);
+  assert.ok(trashed.some((path) => /~#[0-9a-f]{32}\.origin$/.test(path)));
+  await ui.act(async () => store.setFolder('/.trash'));
+  const row = await ui.waitFor(() => trashRow('n'.repeat(240)));
+  assert.match(row.textContent ?? '', /\/notes/);
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(row).getByRole('button', {
+        name: `Restore ${'n'.repeat(240)}`,
+      }),
+    );
+  });
+  await ui.waitFor(async () => assert.ok((await paths()).includes(long)));
+  assert.deepEqual(
+    (await paths()).filter((path) => path.startsWith('/.trash/owner/')),
+    [],
+  );
+  assert.ok(rendered.getByText('Trash is empty'));
+});
+
+test('Empty Trash removes several entries in one host call and keeps those this account cannot change', async () => {
+  const calls: number[] = [];
+  const { rendered, store, paths } = await mount({
+    vault: 'team:eng',
+    path: '/onboarding/README.md',
+    setup: async (base) => {
+      for (const path of [
+        '/deploy/production-token',
+        '/deploy/staging-token',
+        '/release/bundle.tar',
+      ])
+        await trashThrough(base, 'team:eng', path);
+    },
+    decorate: (base) => ({
+      emptyTrash: (request) => {
+        calls.push(request.entries.length);
+        return base.emptyTrash(request);
+      },
+    }),
+  });
+  await ui.act(async () => store.setFolder('/.trash'));
+  await ui.waitFor(() => assert.ok(trashRow('staging-token')));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'Empty Trash…' }));
+  const sheet = await rendered.findByRole('alertdialog');
+  // This Admin cannot change the Owner-written production token.
+  assert.match(sheet.textContent ?? '', /Permanently delete 2 items\?/);
+  assert.match(sheet.textContent ?? '', /1 item stays in Trash/);
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(sheet).getByRole('button', { name: 'Empty Trash' }),
+    );
+  });
+  await ui.waitFor(() => assert.match(toasts(), /Emptied Trash/));
+  assert.deepEqual(calls, [2]);
+  const left = (await paths()).filter((path) =>
+    /^\/\.trash\/[^/]+\/[^/]+$/.test(path),
+  );
+  assert.equal(left.length, 1);
+  assert.match(
+    left[0],
+    /^\/\.trash\/admin\/\d{8}T\d{6}~%2Fdeploy%2Fproduction-token$/,
+  );
+});
+
+test('a member who cannot set up a team Trash is offered permanent deletion instead', async () => {
+  const { rendered, store, paths } = await mount({
+    vault: 'team:eng',
+    path: '/deploy/staging-token',
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Move to Trash' }));
+  });
+  const sheet = await rendered.findByRole('alertdialog');
+  assert.match(sheet.textContent ?? '', /Trash is not set up in this team yet/);
+  assert.match(sheet.textContent ?? '', /Removes it for everyone/);
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(sheet).getByRole('button', { name: 'Delete permanently' }),
+    );
+  });
+  await ui.waitFor(async () =>
+    assert.ok(!(await paths()).includes('/deploy/staging-token')),
+  );
+  assert.ok(!(await paths()).includes('/.trash'));
+  await ui.act(async () => store.setFolder('/.trash'));
+  await ui.waitFor(() =>
+    assert.match(
+      document.querySelector('.trash-view')?.textContent ?? '',
+      /An owner sets it up by moving any item to Trash/,
+    ),
+  );
+});
+
+test('the host refusing to create a team Trash also leads to permanent deletion', async () => {
+  const { rendered } = await mount({
+    vault: 'team:household',
+    path: '/wifi/guest-password',
+    decorate: () => ({
+      trashItem: async () => {
+        throw {
+          code: 'trash-unavailable',
+          message: 'Trash could not be created at the top level of this vault.',
+          retryable: false,
+          ambiguous: false,
+          fatal: false,
+        };
+      },
+    }),
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(rendered.getByRole('button', { name: 'Move to Trash' }));
+  });
+  const sheet = await rendered.findByRole('alertdialog');
+  assert.match(sheet.textContent ?? '', /Trash is not set up in this team yet/);
+});
+
+test('automatic emptying, when chosen on this device, removes entries past the chosen age', async () => {
+  window.localStorage.setItem('trashAutoEmptyDays', '30');
+  try {
+    const { rendered, paths } = await mount({
+      setup: async (base) => {
+        const recent = await trashThrough(
+          base,
+          'acct:personal',
+          '/documents/passport-scan.pdf',
+        );
+        assert.ok(recent);
+        const item = (await base.listCatalog()).items.find(
+          (candidate) =>
+            candidate.store === 'acct:personal' &&
+            candidate.path === '/ssh/id_ed25519',
+        );
+        assert.ok(item);
+        await base.moveItem({
+          storeId: 'acct:personal',
+          path: item.path,
+          version: item.version,
+          direntId: item.direntId,
+          destination: '/.trash/owner/20200101T000000~%2Fssh%2Fid_ed25519',
+        });
+        await base.listCatalog();
+      },
+    });
+    await ui.waitFor(() =>
+      assert.match(toasts(), /Deleted 1 entry permanently from Trash/),
+    );
+    const left = (await paths()).filter((path) =>
+      path.startsWith('/.trash/owner/'),
+    );
+    assert.equal(left.length, 1);
+    assert.match(left[0], /%2Fdocuments%2Fpassport-scan\.pdf$/);
+    assert.ok(rendered);
+  } finally {
+    window.localStorage.removeItem('trashAutoEmptyDays');
+  }
+});

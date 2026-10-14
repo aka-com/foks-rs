@@ -392,14 +392,29 @@ Dirent names are sealed under the key of the directory that holds them, so
 one shared Trash folder would expose the names of owner-only items to
 members. Each read role has its own folder, `/.trash/owner`,
 `/.trash/admin` or `/.trash/member-<visibility>`, created with that read
-role, and an entry keeps its own read and write roles when it moves in. A
-folder is filed by its own directory read role, since its children's names
-stay sealed under its key. When another item already holds a role folder's
-name with other roles, the next free `/.trash/<role-tag>.<n>` is used
-instead. In a team, `/.trash` itself is readable and writable through the
-low-visibility Member key every team root uses, so any member who can
-delete an item can add the role folder it needs. Only an owner can create
-`/.trash` at the top level, because team roots are owner-writable.
+role, and an entry keeps its own read and write roles when it moves in. An
+entry, file or folder, is filed by the most restrictive read role on its
+path: its own and that of every folder above it, ordered Owner, Admin, then
+Member by visibility. A member-readable login inside an admin-only folder
+therefore goes to `/.trash/admin`. Its entry name records the folder names
+above it, which were sealed under the admin key, and members who could not
+list that folder could not reach the login before it moved either. A
+folder's children move with it and stay sealed under its key. When another
+item already holds a role folder's name with other roles, the next free
+`/.trash/<role-tag>.<n>` is used instead. In a team, `/.trash` itself is
+readable and writable through the low-visibility Member key every team root
+uses, so any member who can delete an item can add the role folder it
+needs.
+
+Only an owner can create `/.trash` at the top level, because team roots are
+owner-writable. Until an owner has moved any item to Trash, a member who is
+not an owner cannot move items there. When the roster shows that, or the
+host's attempt to create `/.trash` is refused (`trash-unavailable`), Delete
+opens the permanent-delete confirmation for the item instead and says why.
+`remove_item` removes an item outside Trash only on that explicit request,
+and only for a file in a team whose fully read catalog has no `/.trash`;
+folders can be deleted only through Trash. The team's Trash view states the
+same.
 
 An entry is named `<UTC yyyymmddThhmmss>~<original path>`, with `%`, `/`
 and control characters percent-encoded, for example
@@ -410,14 +425,36 @@ first 16 bytes of the SHA-256 of the original path, and a small file named
 
 Each vault's tree ends with a Trash row. Its view lists the entries the
 account can read, newest first, with where each was and when it was
-deleted. Trash is not part of the ordinary folders, All items or search.
-Restore moves an entry back, creating a missing parent folder with the
-entry's roles; when the original path is taken, it offers to restore the
-entry as `<name> (restored)` beside the item there and never replaces it.
-Delete permanently and Empty Trash use `RemoveKv`, recursive for a folder,
-and the host refuses them outside `/.trash`. Their confirmation says what
-they cannot promise: the server keeps every dirent version, so earlier
-encrypted versions may remain on it.
+deleted; for a hashed name it reads the `.origin` file once per version.
+Trash is not part of the ordinary folders, All items or search. Restore
+moves an entry back. A missing parent folder is created readable only under
+the more restrictive of the entry's read role and its Trash folder's, which
+was the most restrictive on the original path. When the original path is
+taken, Restore offers to restore the entry as `<name> (restored)` beside
+the item there and never replaces it. Delete permanently and Empty Trash
+use `RemoveKv`, recursive for a folder, and the host refuses them outside
+`/.trash` except as above. Their confirmation says what they cannot
+promise: the server keeps every dirent version, so earlier encrypted
+versions may remain on it.
+
+Entries keep their own write roles in a role folder, so a member can list
+an entry that only an admin can remove. Empty Trash removes the entries
+this account can change and lists the ones that stay. It sends them to
+`empty_trash` in one host mutation planned from one catalog read; removing
+them one command at a time would fail after the first, because each write
+discards the store's catalog items. `empty_trash` also removes `.origin`
+files whose entry is gone, which a move into Trash that failed after
+writing its `.origin` file leaves behind, but only when the store's catalog
+was read completely. Removing a hashed entry's `.origin` file is the last
+write of a restore or permanent removal, and its failure does not fail the
+command: the entry has already moved, and an `.origin` file without its
+entry is harmless.
+
+Trash is emptied by hand unless a device opts in. Settings › Preferences ›
+Trash can empty it automatically after 30 or 90 days, a choice kept in that
+device's local storage. While the app runs, it removes the entries older
+than that which this account can change, through `empty_trash`, one store
+at a time and at most hourly per store, and not while a dialog is open.
 
 Go FOKS clients and the CLI list `.trash` as an ordinary folder. The layout
 needs no protocol or storage change, and a Go client can restore an entry
@@ -434,7 +471,8 @@ mounting every card. It no longer imposes the former 200-card cap.
   `src/clipboard.rs`, `src/dragdrop.rs`, `src/commands/context.rs`
   (`record_drop_paths`, `upload_path`), `src/commands/vault.rs`
   (`read_item`, `copy_item_value`, `copy_item_field`, `download_file`),
-  `src/commands/trash.rs` (`trash_item`, `restore_trash_item`, `remove_item`),
+  `src/commands/trash.rs` (`trash_item`, `restore_trash_item`, `remove_item`,
+  `empty_trash`),
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.

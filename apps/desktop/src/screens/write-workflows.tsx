@@ -67,6 +67,7 @@ import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '/kit/toasts';
 import { itemActionProblem } from './store-access';
+import { useTrashOrigins } from './trash-origins';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
 
@@ -133,8 +134,11 @@ export type WriteWorkflow =
       draft?: NewDraft;
     }
   | { kind: 'move'; item: Item }
-  /** Permanently removes an entry in Trash. */
-  | { kind: 'delete'; item: Item }
+  /**
+   * Permanently removes an entry in Trash, or with `outsideTrash` an item in
+   * a team whose Trash this account cannot set up.
+   */
+  | { kind: 'delete'; item: Item; outsideTrash?: boolean }
   /** Restoring a Trash entry found another item at `destination`. */
   | { kind: 'restore-conflict'; item: Item; destination: string }
   | { kind: 'empty-trash'; store: StoreRef }
@@ -1430,8 +1434,13 @@ function trashLabel(item: Item): string {
   return parsed?.kind === 'path' ? nameOf(parsed.original) : nameOf(item.path);
 }
 
+/** Why a team member is offered permanent deletion instead of Trash. */
+export const TRASH_UNAVAILABLE_COPY =
+  'Trash is not set up in this team yet, and only an owner can set it up by moving any item to Trash.';
+
 /**
- * Confirmation dialog for permanently deleting an entry in Trash.
+ * Confirmation dialog for permanently deleting an entry in Trash, or an item
+ * in a team whose Trash this account cannot set up.
  */
 function DeleteSheet({
   snapshot,
@@ -1503,6 +1512,7 @@ function DeleteSheet({
                     storeId: workflow.item.store,
                     path: workflow.item.path,
                     version: workflow.item.version,
+                    ...(workflow.outsideTrash ? { outsideTrash: true } : {}),
                   });
                   setWorkflow(null);
                   // Keep refresh failure separate from the acknowledged deletion.
@@ -1543,6 +1553,7 @@ function DeleteSheet({
           {problem}
         </p>
       ) : null}
+      {workflow.outsideTrash ? <p>{TRASH_UNAVAILABLE_COPY}</p> : null}
       <p>
         {workflow.item.kind === 'Folder'
           ? `This folder and everything in it will be deleted. ${PERMANENT_DELETE_COPY}`
@@ -1634,7 +1645,8 @@ function RestoreConflictSheet({
 
 /**
  * Permanently deletes every entry in one store's Trash that this account can
- * read, one entry at a time, folders with everything in them.
+ * change, folders with everything in them, in one host mutation. Entries
+ * whose write role this account lacks stay in Trash.
  */
 function EmptyTrashSheet({
   snapshot,
@@ -1653,21 +1665,24 @@ function EmptyTrashSheet({
   onApplied: (message: string, profile?: string) => Promise<void>;
   onMutationError: MutationFailureHandler;
 }): ReactNode {
-  const [entries] = useState(() => trashEntries(snapshot, workflow.store));
+  const [listed] = useState(() => trashEntries(snapshot, workflow.store));
+  const entries = useTrashOrigins(bridge, listed);
   const [emptying, setEmptying] = useState(false);
-  const [progress, setProgress] = useState(0);
   const store = storeOf(snapshot, workflow.store);
-  const first = entries[0];
-  const problem = first
-    ? itemActionProblem(snapshot, first.item, true, accessNow())
-    : undefined;
+  const problems = entries.map((entry) =>
+    itemActionProblem(snapshot, entry.item, true, accessNow()),
+  );
+  const removable = entries.filter((_, index) => !problems[index]);
+  const kept = entries.length - removable.length;
+  const problem = removable.length ? undefined : problems[0];
   useSheetGuard(
     emptying
       ? { verdict: 'refuse', reason: 'Wait for Trash to finish emptying.' }
       : null,
     !emptying,
   );
-  const count = `${entries.length} ${entries.length === 1 ? 'item' : 'items'}`;
+  const count = (amount: number): string =>
+    `${amount} ${amount === 1 ? 'item' : 'items'}`;
   return (
     <SheetDialog
       danger
@@ -1678,7 +1693,7 @@ function EmptyTrashSheet({
         </span>
       }
       dismissible={!emptying}
-      title={`Permanently delete ${count}?`}
+      title={`Permanently delete ${count(removable.length)}?`}
       footer={
         <>
           <Button
@@ -1691,29 +1706,24 @@ function EmptyTrashSheet({
           <Button
             variant="primary"
             danger
-            disabled={emptying || !entries.length || Boolean(problem)}
+            disabled={emptying || !removable.length}
             title={problem}
             onClick={() => {
-              if (emptying) return;
+              if (emptying || !removable.length) return;
               setEmptying(true);
               void (async () => {
-                let removed = 0;
                 try {
-                  for (const entry of entries) {
-                    await bridge.removeItem({
-                      storeId: entry.item.store,
-                      path: entry.item.path,
-                      version: entry.item.version,
-                      direntId: entry.item.direntId,
-                    });
-                    removed += 1;
-                    setProgress(removed);
-                  }
+                  await bridge.emptyTrash({
+                    storeId: workflow.store,
+                    entries: removable.map(({ item }) => ({
+                      path: item.path,
+                      version: item.version,
+                      direntId: item.direntId,
+                    })),
+                  });
                 } catch (error) {
                   setWorkflow(null);
-                  await onMutationError(error, {
-                    item: entries[removed]?.item,
-                  });
+                  await onMutationError(error);
                   return;
                 } finally {
                   setEmptying(false);
@@ -1730,9 +1740,7 @@ function EmptyTrashSheet({
               })();
             }}
           >
-            {emptying
-              ? `Deleting ${progress + 1} of ${entries.length}…`
-              : 'Empty Trash'}
+            {emptying ? 'Deleting…' : 'Empty Trash'}
           </Button>
         </>
       }
@@ -1743,9 +1751,18 @@ function EmptyTrashSheet({
         </p>
       ) : null}
       <p>{PERMANENT_DELETE_COPY}</p>
+      {kept && removable.length ? (
+        <p>
+          {count(kept)} {kept === 1 ? 'stays' : 'stay'} in Trash because this
+          account cannot change {kept === 1 ? 'it' : 'them'}.
+        </p>
+      ) : null}
       <ul className="trash-empty-list">
-        {entries.map((entry) => (
-          <li key={entry.item.path}>
+        {entries.map((entry, index) => (
+          <li
+            key={entry.item.path}
+            className={problems[index] ? 'kept' : undefined}
+          >
             <Icon name={entry.item.kind === 'Folder' ? 'folder' : 'file'} />
             <span>{trashEntryLabel(entry)}</span>
             {entry.item.kind === 'Folder' ? (
@@ -1753,6 +1770,7 @@ function EmptyTrashSheet({
                 folder · {entry.count} {entry.count === 1 ? 'item' : 'items'}
               </small>
             ) : null}
+            {problems[index] ? <small>stays in Trash</small> : null}
           </li>
         ))}
       </ul>

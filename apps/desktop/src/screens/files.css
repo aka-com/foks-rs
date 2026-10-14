@@ -1023,3 +1023,6 @@
 .trash-empty-list small {
   color: var(--faint);
 }
+.trash-empty-list li.kept > span {
+  color: var(--faint);
+}

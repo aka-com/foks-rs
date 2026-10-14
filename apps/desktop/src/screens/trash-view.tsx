@@ -1,7 +1,8 @@
 /**
  * One store's Trash: the entries moved into its `/.trash` role folders,
  * newest first, each with Restore and Delete permanently. Where an entry was
- * and when it was deleted come from its name in Trash.
+ * and when it was deleted come from its name in Trash, or for a hashed name
+ * from the `.origin` file beside it.
  */
 
 import { useState } from 'react';
@@ -12,10 +13,14 @@ import {
   formatRole,
   ownersOnly,
   parseRole,
+  trashEntries,
   trashEntryLabel,
+  trashUnavailable,
 } from '../model';
 import type { AgentSnapshot, Store, TrashEntry } from '../model';
+import type { Bridge } from '../bridge';
 import { itemActionProblem } from './store-access';
+import { useTrashOrigins } from './trash-origins';
 
 function deletedLabel(deletedAt: number | null): string {
   if (deletedAt === null) return '—';
@@ -40,14 +45,16 @@ function originalLabel(entry: TrashEntry): string {
 
 export function TrashView({
   snapshot,
+  bridge,
   store,
-  entries,
+  entries: listed,
   accessNow,
   onRestore,
   onDeletePermanently,
   onEmptyTrash,
 }: {
   snapshot: AgentSnapshot;
+  bridge: Bridge;
   store: Store;
   entries: readonly TrashEntry[];
   accessNow: () => number;
@@ -55,17 +62,32 @@ export function TrashView({
   onDeletePermanently: (entry: TrashEntry) => void;
   onEmptyTrash: () => void;
 }): ReactNode {
+  const entries = useTrashOrigins(bridge, listed);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const selected = entries.find((entry) => entry.item.path === selectedPath);
-  const emptyProblem = entries[0]
-    ? itemActionProblem(snapshot, entries[0].item, true, accessNow())
-    : undefined;
+  // Empty Trash removes the entries this account can change and leaves the
+  // rest; it is unavailable only when there are none.
+  const all = trashEntries(snapshot, store.id);
+  const problems = all.map((entry) =>
+    itemActionProblem(snapshot, entry.item, true, accessNow()),
+  );
+  const emptyProblem = problems.some((problem) => !problem)
+    ? undefined
+    : problems[0];
   return (
     <div className="trash-view">
+      {trashUnavailable(snapshot, store.id) ? (
+        <Band severity="info" label="Trash is not set up">
+          Trash is not set up in this team yet. An owner sets it up by moving
+          any item to Trash. Until then, deleting an item removes it permanently
+          after you confirm, and folders cannot be deleted.
+        </Band>
+      ) : null}
       {store.kind === 'team' ? (
         <Band severity="info" label="Trash access">
-          Items keep their read access in Trash. Owner-only items are visible
-          only to owners, and each member sees the entries their role can read.
+          Items keep their read access in Trash. An item from a folder with
+          narrower read access is filed with the access of that folder, so each
+          member sees only the entries their role could reach before.
         </Band>
       ) : null}
       <div className="trash-bar">
@@ -78,7 +100,7 @@ export function TrashView({
           size="sm"
           danger
           icon="trash"
-          disabled={!entries.length || Boolean(emptyProblem)}
+          disabled={!all.length || Boolean(emptyProblem)}
           title={emptyProblem}
           onClick={onEmptyTrash}
         >

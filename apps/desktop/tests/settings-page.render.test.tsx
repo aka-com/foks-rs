@@ -565,7 +565,7 @@ test('a section address opens that page, each with the sub-navigation beside it'
   }
 });
 
-test('Preferences holds desktop alert preferences and the rail color', async () => {
+test('Preferences holds desktop alert preferences, the rail color and Trash emptying', async () => {
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'preferences' },
   });
@@ -579,7 +579,7 @@ test('Preferences holds desktop alert preferences and the rail color', async () 
     [...main.querySelectorAll(':scope > .sec')].map(
       (label) => label.textContent,
     ),
-    ['Appearance', 'Desktop alerts', 'Onboarding tips'],
+    ['Appearance', 'Desktop alerts', 'Trash', 'Onboarding tips'],
   );
   assert.equal(rendered.queryByRole('button', { name: 'Passphrase…' }), null);
   assert.ok(
@@ -587,6 +587,25 @@ test('Preferences holds desktop alert preferences and the rail color', async () 
       name: 'Enable desktop alerts on this device',
     }),
   );
+  // Automatic emptying is off until chosen, and the choice is kept.
+  const autoEmpty = rendered.getByRole('group', {
+    name: 'Empty Trash automatically',
+  });
+  assert.equal(
+    ui
+      .within(autoEmpty)
+      .getByRole('button', { name: 'Never' })
+      .getAttribute('aria-pressed'),
+    'true',
+  );
+  try {
+    ui.fireEvent.click(
+      ui.within(autoEmpty).getByRole('button', { name: 'After 30 days' }),
+    );
+    assert.equal(window.localStorage.getItem('trashAutoEmptyDays'), '30');
+  } finally {
+    window.localStorage.removeItem('trashAutoEmptyDays');
+  }
 });
 
 test('Preferences remains available without an account', async () => {

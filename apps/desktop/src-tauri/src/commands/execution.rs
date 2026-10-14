@@ -151,33 +151,45 @@ pub(super) async fn apply_kv_mutation_with_transport(
     kind: MutationKind,
     transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
 ) -> Result<MutationDto, AgentError> {
-    match kv_mutation_store(&mutation) {
-        Some(store) => state.invalidate_catalog_items(&store),
+    let store = kv_mutation_store(&mutation);
+    run_kv_writes(state, store.as_ref(), move || {
+        execute_kv_mutation(transport.as_ref(), mutation, kind)
+    })
+    .await
+    .map(|()| MutationDto { applied: true })
+}
+
+/// Runs KV writes into `store` on a blocking worker. The store's catalog
+/// items are discarded first, since the writes change them whatever their
+/// outcome, and an ambiguous failure requires a refresh before the next
+/// mutation.
+pub(super) async fn run_kv_writes<T: Send + 'static>(
+    state: &AppState,
+    store: Option<&CatalogStoreRef>,
+    writes: impl FnOnce() -> Result<T, AgentError> + Send + 'static,
+) -> Result<T, AgentError> {
+    match store {
+        Some(store) => state.invalidate_catalog_items(store),
         // Not a KV write, so which items it changed is unknown. Retire the
         // whole catalog rather than leave any of it stale.
         None => state.invalidate_catalog(),
     }
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        execute_kv_mutation(transport.as_ref(), mutation, kind)
-    })
-    .await
-    .map_err(|error| {
-        ambiguous_worker_failure(
-            state,
-            format!("The background operation stopped before reporting its outcome: {error}"),
-        )
-    })?;
-    match result {
-        Ok(()) => Ok(MutationDto { applied: true }),
-        Err(error) => {
-            if error.ambiguous {
-                state
-                    .mutation_requires_refresh
-                    .store(true, Ordering::Release);
-            }
-            Err(error)
+    let result = tauri::async_runtime::spawn_blocking(writes)
+        .await
+        .map_err(|error| {
+            ambiguous_worker_failure(
+                state,
+                format!("The background operation stopped before reporting its outcome: {error}"),
+            )
+        })?;
+    if let Err(error) = &result {
+        if error.ambiguous {
+            state
+                .mutation_requires_refresh
+                .store(true, Ordering::Release);
         }
     }
+    result
 }
 
 pub(super) async fn apply_operation(

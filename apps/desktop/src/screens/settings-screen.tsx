@@ -2,6 +2,11 @@ import { CollectionStatus } from '../components/collection-status';
 import type { CollectionReadiness } from '../model';
 import { localAliasOf } from '../model';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
+import {
+  rememberTrashAutoEmpty,
+  storedTrashAutoEmpty,
+  TRASH_AUTO_EMPTY_CHOICES,
+} from '../trash-auto-empty';
 import { setAppearance, useAppearance, type Appearance } from '../appearance';
 /**
  * The Settings tab: a sub-navigation of three pages, held on screen beside
@@ -254,6 +259,8 @@ function PreferencesSection(): ReactNode {
       <RailColorPicker />
       <SectionLabel>Desktop alerts</SectionLabel>
       <NotificationSettings />
+      <SectionLabel>Trash</SectionLabel>
+      <TrashAutoEmptyPicker />
       <SectionLabel>Onboarding tips</SectionLabel>
       <Inset className="settings-checkboxes">
         <label>
@@ -266,6 +273,47 @@ function PreferencesSection(): ReactNode {
           <span>Add a password</span>
         </label>
       </Inset>
+    </>
+  );
+}
+
+/**
+ * Automatic emptying of vault Trash on this device. While this app runs,
+ * entries deleted longer ago than the chosen age are deleted permanently,
+ * for everyone, from each vault's Trash where this account can change them.
+ */
+function TrashAutoEmptyPicker(): ReactNode {
+  const [days, setDays] = useState(storedTrashAutoEmpty);
+  return (
+    <>
+      <Inset className="settings-inset middle wide">
+        <InsetRow label="Empty automatically">
+          <div
+            className="seg txt"
+            role="group"
+            aria-label="Empty Trash automatically"
+          >
+            {TRASH_AUTO_EMPTY_CHOICES.map((choice) => (
+              <button
+                type="button"
+                key={choice ?? 'never'}
+                className={days === choice ? 'on' : undefined}
+                aria-pressed={days === choice}
+                onClick={() => {
+                  setDays(choice);
+                  rememberTrashAutoEmpty(choice);
+                }}
+              >
+                {choice === null ? 'Never' : `After ${choice} days`}
+              </button>
+            ))}
+          </div>
+        </InsetRow>
+      </Inset>
+      <p className="hint">
+        Entries that have been in Trash this long are deleted permanently, for
+        everyone, while this app runs. The choice applies to this device only.
+      </p>
     </>
   );
 }

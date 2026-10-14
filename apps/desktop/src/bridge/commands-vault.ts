@@ -35,6 +35,7 @@ export const vaultCommands: Pick<
   | 'trashItem'
   | 'restoreTrashItem'
   | 'removeItem'
+  | 'emptyTrash'
   | 'importDroppedFile'
   | 'pickImportFile'
   | 'releaseImportFile'
@@ -138,10 +139,29 @@ export const vaultCommands: Pick<
       { storeId, path, version, direntId, destination },
       decodeTrashMutation,
     ),
-  removeItem: ({ storeId, path, version, direntId }) =>
+  removeItem: ({ storeId, path, version, direntId, outsideTrash }) =>
     checkedMutation(
       'remove_item',
-      { storeId, path, version, direntId },
+      {
+        storeId,
+        path,
+        version,
+        direntId,
+        outsideTrash: outsideTrash === true,
+      },
+      decodeMutation,
+    ),
+  emptyTrash: ({ storeId, entries }) =>
+    checkedMutation(
+      'empty_trash',
+      {
+        storeId,
+        entries: entries.map(({ path, version, direntId }) => ({
+          path,
+          version,
+          direntId,
+        })),
+      },
       decodeMutation,
     ),
   importDroppedFile: ({ storeId, path, sourcePath, readRole, writeRole }) =>

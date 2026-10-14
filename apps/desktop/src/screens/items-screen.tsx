@@ -1416,6 +1416,7 @@ export function ItemsScreen({
     trashSelected && selectedTree ? (
       <TrashView
         snapshot={snapshot}
+        bridge={bridge}
         store={selectedTree.store}
         entries={trashShown}
         accessNow={accessNow}

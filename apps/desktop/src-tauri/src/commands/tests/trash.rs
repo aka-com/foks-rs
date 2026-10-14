@@ -1,8 +1,8 @@
 use crate::commands::execution::MutationKind;
 use crate::commands::trash::{
-    decode_original_path, encode_original_path, execute_trash_plan, in_trash, parse_trash_name,
-    removal_plan, restore_plan, role_tag, trash_entry_name, trash_plan, utc_stamp, TrashName,
-    TrashStep,
+    decode_original_path, empty_trash_plan, encode_original_path, execute_trash_plan, in_trash,
+    parse_trash_name, path_read_role, removal_plan, removal_without_trash_plan, restore_plan,
+    role_tag, trash_entry_name, trash_plan, utc_stamp, TrashName, TrashStep, TRASH_UNAVAILABLE,
 };
 use foks_agent_proto::{KvPrecondition, KvRole, KvStoreRef, Operation};
 use foks_desktop::{CatalogItem, CatalogStoreRef};
@@ -460,6 +460,21 @@ fn permanent_removal_is_limited_to_trash_and_recursive_for_folders() {
 struct ScriptedTransport {
     calls: Mutex<Vec<Operation>>,
     fail_at: usize,
+    code: foks_agent_proto::ErrorCode,
+}
+
+impl ScriptedTransport {
+    fn failing_at(fail_at: usize) -> Self {
+        Self::failing_with(fail_at, foks_agent_proto::ErrorCode::Conflict)
+    }
+
+    fn failing_with(fail_at: usize, code: foks_agent_proto::ErrorCode) -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            fail_at,
+            code,
+        }
+    }
 }
 
 impl foks_desktop::AgentTransport for ScriptedTransport {
@@ -468,7 +483,7 @@ impl foks_desktop::AgentTransport for ScriptedTransport {
         calls.push(operation);
         if calls.len() == self.fail_at {
             return Err(foks_desktop::AgentError::Protocol {
-                code: foks_agent_proto::ErrorCode::Conflict,
+                code: self.code,
                 message: "precondition failed".to_owned(),
                 fields: Box::default(),
             });
@@ -482,10 +497,7 @@ fn plans_stop_at_the_first_failed_write_and_name_the_step() {
     let store = account();
     let item = secret(&store, "/a", 1);
     let plan = trash_plan(std::slice::from_ref(&item), &item, NOW).unwrap();
-    let transport = ScriptedTransport {
-        calls: Mutex::new(Vec::new()),
-        fail_at: 2,
-    };
+    let transport = ScriptedTransport::failing_at(2);
     let error = execute_trash_plan(&transport, plan.steps).unwrap_err();
     assert_eq!(error.code, "already-exists");
     assert!(error
@@ -494,19 +506,278 @@ fn plans_stop_at_the_first_failed_write_and_name_the_step() {
     assert_eq!(transport.calls.lock().unwrap().len(), 2);
 
     let plan = trash_plan(std::slice::from_ref(&item), &item, NOW).unwrap();
-    let transport = ScriptedTransport {
-        calls: Mutex::new(Vec::new()),
-        fail_at: 3,
-    };
+    let transport = ScriptedTransport::failing_at(3);
     let error = execute_trash_plan(&transport, plan.steps).unwrap_err();
     assert_eq!(error.code, "conflict");
     assert_eq!(error.message, "precondition failed");
 
     let plan = trash_plan(std::slice::from_ref(&item), &item, NOW).unwrap();
-    let transport = ScriptedTransport {
-        calls: Mutex::new(Vec::new()),
-        fail_at: 0,
-    };
-    execute_trash_plan(&transport, plan.steps).unwrap();
+    let transport = ScriptedTransport::failing_at(0);
+    assert!(!execute_trash_plan(&transport, plan.steps).unwrap());
     assert_eq!(transport.calls.lock().unwrap().len(), 3);
+}
+
+#[test]
+fn entries_are_filed_by_the_most_restrictive_read_role_on_their_path() {
+    let store = team();
+    let member = KvRole::Member { visibility: 0 };
+    let low = KvRole::Member {
+        visibility: -0x4000,
+    };
+    let payroll = folder(&store, "/Payroll", KvRole::Admin, 1);
+    let login = entry(
+        &store,
+        "/Payroll/bank-login",
+        "small-file",
+        member,
+        member,
+        2,
+    );
+    let items = vec![
+        payroll.clone(),
+        login.clone(),
+        folder(&store, "/.trash", low, 3),
+        folder(&store, "/.trash/member-0", member, 4),
+    ];
+    assert_eq!(path_read_role(&items, &login), KvRole::Admin);
+    let plan = trash_plan(&items, &login, NOW).unwrap();
+    let destination = format!("/.trash/admin/{STAMP}~%2FPayroll%2Fbank-login");
+    assert_eq!(plan.path, destination);
+    assert_eq!(
+        operations(&plan.steps),
+        vec![
+            mkdir(&store, "/.trash/admin", KvRole::Admin, KvRole::Admin, false),
+            moved(&login, &destination),
+        ]
+    );
+
+    // A folder beneath a more restrictive one, and a hashed entry's
+    // `.origin` file, are filed and sealed the same way.
+    let shared = folder(&store, "/Payroll/shared", member, 5);
+    let long = format!("/Payroll/shared/{}", "n".repeat(240));
+    let note = entry(&store, &long, "small-file", member, member, 6);
+    let items = vec![payroll, shared.clone(), note.clone()];
+    let plan = trash_plan(&items, &shared, NOW).unwrap();
+    assert_eq!(
+        plan.path,
+        format!("/.trash/admin/{STAMP}~%2FPayroll%2Fshared")
+    );
+    let plan = trash_plan(&items, &note, NOW).unwrap();
+    let (_, origin) = trash_entry_name(STAMP, &long);
+    assert_eq!(
+        plan.steps[2].operation,
+        Operation::PutKv {
+            store: kv(&store),
+            path: format!("/.trash/admin/{}", origin.unwrap()),
+            content: long.as_bytes().to_vec(),
+            read_role: KvRole::Admin,
+            write_role: member,
+            precondition: KvPrecondition::Create,
+            mkdir_p: false,
+        }
+    );
+
+    // A less restrictive ancestor leaves the entry's own role in charge.
+    let open = folder(&store, "/open", member, 7);
+    let deed = entry(
+        &store,
+        "/open/deed",
+        "small-file",
+        KvRole::Owner,
+        KvRole::Owner,
+        8,
+    );
+    assert_eq!(path_read_role(&[open, deed.clone()], &deed), KvRole::Owner);
+}
+
+#[test]
+fn restore_creates_a_missing_folder_readable_only_under_its_trash_folder_role() {
+    let store = team();
+    let member = KvRole::Member { visibility: 0 };
+    let trashed = entry(
+        &store,
+        &format!("/.trash/admin/{STAMP}~%2FPayroll%2Fbank-login"),
+        "small-file",
+        member,
+        member,
+        1,
+    );
+    let items = vec![
+        trashed.clone(),
+        folder(&store, "/.trash/admin", KvRole::Admin, 2),
+    ];
+    let plan = restore_plan(&items, &trashed, "/Payroll/bank-login").unwrap();
+    assert_eq!(
+        operations(&plan.steps),
+        vec![
+            mkdir(&store, "/Payroll", KvRole::Admin, KvRole::Admin, true),
+            moved(&trashed, "/Payroll/bank-login"),
+        ]
+    );
+}
+
+#[test]
+fn a_name_already_in_trash_is_reported_apart_from_a_changed_item() {
+    let store = account();
+    let item = secret(&store, "/a", 1);
+    let items = vec![
+        item.clone(),
+        folder(&store, "/.trash", KvRole::Owner, 2),
+        folder(&store, "/.trash/owner", KvRole::Owner, 3),
+        secret(&store, &format!("/.trash/owner/{STAMP}~%2Fa"), 4),
+    ];
+    assert_eq!(
+        trash_plan(&items, &item, NOW).unwrap_err().code,
+        "trash-name-taken"
+    );
+}
+
+#[test]
+fn a_team_member_who_cannot_create_trash_is_told_so_by_code() {
+    let store = team();
+    let item = entry(
+        &store,
+        "/wifi/guest",
+        "small-file",
+        KvRole::Member { visibility: 0 },
+        KvRole::Member { visibility: 0 },
+        1,
+    );
+    let refused = |code| {
+        let plan = trash_plan(std::slice::from_ref(&item), &item, NOW).unwrap();
+        let transport = ScriptedTransport::failing_with(1, code);
+        execute_trash_plan(&transport, plan.steps).unwrap_err()
+    };
+    let error = refused(foks_agent_proto::ErrorCode::OperationFailed);
+    assert_eq!(error.code, TRASH_UNAVAILABLE);
+    assert!(error
+        .message
+        .starts_with("Trash could not be created at the top level of this vault."));
+    // A transient failure or a concurrent creation keeps its own code.
+    assert_eq!(
+        refused(foks_agent_proto::ErrorCode::ServerUnavailable).code,
+        "server-unavailable"
+    );
+    assert_eq!(
+        refused(foks_agent_proto::ErrorCode::Conflict).code,
+        "already-exists"
+    );
+
+    // In an account, the owner always can, so the code is never replaced.
+    let own = secret(&account(), "/a", 1);
+    let plan = trash_plan(std::slice::from_ref(&own), &own, NOW).unwrap();
+    let transport =
+        ScriptedTransport::failing_with(1, foks_agent_proto::ErrorCode::OperationFailed);
+    assert_eq!(
+        execute_trash_plan(&transport, plan.steps).unwrap_err().code,
+        "operation-failed"
+    );
+}
+
+#[test]
+fn removal_outside_trash_is_limited_to_files_in_a_team_without_trash() {
+    let store = team();
+    let item = secret(&store, "/wifi/guest", 1);
+    let plan = removal_without_trash_plan(std::slice::from_ref(&item), &item, true).unwrap();
+    assert_eq!(operations(&plan.steps), vec![removed(&item, false)]);
+
+    let low = KvRole::Member {
+        visibility: -0x4000,
+    };
+    let with_trash = vec![item.clone(), folder(&store, "/.trash", low, 2)];
+    assert_eq!(
+        removal_without_trash_plan(&with_trash, &item, true)
+            .unwrap_err()
+            .code,
+        "invalid-request"
+    );
+    assert_eq!(
+        removal_without_trash_plan(std::slice::from_ref(&item), &item, false)
+            .unwrap_err()
+            .code,
+        "catalog-required"
+    );
+    let wifi = folder(&store, "/wifi", low, 3);
+    assert!(removal_without_trash_plan(std::slice::from_ref(&wifi), &wifi, true).is_err());
+    let own = secret(&account(), "/a", 4);
+    assert!(removal_without_trash_plan(std::slice::from_ref(&own), &own, true).is_err());
+    let trashed = secret(&store, &format!("/.trash/owner/{STAMP}~%2Fa"), 5);
+    assert!(removal_without_trash_plan(std::slice::from_ref(&trashed), &trashed, true).is_err());
+}
+
+#[test]
+fn emptying_trash_plans_every_entry_from_one_catalog_read() {
+    let store = account();
+    let long = format!("/{}", "n".repeat(250));
+    let (hashed_name, origin_name) = trash_entry_name(STAMP, &long);
+    let hashed = secret(&store, &format!("/.trash/owner/{hashed_name}"), 1);
+    let origin = secret(
+        &store,
+        &format!("/.trash/owner/{}", origin_name.unwrap()),
+        2,
+    );
+    let tax = folder(
+        &store,
+        &format!("/.trash/owner/{STAMP}~%2Ftax-2024"),
+        KvRole::Owner,
+        3,
+    );
+    let file = secret(&store, &format!("/.trash/owner/{STAMP}~%2Fa"), 4);
+    let orphan = secret(
+        &store,
+        &format!("/.trash/owner/{STAMP}~#{}.origin", "f".repeat(32)),
+        5,
+    );
+    let items = vec![
+        hashed.clone(),
+        origin.clone(),
+        tax.clone(),
+        file.clone(),
+        orphan.clone(),
+    ];
+    let entries = vec![hashed.clone(), tax.clone(), file.clone()];
+    let plan = empty_trash_plan(&items, &entries, true).unwrap();
+    assert_eq!(
+        operations(&plan.steps),
+        vec![
+            removed(&hashed, false),
+            removed(&tax, true),
+            removed(&file, false),
+            removed(&origin, false),
+            removed(&orphan, false),
+        ]
+    );
+    assert_eq!(
+        plan.steps
+            .iter()
+            .map(|step| step.cleanup)
+            .collect::<Vec<_>>(),
+        vec![false, false, false, true, true]
+    );
+
+    // An incomplete catalog may be missing an `.origin` file's entry, so no
+    // `.origin` file is taken for an orphan.
+    let plan = empty_trash_plan(&items, &entries, false).unwrap();
+    assert_eq!(plan.steps.len(), 4);
+    // Every entry must be in Trash.
+    let outside = secret(&store, "/a", 6);
+    assert!(empty_trash_plan(&items, &[file, outside], true).is_err());
+}
+
+#[test]
+fn a_failed_origin_cleanup_leaves_the_command_applied() {
+    let store = account();
+    let long = format!("/{}", "n".repeat(250));
+    let (name, origin) = trash_entry_name(STAMP, &long);
+    let trashed = secret(&store, &format!("/.trash/owner/{name}"), 1);
+    let origin = secret(&store, &format!("/.trash/owner/{}", origin.unwrap()), 2);
+    let items = vec![trashed.clone(), origin];
+    let plan = restore_plan(&items, &trashed, &long).unwrap();
+    let transport = ScriptedTransport::failing_at(2);
+    assert!(!execute_trash_plan(&transport, plan.steps).unwrap());
+
+    let plan = removal_plan(&items, &trashed).unwrap();
+    let transport =
+        ScriptedTransport::failing_with(2, foks_agent_proto::ErrorCode::DeadlineExceeded);
+    assert!(execute_trash_plan(&transport, plan.steps).unwrap());
 }

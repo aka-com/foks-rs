@@ -4,10 +4,18 @@
 //! Dirent names are sealed under the key of the directory that holds them,
 //! so one shared Trash folder would expose names to readers of the wrong
 //! role. Each read role gets its own folder, `/.trash/<role-tag>/`, created
-//! with that read role, and an entry moved into it keeps its own roles. A
-//! folder is filed by its own directory read role, since the names of its
-//! children stay sealed under its key. A role folder is used only when its
-//! read role matches; otherwise the next free `/.trash/<role-tag>.<n>` is.
+//! with that read role, and an entry moved into it keeps its own roles. An
+//! entry is filed by the most restrictive read role on its path: its own and
+//! that of every folder above it. The entry name records the original path,
+//! and readers who lack an ancestor's role could not reach the entry before
+//! it moved either. A folder's children move with it and stay sealed under
+//! its key. A role folder is used only when its read role matches;
+//! otherwise the next free `/.trash/<role-tag>.<n>` is.
+//!
+//! Team roots are owner-writable, so until an owner creates `/.trash`, other
+//! members cannot move items there. Only while a team has no `/.trash` may a
+//! file outside Trash be removed permanently, on the member's explicit
+//! request.
 //!
 //! An entry is named `<UTC yyyymmddThhmmss>~<percent-encoded original path>`.
 //! When that name would exceed the 255-byte component limit, it is
@@ -17,14 +25,14 @@
 
 use crate::agent::AgentError;
 use crate::commands::context::AppState;
-use crate::commands::execution::{
-    ambiguous_worker_failure, execute_kv_mutation, kv_mutation_store, MutationKind,
-};
+use crate::commands::execution::{execute_kv_mutation, run_kv_writes, MutationKind};
 use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutation};
+use crate::commands::types::MutationDto;
 use crate::commands::validation::{invalid_request, require_main_window};
+use crate::commands::vault::protocol_store;
 use foks_agent_proto::{KvPrecondition, KvRole, Operation};
-use foks_desktop::{CatalogItem, CatalogStoreRef, KvAccountMutation};
-use serde::Serialize;
+use foks_desktop::{CatalogItem, CatalogStoreReadState, CatalogStoreRef, KvAccountMutation};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -58,12 +66,32 @@ pub struct TrashMutationDto {
     pub path: String,
 }
 
+/// The code `trash_item` answers with when a team has no `/.trash` and this
+/// account cannot create it. The renderer then offers permanent removal.
+pub(super) const TRASH_UNAVAILABLE: &str = "trash-unavailable";
+
+/// One Trash entry named by the renderer, as `empty_trash` takes it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashEntryRequest {
+    pub path: String,
+    pub version: u64,
+    pub dirent_id: String,
+}
+
 /// One write of a Trash plan, with the context a failure is reported in.
 #[derive(Debug, PartialEq)]
 pub(super) struct TrashStep {
     pub(super) operation: Operation,
     pub(super) kind: MutationKind,
     pub(super) failure: Option<&'static str>,
+    /// The code a definite, non-transient refusal of this write is reported
+    /// with, in place of the agent's.
+    pub(super) refusal: Option<&'static str>,
+    /// Whether the write only removes an `.origin` file after the plan's
+    /// main writes. Its failure leaves the command applied: an `.origin`
+    /// file without its entry is harmless.
+    pub(super) cleanup: bool,
 }
 
 /// The writes that carry out one Trash command, in order, and the path the
@@ -218,11 +246,37 @@ fn parent_of(path: &str) -> &str {
     }
 }
 
-fn kv_store(store: &CatalogStoreRef) -> foks_agent_proto::KvStoreRef {
-    match store {
-        CatalogStoreRef::Account(store) => foks_agent_proto::KvStoreRef::Account(store.clone()),
-        CatalogStoreRef::Team(store) => foks_agent_proto::KvStoreRef::Team(store.clone()),
+/// How few readers a read role admits, as a sortable key: Owner admits the
+/// fewest, then Admin, then Member roles from the highest visibility down.
+fn restriction(role: KvRole) -> (u8, i16) {
+    match role {
+        KvRole::Owner => (2, 0),
+        KvRole::Admin => (1, 0),
+        KvRole::Member { visibility } => (0, visibility),
     }
+}
+
+fn more_restrictive(first: KvRole, second: KvRole) -> KvRole {
+    if restriction(second) > restriction(first) {
+        second
+    } else {
+        first
+    }
+}
+
+/// The most restrictive read role on `item`'s path: its own and that of
+/// every folder above it in the catalog. The store root is not consulted:
+/// an account root is owner-only like everything in it, and a team root is
+/// readable through the lowest Member key.
+pub(super) fn path_read_role(store_items: &[CatalogItem], item: &CatalogItem) -> KvRole {
+    let path = item.metadata.path.as_str();
+    path.match_indices('/')
+        .filter(|(index, _)| *index > 0)
+        .filter_map(|(index, _)| find(store_items, &path[..index]))
+        .filter(|ancestor| ancestor.metadata.node_type == "directory")
+        .fold(item.metadata.read_role, |role, ancestor| {
+            more_restrictive(role, ancestor.metadata.read_role)
+        })
 }
 
 fn mkdir_step(
@@ -235,7 +289,7 @@ fn mkdir_step(
 ) -> TrashStep {
     TrashStep {
         operation: Operation::MkdirKv {
-            store: kv_store(store),
+            store: protocol_store(store),
             path: path.to_owned(),
             read_role,
             write_role,
@@ -244,23 +298,20 @@ fn mkdir_step(
         },
         kind: MutationKind::Create,
         failure: Some(failure),
+        refusal: None,
+        cleanup: false,
     }
 }
 
-fn remove_step(item: &CatalogItem) -> TrashStep {
-    TrashStep {
-        operation: Operation::RemoveKv {
-            expected_dirent_id: Some(item.metadata.dirent_id),
-            store: kv_store(&item.store),
-            path: item.metadata.path.clone(),
-            recursive: item.metadata.node_type == "directory",
-            precondition: KvPrecondition::ExactVersion {
-                version: item.metadata.version,
-            },
-        },
+fn remove_step(item: &CatalogItem, cleanup: bool) -> Result<TrashStep, AgentError> {
+    Ok(TrashStep {
+        operation: foks_desktop::remove_kv_operation(item, item.metadata.node_type == "directory")
+            .map_err(invalid_request)?,
         kind: MutationKind::Guarded,
         failure: None,
-    }
+        refusal: None,
+        cleanup,
+    })
 }
 
 fn move_step(item: &CatalogItem, destination: &str) -> Result<TrashStep, AgentError> {
@@ -268,7 +319,19 @@ fn move_step(item: &CatalogItem, destination: &str) -> Result<TrashStep, AgentEr
         operation: foks_desktop::move_kv_operation(item, destination).map_err(invalid_request)?,
         kind: MutationKind::Guarded,
         failure: None,
+        refusal: None,
+        cleanup: false,
     })
+}
+
+/// The `.origin` file beside a hashed Trash entry, when the catalog lists it.
+fn origin_of<'a>(store_items: &'a [CatalogItem], entry_path: &str) -> Option<&'a CatalogItem> {
+    match trash_entry_component(entry_path).and_then(parse_trash_name) {
+        Some(TrashName::Hashed { .. }) => {
+            find(store_items, &format!("{entry_path}{ORIGIN_SUFFIX}"))
+        }
+        _ => None,
+    }
 }
 
 fn find<'a>(store_items: &'a [CatalogItem], path: &str) -> Option<&'a CatalogItem> {
@@ -303,9 +366,10 @@ fn role_folder(store_items: &[CatalogItem], read_role: KvRole) -> Result<String,
     )))
 }
 
-/// Plans moving `item` into its read role's Trash folder. `store_items` is
-/// the catalog of the item's store, which locates and checks the Trash
-/// folders the move needs before any write is sent.
+/// Plans moving `item` into the Trash folder of the most restrictive read
+/// role on its path. `store_items` is the catalog of the item's store, which
+/// locates and checks the Trash folders the move needs before any write is
+/// sent.
 pub(super) fn trash_plan(
     store_items: &[CatalogItem],
     item: &CatalogItem,
@@ -317,22 +381,24 @@ pub(super) fn trash_plan(
             "This item is already in Trash. Delete it permanently or restore it.",
         ));
     }
-    let read_role = item.metadata.read_role;
+    let read_role = path_read_role(store_items, item);
     let mut steps = Vec::new();
     match find(store_items, TRASH_ROOT) {
         None => {
-            let root_role = match item.store {
-                CatalogStoreRef::Account(_) => KvRole::Owner,
-                CatalogStoreRef::Team(_) => TEAM_TRASH_ROOT_ROLE,
+            let (root_role, refusal) = match item.store {
+                CatalogStoreRef::Account(_) => (KvRole::Owner, None),
+                CatalogStoreRef::Team(_) => (TEAM_TRASH_ROOT_ROLE, Some(TRASH_UNAVAILABLE)),
             };
-            steps.push(mkdir_step(
+            let mut step = mkdir_step(
                 &item.store,
                 TRASH_ROOT,
                 root_role,
                 root_role,
                 false,
                 "Trash could not be created at the top level of this vault. In a team, only an owner can create it; an owner who moves any item to Trash creates it for everyone.",
-            ));
+            );
+            step.refusal = refusal;
+            steps.push(step);
         }
         Some(existing) if existing.metadata.node_type != "directory" => {
             return Err(invalid_request(
@@ -356,7 +422,7 @@ pub(super) fn trash_plan(
     let destination = format!("{folder}/{name}");
     if find(store_items, &destination).is_some() {
         return Err(AgentError::new(
-            "conflict",
+            "trash-name-taken",
             "An entry with the same name is already in Trash. Try again in a second.",
             false,
         ));
@@ -365,7 +431,7 @@ pub(super) fn trash_plan(
         // Written before the move so the entry is never in Trash without it.
         steps.push(TrashStep {
             operation: Operation::PutKv {
-                store: kv_store(&item.store),
+                store: protocol_store(&item.store),
                 path: format!("{folder}/{origin}"),
                 content: path.as_bytes().to_vec(),
                 read_role,
@@ -377,6 +443,8 @@ pub(super) fn trash_plan(
             failure: Some(
                 "The record of this item's original location could not be saved in Trash.",
             ),
+            refusal: None,
+            cleanup: false,
         });
     }
     steps.push(move_step(item, &destination)?);
@@ -387,8 +455,10 @@ pub(super) fn trash_plan(
 }
 
 /// Plans moving a Trash entry to `destination`, outside Trash. A missing
-/// destination folder is created with the entry's own roles, and a hashed
-/// entry's `.origin` file is removed once the entry has moved.
+/// destination folder is created readable only under both the entry's read
+/// role and that of its Trash folder, which was the most restrictive on its
+/// original path. A hashed entry's `.origin` file is removed once the entry
+/// has moved.
 pub(super) fn restore_plan(
     store_items: &[CatalogItem],
     entry: &CatalogItem,
@@ -434,23 +504,26 @@ pub(super) fn restore_plan(
                 )));
             }
             Some(_) => {}
-            None => steps.push(mkdir_step(
-                &entry.store,
-                parent,
-                entry.metadata.read_role,
-                entry.metadata.write_role,
-                true,
-                "The folder to restore into could not be created.",
-            )),
+            None => {
+                let read_role = find(store_items, parent_of(&entry.metadata.path))
+                    .map_or(entry.metadata.read_role, |folder| {
+                        more_restrictive(entry.metadata.read_role, folder.metadata.read_role)
+                    });
+                steps.push(mkdir_step(
+                    &entry.store,
+                    parent,
+                    read_role,
+                    more_restrictive(entry.metadata.write_role, read_role),
+                    true,
+                    "The folder to restore into could not be created.",
+                ));
+            }
         }
     }
     steps.push(move_step(entry, destination)?);
     if hashed {
-        if let Some(origin) = find(
-            store_items,
-            &format!("{}{ORIGIN_SUFFIX}", entry.metadata.path),
-        ) {
-            steps.push(remove_step(origin));
+        if let Some(origin) = origin_of(store_items, &entry.metadata.path) {
+            steps.push(remove_step(origin, true)?);
         }
     }
     Ok(TrashPlan {
@@ -475,11 +548,9 @@ pub(super) fn removal_plan(
             "Only items in Trash can be deleted permanently. Move this item to Trash first.",
         ));
     }
-    let mut steps = vec![remove_step(item)];
-    if let Some(TrashName::Hashed { .. }) = trash_entry_component(path).and_then(parse_trash_name) {
-        if let Some(origin) = find(store_items, &format!("{path}{ORIGIN_SUFFIX}")) {
-            steps.push(remove_step(origin));
-        }
+    let mut steps = vec![remove_step(item, false)?];
+    if let Some(origin) = origin_of(store_items, path) {
+        steps.push(remove_step(origin, true)?);
     }
     Ok(TrashPlan {
         steps,
@@ -487,73 +558,163 @@ pub(super) fn removal_plan(
     })
 }
 
-/// Sends a plan's writes in order and stops at the first failure. Earlier
-/// writes stay applied: an empty Trash folder or an `.origin` file without
-/// its entry is harmless, and the catalog the caller retired shows both.
+/// Plans permanently removing an item outside Trash. That is allowed only in
+/// a team whose catalog is `complete` and has no `/.trash`: team roots are
+/// owner-writable, so until an owner creates it, other members cannot move
+/// items to Trash. Folders are refused; they are deleted through Trash.
+pub(super) fn removal_without_trash_plan(
+    store_items: &[CatalogItem],
+    item: &CatalogItem,
+    complete: bool,
+) -> Result<TrashPlan, AgentError> {
+    let path = item.metadata.path.as_str();
+    if in_trash(path) {
+        return Err(invalid_request(
+            "This item is in Trash. Delete it permanently from Trash.",
+        ));
+    }
+    if !matches!(item.store, CatalogStoreRef::Team(_)) {
+        return Err(invalid_request(
+            "Move this item to Trash; only items in Trash can be deleted permanently.",
+        ));
+    }
+    if !complete {
+        return Err(AgentError::new(
+            "catalog-required",
+            "Refresh the vault before deleting this item.",
+            true,
+        ));
+    }
+    if find(store_items, TRASH_ROOT).is_some() {
+        return Err(invalid_request(
+            "This team has a Trash now. Move this item to Trash; only items in Trash can be deleted permanently.",
+        ));
+    }
+    if item.metadata.node_type == "directory" {
+        return Err(invalid_request(
+            "Folders can be deleted only through Trash, which an owner of this team sets up by moving any item to Trash.",
+        ));
+    }
+    Ok(TrashPlan {
+        steps: vec![remove_step(item, false)?],
+        path: path.to_owned(),
+    })
+}
+
+/// Plans permanently removing every one of `entries`, which must all be in
+/// Trash, from one catalog read: recursively for a folder, together with the
+/// `.origin` files of hashed entries. When the store's catalog is
+/// `complete`, `.origin` files whose entry is gone are removed too; a move
+/// into Trash that failed after its `.origin` file was written leaves one.
+pub(super) fn empty_trash_plan(
+    store_items: &[CatalogItem],
+    entries: &[CatalogItem],
+    complete: bool,
+) -> Result<TrashPlan, AgentError> {
+    let mut main = Vec::new();
+    let mut cleanup = Vec::new();
+    for entry in entries {
+        for step in removal_plan(store_items, entry)?.steps {
+            if step.cleanup {
+                cleanup.push(step);
+            } else {
+                main.push(step);
+            }
+        }
+    }
+    if complete {
+        for item in store_items {
+            let path = item.metadata.path.as_str();
+            let orphaned = matches!(
+                trash_entry_component(path).and_then(parse_trash_name),
+                Some(TrashName::Origin)
+            ) && path
+                .strip_suffix(ORIGIN_SUFFIX)
+                .is_some_and(|entry| find(store_items, entry).is_none());
+            if orphaned {
+                cleanup.push(remove_step(item, true)?);
+            }
+        }
+    }
+    let removed_path = |step: &TrashStep| match &step.operation {
+        Operation::RemoveKv { path, .. } => Some(path.clone()),
+        _ => None,
+    };
+    let mut planned: std::collections::HashSet<String> =
+        main.iter().filter_map(removed_path).collect();
+    cleanup.retain(|step| removed_path(step).is_some_and(|path| planned.insert(path)));
+    main.extend(cleanup);
+    Ok(TrashPlan {
+        steps: main,
+        path: TRASH_ROOT.to_owned(),
+    })
+}
+
+/// Sends a plan's writes in order and stops at the first failure of a main
+/// write. Earlier writes stay applied: an empty Trash folder or an `.origin`
+/// file without its entry is harmless, and the catalog the caller retired
+/// shows both. A failed cleanup write is skipped; the answer is whether the
+/// outcome of one is unknown, which requires a refresh.
 pub(super) fn execute_trash_plan(
     transport: &dyn foks_desktop::AgentTransport,
     steps: Vec<TrashStep>,
-) -> Result<(), AgentError> {
+) -> Result<bool, AgentError> {
+    let mut cleanup_unknown = false;
     for step in steps {
-        execute_kv_mutation(
+        let result = execute_kv_mutation(
             transport,
             KvAccountMutation::Inline(step.operation),
             step.kind,
-        )
-        .map_err(|mut error| {
+        );
+        let Err(mut error) = result else {
+            continue;
+        };
+        if step.cleanup {
+            cleanup_unknown |= error.ambiguous;
+            continue;
+        }
+        if !error.ambiguous {
             if let Some(context) = step.failure {
-                if !error.ambiguous {
-                    error.message = format!("{context} {}", error.message);
+                error.message = format!("{context} {}", error.message);
+            }
+            if let Some(code) = step.refusal {
+                if !error.retryable && error.code != "already-exists" {
+                    error.code = code.to_owned();
                 }
             }
-            error
-        })?;
+        }
+        return Err(error);
     }
-    Ok(())
+    Ok(cleanup_unknown)
 }
 
 async fn apply_trash_plan(
     state: &AppState,
+    store: &CatalogStoreRef,
     plan: TrashPlan,
 ) -> Result<TrashMutationDto, AgentError> {
-    match plan
-        .steps
-        .first()
-        .and_then(|step| kv_mutation_store(&KvAccountMutation::Inline(step.operation.clone())))
-    {
-        Some(store) => state.invalidate_catalog_items(&store),
-        None => state.invalidate_catalog(),
-    }
     let transport = state.agent.transport();
     let TrashPlan { steps, path } = plan;
-    let result =
-        tauri::async_runtime::spawn_blocking(move || execute_trash_plan(transport.as_ref(), steps))
-            .await
-            .map_err(|error| {
-                ambiguous_worker_failure(
-                    state,
-                    format!(
-                        "The background operation stopped before reporting its outcome: {error}"
-                    ),
-                )
-            })?;
-    match result {
-        Ok(()) => Ok(TrashMutationDto {
-            applied: true,
-            path,
-        }),
-        Err(error) => {
-            if error.ambiguous {
-                state
-                    .mutation_requires_refresh
-                    .store(true, Ordering::Release);
-            }
-            Err(error)
-        }
+    let cleanup_unknown = run_kv_writes(state, Some(store), move || {
+        execute_trash_plan(transport.as_ref(), steps)
+    })
+    .await?;
+    if cleanup_unknown {
+        state
+            .mutation_requires_refresh
+            .store(true, Ordering::Release);
     }
+    Ok(TrashMutationDto {
+        applied: true,
+        path,
+    })
 }
 
-fn store_items(state: &AppState, store: &CatalogStoreRef) -> Result<Vec<CatalogItem>, AgentError> {
+/// The catalog items of `store`, and whether the catalog read all of them.
+fn store_items(
+    state: &AppState,
+    store: &CatalogStoreRef,
+) -> Result<(Vec<CatalogItem>, bool), AgentError> {
     let (_, catalog) = state.catalog_at(None)?;
     let catalog = catalog.ok_or_else(|| {
         AgentError::new(
@@ -562,11 +723,16 @@ fn store_items(state: &AppState, store: &CatalogStoreRef) -> Result<Vec<CatalogI
             true,
         )
     })?;
-    Ok(catalog
+    let complete = catalog
+        .store_reads
+        .iter()
+        .any(|read| &read.store == store && read.state == CatalogStoreReadState::Complete);
+    let items = catalog
         .items
         .into_iter()
         .filter(|item| &item.store == store)
-        .collect())
+        .collect();
+    Ok((items, complete))
 }
 
 fn now_seconds() -> Result<u64, AgentError> {
@@ -592,9 +758,10 @@ pub async fn trash_item(
     let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
-    let plan = trash_plan(&store_items(&state, &item.store)?, &item, now_seconds()?)?;
+    let (store_items, _) = store_items(&state, &item.store)?;
+    let plan = trash_plan(&store_items, &item, now_seconds()?)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_trash_plan(&state, plan).await
+    apply_trash_plan(&state, &item.store, plan).await
 }
 
 /// Moves a Trash entry back out of Trash, to its original path or another.
@@ -615,14 +782,18 @@ pub async fn restore_trash_item(
     let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let entry = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
-    let plan = restore_plan(&store_items(&state, &entry.store)?, &entry, &destination)?;
+    let (store_items, _) = store_items(&state, &entry.store)?;
+    let plan = restore_plan(&store_items, &entry, &destination)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_trash_plan(&state, plan).await
+    apply_trash_plan(&state, &entry.store, plan).await
 }
 
-/// Permanently removes an entry in Trash. Earlier encrypted versions stay on
-/// the server, which keeps every dirent version.
+/// Permanently removes an entry in Trash. With `outside_trash`, it instead
+/// removes an item in a team that has no Trash yet, which a member who
+/// cannot create `/.trash` asks for explicitly. Earlier encrypted versions
+/// stay on the server, which keeps every dirent version.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn remove_item(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -631,15 +802,59 @@ pub async fn remove_item(
     path: String,
     version: u64,
     dirent_id: String,
-) -> Result<crate::commands::types::MutationDto, AgentError> {
+    outside_trash: bool,
+) -> Result<MutationDto, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let state = state.for_store(&store_id)?;
     let _permit = prepare_catalog_mutation(&state).await?;
     let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
-    let plan = removal_plan(&store_items(&state, &item.store)?, &item)?;
+    let (store_items, complete) = store_items(&state, &item.store)?;
+    let plan = if outside_trash {
+        removal_without_trash_plan(&store_items, &item, complete)?
+    } else {
+        removal_plan(&store_items, &item)?
+    };
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_trash_plan(&state, plan)
+    apply_trash_plan(&state, &item.store, plan)
         .await
-        .map(|_| crate::commands::types::MutationDto { applied: true })
+        .map(|_| MutationDto { applied: true })
+}
+
+/// Permanently removes the named Trash entries of one store under a single
+/// mutation, from one catalog read, so removing one does not leave the next
+/// unselectable in the catalog it retires.
+#[tauri::command]
+pub async fn empty_trash(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+    entries: Vec<TrashEntryRequest>,
+) -> Result<MutationDto, AgentError> {
+    let unlocked = crate::applock::unlocked_generation(&app)?;
+    require_main_window(&webview)?;
+    if entries.is_empty() {
+        return Err(invalid_request("Choose at least one entry in Trash."));
+    }
+    let state = state.for_store(&store_id)?;
+    let _permit = prepare_catalog_mutation(&state).await?;
+    let entries = entries
+        .iter()
+        .map(|entry| {
+            state.selected_bound_mutation_item(
+                &store_id,
+                &entry.path,
+                entry.version,
+                &entry.dirent_id,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let store = entries[0].store.clone();
+    let (store_items, complete) = store_items(&state, &store)?;
+    let plan = empty_trash_plan(&store_items, &entries, complete)?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
+    apply_trash_plan(&state, &store, plan)
+        .await
+        .map(|_| MutationDto { applied: true })
 }

@@ -12,7 +12,7 @@
  */
 
 import { parseRole } from './roles';
-import type { AgentSnapshot, Item, StoreRef } from './types';
+import type { AgentSnapshot, Item, RoleWire, StoreRef } from './types';
 
 /** The folder that holds every role's Trash folder in a store. */
 export const TRASH_ROOT = '/.trash';
@@ -105,6 +105,11 @@ export interface TrashEntry {
   name: string;
   /** The role folder the entry is in, such as `/.trash/owner`. */
   folder: string;
+  /**
+   * The role folder's read role, which the entry's name is sealed under;
+   * `null` when the catalog does not list the folder.
+   */
+  folderRead: RoleWire | null;
   /** Where the entry was; `null` while a hashed entry's `.origin` is unread. */
   original: string | null;
   /** Milliseconds since the epoch; `null` for a name the host did not write. */
@@ -138,10 +143,12 @@ export function trashEntries(
       parsed?.kind === 'hashed'
         ? byPath.get(`${item.path}${ORIGIN_SUFFIX}`)
         : undefined;
+    const folder = `${TRASH_ROOT}/${parts[0]}`;
     entries.push({
       item,
       name,
-      folder: `${TRASH_ROOT}/${parts[0]}`,
+      folder,
+      folderRead: byPath.get(folder)?.read ?? null,
       original: parsed?.kind === 'path' ? parsed.original : null,
       deletedAt: parsed ? parsed.deletedAt : null,
       ...(origin ? { origin } : {}),
@@ -163,15 +170,37 @@ export function trashEntries(
 
 /**
  * Whether an entry in Trash is readable only by owners: it sits in the
- * owners' role folder, so only owners can list or restore it.
+ * owners' role folder, so only owners can list or restore it. An entry is
+ * filed by the most restrictive read role on its original path, so the
+ * folder's role can be higher than the entry's own.
  */
 export function ownersOnly(entry: TrashEntry): boolean {
-  return parseRole(entry.item.read)?.kind === 'owner';
+  return parseRole(entry.folderRead ?? entry.item.read)?.kind === 'owner';
+}
+
+/**
+ * The path a hashed entry's `.origin` file records, or `null` for content
+ * that is not an absolute path.
+ */
+export function originPath(content: string): string | null {
+  return content.startsWith('/') && !content.includes('\n') ? content : null;
 }
 
 /** The last component of a path, which is what an entry is called. */
 function lastComponent(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
+}
+
+/**
+ * Whether an entry was deleted at least `ageMs` before `now`, so automatic
+ * emptying removes it. An entry whose name has no deletion stamp never is.
+ */
+export function trashEntryExpired(
+  entry: TrashEntry,
+  now: number,
+  ageMs: number,
+): boolean {
+  return entry.deletedAt !== null && now - entry.deletedAt >= ageMs;
 }
 
 /** What an entry is called: its original name, or its name in Trash. */

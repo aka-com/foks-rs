@@ -344,6 +344,7 @@ export function VaultShell({
     toasts,
     locations,
     setWorkflow,
+    accessNow,
   });
   const uploadDroppedFile = useDroppedUpload({
     bridge,

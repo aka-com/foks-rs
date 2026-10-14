@@ -164,6 +164,26 @@ export type MoveItemRequest = ItemRequest & {
 };
 export type RemoveItemRequest = ItemRequest & { direntId: string };
 export type RestoreTrashRequest = RemoveItemRequest & { destination: string };
+export type PermanentRemoveRequest = RemoveItemRequest & {
+  /**
+   * Removes an item outside Trash. The host allows it only for a file in a
+   * team that has no `/.trash`, which members other than owners cannot
+   * create.
+   */
+  outsideTrash?: boolean;
+};
+
+/** One Trash entry, bound to the dirent and version the catalog listed. */
+export interface TrashEntrySelection {
+  path: string;
+  version: number;
+  direntId: string;
+}
+
+export interface EmptyTrashRequest {
+  storeId: StoreRef;
+  entries: TrashEntrySelection[];
+}
 
 export interface TrashMutationResponse {
   applied: boolean;
