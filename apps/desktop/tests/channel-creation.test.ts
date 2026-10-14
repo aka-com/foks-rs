@@ -274,7 +274,10 @@ test('an access change before the preparation is sent withdraws it with a local 
   const record = controller.getSnapshot()[0];
   assert.equal(record.state, 'cancelled');
   assert.equal(record.input, undefined);
-  assert.match(record.error, /Chat access changed/);
+  assert.equal(
+    record.error,
+    'Chat access changed before the channel was created. Submit it again when chat is available.',
+  );
   assert.equal(handled.length, 1);
   const error = normalizeCommandError(handled[0]);
   assert.equal(error.code, 'access-changed');
@@ -300,10 +303,34 @@ test('an access change after the preparation is sent leaves it unresolved with a
   const record = controller.getSnapshot()[0];
   assert.equal(record.state, 'unresolved');
   assert.deepEqual(record.input, input);
+  assert.equal(
+    record.error,
+    'Chat access changed. The saved channel creation can be checked when access is available.',
+  );
   const error = normalizeCommandError(handled[0]);
   assert.equal(error.code, 'access-changed');
   assert.equal(error.ambiguous, true);
   assert.notEqual(commandRecovery(error).kind, 'revalidate');
+  controller.dispose();
+});
+
+test('an access refusal at submission saves nothing and says so', async () => {
+  const { controller, store, actions, denyAccess } = await setup(async () =>
+    reply(prepared),
+  );
+  denyAccess();
+  assert.throws(
+    () => controller.submit(store, input),
+    (error: unknown) =>
+      (error as { code: string }).code === 'access-changed' &&
+      (error as { message: string }).message ===
+        'Chat access changed before the channel was created. Submit it again when chat is available.',
+  );
+  assert.equal(controller.getSnapshot().length, 0);
+  assert.deepEqual(
+    actions.map((action) => action.action),
+    ['pending'],
+  );
   controller.dispose();
 });
 

@@ -27,6 +27,10 @@ const REVIEW_CODES: ReadonlySet<string> = new Set([
   'chat-name-conflict',
   'chat-reprepare-required',
 ]);
+// An access refusal of a preparation that never left this Mac: no channel
+// creation is saved, and the sheet keeps the fields.
+const NOT_SUBMITTED =
+  'Chat access changed before the channel was created. Submit it again when chat is available.';
 
 export interface ChannelCreationInput {
   name: string;
@@ -190,6 +194,7 @@ export class ChannelCreationController {
     scope: ChatScope,
     generation: number,
     phase: 'before' | 'after',
+    message = 'Chat access changed. The saved channel creation can be checked when access is available.',
   ) {
     const access = this.access.current;
     const current = storeOf(access.snapshot, store.id);
@@ -211,10 +216,7 @@ export class ChannelCreationController {
       return;
     // A request that may already have been taken is not retryable on its
     // own: the saved preparation is what settles it.
-    throw accessChanged(
-      'Chat access changed. The saved channel creation can be checked when access is available.',
-      phase,
-    );
+    throw accessChanged(message, phase);
   }
 
   // The service holds the scope this team's chat has been established under.
@@ -252,7 +254,7 @@ export class ChannelCreationController {
     if (problem) throw new Error(problem);
     const generation =
       this.access.current.accessGenerations?.get(store.server) ?? 0;
-    this.authorize(store, entry.scope, generation, 'before');
+    this.authorize(store, entry.scope, generation, 'before', NOT_SUBMITTED);
     this.prune();
     if (this.records.size >= CHANNEL_CREATION_RECORD_LIMIT)
       throw new Error(
@@ -400,8 +402,18 @@ export class ChannelCreationController {
       record.store.id,
     );
     this.clients.add(client);
+    // A refusal before a preparation the agent does not hold has been sent
+    // withdraws it (see the catch below), so nothing is left to check.
     const authorize = (phase: 'before' | 'after') =>
-      this.authorize(record.store, record.scope, generation, phase);
+      this.authorize(
+        record.store,
+        record.scope,
+        generation,
+        phase,
+        phase === 'before' && !record.operation && !record.held
+          ? NOT_SUBMITTED
+          : undefined,
+      );
     try {
       if (!record.operation) {
         if (!record.submission) throw integrity();
