@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 import type { AgentSnapshot, TeamStore } from '../src/model';
 import type { Location } from '../src/location';
+import type { Bridge } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -27,6 +28,7 @@ test.after(async () => vite.close());
 async function mount(
   transform: (snapshot: AgentSnapshot) => AgentSnapshot = (snapshot) =>
     snapshot,
+  overrides: Partial<Bridge> = {},
 ) {
   const { TeamInfoPanel } = (await vite.ssrLoadModule(
     '/src/screens/team-info.tsx',
@@ -53,28 +55,32 @@ async function mount(
       copies.push(text);
       return { ok: true as const };
     },
+    ...overrides,
   };
-  await ui.act(async () => {
-    ui.render(
-      createElement(ChatInboxProvider, {
-        snapshot,
+  const panel = (shown: AgentSnapshot) =>
+    createElement(ChatInboxProvider, {
+      snapshot: shown,
+      bridge,
+      enabled: false,
+      children: createElement(TeamInfoPanel, {
+        snapshot: shown,
+        store: shown.stores.find((entry) => entry.id === store.id) as TeamStore,
         bridge,
-        enabled: false,
-        children: createElement(TeamInfoPanel, {
-          snapshot,
-          store,
-          bridge,
-          requestCount: 2,
-          onNavigate: (location) => navigations.push(location),
-          onClose: (restore) => closed.push(restore),
-          onError: (error) => {
-            throw error;
-          },
-        }),
+        requestCount: 2,
+        onNavigate: (location) => navigations.push(location),
+        onClose: (restore) => closed.push(restore),
+        onError: (error) => {
+          throw error;
+        },
       }),
-    );
+    });
+  let rendered!: ReturnType<typeof ui.render>;
+  await ui.act(async () => {
+    rendered = ui.render(panel(snapshot));
   });
-  return { snapshot, store, navigations, closed, copies };
+  const rerender = async (shown: AgentSnapshot) =>
+    ui.act(async () => rendered.rerender(panel(shown)));
+  return { snapshot, store, navigations, closed, copies, rerender };
 }
 
 test('Team info consolidates identity, membership, files and requests with existing destinations', async () => {
@@ -179,4 +185,62 @@ test('team info waits for roster enrichment after the item catalog is complete',
   assert.ok(ui.screen.getByText('Loading owner…'));
   assert.equal(ui.screen.queryByText('No members yet.'), null);
   assert.equal(ui.screen.queryByText('No owner designated'), null);
+});
+
+test('the Files section reads storage used once on open and again after the files change', async () => {
+  const reads: string[] = [];
+  const mounted = await mount(undefined, {
+    storeUsage: async (storeId) => {
+      reads.push(storeId);
+      return { files: 1_204, bytes: 2.3 * 2 ** 30 };
+    },
+  });
+  assert.ok(
+    await ui.screen.findByText(
+      'About 2.3 GiB stored (encrypted) · 1,204 files',
+    ),
+  );
+  assert.deepEqual(reads, ['team:eng']);
+  // A republished catalog with the same files does not read again.
+  await mounted.rerender({ ...mounted.snapshot });
+  assert.deepEqual(reads, ['team:eng']);
+  const changed = {
+    ...mounted.snapshot,
+    items: mounted.snapshot.items.map((item) =>
+      item.store === 'team:eng' && item.kind !== 'Folder'
+        ? { ...item, version: item.version + 1 }
+        : item,
+    ),
+  };
+  await mounted.rerender(changed);
+  await ui.waitFor(() => assert.deepEqual(reads, ['team:eng', 'team:eng']));
+});
+
+test('a failed usage read is stated in place without an error notice', async () => {
+  await mount(undefined, {
+    storeUsage: async () => {
+      throw { code: 'profile-busy', message: 'Busy.', retryable: true };
+    },
+  });
+  assert.ok(await ui.screen.findByText('Storage used unavailable.'));
+});
+
+test('an incomplete team does not read storage used', async () => {
+  const reads: string[] = [];
+  await mount(
+    (snapshot) => ({
+      ...snapshot,
+      stores: snapshot.stores.map((store) =>
+        store.id === 'team:eng' ? { ...store, active: false } : store,
+      ),
+    }),
+    {
+      storeUsage: async (storeId) => {
+        reads.push(storeId);
+        return { files: 0, bytes: 0 };
+      },
+    },
+  );
+  assert.equal(ui.screen.queryByText(/stored \(encrypted\)/), null);
+  assert.deepEqual(reads, []);
 });

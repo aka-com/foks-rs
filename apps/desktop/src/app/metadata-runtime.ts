@@ -6,6 +6,7 @@ import { DeviceMetadata, isDeviceQuery } from '../device-metadata';
 import { deviceAlertRegistry } from '../screens/device-alert';
 import { accountStopped, type AgentSnapshot } from '../model';
 import { readRecoveryFor } from '../query-read-recovery';
+import { isStoreUsageQuery } from '../store-usage';
 
 /**
  * The metadata query kinds whose key names the profile immediately after the
@@ -103,10 +104,12 @@ export function useMetadataRuntime({
   metadataReconciliation.current = async () => {
     // Devices publish their own progress. Cached background reads must not
     // hold the generic metadata spinner open for their entire duration.
+    // Storage usage costs the server a walk of the vault, so it is read only
+    // when a view opens or the vault's files change, never on this cadence.
     void devices.reconcile();
     await deviceCache.repository.reconcileSubscribed(
       () => foregroundRefreshAllowed.current && !document.hidden,
-      (key) => !isDeviceQuery(key),
+      (key) => !isDeviceQuery(key) && !isStoreUsageQuery(key),
     );
   };
   deviceRefresh.current = async () => {

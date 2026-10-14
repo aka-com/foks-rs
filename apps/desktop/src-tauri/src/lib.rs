@@ -350,6 +350,7 @@ pub fn run() {
             commands::groups::list_parties,
             commands::groups::list_federation,
             commands::vault::read_item,
+            commands::vault::store_usage,
             commands::vault::copy_item_value,
             commands::vault::copy_item_field,
             commands::vault::open_item_url,

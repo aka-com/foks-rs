@@ -18,6 +18,7 @@ import {
   decodePasswordImportOutcome,
   decodePasswordImportPreview,
   decodeReadItem,
+  decodeStoreUsage,
   decodeTrashMutation,
 } from './vault-catalog';
 
@@ -27,6 +28,7 @@ export const vaultCommands: Pick<
   | 'listProfileCatalog'
   | 'listStores'
   | 'readItem'
+  | 'storeUsage'
   | 'copyItemValue'
   | 'copyItemField'
   | 'openItemUrl'
@@ -80,6 +82,8 @@ export const vaultCommands: Pick<
   listStores: () => checked('list_stores', undefined, decodeCatalog),
   readItem: ({ storeId, path, version }) =>
     checked('read_item', { storeId, path, version }, decodeReadItem),
+  storeUsage: (storeId) =>
+    checked('store_usage', { storeId }, decodeStoreUsage),
   copyItemValue: ({ storeId, path, version }) =>
     checked('copy_item_value', { storeId, path, version }, decodeClipboardCopy),
   copyItemField: ({ storeId, path, version, field }) =>

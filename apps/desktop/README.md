@@ -345,6 +345,18 @@ the other facts needed by the Phase 2 shell; `read_item`,
 clipboard if it still holds the copied value (`AUTO_CLEAR_SECONDS` in
 `src-tauri/src/clipboard.rs`: 15 on Linux, 30 elsewhere), which the copy toast
 states, for example "Password copied · clears in 30 s", and closes by then.
+`store_usage` takes `{storeId}` and answers `{files, bytes}`: the vault's file
+count and total ciphertext bytes from the agent's existing data-read path
+(`BindDataAccount`, then `ReadData` with `usage`, narrowed to the team for a
+team vault). Team info's Files section and the Settings account page's Storage
+row show it as "About 2.3 GiB stored (encrypted) · 1,204 files". The server
+walks the vault to compute it, so `src/store-usage.ts` reads it only when one
+of those views opens, keeps it for the session, and reads it again only after
+the vault's listed files change; the metadata reconciliation cadence skips it.
+The figure has no denominator: the server reports no limit, a Go host sets its
+own, and the quota a write is refused against also counts directories,
+metadata and envelopes, so a fraction or an early upload refusal would be
+wrong.
 `tests/bridge.test.ts`
 pins the decoder side and the Rust command tests pin serialization so a drift
 fails on one side or the other. `tests/command-contract.test.ts` checks the

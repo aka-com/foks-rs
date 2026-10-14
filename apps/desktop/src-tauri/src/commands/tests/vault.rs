@@ -2,8 +2,9 @@ use crate::commands::execution::{execute_kv_mutation, MutationKind};
 use crate::commands::validation::{DOWNLOAD_CHUNK_BYTES, MAXIMUM_TEXT_ITEM_BYTES};
 use crate::commands::vault::{
     create_item_roles, download_to_path, file_create_header, file_edit_header, item_field,
-    parse_item_role, read_text, require_file_item, require_text_item, set_create_mutation_roles,
-    set_create_operation_roles, take_text_value, upload_file, website_url, CatalogDto, ItemField,
+    parse_item_role, read_store_usage, read_text, require_file_item, require_text_item,
+    set_create_mutation_roles, set_create_operation_roles, take_text_value, upload_file,
+    website_url, CatalogDto, ItemField,
 };
 use foks_agent_proto::{
     KvChunkResult, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
@@ -1086,4 +1087,93 @@ fn move_preserves_exact_source_and_invalidates_its_store() {
     );
     assert!(foks_desktop::move_kv_operation(&item, &item.metadata.path).is_err());
     assert!(foks_desktop::move_kv_operation(&item, "relative").is_err());
+}
+
+/// Answers the account binding and the usage read, recording each call. The
+/// binding names `bound_alias`, so a test can make it disagree with the vault.
+struct UsageTransport {
+    calls: Mutex<Vec<Operation>>,
+    bound_alias: &'static str,
+}
+
+impl UsageTransport {
+    fn new(bound_alias: &'static str) -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            bound_alias,
+        }
+    }
+}
+
+impl foks_desktop::AgentTransport for UsageTransport {
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.calls.lock().unwrap().push(operation.clone());
+        match operation {
+            Operation::BindDataAccount { profile, .. } => Ok(serde_json::json!({
+                "profile": profile, "account_alias": self.bound_alias,
+                "host_id": "0b", "user_id": "01", "team_id": null,
+            })),
+            Operation::ReadData { .. } => Ok(serde_json::json!({"files": 3, "bytes": 2_469_396})),
+            other => panic!("unexpected operation {other:?}"),
+        }
+    }
+}
+
+fn bound_scope(team_id: Option<&str>) -> foks_agent_proto::data::DataScope {
+    foks_agent_proto::data::DataScope {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+        host_id: "0b".to_owned(),
+        user_id: "01".to_owned(),
+        team_id: team_id.map(str::to_owned),
+    }
+}
+
+#[test]
+fn store_usage_reads_the_bound_account_or_its_team() {
+    let account = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+    });
+    let team = CatalogStoreRef::Team(foks_agent_proto::TeamStoreRef {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+        team_alias: "group".to_owned(),
+        team_id: "0d".repeat(33),
+    });
+    for (store, team_id) in [(account, None), (team, Some("0d".repeat(33)))] {
+        let transport = UsageTransport::new("personal");
+        let usage = read_store_usage(&transport, &store).unwrap();
+        assert_eq!(
+            serde_json::to_value(usage).unwrap(),
+            serde_json::json!({"files": 3, "bytes": 2_469_396})
+        );
+        assert_eq!(
+            transport.calls.lock().unwrap().as_slice(),
+            &[
+                Operation::BindDataAccount {
+                    profile: "foks.example".to_owned(),
+                    account_alias: "personal".to_owned(),
+                },
+                Operation::ReadData {
+                    scope: bound_scope(team_id.as_deref()),
+                    query: foks_agent_proto::data::DataRead::Usage,
+                },
+            ]
+        );
+    }
+}
+
+#[test]
+fn store_usage_refuses_a_binding_for_another_account() {
+    let store = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+    });
+    let transport = UsageTransport::new("other");
+    assert_eq!(
+        read_store_usage(&transport, &store).unwrap_err().code,
+        "invalid-response"
+    );
+    assert_eq!(transport.calls.lock().unwrap().len(), 1);
 }

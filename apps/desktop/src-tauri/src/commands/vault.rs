@@ -8,7 +8,7 @@ use crate::commands::execution::{
 use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutation};
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
 use crate::commands::validation::{
-    invalid_request, require_main_window, serialize_secret, DOWNLOAD_CHUNK_BYTES,
+    invalid_request, invalid_response, require_main_window, serialize_secret, DOWNLOAD_CHUNK_BYTES,
     MAXIMUM_CLIPBOARD_TEXT_BYTES, MAXIMUM_DOWNLOAD_BYTES, MAXIMUM_TEXT_ITEM_BYTES,
 };
 use foks_agent_proto::{
@@ -389,6 +389,66 @@ pub(super) fn protocol_store(store: &CatalogStoreRef) -> KvStoreRef {
         CatalogStoreRef::Account(store) => KvStoreRef::Account(store.clone()),
         CatalogStoreRef::Team(store) => KvStoreRef::Team(store.clone()),
     }
+}
+
+/// How much one vault stores on its server, as the server's KV usage read
+/// reports it: the number of files and their total ciphertext bytes. It
+/// carries no limit. The server enforces its quota on a larger measure
+/// (directories, metadata and envelopes as well as file ciphertext), so the
+/// renderer shows these figures without a fraction of a quota.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct StoreUsageDto {
+    pub files: u64,
+    pub bytes: u64,
+}
+
+/// Reads one vault's usage through the agent's data-read path: binds the
+/// vault's account, narrows the binding to the team for a team vault, and
+/// asks for usage. The agent checks the binding's host and user against the
+/// account again before and after the read; this side checks that the binding
+/// names the account it asked for.
+pub(super) fn read_store_usage(
+    transport: &dyn foks_desktop::AgentTransport,
+    store: &CatalogStoreRef,
+) -> Result<StoreUsageDto, AgentError> {
+    use foks_agent_proto::data::{DataRead, DataScope, DataUsage};
+    let (profile, account_alias, team_id) = match store {
+        CatalogStoreRef::Account(store) => (&store.profile, &store.account_alias, None),
+        CatalogStoreRef::Team(store) => (
+            &store.profile,
+            &store.account_alias,
+            Some(store.team_id.clone()),
+        ),
+    };
+    let mut scope: DataScope = serde_json::from_value(
+        transport
+            .call(Operation::BindDataAccount {
+                profile: profile.clone(),
+                account_alias: account_alias.clone(),
+            })
+            .map_err(AgentError::from_desktop)?,
+    )
+    .map_err(|_| invalid_response("Invalid account binding."))?;
+    if &scope.profile != profile || &scope.account_alias != account_alias || scope.team_id.is_some()
+    {
+        return Err(invalid_response(
+            "The agent bound a different account than the vault's.",
+        ));
+    }
+    scope.team_id = team_id;
+    let usage: DataUsage = serde_json::from_value(
+        transport
+            .call(Operation::ReadData {
+                scope,
+                query: DataRead::Usage,
+            })
+            .map_err(AgentError::from_desktop)?,
+    )
+    .map_err(|_| invalid_response("Invalid storage usage."))?;
+    Ok(StoreUsageDto {
+        files: usage.files,
+        bytes: usage.bytes,
+    })
 }
 
 pub(super) fn download_to_path(
@@ -1199,6 +1259,29 @@ pub async fn read_item(
     tauri::async_runtime::spawn_blocking(move || read_text(transport.as_ref(), &item))
         .await
         .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))?
+}
+
+/// Reads how much a vault in the current catalog stores. The server computes
+/// usage by decoding the vault's nodes on each request, so the renderer asks
+/// only when a view that shows it opens, never on a refresh cadence.
+#[tauri::command]
+pub async fn store_usage(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+) -> Result<StoreUsageDto, AgentError> {
+    require_main_window(&webview)?;
+    let generation = crate::applock::unlocked_generation(webview.app_handle())?;
+    let (store, _) = state.selected_store(&store_id)?;
+    let transport = state.agent.transport();
+    let usage =
+        tauri::async_runtime::spawn_blocking(move || read_store_usage(transport.as_ref(), &store))
+            .await
+            .map_err(|error| {
+                AgentError::unknown(format!("failed to read storage usage: {error}"))
+            })?;
+    crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
+    usage
 }
 
 /// Copies an item's whole stored text; the same command as

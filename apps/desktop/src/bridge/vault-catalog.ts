@@ -127,6 +127,17 @@ export interface DownloadResponse {
   saved: boolean;
 }
 
+/**
+ * How much one vault stores on its server: its file count and the files'
+ * total ciphertext bytes. The server reports no limit with it, and enforces
+ * its quota on a larger measure, so these figures are never a fraction of a
+ * quota.
+ */
+export interface StoreUsage {
+  files: number;
+  bytes: number;
+}
+
 export interface MutationResponse {
   applied: boolean;
 }
@@ -514,6 +525,16 @@ export function decodeClipboardCopy(value: unknown): ClipboardCopyResponse {
 export function decodeDownload(value: unknown): DownloadResponse {
   const item = record(value, 'download_file response');
   return { saved: bool(item.saved, 'download_file.saved') };
+}
+
+export function decodeStoreUsage(value: unknown): StoreUsage {
+  const item = record(value, 'store_usage response');
+  if (Object.keys(item).sort().join(',') !== 'bytes,files')
+    throw new Error('store_usage response must contain only bytes and files');
+  return {
+    files: integer(item.files, 'store_usage.files'),
+    bytes: integer(item.bytes, 'store_usage.bytes'),
+  };
 }
 
 export function decodeTrashMutation(value: unknown): TrashMutationResponse {

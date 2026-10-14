@@ -540,6 +540,9 @@
     "start_device_pairing": {
       "accountStoreId": "required"
     },
+    "store_usage": {
+      "storeId": "required"
+    },
     "sync_yubi_account": {
       "alias": "required",
       "pin": "required",

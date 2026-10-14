@@ -792,6 +792,25 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           .filter((entry) => entry.store === storeId)
           .map((entry) => ({ ...entry })),
       ),
+    storeUsage: async (storeId) => {
+      if (!stores.some((store) => store.id === storeId))
+        throw failure('store-not-found', 'This vault is no longer available.');
+      // The server counts ciphertext; the mock counts the plaintext it holds.
+      const files = items.filter(
+        (item) => item.store === storeId && item.kind !== 'Folder',
+      );
+      return {
+        files: files.length,
+        bytes: files.reduce(
+          (total, item) =>
+            total +
+            (item.size ??
+              new TextEncoder().encode(contents.get(itemKey(item)) ?? '')
+                .length),
+          0,
+        ),
+      };
+    },
     readItem: (request: ItemRequest): Promise<ReadItemResponse> => {
       const item = select(request);
       return Promise.resolve({

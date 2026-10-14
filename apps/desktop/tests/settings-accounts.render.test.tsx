@@ -1506,3 +1506,48 @@ test('a trusted or unreadable adapter clock draws no band', async () => {
     ui.cleanup();
   }
 });
+
+test('the Storage fact reads what the account’s vault stores, without a quota', async () => {
+  const reads: string[] = [];
+  const { rendered } = await renderPeople(
+    await fixture(),
+    'acct:personal',
+    undefined,
+    {
+      decorate: (bridge) => ({
+        ...bridge,
+        storeUsage: async (storeId) => {
+          reads.push(storeId);
+          return { files: 1_204, bytes: 2.3 * 2 ** 30 };
+        },
+      }),
+    },
+  );
+  assert.ok(
+    await rendered.findByText('About 2.3 GiB stored (encrypted) · 1,204 files'),
+  );
+  assert.deepEqual(reads, ['acct:personal']);
+});
+
+test('a stopped account does not read its storage', async () => {
+  const { applyLease } = (await vite.ssrLoadModule(
+    '/src/model/index.ts',
+  )) as typeof import('../src/model');
+  const reads: string[] = [];
+  const { rendered } = await renderPeople(
+    applyLease(await fixture(), 'lapsed'),
+    'acct:work',
+    undefined,
+    {
+      decorate: (bridge) => ({
+        ...bridge,
+        storeUsage: async (storeId) => {
+          reads.push(storeId);
+          return { files: 0, bytes: 0 };
+        },
+      }),
+    },
+  );
+  assert.ok(rendered.getByText('Not read while access is stopped'));
+  assert.deepEqual(reads, []);
+});

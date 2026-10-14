@@ -76,6 +76,7 @@ import type {
   MutationResponse,
   ReadItemResponse,
   RemoveItemRequest,
+  StoreUsage,
   MoveItemRequest,
   CopyItemToStoreRequest,
   RestoreTrashRequest,
@@ -208,6 +209,12 @@ export interface Bridge {
   listGroupDetails(storeId: StoreRef): Promise<GroupDetailsDto>;
   listParties(storeId: StoreRef): Promise<Party[]>;
   listFederation(storeId: StoreRef): Promise<FederationEntry[]>;
+  /**
+   * How much a vault stores on its server. The server decodes the vault's
+   * nodes for each request, so a view reads this when it opens rather than on
+   * a refresh cadence.
+   */
+  storeUsage(storeId: StoreRef): Promise<StoreUsage>;
   readItem(request: ItemRequest): Promise<ReadItemResponse>;
   /** Copies an item's whole stored text; as `copyItemField` with `value`. */
   copyItemValue(request: ItemRequest): Promise<ClipboardCopyResponse>;
