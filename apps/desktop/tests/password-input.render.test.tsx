@@ -91,8 +91,15 @@ test('Show reveals the typed password and a common one is warned about without b
   ui.fireEvent.click(sheet.getByRole('button', { name: 'Hide password' }));
   assert.equal(passwordField(sheet).type, 'password');
 
+  // The strength text is a live region that is mounted before it has text.
+  const live = password.closest('.fr')?.querySelector('.pw-strength-text');
+  assert.equal(live?.getAttribute('aria-live'), 'polite');
+  assert.equal(live?.textContent, '');
+  assert.equal(password.getAttribute('aria-describedby'), null);
+
   ui.fireEvent.change(password, { target: { value: 'Password1!' } });
   const warning = sheet.getByText('Weak · a common password');
+  assert.equal(warning, live);
   assert.ok(warning.closest('.pw-strength.weak'));
   assert.ok(
     passwordField(sheet)
@@ -184,11 +191,22 @@ test('the generator answers Escape itself and remembers its settings on this dev
   let panel = sheet.getByRole('group', { name: 'Generate a password' });
 
   // The last character set cannot be turned off.
-  for (const name of ['Uppercase letters', 'Lowercase letters', 'Digits'])
+  // Each toggle's name begins with its visible text.
+  for (const name of [
+    'A–Z, uppercase letters',
+    'a–z, lowercase letters',
+    '0–9, digits',
+  ])
     ui.fireEvent.click(ui.within(panel).getByRole('button', { name }));
-  ui.fireEvent.click(ui.within(panel).getByRole('button', { name: 'Symbols' }));
-  assert.ok(ui.within(panel).getByText('Keep at least one set of characters.'));
-  const symbols = ui.within(panel).getByRole('button', { name: 'Symbols' });
+  const status = panel.querySelector('.pw-gen-hint[role="status"]')!;
+  assert.equal(status.textContent, '');
+  ui.fireEvent.click(
+    ui.within(panel).getByRole('button', { name: '!@#, symbols' }),
+  );
+  assert.equal(status.textContent, 'Keep at least one set of characters.');
+  const symbols = ui.within(panel).getByRole('button', {
+    name: '!@#, symbols',
+  });
   assert.equal(symbols.getAttribute('aria-pressed'), 'true');
   const preview = ui.within(panel).getByLabelText('Generated password');
   assert.match(preview.textContent ?? '', /^[!@#$%^&*\-_=+?]{24}$/);

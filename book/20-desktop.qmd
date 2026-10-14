@@ -251,10 +251,18 @@ underscore. Each character or word is an index drawn with
 `crypto.getRandomValues` and rejection sampling, so it is uniform over its
 pool, and the strength shown for a value taken from the generator is its
 exact entropy, `length × log2(pool size)` bits: 147 bits for the default
-password, 11 bits per word. A typed password is not measured. It is checked
-against a short list of common passwords, the site and user name, and the
-8-character minimum, and a match shows a warning without disabling Create
-or Save. The generator's last settings, never a password, are kept on the
+password, 11 bits per word. A typed or stored password is not measured. It
+is checked against a short list of common passwords (also with its
+separators removed, so a well-known passphrase matches), the site's
+registrable label (`slack` in `app.slack.com`, not the subdomain) and the
+user name, one unit of up to four characters repeated (`aaaaaaaa`,
+`asdfasdf`), a run of consecutive letters or digits or of a keyboard row
+(`abcdefgh`, `qwerty12`), and the 8-character minimum. A match shows a
+warning at the lowest level without disabling Create or Save; a value with
+no match reads "Not measured · no common weakness found". The strength
+text is a polite live region, so a warning is announced as it appears. The
+candidate in the generator cannot be selected; Use password is the way to
+take it. The generator's last settings, never a password, are kept on the
 device under the `passwordGenerator` `localStorage` key. A generated
 password is stored as any other `password:` line.
 

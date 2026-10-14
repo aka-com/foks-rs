@@ -1967,7 +1967,8 @@
   font-size: 12px;
 }
 .pw-gen-hint:empty {
-  display: none;
+  /* Out of the flex gap but still in the tree, so the status is announced. */
+  position: absolute;
 }
 .pw-gen-preview {
   display: flex;
@@ -1983,7 +1984,8 @@
   min-width: 0;
   font: 12.5px var(--mono);
   overflow-wrap: anywhere;
-  user-select: all;
+  /* Use password is the way to take it; a manual copy skips auto-clear. */
+  user-select: none;
 }
 .pw-gen-actions {
   display: flex;

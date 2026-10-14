@@ -92,11 +92,7 @@ export function PasswordInput({
         className="pw-row"
         verbatim
         describedBy={strength ? strengthId : undefined}
-        hint={
-          strength ? (
-            <PasswordStrength id={strengthId} strength={strength} />
-          ) : undefined
-        }
+        hint={<PasswordStrength id={strengthId} strength={strength} live />}
         action={
           <>
             <button
@@ -139,19 +135,26 @@ export function PasswordInput({
   );
 }
 
+/**
+ * The meter and text for a strength. A `live` text is announced when it
+ * changes; it stays mounted, empty, while there is nothing to rate, since a
+ * live region added together with its content may not be announced.
+ */
 function PasswordStrength({
   id,
   strength,
+  live = false,
 }: {
   id?: string;
-  strength: Strength;
+  strength: Strength | null;
+  live?: boolean;
 }): ReactNode {
   return (
     <span
       id={id}
-      className={strength.weak ? 'pw-strength weak' : 'pw-strength'}
+      className={strength?.weak ? 'pw-strength weak' : 'pw-strength'}
     >
-      {strength.level === null ? null : (
+      {strength === null || strength.level === null ? null : (
         <span
           className="pw-meter"
           data-level={strength.level}
@@ -163,7 +166,12 @@ function PasswordStrength({
           <i />
         </span>
       )}
-      <span className="pw-strength-text">{strength.text}</span>
+      <span
+        className="pw-strength-text"
+        aria-live={live ? 'polite' : undefined}
+      >
+        {strength?.text}
+      </span>
     </span>
   );
 }
@@ -173,10 +181,10 @@ const SET_BUTTONS: readonly {
   text: string;
   label: string;
 }[] = [
-  { set: 'upper', text: 'A–Z', label: 'Uppercase letters' },
-  { set: 'lower', text: 'a–z', label: 'Lowercase letters' },
-  { set: 'digits', text: '0–9', label: 'Digits' },
-  { set: 'symbols', text: '!@#', label: 'Symbols' },
+  { set: 'upper', text: 'A–Z', label: 'A–Z, uppercase letters' },
+  { set: 'lower', text: 'a–z', label: 'a–z, lowercase letters' },
+  { set: 'digits', text: '0–9', label: '0–9, digits' },
+  { set: 'symbols', text: '!@#', label: '!@#, symbols' },
 ];
 
 const SEPARATOR_NAMES: Readonly<Record<PassphraseSeparator, string>> = {
@@ -327,8 +335,12 @@ function PasswordGenerator({
           </div>
         </>
       )}
-      <div className="pw-gen-preview">
-        <code aria-label="Generated password">{candidate.value}</code>
+      <div
+        className="pw-gen-preview"
+        role="group"
+        aria-label="Generated password"
+      >
+        <code>{candidate.value}</code>
         <button
           type="button"
           className="value-action"

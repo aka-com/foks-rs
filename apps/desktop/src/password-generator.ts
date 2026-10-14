@@ -7,9 +7,10 @@
  * each is uniform over its pool and the entropy of the result is exactly
  * `length × log2(pool size)` bits.
  *
- * A typed password has no such measure. It is checked for a few common
- * weaknesses (too short, on a list of common passwords, containing the site
- * or user name) and a warning is shown; nothing blocks saving it.
+ * A typed or stored password has no such measure. It is checked for a few
+ * common weaknesses (on a list of common passwords, containing the site or
+ * user name, one short unit repeated, a sequence or keyboard row, too short)
+ * and a warning is shown; nothing blocks saving it.
  *
  * The last generator settings are a per-device preference under the
  * `passwordGenerator` `localStorage` key. They never include a password.
@@ -172,7 +173,7 @@ const COMMON_PASSWORDS = new Set(
     '123123 654321 sunshine princess trustno1 hunter master shadow superman ' +
     'batman starwars changeme login secret 1q2w3e4r zaq12wsx passpass ' +
     'whatever freedom michael charlie jordan computer internet default ' +
-    'access mustang pokemon'
+    'access mustang pokemon correcthorsebatterystaple'
   ).split(' '),
 );
 
@@ -194,6 +195,8 @@ function commonForms(value: string): string[] {
   return [
     lower,
     stem,
+    // A passphrase with its separators removed.
+    lower.replace(/[\s._-]+/g, ''),
     unleet(lower, 'i'),
     unleet(lower, 'l'),
     unleet(stem, 'i'),
@@ -203,25 +206,86 @@ function commonForms(value: string): string[] {
   ];
 }
 
-/** The parts of a site or user name a password should not contain. */
-function contextWords(context: readonly string[]): string[] {
-  return context
-    .map(
-      (entry) =>
-        entry
-          .toLowerCase()
-          .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
-          .replace(/^www\./, '')
-          .split(/[/@]/)[0]
-          .split('.')[0],
-    )
-    .filter((word) => word.length >= 4);
+/**
+ * The registrable label of a host: the label before the top-level domain,
+ * or before a two-letter country code and a second-level label of at most
+ * three characters (`co.uk`, `com.au`). `app.slack.com` gives `slack`, so a
+ * subdomain such as `login` or `accounts` is never taken for the site.
+ */
+function registrableLabel(host: string): string {
+  const labels = host.split('.').filter(Boolean);
+  if (labels.length < 2) return labels[0] ?? '';
+  let index = labels.length - 2;
+  if (
+    index > 0 &&
+    labels[index].length <= 3 &&
+    labels[labels.length - 1].length === 2
+  )
+    index--;
+  return labels[index];
 }
 
 /**
- * The feedback for a typed password: a warning for the first common
- * weakness found, or a neutral note. A typed password is never given a
- * level, since none of these checks measures its entropy.
+ * The parts of a site or user name a password should not contain: the
+ * registrable label of a host, and the part before an `@` (a user name in a
+ * URL, or the local part of an email address). Parts shorter than four
+ * characters are left out.
+ */
+function contextWords(context: readonly string[]): string[] {
+  return context
+    .flatMap((entry) => {
+      const authority = entry
+        .trim()
+        .toLowerCase()
+        .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+        .split(/[/?#]/)[0];
+      const at = authority.lastIndexOf('@');
+      const host = authority.slice(at + 1).replace(/:\d*$/, '');
+      return at < 0
+        ? [registrableLabel(host)]
+        : [authority.slice(0, at), registrableLabel(host)];
+    })
+    .filter((word) => word.length >= 4);
+}
+
+/** The whole value is one unit of one to four characters, repeated. */
+const REPEATED_UNIT = /^(.{1,4})\1+$/su;
+
+/** Keyboard rows, read left to right; a run is also checked reversed. */
+const KEYBOARD_ROWS = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+
+/**
+ * The whole value is a run of four or more characters: consecutive letters
+ * or digits, ascending or descending (`abcd`, `4321`), or part of a
+ * keyboard row in either direction (`qwerty`, `lkjh`).
+ */
+function isSequence(text: string): boolean {
+  const characters = [...text];
+  if (characters.length < 4) return false;
+  if (/^[a-z]+$|^\d+$/.test(text)) {
+    const step = text.charCodeAt(1) - text.charCodeAt(0);
+    if (
+      (step === 1 || step === -1) &&
+      characters.every(
+        (_, index) =>
+          index === 0 ||
+          text.charCodeAt(index) - text.charCodeAt(index - 1) === step,
+      )
+    )
+      return true;
+  }
+  const reversed = characters.reverse().join('');
+  return KEYBOARD_ROWS.some(
+    (row) => row.includes(text) || row.includes(reversed),
+  );
+}
+
+/**
+ * The feedback for a password not taken from the generator: a warning for
+ * the first common weakness found, shown at level 1 (Weak), or a neutral
+ * note without a level, since none of these checks measures entropy. The
+ * repeat and sequence checks apply to the whole value and to the value
+ * without a trailing run of digits and symbols (`abcd1234!`).
  */
 export function typedPasswordStrength(
   value: string,
@@ -237,6 +301,16 @@ export function typedPasswordStrength(
       text: 'Weak · contains the site or user name',
       weak: true,
     };
+  // The stem is checked only when the run it drops is no longer than itself.
+  const stem = lower.replace(TRAILING_DIGITS_AND_SYMBOLS, '');
+  const shapes =
+    stem && stem !== lower && lower.length <= 2 * stem.length
+      ? [lower, stem]
+      : [lower];
+  if (shapes.some((shape) => REPEATED_UNIT.test(shape)))
+    return { level: 1, text: 'Weak · repeated characters', weak: true };
+  if (shapes.some(isSequence))
+    return { level: 1, text: 'Weak · a sequence', weak: true };
   if ([...value].length < LENGTH_RANGE.min)
     return {
       level: 1,
@@ -245,7 +319,7 @@ export function typedPasswordStrength(
     };
   return {
     level: null,
-    text: 'Typed · no common weakness found',
+    text: 'Not measured · no common weakness found',
     weak: false,
   };
 }

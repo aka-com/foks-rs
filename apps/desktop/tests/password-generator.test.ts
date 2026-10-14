@@ -128,14 +128,20 @@ test('strength levels follow the entropy of a generated password', () => {
   });
 });
 
-test('a typed password is warned about, never rated', () => {
+test('a typed password is warned about at level 1; without a warning it is not rated', () => {
   assert.equal(typedPasswordStrength(''), null);
-  assert.equal(
-    typedPasswordStrength('Password1!')?.text,
-    'Weak · a common password',
-  );
+  assert.deepEqual(typedPasswordStrength('Password1!'), {
+    level: 1,
+    text: 'Weak · a common password',
+    weak: true,
+  });
   assert.equal(
     typedPasswordStrength('P@55w0rd')?.text,
+    'Weak · a common password',
+  );
+  // A well-known passphrase matches with its separators removed.
+  assert.equal(
+    typedPasswordStrength('correct horse battery staple')?.text,
     'Weak · a common password',
   );
   assert.equal(
@@ -151,15 +157,90 @@ test('a typed password is warned about, never rated', () => {
     typedPasswordStrength('k7#Qz')?.text,
     'Weak · shorter than 8 characters',
   );
-  const plain = typedPasswordStrength('correct horse battery staple', [
+  const plain = typedPasswordStrength('violet-anchor-quarry-71', [
     'github.com',
     'me',
   ]);
   assert.deepEqual(plain, {
     level: null,
-    text: 'Typed · no common weakness found',
+    text: 'Not measured · no common weakness found',
     weak: false,
   });
+});
+
+test('the site check uses the registrable label of the host, not a subdomain', () => {
+  const site = 'Weak · contains the site or user name';
+  assert.equal(
+    typedPasswordStrength('Slack-is-great-2024!', ['app.slack.com', 'bob'])
+      ?.text,
+    site,
+  );
+  assert.equal(
+    typedPasswordStrength('Google-rocks-9182', [
+      'https://accounts.google.com/signin',
+      'alice',
+    ])?.text,
+    site,
+  );
+  assert.equal(
+    typedPasswordStrength('Barclays!Spring77', [
+      'https://online.barclays.co.uk:8443/',
+      '',
+    ])?.text,
+    site,
+  );
+  // An email user name contributes its local part.
+  assert.equal(
+    typedPasswordStrength('ringo.starr-1940', ['example.com', 'ringo@x.org'])
+      ?.text,
+    site,
+  );
+  // A subdomain is not the site.
+  assert.equal(
+    typedPasswordStrength('login-violet-quarry', ['login.example.com', ''])
+      ?.text,
+    'Not measured · no common weakness found',
+  );
+});
+
+test('repeated characters and sequences are warned about', () => {
+  const context = ['example.com', ''];
+  for (const value of [
+    '11111111',
+    '00000000',
+    '1111111111',
+    'aaaaaaaa',
+    'zzzzzzzzzzzz',
+    '12341234',
+    'asdfasdf',
+    'aaaaaaaa1!',
+  ])
+    assert.equal(
+      typedPasswordStrength(value, context)?.text,
+      'Weak · repeated characters',
+      value,
+    );
+  for (const value of [
+    'abcdefgh',
+    'qwertyui',
+    'zyxwvuts',
+    '987654321',
+    'ytrewq12',
+    'abcd1234',
+    'hgfedcba',
+  ])
+    assert.equal(
+      typedPasswordStrength(value, context)?.text,
+      'Weak · a sequence',
+      value,
+    );
+  // A run inside a longer value, or before a longer random tail, is not one.
+  for (const value of ['liberty-property-9', 'qwer8#4!9$2&7^1', 'abcz1234'])
+    assert.equal(
+      typedPasswordStrength(value, context)?.text,
+      'Not measured · no common weakness found',
+      value,
+    );
 });
 
 test('stored settings are validated field by field and survive a round trip', () => {
