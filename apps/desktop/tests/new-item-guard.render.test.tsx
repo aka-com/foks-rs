@@ -465,6 +465,7 @@ test('item rename keeps the selected source version and blocks dismissal during 
   const dialog = await rendered.findByRole('dialog', {
     name: 'Rename or move',
   });
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Path' }));
   ui.fireEvent.change(ui.within(dialog).getByLabelText('Destination path'), {
     target: { value: '/renamed-item' },
   });
@@ -518,6 +519,7 @@ test('ambiguous move keeps the draft visible and cannot be submitted twice', asy
   const dialog = await rendered.findByRole('dialog', {
     name: 'Rename or move',
   });
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Path' }));
   ui.fireEvent.change(ui.within(dialog).getByLabelText('Destination path'), {
     target: { value: '/uncertain' },
   });

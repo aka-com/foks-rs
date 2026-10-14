@@ -13,7 +13,7 @@ import { CollectionStatus } from '../components/collection-status';
  */
 
 import { Fragment, useLayoutEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { useToast } from '/kit/toasts';
 import { anyDialogOpen, ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
@@ -89,6 +89,17 @@ import {
   whereOf,
 } from './scope';
 import type { FolderNode } from './scope';
+import {
+  NO_ROWS,
+  allRows,
+  dropVerdict,
+  extendRows,
+  itemCount,
+  rowKey,
+  selectedRows,
+  toggleRow,
+} from './item-moves';
+import type { DropVerdict, MultiSelection } from './item-moves';
 import { AccountMark } from './account-switcher';
 import { manageReason } from './group-model';
 import {
@@ -103,10 +114,6 @@ function emptyStoreCopy(store: Store): string {
   return store.kind === 'team'
     ? 'Items stored in this team vault are accessible to team members according to their assigned roles.'
     : 'Passwords and documents you add are private to this vault.';
-}
-
-function itemCount(count: number): string {
-  return `${count} ${count === 1 ? 'item' : 'items'}`;
 }
 
 /**
@@ -190,7 +197,16 @@ interface RowProps {
   selected: boolean;
   /** A store that can be read but not written: rows are drawn back. */
   readOnly: boolean;
+  /**
+   * How many rows the menu's Move and Trash act on: the size of the
+   * multi-selection this row belongs to, or 0 when it acts on this row.
+   */
+  group: number;
   onSelect: () => void;
+  /** ⌘-click toggles the row in the multi-selection; Shift-click extends it. */
+  onPick: (mode: 'toggle' | 'extend') => void;
+  /** Starts a drag of the row, or of the multi-selection it belongs to. */
+  onPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onCopy: (item: Item, field: ItemField) => void;
   onReveal: (item: Item) => void;
   onDownload: (item: Item) => void;
@@ -206,7 +222,10 @@ function Row({
   columns,
   selected,
   readOnly,
+  group,
   onSelect,
+  onPick,
+  onPointerDown,
   onCopy,
   onReveal,
   onDownload,
@@ -274,7 +293,12 @@ function Row({
         tabIndex={0}
         aria-pressed={selected}
         aria-haspopup="menu"
-        onClick={onSelect}
+        onClick={(event) => {
+          if (event.metaKey || event.ctrlKey) onPick('toggle');
+          else if (event.shiftKey) onPick('extend');
+          else onSelect();
+        }}
+        onPointerDown={onPointerDown}
         onContextMenu={(event) => {
           event.preventDefault();
           rowRef.current?.focus();
@@ -302,7 +326,9 @@ function Row({
           }
           if (event.key !== 'Enter' && event.key !== ' ') return;
           event.preventDefault();
-          onSelect();
+          if (event.metaKey || event.ctrlKey) onPick('toggle');
+          else if (event.shiftKey) onPick('extend');
+          else onSelect();
         }}
       >
         <span className="name">
@@ -398,7 +424,7 @@ function Row({
                 reason={writeProblem}
                 onClick={choose(() => onMove(item))}
               >
-                Rename or move…
+                {group > 1 ? `Move ${group} items to…` : 'Rename or move…'}
               </MenuItem>
             ) : null}
             <MenuItem
@@ -407,7 +433,7 @@ function Row({
               reason={writeProblem}
               onClick={choose(() => onTrash(item))}
             >
-              Move to Trash
+              {group > 1 ? `Move ${group} items to Trash` : 'Move to Trash'}
             </MenuItem>
           </Menu>
         </ContextMenu>
@@ -429,6 +455,7 @@ function FolderRow({
   onSelect,
   storeId,
   path,
+  drop,
 }: {
   storeId: string;
   path: string;
@@ -436,10 +463,18 @@ function FolderRow({
   count: number;
   columns: Columns;
   onSelect: () => void;
+  /** Rows dragged over this folder: whether they can be dropped here. */
+  drop?: 'ok' | 'no';
 }): ReactNode {
   return (
     <div
-      className={columnClass(columns, 'row', 'one', 'folder')}
+      className={columnClass(
+        columns,
+        'row',
+        'one',
+        'folder',
+        drop ? `drop-${drop}` : '',
+      )}
       data-folder-store={storeId}
       data-folder-path={path}
       aria-haspopup="menu"
@@ -482,9 +517,12 @@ function TreeRow({
   onToggle,
   storeId,
   path,
+  drop,
 }: {
   storeId?: string;
   path?: string;
+  /** Rows dragged over this folder: whether they can be dropped here. */
+  drop?: 'ok' | 'no';
   depth: number;
   active: boolean;
   root?: boolean;
@@ -512,6 +550,7 @@ function TreeRow({
         active ? 'on' : '',
         root ? 'root' : '',
         quiet ? 'quiet' : '',
+        drop ? `drop-${drop}` : '',
       ]
         .filter(Boolean)
         .join(' ')}
@@ -683,6 +722,13 @@ export interface ItemsScreenProps {
   /** Asks to remove every entry in a store's Trash permanently. */
   onEmptyTrash?: (storeId: string) => void;
   onMove?: (item: Item) => void;
+  /**
+   * Moves several items of one store: to `folder` when a drag names it, or
+   * to a folder chosen in the move sheet.
+   */
+  onMoveMany?: (items: readonly Item[], folder?: string) => void;
+  /** Moves several items to Trash. */
+  onTrashMany?: (items: readonly Item[]) => void;
   onSettings: (storeId: string) => void;
   onTeamInfo?: (storeId: string, trigger?: HTMLElement) => void;
   onNewFolder?: (storeId: string, path: string) => void;
@@ -715,6 +761,8 @@ export function ItemsScreen({
   onDeletePermanently,
   onEmptyTrash,
   onMove,
+  onMoveMany,
+  onTrashMany,
   onSettings,
   onTeamInfo,
   onNewFolder,
@@ -724,6 +772,21 @@ export function ItemsScreen({
   accessNow = () => Date.now() / 1000,
 }: ItemsScreenProps): ReactNode {
   const sidebar = useFilesSidebarResize();
+  // Rows chosen together, valid only for the view they were chosen in.
+  const [multi, setMulti] = useState<{ scope: string; rows: MultiSelection }>({
+    scope: '',
+    rows: NO_ROWS,
+  });
+  const [drag, setDrag] = useState<{
+    x: number;
+    y: number;
+    what: string;
+    verdict: DropVerdict | null;
+    target: string | null;
+  } | null>(null);
+  // Set when a drag ends, so the click that follows the release is not read
+  // as a selection.
+  const suppressClick = useRef(false);
   const toasts = useToast();
   const [view, setView] = useState<FilesView>(storedFilesView);
   const [folderMenu, setFolderMenu] = useState<{
@@ -918,6 +981,7 @@ export function ItemsScreen({
             icon="folder"
             name={displayPathComponent(folder.name)}
             count={folder.count}
+            drop={dropOn(treeStore.id, folder.path)}
             open={open}
             expandable={folder.folders.length > 0}
             onSelect={() => selectFolder(treeStore, folder.path)}
@@ -941,6 +1005,7 @@ export function ItemsScreen({
           path="/"
           depth={0}
           root
+          drop={dropOn(tree.store.id, '/')}
           active={active}
           icon="vault"
           mark={
@@ -1137,6 +1202,213 @@ export function ItemsScreen({
   const readOnly = Boolean(readOnlyReason);
   const expiredHere = Boolean(selectedStore && leaseExpired(selectedStore));
 
+  /* ------------------------------------------------- multi-selection -- */
+
+  // The rows the list draws, in order: what ⌘A selects and Shift-click
+  // ranges over. Trash draws its own view.
+  const listed = trashSelected ? [] : flatMode ? items : folderScopedItems;
+  const listedKeys = listed.map(rowKey);
+  const multiScope = [
+    location.kind,
+    location.kind === 'store' ? location.ref : '',
+    state.folder,
+    state.query,
+    state.kind,
+  ].join('\n');
+  const chosenRows = multi.scope === multiScope ? multi.rows : NO_ROWS;
+  const chosen = selectedRows(chosenRows, listed);
+  const chosenKeys = new Set(chosen.map(rowKey));
+  const setChosen = (rows: MultiSelection): void =>
+    setMulti({ scope: multiScope, rows });
+  // The row the details panel shows joins a multi-selection started beside it.
+  const seed =
+    state.selection && listedKeys.includes(rowKey(state.selection))
+      ? rowKey(state.selection)
+      : null;
+  const pickRow = (item: Item, mode: 'toggle' | 'extend'): void => {
+    if (suppressClick.current) return;
+    const current = { keys: chosen.map(rowKey), anchor: chosenRows.anchor };
+    setChosen(
+      mode === 'toggle'
+        ? toggleRow(current, rowKey(item), seed)
+        : extendRows(current, listedKeys, rowKey(item), seed),
+    );
+  };
+  /** The multi-selection `item` belongs to, when it has more than one row. */
+  const groupOf = (item: Item): readonly Item[] | null =>
+    chosen.length > 1 && chosenKeys.has(rowKey(item)) ? chosen : null;
+  const writeProblems = (group: readonly Item[]): (string | undefined)[] =>
+    group.map((item) => itemActionProblem(snapshot, item, true, accessNow()));
+  const storeBlocked = (target: Store): string | null =>
+    !availability(target).available
+      ? storeDescription(snapshot, target)
+      : writeBlockReason(snapshot, target);
+  const moveGroupReason = (group: readonly Item[]): string | undefined => {
+    if (new Set(group.map((item) => item.store)).size > 1)
+      return 'Select items from one vault to move them together.';
+    const problems = writeProblems(group);
+    return problems.every(Boolean) ? problems[0] : undefined;
+  };
+  const trashGroupReason = (group: readonly Item[]): string | undefined => {
+    const problems = writeProblems(group);
+    return problems.every(Boolean) ? problems[0] : undefined;
+  };
+  const moveRow = (item: Item): void => {
+    const group = groupOf(item);
+    if (group && onMoveMany) {
+      const reason = moveGroupReason(group);
+      if (reason) toasts.show(reason, { tone: 'warning' });
+      else onMoveMany(group);
+      return;
+    }
+    if (onMove && allowAction(item, true)) onMove(item);
+  };
+  const trashRow = (item: Item): void => {
+    const group = groupOf(item);
+    if (group && onTrashMany) {
+      const reason = trashGroupReason(group);
+      if (reason) toasts.show(reason, { tone: 'warning' });
+      else onTrashMany(group);
+      return;
+    }
+    if (allowAction(item, true)) onTrash(item);
+  };
+
+  /**
+   * Dragging rows onto a folder of the tree or the list moves them there.
+   * The drag follows pointer events and finds the folder under the pointer
+   * with `elementFromPoint`, because the window's native drag-and-drop
+   * handler is reserved for files dropped from the operating system and
+   * keeps HTML drag events from reaching the page on some platforms.
+   */
+  const startDrag = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    item: Item,
+  ): void => {
+    if (
+      !onMoveMany ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      (event.target instanceof Element && event.target.closest('button'))
+    )
+      return;
+    const dragged = groupOf(item) ?? [item];
+    const own = storeOf(snapshot, item.store);
+    const ownName = own?.name ?? 'this vault';
+    const blocked = own
+      ? storeBlocked(own)
+      : 'This vault is no longer available.';
+    const what =
+      dragged.length === 1 ? nameOf(item.path) : itemCount(dragged.length);
+    const origin = { x: event.clientX, y: event.clientY };
+    let active = false;
+    let target: { store: string; path: string } | null = null;
+    let verdict: DropVerdict | null = null;
+    const judge = (x: number, y: number): void => {
+      const element =
+        typeof document.elementFromPoint === 'function'
+          ? document.elementFromPoint(x, y)
+          : null;
+      const folder = element?.closest<HTMLElement>('[data-folder-store]');
+      const store = folder?.dataset.folderStore;
+      const path = folder?.dataset.folderPath;
+      target = store && path ? { store, path } : null;
+      verdict = target
+        ? dropVerdict(dragged, target.store, target.path, ownName, blocked)
+        : null;
+    };
+    const onMove = (next: PointerEvent): void => {
+      if (!active) {
+        if (Math.hypot(next.clientX - origin.x, next.clientY - origin.y) < 6)
+          return;
+        active = true;
+        document.body.classList.add('dragging-rows');
+        window.getSelection()?.removeAllRanges();
+      }
+      judge(next.clientX, next.clientY);
+      setDrag({
+        x: next.clientX,
+        y: next.clientY,
+        what,
+        verdict,
+        target: target ? `${target.store}|${target.path}` : null,
+      });
+    };
+    const finish = (drop: boolean): void => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('keydown', onKey, true);
+      if (!active) return;
+      document.body.classList.remove('dragging-rows');
+      suppressClick.current = true;
+      window.setTimeout(() => {
+        suppressClick.current = false;
+      }, 0);
+      setDrag(null);
+      if (drop && verdict?.ok && target) onMoveMany(dragged, target.path);
+    };
+    const onUp = (next: PointerEvent): void => {
+      if (active) judge(next.clientX, next.clientY);
+      finish(true);
+    };
+    const onCancel = (): void => finish(false);
+    const onKey = (next: KeyboardEvent): void => {
+      if (next.key !== 'Escape' || !active) return;
+      next.preventDefault();
+      next.stopPropagation();
+      finish(false);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('keydown', onKey, true);
+  };
+  const dropOn = (storeId: string, path: string): 'ok' | 'no' | undefined =>
+    drag?.target === `${storeId}|${path}`
+      ? drag.verdict?.ok
+        ? 'ok'
+        : 'no'
+      : undefined;
+
+  const selectionBar =
+    chosen.length && (onMoveMany || onTrashMany) ? (
+      <div className="selbar" role="toolbar" aria-label="Selected items">
+        <span className="n" aria-live="polite">
+          {chosen.length} selected
+        </span>
+        {onMoveMany ? (
+          <Button
+            size="sm"
+            icon="folder"
+            disabled={Boolean(moveGroupReason(chosen))}
+            title={moveGroupReason(chosen)}
+            onClick={() => onMoveMany(chosen)}
+          >
+            Move to…
+          </Button>
+        ) : null}
+        {onTrashMany ? (
+          <Button
+            size="sm"
+            icon="trash"
+            danger
+            disabled={Boolean(trashGroupReason(chosen))}
+            title={trashGroupReason(chosen)}
+            onClick={() => onTrashMany(chosen)}
+          >
+            Move to Trash
+          </Button>
+        ) : null}
+        <span className="sp" />
+        <Button size="sm" onClick={() => setChosen(NO_ROWS)}>
+          Clear
+        </Button>
+      </div>
+    ) : null;
+
   const row = (item: Item, chipColumns: Columns): ReactNode => (
     <Row
       key={`${item.store}|${item.path}`}
@@ -1145,24 +1417,25 @@ export function ItemsScreen({
       item={item}
       columns={chipColumns}
       selected={
-        state.selection?.store === item.store &&
-        state.selection.path === item.path
+        chosen.length
+          ? chosenKeys.has(rowKey(item))
+          : state.selection?.store === item.store &&
+            state.selection.path === item.path
       }
       readOnly={readOnly}
-      onSelect={() => locations.select({ store: item.store, path: item.path })}
+      group={groupOf(item)?.length ?? 0}
+      onSelect={() => {
+        if (suppressClick.current) return;
+        setChosen(NO_ROWS);
+        locations.select({ store: item.store, path: item.path });
+      }}
+      onPick={(mode) => pickRow(item, mode)}
+      onPointerDown={(event) => startDrag(event, item)}
       onCopy={copyItemField}
       onReveal={revealItem}
       onDownload={downloadItem}
-      onMove={
-        onMove
-          ? (item) => {
-              if (allowAction(item, true)) onMove(item);
-            }
-          : undefined
-      }
-      onTrash={(item) => {
-        if (allowAction(item, true)) onTrash(item);
-      }}
+      onMove={onMove || onMoveMany ? moveRow : undefined}
+      onTrash={trashRow}
       accessNow={accessNow}
     />
   );
@@ -1177,6 +1450,7 @@ export function ItemsScreen({
             name={displayPathComponent(folder.name)}
             count={folder.count}
             columns={columns}
+            drop={dropOn(selectedTree.store.id, folder.path)}
             onSelect={() => selectFolder(selectedTree.store, folder.path)}
           />
         )),
@@ -1441,7 +1715,7 @@ export function ItemsScreen({
         )
       ) : (
         <div className="list-window">
-          {contentsHeader}
+          {selectionBar ?? contentsHeader}
           <div className="virtual-rows" ref={listRef}>
             {rowWindow.padTop ? (
               <div
@@ -1480,7 +1754,7 @@ export function ItemsScreen({
       )
     ) : (
       <div className="list-window">
-        {contentsHeader}
+        {selectionBar ?? contentsHeader}
         <div className={view === 'grid' ? 'files-grid' : 'virtual-rows'}>
           {paneRows}
         </div>
@@ -1768,6 +2042,31 @@ export function ItemsScreen({
               className="body folder-body"
               ref={bodyRef}
               onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+              onKeyDown={(event) => {
+                // Keys typed in a menu or sheet opened from a row reach this
+                // handler through React's tree; only the list's own count.
+                if (
+                  !(event.target instanceof Node) ||
+                  !event.currentTarget.contains(event.target)
+                )
+                  return;
+                if (event.key === 'Escape' && chosen.length) {
+                  event.preventDefault();
+                  setChosen(NO_ROWS);
+                  return;
+                }
+                if (
+                  (event.metaKey || event.ctrlKey) &&
+                  !event.shiftKey &&
+                  !event.altKey &&
+                  event.key.toLowerCase() === 'a' &&
+                  listed.length &&
+                  (onMoveMany || onTrashMany)
+                ) {
+                  event.preventDefault();
+                  setChosen(allRows(listedKeys));
+                }
+              }}
             >
               {location.kind === 'all' && accessBands.length ? (
                 <div className="bandstrip">
@@ -1806,6 +2105,21 @@ export function ItemsScreen({
           </section>
         </div>
       </div>
+      {drag ? (
+        <div
+          className="drag-ghost"
+          style={{ left: drag.x + 14, top: drag.y + 14 }}
+          aria-hidden="true"
+        >
+          <span className="what">
+            <Icon name="file" />
+            {drag.what}
+          </span>
+          <span className={drag.verdict?.ok ? 'lab' : 'lab no'}>
+            {drag.verdict?.label ?? 'Drop on a folder to move'}
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { MoveSheet } from './move-item-sheet';
+import { BulkProgressSheet } from './bulk-progress-sheet';
 import { useTabSheetState } from '../navigation-guard';
 import { useCallback, useId, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
@@ -69,6 +70,11 @@ import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '/kit/toasts';
 import { itemActionProblem } from './store-access';
 import { useTrashOrigins } from './trash-origins';
+import {
+  DEFAULT_READ_ROLE,
+  DEFAULT_WRITE_ROLE,
+  newFolderRoles,
+} from './item-roles';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
 
@@ -95,9 +101,7 @@ function discardNewItem(
   };
 }
 
-/** Group items default to team-readable content that only admins can change. */
-export const DEFAULT_READ_ROLE: KvRoleInput = 'Member:0';
-export const DEFAULT_WRITE_ROLE: KvRoleInput = 'Admin';
+export { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE };
 
 /** A partially filled new-item form, carried across conflict recovery. */
 export interface NewDraft {
@@ -135,6 +139,12 @@ export type WriteWorkflow =
       draft?: NewDraft;
     }
   | { kind: 'move'; item: Item }
+  /** Several items of one store, moved together to a folder chosen next. */
+  | { kind: 'move-many'; items: readonly Item[] }
+  /** Moves `items` into `folder` of their store one at a time, with progress. */
+  | { kind: 'bulk-move'; items: readonly Item[]; folder: string }
+  /** Moves `items` to their stores' Trash one at a time, with progress. */
+  | { kind: 'bulk-trash'; items: readonly Item[] }
   /**
    * Permanently removes an entry in Trash, or with `outsideTrash` an item in
    * a team whose Trash this account cannot set up.
@@ -1003,9 +1013,7 @@ function NewFolderSheet({
       await bridge.createFolder({
         storeId: store.id,
         path: namedPath(name.trim(), '/', workflow.initialFolder),
-        ...(store.kind === 'team'
-          ? { readRole: DEFAULT_READ_ROLE, writeRole: DEFAULT_WRITE_ROLE }
-          : {}),
+        ...newFolderRoles(store),
       });
       await onApplied(`Folder created in ${store.name}`, store.server);
       close();
@@ -1193,6 +1201,7 @@ export function WriteOverlay({
   onDeleteConflict,
   onOpenExisting,
   onRestoreTrash,
+  onReload,
   accessNow = () => Date.now() / 1000,
 }: {
   snapshot: AgentSnapshot;
@@ -1220,6 +1229,8 @@ export function WriteOverlay({
   ) => Promise<void>;
   /** Moves a Trash entry to `destination`, outside Trash. */
   onRestoreTrash: (item: Item, destination: string) => Promise<void>;
+  /** Reads the catalog again and resolves with it, for moves in steps. */
+  onReload: () => Promise<AgentSnapshot>;
   accessNow?: () => number;
 }): ReactNode {
   if (!workflow) return null;
@@ -1263,15 +1274,29 @@ export function WriteOverlay({
         onError={(error) => onError(error)}
       />
     );
-  if (workflow.kind === 'move')
+  if (workflow.kind === 'move' || workflow.kind === 'move-many')
     return (
       <MoveSheet
         snapshot={snapshot}
         bridge={bridge}
-        item={workflow.item}
+        items={workflow.kind === 'move' ? [workflow.item] : workflow.items}
         setWorkflow={setWorkflow}
         onApplied={onApplied}
         onMutationError={onMutationError}
+        onReload={onReload}
+        accessNow={accessNow}
+      />
+    );
+  if (workflow.kind === 'bulk-move' || workflow.kind === 'bulk-trash')
+    return (
+      <BulkProgressSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onMutationError={onMutationError}
+        onReload={onReload}
         accessNow={accessNow}
       />
     );

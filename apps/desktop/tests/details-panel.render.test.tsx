@@ -280,6 +280,7 @@ test('an already-open Delete permanently sheet disables its action when access i
           onDeleteConflict: async () => {},
           onOpenExisting: async () => {},
           onRestoreTrash: async () => {},
+          onReload: async () => snapshot,
         }),
       }),
     });

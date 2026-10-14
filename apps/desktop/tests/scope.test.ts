@@ -59,3 +59,26 @@ test('folder lookup returns the root for empty paths and null for stale paths', 
   assert.equal(folderAt(root, '/'), root);
   assert.equal(folderAt(root, '/missing'), null);
 });
+
+test('folder entries add their own nodes, so empty folders are drawn', () => {
+  const root = folderTree([
+    item('/env/token'),
+    { ...item('/env/prod'), kind: 'Folder' },
+    { ...item('/empty'), kind: 'Folder' },
+  ]);
+  assert.deepEqual(
+    root.folders.map((folder) => folder.path),
+    ['/empty', '/env'],
+  );
+  const env = folderAt(root, '/env');
+  assert.ok(env);
+  assert.deepEqual(
+    env.items.map((entry) => entry.path),
+    ['/env/token'],
+  );
+  assert.deepEqual(
+    env.folders.map((folder) => folder.path),
+    ['/env/prod'],
+  );
+  assert.equal(root.count, 1);
+});

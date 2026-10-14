@@ -398,9 +398,22 @@ role changes. The row and byte limits come from the shared
 ## Vault edits
 
 Items and folders offer Rename or move within their current vault. The target
-is an exact absolute path under an existing folder, and a live destination
-is never overwritten. The selected source dirent identity and version remain fixed across retries,
-so a newly created object at the same path cannot satisfy an older selection.
+is an exact absolute path, chosen as a folder of the vault's tree and a name or
+typed in full, and a live destination is never overwritten. A destination
+folder that does not exist yet is created first with `MkdirKv` and `mkdir_p`,
+the operation New folder uses. The selected source dirent identity and version
+remain fixed across retries, so a newly created object at the same path cannot
+satisfy an older selection.
+
+Several items chosen together, or dragged onto a folder, move as separate
+`MoveKv` mutations, one at a time; there is no batched form. The host retires
+a store's catalog after every write and selects the item of the next request
+in a catalog it has read, so the desktop reads the catalog again before each
+item and sends the current version of the same dirent; an item whose path now
+holds another dirent is not sent. Each item's outcome is reported on its own.
+A failure whose request certainly did not run, such as a refused admission
+while another write held the mutation permit, can be retried; an ambiguous
+one cannot, because the item may already have moved.
 
 Text edits and picked or dropped file replacements preserve the selected
 dirent identity and version too. The client validates them before uploading
@@ -415,7 +428,9 @@ tombstone at the source and a dirent at the destination. Nothing is
 destroyed, so Delete asks for no confirmation. The toast it shows offers
 Undo for eight seconds, and ⌘Z does the same while it shows. A child that
 another device adds to a folder while it is moved goes with the folder,
-which a recursive delete could not promise.
+which a recursive delete could not promise. Several items moved to Trash
+together are sent one at a time, as several items are moved, and are restored
+from the Trash view; the toast offers no Undo for them.
 
 Dirent names are sealed under the key of the directory that holds them, so
 one shared Trash folder would expose the names of owner-only items to

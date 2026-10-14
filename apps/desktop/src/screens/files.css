@@ -1026,3 +1026,186 @@
 .trash-empty-list li.kept > span {
   color: var(--faint);
 }
+
+/* Several rows chosen with ⌘-click, Shift-click or ⌘A: the bar takes the
+   column header's place while it is shown. */
+.folder-body .selbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-md);
+  background: var(--accent-wash);
+  font-size: 12px;
+}
+.folder-body .selbar .n {
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+.folder-body .selbar .sp {
+  flex: 1;
+}
+
+/* Rows dragged over a folder of the tree or the list. */
+.tpane .fn.drop-ok,
+.folder-body .row.folder.drop-ok {
+  background: var(--accent-wash-2);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.tpane .fn.drop-no,
+.folder-body .row.folder.drop-no {
+  box-shadow: inset 0 0 0 1px var(--danger-border);
+}
+body.dragging-rows,
+body.dragging-rows * {
+  cursor: grabbing;
+  user-select: none;
+}
+.drag-ghost {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 280px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  font-size: 12px;
+  pointer-events: none;
+}
+.drag-ghost .what {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.drag-ghost .lab {
+  color: var(--accent-ink);
+}
+.drag-ghost .lab.no {
+  color: var(--danger-ink);
+}
+
+/* The move sheet's folder tree. */
+.folder-picker {
+  max-height: min(236px, 38vh);
+  padding: 4px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--main-surface);
+}
+.folder-picker .fp-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px 0 calc(8px + var(--d, 0) * 14px);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.folder-picker .fp-node:hover {
+  background: var(--hover);
+}
+.folder-picker .fp-node.on {
+  background: var(--accent-wash-2);
+  color: var(--accent-ink);
+}
+.folder-picker .fp-node.off {
+  color: var(--faint);
+  cursor: default;
+}
+.folder-picker .fp-node:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
+}
+.folder-picker .fp-node .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.folder-picker .fp-node .tag {
+  font-size: 12px;
+  color: var(--faint);
+}
+.picker-actions {
+  display: flex;
+  margin: 8px 0;
+}
+.ft .move-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ft .move-preview.bad {
+  color: var(--faint);
+}
+
+/* Per-item outcomes of a bulk move. */
+.bulk-rows {
+  max-height: min(300px, 46vh);
+  margin: 8px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  font-size: 13px;
+}
+.bulk-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.bulk-row .t {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.bulk-row small {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.bulk-row.done > .ic,
+.bulk-row.skipped > .ic {
+  color: var(--ok-ink);
+}
+.bulk-row.refused > .ic,
+.bulk-row.uncertain > .ic {
+  color: var(--amber-ink);
+}
+.bulk-row.failed > .ic {
+  color: var(--danger-ink);
+}
+.bulk-row.pending > .ic {
+  color: var(--faint);
+}
+.bulk-row > .spin {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin: 2px;
+  border: 2px solid var(--muted);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bulk-row > .spin {
+    animation: none;
+  }
+}

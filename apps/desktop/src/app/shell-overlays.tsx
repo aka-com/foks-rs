@@ -190,6 +190,7 @@ export function ShellOverlays({
           else toasts.show('This item was already deleted elsewhere.');
         }}
         onRestoreTrash={restoreTrash}
+        onReload={() => refreshSnapshot()}
         onDiscardConflict={() => {
           setWorkflow(null);
           setResumeDraft(null);

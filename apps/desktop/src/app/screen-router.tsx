@@ -113,7 +113,15 @@ export function ScreenRouter({
         setWorkflow({ kind: 'new-folder', storeId, initialFolder })
       }
       onMove={(item) => setWorkflow({ kind: 'move', item })}
+      onMoveMany={(items, folder) =>
+        setWorkflow(
+          folder === undefined
+            ? { kind: 'move-many', items }
+            : { kind: 'bulk-move', items, folder },
+        )
+      }
       onTrash={trash.moveToTrash}
+      onTrashMany={(items) => setWorkflow({ kind: 'bulk-trash', items })}
       onRestore={trash.restore}
       onDeletePermanently={(item) => setWorkflow({ kind: 'delete', item })}
       onEmptyTrash={(store) => setWorkflow({ kind: 'empty-trash', store })}
