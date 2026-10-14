@@ -873,6 +873,13 @@ test('server removal deletes its local credentials after exact-name confirmation
   assert.ok(
     ui.within(dialog).getByText('Remove Personal server and its credentials?'),
   );
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByText(
+        /^This app also removes its setup progress, invitation labels/,
+      ),
+  );
   const remove = ui
     .within(dialog)
     .getByRole('button', { name: 'Remove server and credentials' });
@@ -1184,6 +1191,13 @@ test('Reset this device asks for one typed profile name per server', async () =>
   await ui.waitFor(() => {
     assert.ok(ui.within(dialog).getAllByText('Discarded operations').length);
   });
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByText(
+        /^For each server reset, this app also erases its setup progress/,
+      ),
+  );
   const confirms = ui.within(dialog).getAllByPlaceholderText(/to confirm$/);
   assert.equal(confirms.length, 3);
   const run = ui

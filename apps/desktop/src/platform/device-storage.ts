@@ -17,8 +17,6 @@
  * whose caller must not proceed when the record cannot be read or stored.
  */
 
-export type StorageScope = 'device' | 'profile';
-
 export interface DeviceStorageKey {
   readonly name: string;
   readonly scope: 'device';
@@ -190,7 +188,9 @@ function notify(key: StorageKey): void {
 
 /**
  * Calls `listener` after each write of `key` made through this module,
- * refused writes and {@link purgeProfiles} included.
+ * including writes that {@link writeStorage} reports as refused and those of
+ * {@link purgeProfiles}. A write that {@link writeStorageOrThrow} refuses
+ * throws to its caller without notifying.
  */
 export function subscribeStorage(
   key: StorageKey,

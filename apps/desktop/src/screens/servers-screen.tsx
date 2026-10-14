@@ -1256,8 +1256,8 @@ function RemoveServerSheet({
           history, cached data, and unfinished operations.
         </InsetRow>
         <InsetRow label="App records">
-          This app's setup progress, invitation labels, Recent and Favorites
-          entries, and exposure reviews for this server.
+          This app also removes its setup progress, invitation labels, Recent
+          and Favorites entries, and exposure reviews for this server.
         </InsetRow>
         <InsetRow label="Warning">
           Accounts without a recovery phrase or another paired device cannot be

@@ -124,15 +124,11 @@ import { ShellSearch } from './shell-search';
 import { useWindowRuntime } from './window-runtime';
 
 function incompleteFirstRunCheckpoint(): FirstRunCheckpoint | null {
-  try {
-    const checkpoint = storedFirstRunCheckpoint();
-    return checkpoint &&
-      completedFirstRunSteps(checkpoint) < firstRunStepCount(checkpoint)
-      ? checkpoint
-      : null;
-  } catch {
-    return null;
-  }
+  const checkpoint = storedFirstRunCheckpoint();
+  return checkpoint &&
+    completedFirstRunSteps(checkpoint) < firstRunStepCount(checkpoint)
+    ? checkpoint
+    : null;
 }
 
 interface VaultShellProps {

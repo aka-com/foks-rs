@@ -4,14 +4,16 @@ import {
   readStorage,
   STORAGE_KEYS,
   writeStorage,
+  type DeviceStorageKey,
 } from './platform/device-storage';
 
 export type OnboardingTip = 'add-password' | 'setup-checklist';
 const EVENT = 'foks-onboarding-tip-change';
-const keyFor = (tip: OnboardingTip) =>
-  tip === 'add-password'
-    ? STORAGE_KEYS.dismissedAddPasswordTip
-    : STORAGE_KEYS.dismissedSetupChecklistTip;
+const TIP_KEYS: Record<OnboardingTip, DeviceStorageKey> = {
+  'add-password': STORAGE_KEYS.dismissedAddPasswordTip,
+  'setup-checklist': STORAGE_KEYS.dismissedSetupChecklistTip,
+};
+const keyFor = (tip: OnboardingTip) => TIP_KEYS[tip];
 
 function read(tip: OnboardingTip): boolean {
   return readStorage(keyFor(tip)) === 'true';
