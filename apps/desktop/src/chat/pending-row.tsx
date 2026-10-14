@@ -52,7 +52,13 @@ export function useOperationRequests(
           : await service.cancelOperation(storeId, op.id);
       if (sent && active.current) onChange();
     } catch (e) {
-      if (active.current) setError(failure(e));
+      if (active.current)
+        setError(
+          failure(
+            e,
+            op.kind === 'create-channel' ? 'channel-creation' : 'message',
+          ),
+        );
     } finally {
       running.current = false;
       if (active.current) setBusy(false);

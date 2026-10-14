@@ -1151,9 +1151,10 @@ open; Esc closes it and returns focus to the chip. Once the last of it is
 accounted for the chip says "All caught up" rather than disappearing without a
 word, and the popover closes, so the next saved operation does not reopen it.
 A channel creation's failures use their own copy where a message's would name
-the wrong thing (`chatErrorText(error, 'channel-creation')`). A channel whose
-content could not be verified shows "Channel stopped" under its own header,
-with "Recheck channel" and "Copy diagnostic details". Recheck removes the
+the wrong thing (`chatErrorText(error, 'channel-creation')`), both in the
+creation sheet and when a Retry or Cancel from the unsent list fails. A
+channel whose content could not be verified shows "Channel stopped" under its
+own header, with "Recheck channel" and "Copy diagnostic details". Recheck removes the
 channel from the blocked set the desktop sends with `sync-inbox`
 (`ChatInboxService.unblockChannel`) and synchronizes the team again: the agent
 reports the channel in `blocked_channels` again if it still detects the
@@ -1161,8 +1162,11 @@ conflict, and otherwise the thread reads its history and verifies it from the
 start, where hard-state anchors still catch an equivocating server. A
 synchronization already running when the reader rechecks was sent the old set,
 which the agent echoes back; those echoes are ignored. A channel stopped again
-after a recheck says when that happened, until a synchronization and a history
-read since the recheck have both left it unblocked (`chat/recheck.ts`). The
+after a recheck says when that happened, until a synchronization requested
+since the recheck and a history read since the recheck have both left it
+unblocked (`chat/recheck.ts`). The inbox numbers its `sync-inbox` requests
+across teams (`syncSequence`) and `unblockChannel` returns the last number
+sent, so the reply to a request still running at the recheck does not count. The
 diagnostic details carry the failure that stopped the channel, its code and
 the agent's description of the failed check, or name `sync-inbox` when the
 channel was stopped because the synchronization listed it. "Chat stopped", the

@@ -877,11 +877,24 @@ test('a recheck during a synchronization is not undone by that synchronization e
   f.service.invalidate('t0');
   await f.clock.advance(500);
   assert.ok(hold, 'a synchronization carrying the block is in flight');
-  f.service.unblockChannel('t0', id);
+  const sequence = f.service.unblockChannel('t0', id);
   assert.equal(f.service.isChannelBlocked('t0', id), false);
+  const previous = f.service.getSnapshot().get('t0')?.syncSequence ?? 0;
+  const answered: number[] = [];
+  const stop = f.service.subscribe(() => {
+    const number = f.service.getSnapshot().get('t0')?.syncSequence ?? 0;
+    if (number !== (answered.at(-1) ?? previous)) answered.push(number);
+  });
   hold();
   await f.clock.advance(5_000);
+  stop();
   assert.equal(f.service.isChannelBlocked('t0', id), false);
+  // The reply to the request sent with the old set is numbered at or below
+  // what the recheck recorded, so a recheck does not count it; the follow-up
+  // synchronization's reply is numbered above it.
+  assert.ok(answered.length >= 2);
+  assert.ok(answered[0] <= sequence);
+  assert.ok(answered[1] > sequence);
   f.service.stop();
 });
 

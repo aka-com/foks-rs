@@ -37,6 +37,13 @@ export interface TeamInbox {
   revision: number;
   /** Advances only after an accepted authorized team synchronization. */
   authorizationRevision?: number;
+  /**
+   * The service-wide number of the `sync-inbox` request whose reply this
+   * entry accepted last. Numbers increase with each request sent, so a reply
+   * numbered above what `unblockChannel` returned answers a request sent
+   * without the withdrawn block.
+   */
+  syncSequence?: number;
   channelRevisions: ReadonlyMap<string, number>;
   /** Conservative invalidation for active threads on degraded Basic projections. */
   channelRefreshRevisions?: ReadonlyMap<string, number>;
@@ -195,6 +202,8 @@ export class ChatInboxService {
   /** Armed for the earliest moment a pass could start or release work. */
   private timer: DeadlineTimer;
   private epoch = 0;
+  /** The number of the last `sync-inbox` request sent; see `syncSequence`. */
+  private sequence = 0;
   /**
    * Told when a team's read answers that its profile's vault has not been
    * refreshed, so the shell can request that profile's catalog job. Asked
@@ -620,8 +629,12 @@ export class ChatInboxService {
    * history read verifies the channel from the start, where hard-state
    * anchors still catch an equivocating server. A team whose account is
    * quarantined is left alone; that takes a new chat session.
+   *
+   * Returns the number of the last request already sent. A synchronization
+   * running now carries the old set, so its reply says nothing about the
+   * channel; only a reply whose `syncSequence` is greater does.
    */
-  unblockChannel(id: string, channel: string) {
+  unblockChannel(id: string, channel: string): number {
     for (const account of this.accounts.values()) {
       const team = account.teams.get(id);
       if (!team || account.blocked || !team.blocked.delete(channel)) continue;
@@ -638,6 +651,7 @@ export class ChatInboxService {
       );
       this.invalidate(id);
     }
+    return this.sequence;
   }
   block(id: string, message: string) {
     this.handleError(id, integrity(message));
@@ -708,6 +722,7 @@ export class ChatInboxService {
             failure: error,
             authorizationRevision: this.snapshot.get(team.store.id)
               ?.authorizationRevision,
+            syncSequence: this.snapshot.get(team.store.id)?.syncSequence,
             revision: (this.snapshot.get(team.store.id)?.revision ?? 0) + 1,
             blockedChannels: new Set(team.blocked),
           },
@@ -944,6 +959,7 @@ export class ChatInboxService {
     // this set that `unblockChannel` withdrew while the request ran is an
     // echo of the old set, not a new detection.
     const sent = new Set(team.blocked);
+    const sequence = ++this.sequence;
     team.busy = true;
     team.dirty = false;
     this.profiles.add(team.store.server);
@@ -1024,6 +1040,7 @@ export class ChatInboxService {
         channelRevisions: revisions,
         channelRefreshRevisions: refreshRevisions,
         authorizationRevision: (old?.authorizationRevision ?? 0) + 1,
+        syncSequence: sequence,
       });
       team.failures = 0;
       team.due = team.dirty

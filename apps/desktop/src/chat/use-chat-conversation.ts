@@ -259,11 +259,9 @@ export function useChatConversation(
   // history from the start.
   const recheckChannel = useCallback(
     (channel: string) => {
-      const revision =
-        service.getSnapshot().get(storeId)?.authorizationRevision ?? 0;
-      service.unblockChannel(storeId, channel);
+      const sequence = service.unblockChannel(storeId, channel);
       setRechecks((old) =>
-        new Map(old).set(channel, { stopped: null, revision, read: false }),
+        new Map(old).set(channel, { stopped: null, sequence, read: false }),
       );
     },
     [service, storeId],
@@ -276,12 +274,10 @@ export function useChatConversation(
     [service, storeId, cancelHistory],
   );
   const blockedChannels = inbox?.blockedChannels ?? EMPTY_BLOCKED;
-  const authorizationRevision = inbox?.authorizationRevision ?? 0;
+  const syncSequence = inbox?.syncSequence ?? 0;
   useEffect(() => {
-    setRechecks((old) =>
-      settleRechecks(old, blockedChannels, authorizationRevision),
-    );
-  }, [blockedChannels, authorizationRevision]);
+    setRechecks((old) => settleRechecks(old, blockedChannels, syncSequence));
+  }, [blockedChannels, syncSequence]);
   const channelBlockCause = useCallback(
     (channel: string) => service.channelBlockCause(storeId, channel),
     [service, storeId],
@@ -329,7 +325,7 @@ export function useChatConversation(
         settleRechecks(
           old,
           entry?.blockedChannels ?? EMPTY_BLOCKED,
-          entry?.authorizationRevision ?? 0,
+          entry?.syncSequence ?? 0,
           result.channel,
         ),
       );

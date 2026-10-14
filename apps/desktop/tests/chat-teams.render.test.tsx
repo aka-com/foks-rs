@@ -884,6 +884,65 @@ test('saved work that is accounted for says so rather than vanishing', async () 
   assert.equal(ui.screen.queryByRole('dialog', { name: /Unsent work/ }), null);
 });
 
+test('a channel creation retried from the unsent list reports its failure as a creation', async () => {
+  const snapshot = await snapshotWithChat(['personal', 'acme']);
+  let bridge: Bridge | undefined;
+  const shell: Partial<Shell> = {};
+  const open: Location = {
+    kind: 'chat',
+    ref: 'team:eng',
+    channel: 'ab'.repeat(16),
+  };
+  await mount(
+    snapshot,
+    open,
+    (base) => {
+      bridge = base;
+      return {
+        ...base,
+        chat: async (store, action, view) => {
+          if (action.action === 'attempt')
+            throw {
+              code: 'chat-reprepare-required',
+              message: 'chat operation must be prepared again',
+              retryable: false,
+              fatal: false,
+              ambiguous: false,
+              origin: 'invoke',
+            };
+          return base.chat(store, action, view);
+        },
+      };
+    },
+    undefined,
+    shell,
+  );
+  await ui.screen.findByText('Team chat is ready.');
+  assert.ok(bridge);
+  await bridge.chat(
+    'team:eng',
+    {
+      action: 'prepare-channel',
+      submission: 'pending-stale',
+      name: 'stale',
+      description: '',
+      admin: false,
+    },
+    'test',
+  );
+  await reopenConversation(shell, open);
+  ui.fireEvent.click(
+    await ui.screen.findByRole('button', { name: '1 unsent' }),
+  );
+  const popover = await ui.screen.findByRole('dialog', { name: /Unsent work/ });
+  ui.fireEvent.click(ui.within(popover).getByRole('button', { name: 'Retry' }));
+  const alert = await ui.within(popover).findByRole('alert');
+  assert.equal(
+    alert.textContent,
+    "The team's channels changed since this creation was prepared. Review the name and audience, then create the channel again.",
+  );
+});
+
 test('the rail returns to the chat the tab last had open', async () => {
   const { sidebarCycleLocations } = (await vite.ssrLoadModule(
     '/src/shell/sidebar.tsx',

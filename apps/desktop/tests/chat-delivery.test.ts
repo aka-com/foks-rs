@@ -251,7 +251,7 @@ test('diagnostic details name where chat stopped, and the agent detail only ther
 });
 
 test('a recheck reports a new block until the channel verifies, and not after', () => {
-  const open: Recheck = { stopped: null, revision: 4, read: false };
+  const open: Recheck = { stopped: null, sequence: 4, read: false };
   const none: ReadonlySet<string> = new Set();
   let rechecks: ReadonlyMap<string, Recheck> = new Map([['c', open]]);
   // Blocked again before it verified: the pane states when.

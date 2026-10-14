@@ -2,25 +2,30 @@
 export interface Recheck {
   /** When the channel was blocked again, if it was. */
   stopped: number | null;
-  /** The team's `authorizationRevision` when the reader rechecked. */
-  revision: number;
+  /**
+   * The number `unblockChannel` returned: the last synchronization request
+   * sent before the reader rechecked. See `TeamInbox.syncSequence`.
+   */
+  sequence: number;
   /** Whether a history page of the channel was accepted since. */
   read: boolean;
 }
 
 /**
- * Advances the open rechecks against the team's blocked set and its
- * `authorizationRevision`. A channel blocked again records when, which the
- * stopped pane states as the recheck's outcome. A channel that is still
- * unblocked after a synchronization accepted since the recheck, and whose
- * history has been accepted since the recheck, has verified: its entry is
- * dropped, so a later block is not reported as that recheck's outcome. `read`
- * names the channel whose history page was just accepted.
+ * Advances the open rechecks against the team's blocked set and the
+ * `syncSequence` of its last accepted synchronization. A channel blocked again
+ * records when, which the stopped pane states as the recheck's outcome. A
+ * channel that is still unblocked after a synchronization requested since the
+ * recheck, and whose history has been accepted since the recheck, has
+ * verified: its entry is dropped, so a later block is not reported as that
+ * recheck's outcome. A synchronization already running at the recheck was
+ * sent the old blocked set and does not count. `read` names the channel whose
+ * history page was just accepted.
  */
 export function settleRechecks(
   old: ReadonlyMap<string, Recheck>,
   blocked: ReadonlySet<string>,
-  revision: number,
+  sequence: number,
   read?: string,
 ): ReadonlyMap<string, Recheck> {
   let next: Map<string, Recheck> | null = null;
@@ -29,7 +34,7 @@ export function settleRechecks(
     const wasRead = entry.read || channel === read;
     const value = blocked.has(channel)
       ? { ...entry, stopped: Date.now() }
-      : wasRead && revision > entry.revision
+      : wasRead && sequence > entry.sequence
         ? null
         : wasRead !== entry.read
           ? { ...entry, read: true }
