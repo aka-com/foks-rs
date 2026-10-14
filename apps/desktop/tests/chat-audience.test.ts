@@ -14,6 +14,7 @@ import {
   channelAudience,
   channelReadRole,
   channelRoles,
+  directUser,
   everyonePosts,
   everyoneReads,
   roleAudience,
@@ -164,6 +165,7 @@ test('a user party of another host is not counted', () => {
   ]);
   assert.deepEqual(names(admins.others), ['dana.okafor', 'deploy-bot']);
   assert.equal(audienceLine(admins, undefined), '3 readers');
+  assert.equal(directUser(remote), false);
 });
 
 test('the composer roster and the reader list share one read rule', () => {
@@ -215,6 +217,37 @@ test('no audience is stated without a roster or for a role the contract does not
   assert.equal(audienceLine(undefined, 'Daily notes'), 'Daily notes');
   assert.equal(
     audienceSentence(undefined, 'Engineering'),
+    'Only the members of Engineering can read it.',
+  );
+  // Without a roster the sentence states the read role without a count.
+  const sentence = (read: string, admin = false) =>
+    audienceSentence(
+      undefined,
+      'Engineering',
+      channelReadRole(channel(read, read, admin)),
+    );
+  assert.equal(
+    sentence('Admin'),
+    'Only the admins and owners of Engineering can read it.',
+  );
+  assert.equal(
+    sentence('Member (0)', true),
+    'Only the admins and owners of Engineering can read it.',
+  );
+  assert.equal(
+    sentence('Owner'),
+    'Only the owners of Engineering can read it.',
+  );
+  assert.equal(
+    sentence('Member (1)'),
+    'Only the members of Engineering at visibility level 1 and above can read it.',
+  );
+  assert.equal(
+    sentence('Member (0)'),
+    'Only the members of Engineering can read it.',
+  );
+  assert.equal(
+    sentence('Reader'),
     'Only the members of Engineering can read it.',
   );
   // Without a roster, the role alone is stated.

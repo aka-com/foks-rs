@@ -1,5 +1,5 @@
 import { ChatThread } from '../chat/chat-thread';
-import { channelAudience } from '../chat/audience';
+import { channelAudience, directUser } from '../chat/audience';
 import { ChatConversationProvider } from '../chat/conversation-provider';
 import { chatMentions, mentionKey } from '../chat/mentions';
 import { useComposerAutofocus } from '../chat/use-composer-autofocus';
@@ -175,17 +175,14 @@ export function ChatScreen({
       ownName ?? users.find((party) => party.party_id_hex === actor)?.username,
     );
   }, [agentSnapshot, storeId, actor, ownName]);
-  // The members `@name` completes to: the roster's users with a username,
-  // once each, without the reader.
+  // The members `@name` completes to: the roster's direct users with a
+  // username (the party set the info panel's reader list draws from), once
+  // each, without the reader.
   const members = useMemo(() => {
     const seen = new Set(mentions.self ? [mentions.self] : []);
     return partiesOf(agentSnapshot, storeId).flatMap((party) => {
       const username = party.username;
-      if (
-        party.party_kind !== 'user' ||
-        !username ||
-        party.party_id_hex === actor
-      )
+      if (!directUser(party) || !username || party.party_id_hex === actor)
         return [];
       const key = mentionKey(username);
       if (seen.has(key)) return [];

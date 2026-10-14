@@ -332,6 +332,45 @@ test('the composer states the space left in bytes from 90% of the limit', async 
   assert.match(over?.title ?? '', /^264 bytes over the 65,536-byte limit\./);
   assert.equal(send.disabled, true);
 });
+test('@ does not offer a user of another host', async () => {
+  // The server admits only direct members of the team's own host, so the
+  // composer roster leaves this party out, as the reader list does.
+  await setup(
+    undefined,
+    true,
+    () => {},
+    true,
+    false,
+    false,
+    (snapshot) => {
+      const priya = snapshot.parties.find(
+        (party) => party.username === 'priya.n',
+      )!;
+      const remote = {
+        ...priya,
+        username: 'kai',
+        party_id_hex: '01' + 'dd'.repeat(32),
+        locally_manageable: false,
+        scoped_host_id_hex: '9f31c2aa07',
+      };
+      return { ...snapshot, parties: [...snapshot.parties, remote] };
+    },
+  );
+  const composer = ui.screen.getByRole<HTMLTextAreaElement>('textbox', {
+    name: 'Message',
+  });
+  ui.fireEvent.change(composer, { target: { value: 'cc @' } });
+  assert.deepEqual(
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        '[role="listbox"] [role="option"] .name',
+      ),
+    ].map((name) => name.textContent),
+    ['dana.okafor', 'deploy-bot', 'priya.n', 'sam.ortiz'],
+  );
+  ui.fireEvent.change(composer, { target: { value: 'cc @k' } });
+  assert.equal(ui.screen.queryByRole('listbox'), null);
+});
 test('@ completes team members who can read the channel, and other channels mark their drafts', async () => {
   await withScenario(
     'busy',
@@ -1382,10 +1421,11 @@ test('a failed roster load states no reader count from the parties still held', 
   );
   await channel.open();
   // The header and the empty conversation fall back to the uncounted text,
-  // as the info panel draws no reader list.
+  // as the info panel draws no reader list; the sentence still states the
+  // channel's read role.
   assert.equal(document.querySelector('.chat-thread-sub'), null);
   ui.screen.getByText(
-    'Send a message to start the conversation. Only the members of Engineering can read it.',
+    'Send a message to start the conversation. Only the admins and owners of Engineering can read it.',
   );
   ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
   await ui.screen.findByRole('complementary', { name: 'Channel info' });

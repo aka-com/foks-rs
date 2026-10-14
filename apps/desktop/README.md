@@ -942,7 +942,9 @@ the channel name, the empty conversation's sentence ("Only the 3 admins and
 owners of Engineering can read it.") and the panel all draw from it, so none
 of them counts the whole roster for a channel only part of it can read; such a
 channel leads its header line with its reader count ("3 readers"). While the
-roster has not arrived, or after its load failed, no count is drawn. Leaving,
+roster has not arrived, or after its load failed, no count is drawn, and the
+sentence states the read role alone ("Only the admins and owners of
+Engineering can read it."). Leaving,
 muting, renaming and deleting a channel have no `ChatAction`, so the panel
 does not draw them.
 
@@ -971,9 +973,10 @@ Chromium-based webviews when developer tools are enabled. The edits go through
 
 Typing `@` and the start of a name, or of a part after a `.`, `_` or `-`, lists
 up to eight team members with their role (`matchMembers` in `mentions.ts`):
-the roster's users other than the reader, filtered by the role a reader needs
-(`channelRoster` with `channelReadRole` from `audience.ts`, the rule the info
-panel's reader list follows), so an admins-only channel offers only admins and
+the roster's direct same-host users other than the reader, filtered by the
+role a reader needs (`directUser` and `channelRoster` with `channelReadRole`
+from `audience.ts`, the party set and rule the info panel's reader list
+follows), so an admins-only channel offers only admins and
 owners, whatever read role a Go client wrote on it, and the list says how many
 members cannot read the channel. Up and Down choose,
 Enter or Tab inserts `@username` and a space, and Esc closes the list until

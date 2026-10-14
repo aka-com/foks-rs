@@ -78,7 +78,7 @@ export function channelReadRole(
  * `realtime/policy.rs`). A party with a host scope is a member of another
  * host.
  */
-function directUser(party: Party): boolean {
+export function directUser(party: Party): boolean {
   return party.party_kind === 'user' && !party.scoped_host_id_hex;
 }
 
@@ -174,24 +174,31 @@ export function audienceLine(
 
 /**
  * The empty conversation's sentence on who will read the first message.
- * Without a roster it names the team only.
+ * Without a roster it states `read`, the channel's read role
+ * ({@link channelReadRole}), without a count, and names the team only when
+ * that role is unknown or admits every member.
  */
 export function audienceSentence(
   audience: ChannelAudience | undefined,
   teamName: string,
+  read: RoleWire | null = null,
 ): string {
-  if (!audience) return `Only the members of ${teamName} can read it.`;
-  const count = audience.readers.length;
-  const band = memberBand(audience.read);
-  if (band === null) {
+  const role = audience ? audience.read : read;
+  const count = audience?.readers.length;
+  // "the 3 members" with a roster, "the members" without one.
+  const the = (one: string, many = `${one}s`): string =>
+    count === undefined ? `the ${many}` : `the ${plural(count, one, many)}`;
+  const band = role ? memberBand(role) : null;
+  if (role && band === null) {
     const who =
-      parseRole(audience.read)?.kind === 'owner'
-        ? plural(count, 'owner')
-        : `${count} ${count === 1 ? 'admin or owner' : 'admins and owners'}`;
-    return `Only the ${who} of ${teamName} can read it.`;
+      parseRole(role)?.kind === 'owner'
+        ? the('owner')
+        : the('admin or owner', 'admins and owners');
+    return `Only ${who} of ${teamName} can read it.`;
   }
-  const level = everyoneReads(audience)
-    ? ''
-    : ` at visibility level ${band} and above`;
-  return `Only the ${plural(count, 'member')} of ${teamName}${level} can read it.`;
+  const narrowed = audience
+    ? !everyoneReads(audience)
+    : band !== null && band > 0;
+  const level = narrowed ? ` at visibility level ${band} and above` : '';
+  return `Only ${the('member')} of ${teamName}${level} can read it.`;
 }
