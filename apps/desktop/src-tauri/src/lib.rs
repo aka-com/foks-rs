@@ -316,6 +316,7 @@ pub fn run() {
             commands::groups::list_federation,
             commands::vault::read_item,
             commands::vault::copy_item_value,
+            commands::vault::copy_item_field,
             commands::vault::copy_item_path,
             commands::vault::copy_text,
             commands::vault::download_file,

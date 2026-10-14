@@ -346,6 +346,22 @@ pub struct KvEntryMetadata {
     pub size: Option<u64>,
     pub read_role: KvRole,
     pub write_role: KvRole,
+    /// Whether a small file holds a login. The listing computes it from
+    /// plaintext it opens to authenticate the node and then discards; it is
+    /// absent for every other node type and carries no field value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<KvEntryShape>,
+}
+
+/// The content classes [`KvEntryMetadata::shape`] distinguishes.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KvEntryShape {
+    /// UTF-8 `key: value` lines including a `password` key, the layout the
+    /// desktop writes for a login.
+    Login,
+    /// Any other small file.
+    Other,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

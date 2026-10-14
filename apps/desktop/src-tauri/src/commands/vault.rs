@@ -12,13 +12,13 @@ use crate::commands::validation::{
     MAXIMUM_CLIPBOARD_TEXT_BYTES, MAXIMUM_DOWNLOAD_BYTES, MAXIMUM_TEXT_ITEM_BYTES,
 };
 use foks_agent_proto::{
-    KvChunkResult, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
+    KvChunkResult, KvEntryShape, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
 };
 use foks_desktop::{
     CatalogFailureScope, CatalogInventoryState, CatalogItem, CatalogSnapshot, CatalogStoreRef,
     CatalogStoreSummary, KvAccountMutation, KvItemRead, KvItemValue,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -61,6 +61,10 @@ pub struct ItemDto {
     pub version: u64,
     pub read: RoleDto,
     pub write: RoleDto,
+    /// `login` or `other` for a small file the agent's listing classified;
+    /// absent for other node types. It carries no field value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -303,6 +307,10 @@ fn item_dto(item: &CatalogItem) -> Result<ItemDto, AgentError> {
         version: item.metadata.version,
         read: item.metadata.read_role.into(),
         write: item.metadata.write_role.into(),
+        shape: item.metadata.shape.map(|shape| match shape {
+            KvEntryShape::Login => "login",
+            KvEntryShape::Other => "other",
+        }),
     })
 }
 
@@ -1194,6 +1202,63 @@ pub async fn copy_item_value(
     let transport = state.agent.transport();
     let value = tauri::async_runtime::spawn_blocking(move || {
         read_text(transport.as_ref(), &item).map(|read| read.value)
+    })
+    .await
+    .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))??;
+    crate::clipboard::copy_with_hygiene(&app, value)
+        .map_err(|error| AgentError::new("clipboard", error, true))?;
+    Ok(CommandAck { ok: true })
+}
+
+/// The part of a stored item [`copy_item_field`] puts on the clipboard.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ItemField {
+    Password,
+    Username,
+    Url,
+    /// The whole stored text, as [`copy_item_value`] copies it.
+    Value,
+}
+
+/// Selects one field of a read item's text. Login fields are found by the
+/// same parser the agent's listing uses to classify a login, so an item
+/// listed as one has fields this can find. The returned value is a fresh
+/// zeroizing copy; the full text is dropped, and zeroized, with `value`.
+pub(super) fn item_field(
+    value: Zeroizing<String>,
+    field: ItemField,
+) -> Result<Zeroizing<String>, AgentError> {
+    let (login_field, name) = match field {
+        ItemField::Value => return Ok(value),
+        ItemField::Password => (foks_client_app::LoginField::Password, "password"),
+        ItemField::Username => (foks_client_app::LoginField::Username, "user name"),
+        ItemField::Url => (foks_client_app::LoginField::Url, "website"),
+    };
+    foks_client_app::login_field(&value, login_field)
+        .map(|found| Zeroizing::new(found.to_owned()))
+        .ok_or_else(|| AgentError::new("field-missing", format!("This item has no {name}."), false))
+}
+
+/// Copies one field of an item, for example only the password of a login
+/// rather than its whole stored text, under the same exact-version read and
+/// clipboard hygiene as [`copy_item_value`]. No content crosses IPC.
+#[tauri::command]
+pub async fn copy_item_field(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+    path: String,
+    version: u64,
+    field: ItemField,
+) -> Result<CommandAck, AgentError> {
+    crate::applock::require_unlocked(&app)?;
+    require_main_window(&webview)?;
+    let item = state.selected_item(&store_id, &path, version)?;
+    let transport = state.agent.transport();
+    let value = tauri::async_runtime::spawn_blocking(move || {
+        read_text(transport.as_ref(), &item).and_then(|read| item_field(read.value, field))
     })
     .await
     .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))??;

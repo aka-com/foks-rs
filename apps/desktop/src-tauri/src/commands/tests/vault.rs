@@ -1,10 +1,10 @@
 use crate::commands::execution::{execute_kv_mutation, MutationKind};
 use crate::commands::validation::{DOWNLOAD_CHUNK_BYTES, MAXIMUM_TEXT_ITEM_BYTES};
 use crate::commands::vault::{
-    create_item_roles, download_to_path, file_create_header, file_edit_header, parse_item_role,
-    read_text, remove_item_operation, require_file_item, require_text_item,
+    create_item_roles, download_to_path, file_create_header, file_edit_header, item_field,
+    parse_item_role, read_text, remove_item_operation, require_file_item, require_text_item,
     set_create_mutation_roles, set_create_operation_roles, take_text_value, upload_file,
-    CatalogDto,
+    CatalogDto, ItemField,
 };
 use foks_agent_proto::{
     KvChunkResult, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
@@ -336,6 +336,7 @@ pub(super) fn download_item(_total: u64) -> CatalogItem {
             size: None,
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
+            shape: None,
         },
     }
 }
@@ -355,6 +356,7 @@ fn read_text_issues_exactly_one_version_bound_read() {
             size: None,
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
+            shape: None,
         },
     };
     let transport = ReadTransport {
@@ -425,6 +427,7 @@ fn catalog_dto_rejects_unknown_kinds_and_preserves_unknown_sizes() {
                 size: Some(1),
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
+                shape: None,
             },
         }],
         ..CatalogSnapshot::default()
@@ -464,6 +467,70 @@ fn catalog_dto_rejects_unknown_kinds_and_preserves_unknown_sizes() {
         CatalogDto::from_snapshot(&snapshot).unwrap_err().code,
         "invalid-response"
     );
+}
+
+#[test]
+fn catalog_dto_carries_the_listed_shape_and_omits_it_otherwise() {
+    let mut item = download_item(0);
+    item.metadata.node_type = "small-file".to_owned();
+    item.metadata.shape = Some(foks_agent_proto::KvEntryShape::Login);
+    let mut snapshot = CatalogSnapshot {
+        profiles: vec!["foks.example".to_owned()],
+        stores: vec![CatalogStoreSummary::Account {
+            store: foks_agent_proto::AccountStoreRef {
+                profile: "foks.example".to_owned(),
+                account_alias: "personal".to_owned(),
+            },
+        }],
+        items: vec![item],
+        ..CatalogSnapshot::default()
+    };
+    let encoded = |snapshot: &CatalogSnapshot| {
+        serde_json::to_value(CatalogDto::from_snapshot(snapshot).unwrap()).unwrap()["items"][0]
+            .clone()
+    };
+    assert_eq!(encoded(&snapshot)["shape"], "login");
+    snapshot.items[0].metadata.shape = Some(foks_agent_proto::KvEntryShape::Other);
+    assert_eq!(encoded(&snapshot)["shape"], "other");
+    snapshot.items[0].metadata.shape = None;
+    assert!(encoded(&snapshot).get("shape").is_none());
+}
+
+#[test]
+fn item_field_selects_one_login_field_or_reports_it_missing() {
+    let stored =
+        || zeroize::Zeroizing::new("user: satoshi\npassword: hx7-Qm2!vTe9\nurl: ".to_owned());
+    assert_eq!(
+        item_field(stored(), ItemField::Password).unwrap().as_str(),
+        "hx7-Qm2!vTe9"
+    );
+    assert_eq!(
+        item_field(stored(), ItemField::Username).unwrap().as_str(),
+        "satoshi"
+    );
+    assert_eq!(item_field(stored(), ItemField::Value).unwrap(), stored());
+    // A login written without a website still has its empty url line.
+    let missing = item_field(stored(), ItemField::Url).unwrap_err();
+    assert_eq!(missing.code, "field-missing");
+    assert_eq!(missing.message, "This item has no website.");
+    assert!(!missing.retryable);
+    let note = zeroize::Zeroizing::new("postgres://service:o4Kq@db/prod".to_owned());
+    assert_eq!(
+        item_field(note, ItemField::Password).unwrap_err().code,
+        "field-missing"
+    );
+    for (name, field) in [
+        ("password", ItemField::Password),
+        ("username", ItemField::Username),
+        ("url", ItemField::Url),
+        ("value", ItemField::Value),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<ItemField>(serde_json::json!(name)).unwrap(),
+            field
+        );
+    }
+    assert!(serde_json::from_value::<ItemField>(serde_json::json!("user")).is_err());
 }
 
 pub(super) struct MutationTransport {
@@ -547,6 +614,7 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
             size: Some(3),
             read_role: KvRole::Member { visibility: -2 },
             write_role: KvRole::Admin,
+            shape: None,
         },
     };
     let transport = MutationTransport {
@@ -691,6 +759,7 @@ fn team_create_and_edit_conflicts_are_returned_after_one_attempt_without_retry()
             size: Some(3),
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
+            shape: None,
         },
     };
     let create_transport = ConflictTransport {

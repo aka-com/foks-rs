@@ -29,13 +29,13 @@ pub use message::{
     AccountStoreRef, AccountSummary, AgentStatus, BackupEnrollmentSummary, CompatibilityFailure,
     CompatibilityStatus, CredentialBackend, DeviceSummary, ErrorCode, ErrorFields, FederationRole,
     GoProfileCandidate, GoProfileDiscovery, KnownStoreSummary, KvChunkResult, KvEntryMetadata,
-    KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadFrame, KvUploadHeader,
-    KvUploadPayload, Operation, PendingOperationKind, PendingOperationSummary, ProfileOverview,
-    ProfileProtocol, ProfileTrust, RecoveryPhraseCheck, Request, ResetArtifactKind,
-    ResetArtifactSummary, ResetStatePreview, Response, ResponseResult, ResponseTiming,
-    SecretString, ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole,
-    TeamStoreRef, TeamSummary, TimerStatus, YubiFederationUnlockInput, YubiRetryConfiguration,
-    PROTOCOL_VERSION,
+    KvEntryShape, KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadFrame,
+    KvUploadHeader, KvUploadPayload, Operation, PendingOperationKind, PendingOperationSummary,
+    ProfileOverview, ProfileProtocol, ProfileTrust, RecoveryPhraseCheck, Request,
+    ResetArtifactKind, ResetArtifactSummary, ResetStatePreview, Response, ResponseResult,
+    ResponseTiming, SecretString, ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary,
+    TeamKind, TeamRole, TeamStoreRef, TeamSummary, TimerStatus, YubiFederationUnlockInput,
+    YubiRetryConfiguration, PROTOCOL_VERSION,
 };
 
 #[cfg(test)]
@@ -594,11 +594,34 @@ mod tests {
                 size: None,
                 read_role: KvRole::Member { visibility: 0 },
                 write_role: KvRole::Admin,
+                shape: Some(KvEntryShape::Login),
             }],
             next_cursor: None,
         };
         let encoded = serde_json::to_value(&page).unwrap();
+        assert_eq!(encoded["entries"][0]["shape"], "login");
         assert_eq!(serde_json::from_value::<KvPage>(encoded).unwrap(), page);
+    }
+
+    #[test]
+    fn catalog_entry_shape_is_optional_and_omitted_when_unknown() {
+        let entry = serde_json::json!({
+            "dirent_id": vec![7u8; 16],
+            "path": "/scan.pdf",
+            "node_type": "file",
+            "version": 1,
+            "size": 3,
+            "read_role": "owner",
+            "write_role": "owner",
+        });
+        let decoded: KvEntryMetadata = serde_json::from_value(entry.clone()).unwrap();
+        assert_eq!(decoded.shape, None);
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), entry);
+        let other = KvEntryMetadata {
+            shape: Some(KvEntryShape::Other),
+            ..decoded
+        };
+        assert_eq!(serde_json::to_value(&other).unwrap()["shape"], "other");
     }
 
     #[test]

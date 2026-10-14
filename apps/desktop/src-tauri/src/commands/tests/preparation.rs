@@ -73,7 +73,7 @@ impl AgentTransport for PreparationTransport {
                 entries: vec![KvEntryMetadata {
                     dirent_id: [7; 16],
                     path: "/note".into(), node_type: "small-file".into(), version: self.version,
-                    size: Some(1), read_role: KvRole::Owner, write_role: KvRole::Owner,
+                    size: Some(1), read_role: KvRole::Owner, write_role: KvRole::Owner, shape: None,
                 }],
                 next_cursor: None,
             }).unwrap()),

@@ -526,7 +526,7 @@ crate::applock::require_unlocked_generation(&app, access)?;</div>
 <p>Clipboard security is a major vulnerability in password management. Background clipboard logging tools and clipboard history extensions regularly archive plaintext credentials.</p>
 
 <h3>Digest-Only Fingerprinting</h3>
-<p>When a user copies a password or secret via <code>copy_item_value</code>, the secret is encapsulated in a <code>Zeroizing&lt;String&gt;</code> container. The string is written to the system pasteboard and dropped immediately:</p>
+<p>When a user copies one field of a login via <code>copy_item_field</code>, or a whole text item via <code>copy_item_value</code>, the secret is encapsulated in a <code>Zeroizing&lt;String&gt;</code> container. The string is written to the system pasteboard and dropped immediately:</p>
 <div class="pre">pub fn copy_with_hygiene(app: &AppHandle, value: Zeroizing<String>) -> Result<(), String> {
     let expected = PendingClipboard {
         digest: Sha256::digest(value.as_bytes()).into(),

@@ -112,8 +112,10 @@ permanently inaccessible.
 
 `read_item` is that sole value-returning command. `copy_item_value` performs
 the same exact-version read but writes directly to the system clipboard;
-`download_file` sends bounded exact-version chunks directly to a native-picked
-destination. Neither returns content through IPC.
+`copy_item_field` does the same with one field of a login (password, user name
+or website) selected in Rust; `download_file` sends bounded exact-version
+chunks directly to a native-picked destination. None of them returns content
+through IPC.
 
 All Phase 3 mutation commands also call `require_unlocked`. A dropped source
 path is accepted only when Rust observed a native event containing that one
