@@ -80,7 +80,11 @@ function endOf(window: HistoryWindow | null): HeldEnd | null {
   );
 }
 
-/** The newest sequence among `messages` and `floor`. */
+/**
+ * The newest sequence among `messages` and `floor`, as the row states it.
+ * Unlike {@link newest}, it keeps `undefined` (no row held) apart from
+ * sequence 0.
+ */
 function tailOf(
   messages: readonly ChatMessage[],
   floor: string | undefined,
@@ -145,8 +149,9 @@ export interface ChatHistoryOptions {
 
 /**
  * Loads verified pages and retains invalidations while a request is running.
- * The callbacks are read when they are called, so a caller can pass inline
- * functions without reloading the window on every render.
+ * `onAccepted`, `onFatal` and `onLoading` are read when they are called, so a
+ * caller can pass inline functions without reloading the window on every
+ * render, and a read in flight reports to the latest render's callbacks.
  */
 export function useChatHistory({
   channel,
@@ -182,9 +187,12 @@ export function useChatHistory({
   const generation = useRef(0);
   const heldEnd = useRef(endOf(accepted));
   heldEnd.current = endOf(accepted);
-  // The request and the callbacks are read through a ref for the same reason
-  // as the position below: in the load's dependencies, an inline callback
-  // would reopen the thread on every render.
+  // The callbacks are read through a ref for the same reason as the position
+  // below: in the load's dependencies, an inline callback would reopen the
+  // thread on every render. The request is read through it too, so that
+  // `read` keeps its identity; a read captures the request when it starts,
+  // and the mount effect still depends on `request`, because a new request
+  // is a new owner.
   const callbacks = useRef({ request, onAccepted, onFatal, onLoading });
   callbacks.current = { request, onAccepted, onFatal, onLoading };
   // Read through a ref: a position in the load's dependencies would rebuild
@@ -224,7 +232,9 @@ export function useChatHistory({
       }
       const run = generation.current;
       const current = () => active.current && generation.current === run;
-      const { request, onAccepted, onFatal, onLoading } = callbacks.current;
+      // The request names the owner the read started under; the other
+      // callbacks are read from the ref where they are called.
+      const { request } = callbacks.current;
       const held =
         heldEnd.current?.channel === channel.id ? heldEnd.current : null;
       const tail = held?.tail;
@@ -266,7 +276,7 @@ export function useChatHistory({
       // Read marking waits for the anchored page, as it does on open.
       if (load === 'anchor') setAnchoring(true);
       setError(null);
-      onLoading?.(load);
+      callbacks.current.onLoading?.(load);
       // The page load is timed under a hash of the channel, with the row
       // count: a thread open, and the reload each incoming message costs.
       const end = diagnosticLog.span('chat.history', {
@@ -412,7 +422,7 @@ export function useChatHistory({
                 ? reached >= BigInt(requested) - 1n
                 : BigInt(publishedHead.current) > reached;
           }
-          const stored = onAccepted?.(
+          const stored = callbacks.current.onAccepted?.(
             page,
             requested,
             {
@@ -450,7 +460,7 @@ export function useChatHistory({
               ? { load: 'tail', cursor: null }
               : { load, cursor };
           if (normalizeCommandError(e).code === 'chat-channel-integrity')
-            onFatal?.(channel.id);
+            callbacks.current.onFatal?.(channel.id);
           setError(e);
         }
       } finally {

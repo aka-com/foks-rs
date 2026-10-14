@@ -704,9 +704,11 @@ test('inline history callbacks neither reload the window nor go stale', async ()
   };
   const calls: ChatAction[] = [];
   let rows = [2, 1];
+  let pending: Promise<void> | null = null;
   const request = async (action: ChatAction): Promise<ChatReply> => {
     assert.equal(action.action, 'history');
     calls.push(action);
+    if (pending) await pending;
     const selected = rows.filter(
       (n) => action.after === undefined || n > Number(action.after),
     );
@@ -764,11 +766,20 @@ test('inline history callbacks neither reload the window nor go stale', async ()
   view.rerender(createElement(History, { revision: 0, label: 'second' }));
   await ui.act(settle);
   assert.equal(calls.length, 1);
-  // A later read reports to the callbacks of the latest render.
+  // A later read reports to the callbacks of the latest render, including
+  // a render that happens while the read is in flight.
   rows = [3, 2, 1];
+  const reply = deferred();
+  pending = reply.promise;
   view.rerender(createElement(History, { revision: 1, label: 'second' }));
+  await ui.waitFor(() => assert.equal(calls.length, 2));
+  view.rerender(createElement(History, { revision: 1, label: 'third' }));
+  await ui.act(async () => {
+    reply.resolve();
+    await reply.promise;
+  });
   await ui.waitFor(() => assert.equal(current.messages.length, 3));
-  assert.deepEqual(accepted, ['first', 'second']);
+  assert.deepEqual(accepted, ['first', 'third']);
   assert.deepEqual(loading, ['first:tail', 'second:incremental']);
   assert.deepEqual(calls.at(-1), {
     action: 'history',
