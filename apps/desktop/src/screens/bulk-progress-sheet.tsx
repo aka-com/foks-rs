@@ -15,6 +15,7 @@ import {
 } from '../model';
 import type { AgentSnapshot, Item } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
+import { noteMoved } from '../recent-favorites';
 import { useSheetGuard } from '../navigation-guard';
 import {
   baseName,
@@ -76,13 +77,15 @@ function bulkAction(
       check: (item, snapshot) =>
         moveRowCheck(item, snapshot, folder) ?? writeProblem(item, snapshot),
       apply: async (item) => {
+        const destination = joinPath(folder, baseName(item.path));
         await bridge.moveItem({
           direntId: item.direntId,
           storeId: item.store,
           path: item.path,
           version: item.version,
-          destination: joinPath(folder, baseName(item.path)),
+          destination,
         });
+        noteMoved(item, destination);
         return `Moved ${toFolder(folder)}`;
       },
     };

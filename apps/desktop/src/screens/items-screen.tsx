@@ -77,12 +77,7 @@ import type { Bridge, ItemField } from '../bridge';
 import { useFileDrop } from '../file-drop';
 import { fileDropPath, writeBlockReason } from './write-workflows';
 import type { NewKind } from './write-workflows';
-import {
-  COPIED,
-  copyActions,
-  copyItem,
-  missingFieldMessage,
-} from './item-copy';
+import { copyActions, copyAndAnnounce } from './item-copy';
 import {
   ALL_ITEMS,
   folderAt,
@@ -1220,15 +1215,14 @@ export function ItemsScreen({
     return false;
   };
   const copyItemField = (item: Item, field: ItemField): void => {
-    if (!allowAction(item)) return;
-    void copyItem(bridge, item, field).then(
-      () => toasts.show(COPIED[field]),
-      (error: unknown) => {
-        const missing = missingFieldMessage(error);
-        if (missing) toasts.show(missing, { tone: 'warning' });
-        else onCommandError(error, item);
-      },
-    );
+    void copyAndAnnounce({
+      bridge,
+      item,
+      field,
+      toasts,
+      problem: itemActionProblem(snapshot, item, false, accessNow()),
+      onError: onCommandError,
+    });
   };
   const revealItem = (item: Item): void => {
     if (!allowAction(item)) return;

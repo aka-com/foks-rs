@@ -245,8 +245,15 @@ text document its value, so a value reaches the clipboard without being
 shown or opened. The palette searches names and paths only, never values.
 Its Recent and Favorites lists are kept in the webview's local storage,
 which is not cleared by the app lock, so they hold an item's `StoreRef` and
-dirent id and nothing else; names and paths are resolved from the
-snapshot while the app is unlocked.
+dirent id and nothing else. The `StoreRef` names the server profile, the
+account and, for a team, the team's alias and id; item names and paths are
+resolved from the snapshot while the app is unlocked. A dirent id names the
+entry at one path: a move or a rename writes the item under a new dirent id
+at its destination and leaves a tombstone with the old id, which an item
+later created at that path reuses. The app follows a move it made to the new
+id once the refreshed snapshot holds the item; after a move made elsewhere
+the entry is no longer listed, until an item created at the old path takes
+its place.
 
 The New password sheet and the login Edit form give the password Show and
 Generate. Generate draws a password in the renderer, which already holds

@@ -43,6 +43,7 @@ import {
 } from '../model';
 import { NavigationGuardProvider, useTabSheetState } from '../navigation-guard';
 import { MetadataRepositoryContext } from '../query-hooks';
+import { followMoves } from '../recent-favorites';
 import {
   systemLeaseExpiryClock,
   type LeaseExpiryClock,
@@ -64,7 +65,7 @@ import {
   folderSelection,
   listsItems,
 } from '../screens/scope';
-import { COPIED, copyItem, missingFieldMessage } from '../screens/item-copy';
+import { copyAndAnnounce } from '../screens/item-copy';
 import { itemActionProblem } from '../screens/store-access';
 import { teamRequestsBadge, useTeamRequestCounts } from '../operation-queries';
 import {
@@ -345,6 +346,9 @@ export function VaultShell({
     () => locations.setAccountStores(shown.stores),
     [locations, shown.stores],
   );
+  // A move made from a sheet settles its Recent and Favorites entries once
+  // the refreshed snapshot holds the item under its new dirent id.
+  useEffect(() => followMoves(shown.items), [shown.items]);
   const trash = useTrashActions({
     bridge,
     shown,
@@ -585,19 +589,14 @@ export function VaultShell({
         (candidate) => candidate.store === storeId && candidate.path === path,
       );
       if (!item) return;
-      const problem = itemActionProblem(shown, item, false, accessNow());
-      if (problem) {
-        toasts.show(problem, { tone: 'warning' });
-        return;
-      }
-      void copyItem(bridge, item, field).then(
-        () => toasts.show(COPIED[field]),
-        (error: unknown) => {
-          const missing = missingFieldMessage(error);
-          if (missing) toasts.show(missing, { tone: 'warning' });
-          else commandError(error, item);
-        },
-      );
+      void copyAndAnnounce({
+        bridge,
+        item,
+        field,
+        toasts,
+        problem: itemActionProblem(shown, item, false, accessNow()),
+        onError: commandError,
+      });
     },
     [accessNow, bridge, commandError, shown, toasts],
   );

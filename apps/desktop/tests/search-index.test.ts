@@ -379,6 +379,23 @@ test('actions are searched under All and have no chip of their own', () => {
   assert.deepEqual(palette.searchResults(index, 'in:personal lock'), []);
 });
 
+test('an empty query lists every favorite, past the ten Recent keeps', () => {
+  const index = palette.searchIndex(FIXTURE, CHANNELS, ACTIONS);
+  const favorites = index.flatMap((entry) => (entry.ref ? [entry.ref] : []));
+  assert.ok(favorites.length > 10, 'the fixture has more than ten items');
+  const results = palette.searchResults(
+    index,
+    '',
+    'all',
+    palette.SEARCH_GROUP_LIMIT,
+    { recent: [], favorites },
+  );
+  assert.equal(
+    results.filter((entry) => entry.group === 'Favorites').length,
+    favorites.length,
+  );
+});
+
 test('an empty query lists Recent, Favorites, then Actions', () => {
   const index = palette.searchIndex(FIXTURE, CHANNELS, ACTIONS);
   const netflix = { store: 'team:household', dirent: '0'.repeat(31) + 'e' };

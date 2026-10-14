@@ -6,6 +6,7 @@ import { normalizeCommandError } from '../bridge';
 import { isTrashPath, nameOf, storeOf } from '../model';
 import type { AgentSnapshot, Item } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
+import { noteMoved } from '../recent-favorites';
 import { useSheetGuard } from '../navigation-guard';
 import { FolderPicker, pickerFolders } from './folder-picker';
 import {
@@ -274,6 +275,7 @@ export function MoveSheet({
         version: target.version,
         destination,
       });
+      noteMoved(target, destination);
     } catch (failure) {
       const typed = normalizeCommandError(failure);
       setError(

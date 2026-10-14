@@ -69,7 +69,7 @@ import type {
 } from '../bridge';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import { COPIED, copyItem, missingFieldMessage } from './item-copy';
+import { copyAndAnnounce } from './item-copy';
 import {
   isFavorite,
   itemRefOf,
@@ -734,14 +734,13 @@ export function DetailsPanel({
   const reading = activeRead?.state === 'loading';
   const copyField = async (field: ItemField): Promise<void> => {
     if (!requireAccess()) return;
-    try {
-      await copyItem(bridge, item, field);
-      toasts.show(COPIED[field]);
-    } catch (error) {
-      const missing = missingFieldMessage(error);
-      if (missing) toasts.show(missing, { tone: 'warning' });
-      else onCommandError(error, item);
-    }
+    await copyAndAnnounce({
+      bridge,
+      item,
+      field,
+      toasts,
+      onError: onCommandError,
+    });
   };
   // Showing one login row reads the item once; the text then stays in
   // `read` while any row is shown, and later rows reveal without a read.

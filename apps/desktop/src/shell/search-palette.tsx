@@ -43,7 +43,6 @@ import { copyActions } from '../screens/item-copy';
 import type { CopyAction } from '../screens/item-copy';
 import type { ItemField } from '../bridge';
 import {
-  RECENT_LIMIT,
   isFavorite,
   itemRefOf,
   rememberRecent,
@@ -222,7 +221,6 @@ function itemEntries(snapshot: AgentSnapshot): SearchEntry[] {
     const store = storeOf(snapshot, item.store);
     if (!store) continue;
     const name = nameOf(item.path);
-    if (!name) continue;
     const ref = itemRefOf(item);
     const common = {
       scope: 'items' as const,
@@ -494,9 +492,10 @@ function refKey(ref: ItemRef): string {
 }
 
 /**
- * What an empty query shows under All: Recent, then Favorites, each resolved
- * against the index so that only items the snapshot holds now appear, then
- * every action. A row in both lists appears in both, under its own id.
+ * What an empty query shows under All: Recent, then every favorite, each
+ * resolved against the index so that only items the snapshot holds now
+ * appear, then every action. A row in both lists appears in both, under its
+ * own id.
  */
 function startResults(
   index: readonly SearchEntry[],
@@ -509,12 +508,10 @@ function startResults(
     group: string,
     prefix: string,
   ): SearchEntry[] =>
-    refs
-      .flatMap((ref) => {
-        const entry = byRef.get(refKey(ref));
-        return entry ? [{ ...entry, id: `${prefix}:${entry.id}`, group }] : [];
-      })
-      .slice(0, RECENT_LIMIT);
+    refs.flatMap((ref) => {
+      const entry = byRef.get(refKey(ref));
+      return entry ? [{ ...entry, id: `${prefix}:${entry.id}`, group }] : [];
+    });
   return [
     ...resolve(lists.recent, RECENT_GROUP, 'recent'),
     ...resolve(lists.favorites, FAVORITES_GROUP, 'favorite'),

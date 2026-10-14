@@ -2,7 +2,8 @@
  * Organising Files in the running shell: the move sheet's folder tree and
  * its New folder, several rows chosen with ⌘-click, Shift-click or ⌘A and
  * moved or sent to Trash one request at a time with per-item outcomes and
- * an Undo for Trash, and rows dragged onto a folder of the tree.
+ * an Undo for Trash, rows dragged onto a folder of the tree, and a favorite
+ * followed to the new dirent id a move gives it.
  */
 
 import assert from 'node:assert/strict';
@@ -267,6 +268,82 @@ test('⌘-click chooses rows and Move to… moves them one at a time to the chos
     now.includes('/ssh/github.com') && now.includes('/ssh/fastmail.com'),
   );
   assert.equal(rendered.queryByRole('dialog'), null);
+});
+
+/** The Recent and Favorites lists as `recent-favorites.ts` stored them. */
+function storedLists(): { recent: unknown[]; favorites: unknown[] } {
+  return JSON.parse(
+    window.localStorage.getItem('foks.recentFavorites') ??
+      '{"recent":[],"favorites":[]}',
+  ) as { recent: unknown[]; favorites: unknown[] };
+}
+
+test('a favorite renamed or moved from these sheets is followed to its new dirent id', async () => {
+  window.localStorage.clear();
+  const { rendered, base } = await mount({
+    selection: '/logins/fastmail.com',
+  });
+  const direntAt = async (path: string) =>
+    (await base.listCatalog()).items.find(
+      (item) => item.store === VAULT && item.path === path,
+    )?.direntId;
+  ui.fireEvent.click(await rendered.findByRole('button', { name: 'Favorite' }));
+  const original = await direntAt('/logins/fastmail.com');
+  assert.deepEqual(storedLists().favorites, [
+    { store: VAULT, dirent: original },
+  ]);
+
+  // A rename writes the item under a new dirent id at its new path.
+  ui.fireEvent.click(
+    await rendered.findByRole('button', { name: 'Rename or move…' }),
+  );
+  const dialog = await rendered.findByRole('dialog', {
+    name: 'Rename or move',
+  });
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Path' }));
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Destination path'), {
+    target: { value: '/logins/mail' },
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Move' }));
+  });
+  await ui.waitFor(() =>
+    assert.match(toasts(), /Renamed fastmail\.com to mail/),
+  );
+  const renamed = await direntAt('/logins/mail');
+  assert.ok(renamed && renamed !== original);
+  await ui.waitFor(() =>
+    assert.deepEqual(storedLists().favorites, [
+      { store: VAULT, dirent: renamed },
+    ]),
+  );
+
+  // A move of several rows follows the favorite among them, and adds none
+  // of the others.
+  await ui.act(async () => {
+    ui.fireEvent.click(listRow('mail'), { metaKey: true });
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(listRow('github.com'), { metaKey: true });
+  });
+  ui.fireEvent.click(
+    ui.within(selectionBar()).getByRole('button', { name: 'Move to…' }),
+  );
+  const picker = await rendered.findByRole('dialog', { name: 'Move 2 items' });
+  ui.fireEvent.click(treeItem(picker, 'ssh'));
+  await ui.act(async () => {
+    ui.fireEvent.click(ui.within(picker).getByRole('button', { name: 'Move' }));
+  });
+  await ui.waitFor(() => assert.match(toasts(), /Moved 2 items to \/ssh/));
+  const moved = await direntAt('/ssh/mail');
+  assert.ok(moved && moved !== renamed);
+  await ui.waitFor(() =>
+    assert.deepEqual(storedLists().favorites, [
+      { store: VAULT, dirent: moved },
+    ]),
+  );
+  assert.deepEqual(storedLists().recent, []);
+  window.localStorage.clear();
 });
 
 test('Retry failed sends again only the item whose request did not run', async () => {

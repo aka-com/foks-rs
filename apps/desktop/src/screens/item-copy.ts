@@ -3,6 +3,7 @@
  * each one calls, and the toast that names what reached the clipboard.
  */
 
+import type { ToastController } from '/kit/toasts';
 import { kindOf } from '../model';
 import type { Item } from '../model';
 import { normalizeCommandError } from '../bridge';
@@ -67,4 +68,43 @@ export async function copyItem(
 export function missingFieldMessage(error: unknown): string | null {
   const typed = normalizeCommandError(error);
   return typed.code === 'field-missing' ? typed.message : null;
+}
+
+/** One copy action and where its outcome is reported. */
+export interface AnnouncedCopy {
+  bridge: Bridge;
+  item: Item;
+  field: ItemField;
+  toasts: Pick<ToastController, 'show'>;
+  /** Why the caller refuses the copy, shown instead of copying. */
+  problem?: string;
+  /** Any failure other than a missing field. */
+  onError: (error: unknown, item: Item) => void;
+}
+
+/**
+ * A row's, the details panel's or the palette's Copy: refuses with the
+ * access `problem` as a warning when there is one, copies the field, and
+ * names what was copied or which field the item lacks in a toast.
+ */
+export async function copyAndAnnounce({
+  bridge,
+  item,
+  field,
+  toasts,
+  problem,
+  onError,
+}: AnnouncedCopy): Promise<void> {
+  if (problem) {
+    toasts.show(problem, { tone: 'warning' });
+    return;
+  }
+  try {
+    await copyItem(bridge, item, field);
+    toasts.show(COPIED[field]);
+  } catch (error) {
+    const missing = missingFieldMessage(error);
+    if (missing) toasts.show(missing, { tone: 'warning' });
+    else onError(error, item);
+  }
 }
