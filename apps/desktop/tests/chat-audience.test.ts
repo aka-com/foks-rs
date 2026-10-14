@@ -12,12 +12,14 @@ import {
   audienceLine,
   audienceSentence,
   channelAudience,
+  channelReadRole,
   channelRoles,
   everyonePosts,
   everyoneReads,
   roleAudience,
   type ChannelAudience,
 } from '../src/chat/audience';
+import { channelRoster } from '../src/chat/mentions';
 import { partyName, type AgentSnapshot, type Party } from '../src/model';
 import type { ChatChannel } from '../src/chat-contract';
 
@@ -142,6 +144,50 @@ test('a banded read role leaves out members below its band', () => {
     role: 'Member',
     visibility: 1,
   });
+});
+
+test('a user party of another host is not counted', () => {
+  const remote: Party = {
+    ...FIXTURE.parties.find((party) => party.username === 'priya.n')!,
+    username: 'kai',
+    party_id_hex: '01' + 'dd'.repeat(32),
+    locally_manageable: false,
+    scoped_host_id_hex: '9f31c2aa07',
+  };
+  const snapshot = { ...FIXTURE, parties: [...FIXTURE.parties, remote] };
+  const admins = audience(channel('Admin', 'Admin', true), snapshot);
+  // The server admits only direct members of the team's own host.
+  assert.deepEqual(readers(admins), [
+    'sam.ortiz true',
+    'priya.n true',
+    'vitalik true',
+  ]);
+  assert.deepEqual(names(admins.others), ['dana.okafor', 'deploy-bot']);
+  assert.equal(audienceLine(admins, undefined), '3 readers');
+});
+
+test('the composer roster and the reader list share one read rule', () => {
+  // A Member read role on an admins-only channel admits admins and owners.
+  const need = channelReadRole(channel('Member (0)', 'Member (0)', true));
+  assert.deepEqual(need, { role: 'Admin' });
+  const roster = channelRoster(
+    [
+      { username: 'sam.ortiz', role: { role: 'Owner' } },
+      { username: 'priya.n', role: { role: 'Admin' } },
+      { username: 'dana.okafor', role: { role: 'Member', visibility: 0 } },
+    ],
+    need,
+  );
+  assert.deepEqual(
+    roster.members.map((member) => member.username),
+    ['sam.ortiz', 'priya.n'],
+  );
+  assert.equal(roster.excluded, 1);
+  assert.deepEqual(channelReadRole(channel('Member (1)')), {
+    role: 'Member',
+    visibility: 1,
+  });
+  assert.equal(channelReadRole(channel('Reader')), null);
 });
 
 test('an owners-only channel names its owners', () => {

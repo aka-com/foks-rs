@@ -8,6 +8,7 @@ import { readSource } from './lib/source';
 import type { Location } from '../src/location';
 import type { Bridge } from '../src/bridge';
 import type { ChatAction, ChatChannel } from '../src/chat-contract';
+import type { AgentSnapshot } from '../src/model';
 installDom({
   url: 'http://localhost/',
   body: '<div id="root"></div><div id="overlays"></div>',
@@ -34,6 +35,7 @@ async function setup(
   showChat = true,
   navigate = false,
   incrementalHistory = false,
+  adjust: (snapshot: AgentSnapshot) => AgentSnapshot = (snapshot) => snapshot,
 ) {
   const { ChatTeamColumn } = await vite.ssrLoadModule(
     '/src/screens/chat-teams.tsx',
@@ -53,7 +55,7 @@ async function setup(
   const { mockBridge } = (await vite.ssrLoadModule(
     '/src/mock-bridge.ts',
   )) as typeof import('../src/mock-bridge');
-  const enabledSnapshot = {
+  const enabledSnapshot = adjust({
     ...FIXTURE,
     agent: { state: 'ready' as const, historyAfter: incrementalHistory },
     stores: FIXTURE.stores.filter(
@@ -64,7 +66,7 @@ async function setup(
         ? { ...s, services: { ...s.services, chat: true } }
         : s,
     ),
-  };
+  });
   const baseBridge = mockBridge(enabledSnapshot);
   const bridge = override?.(baseBridge) ?? baseBridge;
   const portalRoot = document.getElementById('overlays');
@@ -1354,6 +1356,42 @@ test('a banded read role counts only the members at or above its band', async ()
     'Who can read: Members at visibility level 1 and above',
     'Who can post: Admins and owners',
   ]);
+});
+
+test('a failed roster load states no reader count from the parties still held', async () => {
+  const channel = emptyChannel(true);
+  await setup(
+    channel.override,
+    false,
+    () => {},
+    true,
+    true,
+    false,
+    (snapshot) => ({
+      ...snapshot,
+      groupDetailFailures: [
+        {
+          store: 'team:eng',
+          source: 'roster',
+          code: 'unavailable',
+          message: 'Roster temporarily unavailable.',
+          retryable: true,
+        },
+      ],
+    }),
+  );
+  await channel.open();
+  // The header and the empty conversation fall back to the uncounted text,
+  // as the info panel draws no reader list.
+  assert.equal(document.querySelector('.chat-thread-sub'), null);
+  ui.screen.getByText(
+    'Send a message to start the conversation. Only the members of Engineering can read it.',
+  );
+  ui.fireEvent.click(ui.screen.getByRole('button', { name: 'Channel info' }));
+  await ui.screen.findByRole('complementary', { name: 'Channel info' });
+  const info = channelInfo();
+  assert.deepEqual(info.readers, []);
+  ui.within(info.panel).getByText('Roster temporarily unavailable.');
 });
 
 test('a channel every member reads folds its readers and marks who can post', async () => {

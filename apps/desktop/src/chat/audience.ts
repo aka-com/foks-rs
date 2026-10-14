@@ -39,7 +39,7 @@ export interface ChannelAudience {
   write: RoleWire;
   /** Highest role first, then by name. */
   readers: ChannelReader[];
-  /** The team's users who cannot read the channel, in the same order. */
+  /** The team's direct users who cannot read the channel, in the same order. */
   others: Party[];
 }
 
@@ -60,17 +60,39 @@ function byRole(left: Party, right: Party): number {
 }
 
 /**
+ * The role a channel's reader needs, or `null` when the read role is not one
+ * the chat contract writes. The admins-only tier raises it to Admin, as a Go
+ * client can write a Member read role on such a channel.
+ */
+export function channelReadRole(
+  channel: Pick<ChatChannel, 'read_role' | 'admin'>,
+): RoleWire | null {
+  const readRole = channelRole(channel.read_role);
+  if (!readRole) return null;
+  return channel.admin ? higher(readRole, ADMIN) : readRole;
+}
+
+/**
+ * Whether a party is a direct user member on the team's own host, the only
+ * membership the server admits to a channel (`membership_role` in
+ * `realtime/policy.rs`). A party with a host scope is a member of another
+ * host.
+ */
+function directUser(party: Party): boolean {
+  return party.party_kind === 'user' && !party.scoped_host_id_hex;
+}
+
+/**
  * The roles a channel's reader and writer need, or `undefined` when a role is
- * not one the chat contract writes. The admins-only tier raises the read role
- * to Admin, and the write role is at least the read role.
+ * not one the chat contract writes. The read role is
+ * {@link channelReadRole}'s, and the write role is at least the read role.
  */
 export function channelRoles(
   channel: ChatChannel,
 ): { read: RoleWire; write: RoleWire } | undefined {
-  const readRole = channelRole(channel.read_role);
+  const read = channelReadRole(channel);
   const writeRole = channelRole(channel.write_role);
-  if (!readRole || !writeRole) return undefined;
-  const read = channel.admin ? higher(readRole, ADMIN) : readRole;
+  if (!read || !writeRole) return undefined;
   return { read, write: higher(writeRole, read) };
 }
 
@@ -92,9 +114,7 @@ export function channelAudience(
   const { read, write } = roles;
   const readers: ChannelReader[] = [];
   const others: Party[] = [];
-  for (const party of parties
-    .filter((candidate) => candidate.party_kind === 'user')
-    .sort(byRole)) {
+  for (const party of parties.filter(directUser).sort(byRole)) {
     if (admits(party.destination_role, read))
       readers.push({ party, post: admits(party.destination_role, write) });
     else others.push(party);

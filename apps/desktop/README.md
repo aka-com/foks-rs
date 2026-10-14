@@ -936,14 +936,15 @@ The audience comes from `channelAudience` in `chat/audience.ts`, on the roster
 the team page already loads: the user parties whose role `admits` the read
 role, raised to Admin on an admins-only channel because the server applies the
 tier's floor first, and among them those whose role also admits the write
-role. Team parties are not counted, since basic chat serves direct user
-members only. The header line under the channel name, the empty
-conversation's sentence ("Only the 3 admins and owners of Engineering can read
-it.") and the panel all draw from it, so none of them counts the whole roster
-for a channel only part of it can read; such a channel leads its header line
-with its reader count ("3 readers"). While the roster has not arrived no count
-is drawn. Leaving, muting, renaming and deleting a channel have no
-`ChatAction`, so the panel does not draw them.
+role. Team parties and users scoped to another host are not counted, since
+basic chat serves direct same-host user members only. The header line under
+the channel name, the empty conversation's sentence ("Only the 3 admins and
+owners of Engineering can read it.") and the panel all draw from it, so none
+of them counts the whole roster for a channel only part of it can read; such a
+channel leads its header line with its reader count ("3 readers"). While the
+roster has not arrived, or after its load failed, no count is drawn. Leaving,
+muting, renaming and deleting a channel have no `ChatAction`, so the panel
+does not draw them.
 
 The composer exposes text entry and delivery actions. Attachments, an emoji
 picker and message expiry are omitted until supported. A hint line under the
@@ -970,9 +971,11 @@ Chromium-based webviews when developer tools are enabled. The edits go through
 
 Typing `@` and the start of a name, or of a part after a `.`, `_` or `-`, lists
 up to eight team members with their role (`matchMembers` in `mentions.ts`):
-the roster's users other than the reader, filtered by the channel's read role
-(`channelRoster`), so an admins-only channel offers only admins and owners and
-the list says how many members cannot read the channel. Up and Down choose,
+the roster's users other than the reader, filtered by the role a reader needs
+(`channelRoster` with `channelReadRole` from `audience.ts`, the rule the info
+panel's reader list follows), so an admins-only channel offers only admins and
+owners, whatever read role a Go client wrote on it, and the list says how many
+members cannot read the channel. Up and Down choose,
 Enter or Tab inserts `@username` and a space, and Esc closes the list until
 another `@` is typed. The result is Basic text; nothing is sent to the server
 about it.

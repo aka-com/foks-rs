@@ -19,7 +19,7 @@ import { MessageList } from './message-list';
 import { Composer } from './thread-composer';
 import { quoteInsertion } from './message-actions';
 import { channelRoster } from './mentions';
-import type { ChannelAudience } from './audience';
+import { channelReadRole, type ChannelAudience } from './audience';
 
 /**
  * One channel of the open team. The thread owns the channel's history
@@ -250,10 +250,11 @@ export function ChatThread({
     }
     if (position !== null || !detached) dismissNew();
   };
-  // `@name` completes to the members the channel's read role admits.
+  // `@name` completes to the members who can read the channel, by the read
+  // rule the info panel's reader list follows.
   const roster = useMemo(
-    () => channelRoster(members, channel.read_role),
-    [members, channel.read_role],
+    () => channelRoster(members, channelReadRole(channel)),
+    [members, channel],
   );
   // Quote reply writes at the composer's caret, or where the caret was when
   // the field lost focus, and leaves the caret after the quote.

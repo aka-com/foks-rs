@@ -89,16 +89,15 @@ export function channelRole(text: string): RoleWire | null {
 }
 
 /**
- * The members who can read a channel with read role `readRole`. A role this
- * cannot read leaves every member in, as does a member whose own role it
- * cannot read: the completion is a convenience, and the server enforces who
- * reads the channel.
+ * The members whose role admits `need`, the role a channel's reader needs
+ * (`channelReadRole` in `audience.ts`). A `null` role leaves every member
+ * in, as does a member whose own role this cannot read: the completion is a
+ * convenience, and the server enforces who reads the channel.
  */
 export function channelRoster(
   members: readonly ChatMember[],
-  readRole: string,
+  need: RoleWire | null,
 ): ChannelRoster {
-  const need = channelRole(readRole);
   if (!need) return { members, excluded: 0 };
   const readers = members.filter(
     (member) => !parseRole(member.role) || admits(member.role, need),

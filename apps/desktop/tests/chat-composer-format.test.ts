@@ -220,11 +220,11 @@ test('a channel offers the members its read role admits', () => {
   });
   assert.deepEqual(channelRole('Admin'), { role: 'Admin' });
   assert.equal(channelRole('Reader'), null);
-  assert.deepEqual(channelRoster(roster, 'Member (0)'), {
+  assert.deepEqual(channelRoster(roster, channelRole('Member (0)')), {
     members: roster,
     excluded: 0,
   });
-  const admins = channelRoster(roster, 'Admin');
+  const admins = channelRoster(roster, channelRole('Admin'));
   assert.deepEqual(
     admins.members.map((m) => m.username),
     ['sam.ortiz', 'priya.n'],
@@ -232,11 +232,13 @@ test('a channel offers the members its read role admits', () => {
   assert.equal(admins.excluded, 3);
   // A visibility band admits members at or above it.
   assert.deepEqual(
-    channelRoster(roster, 'Member (1)').members.map((m) => m.username),
+    channelRoster(roster, channelRole('Member (1)')).members.map(
+      (m) => m.username,
+    ),
     ['sam.ortiz', 'priya.n', 'lee'],
   );
   // A read role this does not know filters no one; the server decides.
-  assert.equal(channelRoster(roster, 'Reader').excluded, 0);
+  assert.equal(channelRoster(roster, channelRole('Reader')).excluded, 0);
 });
 
 test('names match from their start or from a part after a separator', () => {

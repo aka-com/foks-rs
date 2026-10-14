@@ -18,6 +18,7 @@ import type { Bridge } from '../bridge';
 import type { ChatAction, ChatReply } from '../chat-contract';
 import {
   chatAvailable,
+  groupDetailFailure,
   partiesOf,
   serverDisplayLabelForStore,
   storeOperationAvailability,
@@ -195,10 +196,13 @@ export function ChatScreen({
   // Who can read the open channel, from the roster the team page already
   // loads, read here rather than fetched again. `channelAudience` treats a
   // roster with no parties as not loaded, so the header omits the count
-  // instead of showing zero.
+  // instead of showing zero. A failed roster load leaves whatever parties
+  // were held; as in the info panel, no count is drawn from them.
   const audience = useMemo(
     () =>
-      storeId && channel
+      storeId &&
+      channel &&
+      !groupDetailFailure(agentSnapshot, storeId, 'roster')
         ? channelAudience(agentSnapshot, storeId, channel)
         : undefined,
     [agentSnapshot, storeId, channel],
