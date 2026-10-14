@@ -24,8 +24,11 @@ const WRITE_VARIABLE: &str = "FOKS_WRITE_COMMAND_SIGNATURES";
 const CHECK_COMMAND: &str = "cargo test --locked -p foks-desktop-app --lib command_signatures";
 
 /// Parameter types that Tauri supplies from the invocation instead of the
-/// payload, matched on the last path segment. `Channel` is not among them: the
-/// renderer passes it under its key like any other argument.
+/// payload. A parameter is injected when its type path is one of these names,
+/// either bare (imported from `tauri`) or under `tauri::`.
+/// `crate_items_do_not_reuse_injected_names` keeps a bare name unambiguous.
+/// `Channel` is not among them: the renderer passes it under its key like any
+/// other argument.
 const INJECTED: [&str; 8] = [
     "AppHandle",
     "Webview",
@@ -72,18 +75,29 @@ fn is_command(attributes: &[syn::Attribute]) -> bool {
             segments.len() == 2 && segments[0].ident == "tauri" && segments[1].ident == "command";
         assert!(
             !command || matches!(attribute.meta, syn::Meta::Path(_)),
-            "#[tauri::command] options such as rename_all change the argument keys; \
-             teach command_signatures.rs about them first"
+            "#[tauri::command] options such as rename_all change the argument keys, and \
+             command_signatures.rs does not read them; add support for the option before \
+             using it"
         );
         command
     })
 }
 
-fn last_segment(ty: &syn::Type) -> Option<&syn::PathSegment> {
+fn type_path(ty: &syn::Type) -> Option<&syn::Path> {
     match ty {
-        syn::Type::Path(path) => path.path.segments.last(),
+        syn::Type::Path(path) if path.qself.is_none() => Some(&path.path),
         _ => None,
     }
+}
+
+/// Whether Tauri supplies a parameter of this type instead of the payload.
+fn is_injected(path: &syn::Path) -> bool {
+    let segments = &path.segments;
+    let from_tauri = segments.len() == 1 || segments[0].ident == "tauri";
+    from_tauri
+        && segments
+            .last()
+            .is_some_and(|segment| INJECTED.iter().any(|kind| segment.ident == kind))
 }
 
 /// Tauri's default argument rename: `store_id` is sent as `storeId`.
@@ -106,15 +120,18 @@ fn signature(function: &syn::ItemFn, module: &str) -> Command {
         let syn::FnArg::Typed(argument) = input else {
             panic!("{module}::{name} takes self; commands are free functions");
         };
-        let segment = last_segment(&argument.ty);
-        if segment.is_some_and(|segment| INJECTED.iter().any(|kind| segment.ident == kind)) {
+        let path = type_path(&argument.ty);
+        if path.is_some_and(is_injected) {
             continue;
         }
         let syn::Pat::Ident(binding) = &*argument.pat else {
             panic!("{module}::{name} destructures a parameter; Tauri keys arguments by name");
         };
         let key = camel_case(&binding.ident.to_string());
-        let presence = if segment.is_some_and(|segment| segment.ident == "Option") {
+        let presence = if path
+            .and_then(|path| path.segments.last())
+            .is_some_and(|segment| segment.ident == "Option")
+        {
             OPTIONAL
         } else {
             REQUIRED
@@ -203,6 +220,73 @@ impl<'ast> Visit<'ast> for Handlers {
     }
 }
 
+/// Crate items and imports that bind one of the [`INJECTED`] names to something
+/// other than the `tauri` type, as `path: name`.
+struct LocalInjectedNames<'a> {
+    path: &'a Path,
+    found: Vec<String>,
+}
+
+impl LocalInjectedNames<'_> {
+    fn check(&mut self, ident: &syn::Ident) {
+        if INJECTED.iter().any(|kind| ident == kind) {
+            self.found.push(format!("{}: {ident}", self.path.display()));
+        }
+    }
+
+    fn check_use(&mut self, tree: &syn::UseTree, from_tauri: bool) {
+        match tree {
+            syn::UseTree::Path(path) => self.check_use(&path.tree, from_tauri),
+            syn::UseTree::Name(name) if !from_tauri => self.check(&name.ident),
+            syn::UseTree::Rename(rename) if !from_tauri || rename.ident != rename.rename => {
+                self.check(&rename.rename)
+            }
+            syn::UseTree::Group(group) => {
+                for tree in &group.items {
+                    self.check_use(tree, from_tauri);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for LocalInjectedNames<'_> {
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        self.check(&item.ident);
+    }
+
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        self.check(&item.ident);
+    }
+
+    fn visit_item_union(&mut self, item: &'ast syn::ItemUnion) {
+        self.check(&item.ident);
+    }
+
+    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
+        self.check(&item.ident);
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        let from_tauri = matches!(&item.tree, syn::UseTree::Path(path) if path.ident == "tauri");
+        self.check_use(&item.tree, from_tauri);
+    }
+}
+
+fn source_files(directory: &Path, files: &mut Vec<PathBuf>) {
+    let entries = std::fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("{} is readable: {error}", directory.display()));
+    for entry in entries {
+        let path = entry.expect("directory entries are readable").path();
+        if path.is_dir() {
+            source_files(&path, files);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+}
+
 fn manifest(commands: &BTreeMap<String, Command>) -> serde_json::Value {
     serde_json::json!({
         "sourceOfTruth": concat!(
@@ -286,6 +370,46 @@ fn command_signatures_match_the_manifest() {
 }
 
 #[test]
+fn crate_items_do_not_reuse_injected_names() {
+    // A bare parameter type such as `Request` counts as injected only while
+    // nothing in the crate binds that name to a payload type.
+    let mut files = Vec::new();
+    source_files(&source_root(), &mut files);
+    files.sort();
+    let mut found = Vec::new();
+    for file in &files {
+        let mut names = LocalInjectedNames {
+            path: file.strip_prefix(source_root()).unwrap_or(file),
+            found: Vec::new(),
+        };
+        names.visit_file(&parse(file));
+        found.append(&mut names.found);
+    }
+    assert_eq!(found, Vec::<String>::new());
+}
+
+#[test]
+fn local_names_report_payload_types_with_injected_names() {
+    let file: syn::File = syn::parse_quote! {
+        use tauri::{AppHandle, Manager as _, State};
+        use foks_agent_proto::{Request, Response};
+        use tauri::Window as Frame;
+        use tauri::Webview as Webview;
+        type GlobalScope = u8;
+        struct Commands;
+    };
+    let mut names = LocalInjectedNames {
+        path: Path::new("example.rs"),
+        found: Vec::new(),
+    };
+    names.visit_file(&file);
+    assert_eq!(
+        names.found,
+        ["example.rs: Request", "example.rs: GlobalScope"]
+    );
+}
+
+#[test]
 fn argument_keys_use_tauris_camel_case() {
     assert_eq!(camel_case("store_id"), "storeId");
     assert_eq!(camel_case("pq_slot"), "pqSlot");
@@ -301,9 +425,11 @@ fn signatures_skip_injected_parameters_and_mark_options() {
             app: tauri::AppHandle,
             webview: tauri::Webview,
             state: State<'_, AppState>,
+            window: tauri::window::Window,
             store_id: String,
             on_partial: tauri::ipc::Channel<CatalogDto>,
             read_role: Option<RoleInput>,
+            request: foks_agent_proto::Request,
         ) -> Result<(), AgentError> {
             Ok(())
         }
@@ -314,6 +440,7 @@ fn signatures_skip_injected_parameters_and_mark_options() {
         BTreeMap::from([
             ("onPartial".to_owned(), REQUIRED),
             ("readRole".to_owned(), OPTIONAL),
+            ("request".to_owned(), REQUIRED),
             ("storeId".to_owned(), REQUIRED),
         ])
     );

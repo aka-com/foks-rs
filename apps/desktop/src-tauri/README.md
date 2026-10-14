@@ -100,7 +100,10 @@ derives it from the `#[tauri::command]` functions, fails when they differ from
 the `generate_handler!` list or from the file, and rewrites the file when
 `FOKS_WRITE_COMMAND_SIGNATURES=1` is set. `tests/command-contract.test.ts` in
 the desktop app checks every bridge call site, and the commands of the
-`YubiCommand` union, against it.
+`YubiCommand` union, against it. Parameters of the types Tauri injects
+(`AppHandle`, `Webview`, `State` and the others listed in that module), named
+bare or under `tauri::`, are left out of the file; a crate item or import that
+binds one of those names to another type fails the test.
 
 | Module | Responsibility |
 | --- | --- |

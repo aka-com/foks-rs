@@ -9,7 +9,9 @@ import ts from 'typescript';
 // argument keys in src-tauri/command-signatures.json, which a Rust test derives
 // from the #[tauri::command] functions that generate_handler! registers. Tauri
 // reads each argument from the camelCase key of its parameter name, so a
-// renamed command or parameter otherwise fails only at runtime.
+// renamed command or parameter otherwise fails only at runtime. A reference to
+// invoke or a transport wrapper that is not the callee of a recorded call, such
+// as a value passed on or `checked.call(...)`, fails the test.
 
 type Presence = 'required' | 'optional';
 type Keys = Map<string, Presence>;
@@ -102,18 +104,9 @@ function keysOf(
   return merged;
 }
 
-/** Whether the callee is `invoke` or a transport wrapper around it. */
-function isNativeCall(checker: ts.TypeChecker, callee: ts.Expression): boolean {
-  let expression = callee;
-  while (ts.isParenthesizedExpression(expression))
-    expression = expression.expression;
-  if (ts.isConditionalExpression(expression))
-    return (
-      isNativeCall(checker, expression.whenTrue) ||
-      isNativeCall(checker, expression.whenFalse)
-    );
-  if (!ts.isIdentifier(expression)) return false;
-  let symbol = checker.getSymbolAtLocation(expression);
+/** Whether the identifier names `invoke` or a transport wrapper around it. */
+function isNative(checker: ts.TypeChecker, name: ts.Identifier): boolean {
+  let symbol = checker.getSymbolAtLocation(name);
   if (symbol && symbol.flags & ts.SymbolFlags.Alias)
     symbol = checker.getAliasedSymbol(symbol);
   return (symbol?.declarations ?? []).some((declaration) => {
@@ -127,6 +120,39 @@ function isNativeCall(checker: ts.TypeChecker, callee: ts.Expression): boolean {
   });
 }
 
+/**
+ * The identifiers through which this callee calls `invoke` or a transport
+ * wrapper: a name, a property such as `core.invoke`, or either branch of a
+ * conditional.
+ */
+function nativeCallees(
+  checker: ts.TypeChecker,
+  callee: ts.Expression,
+): ts.Identifier[] {
+  let expression = callee;
+  while (ts.isParenthesizedExpression(expression))
+    expression = expression.expression;
+  if (ts.isConditionalExpression(expression))
+    return [
+      ...nativeCallees(checker, expression.whenTrue),
+      ...nativeCallees(checker, expression.whenFalse),
+    ];
+  const name = ts.isPropertyAccessExpression(expression)
+    ? expression.name
+    : expression;
+  return ts.isIdentifier(name) && isNative(checker, name) ? [name] : [];
+}
+
+/** Whether the identifier declares, imports or exports a name. */
+function isBinding(name: ts.Identifier): boolean {
+  const parent = name.parent;
+  return (
+    ts.isImportSpecifier(parent) ||
+    ts.isExportSpecifier(parent) ||
+    (ts.isFunctionDeclaration(parent) && parent.name === name)
+  );
+}
+
 function location(node: ts.Node): string {
   const file = node.getSourceFile();
   const { line } = file.getLineAndCharacterOfPosition(node.getStart());
@@ -135,17 +161,36 @@ function location(node: ts.Node): string {
 
 /**
  * The native calls in src/: those that name their command with a literal, and
- * the files of those that pass a command chosen at runtime.
+ * the files of those that pass a command chosen at runtime. `unchecked` lists
+ * the other references to `invoke` and the transport wrappers.
  */
-function callSites(): { literal: Site[]; dynamic: string[]; yubi: Site[] } {
+function callSites(): {
+  literal: Site[];
+  dynamic: string[];
+  yubi: Site[];
+  unchecked: string[];
+} {
   const compiled = program();
   const checker = compiled.getTypeChecker();
   const literal: Site[] = [];
   const dynamic: string[] = [];
+  const unchecked: string[] = [];
+  const callees = new Set<ts.Node>();
   for (const file of compiled.getSourceFiles()) {
     if (!file.fileName.startsWith(source)) continue;
     const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && isNativeCall(checker, node.expression)) {
+      if (
+        ts.isIdentifier(node) &&
+        !callees.has(node) &&
+        !isBinding(node) &&
+        isNative(checker, node)
+      )
+        unchecked.push(`${location(node)}: ${node.text}`);
+      const native = ts.isCallExpression(node)
+        ? nativeCallees(checker, node.expression)
+        : [];
+      if (ts.isCallExpression(node) && native.length > 0) {
+        for (const callee of native) callees.add(callee);
         const [name, args] = node.arguments;
         if (name && ts.isStringLiteralLike(name))
           literal.push({
@@ -189,7 +234,7 @@ function callSites(): { literal: Site[]; dynamic: string[]; yubi: Site[] } {
       };
     });
   });
-  return { literal, dynamic: dynamic.sort(), yubi };
+  return { literal, dynamic: dynamic.sort(), yubi, unchecked };
 }
 
 /** Every disagreement between the call sites and the manifest. */
@@ -224,6 +269,10 @@ test('only the transport and runYubi choose a native command at runtime', () => 
     'bridge/transport.ts',
     'bridge/transport.ts',
   ]);
+});
+
+test('invoke and the transport wrappers are referenced only as callees', () => {
+  assert.deepEqual(sites.unchecked, []);
 });
 
 test('every native call names a registered command with its argument keys', async () => {

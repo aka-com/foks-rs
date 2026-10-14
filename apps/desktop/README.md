@@ -251,7 +251,9 @@ fails on one side or the other. `tests/command-contract.test.ts` checks the
 command name and argument keys of every native call in `src/` against
 `src-tauri/command-signatures.json`, which a Rust test derives from the
 registered commands; an argument the Rust command requires must not be
-optional or possibly `undefined` on the TypeScript side.
+optional or possibly `undefined` on the TypeScript side. A reference to
+`invoke` or a transport wrapper that is not the callee of a checked call, such
+as `checked.call(...)` or a wrapper passed as a value, fails the test.
 
 Phase 3 adds `create_text_item`, `create_link`, `edit_text_item`,
 `remove_item`, dropped/native-picker file import and exact-version file
