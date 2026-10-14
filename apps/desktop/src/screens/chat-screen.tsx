@@ -1,6 +1,6 @@
 import { ChatThread } from '../chat/chat-thread';
 import { ChatConversationProvider } from '../chat/conversation-provider';
-import { chatMentions } from '../chat/mentions';
+import { chatMentions, mentionKey } from '../chat/mentions';
 import { useComposerAutofocus } from '../chat/use-composer-autofocus';
 import { ChatAlerts, failureAlert, type ChatAlert } from '../chat/chat-alerts';
 import { PendingRow } from '../chat/pending-row';
@@ -173,6 +173,24 @@ export function ChatScreen({
       ownName ?? users.find((party) => party.party_id_hex === actor)?.username,
     );
   }, [agentSnapshot, storeId, actor, ownName]);
+  // The members `@name` completes to: the roster's users with a username,
+  // once each, without the reader.
+  const members = useMemo(() => {
+    const seen = new Set(mentions.self ? [mentions.self] : []);
+    return partiesOf(agentSnapshot, storeId).flatMap((party) => {
+      const username = party.username;
+      if (
+        party.party_kind !== 'user' ||
+        !username ||
+        party.party_id_hex === actor
+      )
+        return [];
+      const key = mentionKey(username);
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [{ username, role: party.destination_role }];
+    });
+  }, [agentSnapshot, storeId, actor, mentions.self]);
   // The roster the team page already loads, read here rather than fetched
   // again. A team whose roster has not arrived yet has no parties on this
   // store id, which is indistinguishable from an empty team — but a real team
@@ -363,6 +381,7 @@ export function ChatScreen({
             scope={scope}
             senderNames={senderNames}
             mentions={mentions}
+            members={members}
             request={guardedRequest}
             refreshPending={guardedRefreshPending}
             markRead={guardedMarkRead}

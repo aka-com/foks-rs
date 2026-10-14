@@ -2,9 +2,8 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import type { ChatChannel, ChatScope } from '../chat-contract';
 import { CHAT_TEXT_BYTES } from '../chat-limits';
 import { failure } from './actions';
+import type { OutgoingMessage } from './send/outgoing';
 import { useChatSendService, useChatSends } from './send-provider';
-
-export const TEXT_LIMIT_LABEL = `${CHAT_TEXT_BYTES / 1024} KiB`;
 
 /**
  * The channel's draft and its size against the text limit. Drafts are held
@@ -33,7 +32,6 @@ export function useChatDraft(storeId: string, channel: string) {
     draft,
     draftBytes,
     overLimit: draftBytes > CHAT_TEXT_BYTES,
-    nearLimit: draftBytes > CHAT_TEXT_BYTES * 0.75,
   };
 }
 
@@ -91,12 +89,33 @@ export function useChatComposer(
       .catch((error) => setSendError(failure(error)));
     return true;
   };
+  // The newest unsent message of this channel whose row offers Edit, which
+  // Up in an empty composer moves back into the draft.
+  const restorable = service
+    .messages(storeId, channel.id)
+    .filter((message) => service.outgoingActions(storeId, message).edit)
+    .reduce<OutgoingMessage | undefined>(
+      (newest, message) =>
+        newest && newest.createdAt > message.createdAt ? newest : message,
+      undefined,
+    );
+  /** Returns whether there was a message to restore. */
+  const restoreLatest = (): boolean => {
+    if (!restorable) return false;
+    setSendError('');
+    void service
+      .restoreDraft(storeId, restorable.id)
+      .catch((error) => setSendError(failure(error)));
+    return true;
+  };
   // Read admission from the service when rendering and sending, so typing
   // registers neither a navigation guard nor a component-owned request.
   const loadError = service.loadError(storeId, channel.id);
   return {
     setDraft,
     send,
+    canRestore: restorable !== undefined,
+    restoreLatest,
     sendError,
     canSend: channel.writable && service.canSubmit(storeId, channel.id),
     loadError,

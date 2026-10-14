@@ -1,3 +1,6 @@
+import { admits, parseRole } from '../model';
+import type { RoleWire } from '../model';
+
 /**
  * Which `@name` tokens in message text are drawn as mentions. This is text
  * styling of Basic messages only: a mention has no protocol meaning, raises
@@ -56,4 +59,75 @@ export function chatMentions(
   const own = self ? mentionKey(self) : null;
   if (own) members.add(own);
   return { members, self: own };
+}
+
+/** A team member an `@name` can be completed to. */
+export interface ChatMember {
+  username: string;
+  /** The member's role in the team, as the roster states it. */
+  role: RoleWire;
+}
+
+/** The members a channel's `@name` completion offers. */
+export interface ChannelRoster {
+  members: readonly ChatMember[];
+  /**
+   * How many team members the channel's read role leaves out. A message
+   * that names one of them is still sent, but they cannot read it.
+   */
+  excluded: number;
+}
+
+/**
+ * A channel's read role as the chat contract writes it (`Owner`, `Admin`,
+ * `Member (0)`), in the form `admits` compares; `null` for any other text.
+ */
+export function channelRole(text: string): RoleWire | null {
+  const member = /^Member \((-?\d+)\)$/.exec(text);
+  if (member) return { role: 'Member', visibility: Number(member[1]) };
+  return text === 'Owner' || text === 'Admin' ? { role: text } : null;
+}
+
+/**
+ * The members who can read a channel with read role `readRole`. A role this
+ * cannot read leaves every member in, as does a member whose own role it
+ * cannot read: the completion is a convenience, and the server enforces who
+ * reads the channel.
+ */
+export function channelRoster(
+  members: readonly ChatMember[],
+  readRole: string,
+): ChannelRoster {
+  const need = channelRole(readRole);
+  if (!need) return { members, excluded: 0 };
+  const readers = members.filter(
+    (member) => !parseRole(member.role) || admits(member.role, need),
+  );
+  return { members: readers, excluded: members.length - readers.length };
+}
+
+/** How many completions the list offers at once. */
+export const MENTION_CHOICES = 8;
+
+/**
+ * The members whose username starts with `query`, or has a part after a
+ * `.`, `_` or `-` that does, compared as {@link mentionKey} compares names.
+ * Names that start with the query come first, then alphabetical order.
+ */
+export function matchMembers(
+  members: readonly ChatMember[],
+  query: string,
+): ChatMember[] {
+  const key = mentionKey(query);
+  const ranked: { member: ChatMember; whole: boolean; name: string }[] = [];
+  for (const member of members) {
+    const name = mentionKey(member.username);
+    const whole = name.startsWith(key);
+    if (whole || name.split('_').some((part) => part.startsWith(key)))
+      ranked.push({ member, whole, name });
+  }
+  ranked.sort(
+    (a, b) => Number(b.whole) - Number(a.whole) || a.name.localeCompare(b.name),
+  );
+  return ranked.slice(0, MENTION_CHOICES).map(({ member }) => member);
 }

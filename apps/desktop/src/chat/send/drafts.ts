@@ -13,11 +13,15 @@ const encoder = new TextEncoder();
  *
  * A change notifies only the listeners of the channel whose draft changed,
  * so typing in one composer re-renders nothing that reads another channel's
- * draft or the send service's revision.
+ * draft or the send service's revision. A channel's draft appearing or going
+ * also notifies the {@link subscribeDrafted} listeners, which a channel list
+ * uses to mark the channels that hold one.
  */
 export class DraftStore {
   private drafts = new Map<string, Map<string, Draft>>();
   private listeners = new Map<string, Map<string, Set<() => void>>>();
+  private draftedListeners = new Set<() => void>();
+  private draftedChannels: ReadonlyMap<string, ReadonlySet<string>> = new Map();
   private total = 0;
 
   constructor(private readonly limit: number) {}
@@ -52,6 +56,7 @@ export class DraftStore {
     if (drafts) drafts.set(channel, { text, bytes });
     else this.drafts.set(store, new Map([[channel, { text, bytes }]]));
     this.notify(store, channel);
+    if (!previous) this.changeDrafted(store);
     return true;
   }
   /** Removes the channel's draft. Returns whether there was one. */
@@ -63,6 +68,7 @@ export class DraftStore {
     if (!drafts.size) this.drafts.delete(store);
     this.total -= previous.bytes;
     this.notify(store, channel);
+    this.changeDrafted(store);
     return true;
   }
   /** Removes every draft of the team. Returns whether there was one. */
@@ -101,6 +107,29 @@ export class DraftStore {
       if (!channels.size && this.listeners.get(store) === channels)
         this.listeners.delete(store);
     };
+  }
+  /**
+   * The channels that hold a draft, by team. The map is replaced, never
+   * changed in place, when a channel's draft appears or goes, so it can be
+   * read as a snapshot; editing a draft that stays non-empty keeps it.
+   */
+  drafted(): ReadonlyMap<string, ReadonlySet<string>> {
+    return this.draftedChannels;
+  }
+  /** Calls `listener` whenever {@link drafted} changes. */
+  subscribeDrafted(listener: () => void) {
+    this.draftedListeners.add(listener);
+    return () => {
+      this.draftedListeners.delete(listener);
+    };
+  }
+  private changeDrafted(store: string) {
+    const next = new Map(this.draftedChannels);
+    const channels = this.drafts.get(store);
+    if (channels?.size) next.set(store, new Set(channels.keys()));
+    else next.delete(store);
+    this.draftedChannels = next;
+    for (const listener of [...this.draftedListeners]) listener();
   }
   private notify(store: string, channel: string) {
     const set = this.listeners.get(store)?.get(channel);

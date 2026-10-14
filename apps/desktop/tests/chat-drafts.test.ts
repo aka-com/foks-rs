@@ -95,3 +95,42 @@ test('a stale unsubscribe does not remove a later subscription', () => {
   assert.equal(second.calls, 1);
   second.stop();
 });
+
+test('the drafted channels change only when a draft appears or goes', () => {
+  const store = new DraftStore(1024);
+  let calls = 0;
+  const stop = store.subscribeDrafted(() => calls++);
+  const empty = store.drafted();
+  assert.equal(empty.size, 0);
+  store.set('team:a', 'general', 'h');
+  const first = store.drafted();
+  assert.notEqual(first, empty);
+  assert.deepEqual([...(first.get('team:a') ?? [])], ['general']);
+  // Editing a draft that stays non-empty keeps the snapshot.
+  store.set('team:a', 'general', 'hi');
+  store.set('team:a', 'general', 'hi there');
+  assert.equal(store.drafted(), first);
+  assert.equal(calls, 1);
+  store.set('team:a', 'random', 'x');
+  store.set('team:b', 'general', 'y');
+  assert.deepEqual(
+    [...store.drafted()].map(([team, channels]) => [team, [...channels]]),
+    [
+      ['team:a', ['general', 'random']],
+      ['team:b', ['general']],
+    ],
+  );
+  // The previous snapshot was replaced, not changed in place.
+  assert.deepEqual([...(first.get('team:a') ?? [])], ['general']);
+  store.set('team:a', 'general', '');
+  store.clear('team:b');
+  assert.deepEqual(
+    [...store.drafted()].map(([team, channels]) => [team, [...channels]]),
+    [['team:a', ['random']]],
+  );
+  assert.equal(calls, 5);
+  stop();
+  store.clearAll();
+  assert.equal(store.drafted().size, 0);
+  assert.equal(calls, 5);
+});

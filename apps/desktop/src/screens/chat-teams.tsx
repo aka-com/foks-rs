@@ -25,6 +25,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import type { ReactNode } from 'react';
 import { Icon, MenuItem, SectionLabel } from '../components';
@@ -440,6 +441,24 @@ export function ChatTeamColumn({
 }: ChatTeamColumnProps): ReactNode {
   const { service, snapshot: inbox } = useChatInbox();
   const sends = useChatSendService();
+  // The channels other than the open one that hold a draft, as one string of
+  // `["team","channel"]` lines. It changes when such a draft appears or goes,
+  // and a string compares by value, so typing in the open channel's
+  // composer, including its first and last character, does not re-render the
+  // column.
+  const draftKey = () => {
+    const lines: string[] = [];
+    for (const [team, channels] of sends.draftedChannels())
+      for (const channel of channels)
+        if (team !== selected || channel !== activeChannel)
+          lines.push(JSON.stringify([team, channel]));
+    return lines.sort().join('\n');
+  };
+  const drafted = new Set(
+    useSyncExternalStore(sends.subscribeDrafted, draftKey, draftKey)
+      .split('\n')
+      .filter(Boolean),
+  );
   const toasts = useOptionalToast();
   const { controller } = useChannelCreation();
   const [context, setContext] = useState<{
@@ -643,6 +662,7 @@ export function ChatTeamColumn({
         channels={matching}
         selected={selected}
         activeChannel={row.store.id === selected ? activeChannel : undefined}
+        drafts={drafted}
         // A search in progress overrides a fold: a channel the query
         // matched inside a collapsed team has to be seen to explain why its
         // team matched at all. The fold itself is untouched underneath, and
@@ -1066,6 +1086,7 @@ function TeamHeading({
   channels,
   selected,
   activeChannel,
+  drafts,
   collapsed,
   previews,
   now,
@@ -1078,6 +1099,8 @@ function TeamHeading({
   /** The team whose conversation is mounted beside the column. */
   selected?: StoreRef;
   activeChannel?: string;
+  /** `["team","channel"]` for each channel but the open one with a draft. */
+  drafts: ReadonlySet<string>;
   /** The channel list is folded away; stored by the column, keyed by team id. */
   collapsed: boolean;
   /** Each channel row carries its last message and that message's time. */
@@ -1315,9 +1338,14 @@ function TeamHeading({
               (!previews && listedChannel === lone && silent
                 ? 'No messages yet'
                 : '');
-            const name = caption
-              ? `${channelTitle(channel)} · ${caption}`
-              : channelTitle(channel);
+            // The open channel's draft is in the composer beside the column,
+            // so only other channels are marked.
+            const draft = drafts.has(
+              JSON.stringify([row.store.id, channel.id]),
+            );
+            const name = [channelTitle(channel), caption, draft ? 'Draft' : '']
+              .filter(Boolean)
+              .join(' · ');
             const lock = channel.admin && (
               <span
                 className="lock"
@@ -1341,6 +1369,12 @@ function TeamHeading({
               <span className="t">
                 <span className="n">{channelLabel(channel)}</span>
                 {caption && <small> · {caption}</small>}
+              </span>
+            );
+            const draftMark = draft && (
+              <span className="chat-channel-draft" aria-hidden="true">
+                <Icon name="pencil" size={12} />
+                Draft
               </span>
             );
             return (
@@ -1381,6 +1415,7 @@ function TeamHeading({
                     <span className="chat-channel-head">
                       {label}
                       {lock}
+                      {draftMark}
                       {when && (
                         <time
                           dateTime={messageDate(
@@ -1400,6 +1435,7 @@ function TeamHeading({
                   <>
                     {label}
                     {lock}
+                    {draftMark}
                     {badge}
                   </>
                 )}

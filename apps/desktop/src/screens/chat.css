@@ -392,6 +392,19 @@
   place-items: center;
   opacity: 0.6;
 }
+/* A channel other than the open one that holds an unsent draft. */
+.chat-channel-draft {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.chat-channel.on .chat-channel-draft {
+  color: var(--accent-ink);
+}
 /* Error row displayed when channel loading fails. */
 .chat-channel.fail {
   height: auto;
@@ -1365,15 +1378,19 @@
   font-size: 12px;
   color: var(--muted);
 }
-/* The text grows beside Send; the byte counter gets its own row. */
-.chat-composer {
+/* The composer, its hint line and the completion list above it. */
+.chat-compose {
   flex: none;
+  position: relative;
+  margin: 0 16px 8px;
+}
+/* The text grows beside Send. */
+.chat-composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 28px;
   align-items: end;
   gap: 0 6px;
   padding: 6px;
-  margin: 0 16px 14px;
   border: 1px solid var(--line-field);
   border-radius: var(--radius-lg);
   background: var(--main-surface);
@@ -1425,16 +1442,188 @@
   color: var(--faint);
   cursor: default;
 }
-.chat-composer .chat-meter {
-  grid-column: 1 / -1;
-  padding: 4px 6px 0;
+.chat-compose-hints {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+  padding: 2px 4px 0 8px;
   font-size: 12px;
+  color: var(--faint);
+}
+/* The key hints are read while the field has focus, and faint otherwise so
+   the line does not move the composer when focus arrives. */
+.chat-compose-hint {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.chat-compose:focus-within .chat-compose-hint,
+.chat-compose.help-open .chat-compose-hint {
+  opacity: 1;
+}
+.chat-compose-hint code,
+.chat-compose-hint kbd {
+  font: 12px var(--mono);
   color: var(--muted);
+}
+@media (max-width: 700px) {
+  .chat-compose-formats {
+    display: none;
+  }
+}
+.chat-compose .chat-meter {
+  flex: none;
+  color: var(--amber-strong);
   font-variant-numeric: tabular-nums;
 }
-.chat-composer .chat-meter.over {
+.chat-compose .chat-meter.over {
   color: var(--danger-ink);
   font-weight: 600;
+}
+.chat-compose-help {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+.chat-compose-help:hover,
+.chat-compose-help[aria-expanded='true'] {
+  color: var(--ink);
+  background: var(--hover);
+}
+.chat-compose-help:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-compose-hint {
+    transition: none;
+  }
+}
+/* The @name completion, above the field it completes. */
+.chat-mentions {
+  position: absolute;
+  z-index: 4;
+  bottom: calc(100% + 4px);
+  left: 0;
+  width: min(320px, 100%);
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--main-surface);
+  box-shadow: var(--shadow-menu);
+  font-size: 13px;
+}
+.chat-mentions-caption,
+.chat-mentions-note {
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-mentions-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+}
+.chat-mention-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: default;
+}
+.chat-mention-option[aria-selected='true'] {
+  background: var(--accent-wash);
+}
+.chat-mention-option .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-mention-option .role {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+/* The formatting and keys help opened from the ? beside the hint line. */
+.chat-format-help {
+  width: min(420px, calc(100vw - 16px));
+  max-height: min(560px, calc(100vh - 32px));
+  overflow-y: auto;
+}
+.chat-format-help table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.chat-format-help th {
+  padding: 4px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: left;
+}
+.chat-format-help td {
+  padding: 4px 6px;
+  border-top: 1px solid var(--line);
+  vertical-align: top;
+}
+.chat-format-help td code {
+  font: 12px var(--mono);
+  white-space: pre-wrap;
+}
+.chat-format-help td small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-format-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-format-help h4 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.chat-format-help dl > div {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+}
+.chat-format-help dt {
+  flex: none;
+  width: 140px;
+}
+.chat-format-help dd {
+  margin: 0;
+}
+.chat-format-help kbd {
+  font: 12px var(--sans);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0 5px;
+  background: var(--btn-bg);
 }
 .chat-channel:focus-visible,
 .chat-jump:focus-visible,
@@ -1568,7 +1757,7 @@
     padding-left: 12px;
     padding-right: 12px;
   }
-  .chat-composer {
+  .chat-compose {
     margin-left: 12px;
     margin-right: 12px;
   }

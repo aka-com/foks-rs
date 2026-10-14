@@ -4,7 +4,7 @@ import type { Bridge } from '../bridge';
 import type { ChatAction, ChatReply, ChatScope } from '../chat-contract';
 import type { AcceptHistory } from './conversation-model';
 import type { ListPosition } from './history-cache';
-import type { ChatMentions } from './mentions';
+import type { ChatMember, ChatMentions } from './mentions';
 
 /**
  * What every channel of one team's conversation shares: the team, the
@@ -22,6 +22,8 @@ export interface ChatConversationValue {
   senderNames: ReadonlyMap<string, string>;
   /** The usernames an `@name` in message text is drawn as a mention of. */
   mentions: ChatMentions;
+  /** The team's members other than the reader, for `@name` completion. */
+  members: readonly ChatMember[];
   request: (action: ChatAction) => Promise<ChatReply>;
   refreshPending: () => Promise<void>;
   markRead: (channel: string, sequence: string) => Promise<void>;
@@ -43,6 +45,7 @@ export function ChatConversationProvider({
   scope,
   senderNames,
   mentions,
+  members,
   request,
   refreshPending,
   markRead,
@@ -60,6 +63,7 @@ export function ChatConversationProvider({
       scope,
       senderNames,
       mentions,
+      members,
       request,
       refreshPending,
       markRead,
@@ -75,6 +79,7 @@ export function ChatConversationProvider({
       scope,
       senderNames,
       mentions,
+      members,
       request,
       refreshPending,
       markRead,

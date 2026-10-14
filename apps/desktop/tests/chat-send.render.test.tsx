@@ -373,6 +373,53 @@ test('confirmation replaces the spinner with a timestamp independently of a stal
   }
 });
 
+test('Up in an empty composer moves the newest unsent message back into it', async () => {
+  const gate = deferred();
+  await setup((base) => ({
+    ...base,
+    chat: async (store, action, view) => {
+      if (action.action === 'save-intent') await gate.promise;
+      return base.chat(store, action, view);
+    },
+  }));
+  const field = ui.screen.getByRole<HTMLTextAreaElement>('textbox', {
+    name: 'Message',
+  });
+  const hint = () =>
+    document.getElementById(field.getAttribute('aria-describedby') ?? '')
+      ?.textContent;
+  try {
+    for (const text of ['first message', 'second message']) {
+      ui.fireEvent.change(field, { target: { value: text } });
+      ui.fireEvent.keyDown(field, { key: 'Enter' });
+      await ui.screen.findByText(text);
+    }
+    // The first is being saved and cannot be edited; the second waits behind
+    // it, and its row offers Edit.
+    await ui.waitFor(() =>
+      assert.ok(document.querySelector('.chat-outgoing.queued')),
+    );
+    assert.equal(field.value, '');
+    await ui.waitFor(() =>
+      assert.equal(hint(), '↑ to edit your unsent message · Enter to send'),
+    );
+    // With text in the box, Up is left to the caret.
+    ui.fireEvent.change(field, { target: { value: 'x' } });
+    ui.fireEvent.keyDown(field, { key: 'ArrowUp' });
+    assert.equal(field.value, 'x');
+    ui.fireEvent.change(field, { target: { value: '' } });
+    ui.fireEvent.keyDown(field, { key: 'ArrowUp' });
+    await ui.waitFor(() => assert.equal(field.value, 'second message'));
+    await ui.waitFor(() =>
+      assert.equal(document.querySelector('.chat-outgoing.queued'), null),
+    );
+    assert.equal(ui.screen.getAllByText('first message').length, 1);
+    assert.match(hint() ?? '', /^Enter to send/);
+  } finally {
+    gate.resolve();
+  }
+});
+
 test('queued messages survive agent unavailability and remain counted for the window', async () => {
   const gate = deferred();
   const reports: number[] = [];

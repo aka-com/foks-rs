@@ -400,6 +400,14 @@ export class ChatSendService {
   subscribeDraft(storeId: string, channel: string, listener: () => void) {
     return this.draftStore.subscribe(storeId, channel, listener);
   }
+  /**
+   * The channels that hold a draft, by team: a snapshot that changes only
+   * when a channel's draft appears or goes, not on each keystroke.
+   */
+  draftedChannels = () => this.draftStore.drafted();
+  /** Calls `listener` whenever {@link draftedChannels} changes. */
+  subscribeDrafted = (listener: () => void) =>
+    this.draftStore.subscribeDrafted(listener);
   setDraft(storeId: string, channel: string, text: string) {
     const team = this.ensure(storeId);
     if (team.blocked) throw integrity();

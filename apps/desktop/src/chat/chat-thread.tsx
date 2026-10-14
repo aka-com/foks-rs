@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, Ref } from 'react';
 import { Icon } from '../components';
 import { ChatAlerts, failureAlert, type ChatAlert } from './chat-alerts';
@@ -18,6 +18,7 @@ import { ThreadHeader } from './thread-header';
 import { MessageList } from './message-list';
 import { Composer } from './thread-composer';
 import { quoteInsertion } from './message-actions';
+import { channelRoster } from './mentions';
 
 /**
  * One channel of the open team. The thread owns the channel's history
@@ -95,11 +96,14 @@ export function ChatThread({
     blockHistory,
     listPosition,
     keepListPosition,
+    members,
   } = useChatConversationContext();
   const {
     setDraft,
     sendError,
     send,
+    canRestore,
+    restoreLatest,
     canSend,
     loadError,
     retryLoad,
@@ -245,6 +249,11 @@ export function ChatThread({
     }
     if (position !== null || !detached) dismissNew();
   };
+  // `@name` completes to the members the channel's read role admits.
+  const roster = useMemo(
+    () => channelRoster(members, channel.read_role),
+    [members, channel.read_role],
+  );
   // Quote reply writes at the composer's caret, or where the caret was when
   // the field lost focus, and leaves the caret after the quote.
   const composerField = useRef<HTMLTextAreaElement>(null);
@@ -370,10 +379,14 @@ export function ChatThread({
             <Composer
               storeId={storeId}
               channel={channel.id}
+              channelTitle={channelTitle(channel)}
               placeholder={`Message ${channelTitle(channel)}`}
+              roster={roster}
               setDraft={setDraft}
               canSend={canSend}
               onSend={sendLatest}
+              canRestore={canRestore}
+              onRestore={restoreLatest}
               onKeyDown={markOnEscape}
               autofocus={autofocusComposer}
               fieldRef={composerField}

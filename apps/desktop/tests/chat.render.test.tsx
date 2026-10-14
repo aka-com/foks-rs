@@ -219,10 +219,220 @@ test('@names on the team roster are drawn as mentions in history and in sent mes
   assert.equal(document.querySelectorAll('.chat-mention').length, 2);
   const composer = ui.screen.getByRole('textbox', { name: 'Message' });
   ui.fireEvent.change(composer, { target: { value: 'Thanks @sam.ortiz' } });
+  // The completion list is open on the typed name: Enter completes it, and
+  // the next Enter sends.
+  ui.fireEvent.keyDown(composer, { key: 'Enter' });
+  assert.equal((composer as HTMLTextAreaElement).value, 'Thanks @sam.ortiz ');
   ui.fireEvent.keyDown(composer, { key: 'Enter' });
   const sent = await ui.screen.findByText('@sam.ortiz');
   assert.equal(sent.className, 'chat-mention');
   assert.ok(sent.closest('.chat-outgoing'));
+});
+test('the composer states its keys, formats the selection and lists the formats messages render', async () => {
+  await setup();
+  const composer = ui.screen.getByRole<HTMLTextAreaElement>('textbox', {
+    name: 'Message',
+  });
+  const hint = document.getElementById(
+    composer.getAttribute('aria-describedby') ?? '',
+  );
+  assert.equal(
+    hint?.textContent,
+    'Enter to send · Shift+Enter new line · **bold** *italic* `code`',
+  );
+  // Ctrl+B wraps the selection and selects the text inside the markers;
+  // pressed again, it removes them.
+  ui.fireEvent.change(composer, { target: { value: 'is below 0.05% now' } });
+  composer.setSelectionRange(3, 14);
+  ui.fireEvent.keyDown(composer, { key: 'b', ctrlKey: true });
+  assert.equal(composer.value, 'is **below 0.05%** now');
+  assert.deepEqual([composer.selectionStart, composer.selectionEnd], [5, 16]);
+  ui.fireEvent.keyDown(composer, { key: 'b', ctrlKey: true });
+  assert.equal(composer.value, 'is below 0.05% now');
+  composer.setSelectionRange(3, 8);
+  ui.fireEvent.keyDown(composer, { key: 'i', ctrlKey: true });
+  assert.equal(composer.value, 'is *below* 0.05% now');
+  composer.setSelectionRange(11, 16);
+  ui.fireEvent.keyDown(composer, { key: 'e', ctrlKey: true });
+  assert.equal(composer.value, 'is *below* `0.05%` now');
+  // Ctrl+Shift+E puts the caret's line in a fence.
+  ui.fireEvent.change(composer, {
+    target: { value: 'logs:\nkubectl get pods' },
+  });
+  composer.setSelectionRange(9, 9);
+  ui.fireEvent.keyDown(composer, { key: 'E', ctrlKey: true, shiftKey: true });
+  assert.equal(composer.value, 'logs:\n```\nkubectl get pods\n```');
+  // The draft follows the edits, so Send sends the formatted text.
+  ui.fireEvent.keyDown(composer, { key: 'Enter' });
+  await ui.waitFor(() =>
+    assert.ok(document.querySelector('.chat-outgoing pre code')),
+  );
+  assert.equal(composer.value, '');
+
+  // The help lists each form with the rendering a sent message gets.
+  const help = ui.screen.getByRole('button', { name: 'Formatting and keys' });
+  ui.fireEvent.click(help);
+  const sheet = await ui.screen.findByRole('dialog', {
+    name: 'Formatting and keys',
+  });
+  assert.equal(help.getAttribute('aria-expanded'), 'true');
+  for (const selector of [
+    'strong',
+    'em',
+    'p > code',
+    'a',
+    'pre code',
+    'ul li',
+    'ol li',
+    'blockquote',
+  ])
+    assert.ok(
+      sheet.querySelector(`td .chat-message-text ${selector}`),
+      selector,
+    );
+  assert.match(sheet.textContent ?? '', /Ctrl\+B/);
+  assert.equal(
+    document.activeElement,
+    ui.within(sheet).getByRole('button', { name: 'Close formatting help' }),
+  );
+  ui.fireEvent.keyDown(document.activeElement, { key: 'Escape' });
+  await ui.waitFor(() =>
+    assert.equal(
+      ui.screen.queryByRole('dialog', { name: 'Formatting and keys' }),
+      null,
+    ),
+  );
+  assert.equal(document.activeElement, help);
+});
+test('the composer states the space left in bytes from 90% of the limit', async () => {
+  await setup();
+  const composer = ui.screen.getByRole<HTMLTextAreaElement>('textbox', {
+    name: 'Message',
+  });
+  const send = ui.screen.getByRole<HTMLButtonElement>('button', {
+    name: 'Send',
+  });
+  ui.fireEvent.change(composer, { target: { value: 'a'.repeat(58_000) } });
+  assert.equal(document.querySelector('.chat-meter'), null);
+  ui.fireEvent.change(composer, { target: { value: 'a'.repeat(62_236) } });
+  const meter = document.querySelector<HTMLElement>('.chat-meter');
+  assert.equal(meter?.textContent, '3.3 KB left');
+  assert.equal(meter?.classList.contains('over'), false);
+  assert.equal(send.disabled, false);
+  // 32,900 two-byte characters: 65,800 bytes, which no count of characters
+  // against the limit would show as over.
+  ui.fireEvent.change(composer, { target: { value: 'é'.repeat(32_900) } });
+  const over = document.querySelector<HTMLElement>('.chat-meter');
+  assert.equal(over?.textContent, '264 bytes over the limit');
+  assert.ok(over?.classList.contains('over'));
+  assert.match(over?.title ?? '', /^264 bytes over the 65,536-byte limit\./);
+  assert.equal(send.disabled, true);
+});
+test('@ completes team members who can read the channel, and other channels mark their drafts', async () => {
+  await withScenario(
+    'busy',
+    async () => {
+      const composer = await ui.screen.findByRole<HTMLTextAreaElement>(
+        'textbox',
+        { name: 'Message' },
+      );
+      const options = () =>
+        [
+          ...document.querySelectorAll<HTMLElement>(
+            '[role="listbox"] [role="option"]',
+          ),
+        ].map(
+          (option) =>
+            `${option.querySelector('.name')?.textContent} ${option.querySelector('.role')?.textContent}`,
+        );
+      ui.fireEvent.change(composer, { target: { value: 'cc @' } });
+      const list = ui.screen.getByRole('listbox', { name: 'Team members' });
+      // Every user of the team but the reader, who is vitalik.
+      assert.deepEqual(options(), [
+        'dana.okafor Member',
+        'deploy-bot Member',
+        'priya.n Admin',
+        'sam.ortiz Owner',
+      ]);
+      assert.equal(
+        composer.getAttribute('aria-activedescendant'),
+        list.querySelector('[aria-selected="true"]')?.id,
+      );
+      // Names also match from a part after a separator.
+      ui.fireEvent.change(composer, { target: { value: 'cc @ortiz' } });
+      assert.deepEqual(options(), ['sam.ortiz Owner']);
+      ui.fireEvent.change(composer, { target: { value: 'cc @d' } });
+      assert.deepEqual(options(), ['dana.okafor Member', 'deploy-bot Member']);
+      ui.fireEvent.keyDown(composer, { key: 'ArrowDown' });
+      assert.equal(
+        list.querySelector('[aria-selected="true"] .name')?.textContent,
+        'deploy-bot',
+      );
+      ui.fireEvent.keyDown(composer, { key: 'Tab' });
+      assert.equal(composer.value, 'cc @deploy-bot ');
+      assert.equal(ui.screen.queryByRole('listbox'), null);
+      // Esc closes the list for that @ and leaves the text; a new @ opens it.
+      ui.fireEvent.change(composer, {
+        target: { value: 'cc @deploy-bot and @p' },
+      });
+      assert.deepEqual(options(), ['priya.n Admin']);
+      ui.fireEvent.keyDown(composer, { key: 'Escape' });
+      assert.equal(ui.screen.queryByRole('listbox'), null);
+      ui.fireEvent.change(composer, {
+        target: { value: 'cc @deploy-bot and @pr' },
+      });
+      assert.equal(ui.screen.queryByRole('listbox'), null);
+      assert.equal(composer.value, 'cc @deploy-bot and @pr');
+
+      // #incidents is for admins and owners: the list holds only the
+      // members who can read it, and says how many are left out.
+      const general = 'ab'.repeat(16);
+      const incidents = 'b2'.repeat(16);
+      const row = (id: string) =>
+        document.querySelector<HTMLElement>(`[data-chat-channel="${id}"]`)!;
+      assert.equal(row(general).querySelector('.chat-channel-draft'), null);
+      ui.fireEvent.click(row(incidents));
+      const field = await ui.waitFor(() => {
+        const next = ui.screen.getByRole<HTMLTextAreaElement>('textbox', {
+          name: 'Message',
+        });
+        assert.equal(next.placeholder, 'Message #incidents');
+        return next;
+      });
+      // The channel left with a draft says so; the open one does not.
+      await ui.waitFor(() =>
+        assert.ok(row(general).querySelector('.chat-channel-draft')),
+      );
+      assert.match(
+        row(general).getAttribute('aria-label') ?? '',
+        /^#general · Draft/,
+      );
+      ui.fireEvent.change(field, { target: { value: '@' } });
+      assert.deepEqual(options(), ['priya.n Admin', 'sam.ortiz Owner']);
+      ui.screen.getByText('Members who can read #incidents');
+      ui.screen.getByText('2 team members cannot read this channel');
+      assert.equal(row(incidents).querySelector('.chat-channel-draft'), null);
+      // Clearing the draft that was left behind removes its mark.
+      ui.fireEvent.click(row(general));
+      const back = await ui.waitFor(() => {
+        const next = ui.screen.getByRole<HTMLTextAreaElement>('textbox', {
+          name: 'Message',
+        });
+        assert.equal(next.value, 'cc @deploy-bot and @pr');
+        return next;
+      });
+      await ui.waitFor(() =>
+        assert.ok(row(incidents).querySelector('.chat-channel-draft')),
+      );
+      ui.fireEvent.change(back, { target: { value: '' } });
+      ui.fireEvent.click(row(incidents));
+      await ui.waitFor(() =>
+        assert.ok(row(general).getAttribute('aria-current') === null),
+      );
+      assert.equal(row(general).querySelector('.chat-channel-draft'), null);
+    },
+    true,
+  );
 });
 test('message actions copy, quote into the composer and show details', async () => {
   const copied: string[] = [];
@@ -440,10 +650,12 @@ test('the composer exposes only supported actions', async () => {
     'Set an exploding timer',
   ])
     assert.equal(ui.screen.queryByRole('button', { name: label }), null);
-  assert.equal(ui.screen.queryByText('**bold**'), null);
-  assert.equal(
-    ui.screen.queryByText('Enter to send · Shift+Enter for a new line'),
-    null,
+  // The hint line names only the inline forms messages render; no
+  // underline, strikethrough or heading is offered.
+  const hint = document.querySelector('.chat-compose-hint');
+  assert.deepEqual(
+    [...(hint?.querySelectorAll('code') ?? [])].map((code) => code.textContent),
+    ['**bold**', '*italic*', '`code`'],
   );
   assert.equal(ui.screen.queryByText('@user'), null);
 });

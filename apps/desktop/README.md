@@ -765,11 +765,15 @@ team nothing has been said in reads "No messages yet", beside its name. A
 channel with unread messages is drawn with a bolder name and a stronger
 preview. The caption beside a name says why a channel is quiet ("Restricted",
 "Hidden", "Muted", "Channel stopped") through the same `channelMeta` the group
-page's channel list uses. The fold of each team, the order and the previews
-switch are display preferences that `src/sidebar-prefs.ts` stores in guarded
-`localStorage`, so the column returns as it was left; the fold set keeps a
-short hash of each team's store reference rather than the reference, which
-names the local profile and aliases, and keeps at most 256 entries. The open
+page's channel list uses. A channel other than the open one that holds an
+unsent draft carries a pencil and "Draft" after its name, and its row's label
+ends in "· Draft". The column reads which channels hold a draft from the send
+service's `draftedChannels`, which changes only when a draft appears or goes,
+so typing does not re-render the column. The fold of each team, the order and
+the previews switch are display preferences that `src/sidebar-prefs.ts` stores
+in guarded `localStorage`, so the column returns as it was left; the fold set
+keeps a short hash of each team's store reference rather than the reference,
+which names the local profile and aliases, and keeps at most 256 entries. The open
 channel's row carries `aria-current="page"`, from the first render that
 resolves it: the column and the pane resolve the open channel through the same
 `openChannel` helper, so neither marks a row the other did not mount.
@@ -928,7 +932,43 @@ Leaving, muting, renaming and deleting a channel have no `ChatAction`, so the
 panel does not draw them.
 
 The composer exposes text entry and delivery actions. Attachments, an emoji
-picker and message expiry are omitted until supported.
+picker and message expiry are omitted until supported. A hint line under the
+field, drawn while the composer has focus, reads "Enter to send · Shift+Enter
+new line · `**bold**` `*italic*` `` `code` ``"; Alt+Enter also inserts a line
+break. The ? at the end of the line opens Formatting and keys, which lists each
+form `message-text.tsx` renders with the rendering drawn by `MessageText`
+itself, so the sheet cannot list a form messages do not get, and the keys.
+Ctrl+B, Ctrl+I and Ctrl+E (⌘ on macOS) wrap the selection in `**`, `*` and
+`` ` ``, or remove those markers when the selection is already wrapped in them;
+a selection across lines has each non-blank line wrapped, since inline styles
+do not cross lines. Ctrl+Shift+E (⇧⌘E) puts the selected lines in a ``` fence.
+None of these is an accelerator of the macOS application menu, and the
+code-block chord avoids Ctrl+Shift+C, which opens the element inspector in
+Chromium-based webviews when developer tools are enabled. The edits go through
+`insertText` where the webview supports it, so Ctrl+Z (⌘Z) undoes them
+(`composer-format.ts`).
+
+Typing `@` and the start of a name, or of a part after a `.`, `_` or `-`, lists
+up to eight team members with their role (`matchMembers` in `mentions.ts`):
+the roster's users other than the reader, filtered by the channel's read role
+(`channelRoster`), so an admins-only channel offers only admins and owners and
+the list says how many members cannot read the channel. Up and Down choose,
+Enter or Tab inserts `@username` and a space, and Esc closes the list until
+another `@` is typed. The result is Basic text; nothing is sent to the server
+about it.
+
+From 90% of the 65,536-byte text limit the hint line states the space left in
+bytes ("3.3 KB left", or "536 bytes left" below a kilobyte), and past the limit
+how far over it is, in red, with Send disabled. The count is in bytes because
+the limit is: a character takes one to four UTF-8 bytes, so no character count
+follows from it. Screen readers hear when the message passes 90% and the
+limit, not each keystroke.
+
+With the field empty, Up moves the channel's newest unsent message whose row
+offers Edit (not sent, or queued behind another) back into the field, as Edit
+does, and the hint line says so. Drafts are held in memory by the send service
+and are discarded on lock or quit; keeping them across a lock needs agent
+actions that store them in the protected store, which do not exist yet.
 
 `message-text.tsx` renders a Markdown subset (`**bold**`, `*italics*`,
 `` `code` ``, fenced code blocks, `> quote`, `- list`, `1. list`,
