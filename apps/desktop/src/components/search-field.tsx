@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './icon';
-import { isMac } from './shortcut-label';
+import { matchesShortcut, shortcutLabel } from '../shortcuts';
 
 export interface SearchFieldProps {
   value: string;
@@ -43,8 +43,7 @@ export function SearchField({
   useEffect(() => {
     if (!shortcut) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k')
-        return;
+      if (!matchesShortcut(event, 'search')) return;
       event.preventDefault();
       inputRef.current?.focus();
     };
@@ -81,7 +80,7 @@ export function SearchField({
         }}
       />
       {shortcut || kbd ? (
-        <kbd aria-hidden="true">{isMac() ? '⌘K' : 'Ctrl K'}</kbd>
+        <kbd aria-hidden="true">{shortcutLabel('search')}</kbd>
       ) : null}
     </label>
   );

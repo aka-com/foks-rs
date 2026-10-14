@@ -148,13 +148,18 @@ pub fn lock_app(
     lock: State<'_, Arc<AppLock>>,
 ) -> Result<LockStateDto, AgentError> {
     crate::commands::require_main_window(&webview)?;
+    lock_now(webview.app_handle(), &lock)
+}
+
+/// Locks the app and drops what the unlocked interval held open: the catalog,
+/// web admin windows and local chat views. The macOS menu's Lock calls this
+/// directly when no main window is open to run `lock_app`.
+pub(crate) fn lock_now(app: &AppHandle, lock: &AppLock) -> Result<LockStateDto, AgentError> {
     lock.lock()?;
-    webview
-        .app_handle()
-        .state::<crate::commands::AppState>()
+    app.state::<crate::commands::AppState>()
         .invalidate_catalog();
-    crate::commands::web_admin::close_all(webview.app_handle());
-    crate::commands::chat_local::conceal(webview.app_handle());
+    crate::commands::web_admin::close_all(app);
+    crate::commands::chat_local::conceal(app);
     Ok(lock.state())
 }
 

@@ -242,7 +242,8 @@ is `copy_item_field` with the field `value`.
 The ⌘K search palette copies through the same two commands: ⌘C on a
 highlighted Password copies its password, ⇧⌘C its user name, and ⌘C on a
 text document its value, so a value reaches the clipboard without being
-shown or opened. The palette searches names and paths only, never values.
+shown or opened. The same keys do the same on the focused row of the Files
+list. The palette searches names and paths only, never values.
 Its Recent and Favorites lists are kept in the webview's local storage,
 which is not cleared by the app lock, so they hold an item's `StoreRef` and
 dirent id and nothing else. The `StoreRef` names the server profile, the

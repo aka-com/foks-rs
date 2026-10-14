@@ -46,4 +46,5 @@ export type FoksIconName =
   | 'restore'
   | 'lock'
   | 'dices'
-  | 'star';
+  | 'star'
+  | 'keyboard';

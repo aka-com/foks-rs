@@ -115,6 +115,8 @@ import {
 } from './item-moves';
 import type { DropVerdict, MultiSelection } from './item-moves';
 import { AccountMark } from './account-switcher';
+import { matchesShortcut, shortcutLabel } from '../shortcuts';
+import type { KeyPress } from '../shortcuts';
 import { manageReason } from './group-model';
 import {
   itemActionProblem,
@@ -335,6 +337,27 @@ function Row({
     ? itemActionProblem(snapshot, item, true, accessNow())
     : undefined;
   const copies = copyActions(item);
+  /** What a key pressed on the row itself runs, if anything. */
+  const rowShortcut = (event: KeyPress): (() => void) | undefined => {
+    // Moving to Trash can be undone, for several chosen rows as for one, so
+    // the key asks for nothing more.
+    if (matchesShortcut(event, 'rowTrash')) return () => onTrash(item);
+    if (matchesShortcut(event, 'rowOpen')) return onSelect;
+    if (matchesShortcut(event, 'rowToggle')) return () => onPick('toggle');
+    if (matchesShortcut(event, 'rowExtend')) return () => onPick('extend');
+    if (onMove && matchesShortcut(event, 'rowRename'))
+      return () => onMove(item);
+    // A file has nothing to copy, and selected text is copied as text; the
+    // key is left to the window for both.
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return undefined;
+    const copy = matchesShortcut(event, 'rowCopyUsername')
+      ? copies.find(({ field }) => field === 'username')
+      : matchesShortcut(event, 'rowCopy')
+        ? copies[0]
+        : undefined;
+    return copy && (() => onCopy(item, copy.field));
+  };
   const choose =
     (run: () => void): (() => void) =>
     () => {
@@ -386,31 +409,17 @@ function Row({
           setMenuPoint({ x: event.clientX, y: event.clientY });
         }}
         onKeyDown={(event) => {
-          if (
-            event.key === 'ContextMenu' ||
-            (event.key === 'F10' && event.shiftKey)
-          ) {
+          if (matchesShortcut(event, 'rowMenu')) {
             event.preventDefault();
             const bounds = event.currentTarget.getBoundingClientRect();
             setMenuPoint({ x: bounds.left, y: bounds.bottom });
             return;
           }
           if (event.target !== event.currentTarget) return;
-          if (
-            event.key === 'Delete' ||
-            (event.key === 'Backspace' && (event.metaKey || event.ctrlKey))
-          ) {
-            // Moving to Trash can be undone, for several chosen rows as for
-            // one, so the key asks for nothing more.
-            event.preventDefault();
-            onTrash(item);
-            return;
-          }
-          if (event.key !== 'Enter' && event.key !== ' ') return;
+          const run = rowShortcut(event);
+          if (!run) return;
           event.preventDefault();
-          if (event.metaKey || event.ctrlKey) onPick('toggle');
-          else if (event.shiftKey) onPick('extend');
-          else onSelect();
+          run();
         }}
       >
         <span className="name" role={cellRole(nav)}>
@@ -1976,7 +1985,7 @@ export function ItemsScreen({
           </span>
           <b>New password</b>
           <small>A login, API key or any secret value.</small>
-          <kbd>⌘N</kbd>
+          <kbd>{shortcutLabel('newPassword')}</kbd>
         </button>
         <button
           type="button"
@@ -1988,7 +1997,7 @@ export function ItemsScreen({
           </span>
           <b>Add a document</b>
           <small>Drop a file anywhere in this window, or pick one.</small>
-          <kbd>⇧⌘N</kbd>
+          <kbd>{shortcutLabel('newDocument')}</kbd>
         </button>
         {/* The app has no CLI import command, so this card states the one the
             CLI already has rather than offering an action it cannot run. */}
@@ -2010,7 +2019,10 @@ export function ItemsScreen({
         <Icon name="search" />
       </div>
       <h2>Nothing matches “{state.query}”</h2>
-      <p>Try a shorter word, or press ⌘K to search every vault and team.</p>
+      <p>
+        Try a shorter word, or press {shortcutLabel('search')} to search every
+        vault and team.
+      </p>
     </div>
   );
 
@@ -2566,16 +2578,13 @@ export function ItemsScreen({
                   !event.currentTarget.contains(event.target)
                 )
                   return;
-                if (event.key === 'Escape' && chosen.length) {
+                if (matchesShortcut(event, 'rowsClear') && chosen.length) {
                   event.preventDefault();
                   setChosen(NO_ROWS);
                   return;
                 }
                 if (
-                  (event.metaKey || event.ctrlKey) &&
-                  !event.shiftKey &&
-                  !event.altKey &&
-                  event.key.toLowerCase() === 'a' &&
+                  matchesShortcut(event, 'rowsAll') &&
                   listed.length &&
                   (onMoveMany || onTrashMany)
                 ) {

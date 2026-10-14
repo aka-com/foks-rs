@@ -41,6 +41,7 @@ import { PageHeader } from '../shell/page-header';
 import { AccountMark } from './account-switcher';
 import { ProfileKeys } from './profile-keys';
 import { GroupMark } from './group-mark';
+import { matchesShortcut } from '../shortcuts';
 
 interface Props {
   snapshot: AgentSnapshot;
@@ -286,11 +287,7 @@ export function ServersSection({
         event.target instanceof HTMLTextAreaElement
       )
         return;
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.key.toLowerCase() === 'r' &&
-        selected
-      ) {
+      if (matchesShortcut(event, 'serverCheck') && selected) {
         event.preventDefault();
         void check(selected);
       }

@@ -454,6 +454,8 @@ export interface Bridge {
   onNewItem(
     listener: (kind: 'Password' | 'Document') => void,
   ): Promise<Unlisten>;
+  /** The macOS application menu's Lock, which the renderer carries out. */
+  onLockMenu(listener: () => void): Promise<Unlisten>;
   onMaintenanceStatus(
     listener: (snapshot: MaintenanceSnapshot) => void,
   ): Promise<Unlisten>;

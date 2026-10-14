@@ -12,7 +12,6 @@ import { anyDialogOpen, OverlayProvider } from '/kit/overlay-primitives';
 import { ToastController, ToastProvider } from '/kit/toasts';
 import type { AgentLifecycleController } from '../agent-lifecycle';
 import type { Bridge, ItemField } from '../bridge';
-import { shortcutLabel } from '../components/shortcut-label';
 import { useChatMigration } from '../chat/migration';
 import { ChatInboxProvider } from '../chat/inbox-provider';
 import { DeviceCacheContext } from '../device-cache';
@@ -74,6 +73,8 @@ import {
   type WriteWorkflow,
 } from '../screens/write-workflows';
 import { useSearchShortcut } from '../shell/search-palette';
+import { ShortcutSheet, useShortcutSheetKey } from '../shell/shortcut-sheet';
+import { matchesShortcut, shortcutLabel } from '../shortcuts';
 import type { SearchAction } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
 import { Topbar } from '../shell/topbar';
@@ -196,6 +197,8 @@ export function VaultShell({
   const [deviceLabel, setDeviceLabel] = useState<DeviceLabel | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   useSearchShortcut(() => setSearchOpen(true));
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  useShortcutSheetKey(() => setShortcutsOpen(true));
   const [fallback] = useState(() => {
     return storeAtScene({ ...scene, selection: initialSelection });
   });
@@ -552,7 +555,7 @@ export function VaultShell({
               label: 'New password',
               detail: `A login, API key or any secret value in ${newItemStore.name}`,
               icon: 'key' as const,
-              keys: shortcutLabel('N'),
+              keys: shortcutLabel('newPassword'),
               run: () => void startNewItem('Password'),
             },
             {
@@ -560,7 +563,7 @@ export function VaultShell({
               label: 'Add a document',
               detail: `A file or a text value in ${newItemStore.name}`,
               icon: 'upload' as const,
-              keys: shortcutLabel('N', true),
+              keys: shortcutLabel('newDocument'),
               run: () => void startNewItem('Document'),
             },
           ]
@@ -570,7 +573,16 @@ export function VaultShell({
         label: 'Lock',
         detail: 'Lock the app now',
         icon: 'lock',
+        keys: shortcutLabel('lock'),
         run: lockFromMenu,
+      },
+      {
+        id: 'shortcuts',
+        label: 'Keyboard shortcuts',
+        detail: 'Every shortcut and where it applies',
+        icon: 'keyboard',
+        keys: shortcutLabel('shortcuts'),
+        run: () => setShortcutsOpen(true),
       },
       {
         id: 'settings',
@@ -602,19 +614,29 @@ export function VaultShell({
   );
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      const addDocument = matchesShortcut(event, 'newDocument');
       if (
-        !(event.metaKey || event.ctrlKey) ||
-        event.altKey ||
-        event.key.toLowerCase() !== 'n' ||
+        (!addDocument && !matchesShortcut(event, 'newPassword')) ||
         document.querySelector('[role="menu"], [role="listbox"]')
       )
         return;
-      if (openNewItem(event.shiftKey ? 'Document' : 'Password'))
+      if (openNewItem(addDocument ? 'Document' : 'Password'))
         event.preventDefault();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [openNewItem]);
+  // Lock works from any page and over any sheet, as the account menu's Lock
+  // does; ⌘L types nothing, so a text field gives up nothing to it.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!matchesShortcut(event, 'lock')) return;
+      event.preventDefault();
+      if (!event.repeat) lockFromMenu();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [lockFromMenu]);
   useEffect(() => {
     if (!bridge.native) return;
     let disposed = false;
@@ -634,6 +656,22 @@ export function VaultShell({
       stop?.();
     };
   }, [bridge, openNewItem]);
+  useEffect(() => {
+    if (!bridge.native) return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void bridge
+      .onLockMenu(lockFromMenu)
+      .then((unlisten) => {
+        if (disposed) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [bridge, lockFromMenu]);
   const chatMigration = useChatMigration(
     bridge,
     agentLifecycle.state === 'ready' && agentCatalogReady && !chrome.blocked,
@@ -928,6 +966,10 @@ export function VaultShell({
             }
             onCopyItem={copyFromPalette}
             actions={paletteActions}
+          />
+          <ShortcutSheet
+            open={shortcutsOpen}
+            onClose={() => setShortcutsOpen(false)}
           />
         </ChatInboxProvider>
       </div>

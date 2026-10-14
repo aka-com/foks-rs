@@ -2510,3 +2510,49 @@
 .sheet .ft .lnk {
   padding: 0 4px;
 }
+
+/* Keyboard shortcut sheet (`shell/shortcut-sheet.tsx`) */
+.shortcut-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.shortcut-table:first-child {
+  margin-top: 4px;
+}
+
+.shortcut-table caption {
+  text-align: left;
+  font-weight: 650;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding-bottom: 4px;
+}
+
+.shortcut-table th,
+.shortcut-table td {
+  padding: 5px 0;
+  border-top: 1px solid var(--line-soft);
+  vertical-align: baseline;
+}
+
+.shortcut-table th {
+  font-weight: 400;
+  text-align: left;
+  padding-right: 12px;
+}
+
+.shortcut-table td {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.shortcut-table kbd {
+  font: 12px var(--sans);
+  background: var(--btn-bg);
+  border: 1px solid var(--line-mid);
+  border-radius: 4px;
+  padding: 0 5px;
+}

@@ -58,6 +58,7 @@ async function mount(accessNow?: () => number) {
   const downloads: ItemRequest[] = [];
   const reveals: Item[] = [];
   const deletions: Item[] = [];
+  const moves: Item[] = [];
   const restores: TrashEntry[] = [];
   const permanent: Item[] = [];
   const failures: unknown[] = [];
@@ -93,6 +94,7 @@ async function mount(accessNow?: () => number) {
       accessNow,
       onReveal: (item: Item) => reveals.push(item),
       onTrash: (item: Item) => deletions.push(item),
+      onMove: (item: Item) => moves.push(item),
       onRestore: (entry: TrashEntry) => restores.push(entry),
       onDeletePermanently: (item: Item) => permanent.push(item),
       onNew: () => {},
@@ -121,6 +123,7 @@ async function mount(accessNow?: () => number) {
     downloads,
     reveals,
     deletions,
+    moves,
     restores,
     permanent,
     failures,
@@ -233,6 +236,48 @@ test('row copies name the field, and a login without it gets a warning', async (
     }),
     null,
   );
+});
+
+test('row keys copy a field, open Rename or move and move to Trash', async () => {
+  const mounted = await mount();
+  const github = row('github.com');
+  github.focus();
+  ui.fireEvent.keyDown(github, { key: 'c', ctrlKey: true });
+  ui.fireEvent.keyDown(github, { key: 'C', metaKey: true, shiftKey: true });
+  await ui.waitFor(() =>
+    assert.deepEqual(
+      mounted.copies.map(({ path, field }) => [path, field]),
+      [
+        ['/logins/github.com', 'password'],
+        ['/logins/github.com', 'username'],
+      ],
+    ),
+  );
+  // A text Document copies its value and has no user name to copy.
+  const value = row('DATABASE_URL');
+  ui.fireEvent.keyDown(value, { key: 'C', ctrlKey: true, shiftKey: true });
+  ui.fireEvent.keyDown(value, { key: 'c', metaKey: true });
+  await ui.waitFor(() => assert.equal(mounted.copies.length, 3));
+  assert.equal(mounted.copies[2].path, '/env/prod/DATABASE_URL');
+  assert.equal(mounted.copies[2].field, 'value');
+  // A file has nothing to copy, so the key is left to the window.
+  assert.equal(
+    ui.fireEvent.keyDown(row('passport-scan.pdf'), { key: 'c', ctrlKey: true }),
+    true,
+  );
+
+  ui.fireEvent.keyDown(github, { key: 'F2' });
+  assert.deepEqual(
+    mounted.moves.map((item) => item.path),
+    ['/logins/github.com'],
+  );
+  ui.fireEvent.keyDown(github, { key: 'Backspace', metaKey: true });
+  assert.deepEqual(
+    mounted.deletions.map((item) => item.path),
+    ['/logins/github.com'],
+  );
+  assert.equal(mounted.copies.length, 3);
+  assert.equal(mounted.failures.length, 0);
 });
 
 test('details and Move to Trash target the context item, not the current selection', async () => {
@@ -552,5 +597,18 @@ test('a team Trash lists entries by read role and states who can see them', asyn
   assert.equal(
     mounted.permanent[0]?.path,
     `/.trash/owner/${stamp}~%2Flease-2024.pdf`,
+  );
+});
+
+test('the empty vault’s cards show the New shortcuts this platform uses', async () => {
+  const mounted = await mount();
+  mounted.update({ ...mounted.snapshot, items: [] });
+  assert.ok(ui.screen.getByText('Your vault is empty'));
+  // The test window is not a Mac, so the hints name Ctrl.
+  assert.deepEqual(
+    [...document.querySelectorAll('.starter .card kbd')].map(
+      (key) => key.textContent,
+    ),
+    ['Ctrl N', 'Ctrl Shift N'],
   );
 });

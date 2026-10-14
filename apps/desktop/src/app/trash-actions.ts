@@ -24,6 +24,7 @@ import {
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { itemActionProblem } from '../screens/store-access';
 import type { WriteWorkflow } from '../screens/write-workflows';
+import { matchesShortcut, typingTarget } from '../shortcuts';
 import { storedTrashAutoEmpty } from '../trash-auto-empty';
 
 /** How often automatic emptying looks at one store's Trash again. */
@@ -61,15 +62,6 @@ function occupied(
 ): boolean {
   return snapshot.items.some(
     (item) => item.store === store && item.path === path,
-  );
-}
-
-/** Whether a key press belongs to a text field, which keeps its own ⌘Z. */
-function editing(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  return (
-    target.isContentEditable ||
-    ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
   );
 }
 
@@ -328,6 +320,7 @@ export function useTrashActions({
     );
     const timer = window.setTimeout(() => {
       const pending = pendingUndo.current;
+      // A text field keeps its own ⌘Z.
       if (
         busy.current ||
         undoing.current ||
@@ -389,11 +382,8 @@ export function useTrashActions({
       const pending = pendingUndo.current;
       if (
         !pending ||
-        !(event.metaKey || event.ctrlKey) ||
-        event.shiftKey ||
-        event.altKey ||
-        event.key.toLowerCase() !== 'z' ||
-        editing(event.target) ||
+        !matchesShortcut(event, 'undoTrash') ||
+        typingTarget(event.target) ||
         anyDialogOpen()
       )
         return;

@@ -36,8 +36,8 @@ import {
   useDismissOnOverlayBlock,
 } from '/kit/overlay-primitives';
 import { Icon } from '../components/icon';
-import { shortcutLabel } from '../components/shortcut-label';
 import type { FoksIconName } from '../icons';
+import { matchesShortcut, shortcutLabel } from '../shortcuts';
 import { GroupMark } from '../screens/group-mark';
 import { copyActions } from '../screens/item-copy';
 import type { CopyAction } from '../screens/item-copy';
@@ -575,8 +575,7 @@ export function useSearchShortcut(onOpen: () => void): void {
   onOpenRef.current = onOpen;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
-      if (event.key.toLowerCase() !== 'k') return;
+      if (!matchesShortcut(event, 'search')) return;
       // This listener runs on document, beyond a dialog's event boundary.
       // Disable the shortcut while any dialog is open, including the palette
       // itself.
@@ -627,11 +626,13 @@ export interface SearchPaletteProps {
 }
 
 /** The keyboard hints along the foot, which never change. */
-const FOOT_KEYS: readonly { keys: readonly string[]; label: string }[] = [
-  { keys: ['↑', '↓'], label: 'move' },
-  { keys: ['↵'], label: 'open' },
-  { keys: ['tab'], label: 'next kind' },
-];
+function footKeys(): { keys: readonly string[]; label: string }[] {
+  return [
+    { keys: ['↑', '↓'], label: 'move' },
+    { keys: [shortcutLabel('paletteOpen')], label: 'open' },
+    { keys: [shortcutLabel('paletteKind')], label: 'next kind' },
+  ];
+}
 
 /** The copy ⌘C makes from an entry, or with Shift the login's user name. */
 function copyFor(
@@ -649,17 +650,25 @@ function rowKeys(
   canCopy: boolean,
 ): { keys: string; label: string }[] {
   const keys = [
-    { keys: '↵', label: entry.target.kind === 'action' ? 'Run' : 'Open' },
+    {
+      keys: shortcutLabel('paletteOpen'),
+      label: entry.target.kind === 'action' ? 'Run' : 'Open',
+    },
   ];
   if (canCopy) {
     const copy = copyFor(entry, false);
-    if (copy) keys.push({ keys: shortcutLabel('C'), label: copy.label });
+    if (copy)
+      keys.push({ keys: shortcutLabel('paletteCopy'), label: copy.label });
     const user = copyFor(entry, true);
-    if (user) keys.push({ keys: shortcutLabel('C', true), label: user.label });
+    if (user)
+      keys.push({
+        keys: shortcutLabel('paletteCopyUsername'),
+        label: user.label,
+      });
   }
   if (entry.ref)
     keys.push({
-      keys: shortcutLabel('D'),
+      keys: shortcutLabel('paletteFavorite'),
       label: favorite ? 'Remove favorite' : 'Add favorite',
     });
   return keys;
@@ -832,10 +841,9 @@ function SearchSheet({
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
-    const command = (event.metaKey || event.ctrlKey) && !event.altKey;
-    const key = event.key.toLowerCase();
-    if (command && key === 'c') {
-      const copy = copyFor(highlighted, event.shiftKey);
+    const copyUsername = matchesShortcut(event, 'paletteCopyUsername');
+    if (copyUsername || matchesShortcut(event, 'paletteCopy')) {
+      const copy = copyFor(highlighted, copyUsername);
       const input = inputRef.current;
       // With query text selected, ⌘C copies that text as in any field.
       if (input && input.selectionStart !== input.selectionEnd) return;
@@ -847,7 +855,7 @@ function SearchSheet({
       onCopyItem(target.store, target.path, copy.field);
       return;
     }
-    if (command && key === 'd' && !event.shiftKey) {
+    if (matchesShortcut(event, 'paletteFavorite')) {
       if (!highlighted?.ref) return;
       event.preventDefault();
       toggleFavorite(highlighted.ref);
@@ -863,16 +871,17 @@ function SearchSheet({
       setActive(Math.max(selected - 1, 0));
       return;
     }
-    if (event.key === 'Enter') {
+    if (matchesShortcut(event, 'paletteOpen')) {
       event.preventDefault();
       open(highlighted);
       return;
     }
-    if (event.key === 'Tab') {
+    const previousKind = matchesShortcut(event, 'palettePreviousKind');
+    if (previousKind || matchesShortcut(event, 'paletteKind')) {
       // The chips are the only thing Tab moves between here: the field keeps
       // focus, so there is nowhere else in the sheet for it to go.
       event.preventDefault();
-      cycleScope(event.shiftKey ? -1 : 1);
+      cycleScope(previousKind ? -1 : 1);
     }
   };
 
@@ -1028,7 +1037,7 @@ function SearchSheet({
         </div>
 
         <div className="pal-foot">
-          {FOOT_KEYS.map((hint) => (
+          {footKeys().map((hint) => (
             <span className="k" key={hint.label}>
               {hint.keys.map((key) => (
                 <kbd key={key}>{key}</kbd>

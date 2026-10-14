@@ -38,6 +38,10 @@ const NEW_DOCUMENT_MENU_ID: &str = "new-document";
 const SETTINGS_MENU_ID: &str = "open-settings";
 #[cfg(target_os = "macos")]
 const OPEN_SETTINGS_EVENT: &str = "foks://open-settings";
+#[cfg(target_os = "macos")]
+const LOCK_MENU_ID: &str = "lock";
+#[cfg(target_os = "macos")]
+const LOCK_EVENT: &str = "foks://lock";
 
 #[cfg(target_os = "macos")]
 fn open_main_window(app: &tauri::AppHandle, settings: bool) -> Result<(), String> {
@@ -81,8 +85,13 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem};
 
     let menu = Menu::default(app.handle())?;
+    // Accelerators match the renderer's shortcut registry
+    // (`src/shortcuts.ts`), which a UI test checks against this file.
     let settings = MenuItemBuilder::with_id(SETTINGS_MENU_ID, "Settings…")
         .accelerator("CmdOrCtrl+,")
+        .build(app)?;
+    let lock = MenuItemBuilder::with_id(LOCK_MENU_ID, "Lock")
+        .accelerator("CmdOrCtrl+L")
         .build(app)?;
     let new_window = MenuItemBuilder::with_id(NEW_WINDOW_MENU_ID, "New Window").build(app)?;
     let new_password = MenuItemBuilder::with_id(NEW_PASSWORD_MENU_ID, "New Password")
@@ -94,7 +103,8 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     let items = menu.items()?;
     if let Some(application) = items.first().and_then(|item| item.as_submenu()) {
         application.insert(&settings, 2)?;
-        application.insert(&PredefinedMenuItem::separator(app)?, 3)?;
+        application.insert(&lock, 3)?;
+        application.insert(&PredefinedMenuItem::separator(app)?, 4)?;
     }
     if let Some(file) = items
         .iter()
@@ -113,6 +123,24 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
         if settings || event.id() == NEW_WINDOW_MENU_ID {
             if let Err(error) = open_main_window(app, settings) {
                 tracing::error!(%error, "Failed to open main window from application menu");
+            }
+            return;
+        }
+        if event.id() == LOCK_MENU_ID {
+            use tauri::Emitter as _;
+            // The renderer locks through `lock_app` and draws the lock
+            // screen. With no main window there is nothing to draw, so the
+            // host locks, and the next window starts on the lock screen.
+            let result = match app.get_webview_window(MAIN) {
+                Some(window) => window
+                    .emit(LOCK_EVENT, ())
+                    .map_err(|error| error.to_string()),
+                None => applock::lock_now(app, &app.state::<Arc<applock::AppLock>>())
+                    .map(|_| ())
+                    .map_err(|error| error.message),
+            };
+            if let Err(error) = result {
+                tracing::error!(%error, "Failed to lock from the application menu");
             }
             return;
         }

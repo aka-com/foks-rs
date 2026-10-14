@@ -57,6 +57,7 @@ export const coreCommands: Pick<
   | 'onChatNotification'
   | 'onOpenSettings'
   | 'onNewItem'
+  | 'onLockMenu'
   | 'onMaintenanceStatus'
   | 'onExitState'
 > = {
@@ -162,6 +163,7 @@ export const coreCommands: Pick<
       throw cause;
     }
   },
+  onLockMenu: async (listener) => listen('foks://lock', listener),
   onMaintenanceStatus: async (listener) =>
     listen<unknown>('foks://maintenance-status', (event) => {
       listener(decodeMaintenanceSnapshot(event.payload));

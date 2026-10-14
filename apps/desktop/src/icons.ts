@@ -28,6 +28,7 @@ import Globe from 'lucide/dist/esm/icons/globe.mjs';
 import Hash from 'lucide/dist/esm/icons/hash.mjs';
 import Info from 'lucide/dist/esm/icons/info.mjs';
 import KeyRound from 'lucide/dist/esm/icons/key-round.mjs';
+import Keyboard from 'lucide/dist/esm/icons/keyboard.mjs';
 import Laptop from 'lucide/dist/esm/icons/laptop.mjs';
 import LayoutGrid from 'lucide/dist/esm/icons/layout-grid.mjs';
 import List from 'lucide/dist/esm/icons/list.mjs';
@@ -104,6 +105,7 @@ export const FOKS_ICONS = {
   lock: Lock,
   dices: Dices,
   star: Star,
+  keyboard: Keyboard,
 } as const satisfies Record<FoksIconName, IconNode>;
 
 export type { FoksIconName } from './icon-name';
