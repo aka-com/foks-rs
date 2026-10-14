@@ -2425,6 +2425,18 @@ test('the message list has one toolbar tab stop, on the row focus last entered',
   // Focus entering a row moves the tab stop to its toolbar, which follows
   // the row's links.
   assert.deepEqual(stops(), [first]);
+  // The row's menu is portaled out of the list; focus in it keeps the stop.
+  ui.fireEvent.keyDown(link, { key: 'ContextMenu' });
+  const copy = await ui.screen.findByRole('menuitem', { name: 'Copy message' });
+  await ui.waitFor(() => assert.equal(document.activeElement, copy));
+  assert.deepEqual(stops(), [first]);
+  ui.fireEvent.keyDown(copy, { key: 'Escape' });
+  await ui.waitFor(() => assert.equal(document.activeElement, link));
+  assert.deepEqual(stops(), [first]);
+  // Focus leaving the list returns the stop to the newest row.
+  const composer = ui.screen.getByRole('textbox', { name: 'Message' });
+  ui.act(() => composer.focus());
+  assert.deepEqual(stops(), [article('Third')]);
 });
 
 for (const offline of [true, false]) {

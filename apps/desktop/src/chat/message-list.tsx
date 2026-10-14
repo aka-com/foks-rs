@@ -217,11 +217,34 @@ export function MessageList({
       : 0;
   // The rows this device has not seen in history follow the newer edge.
   const { held, unsent } = splitThreadRows(rows);
-  // One message toolbar is a tab stop: the row that last held focus while it
-  // is drawn, otherwise the newest row with actions. Other rows' toolbars are
-  // reached by hover, the context menu, or focus entering the row, so a Tab
-  // across the list does not stop at every message.
+  // One message toolbar is a tab stop: that of the row focus last entered,
+  // while focus stays in the list and the row is drawn, otherwise that of the
+  // newest row with actions. Other rows' toolbars are reached by hover, the
+  // context menu, or focus entering the row, so a Tab across the list does
+  // not stop at every message.
   const [focusedRow, setFocusedRow] = useState<string | null>(null);
+  // The claim lasts while focus is in the list or in a menu or popover
+  // (`.menu-portal`) a row opened; focus anywhere else, or on no element,
+  // returns the tab stop to the newest row. `focusin` also covers focus that
+  // moves on after the focused element was removed without a `focusout`.
+  useEffect(() => {
+    const keeps = (node: EventTarget | null) =>
+      node instanceof Element &&
+      (Boolean(scroller.current?.contains(node)) ||
+        node.closest('.menu-portal') !== null);
+    const onFocusIn = (event: FocusEvent) => {
+      if (!keeps(event.target)) setFocusedRow(null);
+    };
+    const onFocusOut = (event: FocusEvent) => {
+      if (!keeps(event.relatedTarget)) setFocusedRow(null);
+    };
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('focusout', onFocusOut);
+    return () => {
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('focusout', onFocusOut);
+    };
+  }, [scroller]);
   const actionRows = [...held, ...unsent]
     .filter(
       (row) =>

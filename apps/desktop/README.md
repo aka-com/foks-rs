@@ -966,13 +966,16 @@ but cannot compare the two.
 Each message row carries its actions (`message-actions.tsx`) in a toolbar over
 its top corner, shown while the row is hovered or holds focus, and named after
 the message's author and time. The message list keeps one toolbar in the tab
-order: that of the row focus last entered, or of the newest row. A toolbar is
-one tab stop, and the arrow keys, Home and End move along it. A right-click on
-the row, or the ContextMenu key or Shift+F10 on anything focused in it, opens
-the same actions as a menu. Rows themselves are not focusable yet, so a row
-without links or code blocks is reached from the keyboard only when it is the
-newest; moving between rows with the arrow keys belongs to the conversation's
-keyboard navigation, which is not built. Copy message copies the message's
+order: that of the row focus last entered, while focus stays in the list or in
+a menu or popover a row opened, and otherwise that of the newest row. A toolbar
+is one tab stop, and the arrow keys, Home and End move along it. A right-click
+on the row, or the ContextMenu key or Shift+F10 on anything focused in it,
+opens the same actions as a menu. The toolbar follows the row's links and code
+blocks in tab order, so Tab from them reaches it but Shift+Tab into the row
+does not. Rows themselves are not focusable yet, so a row without links or
+code blocks is reached from the keyboard only when it is the newest; moving
+between rows with the arrow keys belongs to the conversation's keyboard
+navigation, which is not built. Copy message copies the message's
 Markdown source; it is the only action on an unsent or pending message. Quote
 reply, offered only where the reader can send, writes a quote as Basic text at
 the composer's caret, on a line of its own: a `>` line with the author in bold
