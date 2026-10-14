@@ -957,12 +957,13 @@ the label is the URL itself (up to the case of ASCII letters and a final `/`)
 and names no other host, it is followed by the destination host in parentheses,
 as `new URL(url).hostname` gives it, so an internationalized host appears in its
 `xn--` form. A host longer than the line wraps rather than running out of view,
-so its last labels stay visible. The link's accessible name ends with ", opens" and that host, and
-the visible copy is hidden from assistive technology. `labelHosts` in
-`message-text.tsx` reads every host name in the label, including both sides of
-an `@`, names wrapped in quotes, brackets or punctuation, and a name, with or
-without a scheme, after a `?@` or `#@` that ends a URL's authority or a leading
-host name (`https://bank.example#@evil.example`,
+so its last labels stay visible. The link's accessible name ends with
+", opens" and that host, and the visible copy is hidden from assistive
+technology. `labelHosts` in `message-text.tsx` reads every host name in the
+label, including both sides of an `@`, names wrapped in quotes, brackets or
+punctuation, and a name, with or without a scheme, after a `?@` or `#@` that
+ends a URL's authority or a leading host name
+(`https://bank.example#@evil.example`,
 `bank.example/?@https://evil.example`), in time linear in the label's length. It
 reads the label with invisible characters removed (format characters such as
 U+200B, and other default ignorable code points such as U+034F and the variation
