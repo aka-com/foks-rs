@@ -1286,6 +1286,40 @@ test('a degraded projection holds the open channel at the base interval and back
   }
 });
 
+test('closing a quiet degraded channel resumes the backoff it built up while open', async () => {
+  const f = fixture(1);
+  f.inbox.channels = ['open', 'other'];
+  f.inbox.degraded = true;
+  f.service.setOpenChannel('t0', 'open');
+  const raised = () =>
+    f.service.getSnapshot().get('t0')!.channelRefreshRevisions!.get('open')!;
+  try {
+    await f.clock.advance(500);
+    // Thirty seconds of bumps one second apart: the open channel refreshes
+    // at the base interval, and each refresh that found nothing doubles the
+    // interval it has stored, to the ceiling.
+    const start = raised();
+    for (let step = 0; step < 30; step++) {
+      f.service.invalidate('t0');
+      await f.clock.advance(1_000);
+    }
+    assert.ok(
+      raised() - start >= 5,
+      `${raised() - start} refreshes while open`,
+    );
+    // Once it is closed the stored interval applies, not the base.
+    f.service.setOpenChannel('t0', 'other');
+    const closed = raised();
+    for (let step = 0; step < 30; step++) {
+      f.service.invalidate('t0');
+      await f.clock.advance(1_000);
+    }
+    assert.equal(raised(), closed);
+  } finally {
+    f.service.stop();
+  }
+});
+
 test('a throttled degraded bump refreshes the open thread when its delay expires without another sync', async () => {
   const f = fixture(1);
   f.inbox.channels = ['open'];

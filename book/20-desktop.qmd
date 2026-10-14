@@ -290,7 +290,22 @@ when the read happens, not whether. **The channel whose thread is open
 never backs off**: the due-time computation uses the base interval whenever
 the channel is the presented one, whatever interval is stored. Opening a
 channel that had backed off therefore makes it due at the base interval
-immediately.
+immediately, and closing it again resumes the interval its quiet passes
+stored. The inbox service holds the invalidations a degraded projection
+raises on no evidence to the same schedule.
+
+**Doubling waits.** `chat/backoff.ts` holds every wait in the chat
+services that doubles from a base to a cap:
+
+| Wait | First | Cap |
+|---|---|---|
+| Retry of a send-service check or notification history read | 2 s | 30 s |
+| Retry of an inbox synchronization or account poll | 250 ms, plus up to 25% | 30 s |
+| Fallback read of a channel that found nothing | 5 s | 60 s |
+
+A failed check's first retry waits the same 2 s a successful check waits
+before it repeats, so a failing request is never asked more often than a
+working one.
 
 Timers are armed for the earliest computed deadline, or not at all if
 nothing is due; other wake-ups come from inbox publications or admission

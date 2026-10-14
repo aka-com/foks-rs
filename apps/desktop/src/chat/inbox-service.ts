@@ -5,6 +5,7 @@ import type { ChatReply, ChatResult, ChatScope } from '../chat-contract';
 import { chatAvailable } from '../model';
 import type { AvailabilityOptions, TeamStore, AgentSnapshot } from '../model';
 import { cancelled as cancelledAccess, chatClient, integrity } from './client';
+import { GeometricInterval, SYNC_RETRY, retryDelay } from './backoff';
 import { systemChatClock } from './clock';
 import { DeadlineTimer } from './deadline-timer';
 import { ChatHistoryCache } from './history-cache';
@@ -95,7 +96,11 @@ interface Team {
   store: TeamStore;
   dirty: boolean;
   due: number;
-  retry: number;
+  /**
+   * Failures since the team's last accepted synchronization, which set its
+   * retry delay.
+   */
+  failures: number;
   busy: boolean;
   /** Authenticated compatibility deadline, in the clock's millisecond unit. */
   accessExpiresAt?: number;
@@ -106,7 +111,7 @@ interface Team {
    * evidence that anything moved, and how long the next such invalidation
    * waits. Only consulted while the projection is degraded.
    */
-  degraded: Map<string, { at: number; interval: number; pending: boolean }>;
+  degraded: Map<string, { fallback: GeometricInterval; pending: boolean }>;
 }
 interface Account {
   key: string;
@@ -115,7 +120,8 @@ interface Account {
   actor?: string;
   host?: string;
   due: number;
-  retry: number;
+  /** Consecutive failed polls, which set the retry delay. */
+  failures: number;
   busy: boolean;
   blocked?: CommandError;
   /** The poll failure the account is backing off from, until a poll succeeds. */
@@ -134,27 +140,6 @@ const identity = teamIdentity;
  */
 const answeredByCatalog = (failure: CommandError | undefined): boolean =>
   failure?.code === 'catalog-required' || failure?.code === 'store-not-found';
-/**
- * How long a degraded projection waits before invalidating a channel again on
- * no evidence, and the ceiling that wait doubles toward.
- *
- * A degraded host cannot report what changed, so an invalidation it raises is
- * a guess, and acting on every guess is what makes a degraded host poll: with
- * twenty channels the fallback alone costs four full history reads a second.
- * The channel the user has open keeps the base interval and never backs off;
- * every other channel doubles its wait up to the ceiling and resets to the
- * base the moment the projection shows it actually moved.
- *
- * **This trades alert latency on a degraded host, and it is a product
- * decision.** On such a host nothing reports which thread moved, so a message
- * in a channel that is not open surfaces at that channel's current wait —
- * `DEGRADED_REFRESH_MAX_MS` in the worst case, against five seconds before.
- * Nothing is lost: the wait bounds when the read happens, not whether it
- * happens, and the first read that finds the message resets the channel to
- * the base interval.
- */
-const DEGRADED_REFRESH_BASE_MS = 5_000;
-const DEGRADED_REFRESH_MAX_MS = 60_000;
 /**
  * How long an idle team waits before resynchronizing, and the short cadence
  * it keeps instead while its account's poll is failing or its projection is
@@ -442,7 +427,7 @@ export class ChatInboxService {
           teams: new Map(),
           head: '0',
           due: 0,
-          retry: 250,
+          failures: 0,
           busy: false,
         };
         this.accounts.set(key, account);
@@ -459,7 +444,7 @@ export class ChatInboxService {
           degraded: new Map(),
           dirty: true,
           due: 0,
-          retry: 250,
+          failures: 0,
           busy: false,
           accessExpiresAt:
             server?.compatibility.status === 'required'
@@ -494,7 +479,7 @@ export class ChatInboxService {
           if (answeredByCatalog(this.snapshot.get(store.id)?.failure)) {
             team.dirty = true;
             team.due = 0;
-            team.retry = 250;
+            team.failures = 0;
           }
         }
       }
@@ -503,7 +488,7 @@ export class ChatInboxService {
       if (!answeredByCatalog(account.failure)) continue;
       account.failure = undefined;
       account.due = 0;
-      account.retry = 250;
+      account.failures = 0;
     }
     for (const listener of this.listeners) listener();
     this.kick();
@@ -658,14 +643,14 @@ export class ChatInboxService {
         team.generation++;
         if (quarantined) team.quarantine = error;
         team.dirty = true;
+        team.failures++;
         team.due =
           quarantined || recovery.scope === 'request'
             ? Infinity
             : this.clock.now() +
               (recovery.kind === 'revalidate'
                 ? 30_000
-                : this.delay(team.retry));
-        team.retry = Math.min(30_000, team.retry * 2);
+                : this.delay(team.failures));
         this.publish(
           team.store.id,
           {
@@ -683,7 +668,9 @@ export class ChatInboxService {
       }
       for (const [client, owner] of this.jobs)
         if (owner === account) client.dispose();
-      account.due = this.clock.now() + this.delay(account.retry);
+      // The account's poll did not fail, so its failure count stays; it waits
+      // the delay its next poll failure would.
+      account.due = this.clock.now() + this.delay(account.failures + 1);
     }
     reportReadinessError(error);
     this.kick();
@@ -729,14 +716,16 @@ export class ChatInboxService {
   }
   /**
    * Whether a degraded projection may invalidate a channel on no evidence
-   * this pass, advancing that channel's backoff when it does.
+   * this pass, advancing that channel's backoff when it does. The wait
+   * follows the shared fallback schedule in `backoff.ts`.
    *
    * `moved` states what the comparison that ignores degradation already saw:
    * a channel it reports is invalidated by that change alone, so admitting it
    * here would buy nothing, and its backoff resets because the projection is
    * demonstrably still reporting this channel's arrivals. The channel the
-   * user has open never backs off; it is rate-limited to the base interval so
-   * that a burst of synchronizations cannot turn its thread into a poll.
+   * user has open is due at the base interval whatever interval is stored,
+   * which still rate-limits it so that a burst of synchronizations cannot
+   * turn its thread into a poll.
    */
   private degradedAdmission(
     team: Team,
@@ -747,30 +736,20 @@ export class ChatInboxService {
     return (channel: string) => {
       let state = team.degraded.get(channel);
       if (!state) {
-        state = {
-          at: -Infinity,
-          interval: DEGRADED_REFRESH_BASE_MS,
-          pending: false,
-        };
+        state = { fallback: GeometricInterval.base(-Infinity), pending: false };
         team.degraded.set(channel, state);
       }
       if (moved(channel)) {
-        state.at = now;
-        state.interval = DEGRADED_REFRESH_BASE_MS;
+        state.fallback = state.fallback.next(true, now);
         state.pending = false;
         return false;
       }
-      const wait = channel === open ? DEGRADED_REFRESH_BASE_MS : state.interval;
-      if (now - state.at < wait) {
+      if (now < state.fallback.due(channel === open)) {
         state.pending = true;
         return false;
       }
       state.pending = false;
-      state.at = now;
-      state.interval =
-        channel === open
-          ? DEGRADED_REFRESH_BASE_MS
-          : Math.min(state.interval * 2, DEGRADED_REFRESH_MAX_MS);
+      state.fallback = state.fallback.next(false, now);
       return true;
     };
   }
@@ -787,11 +766,7 @@ export class ChatInboxService {
     let due = Infinity;
     for (const [channel, state] of team.degraded)
       if (state.pending)
-        due = Math.min(
-          due,
-          state.at +
-            (channel === open ? DEGRADED_REFRESH_BASE_MS : state.interval),
-        );
+        due = Math.min(due, state.fallback.due(channel === open));
     return due;
   }
   /** Release coalesced invalidations without another inbox RPC. */
@@ -817,11 +792,9 @@ export class ChatInboxService {
         'degraded',
       );
   }
-  private delay(retry: number) {
-    return Math.min(
-      30_000,
-      retry + Math.floor((this.clock.random() * retry) / 4),
-    );
+  /** The jittered wait after `failures` consecutive failures. */
+  private delay(failures: number) {
+    return retryDelay(failures, SYNC_RETRY, () => this.clock.random());
   }
   /** Runs a pass as soon as possible. */
   private kick() {
@@ -998,7 +971,7 @@ export class ChatInboxService {
         channelRefreshRevisions: refreshRevisions,
         authorizationRevision: (old?.authorizationRevision ?? 0) + 1,
       });
-      team.retry = 250;
+      team.failures = 0;
       team.due = team.dirty
         ? 0
         : this.clock.now() +
@@ -1030,8 +1003,7 @@ export class ChatInboxService {
         'sync-error',
       );
       team.dirty = true;
-      team.due = this.clock.now() + this.delay(team.retry);
-      team.retry = Math.min(30_000, team.retry * 2);
+      team.due = this.clock.now() + this.delay(++team.failures);
     } finally {
       client.dispose();
       this.jobs.delete(client);
@@ -1111,7 +1083,7 @@ export class ChatInboxService {
           t.due = 0;
         }
       }
-      account.retry = 250;
+      account.failures = 0;
       // A poll that succeeds after failing is the recovery the short cadence
       // was being kept for: what changed while no poll was running was never
       // reported, so every team of the account resynchronizes now and only
@@ -1148,8 +1120,7 @@ export class ChatInboxService {
           if (!t.quarantine && t.due !== Infinity)
             t.due = Math.min(t.due, this.clock.now() + RESYNC_SHORT_MS);
       account.failure = error;
-      account.due = this.clock.now() + this.delay(account.retry);
-      account.retry = Math.min(30_000, account.retry * 2);
+      account.due = this.clock.now() + this.delay(++account.failures);
     } finally {
       client.dispose();
       this.jobs.delete(client);

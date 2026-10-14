@@ -4,6 +4,12 @@ import type { ChatMessage } from '../chat-contract';
 import { CHAT_NOTIFICATION_TEXT_CHARS, CHAT_PAGE_ROWS } from '../chat-limits';
 import { chatClient, channelIntegrity, integrity } from './client';
 import { sameScope, channelWorkKey } from './scope';
+import {
+  FALLBACK_BASE_MS,
+  GeometricInterval,
+  REQUEST_RETRY,
+  retryDelay,
+} from './backoff';
 import { systemChatClock, type ChatClock } from './clock';
 import { DeadlineTimer } from './deadline-timer';
 import type { ChatInboxService } from './inbox-service';
@@ -19,29 +25,6 @@ import {
 import { notificationAdmission } from './notification-admission';
 
 export const NOTIFICATION_LIMITS = { queued: 64, baselines: 4096 } as const;
-/**
- * The base wait between fallback passes, and the ceiling that wait doubles
- * toward for a channel whose passes keep finding nothing.
- *
- * The fallback exists for a projection that cannot say which thread moved: a
- * degraded host, or a channel whose baseline is not established yet. It is
- * the whole cost of a degraded host — twenty channels at the base interval is
- * four full history reads a second, sustained — so a channel that keeps
- * finding nothing doubles its wait, and any pass that finds a newer sequence
- * puts it straight back to the base.
- *
- * **The channel whose thread is open never backs off.** It keeps the base
- * interval however long it has been quiet, because it is the one channel
- * whose staleness the user is looking at.
- *
- * **What this trades is alert latency on a degraded host, deliberately.** A
- * message in a quiet channel that is not open is alerted up to
- * `FALLBACK_MAX_MS` after it arrives rather than up to `FALLBACK_MS`. No
- * message is skipped: the wait decides when the read happens, not whether,
- * and the read that finds it resets the channel to the base interval.
- */
-const FALLBACK_MS = 5000;
-const FALLBACK_MAX_MS = 60_000;
 /**
  * How long to wait before retrying a channel that is due but could not be
  * started, because a profile admission was refused or this pass's row
@@ -67,10 +50,11 @@ type Progress = {
   dirtyDuringFlight: boolean;
   overflow: boolean;
   due: number;
-  /** When the last pass that could have observed an arrival finished. */
-  fallbackAt: number;
-  /** This channel's current wait, doubled per pass that found nothing. */
-  fallbackInterval: number;
+  /**
+   * When the last pass that could have observed an arrival finished, and the
+   * wait before the next, doubled per pass that found nothing.
+   */
+  fallback: GeometricInterval;
   failures: number;
   preference?: string;
   locallyDisabled?: boolean;
@@ -201,9 +185,7 @@ export class NotificationConsumer {
    * had reached.
    */
   private fallbackDue(p: Progress): number {
-    return (
-      p.fallbackAt + (this.presented(p) ? FALLBACK_MS : p.fallbackInterval)
-    );
+    return p.fallback.due(this.presented(p));
   }
   private scan() {
     if (this.stopped) return;
@@ -306,7 +288,7 @@ export class NotificationConsumer {
             if (this.progress.size >= this.limits.baselines) {
               // Best-effort rotation must not become an endless baseline RPC loop.
               if (now >= this.evictionWindow) {
-                this.evictionWindow = now + FALLBACK_MS;
+                this.evictionWindow = now + FALLBACK_BASE_MS;
                 this.evictions = 0;
               }
               if (this.evictions >= this.limits.queued) {
@@ -336,8 +318,7 @@ export class NotificationConsumer {
               dirtyDuringFlight: false,
               overflow: false,
               due: 0,
-              fallbackAt: now,
-              fallbackInterval: FALLBACK_MS,
+              fallback: GeometricInterval.base(now),
               failures: 0,
             };
             this.progress.set(key, p);
@@ -490,10 +471,7 @@ export class NotificationConsumer {
       p.processed = revision;
       p.failures = 0;
       p.due = 0;
-      p.fallbackAt = this.clock.now();
-      p.fallbackInterval = observed
-        ? FALLBACK_MS
-        : Math.min(p.fallbackInterval * 2, FALLBACK_MAX_MS);
+      p.fallback = p.fallback.next(observed, this.clock.now());
       p.dirty = p.dirtyDuringFlight || p.view.revision !== revision;
     };
     try {
@@ -537,7 +515,7 @@ export class NotificationConsumer {
         // Rebaselining after a page the server could not serve in full is a
         // recovery, not a quiet channel: the geometric wait is for a channel
         // that keeps finding nothing, and this one found something wrong.
-        p.fallbackInterval = FALLBACK_MS;
+        p.fallback = GeometricInterval.base(p.fallback.at);
         this.metric({
           kind: 'pass',
           milliseconds: this.clock.now() - started,
@@ -661,8 +639,7 @@ export class NotificationConsumer {
         this.discard(p);
       } else {
         p.failures = Math.min(p.failures + 1, 6);
-        p.due =
-          this.clock.now() + Math.min(1000 * 2 ** (p.failures - 1), 30000);
+        p.due = this.clock.now() + retryDelay(p.failures, REQUEST_RETRY);
       }
       this.metric({
         kind: 'failure',

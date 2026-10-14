@@ -389,7 +389,8 @@ test('overflow rotates beyond 64 entries and retry backoff is local to the faile
       await f.clock.flush();
     assert.equal(new Set(f.calls).size, 130);
     assert.equal(f.calls.filter((x) => x === '0').length, 1);
-    await f.clock.advance(999);
+    // The first retry waits the shared 2 s request delay.
+    await f.clock.advance(1_999);
     assert.equal(f.calls.filter((x) => x === '0').length, 1);
     await f.clock.advance(1);
     assert.equal(f.calls.filter((x) => x === '0').length, 2);

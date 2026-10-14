@@ -29,6 +29,7 @@ import type { TrackedOperation } from './operations';
 import { chatIntentPersistence } from './intent';
 import type { ChatIntentPersistence } from './intent';
 import { sameScope } from './scope';
+import { REQUEST_RETRY, retryDelay } from './backoff';
 import { systemChatClock } from './clock';
 import type { ChatClock } from './clock';
 import { DeadlineTimer } from './deadline-timer';
@@ -1160,7 +1161,7 @@ export class ChatSendService {
       failures,
       due:
         this.clock.now() +
-        (failed ? Math.min(1000 * 2 ** failures, 30000) : 2000),
+        (failed ? retryDelay(failures, REQUEST_RETRY) : 2000),
     });
   }
   private async recover(team: Team, priority: ChatWorkPriority) {
