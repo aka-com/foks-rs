@@ -14,8 +14,8 @@ export interface RetryPolicy {
 
 /**
  * A send-service check or a notification history read: 2 s, 4 s, 8 s, 16 s,
- * then 30 s. The first delay matches the 2 s a successful check waits before
- * it repeats, so a failing request is never asked more often than a working
+ * then 30 s. A successful send-service check also waits `base` before it
+ * repeats, so a failing request is never asked more often than a working
  * one.
  */
 export const REQUEST_RETRY: RetryPolicy = { base: 2_000, cap: 30_000 };

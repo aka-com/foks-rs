@@ -4,12 +4,7 @@ import type { ChatMessage } from '../chat-contract';
 import { CHAT_NOTIFICATION_TEXT_CHARS, CHAT_PAGE_ROWS } from '../chat-limits';
 import { chatClient, channelIntegrity, integrity } from './client';
 import { sameScope, channelWorkKey } from './scope';
-import {
-  FALLBACK_BASE_MS,
-  GeometricInterval,
-  REQUEST_RETRY,
-  retryDelay,
-} from './backoff';
+import { GeometricInterval, REQUEST_RETRY, retryDelay } from './backoff';
 import { systemChatClock, type ChatClock } from './clock';
 import { DeadlineTimer } from './deadline-timer';
 import type { ChatInboxService } from './inbox-service';
@@ -32,6 +27,12 @@ export const NOTIFICATION_LIMITS = { queued: 64, baselines: 4096 } as const;
  * computed, so this is the only fixed interval left.
  */
 const PENDING_REARM_MS = 1000;
+/**
+ * The window over which idle progress records may be evicted, at most
+ * `NOTIFICATION_LIMITS.queued` per window. Independent of the fallback read
+ * interval.
+ */
+const EVICTION_WINDOW_MS = 5_000;
 const CHANNEL_ROWS = 100,
   CHANNEL_BYTES = 1024 * 1024,
   PASS_ROWS = 400,
@@ -288,7 +289,7 @@ export class NotificationConsumer {
             if (this.progress.size >= this.limits.baselines) {
               // Best-effort rotation must not become an endless baseline RPC loop.
               if (now >= this.evictionWindow) {
-                this.evictionWindow = now + FALLBACK_BASE_MS;
+                this.evictionWindow = now + EVICTION_WINDOW_MS;
                 this.evictions = 0;
               }
               if (this.evictions >= this.limits.queued) {

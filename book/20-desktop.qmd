@@ -282,8 +282,8 @@ miss re-arms after a short yield.
 
 **Geometric backoff, with one exception.** A channel whose pass found
 nothing new doubles its interval from 5 s toward a ceiling of 60 s; a
-pass that observed a newer sequence resets it to 5 s. The module
-documentation is explicit about what this trades: on a degraded host, a
+pass that observed a newer sequence resets it to 5 s. The documentation
+in `chat/backoff.ts` is explicit about what this trades: on a degraded host, a
 message in a quiet, unopened channel may be noticed up to 60 s after it
 arrives rather than up to 5 s. No message is skipped; the backoff decides
 when the read happens, not whether. **The channel whose thread is open
@@ -418,7 +418,7 @@ mounting every card. It no longer imposes the former 200-card cap.
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.
 - `apps/desktop/src/chat`: `notification-consumer.ts`, `inbox-service.ts`,
-  `deadline-timer.ts`, `use-chat-history.ts`, `history-cache.ts`;
+  `deadline-timer.ts`, `backoff.ts`, `use-chat-history.ts`, `history-cache.ts`;
   `apps/desktop/src/chat-contract.ts`.
 - `foks-desktop`: `lib.rs` (size constants, streaming), `tests/backend_transcript.rs`.
 

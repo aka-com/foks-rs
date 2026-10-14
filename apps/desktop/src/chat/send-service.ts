@@ -1161,7 +1161,7 @@ export class ChatSendService {
       failures,
       due:
         this.clock.now() +
-        (failed ? retryDelay(failures, REQUEST_RETRY) : 2000),
+        (failed ? retryDelay(failures, REQUEST_RETRY) : REQUEST_RETRY.base),
     });
   }
   private async recover(team: Team, priority: ChatWorkPriority) {
