@@ -8,7 +8,7 @@
     },
     {
       "name": "model",
-      "description": "The pure model depends on no data, platform, mock or view module.",
+      "description": "The pure model depends on no data, navigation, platform, mock or view module.",
       "paths": ["src/model"],
       "forbid": [
         "src/app",
@@ -18,6 +18,7 @@
         "src/data",
         "src/diagnostics",
         "src/mock",
+        "src/navigation",
         "src/platform",
         "src/resources",
         "src/scheduling",
@@ -26,10 +27,23 @@
       ]
     },
     {
+      "name": "bridge",
+      "description": "The bridge depends on no view, shell, application or mock module, and reads only the chat host contract, src/chat/local-contract.ts, from src/chat/.",
+      "paths": ["src/bridge"],
+      "forbid": [
+        "src/app",
+        "src/chat",
+        "src/components",
+        "src/mock",
+        "src/screens",
+        "src/shell"
+      ],
+      "except": ["src/chat/local-contract.ts"]
+    },
+    {
       "name": "data and platform",
-      "description": "Data, bridge, scheduling, diagnostics and navigation modules depend on no view, shell, application or mock module. The bridge reads the chat host contract, src/chat/local-contract.ts.",
+      "description": "Data, scheduling, diagnostics, navigation, platform and resource modules depend on no view, chat, shell, application or mock module.",
       "paths": [
-        "src/bridge",
         "src/data",
         "src/diagnostics",
         "src/navigation",
@@ -44,8 +58,7 @@
         "src/mock",
         "src/screens",
         "src/shell"
-      ],
-      "except": ["src/chat/local-contract.ts"]
+      ]
     },
     {
       "name": "mock",

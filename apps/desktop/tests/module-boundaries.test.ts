@@ -64,10 +64,9 @@ async function imports(path: string): Promise<string[]> {
 
 /**
  * Every module a file names, including type-only imports and re-exports,
- * `import('...')` types and, unless `dynamic` is false, dynamic `import()`
- * calls.
+ * `import('...')` types and dynamic `import()` calls.
  */
-async function references(path: string, dynamic = true): Promise<string[]> {
+async function references(path: string): Promise<string[]> {
   const source = ts.createSourceFile(
     path,
     await readFile(path, 'utf8'),
@@ -83,7 +82,6 @@ async function references(path: string, dynamic = true): Promise<string[]> {
     )
       found.push(node.moduleSpecifier.text);
     else if (
-      dynamic &&
       ts.isCallExpression(node) &&
       node.expression.kind === ts.SyntaxKind.ImportKeyword &&
       node.arguments[0] &&
@@ -185,11 +183,25 @@ for (const domain of folders)
     for (const file of files) visit(file, []);
   });
 
+/**
+ * Imports that layers.json forbids and that exist by design: the bridge
+ * selection loads the mock bridge by dynamic import, which
+ * react-boundary.test.ts requires to stay dynamic.
+ */
+const LAYER_EXCEPTION_EDGES = new Set(
+  ['bridge/selection.ts -> mock/mock-bridge.ts'].map((edge) =>
+    edge
+      .split(' -> ')
+      .map((path) => join(root, path))
+      .join(' -> '),
+  ),
+);
+
 test('no layer names a module in a folder layers.json forbids it', async () => {
-  // eslint.config.mjs matches the same table against import specifiers. This
-  // resolves each specifier to a file, so any spelling of a path into a
-  // forbidden folder is caught, and it covers `import('...')` types. Dynamic
-  // imports are not checked: bridge/selection.ts reaches the mock by one.
+  // eslint.config.mjs matches the same table against static import
+  // specifiers. This resolves each specifier to a file, so any spelling of a
+  // path into a forbidden folder is caught, and it covers `import('...')`
+  // types and dynamic `import()` calls.
   const app = fileURLToPath(new URL('../', import.meta.url));
   const files = [
     ...(await sources(root)),
@@ -203,11 +215,12 @@ test('no layer names a module in a folder layers.json forbids it', async () => {
     const except = new Set((layer.except ?? []).map((path) => join(app, path)));
     for (const file of files)
       if (layer.paths.some((path) => under(file, path)))
-        for (const specifier of await references(file, false)) {
+        for (const specifier of await references(file)) {
           const target = resolveSpecifier(file, specifier, known);
           if (
             target &&
             !except.has(target) &&
+            !LAYER_EXCEPTION_EDGES.has(`${file} -> ${target}`) &&
             layer.forbid.some((path) => under(target, path))
           )
             problems.push(
