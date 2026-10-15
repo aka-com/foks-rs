@@ -1109,7 +1109,6 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'test-backup' && selected ? (
         <RecoveryPhraseTestSheet
-          bridge={bridge}
           store={selected}
           username={usernameOf(snapshot, selected) ?? selected.account}
           backups={backups}

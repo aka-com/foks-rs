@@ -56,7 +56,7 @@ async function harness() {
   const { FIXTURE } = await import('../src/fixture');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { ShellSnapshotProvider } = await import('../src/shell-services');
+  const TestShell = await loadTestShell();
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const group = FIXTURE.stores.find((store) => store.id === 'team:household');
@@ -65,6 +65,7 @@ async function harness() {
   const mount = (
     node: ReactNode,
     answer: boolean | null = null,
+    bridge?: Bridge,
   ): {
     store: LocationStore;
     asked: GuardVerdict[];
@@ -86,8 +87,9 @@ async function harness() {
           controller: new ToastController(),
           children: createElement(guards.NavigationGuardProvider, {
             store,
-            children: createElement(ShellSnapshotProvider, {
+            children: createElement(TestShell, {
               snapshot: FIXTURE,
+              ...(bridge ? { bridge } : {}),
               children: node,
             }),
           }),
@@ -202,21 +204,17 @@ async function groupSheet(
   bridge: Bridge = h.bridge(),
 ) {
   const { GroupSheet } = await import('../src/screens/groups-screen');
-  const TestShell = await loadTestShell();
   return h.mount(
-    createElement(TestShell, {
-      snapshot: h.fixture,
-      bridge,
-      children: createElement(GroupSheet, {
-        store: h.group,
-        sheet,
-        target: null,
-        onClose,
-        onApplied: async () => {},
-        onMutationError: async () => {},
-      }),
+    createElement(GroupSheet, {
+      store: h.group,
+      sheet,
+      target: null,
+      onClose,
+      onApplied: async () => {},
+      onMutationError: async () => {},
     }),
     true,
+    bridge,
   );
 }
 

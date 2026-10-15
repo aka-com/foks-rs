@@ -277,7 +277,6 @@ export function VaultShell({
     agentLifecycle,
     concealSignal,
     setConcealSignal,
-    commandError,
     recoverAgentReadiness,
     handleAgentReadinessFailure,
     reconciliation,
@@ -307,7 +306,7 @@ export function VaultShell({
     commandErrorRef: catalog.commandErrorRef,
   });
   const services = useShellServicesRuntime({ bridge, accessNow, catalog });
-  const { mutationError } = services;
+  const { commandError, mutationError } = services;
   const [resumeDraft, setResumeDraft] = useState<ResumeDraft | null>(null);
   const [revealRequest, setRevealRequest] = useState<string | null>(() =>
     scene.reveal && initialSelection

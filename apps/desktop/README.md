@@ -1932,7 +1932,9 @@ bridge explicitly. A screen or sheet that reads the shell services renders
 under the `TestShell` that `loadTestShell()` in `tests/lib/test-shell.ts`
 returns: it provides the given snapshot and services, and fills the rest with
 the mock bridge, handlers that do nothing and reloads that resolve with the
-snapshot. With `timers: true` the harness unreferences the global
+snapshot. `workflowScope()` in `tests/lib/workflow-scope.ts` mounts the same
+`TestShell` over a snapshot whose servers are all verified and available.
+With `timers: true` the harness unreferences the global
 timers and keeps the event loop open for at most two minutes from the start of
 each test; a test still waiting on an unsettled promise after that is
 cancelled, with the rest of its file.

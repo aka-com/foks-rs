@@ -13,7 +13,8 @@ import {
  * `commandError` calls `commandErrorRef.current`, which the shell runtime
  * assigns on every render, so the reported handler is always the current one
  * while the function itself keeps one identity. `mutationError` is built on
- * it and keeps its identity for the same reason.
+ * it and keeps its identity for the same reason. `VaultShell` passes the same
+ * two handlers to its own panels and runtimes.
  */
 export function useShellServicesRuntime({
   bridge,

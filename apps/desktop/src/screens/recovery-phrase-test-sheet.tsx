@@ -16,7 +16,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   ReactNode,
 } from 'react';
-import type { BackupEnrollment, Bridge, RecoveryPhraseCheck } from '../bridge';
+import type { BackupEnrollment, RecoveryPhraseCheck } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import { Button, Chip, Icon, SheetDialog } from '../components';
 import type { AccountStore } from '../model';
@@ -34,6 +34,7 @@ import {
   tokenProblem,
 } from '../recovery-phrase';
 import { recordRecoveryPhraseTest } from '../recovery-phrase-tests';
+import { useShellServices } from '../shell-services';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 
 const EMPTY: readonly string[] = Array.from(
@@ -56,14 +57,12 @@ function keyName(check: RecoveryPhraseCheck): string {
 }
 
 export function RecoveryPhraseTestSheet({
-  bridge,
   store,
   username,
   backups,
   onClose,
   onError,
 }: {
-  bridge: Bridge;
   store: AccountStore;
   /** The account's username, which the intro names. */
   username: string;
@@ -72,6 +71,7 @@ export function RecoveryPhraseTestSheet({
   onClose: () => void;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const { bridge } = useShellServices();
   const id = useId();
   const [tokens, setTokens] = useState<readonly string[]>(EMPTY);
   const [left, setLeft] = useState<ReadonlySet<number>>(new Set());
