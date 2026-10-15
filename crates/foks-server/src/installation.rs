@@ -905,6 +905,23 @@ mod tests {
                 foks_server_db::RealtimeLimits::FANOUT_MEMBERS + 1),
             "maximum_team_members exceeds the realtime fanout limit"
         );
+        let with_admin = |change: &dyn Fn(&mut InstallationConfig)| {
+            message(&|c| {
+                c.web_admin = Some(crate::web_admin::WebAdminConfig {
+                    origin: "https://admin.example.test".to_owned(),
+                    listen: "127.0.0.1:9443".parse().unwrap(),
+                });
+                change(c);
+            })
+        };
+        assert_eq!(
+            with_admin(&|c| c.limits.maximum_read_connections = 2),
+            "admin requires at least three read connections and two writer slots"
+        );
+        assert_eq!(
+            with_admin(&|c| c.limits.maximum_pending_writes = 1),
+            "admin requires at least three read connections and two writer slots"
+        );
         let mut largest = config.clone();
         largest.storage.maximum_team_members = foks_server_db::RealtimeLimits::FANOUT_MEMBERS;
         largest.validate().unwrap();

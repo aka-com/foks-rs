@@ -165,15 +165,22 @@ the same default.
   `maximum_kv_namespace_bytes` (16 GiB) and `maximum_kv_namespace_objects`
   (1,000,000). Other database limits keep their compiled defaults. Every
   command that reads `server.toml` opens the database with these limits;
-  `serve` has no flags for them and uses the defaults.
+  `serve` has no flags for them and uses the defaults. `backup` and `restore`
+  take their paths from flags and use the defaults, including the 64 GiB
+  database ceiling, unless `--config` names a `server.toml`; pass it when the
+  table raises `maximum_database_bytes`.
 
 Each value must be non-zero. `maximum_team_members` bounds the rows of one
 team roster and must not exceed 1,024, the number of roster rows a realtime
 mutation scans when it records message recipients; a larger roster could not
 create channels or send messages. A configured `[web_admin]` listener requires
 at least 3 read connections and 2 writer slots. `config-check` reports the
-first condition that fails, and `config-check --print-effective` also prints
-the configuration that `serve-config` would run, defaults included, as TOML.
+first condition that fails. `config-check --print-effective` writes the
+configuration that `serve-config` would run, defaults included, as TOML to
+standard output and the check report to standard error, so the output can be
+redirected to a loadable `server.toml`. The zone TTL is not a setting: the
+first start signs 60 seconds into the stored probe response, and later starts
+refuse a different value.
 
 The lower-level `serve` command remains available when every artifact and
 listener should be supplied individually:
@@ -240,8 +247,9 @@ sets `LimitNOFILE=65536`.
 
 Connection and request token buckets are enforced per source IP with bounded
 tracking memory. The `[rate_limits]` table or the `serve` flags set their
-refill rates, bursts, and maximum tracked IP count. Saturated connection admission is dropped; a framed request that
-exceeds its bucket receives FOKS status 1012 and the connection closes.
+refill rates, bursts, and maximum tracked IP count. Saturated connection
+admission is dropped; a framed request that exceeds its bucket receives FOKS
+status 1012 and the connection closes.
 
 Automatic backups are opt-in:
 
@@ -494,7 +502,9 @@ foks-server restore \
 Backup authenticates every encrypted key generation with the root key and
 uses a read-only source connection. Restore accepts only a complete manifest,
 integrity-checked database, and exact declared key set, and requires empty
-destination paths.
+destination paths. Both commands open the database with the compiled limits
+unless `--config /var/lib/foks/server.toml` supplies the `[storage]` and
+`[waitlist]` tables; the paths still come from the flags.
 
 Restore and retention validation also accept the same prior schemas as server
 startup (43 through 48, upgraded to 49). They copy the database and any WAL into
