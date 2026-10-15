@@ -1,11 +1,10 @@
-import { Channel } from '@tauri-apps/api/core';
 import type { Bridge } from './contract';
 import {
   isTerminalCommandError,
   normalizeCommandError,
   type CommandError,
 } from './errors';
-import { checked, checkedMutation } from './transport';
+import type { Transport } from './transport';
 import { decodeCommandAck } from './core';
 import { array, nullableString } from './validation';
 import {
@@ -22,7 +21,9 @@ import {
   decodeTrashMutation,
 } from './vault-catalog';
 
-export const vaultCommands: Pick<
+export const vaultCommands = (
+  transport: Transport,
+): Pick<
   Bridge,
   | 'listCatalog'
   | 'listProfileCatalog'
@@ -51,10 +52,11 @@ export const vaultCommands: Pick<
   | 'commitPasswordImport'
   | 'discardPasswordImport'
   | 'exportLogins'
-> = {
+> => ({
   listCatalog: async (onPartial, fresh = false) => {
-    if (!onPartial) return checked('list_catalog', { fresh }, decodeCatalog);
-    const channel = new Channel<unknown>();
+    if (!onPartial)
+      return transport.checked('list_catalog', { fresh }, decodeCatalog);
+    const channel = transport.channel();
     let failure: CommandError | undefined;
     channel.onmessage = (value) => {
       if (failure) return;
@@ -66,7 +68,7 @@ export const vaultCommands: Pick<
       }
     };
     try {
-      const catalog = await checked(
+      const catalog = await transport.checked(
         'list_catalog_progressive',
         { onPartial: channel, fresh },
         decodeCatalog,
@@ -78,26 +80,34 @@ export const vaultCommands: Pick<
     }
   },
   listProfileCatalog: (profile) =>
-    checked('list_profile_catalog', { profile }, decodeCatalog),
-  listStores: () => checked('list_stores', undefined, decodeCatalog),
+    transport.checked('list_profile_catalog', { profile }, decodeCatalog),
+  listStores: () => transport.checked('list_stores', undefined, decodeCatalog),
   readItem: ({ storeId, path, version }) =>
-    checked('read_item', { storeId, path, version }, decodeReadItem),
+    transport.checked('read_item', { storeId, path, version }, decodeReadItem),
   storeUsage: (storeId) =>
-    checked('store_usage', { storeId }, decodeStoreUsage),
+    transport.checked('store_usage', { storeId }, decodeStoreUsage),
   copyItemValue: ({ storeId, path, version }) =>
-    checked('copy_item_value', { storeId, path, version }, decodeClipboardCopy),
+    transport.checked(
+      'copy_item_value',
+      { storeId, path, version },
+      decodeClipboardCopy,
+    ),
   copyItemField: ({ storeId, path, version, field }) =>
-    checked(
+    transport.checked(
       'copy_item_field',
       { storeId, path, version, field },
       decodeClipboardCopy,
     ),
   openItemUrl: ({ storeId, path, version }) =>
-    checked('open_item_url', { storeId, path, version }, decodeCopy),
+    transport.checked('open_item_url', { storeId, path, version }, decodeCopy),
   downloadFile: ({ storeId, path, version }) =>
-    checked('download_file', { storeId, path, version }, decodeDownload),
+    transport.checked(
+      'download_file',
+      { storeId, path, version },
+      decodeDownload,
+    ),
   createTextItem: ({ storeId, path, value, readRole, writeRole }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'create_text_item',
       {
         storeId,
@@ -109,7 +119,7 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   createFolder: ({ storeId, path, readRole, writeRole }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'create_folder',
       {
         storeId,
@@ -120,13 +130,13 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   editTextItem: ({ storeId, path, version, direntId, value }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'edit_text_item',
       { storeId, path, version, direntId, value },
       decodeMutation,
     ),
   moveItem: ({ storeId, path, version, destination, direntId }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'move_item',
       { storeId, path, version, destination, direntId },
       decodeMutation,
@@ -141,7 +151,7 @@ export const vaultCommands: Pick<
     readRole,
     writeRole,
   }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'copy_item_to_store',
       {
         storeId,
@@ -156,19 +166,19 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   trashItem: ({ storeId, path, version, direntId }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'trash_item',
       { storeId, path, version, direntId },
       decodeTrashMutation,
     ),
   restoreTrashItem: ({ storeId, path, version, direntId, destination }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'restore_trash_item',
       { storeId, path, version, direntId, destination },
       decodeTrashMutation,
     ),
   removeItem: ({ storeId, path, version, direntId, outsideTrash }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'remove_item',
       {
         storeId,
@@ -180,7 +190,7 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   emptyTrash: ({ storeId, entries }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'empty_trash',
       {
         storeId,
@@ -193,7 +203,7 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   importDroppedFile: ({ storeId, path, sourcePath, readRole, writeRole }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'import_dropped_file',
       {
         storeId,
@@ -205,32 +215,37 @@ export const vaultCommands: Pick<
       decodeMutation,
     ),
   pickImportFile: () =>
-    checked('pick_import_file', undefined, (value) =>
+    transport.checked('pick_import_file', undefined, (value) =>
       nullableString(value, 'pick_import_file response'),
     ),
   releaseImportFile: (sourcePath) =>
-    checked('release_import_file', { sourcePath }, decodeCommandAck, false),
+    transport.checked(
+      'release_import_file',
+      { sourcePath },
+      decodeCommandAck,
+      false,
+    ),
   replaceDroppedFile: ({ storeId, path, version, direntId, sourcePath }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'replace_dropped_file',
       { storeId, path, version, direntId, sourcePath },
       decodeMutation,
     ),
   pickAndReplaceFile: ({ storeId, path, version, direntId }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'pick_and_replace_file',
       { storeId, path, version, direntId },
       decodeMutation,
     ),
   beginPasswordImport: () =>
-    checked('begin_password_import', undefined, (value) =>
+    transport.checked('begin_password_import', undefined, (value) =>
       value === null ? null : decodePasswordImportPreview(value),
     ),
   commitPasswordImport: async (
     { importId, entries, storeId, folder, readRole, writeRole },
     onProgress,
   ) => {
-    const channel = new Channel<unknown>();
+    const channel = transport.channel();
     channel.onmessage = (value) => {
       // The resolved list repeats every outcome, so a progress message
       // that fails to decode is only a missed update.
@@ -241,7 +256,7 @@ export const vaultCommands: Pick<
       }
     };
     try {
-      return await checkedMutation(
+      return await transport.checkedMutation(
         'commit_password_import',
         {
           importId,
@@ -262,7 +277,12 @@ export const vaultCommands: Pick<
     }
   },
   discardPasswordImport: (importId) =>
-    checked('discard_password_import', { importId }, decodeCommandAck, false),
+    transport.checked(
+      'discard_password_import',
+      { importId },
+      decodeCommandAck,
+      false,
+    ),
   exportLogins: (storeId) =>
-    checked('export_logins', { storeId }, decodeLoginExport),
-};
+    transport.checked('export_logins', { storeId }, decodeLoginExport),
+});

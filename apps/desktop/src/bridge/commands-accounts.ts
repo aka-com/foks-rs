@@ -11,11 +11,13 @@ import {
 } from './accounts-groups';
 import type { Bridge } from './contract';
 import { decodeCommandAck } from './core';
-import { checked, checkedMutation } from './transport';
+import type { Transport } from './transport';
 import { record } from './validation';
 import { decodeCopy, decodeMutation } from './vault-catalog';
 
-export const accountCommands: Pick<
+export const accountCommands = (
+  transport: Transport,
+): Pick<
   Bridge,
   | 'listAccounts'
   | 'listGroupDetails'
@@ -42,98 +44,113 @@ export const accountCommands: Pick<
   | 'adapterClock'
   | 'sso'
   | 'openSsoBrowser'
-> = {
+> => ({
   listAccounts: (generation) =>
-    checked(
+    transport.checked(
       'list_accounts',
       generation === undefined ? undefined : { generation },
       decodeAccounts,
     ),
   listGroupDetails: (storeId) =>
-    checked('list_group_details', { storeId }, decodeGroupDetails),
-  listParties: (storeId) => checked('list_parties', { storeId }, decodeParties),
+    transport.checked('list_group_details', { storeId }, decodeGroupDetails),
+  listParties: (storeId) =>
+    transport.checked('list_parties', { storeId }, decodeParties),
   listFederation: (storeId) =>
-    checked('list_federation', { storeId }, decodeFederation),
+    transport.checked('list_federation', { storeId }, decodeFederation),
   resumeGroupCreation: (storeId) =>
-    checkedMutation('resume_group_creation', { storeId }, decodeMutation),
+    transport.checkedMutation(
+      'resume_group_creation',
+      { storeId },
+      decodeMutation,
+    ),
   abandonGroupCreation: (storeId) =>
-    checkedMutation('abandon_group_creation', { storeId }, decodeMutation),
+    transport.checkedMutation(
+      'abandon_group_creation',
+      { storeId },
+      decodeMutation,
+    ),
   createGroup: ({ accountStoreId, teamAlias, name, kind }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'create_group',
       { accountStoreId, teamAlias, name, kind },
       decodeMutation,
     ),
   addGroupMember: ({ storeId, username, destination }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'add_group_member',
       { storeId, username, destination },
       decodeMutation,
     ),
   resumeGroupMemberAddition: ({ storeId, username }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'resume_group_member_addition',
       { storeId, username },
       decodeMutation,
     ),
   promoteGroupMember: ({ storeId, username, destination }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'promote_group_member',
       { storeId, username, destination },
       decodeMutation,
     ),
   demoteGroupMember: ({ storeId, username, destination }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'demote_group_member',
       { storeId, username, destination },
       decodeMutation,
     ),
   removeGroupMember: ({ storeId, username }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'remove_group_member',
       { storeId, username },
       decodeMutation,
     ),
   resumeGroupMemberEdit: (storeId) =>
-    checkedMutation('resume_group_member_edit', { storeId }, decodeMutation),
+    transport.checkedMutation(
+      'resume_group_member_edit',
+      { storeId },
+      decodeMutation,
+    ),
   addFederatedTeamMember: ({ storeId, remoteStoreId, visibility }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'add_federated_team_member',
       { storeId, remoteStoreId, visibility },
       decodeMutation,
     ),
   removeFederatedGroup: ({ storeId, remoteHostIdHex, remoteTeamIdHex }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'expel_federated_group',
       { storeId, remoteHostIdHex, remoteTeamIdHex },
       decodeMutation,
     ),
   rerunFederatedTeamMemberAdd: (storeId, operationId) =>
-    checkedMutation(
+    transport.checkedMutation(
       'rerun_federated_team_member_add',
       { storeId, operationId },
       decodeMutation,
     ),
   configureWebAdmin: (profile, accountAlias, destination) =>
-    checkedMutation(
+    transport.checkedMutation(
       'configure_web_admin',
       { profile, accountAlias, destination },
       decodeCommandAck,
     ),
   openWebAdmin: (profile, accountAlias, pin) =>
-    checkedMutation(
+    transport.checkedMutation(
       'open_web_admin',
       { profile, accountAlias, pin },
       decodeCommandAck,
     ),
   botAccount: (profile, accountAlias, action) =>
-    (['list', 'status'].includes(action.action) ? checked : checkedMutation)(
+    (['list', 'status'].includes(action.action)
+      ? transport.checked
+      : transport.checkedMutation)(
       'bot_account_request',
       { profile, accountAlias, action },
       decodeBotReply,
     ),
   setLocalAccountAlias: (store, label) =>
-    checkedMutation(
+    transport.checkedMutation(
       'set_local_account_alias',
       { accountStoreId: store, label },
       (value) => {
@@ -150,31 +167,37 @@ export const accountCommands: Pick<
       },
     ),
   renameAccount: (profile, accountAlias, action) =>
-    (action === null || action.action === 'status' ? checked : checkedMutation)(
+    (action === null || action.action === 'status'
+      ? transport.checked
+      : transport.checkedMutation)(
       'rename_account_request',
       { profile, accountAlias, action },
       decodeRenameProgress,
     ),
   adapterClock: (profile, accountAlias, confirm) =>
-    (confirm ? checkedMutation : checked)(
+    (confirm ? transport.checkedMutation : transport.checked)(
       'adapter_clock_request',
       { profile, accountAlias, confirm },
       decodeAdapterClock,
     ),
   sso: (profile, accountAlias, action) =>
     (['account-status', 'status', 'poll'].includes(action.action)
-      ? checked
-      : checkedMutation)(
+      ? transport.checked
+      : transport.checkedMutation)(
       'sso_request',
       { profile, accountAlias, action },
       decodeSsoProgress,
     ),
   openSsoBrowser: (profile, accountAlias, operationId) =>
-    checkedMutation(
+    transport.checkedMutation(
       'open_sso_browser',
       { profile, accountAlias, operationId },
       decodeCopy,
     ),
   discoverGroups: (profile, accountAlias) =>
-    checked('discover_groups', { profile, accountAlias }, decodeGroupDiscovery),
-};
+    transport.checked(
+      'discover_groups',
+      { profile, accountAlias },
+      decodeGroupDiscovery,
+    ),
+});

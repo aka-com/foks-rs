@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
 import type { Channel } from '@tauri-apps/api/core';
 import { vaultCommands } from '../src/bridge/commands-vault';
+import { tauriTransport } from '../src/bridge/transport';
 import {
   enqueueProfileWork,
   loadSnapshot,
@@ -296,7 +297,7 @@ for (const terminal of [false, true]) {
       else delete (globalThis as { window?: Window }).window;
     });
     let publications = 0;
-    const pending = vaultCommands.listCatalog(() => {
+    const pending = vaultCommands(tauriTransport).listCatalog(() => {
       publications++;
       if (terminal)
         throw {

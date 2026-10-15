@@ -278,27 +278,29 @@ test('native command maps cover the contract without duplicate methods', async (
     'commands-servers',
     'commands-vault',
     'commands-yubikey',
-    'tauri',
+    'create',
   ]) {
     const file = await source(
       new URL(`../src/bridge/${module}.ts`, import.meta.url),
     );
-    for (const statement of file.statements) {
-      if (!ts.isVariableStatement(statement)) continue;
-      for (const declaration of statement.declarationList.declarations) {
-        if (
-          !declaration.initializer ||
-          !ts.isObjectLiteralExpression(declaration.initializer)
-        )
-          continue;
-        for (const property of declaration.initializer.properties) {
-          if (ts.isSpreadAssignment(property)) continue;
-          assert.ok(ts.isPropertyAssignment(property));
-          const name = property.name.getText(file);
-          if (name !== 'native') actual.push(name);
-        }
+    // A command map is a variable's object literal, or the object literal an
+    // arrow function assigned to a variable returns.
+    const visit = (node: ts.Node): void => {
+      if (ts.isVariableDeclaration(node) && node.initializer) {
+        let map: ts.Expression = node.initializer;
+        if (ts.isArrowFunction(map) && !ts.isBlock(map.body)) map = map.body;
+        while (ts.isParenthesizedExpression(map)) map = map.expression;
+        if (ts.isObjectLiteralExpression(map))
+          for (const property of map.properties) {
+            if (ts.isSpreadAssignment(property)) continue;
+            assert.ok(ts.isPropertyAssignment(property));
+            const name = property.name.getText(file);
+            if (name !== 'native') actual.push(name);
+          }
       }
-    }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
   }
   assert.equal(new Set(actual).size, actual.length);
   assert.deepEqual(actual.sort(), expected);

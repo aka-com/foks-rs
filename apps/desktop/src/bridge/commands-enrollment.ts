@@ -14,11 +14,13 @@ import {
   decodePendingOperations,
   decodeResetPreview,
 } from './enrollment';
-import { checked, checkedMutation } from './transport';
+import type { Transport } from './transport';
 import { record } from './validation';
 import { decodeMutation } from './vault-catalog';
 
-export const enrollmentCommands: Pick<
+export const enrollmentCommands = (
+  transport: Transport,
+): Pick<
   Bridge,
   | 'runFirstRunAccountOperation'
   | 'firstRunOperationStatus'
@@ -50,18 +52,22 @@ export const enrollmentCommands: Pick<
   | 'accountPassphraseStatus'
   | 'describeReset'
   | 'resetServer'
-> = {
+> => ({
   runFirstRunAccountOperation: (request) =>
-    checkedMutation('run_first_run_account_operation', { request }, (value) => {
-      const result = decodeMutation(value);
-      if (!result.applied)
-        throw new Error(
-          'Account setup did not acknowledge completion. Check its status.',
-        );
-      return result;
-    }),
+    transport.checkedMutation(
+      'run_first_run_account_operation',
+      { request },
+      (value) => {
+        const result = decodeMutation(value);
+        if (!result.applied)
+          throw new Error(
+            'Account setup did not acknowledge completion. Check its status.',
+          );
+        return result;
+      },
+    ),
   firstRunOperationStatus: (attempt) =>
-    checked('first_run_operation_status', { attempt }, (value) => {
+    transport.checked('first_run_operation_status', { attempt }, (value) => {
       const result = record(value, 'first_run_operation_status');
       const binding = record(
         result.attempt,
@@ -81,9 +87,17 @@ export const enrollmentCommands: Pick<
       return result.outcome as 'complete' | 'rejected' | 'unknown' | 'running';
     }),
   discoverGoProfiles: () =>
-    checked('discover_go_profiles', undefined, decodeGoProfileDiscovery),
+    transport.checked(
+      'discover_go_profiles',
+      undefined,
+      decodeGoProfileDiscovery,
+    ),
   listPendingOperations: (profile) =>
-    checked('list_pending_operations', { profile }, decodePendingOperations),
+    transport.checked(
+      'list_pending_operations',
+      { profile },
+      decodePendingOperations,
+    ),
   createFirstRunAccount: ({
     profile,
     alias,
@@ -94,7 +108,7 @@ export const enrollmentCommands: Pick<
     passphrase,
     passphraseConfirmation,
   }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'create_first_run_account',
       {
         profile,
@@ -109,57 +123,61 @@ export const enrollmentCommands: Pick<
       decodeMutation,
     ),
   resumeFirstRunAccount: (profile, alias) =>
-    checkedMutation(
+    transport.checkedMutation(
       'resume_first_run_account',
       { profile, alias },
       decodeMutation,
     ),
   setFirstRunPassphrase: ({ profile, alias, passphrase, confirmation }) =>
-    checkedMutation(
+    transport.checkedMutation(
       'set_first_run_passphrase',
       { profile, alias, passphrase, confirmation },
       decodeMutation,
     ),
   prepareOwnerBackup: (profile, accountAlias, backupAlias) =>
-    checked(
+    transport.checked(
       'prepare_owner_backup',
       { profile, accountAlias, backupAlias },
       decodeRecoveryPhrase,
     ),
   commitOwnerBackup: (profile, accountAlias, backupAlias, phrase) =>
-    checkedMutation(
+    transport.checkedMutation(
       'commit_owner_backup',
       { profile, accountAlias, backupAlias, phrase },
       decodeMutation,
     ),
   recoverOwnerAccount: (profile, targetAlias, phrase, deviceName) =>
-    checkedMutation(
+    transport.checkedMutation(
       'recover_owner_account',
       { profile, targetAlias, phrase, deviceName },
       decodeMutation,
     ),
   resumeOwnerRecovery: (profile, targetAlias, phrase, deviceName) =>
-    checkedMutation(
+    transport.checkedMutation(
       'resume_owner_recovery',
       { profile, targetAlias, phrase, deviceName },
       decodeMutation,
     ),
   listAccountDevices: (accountStoreId) =>
-    checked('list_account_devices', { accountStoreId }, decodeAccountDevices),
+    transport.checked(
+      'list_account_devices',
+      { accountStoreId },
+      decodeAccountDevices,
+    ),
   removeAccountDevice: (accountStoreId, deviceId) =>
-    checkedMutation(
+    transport.checkedMutation(
       'remove_account_device',
       { accountStoreId, deviceId },
       decodeDeviceRemoval,
     ),
   listBackupEnrollments: (accountStoreId) =>
-    checked(
+    transport.checked(
       'list_backup_enrollments',
       { accountStoreId },
       decodeBackupEnrollments,
     ),
   revokeOwnerBackup: (accountStoreId, backup, confirmation) =>
-    checkedMutation(
+    transport.checkedMutation(
       'revoke_owner_backup',
       {
         accountStoreId,
@@ -181,31 +199,31 @@ export const enrollmentCommands: Pick<
       },
     ),
   verifyRecoveryPhrase: (accountStoreId, phrase) =>
-    checked(
+    transport.checked(
       'verify_recovery_phrase',
       { accountStoreId, phrase },
       decodeRecoveryPhraseCheck,
     ),
   startDevicePairing: (accountStoreId) =>
-    checkedMutation(
+    transport.checkedMutation(
       'start_device_pairing',
       { accountStoreId },
       decodePairingOffer,
     ),
   resumeDevicePairingOffer: (accountStoreId) =>
-    checkedMutation(
+    transport.checkedMutation(
       'resume_device_pairing_offer',
       { accountStoreId },
       decodePairingOffer,
     ),
   finishDevicePairing: (accountStoreId) =>
-    checkedMutation(
+    transport.checkedMutation(
       'finish_device_pairing',
       { accountStoreId },
       decodeDeviceProvision,
     ),
   acceptDevicePairing: (profile, targetAlias, deviceName, phrase) =>
-    checkedMutation(
+    transport.checkedMutation(
       'accept_device_pairing',
       { profile, targetAlias, deviceName, phrase },
       decodeDeviceProvision,
@@ -217,31 +235,31 @@ export const enrollmentCommands: Pick<
     deviceName,
     phrase,
   ) =>
-    checkedMutation(
+    transport.checkedMutation(
       'accept_go_profile_pairing',
       { request: { candidateId, profile, targetAlias, deviceName, phrase } },
       decodeDeviceProvision,
     ),
   resumeDevicePairingAcceptance: (profile, targetAlias) =>
-    checkedMutation(
+    transport.checkedMutation(
       'resume_device_pairing_acceptance',
       { profile, targetAlias },
       decodeDeviceProvision,
     ),
   resumeGoProfilePairing: (candidateId, profile, targetAlias) =>
-    checkedMutation(
+    transport.checkedMutation(
       'resume_go_profile_pairing',
       { candidateId, profile, targetAlias },
       decodeDeviceProvision,
     ),
   copyGoProfileDevice: (candidateId, profile, targetAlias) =>
-    checkedMutation(
+    transport.checkedMutation(
       'copy_go_profile_device',
       { candidateId, profile, targetAlias },
       decodeDeviceProvision,
     ),
   setAccountPassphrase: (accountStoreId, passphrase, confirmation) =>
-    checkedMutation(
+    transport.checkedMutation(
       'set_account_passphrase',
       { accountStoreId, passphrase, confirmation },
       decodePassphraseReport,
@@ -252,29 +270,29 @@ export const enrollmentCommands: Pick<
     passphrase,
     confirmation,
   ) =>
-    checkedMutation(
+    transport.checkedMutation(
       'change_account_passphrase',
       { accountStoreId, current, passphrase, confirmation },
       decodePassphraseReport,
     ),
   verifyAccountPassphrase: (accountStoreId, passphrase) =>
-    checked(
+    transport.checked(
       'verify_account_passphrase',
       { accountStoreId, passphrase },
       decodePassphraseReport,
     ),
   accountPassphraseStatus: (accountStoreId) =>
-    checked(
+    transport.checked(
       'account_passphrase_status',
       { accountStoreId },
       decodePassphraseStatus,
     ),
   describeReset: (profile) =>
-    checked('describe_reset', { profile }, decodeResetPreview),
+    transport.checked('describe_reset', { profile }, decodeResetPreview),
   resetServer: (profileName, confirmedProfileName, token) =>
-    checkedMutation(
+    transport.checkedMutation(
       'reset_server',
       { profileName, confirmedProfileName, token },
       decodeMutation,
     ),
-};
+});

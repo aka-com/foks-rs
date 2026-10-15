@@ -8,9 +8,11 @@ import {
   decodeServers,
   decodeServerStatus,
 } from './servers';
-import { checked, checkedMutation } from './transport';
+import type { Transport } from './transport';
 
-export const serverCommands: Pick<
+export const serverCommands = (
+  transport: Transport,
+): Pick<
   Bridge,
   | 'listServers'
   | 'checkAndAddProfile'
@@ -20,47 +22,47 @@ export const serverCommands: Pick<
   | 'reconcileServer'
   | 'setServerLabel'
   | 'removeServerAndCredentials'
-> = {
+> => ({
   listServers: (generation) =>
-    checked(
+    transport.checked(
       'list_servers',
       generation === undefined ? undefined : { generation },
       decodeServers,
     ),
   checkAndAddProfile: (profileName, probe) =>
-    checkedMutation(
+    transport.checkedMutation(
       'check_and_add_profile',
       { profileName, probe },
       decodeCheckedProfile,
     ),
   checkAndAddGoProfile: (candidateId, hostId, profileName, probe) =>
-    checkedMutation(
+    transport.checkedMutation(
       'check_and_add_go_profile',
       { candidateId, hostId, profileName, probe },
       decodeCheckedProfile,
     ),
   describeServerStatus: (profile, fresh) =>
-    checked(
+    transport.checked(
       'describe_server_status',
       { profile, ...(fresh ? { fresh: true } : {}) },
       decodeServerStatus,
     ),
   checkServer: (profile) =>
-    checkedMutation('check_server', { profile }, decodeCheckedServer),
+    transport.checkedMutation('check_server', { profile }, decodeCheckedServer),
   reconcileServer: (profile) =>
-    checked('reconcile_server', { profile }, (value) =>
+    transport.checked('reconcile_server', { profile }, (value) =>
       decodeProfileReconciliation(value, profile),
     ),
   setServerLabel: (profile, label) =>
-    checkedMutation(
+    transport.checkedMutation(
       'set_server_label',
       { profile, label },
       decodeServerLabelResponse,
     ),
   removeServerAndCredentials: (profileName, confirmedProfileName) =>
-    checkedMutation(
+    transport.checkedMutation(
       'remove_server_and_credentials',
       { profileName, confirmedProfileName },
       decodeRemovedServer,
     ),
-};
+});

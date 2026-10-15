@@ -1,5 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { chatActionMutates, decodeChatReply } from '../chat-contract';
 import { decodeLocalSession } from '../chat/local-contract';
 import type { Bridge } from './contract';
@@ -16,10 +14,12 @@ import {
   decodeTimingBatch,
   decodeWindowState,
 } from './core';
-import { checked, checkedMutation } from './transport';
+import type { Transport } from './transport';
 import { decodeCopy } from './vault-catalog';
 
-export const coreCommands: Pick<
+export const coreCommands = (
+  transport: Transport,
+): Pick<
   Bridge,
   | 'cancelChat'
   | 'chat'
@@ -62,84 +62,122 @@ export const coreCommands: Pick<
   | 'onLockMenu'
   | 'onMaintenanceStatus'
   | 'onExitState'
-> = {
-  cancelChat: (viewId) => invoke<void>('cancel_chat_requests', { viewId }),
+> => ({
+  cancelChat: (viewId) => transport.invoke('cancel_chat_requests', { viewId }),
   chat: (storeId, action, viewId) =>
-    (chatActionMutates(action) ? checkedMutation : checked)(
+    (chatActionMutates(action) ? transport.checkedMutation : transport.checked)(
       'chat_request',
       { storeId, action, viewId },
       (value) => decodeChatReply(value, storeId, action),
     ),
-  appLockState: () => checked('app_lock_state', undefined, decodeAppLockState),
-  windowState: () => checked('get_window_state', undefined, decodeWindowState),
+  appLockState: () =>
+    transport.checked('app_lock_state', undefined, decodeAppLockState),
+  windowState: () =>
+    transport.checked('get_window_state', undefined, decodeWindowState),
   setTrafficLightsVisible: (visible) =>
-    checked('set_traffic_lights_visible', { visible }, () => undefined),
+    transport.checked(
+      'set_traffic_lights_visible',
+      { visible },
+      () => undefined,
+    ),
   setUnsentMessages: (count) =>
-    checked('set_unsent_messages', { count }, () => undefined),
+    transport.checked('set_unsent_messages', { count }, () => undefined),
   setQuitConfirmation: (confirmation) =>
-    checked('set_quit_confirmation', { confirmation }, () => undefined),
-  lockApp: () => checked('lock_app', undefined, decodeAppLockState),
-  unlockApp: () => checked('unlock_app', undefined, decodeAppLockState),
-  restartApp: () => invoke<void>('restart_app'),
-  quitApp: () => invoke<void>('quit_app'),
-  exitState: () => checked('exit_state', undefined, decodeExitState),
+    transport.checked(
+      'set_quit_confirmation',
+      { confirmation },
+      () => undefined,
+    ),
+  lockApp: () => transport.checked('lock_app', undefined, decodeAppLockState),
+  unlockApp: () =>
+    transport.checked('unlock_app', undefined, decodeAppLockState),
+  restartApp: () => transport.invoke('restart_app'),
+  quitApp: () => transport.invoke('quit_app'),
+  exitState: () => transport.checked('exit_state', undefined, decodeExitState),
   handleExitAction: (action) =>
-    checked('handle_exit_action', { action }, () => undefined),
-  agentStatus: () => checked('agent_status', undefined, decodeAgentStatus),
+    transport.checked('handle_exit_action', { action }, () => undefined),
+  agentStatus: () =>
+    transport.checked('agent_status', undefined, decodeAgentStatus),
   probeAgentStatus: () =>
-    checked('agent_status', undefined, decodeAgentStatus, false),
-  appInfo: () => checked('app_info', undefined, decodeAppInfo),
+    transport.checked('agent_status', undefined, decodeAgentStatus, false),
+  appInfo: () => transport.checked('app_info', undefined, decodeAppInfo),
   takeAgentConnectionLoss: () =>
-    checked('take_agent_connection_loss', undefined, decodeConnectionLoss),
+    transport.checked(
+      'take_agent_connection_loss',
+      undefined,
+      decodeConnectionLoss,
+    ),
   retryAgentConnection: () =>
-    checked('retry_agent_connection', undefined, decodeAgentStatus),
+    transport.checked('retry_agent_connection', undefined, decodeAgentStatus),
   autoRecoverAgent: () =>
-    checked('auto_recover_agent', undefined, decodeAgentStatus, false),
-  chatLocal: (action) => checked('chat_local', { action }, decodeLocalSession),
+    transport.checked(
+      'auto_recover_agent',
+      undefined,
+      decodeAgentStatus,
+      false,
+    ),
+  chatLocal: (action) =>
+    transport.checked('chat_local', { action }, decodeLocalSession),
   openNotificationSettings: () =>
-    checked('open_notification_settings', undefined, decodeCopy),
-  setUnreadBadge: (count) => checked('set_unread_badge', { count }, decodeCopy),
+    transport.checked('open_notification_settings', undefined, decodeCopy),
+  setUnreadBadge: (count) =>
+    transport.checked('set_unread_badge', { count }, decodeCopy),
   relocateClientState: () =>
-    checked('relocate_client_state', {}, decodeMaintenanceSnapshot),
+    transport.checked('relocate_client_state', {}, decodeMaintenanceSnapshot),
   maintainClientState: (action) =>
-    checked('maintain_client_state', { action }, decodeMaintenanceSnapshot),
+    transport.checked(
+      'maintain_client_state',
+      { action },
+      decodeMaintenanceSnapshot,
+    ),
   clientStateMaintenanceStatus: () =>
-    checked(
+    transport.checked(
       'client_state_maintenance_status',
       undefined,
       decodeMaintenanceSnapshot,
     ),
   agentProcessInfo: () =>
-    checked('agent_process_info', undefined, decodeAgentProcessInfo),
+    transport.checked('agent_process_info', undefined, decodeAgentProcessInfo),
   diagnosticTimings: (since) =>
-    checked('diagnostic_timings', { since }, decodeTimingBatch, false),
+    transport.checked(
+      'diagnostic_timings',
+      { since },
+      decodeTimingBatch,
+      false,
+    ),
   restartAgent: (takeover) =>
-    checked('restart_agent', { takeover }, decodeMaintenanceSnapshot),
-  openChatLink: (url) => checked('open_chat_link', { url }, decodeCopy),
-  copyText: (text) => checked('copy_text', { text }, decodeCopy),
+    transport.checked('restart_agent', { takeover }, decodeMaintenanceSnapshot),
+  openChatLink: (url) =>
+    transport.checked('open_chat_link', { url }, decodeCopy),
+  copyText: (text) => transport.checked('copy_text', { text }, decodeCopy),
   initializeClientState: () =>
-    checkedMutation('initialize_client_state', undefined, decodeAgentStatus),
+    transport.checkedMutation(
+      'initialize_client_state',
+      undefined,
+      decodeAgentStatus,
+    ),
   onAgentConnectionLoss: async (listener) =>
-    listen('foks://agent-connection-loss', () => listener()),
+    transport.listen('foks://agent-connection-loss', () => listener()),
   onDropHover: async (listener) =>
-    listen<unknown>('foks://drop-hover', (event) => {
-      listener(decodeDropHover(event.payload));
+    transport.listen('foks://drop-hover', (payload) => {
+      listener(decodeDropHover(payload));
     }),
   onDropPaths: async (listener) =>
-    listen<unknown>('foks://drop-paths', (event) => {
-      listener(decodeDropPaths(event.payload));
+    transport.listen('foks://drop-paths', (payload) => {
+      listener(decodeDropPaths(payload));
     }),
   onWindowState: async (listener) =>
-    listen<unknown>('foks://window-state', (event) => {
-      listener(decodeWindowState(event.payload));
+    transport.listen('foks://window-state', (payload) => {
+      listener(decodeWindowState(payload));
     }),
   onChatNotification: async (listener) => {
-    const activation = await listen('foks://chat-notification', () =>
+    const activation = await transport.listen('foks://chat-notification', () =>
       listener('activate'),
     );
     try {
-      const error = await listen('foks://chat-notification-error', () =>
-        listener('error'),
+      const error = await transport.listen(
+        'foks://chat-notification-error',
+        () => listener('error'),
       );
       return () => {
         activation();
@@ -150,13 +188,14 @@ export const coreCommands: Pick<
       throw cause;
     }
   },
-  onOpenSettings: async (listener) => listen('foks://open-settings', listener),
+  onOpenSettings: async (listener) =>
+    transport.listen('foks://open-settings', listener),
   onNewItem: async (listener) => {
-    const password = await listen('foks://new-password', () =>
+    const password = await transport.listen('foks://new-password', () =>
       listener('Password'),
     );
     try {
-      const document = await listen('foks://new-document', () =>
+      const document = await transport.listen('foks://new-document', () =>
         listener('Document'),
       );
       return () => {
@@ -168,13 +207,13 @@ export const coreCommands: Pick<
       throw cause;
     }
   },
-  onLockMenu: async (listener) => listen('foks://lock', listener),
+  onLockMenu: async (listener) => transport.listen('foks://lock', listener),
   onMaintenanceStatus: async (listener) =>
-    listen<unknown>('foks://maintenance-status', (event) => {
-      listener(decodeMaintenanceSnapshot(event.payload));
+    transport.listen('foks://maintenance-status', (payload) => {
+      listener(decodeMaintenanceSnapshot(payload));
     }),
   onExitState: async (listener) =>
-    listen<unknown>('foks://exit-state', (event) => {
-      listener(decodeExitState(event.payload));
+    transport.listen('foks://exit-state', (payload) => {
+      listener(decodeExitState(payload));
     }),
-};
+});

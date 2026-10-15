@@ -1,23 +1,36 @@
 import type { Bridge } from './contract';
-import { checked, checkedMutation } from './transport';
+import type { Transport } from './transport';
 import {
   decodeYubiAccounts,
   decodeYubiCards,
   decodeYubiResult,
+  type YubiCommand,
 } from './yubikey';
 
-export const yubiCommands: Pick<
-  Bridge,
-  'listYubiCards' | 'listYubiAccounts' | 'runYubi'
-> = {
+/**
+ * The YubiKey commands that only read. `runYubi` sends every other command as
+ * a mutation, whose failure with an unknown outcome is reported as ambiguous.
+ */
+export const YUBI_READ_COMMANDS: readonly YubiCommand['command'][] = [
+  'yubi_pin_status',
+  'verify_yubi_passphrase',
+];
+
+export function yubiCommandMutates(command: YubiCommand['command']): boolean {
+  return !YUBI_READ_COMMANDS.includes(command);
+}
+
+export const yubiCommands = (
+  transport: Transport,
+): Pick<Bridge, 'listYubiCards' | 'listYubiAccounts' | 'runYubi'> => ({
   listYubiCards: (profile) =>
-    checked('list_yubi_cards', { profile }, decodeYubiCards),
+    transport.checked('list_yubi_cards', { profile }, decodeYubiCards),
   listYubiAccounts: (profile) =>
-    checked('list_yubi_accounts', { profile }, decodeYubiAccounts),
+    transport.checked('list_yubi_accounts', { profile }, decodeYubiAccounts),
   runYubi: ({ command, args }) =>
-    (['yubi_pin_status', 'verify_yubi_passphrase'].includes(command)
-      ? checked
-      : checkedMutation)(command, { ...args }, (value) =>
+    (yubiCommandMutates(command)
+      ? transport.checkedMutation
+      : transport.checked)(command, { ...args }, (value) =>
       decodeYubiResult(command, value),
     ),
-};
+});

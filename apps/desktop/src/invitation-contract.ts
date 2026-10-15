@@ -59,6 +59,26 @@ export type InvitationAction =
       source_team_alias?: string;
       source_role?: InvitationRole;
     };
+/**
+ * The invitation actions that only read. The bridge sends every other action
+ * as a mutation, whose failure with an unknown outcome is reported as
+ * ambiguous.
+ */
+export const INVITATION_READ_ACTIONS: readonly InvitationAction['action'][] = [
+  'preview',
+  'preview-remote',
+  'inbox',
+  'pending-approvals',
+  'list',
+  'status',
+  'status-remote',
+  'inspect-remote',
+];
+
+export function invitationActionMutates(action: InvitationAction): boolean {
+  return !INVITATION_READ_ACTIONS.includes(action.action);
+}
+
 export interface InvitationRow {
   operation_id?: string;
   request_id?: string;

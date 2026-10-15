@@ -118,7 +118,7 @@ function isNative(checker: ts.TypeChecker, name: ts.Identifier): boolean {
     return (
       (symbol?.name === 'invoke' &&
         file.includes('/node_modules/@tauri-apps/api/core')) ||
-      (['checked', 'checkedMutation'].includes(symbol?.name ?? '') &&
+      (['invoke', 'checked', 'checkedMutation'].includes(symbol?.name ?? '') &&
         file === transport)
     );
   });
@@ -147,13 +147,19 @@ function nativeCallees(
   return ts.isIdentifier(name) && isNative(checker, name) ? [name] : [];
 }
 
-/** Whether the identifier declares, imports or exports a name. */
+/**
+ * Whether the identifier declares, imports or exports a name, including a
+ * member of the transport interfaces or of the object that implements them.
+ */
 function isBinding(name: ts.Identifier): boolean {
   const parent = name.parent;
   return (
     ts.isImportSpecifier(parent) ||
     ts.isExportSpecifier(parent) ||
-    (ts.isFunctionDeclaration(parent) && parent.name === name)
+    ((ts.isFunctionDeclaration(parent) ||
+      ts.isPropertySignature(parent) ||
+      ts.isPropertyAssignment(parent)) &&
+      parent.name === name)
   );
 }
 
@@ -309,8 +315,12 @@ const compiled = program();
 const sites = callSites(compiled);
 
 test('only the transport and runYubi choose a native command at runtime', () => {
+  // The transport's four: its unchecked invoke, checked, checkedMutation
+  // calling checked, and the Tauri host's invoke.
   assert.deepEqual(sites.dynamic, [
     'bridge/commands-yubikey.ts',
+    'bridge/transport.ts',
+    'bridge/transport.ts',
     'bridge/transport.ts',
     'bridge/transport.ts',
   ]);

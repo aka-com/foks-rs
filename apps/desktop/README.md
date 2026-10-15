@@ -406,6 +406,16 @@ reference outside its `src/bridge/commands-*.ts` wrapper and the mock bridge,
 so a registered command does not stay reachable from the renderer without a
 feature that calls it.
 
+`createBridge` in `src/bridge/create.ts` assembles the `Bridge` from the
+`src/bridge/commands-*.ts` factories over a `Transport`
+(`src/bridge/transport.ts`). The transport decodes each response, records
+whether a failure arose before or after the host responded, and marks a
+mutation's failure with an unknown outcome as ambiguous; `tauriBridge` uses
+the transport over Tauri's IPC. The invitation actions and YubiKey commands
+that only read are listed once, in `INVITATION_READ_ACTIONS`
+(`src/invitation-contract.ts`) and `YUBI_READ_COMMANDS`
+(`src/bridge/commands-yubikey.ts`); every other one is sent as a mutation.
+
 The per-action properties of `chat_request` are one table, `CHAT_ACTIONS` in
 `src/chat-contract.ts`: the result kind each action is answered with, whether
 the agent treats it as a mutation (which selects `checkedMutation`), and the

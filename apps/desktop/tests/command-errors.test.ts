@@ -7,12 +7,19 @@ import {
   onAgentReadinessRequired,
   type CommandError,
 } from '../src/bridge/errors';
-import { checked, checkedMutation } from '../src/bridge/transport';
+import { createBridge } from '../src/bridge/create';
+import {
+  createTransport,
+  tauriTransport,
+  type TransportHost,
+} from '../src/bridge/transport';
 import { tauriBridge } from '../src/bridge/tauri';
 import { loadSnapshot } from '../src/bridge/snapshot';
 import { failureOutcome, synchronizeApplied } from '../src/operation-outcome';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
+
+const { checked, checkedMutation } = tauriTransport;
 
 /** The chat view a test names when it calls the bridge directly. */
 const VIEW = 'cd'.repeat(16);
@@ -135,6 +142,75 @@ test('malformed invocation errors do not imply agent loss and mutation wrappers 
     { ambiguous: true },
   );
   assert.deepEqual(events, []);
+});
+
+test('a bridge over an injected host decodes its responses and classifies reads and mutations', async () => {
+  const calls: string[] = [];
+  let respond: () => unknown = () => {
+    throw 'host rejection';
+  };
+  let hover: ((payload: unknown) => void) | undefined;
+  const host: TransportHost = {
+    invoke: async (command) => {
+      calls.push(command);
+      return respond();
+    },
+    listen: async (event, handler) => {
+      if (event === 'foks://drop-hover') hover = handler;
+      return () => undefined;
+    },
+    channel: () => ({ onmessage: () => undefined }),
+  };
+  const bridge = createBridge(createTransport(host), { native: false });
+  assert.equal(bridge.native, false);
+  const card = { profile: 'personal', alias: 'card' };
+  await assert.rejects(
+    bridge.runYubi({ command: 'yubi_pin_status', args: card }),
+    { code: 'invalid-command-error', origin: 'invoke', ambiguous: false },
+  );
+  await assert.rejects(
+    bridge.runYubi({
+      command: 'change_yubi_pin',
+      args: { ...card, oldPin: '123456', newPin: '654321' },
+    }),
+    { code: 'invalid-command-error', origin: 'invoke', ambiguous: true },
+  );
+  await assert.rejects(
+    bridge.invitation('personal', 'satoshi', { action: 'list' }, null),
+    { ambiguous: false },
+  );
+  await assert.rejects(
+    bridge.invitation(
+      'personal',
+      'satoshi',
+      { action: 'accept', invite: 'invite' },
+      null,
+    ),
+    { ambiguous: true },
+  );
+  respond = () => ({});
+  await assert.rejects(
+    bridge.readItem({ storeId: 'store', path: '/a', version: 1 }),
+    { code: 'invalid-response', origin: 'response', ambiguous: false },
+  );
+  await assert.rejects(bridge.createFolder({ storeId: 'store', path: '/a' }), {
+    code: 'invalid-response',
+    origin: 'response',
+    ambiguous: true,
+  });
+  assert.deepEqual(calls, [
+    'yubi_pin_status',
+    'change_yubi_pin',
+    'invitation_request',
+    'invitation_request',
+    'read_item',
+    'create_folder',
+  ]);
+  const hovering: boolean[] = [];
+  await bridge.onDropHover((event) => hovering.push(event.hovering));
+  hover?.({ hovering: true });
+  assert.throws(() => hover?.({ hovering: 'yes' }));
+  assert.deepEqual(hovering, [true]);
 });
 
 test('response validation is distinct from invocation failure and never publishes invalid data', async (t) => {
