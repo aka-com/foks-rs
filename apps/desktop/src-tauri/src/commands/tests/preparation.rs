@@ -4,8 +4,8 @@ use crate::commands::execution::{execute_kv_mutation, MutationKind};
 use crate::commands::preparation::{
     check_mutation_access, ensure_catalog_for_mutation, prepare_group_facts, GroupMutationFacts,
 };
+use crate::commands::store_key::store_id;
 use crate::commands::tests::support::{account_ref, test_profile_value};
-use crate::commands::vault::store_id;
 use foks_agent_proto::{
     KvEntryMetadata, KvPage, KvRole, Operation, ProfileOverview, ResponseResult, TeamDetailsSummary,
 };
@@ -159,10 +159,10 @@ fn ambiguity_reconciliation_requires_full_item_reads_for_root_and_profile() {
             root.clone()
         };
         profile
-            .mutation_requires_refresh
+            .mutation_requires_refresh()
             .store(true, Ordering::Release);
         state
-            .mutation_requires_refresh
+            .mutation_requires_refresh()
             .store(true, Ordering::Release);
         let stores = Arc::new(PreparationTransport::new(7));
         let catalog = foks_desktop::load_stores(stores.clone()).unwrap();
@@ -179,8 +179,8 @@ fn ambiguity_reconciliation_requires_full_item_reads_for_root_and_profile() {
             .any(|call| matches!(call, Operation::ListKv { .. })));
         let (generation, _) = state.begin_catalog_load_checked().unwrap();
         assert!(state.accept_catalog(generation, catalog));
-        assert!(state.mutation_requires_refresh.load(Ordering::Acquire));
-        assert!(profile.mutation_requires_refresh.load(Ordering::Acquire));
+        assert!(state.mutation_requires_refresh().load(Ordering::Acquire));
+        assert!(profile.mutation_requires_refresh().load(Ordering::Acquire));
         for fail_items in [true, false] {
             let mut transport = PreparationTransport::new(7);
             transport.fail_items = fail_items;
@@ -206,11 +206,11 @@ fn ambiguity_reconciliation_requires_full_item_reads_for_root_and_profile() {
             assert_eq!(catalog.failures.is_empty(), !fail_items);
             assert!(state.accept_catalog(generation, catalog));
             assert_eq!(
-                state.mutation_requires_refresh.load(Ordering::Acquire),
+                state.mutation_requires_refresh().load(Ordering::Acquire),
                 fail_items
             );
             assert_eq!(
-                profile.mutation_requires_refresh.load(Ordering::Acquire),
+                profile.mutation_requires_refresh().load(Ordering::Acquire),
                 fail_items
             );
         }
@@ -383,7 +383,7 @@ fn foreign_permits_and_prior_ambiguous_writes_cannot_enter_preparation() {
     .unwrap_err();
     assert_eq!(error.code, "invalid-request");
     state
-        .mutation_requires_refresh
+        .mutation_requires_refresh()
         .store(true, Ordering::Release);
     assert_eq!(
         prepared_edit(&state, transport.clone(), 7)

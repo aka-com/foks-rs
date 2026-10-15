@@ -7,6 +7,7 @@ use crate::commands::execution::{
     MutationKind,
 };
 use crate::commands::servers::require_transport_profile;
+use crate::commands::store_key::store_id;
 use crate::commands::types::MutationDto;
 use crate::commands::validation::{
     bounded_local_name, bounded_secret, confirmed_passphrase, deserialize_secret, invalid_request,
@@ -15,7 +16,6 @@ use crate::commands::validation::{
     BACKUP_ID_PREFIX, MAXIMUM_FIRST_RUN_ROWS, MAXIMUM_PASSPHRASE_BYTES,
     MAXIMUM_RECOVERY_PHRASE_BYTES, MAXIMUM_SYNC_FACTS,
 };
-use crate::commands::vault::store_id;
 use foks_agent_proto::{Operation, SecretString};
 use foks_desktop::{CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
 use serde::{Deserialize, Serialize};
@@ -621,7 +621,7 @@ pub async fn list_account_devices(
     account_store_id: String,
 ) -> Result<Vec<DeviceDto>, AgentError> {
     require_main_window(&webview)?;
-    let generation = state.catalog_generation.load(Ordering::Acquire);
+    let generation = state.catalog_generation().load(Ordering::Acquire);
     let account = state.selected_account(&account_store_id)?;
     let transport = state
         .agent

@@ -18,7 +18,7 @@ use crate::agent::AgentError;
 use crate::commands::context::AppState;
 use crate::commands::trash::{decode_original_path, in_trash};
 use crate::commands::validation::{invalid_request, require_main_window};
-use crate::commands::vault::{read_file_content, store_id};
+use crate::commands::vault::read_file_content;
 use foks_agent_proto::KvEntryShape;
 use foks_desktop::{CatalogItem, CatalogStoreReadState};
 use serde::Serialize;
@@ -222,7 +222,7 @@ fn store_logins(state: &AppState, id: &str) -> Result<Vec<CatalogItem>, AgentErr
     let mut logins: Vec<CatalogItem> = catalog
         .items
         .into_iter()
-        .filter(|item| store_id(&item.store) == id && is_exported_login(item))
+        .filter(|item| item.store == store && is_exported_login(item))
         .collect();
     logins.sort_by(|a, b| a.metadata.path.cmp(&b.metadata.path));
     Ok(logins)

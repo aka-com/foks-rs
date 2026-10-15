@@ -6,6 +6,7 @@ use crate::commands::execution::{
     ambiguous_worker_failure, apply_kv_mutation, map_mutation_error, MutationKind,
 };
 use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutation};
+use crate::commands::store_key::store_id;
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
 use crate::commands::validation::{
     invalid_request, invalid_response, require_main_window, serialize_secret, DOWNLOAD_CHUNK_BYTES,
@@ -208,24 +209,6 @@ impl CatalogDto {
             generation: 0,
         })
     }
-}
-
-pub(super) fn store_id(store: &CatalogStoreRef) -> String {
-    match store {
-        CatalogStoreRef::Account(store) => serde_json::json!({
-            "kind": "account",
-            "profile": store.profile,
-            "accountAlias": store.account_alias,
-        }),
-        CatalogStoreRef::Team(store) => serde_json::json!({
-            "kind": "team",
-            "profile": store.profile,
-            "accountAlias": store.account_alias,
-            "teamAlias": store.team_alias,
-            "teamId": store.team_id,
-        }),
-    }
-    .to_string()
 }
 
 fn store_dto(store: &CatalogStoreSummary) -> Result<StoreDto, AgentError> {
@@ -928,7 +911,7 @@ async fn apply_file_upload(
     })?;
     if result.as_ref().is_err_and(|error| error.ambiguous) {
         state
-            .mutation_requires_refresh
+            .mutation_requires_refresh()
             .store(true, Ordering::Release);
     }
     result.map(|()| MutationDto { applied: true })

@@ -755,7 +755,7 @@ pub(super) async fn load_group_details(
     transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
     retain: bool,
 ) -> Result<GroupDetailsDto, AgentError> {
-    let generation = state.catalog_generation.load(Ordering::Acquire);
+    let generation = state.catalog_generation().load(Ordering::Acquire);
     let (profile, team_alias) = state.selected_team(&store_id)?;
     let expected_profile = profile.clone();
     let expected_team_alias = team_alias.clone();
@@ -814,7 +814,7 @@ pub async fn list_parties(
     store_id: String,
 ) -> Result<Vec<PartyDto>, AgentError> {
     require_main_window(&webview)?;
-    let generation = state.catalog_generation.load(Ordering::Acquire);
+    let generation = state.catalog_generation().load(Ordering::Acquire);
     let (profile, team_alias) = state.selected_team(&store_id)?;
     let transport = state.agent.transport();
     let cache_key = store_id.clone();
@@ -843,7 +843,7 @@ pub async fn list_federation(
     store_id: String,
 ) -> Result<Vec<FederationEntryDto>, AgentError> {
     require_main_window(&webview)?;
-    let generation = state.catalog_generation.load(Ordering::Acquire);
+    let generation = state.catalog_generation().load(Ordering::Acquire);
     let (profile, team_alias) = state.selected_team(&store_id)?;
     let transport = state.agent.transport();
     let cache_key = store_id.clone();

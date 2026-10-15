@@ -22,7 +22,7 @@ pub(super) fn ambiguous_mutation_response(
     message: impl Into<String>,
 ) -> AgentError {
     state
-        .mutation_requires_refresh
+        .mutation_requires_refresh()
         .store(true, Ordering::Release);
     let mut error = AgentError::new("response-binding", message, false);
     error.ambiguous = true;
@@ -32,7 +32,7 @@ pub(super) fn ambiguous_mutation_response(
 
 pub(super) fn ambiguous_worker_failure(state: &AppState, message: impl Into<String>) -> AgentError {
     state
-        .mutation_requires_refresh
+        .mutation_requires_refresh()
         .store(true, Ordering::Release);
     let mut error = AgentError::new("ambiguous", message, false);
     error.ambiguous = true;
@@ -45,7 +45,7 @@ pub(super) fn observe_mutation_error(state: &AppState, error: AgentError) -> Age
     }
     if error.ambiguous {
         state
-            .mutation_requires_refresh
+            .mutation_requires_refresh()
             .store(true, Ordering::Release);
     }
     error
@@ -185,7 +185,7 @@ pub(super) async fn run_kv_writes<T: Send + 'static>(
     if let Err(error) = &result {
         if error.ambiguous {
             state
-                .mutation_requires_refresh
+                .mutation_requires_refresh()
                 .store(true, Ordering::Release);
         }
     }
@@ -226,7 +226,7 @@ pub(super) async fn apply_operation_value(
         Err(error) => {
             if error.ambiguous {
                 state
-                    .mutation_requires_refresh
+                    .mutation_requires_refresh()
                     .store(true, Ordering::Release);
             }
             Err(error)
@@ -311,7 +311,7 @@ pub(super) async fn apply_pending_operation_value(
         Err(error) => {
             if error.ambiguous {
                 state
-                    .mutation_requires_refresh
+                    .mutation_requires_refresh()
                     .store(true, Ordering::Release);
             }
             Err(error)
@@ -364,7 +364,7 @@ pub(super) async fn apply_profile_operation_value(
         Err(error) => {
             if error.ambiguous {
                 state
-                    .mutation_requires_refresh
+                    .mutation_requires_refresh()
                     .store(true, Ordering::Release);
             }
             Err(error)
@@ -430,7 +430,7 @@ pub(super) async fn apply_surveying_profile_operation_with_transport(
             state.invalidate_catalog();
             if error.ambiguous {
                 state
-                    .mutation_requires_refresh
+                    .mutation_requires_refresh()
                     .store(true, Ordering::Release);
             }
             Err(error)
@@ -465,7 +465,7 @@ pub(super) async fn apply_profile_operation_with_profile(
         Err(error) => {
             if error.ambiguous {
                 state
-                    .mutation_requires_refresh
+                    .mutation_requires_refresh()
                     .store(true, Ordering::Release);
             }
             Err(error)

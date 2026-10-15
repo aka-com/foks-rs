@@ -754,7 +754,7 @@ pub async fn commit_password_import(
     .await?;
     if outcomes.iter().any(|outcome| outcome.status == "uncertain") {
         state
-            .mutation_requires_refresh
+            .mutation_requires_refresh()
             .store(true, Ordering::Release);
     }
     Ok(outcomes)

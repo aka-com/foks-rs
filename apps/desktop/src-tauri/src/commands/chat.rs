@@ -103,7 +103,7 @@ pub async fn chat_request(
     crate::applock::require_unlocked_generation(webview.app_handle(), unlocked)?;
     require_catalog_generation(
         generation,
-        state.chat_generation.load(Ordering::Acquire),
+        state.chat_generation().load(Ordering::Acquire),
         mutation,
     )?;
     if reply.scope.store != expected {
@@ -250,11 +250,11 @@ mod tests {
         )));
         let store = serde_json::json!({"kind":"team", "profile":"chat", "accountAlias":"owner", "teamAlias":"team", "teamId":"team"}).to_string();
         let chat = state.for_store(&store).unwrap();
-        let generation = chat.chat_generation.load(Ordering::Acquire);
+        let generation = chat.chat_generation().load(Ordering::Acquire);
         state.for_profile("other").unwrap().invalidate_catalog();
         assert!(require_catalog_generation(
             generation,
-            chat.chat_generation.load(Ordering::Acquire),
+            chat.chat_generation().load(Ordering::Acquire),
             true
         )
         .is_ok());
@@ -262,17 +262,17 @@ mod tests {
         assert!(
             require_catalog_generation(
                 generation,
-                chat.chat_generation.load(Ordering::Acquire),
+                chat.chat_generation().load(Ordering::Acquire),
                 true
             )
             .unwrap_err()
             .ambiguous
         );
-        let generation = chat.chat_generation.load(Ordering::Acquire);
+        let generation = chat.chat_generation().load(Ordering::Acquire);
         state.invalidate_catalog();
         assert!(require_catalog_generation(
             generation,
-            chat.chat_generation.load(Ordering::Acquire),
+            chat.chat_generation().load(Ordering::Acquire),
             false
         )
         .is_err());
@@ -296,7 +296,7 @@ mod tests {
             ..Default::default()
         };
         assert!(state.publish_catalog(load, snapshot.clone(), |_| {}));
-        let generation = chat.chat_generation.load(Ordering::Acquire);
+        let generation = chat.chat_generation().load(Ordering::Acquire);
         snapshot
             .inventory
             .push(foks_desktop::CatalogInventoryState {
@@ -313,7 +313,7 @@ mod tests {
         assert!(
             require_catalog_generation(
                 generation,
-                chat.chat_generation.load(Ordering::Acquire),
+                chat.chat_generation().load(Ordering::Acquire),
                 true
             )
             .is_ok(),

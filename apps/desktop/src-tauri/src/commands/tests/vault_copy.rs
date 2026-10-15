@@ -1,7 +1,7 @@
 use super::support::{account_ref, phase_four_state, team_ref};
 use super::vault::{download_item, DownloadTransport, ReadTransport, READ_VALUE};
+use crate::commands::store_key::store_id;
 use crate::commands::validation::DOWNLOAD_CHUNK_BYTES;
-use crate::commands::vault::store_id;
 use crate::commands::vault_copy::{
     copy_scope, copy_target, read_copy_source, require_spool_space, write_copy, CopySource,
     CopyTarget, SealedSpool,

@@ -117,7 +117,8 @@ binds one of those names to another type fails the test.
 | `groups` | Group discovery, membership, admission, and federation |
 | `servers` | Profiles, trust verification, status, and local reset |
 | `application` | Agent connectivity and application information |
-| `context` | Shared state, cached authorization facts, and mutation coordination |
+| `context` | Shared state, cached authorization facts, and mutation coordination, split into mutation scopes, catalog publication, store and target lookup, chat access, cached facts, and upload path grants |
+| `store_key` | The store identity string the renderer echoes back, and its parsed form for lookups |
 | `validation` | Shared input bounds, typed identities, secrets, and window checks |
 | `execution` | Transport preflight, mutation execution, and ambiguous outcomes |
 | `types` | Small wire types shared across domains |

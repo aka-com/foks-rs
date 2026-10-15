@@ -8,6 +8,7 @@ mod password_export;
 mod password_import;
 mod preparation;
 mod servers;
+mod store_key;
 mod support;
 mod trash;
 mod validation;

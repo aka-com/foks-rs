@@ -385,7 +385,7 @@ pub async fn initialize_client_state(
     let _mutation = state.begin_initialization()?;
     state.invalidate_catalog();
     let transport = state.agent.transport();
-    let uncertainty = Arc::clone(&state.mutation_requires_refresh);
+    let uncertainty = Arc::clone(state.mutation_requires_refresh());
     let status = tauri::async_runtime::spawn_blocking(move || {
         execute_initialization_recovery(uncertainty.as_ref(), transport.as_ref())
     })
@@ -558,7 +558,7 @@ pub async fn check_and_add_go_profile(
         Err(error) => {
             if error.ambiguous {
                 state
-                    .mutation_requires_refresh
+                    .mutation_requires_refresh()
                     .store(true, Ordering::Release);
             }
             Err(error)

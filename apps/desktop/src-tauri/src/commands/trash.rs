@@ -706,7 +706,7 @@ async fn apply_trash_plan(
     .await?;
     if cleanup_unknown {
         state
-            .mutation_requires_refresh
+            .mutation_requires_refresh()
             .store(true, Ordering::Release);
     }
     Ok(TrashMutationDto {

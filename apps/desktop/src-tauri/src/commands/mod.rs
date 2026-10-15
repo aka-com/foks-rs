@@ -20,6 +20,7 @@ pub(crate) mod portability;
 mod preparation;
 pub(crate) mod servers;
 pub(crate) mod sso;
+mod store_key;
 pub(crate) mod trash;
 mod types;
 mod validation;
