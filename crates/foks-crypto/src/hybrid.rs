@@ -157,7 +157,15 @@ impl PukBoxRandomness {
 
     /// Generates independent randomness for `count` boxes of one box set.
     pub fn generate_many(count: usize) -> Result<Vec<Self>> {
-        (0..count).map(|_| Self::generate()).collect()
+        // Allocate the final capacity up front. Collecting through `Result`
+        // starts from a zero size hint, so the vector would reallocate and
+        // free earlier buffers holding `kem_message` seeds without zeroizing
+        // them.
+        let mut set = Vec::with_capacity(count);
+        for _ in 0..count {
+            set.push(Self::generate()?);
+        }
+        Ok(set)
     }
 }
 

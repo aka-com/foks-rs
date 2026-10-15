@@ -3065,6 +3065,9 @@ fn box_randomness_generators_fill_secret_fields() {
     let set = PukBoxRandomness::generate_many(2).unwrap();
     assert_eq!(set.len(), 2);
     assert_ne!(set[0].kem_message, set[1].kem_message);
+    // The set is allocated at its final size, so filling it never moves
+    // seeds out of a freed buffer.
+    assert_eq!(PukBoxRandomness::generate_many(9).unwrap().capacity(), 9);
     assert_ne!(set[0].nonce, set[1].nonce);
     let initial = InitialPukBoxRandomness::generate().unwrap();
     assert_ne!(initial.box_id, [0; 16]);
