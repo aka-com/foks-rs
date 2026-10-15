@@ -262,14 +262,17 @@ breaking the order.
 
 ## Where to look
 
-- `foks-crypto` (`lib.rs`): `shared_key_seed_plaintext`,
+- `foks-crypto` (`hybrid.rs`): `shared_key_seed_plaintext`,
   `seal_puk_seed_chain_box`, `open_shared_key_seed_chain`,
   `open_team_shared_key_seed_chain`, `open_shared_key_parcel_with`,
-  `decode_with_redacted_trailing_seed`, `make_software_puk_change_link`,
-  `make_yubi_puk_rotation_link`, `derive_kv_keys`, `derive_shared_public`.
+  `derive_shared_public`.
+- `foks-crypto` (`user.rs`): `make_software_puk_change_link`,
+  `make_yubi_puk_rotation_link`.
+- `foks-crypto` (`kv.rs`): `derive_kv_keys`.
 - `foks-crypto` (`realtime.rs`): `derive_realtime_keys`.
 - `foks-proto` (`role.rs`, `key_material.rs`): `Role`, `RoleType`,
-  `SharedKeyBoxSet`, `SharedKeyBox`, `SeedChainBox`, `PukParcel`.
+  `SharedKeyBoxSet`, `SharedKeyBox`, `SeedChainBox`, `PukParcel`,
+  `SharedKeySeed`, `decode_with_redacted_trailing_seed`.
 - `foks-client` (`device.rs`, `team/rotation/`): the revocation and
   member-change flows that decide who receives which box.
 

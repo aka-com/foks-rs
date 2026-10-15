@@ -17,7 +17,8 @@ pub fn decode(input: &[u8]) -> Result<Value, Error> {
 
 /// Decodes one canonical value at the start of `input` and returns the number
 /// of bytes consumed. FOKS uses this for authenticated plaintexts whose
-/// canonical Snowpack value is followed by zero padding.
+/// canonical Snowpack value is followed by zero padding. The returned tree is
+/// not erased on drop; use [`decode_prefix_sensitive`] for secret plaintexts.
 pub fn decode_prefix(input: &[u8]) -> Result<(Value, usize), Error> {
     let mut decoder = Decoder::new(input, false);
     let value = decoder.value()?;
