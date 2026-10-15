@@ -17,7 +17,7 @@ import {
   conflictDraftWorkflow,
   droppedFileDraft,
   type WriteWorkflow,
-} from '../screens/write-workflow-model';
+} from '../screens/files/write-workflow-model';
 import { WriteOverlay } from '../screens/write-workflows';
 import {
   AgentLostCard,

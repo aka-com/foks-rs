@@ -11,7 +11,7 @@ import type { FilterKind } from '../../../components';
 import { kindOf } from '../../../model';
 import type { Item } from '../../../model';
 import { useShellServices } from '../../../shell-services';
-import type { WriteWorkflow } from '../../write-workflow-model';
+import type { WriteWorkflow } from '../write-workflow-model';
 
 /**
  * Modal sheet displayed when a save conflict occurs, prompting the user to review or discard changes.

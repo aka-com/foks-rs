@@ -44,8 +44,8 @@ import { useToast } from '../../../../kit/toasts';
 import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from '../../item-roles';
 import { AccessBlock, storeOption, writeBlockReason } from '../../store-choice';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
-import { PATH_HINT, fileDropPath, namedPath } from '../../write-workflow-model';
-import type { NewKind, WriteWorkflow } from '../../write-workflow-model';
+import { PATH_HINT, fileDropPath, namedPath } from '../write-workflow-model';
+import type { NewKind, WriteWorkflow } from '../write-workflow-model';
 
 /** Refusal shown when navigating while a save request is in flight. */
 export const SAVING_REFUSAL = 'Wait for the item to finish saving.';

@@ -462,7 +462,7 @@ test('screen and shell model modules load without React or a view module', async
     'screens/devices/credential-actions.ts',
     'model/group-model.ts',
     'screens/servers/server-model.ts',
-    'screens/write-workflow-model.ts',
+    'screens/files/write-workflow-model.ts',
     'screens/details-model.ts',
   ].map((path) => join(root, path));
   const files = new Set(await sources(root));

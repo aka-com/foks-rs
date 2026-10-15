@@ -9,7 +9,7 @@ import { normalizeCommandError } from '../../../bridge';
 import { useSheetGuard } from '../../../navigation-guard';
 import { itemActionProblem } from '../../store-access';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
-import type { WriteWorkflow } from '../../write-workflow-model';
+import type { WriteWorkflow } from '../write-workflow-model';
 
 /** What permanent deletion says it does, in every sheet that offers it. */
 export const PERMANENT_DELETE_COPY =

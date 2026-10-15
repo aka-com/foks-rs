@@ -20,7 +20,7 @@ import {
   initialWriteWorkflow,
   namedPath,
   workflowForError,
-} from '../src/screens/write-workflow-model';
+} from '../src/screens/files/write-workflow-model';
 
 const PATH = '/logins/github.com';
 

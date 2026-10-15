@@ -6,8 +6,8 @@
  * in, and the workflow a `?state=` scene or a command error opens.
  */
 
-import { normalizeCommandError } from '../bridge';
-import type { KvRoleInput } from '../bridge';
+import { normalizeCommandError } from '../../bridge';
+import type { KvRoleInput } from '../../bridge';
 import {
   isLogin,
   itemKey,
@@ -16,15 +16,15 @@ import {
   loginFieldOf,
   loginLines,
   nameOf,
-} from '../model';
+} from '../../model';
 import type {
   AgentSnapshot,
   Item,
   ItemKind,
   LoginFieldName,
   StoreRef,
-} from '../model';
-import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from './item-roles';
+} from '../../model';
+import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from '../item-roles';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
 

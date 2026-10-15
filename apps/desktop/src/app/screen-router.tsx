@@ -10,7 +10,7 @@ import type { DropUpload } from '../screens/files/vault-drop-zone';
 import { PlaceholderScreen } from '../screens/placeholder-screen';
 import { listsItems } from '../model/scope';
 import { useShellServices, useShellSnapshot } from '../shell-services';
-import type { WriteWorkflow } from '../screens/write-workflow-model';
+import type { WriteWorkflow } from '../screens/files/write-workflow-model';
 import {
   ChatTab,
   DevicesScreen,

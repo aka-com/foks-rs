@@ -8,7 +8,7 @@ import { useSheetGuard } from '../../../navigation-guard';
 import { itemActionProblem } from '../../store-access';
 import { useTrashOrigins } from '../../trash-origins';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
-import type { WriteWorkflow } from '../../write-workflow-model';
+import type { WriteWorkflow } from '../write-workflow-model';
 import { PERMANENT_DELETE_COPY } from './delete-sheet';
 
 /**

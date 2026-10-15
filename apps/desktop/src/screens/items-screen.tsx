@@ -86,7 +86,7 @@ import type {
 import type { ItemField } from '../bridge';
 import { writeBlockReason } from './store-choice';
 import { exportedPasswords } from './files/sheets/export-passwords-sheet';
-import type { NewKind } from './write-workflow-model';
+import type { NewKind } from './files/write-workflow-model';
 import { copyAndAnnounce } from './item-copy';
 import {
   ALL_ITEMS,

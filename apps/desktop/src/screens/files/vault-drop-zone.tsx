@@ -8,7 +8,7 @@ import type { Store } from '../../model';
 import { normalizeCommandError } from '../../bridge';
 import type { Bridge } from '../../bridge';
 import { useFileDrop } from '../../file-drop';
-import { fileDropPath } from '../write-workflow-model';
+import { fileDropPath } from './write-workflow-model';
 
 /** Where a file dropped on the current view is saved. */
 export interface DropTarget {

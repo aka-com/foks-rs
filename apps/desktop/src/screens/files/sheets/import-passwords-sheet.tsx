@@ -31,7 +31,7 @@ import { useSheetGuard } from '../../../navigation-guard';
 import { joinPath, validFolderPath } from '../../item-moves';
 import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from '../../item-roles';
 import { AccessBlock, storeOption, writeBlockReason } from '../../store-choice';
-import type { WriteWorkflow } from '../../write-workflow-model';
+import type { WriteWorkflow } from '../write-workflow-model';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 /** The folder imported logins go to unless another is chosen. */

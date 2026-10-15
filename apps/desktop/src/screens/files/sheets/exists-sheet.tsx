@@ -8,7 +8,7 @@ import type { FilterKind } from '../../../components';
 import { displayPath, kindOf } from '../../../model';
 import { NavigationPrompt, useSheetGuard } from '../../../navigation-guard';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
-import type { WriteWorkflow } from '../../write-workflow-model';
+import type { WriteWorkflow } from '../write-workflow-model';
 import { discardNewItem } from './new-item-sheet';
 
 export function ExistsSheet({

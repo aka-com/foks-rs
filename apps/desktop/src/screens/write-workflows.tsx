@@ -1,7 +1,7 @@
 /**
  * The write overlay: the sheet each write workflow opens. The sheets are in
  * `files/sheets/`, one per file; the workflow type is in
- * `write-workflow-model.ts`.
+ * `files/write-workflow-model.ts`.
  */
 
 import { MoveSheet } from './files/sheets/move-item-sheet';
@@ -11,7 +11,7 @@ import type { Item } from '../model';
 import { CopyItemSheet } from './files/sheets/copy-item-sheet';
 import { ImportPasswordsSheet } from './files/sheets/import-passwords-sheet';
 import { ExportPasswordsSheet } from './files/sheets/export-passwords-sheet';
-import type { WriteWorkflow } from './write-workflow-model';
+import type { WriteWorkflow } from './files/write-workflow-model';
 import { NewSheet } from './files/sheets/new-item-sheet';
 import { NewFolderSheet } from './files/sheets/new-folder-sheet';
 import { ExistsSheet } from './files/sheets/exists-sheet';

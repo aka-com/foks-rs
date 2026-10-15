@@ -11,7 +11,7 @@ import { createElement } from 'react';
 import type { ReactNode } from 'react';
 
 import type { GuardVerdict, Location, LocationStore } from '../src/location';
-import type { WriteWorkflow } from '../src/screens/write-workflow-model';
+import type { WriteWorkflow } from '../src/screens/files/write-workflow-model';
 import { installDom } from './lib/dom-harness';
 import { loadTestShell } from './lib/test-shell';
 

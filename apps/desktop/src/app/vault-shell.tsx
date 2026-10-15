@@ -74,7 +74,7 @@ import {
 import {
   initialWriteWorkflow,
   type WriteWorkflow,
-} from '../screens/write-workflow-model';
+} from '../screens/files/write-workflow-model';
 import { writeBlockReason } from '../screens/store-choice';
 import { useSearchShortcut } from '../shell/search-palette';
 import { ShortcutSheet, useShortcutSheetKey } from '../shell/shortcut-sheet';

@@ -12,7 +12,7 @@ import { normalizeCommandError } from '../../../bridge';
 import { isTrashPath, kindOf, storeOf } from '../../../model';
 import type { AgentSnapshot, StoreRef } from '../../../model';
 import { useSheetGuard } from '../../../navigation-guard';
-import type { WriteWorkflow } from '../../write-workflow-model';
+import type { WriteWorkflow } from '../write-workflow-model';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 /** The passwords of `store` an export writes: what Files lists as one. */

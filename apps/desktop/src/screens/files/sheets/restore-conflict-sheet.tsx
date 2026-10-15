@@ -7,7 +7,7 @@ import { nameOf, restoredCopyPath } from '../../../model';
 import type { Item } from '../../../model';
 import { useSheetGuard } from '../../../navigation-guard';
 import { useShellSnapshot } from '../../../shell-services';
-import type { WriteWorkflow } from '../../write-workflow-model';
+import type { WriteWorkflow } from '../write-workflow-model';
 
 /**
  * Restoring an entry from Trash found another item at its original path.
