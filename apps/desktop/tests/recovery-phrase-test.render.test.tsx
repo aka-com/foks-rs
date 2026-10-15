@@ -63,18 +63,14 @@ async function renderDevices(
         children: createElement(TestShell, {
           snapshot,
           bridge,
+          commandError: (error: unknown) => errors.push(error),
+          mutationError: async (error: unknown) => {
+            throw error;
+          },
           children: createElement(DevicesScreen, {
-            snapshot,
-            bridge,
             location: { kind: 'devices', store: 'acct:personal' },
             scene,
             onNavigate: () => {},
-            onRefresh: async () => {},
-            onRefreshSnapshot: async () => snapshot,
-            onError: (error: unknown) => errors.push(error),
-            onMutationError: async (error: unknown) => {
-              throw error;
-            },
           }),
         }),
       }),

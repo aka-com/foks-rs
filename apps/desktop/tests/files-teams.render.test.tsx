@@ -122,9 +122,16 @@ async function teams(
     return createElement(TestShell, {
       snapshot,
       bridge,
+      refreshSnapshot: options.refresh ?? (async () => snapshot),
+      commandError: (error: unknown) => {
+        throw error;
+      },
+      mutationError:
+        options.mutationError ??
+        (async (error: unknown) => {
+          throw error;
+        }),
       children: createElement(TeamsScreen, {
-        snapshot,
-        bridge,
         location,
         scene: options.scene ?? 'groups',
         onNavigate: (
@@ -134,16 +141,6 @@ async function teams(
           onNavigate(next, navigateOptions);
           if (options.follow && next.kind === 'teams') setLocation(next);
         },
-        onRefresh: async () => {},
-        onRefreshSnapshot: options.refresh ?? (async () => snapshot),
-        onError: (error: unknown) => {
-          throw error;
-        },
-        onMutationError:
-          options.mutationError ??
-          (async (error: unknown) => {
-            throw error;
-          }),
       }),
     });
   };

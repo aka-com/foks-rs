@@ -38,7 +38,6 @@ import { useToast } from '../../kit/toasts';
 import type {
   AccountDevice,
   BackupEnrollment,
-  Bridge,
   YubiEnrollment,
 } from '../bridge';
 import {
@@ -71,8 +70,8 @@ import type {
   Location,
   NavigateOptions,
 } from '../location';
-import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { PageHeader } from '../shell/page-header';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 import { AddDeviceSheet } from './devices/sheets/add-device-sheet';
 import { EnrollSheet } from './devices/sheets/enroll-sheet';
 import { PairSheet } from './devices/sheets/pair-sheet';
@@ -219,9 +218,11 @@ function kindLabel(kind: DeviceEntry['kind']): string {
   return kind === 'Enrollment' ? 'Security key' : kind;
 }
 
+/**
+ * The page reads the snapshot, the bridge, the catalog refreshes and the error
+ * handlers from the shell services.
+ */
 export interface DevicesScreenProps {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   location: Extract<Location, { kind: 'devices' }>;
   /** The named fixture scene this tab was entered at, captured once. */
   scene: string;
@@ -232,14 +233,6 @@ export interface DevicesScreenProps {
    * may answer for.
    */
   onNavigate: (location: Location, options?: NavigateOptions) => void;
-  /**
-   * Refreshes data after a mutation. Device operations are scoped to the
-   * selected account's server profile.
-   */
-  onRefresh: (message: string, profile?: string) => Promise<void>;
-  onRefreshSnapshot: () => Promise<AgentSnapshot>;
-  onError: (error: unknown) => void;
-  onMutationError: MutationFailureHandler;
   onDeviceLabel?: (label: DeviceLabel | null) => void;
   /** Re-probe connected cards independently of cached enrollment metadata. */
   hardwareRefresh?: number;
@@ -251,19 +244,21 @@ export interface DevicesScreenProps {
 }
 
 export function DevicesScreen({
-  snapshot,
-  bridge,
   location,
   scene,
   onNavigate,
-  onRefresh,
-  onRefreshSnapshot,
-  onError,
-  onMutationError,
   onDeviceLabel,
   hardwareRefresh = 0,
   onOpenItem,
 }: DevicesScreenProps): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    refresh: onRefresh,
+    refreshSnapshot: onRefreshSnapshot,
+    commandError: onError,
+    mutationError: onMutationError,
+  } = useShellServices();
   // The shell canonicalizes the route on mount; the scene it was entered at
   // is what decides whether a sheet opens with the page.
   const [enteredScene] = useState(scene);

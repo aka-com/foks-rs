@@ -1,7 +1,7 @@
 import { Suspense } from 'react';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import type { AgentLifecycle } from '../agent-lifecycle';
-import type { Location, LocationStore, NavigateOptions } from '../location';
+import type { LocationStore } from '../location';
 import { storeOf } from '../model';
 import type { DeviceLabel, Item } from '../model';
 import { markProfileRostersStale } from '../data/roster-staleness';
@@ -60,14 +60,8 @@ export function ScreenRouter({
 }): ReactNode {
   const shown = useShellSnapshot();
   usePreloadVaultScreens();
-  const {
-    bridge,
-    accessNow,
-    commandError,
-    mutationError,
-    refresh,
-    refreshSnapshot,
-  } = useShellServices();
+  const { bridge, accessNow, commandError, mutationError, refresh } =
+    useShellServices();
   const here = state.location;
   // An exposure review's Open: the item's store, with the item selected so
   // the details panel shows it and its Edit.
@@ -76,21 +70,6 @@ export function ScreenRouter({
       { kind: 'store', ref: item.store },
       { store: item.store, path: item.path },
     );
-  // People, Teams, Devices and Settings are the same body under four titles.
-  const settingsProps = {
-    snapshot: shown,
-    bridge,
-    scene: enteredScene,
-    onNavigate: (location: Location, options?: NavigateOptions) =>
-      locations.navigate(location, options),
-    onRefresh: refresh,
-    onRefreshSnapshot: refreshSnapshot,
-    onError: commandError,
-    onMutationError: mutationError,
-    onLock,
-    agentLifecycle,
-    onRetryAgent: () => recoverAgentReadiness(true),
-  };
   // Every screen but Files loads its chunk on first use; the fallback fills
   // the content pane until it has.
   const screen = listsItems(here) ? (
@@ -171,56 +150,39 @@ export function ScreenRouter({
   ) : here.kind === 'group-settings' ? (
     <GroupSettingsScreen
       key={`${here.kind}:${here.ref}`}
-      snapshot={shown}
-      bridge={bridge}
       location={here}
-      // The Channels tab reads chat, so it decides availability on the shell's
-      // own clock and guards a new channel on the same access generation the
-      // Chat tab does.
-      accessNow={accessNow}
+      // The Channels tab reads chat, so it guards a new channel on the same
+      // access generation the Chat tab does.
       accessGenerations={accessGenerations}
       onNavigate={(location, options) => locations.navigate(location, options)}
-      onApplied={refresh}
-      onError={commandError}
-      onMutationError={mutationError}
       onOpenItem={openItem}
     />
   ) : here.kind === 'teams' ? (
-    // Teams shares no state with Settings, so it is given exactly the props it
-    // declares rather than the settings bundle.
     <TeamsScreen
       key={`teams:${concealSignal}`}
-      snapshot={shown}
-      bridge={bridge}
       location={here}
       scene={namedState}
       onNavigate={(location, options) => locations.navigate(location, options)}
-      onRefresh={refresh}
-      onRefreshSnapshot={refreshSnapshot}
-      onError={commandError}
-      onMutationError={mutationError}
     />
   ) : here.kind === 'devices' ? (
     <DevicesScreen
       hardwareRefresh={hardwareRefresh}
       onDeviceLabel={setDeviceLabel}
       key={`devices:${concealSignal}`}
-      snapshot={shown}
-      bridge={bridge}
       location={here}
       scene={enteredScene}
       onNavigate={(location, options) => locations.navigate(location, options)}
-      onRefresh={refresh}
-      onRefreshSnapshot={refreshSnapshot}
-      onError={commandError}
-      onMutationError={mutationError}
       onOpenItem={openItem}
     />
   ) : here.kind === 'settings' ? (
     <SettingsScreen
       key={`settings:${concealSignal}`}
-      {...settingsProps}
       location={here}
+      scene={enteredScene}
+      onNavigate={(location, options) => locations.navigate(location, options)}
+      onLock={onLock}
+      agentLifecycle={agentLifecycle}
+      onRetryAgent={() => recoverAgentReadiness(true)}
     />
   ) : (
     <PlaceholderScreen location={here} />

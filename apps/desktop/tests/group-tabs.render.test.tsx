@@ -78,17 +78,15 @@ async function group(
       ? createElement(TestShell, {
           snapshot,
           bridge,
+          ...(options.accessNow ? { accessNow: options.accessNow } : {}),
+          refresh: options.onApplied ?? (async () => {}),
+          commandError: (error: unknown) => {
+            throw error;
+          },
+          mutationError: options.onMutationError ?? (async () => {}),
           children: createElement(GroupSettingsScreen, {
-            snapshot,
-            bridge,
             location: { kind: 'group-settings', ref, tab },
-            ...(options.accessNow ? { accessNow: options.accessNow } : {}),
             onNavigate: options.onNavigate ?? (() => {}),
-            onApplied: options.onApplied ?? (async () => {}),
-            onError: (error: unknown) => {
-              throw error;
-            },
-            onMutationError: options.onMutationError ?? (async () => {}),
           }),
         })
       : createElement('p', null, 'Elsewhere');

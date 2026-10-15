@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
 import type { AgentSnapshot } from '../src/model/types';
+import type { ShellServices } from '../src/shell-services';
 import { installDom } from './lib/dom-harness';
 import { workflowScope } from './lib/workflow-scope';
 
@@ -18,12 +19,16 @@ test.before(async () => {
 });
 test.afterEach(() => ui.cleanup());
 
-async function overlay(children: ReactNode, snapshot: AgentSnapshot) {
+async function overlay(
+  children: ReactNode,
+  snapshot: AgentSnapshot,
+  services: Partial<ShellServices> = {},
+) {
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   return createElement(OverlayProvider, {
     backgroundRef: { current: null },
     portalRoot: document.getElementById('overlays')!,
-    children: await workflowScope(children, snapshot),
+    children: await workflowScope(children, snapshot, services),
   });
 }
 
@@ -223,20 +228,18 @@ test('device rendering never scans hardware or prompts for credentials', async (
       createElement(ToastProvider, {
         controller: new ToastController(),
         children: createElement(DevicesScreen, {
-          snapshot: current,
-          bridge,
           location: { kind: 'devices', store: 'acct:personal' },
           scene: '',
           onNavigate() {},
-          onRefresh: async () => {},
-          onRefreshSnapshot: async () => current,
-          onError(error) {
-            throw error;
-          },
-          onMutationError: async () => {},
         }),
       }),
       current,
+      {
+        bridge,
+        commandError(error) {
+          throw error;
+        },
+      },
     ),
   );
   await ui.act(async () => {

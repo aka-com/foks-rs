@@ -113,6 +113,13 @@ async function harness() {
     /** Renders `node` with `bridge` as the shell's bridge. */
     withBridge: (bridge: Bridge, node: ReactNode): ReactNode =>
       createElement(TestShell, { snapshot: FIXTURE, bridge, children: node }),
+    /** Renders `node` with `snapshot` as the shell's snapshot. */
+    withShell: (snapshot: AgentSnapshot, node: ReactNode): ReactNode =>
+      createElement(TestShell, {
+        snapshot,
+        bridge: mockBridge(FIXTURE),
+        children: node,
+      }),
     /** What the guards say about leaving, without moving anything. */
     verdict: (store: LocationStore): GuardVerdict =>
       store.navigationVerdict({ kind: 'navigate', location: AWAY }),
@@ -450,21 +457,26 @@ test('Devices and Account wait for account inventory instead of showing a missin
     [DevicesScreen, 'devices'],
     [AccountSection, 'settings'],
   ] as const) {
+    // Devices reads the snapshot from the shell; the Account section takes it
+    // as a prop.
     const { rendered } = h.mount(
-      createElement(
-        screen as unknown as ComponentType<Record<string, unknown>>,
-        {
-          snapshot,
-          bridge: h.bridge(),
-          location: { kind, store: 'acct:personal' },
-          scene: kind,
-          panel: { id: 'panel', labelledBy: 'tab' },
-          onNavigate() {},
-          onRefresh: async () => {},
-          onRefreshSnapshot: async () => snapshot,
-          onError() {},
-          onMutationError: async () => {},
-        },
+      h.withShell(
+        snapshot,
+        createElement(
+          screen as unknown as ComponentType<Record<string, unknown>>,
+          {
+            snapshot,
+            bridge: h.bridge(),
+            location: { kind, store: 'acct:personal' },
+            scene: kind,
+            panel: { id: 'panel', labelledBy: 'tab' },
+            onNavigate() {},
+            onRefresh: async () => {},
+            onRefreshSnapshot: async () => snapshot,
+            onError() {},
+            onMutationError: async () => {},
+          },
+        ),
       ),
     );
     assert.ok(rendered.getByText('Loading accounts…'));

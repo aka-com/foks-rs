@@ -92,19 +92,16 @@ async function teamPage(
       createElement(TestShell, {
         snapshot,
         bridge,
+        commandError: (error: unknown) => {
+          throw error;
+        },
+        mutationError: async (error: unknown) => {
+          if (!failures) throw error;
+          failures.push(error);
+        },
         children: createElement(GroupSettingsScreen, {
-          snapshot,
-          bridge,
           location: { kind: 'group-settings', ref, tab },
           onNavigate: () => {},
-          onApplied: async () => {},
-          onError: (error: unknown) => {
-            throw error;
-          },
-          onMutationError: async (error: unknown) => {
-            if (!failures) throw error;
-            failures.push(error);
-          },
           onOpenItem: (item: Item) => opened.push(item),
         }),
       }),
@@ -382,9 +379,13 @@ async function removeDeviceSheet(snapshot: AgentSnapshot) {
       createElement(TestShell, {
         snapshot,
         bridge,
+        commandError: (error: unknown) => {
+          throw error;
+        },
+        mutationError: async (error: unknown) => {
+          throw error;
+        },
         children: createElement(DevicesScreen, {
-          snapshot,
-          bridge,
           location: {
             kind: 'devices',
             store: 'acct:personal',
@@ -392,14 +393,6 @@ async function removeDeviceSheet(snapshot: AgentSnapshot) {
           },
           scene: 'devices',
           onNavigate: () => {},
-          onRefresh: async () => {},
-          onRefreshSnapshot: async () => snapshot,
-          onError: (error: unknown) => {
-            throw error;
-          },
-          onMutationError: async (error: unknown) => {
-            throw error;
-          },
         }),
       }),
     );

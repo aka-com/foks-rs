@@ -72,29 +72,26 @@ import {
 } from '../model';
 import type { AgentSnapshot, Server } from '../model';
 import { PageHeader } from '../shell/page-header';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 import {
   RAIL_COLORS,
   applyRailColor,
   rememberRailColor,
   storedRailColor,
 } from '../rail-theme';
-import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
 import { NotificationSettings } from '../chat/notification-provider';
 import { ServersSection } from './servers-screen';
 import { AccountSection } from './account-section';
 
+/**
+ * The page reads the snapshot, the bridge, the catalog refreshes and the error
+ * handlers from the shell services.
+ */
 export interface SettingsScreenProps {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   location: Extract<Location, { kind: 'settings' }>;
   scene: string;
   onNavigate: (location: Location, options?: NavigateOptions) => void;
-  /** Refreshes data after a mutation, optionally scoped to a specific server profile. */
-  onRefresh: (message: string, profile?: string) => Promise<void>;
-  onRefreshSnapshot: () => Promise<AgentSnapshot>;
-  onError: (error: unknown) => void;
-  onMutationError: MutationFailureHandler;
   onLock: () => Promise<boolean>;
   agentLifecycle: AgentLifecycle;
   onRetryAgent: () => Promise<void>;
@@ -108,19 +105,21 @@ type Sheet = 'reset-mac' | null;
 const SETTINGS_TABS = 'settings-sections';
 
 export function SettingsScreen({
-  snapshot,
-  bridge,
   location,
   scene,
   onNavigate,
-  onRefresh,
-  onRefreshSnapshot,
-  onError,
-  onMutationError,
   onLock,
   agentLifecycle,
   onRetryAgent,
 }: SettingsScreenProps): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    refresh: onRefresh,
+    refreshSnapshot: onRefreshSnapshot,
+    commandError: onError,
+    mutationError: onMutationError,
+  } = useShellServices();
   const [enteredScene] = useState(scene);
   const toasts = useToast();
   const [sheet, setSheet] = useState<Sheet>(null);

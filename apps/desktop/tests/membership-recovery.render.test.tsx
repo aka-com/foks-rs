@@ -87,22 +87,19 @@ for (const action of ['add', 'demote', 'promote'] as const) {
           children: createElement(TestShell, {
             snapshot: FIXTURE,
             bridge,
+            commandError: (error: unknown) => {
+              throw error;
+            },
+            mutationError: async () => {
+              reconciled = true;
+            },
             children: createElement(GroupSettingsScreen, {
-              snapshot: FIXTURE,
-              bridge,
               location: {
                 kind: 'group-settings',
                 ref: store.id,
                 tab: 'people',
               },
               onNavigate: () => {},
-              onApplied: async () => {},
-              onError: (error: unknown) => {
-                throw error;
-              },
-              onMutationError: async () => {
-                reconciled = true;
-              },
             }),
           }),
         }),
@@ -192,16 +189,13 @@ test('a failed pending-operation query reports one error and renders no recovery
         children: createElement(TestShell, {
           snapshot: FIXTURE,
           bridge,
+          commandError: (error: unknown) => {
+            reported.push(error);
+          },
+          mutationError: async () => {},
           children: createElement(GroupSettingsScreen, {
-            snapshot: FIXTURE,
-            bridge,
             location: { kind: 'group-settings', ref: store.id, tab: 'people' },
             onNavigate: () => {},
-            onApplied: async () => {},
-            onError: (error: unknown) => {
-              reported.push(error);
-            },
-            onMutationError: async () => {},
           }),
         }),
       }),

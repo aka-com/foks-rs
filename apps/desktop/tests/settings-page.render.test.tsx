@@ -123,20 +123,17 @@ async function renderSettings(
           children: createElement(TestShell, {
             snapshot,
             bridge,
+            refresh: onRefresh,
+            commandError: (error: unknown) => {
+              throw error;
+            },
+            mutationError: async (error: unknown) => {
+              onMutationError(error);
+            },
             children: createElement(SettingsScreen, {
-              snapshot,
-              bridge,
               location: { kind: 'settings', ...at },
               scene,
               onNavigate: navigate,
-              onRefresh,
-              onRefreshSnapshot: async () => snapshot,
-              onError: (error: unknown) => {
-                throw error;
-              },
-              onMutationError: async (error: unknown) => {
-                onMutationError(error);
-              },
               onLock: async () => true,
               agentLifecycle: { state: 'ready' },
               onRetryAgent: async () => {},

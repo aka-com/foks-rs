@@ -47,12 +47,11 @@ import type {
   StoreRef,
   TeamStore,
 } from '../model';
-import type { Bridge } from '../bridge';
 import { accountAtLocation, normalizeTeamsLocation } from '../location';
 import type { Location, NavigateOptions, TeamsSheetIntent } from '../location';
-import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { markProfileRostersStale } from '../data/roster-staleness';
 import { PageHeader } from '../shell/page-header';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 import { useToast } from '../../kit/toasts';
 import { GroupMark } from '../components/group-mark';
 import {
@@ -66,16 +65,14 @@ import { AbandonGroupSheet, GroupSheet } from './groups-screen';
 import type { GroupSheetKind } from './groups-screen';
 
 /** Only what this page uses; the tab shares no state with Settings. */
+/**
+ * The page reads the snapshot, the bridge, the catalog refreshes and the error
+ * handlers from the shell services.
+ */
 export interface TeamsScreenProps {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   location: Extract<Location, { kind: 'teams' }>;
   scene?: string;
   onNavigate: (location: Location, options?: NavigateOptions) => void;
-  onRefresh: (message: string, profile?: string) => Promise<void>;
-  onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
-  onError: (error: unknown) => void;
-  onMutationError: MutationFailureHandler;
 }
 
 /** A sheet opened from this page, and the store it acts on. */
@@ -292,15 +289,17 @@ function TeamRow({
 }
 
 export function TeamsScreen({
-  snapshot,
-  bridge,
   location,
   onNavigate,
-  onRefresh,
-  onRefreshSnapshot,
-  onError,
-  onMutationError,
 }: TeamsScreenProps): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    refresh: onRefresh,
+    refreshSnapshot: onRefreshSnapshot,
+    commandError: onError,
+    mutationError: onMutationError,
+  } = useShellServices();
   const toasts = useToast();
   const stores = storeNavigationOrder(snapshot);
   const teamReadiness = inventoryReadiness(snapshot, 'teams');

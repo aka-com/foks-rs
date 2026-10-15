@@ -1,11 +1,17 @@
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
 import type { AgentSnapshot } from '../../src/model/types';
+import type { ShellServices } from '../../src/shell-services';
 import { loadTestShell } from './test-shell';
 
+/**
+ * Mounts `children` under `TestShell` with `snapshot`, or with the fixture
+ * whose servers are all verified and available, and with the given services.
+ */
 export async function workflowScope(
   children: ReactNode,
   snapshot?: AgentSnapshot,
+  services: Partial<ShellServices> = {},
 ) {
   const TestShell = await loadTestShell();
   const { FIXTURE } = await import('../../src/mock/fixture');
@@ -23,5 +29,5 @@ export async function workflowScope(
     })),
     observedExpiredLeases: [],
   };
-  return createElement(TestShell, { snapshot: ready, children });
+  return createElement(TestShell, { ...services, snapshot: ready, children });
 }

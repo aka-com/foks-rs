@@ -77,6 +77,7 @@ import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { useSheetGuard } from '../navigation-guard';
 import { markProfileRostersStale } from '../data/roster-staleness';
 import { PageHeader } from '../shell/page-header';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 import { NewChatSheet } from './chat-new';
 import {
   ChannelsTab,
@@ -1151,23 +1152,18 @@ export function GroupSheet({
   }
 }
 
+/**
+ * A team's or a share's settings page. It reads the snapshot, the bridge, the
+ * shell's lease clock, which the Channels tab shares with Chat, the applied
+ * refresh and the error handlers from the shell services.
+ */
 export function GroupSettingsScreen({
-  snapshot,
-  bridge,
   location,
-  accessNow,
   accessGenerations,
   onNavigate,
-  onApplied: onSnapshotApplied,
-  onError,
-  onMutationError: onSnapshotMutationError,
   onOpenItem,
 }: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   location: Extract<Location, { kind: 'group-settings' }>;
-  /** The shell's availability clock, which the Channels tab shares with Chat. */
-  accessNow?: () => number;
   /** The shell's access generation per server, as a channel write reads it. */
   accessGenerations?: ReadonlyMap<string, number>;
   /**
@@ -1175,15 +1171,20 @@ export function GroupSettingsScreen({
    * shell records in place of the last rather than behind it.
    */
   onNavigate: (location: Location, options?: NavigateOptions) => void;
-  onApplied: (message: string, profile?: string) => Promise<void>;
-  onError: (error: unknown) => void;
-  onMutationError: MutationFailureHandler;
   /**
    * Opens an item in Files, from an exposure review. Without it, the review
    * lists items without an Open action.
    */
   onOpenItem?: (item: Item) => void;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    accessNow,
+    refresh: onSnapshotApplied,
+    commandError: onError,
+    mutationError: onSnapshotMutationError,
+  } = useShellServices();
   const copy = useCopyText(bridge, onError);
   // Reviews of what removed or lowered members could read, kept on this
   // device after the change; one is open in its sheet at a time.
@@ -1233,9 +1234,7 @@ export function GroupSettingsScreen({
   // One clock for this render, the way the Chat tab reads its own: a cache
   // would freeze the availability decision at the moment the tab mounted, so
   // a check-in that lapses while the tab is open would never be noticed.
-  const accessOptions: AvailabilityOptions = accessNow
-    ? { nowSeconds: accessNow() }
-    : {};
+  const accessOptions: AvailabilityOptions = { nowSeconds: accessNow() };
   useEffect(() => {
     setTab(location.tab ?? 'people');
   }, [location.ref, location.tab]);
@@ -1877,7 +1876,7 @@ export function GroupSettingsScreen({
               bridge={bridge}
               team={store.id}
               accessOptions={accessOptions}
-              {...(accessNow ? { accessNow } : {})}
+              accessNow={accessNow}
               {...(accessGenerations ? { accessGenerations } : {})}
               onUnresolved={(unresolved) => {
                 channelUnresolved.current = unresolved;

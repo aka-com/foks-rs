@@ -79,21 +79,17 @@ async function setup(
                   children: createElement(TestShell, {
                     snapshot,
                     bridge,
+                    commandError: (error: unknown) => {
+                      throw error;
+                    },
+                    mutationError: async (error: unknown) => {
+                      throw error;
+                    },
                     children: createElement(TeamsScreen, {
-                      snapshot,
-                      bridge,
                       location: state.location,
                       scene,
                       onNavigate: (next: Location, options?: NavigateOptions) =>
                         store.navigate(next, options),
-                      onRefresh: async () => {},
-                      onRefreshSnapshot: async () => snapshot,
-                      onError: (error: unknown) => {
-                        throw error;
-                      },
-                      onMutationError: async (error: unknown) => {
-                        throw error;
-                      },
                     }),
                   }),
                 })

@@ -60,16 +60,13 @@ async function group(
         children: createElement(TestShell, {
           snapshot,
           bridge,
+          commandError: (error: unknown) => {
+            throw error;
+          },
+          mutationError: async () => {},
           children: createElement(GroupSettingsScreen, {
-            snapshot,
-            bridge,
             location: { kind: 'group-settings', ref, tab },
             onNavigate: () => {},
-            onApplied: async () => {},
-            onError: (error: unknown) => {
-              throw error;
-            },
-            onMutationError: async () => {},
           }),
         }),
       }),
