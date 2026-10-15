@@ -1,12 +1,18 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Field, Inset, SectionLabel, SheetDialog } from '../components';
-import { normalizeCommandError } from '../bridge';
-import { isTrashPath, nameOf, storeOf } from '../model';
-import type { Item } from '../model';
-import { noteMoved } from '../recent-favorites';
-import { useSheetGuard } from '../navigation-guard';
-import { FolderPicker, pickerFolders } from './folder-picker';
+import {
+  Button,
+  Field,
+  Inset,
+  SectionLabel,
+  SheetDialog,
+} from '../../../components';
+import { normalizeCommandError } from '../../../bridge';
+import { isTrashPath, nameOf, storeOf } from '../../../model';
+import type { Item } from '../../../model';
+import { noteMoved } from '../../../recent-favorites';
+import { useSheetGuard } from '../../../navigation-guard';
+import { FolderPicker, pickerFolders } from '../folder-picker';
 import {
   baseName,
   checkMove,
@@ -20,12 +26,12 @@ import {
   toFolder,
   validFolderPath,
   validItemPath,
-} from './item-moves';
-import type { MoveCheck } from './item-moves';
-import { newFolderRoles } from './item-roles';
-import { itemActionProblem } from './store-access';
-import type { WriteWorkflow } from './write-workflow-model';
-import { useShellServices, useShellSnapshot } from '../shell-services';
+} from '../../item-moves';
+import type { MoveCheck } from '../../item-moves';
+import { newFolderRoles } from '../../item-roles';
+import { itemActionProblem } from '../../store-access';
+import type { WriteWorkflow } from '../../write-workflow-model';
+import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 /**
  * Why the sheet cannot move `items`, given each item's reason or undefined:

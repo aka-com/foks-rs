@@ -10,9 +10,9 @@ import {
   RadioGroup,
   SectionLabel,
   SheetDialog,
-} from '../components';
-import type { KvRoleInput } from '../bridge';
-import { normalizeCommandError } from '../bridge';
+} from '../../../components';
+import type { KvRoleInput } from '../../../bridge';
+import { normalizeCommandError } from '../../../bridge';
 import {
   canCreateInStore,
   displayPath,
@@ -23,10 +23,10 @@ import {
   storeNavigationOrder,
   storeOf,
   trashUnavailable,
-} from '../model';
-import type { AgentSnapshot, Item, Store } from '../model';
-import { useSheetGuard } from '../navigation-guard';
-import { FolderPicker, pickerFolders } from './folder-picker';
+} from '../../../model';
+import type { AgentSnapshot, Item, Store } from '../../../model';
+import { useSheetGuard } from '../../../navigation-guard';
+import { FolderPicker, pickerFolders } from '../folder-picker';
 import {
   baseName,
   copyProblem,
@@ -35,12 +35,12 @@ import {
   joinPath,
   nameProblem,
   parentOf,
-} from './item-moves';
-import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from './item-roles';
-import { itemActionProblem } from './store-access';
-import { AccessBlock, storeOption, writeBlockReason } from './store-choice';
-import type { WriteWorkflow } from './write-workflow-model';
-import { useShellServices, useShellSnapshot } from '../shell-services';
+} from '../../item-moves';
+import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from '../../item-roles';
+import { itemActionProblem } from '../../store-access';
+import { AccessBlock, storeOption, writeBlockReason } from '../../store-choice';
+import type { WriteWorkflow } from '../../write-workflow-model';
+import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 /**
  * The vault a copy goes to when the sheet opens: the first team this account

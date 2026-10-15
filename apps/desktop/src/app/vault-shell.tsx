@@ -64,7 +64,7 @@ import {
   listsItems,
 } from '../model/scope';
 import { copyAndAnnounce, openWebsiteAndAnnounce } from '../screens/item-copy';
-import { exportedPasswords } from '../screens/export-passwords-sheet';
+import { exportedPasswords } from '../screens/files/sheets/export-passwords-sheet';
 import { itemActionProblem } from '../screens/store-access';
 import {
   teamRequestsBadge,

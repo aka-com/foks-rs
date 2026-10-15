@@ -85,7 +85,7 @@ import type {
 } from '../location';
 import type { ItemField } from '../bridge';
 import { writeBlockReason } from './store-choice';
-import { exportedPasswords } from './export-passwords-sheet';
+import { exportedPasswords } from './files/sheets/export-passwords-sheet';
 import type { NewKind } from './write-workflow-model';
 import { copyAndAnnounce } from './item-copy';
 import {

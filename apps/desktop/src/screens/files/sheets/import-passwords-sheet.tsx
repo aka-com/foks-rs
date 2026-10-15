@@ -9,15 +9,15 @@ import {
   Inset,
   SectionLabel,
   SheetDialog,
-} from '../components';
+} from '../../../components';
 import type {
   KvRoleInput,
   PasswordImportOutcome,
   PasswordImportPreview,
   PasswordImportStatus,
-} from '../bridge';
-import { normalizeCommandError } from '../bridge';
-import type { FoksIconName } from '../icons';
+} from '../../../bridge';
+import { normalizeCommandError } from '../../../bridge';
+import type { FoksIconName } from '../../../icons';
 import {
   defaultCreateStore,
   displayPath,
@@ -25,14 +25,14 @@ import {
   storeAvailability,
   storeNavigationOrder,
   storeOf,
-} from '../model';
-import type { StoreRef } from '../model';
-import { useSheetGuard } from '../navigation-guard';
-import { joinPath, validFolderPath } from './item-moves';
-import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from './item-roles';
-import { AccessBlock, storeOption, writeBlockReason } from './store-choice';
-import type { WriteWorkflow } from './write-workflow-model';
-import { useShellServices, useShellSnapshot } from '../shell-services';
+} from '../../../model';
+import type { StoreRef } from '../../../model';
+import { useSheetGuard } from '../../../navigation-guard';
+import { joinPath, validFolderPath } from '../../item-moves';
+import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from '../../item-roles';
+import { AccessBlock, storeOption, writeBlockReason } from '../../store-choice';
+import type { WriteWorkflow } from '../../write-workflow-model';
+import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 /** The folder imported logins go to unless another is chosen. */
 export const IMPORT_FOLDER = '/logins';

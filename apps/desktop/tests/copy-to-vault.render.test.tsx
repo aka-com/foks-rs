@@ -282,7 +282,8 @@ test('the row menu opens Copy to vault for that row', async () => {
  * way.
  */
 async function ambiguousCopyScope(vault: string): Promise<string | undefined> {
-  const { CopyItemSheet } = await import('../src/screens/copy-item-sheet');
+  const { CopyItemSheet } =
+    await import('../src/screens/files/sheets/copy-item-sheet');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { OverlayProvider } = await import('../kit/overlay-primitives');

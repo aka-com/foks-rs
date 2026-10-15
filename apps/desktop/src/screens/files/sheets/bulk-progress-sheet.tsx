@@ -1,20 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { anyDialogOpen } from '../../kit/overlay-primitives';
-import { useToast } from '../../kit/toasts';
-import { Button, Icon, SheetDialog } from '../components';
-import type { Bridge } from '../bridge';
-import type { FoksIconName } from '../icons';
+import { anyDialogOpen } from '../../../../kit/overlay-primitives';
+import { useToast } from '../../../../kit/toasts';
+import { Button, Icon, SheetDialog } from '../../../components';
+import type { Bridge } from '../../../bridge';
+import type { FoksIconName } from '../../../icons';
 import {
   isTrashPath,
   nameOf,
   storeOf,
   trashUnavailable,
   UNDO_DURATION_MS,
-} from '../model';
-import type { AgentSnapshot, Item } from '../model';
-import { noteMoved } from '../recent-favorites';
-import { useSheetGuard } from '../navigation-guard';
+} from '../../../model';
+import type { AgentSnapshot, Item } from '../../../model';
+import { noteMoved } from '../../../recent-favorites';
+import { useSheetGuard } from '../../../navigation-guard';
 import {
   baseName,
   bulkCounts,
@@ -27,11 +27,11 @@ import {
   rowKey,
   runBulk,
   toFolder,
-} from './item-moves';
-import type { BulkAction, BulkRow, BulkStatus } from './item-moves';
-import { itemActionProblem } from './store-access';
-import type { WriteWorkflow } from './write-workflow-model';
-import { useShellServices, useShellSnapshot } from '../shell-services';
+} from '../../item-moves';
+import type { BulkAction, BulkRow, BulkStatus } from '../../item-moves';
+import { itemActionProblem } from '../../store-access';
+import type { WriteWorkflow } from '../../write-workflow-model';
+import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 export type BulkWorkflow = Extract<
   NonNullable<WriteWorkflow>,

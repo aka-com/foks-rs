@@ -1,16 +1,16 @@
 /**
  * The write overlay: the sheet each write workflow opens. The sheets are in
- * `files/sheets/` and in the `*-sheet.tsx` modules beside this one; the
- * workflow type is in `write-workflow-model.ts`.
+ * `files/sheets/`, one per file; the workflow type is in
+ * `write-workflow-model.ts`.
  */
 
-import { MoveSheet } from './move-item-sheet';
-import { BulkProgressSheet } from './bulk-progress-sheet';
+import { MoveSheet } from './files/sheets/move-item-sheet';
+import { BulkProgressSheet } from './files/sheets/bulk-progress-sheet';
 import type { ReactNode } from 'react';
 import type { Item } from '../model';
-import { CopyItemSheet } from './copy-item-sheet';
-import { ImportPasswordsSheet } from './import-passwords-sheet';
-import { ExportPasswordsSheet } from './export-passwords-sheet';
+import { CopyItemSheet } from './files/sheets/copy-item-sheet';
+import { ImportPasswordsSheet } from './files/sheets/import-passwords-sheet';
+import { ExportPasswordsSheet } from './files/sheets/export-passwords-sheet';
 import type { WriteWorkflow } from './write-workflow-model';
 import { NewSheet } from './files/sheets/new-item-sheet';
 import { NewFolderSheet } from './files/sheets/new-folder-sheet';
