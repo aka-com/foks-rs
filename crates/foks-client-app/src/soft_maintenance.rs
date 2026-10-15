@@ -1,12 +1,10 @@
 //! Orphaned large-file stage reclamation at exclusive checked-session admission.
+use crate::scan_limiter::ScanLimiter;
 use crate::*;
-use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
 
 // Each pass opens the soft cache and scans every staged large file. Bound
 // repeat scanning per database without adding durable state.
-static LAST_SCAN: OnceLock<Mutex<BTreeMap<PathBuf, Instant>>> = OnceLock::new();
-const SCAN_INTERVAL: Duration = Duration::from_secs(60);
+static LAST_SCAN: ScanLimiter<PathBuf> = ScanLimiter::new();
 
 /// Deletes large-file stages that no projected KV entry references, which a
 /// process exit during a download leaves behind with their plaintext chunks.
@@ -21,21 +19,11 @@ pub(crate) fn compact_soft_large_file_stages(session: &CheckedProfileSession<'_>
     if !path.try_exists()? {
         return Ok(0);
     }
-    let scans = LAST_SCAN.get_or_init(Mutex::default);
-    if scans
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(path)
-        .is_some_and(|last| last.elapsed() < SCAN_INTERVAL)
-    {
+    if !LAST_SCAN.due(path) {
         return Ok(0);
     }
     let removed = foks_client_db::SoftStateStore::open(path)?.reclaim_orphaned_large_files()?;
-    let mut scans = scans.lock().unwrap_or_else(|e| e.into_inner());
-    if scans.len() >= 128 && !scans.contains_key(path) {
-        scans.pop_first();
-    }
-    scans.insert(path.clone(), Instant::now());
+    LAST_SCAN.record(path.clone());
     Ok(removed)
 }
 
@@ -65,11 +53,7 @@ mod tests {
         (count("kv_large_files"), count("kv_large_file_chunks"))
     }
     fn forget_scan(session: &ProfileSession) {
-        LAST_SCAN
-            .get_or_init(Mutex::default)
-            .lock()
-            .unwrap()
-            .remove(&session.paths.soft_database);
+        LAST_SCAN.forget(&session.paths.soft_database);
     }
 
     #[test]
