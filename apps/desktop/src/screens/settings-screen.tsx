@@ -7,7 +7,11 @@ import {
   storedTrashAutoEmpty,
   TRASH_AUTO_EMPTY_CHOICES,
 } from '../trash-auto-empty';
-import { setAppearance, useAppearance, type Appearance } from '../appearance';
+import {
+  setAppearance,
+  useAppearance,
+  type Appearance,
+} from '../platform/appearance';
 import {
   rememberQuitConfirmation,
   useQuitConfirmation,

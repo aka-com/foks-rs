@@ -6,7 +6,7 @@ import {
   mountAppearance,
   setAppearance,
   storedAppearance,
-} from '../src/appearance';
+} from '../src/platform/appearance';
 installDom({ url: 'http://localhost/' });
 
 test('appearance persists, follows system changes only in System mode, and syncs other windows', () => {

@@ -10,7 +10,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './app-root';
 import { WindowFaultBoundary } from './app/fault-boundaries';
-import { mountAppearance } from './appearance';
+import { mountAppearance } from './platform/appearance';
 import {
   listenForWindowFaults,
   rendererRootOptions,

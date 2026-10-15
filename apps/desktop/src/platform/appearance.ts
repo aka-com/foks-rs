@@ -1,10 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
-import {
-  readStorage,
-  STORAGE_KEYS,
-  writeStorage,
-} from './platform/device-storage';
+import { readStorage, STORAGE_KEYS, writeStorage } from './device-storage';
 
 export type Appearance = 'light' | 'dark' | 'system';
 const KEY = STORAGE_KEYS.appearance;
