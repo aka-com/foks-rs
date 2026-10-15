@@ -275,6 +275,19 @@ fn authorize(
     Ok(())
 }
 
+pub(crate) fn authorize_username_change(
+    database: &foks_server_db::ReadDatabase,
+    principal: &Principal,
+) -> Result<(), RpcStatus> {
+    principal.require_interactive_device()?;
+    database
+        .require_username_change_owner(principal.uid(), principal.device_id())
+        .map_err(|error| match error {
+            foks_server_db::Error::AuthorizationChanged => permission_denied(),
+            _ => RpcStatus::TransactionRetry,
+        })
+}
+
 pub(crate) fn authorize_database(
     database: &foks_server_db::ReadDatabase,
     principal: &Principal,

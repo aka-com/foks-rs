@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"github.com/foks-proj/go-foks/lib/core"
 	proto "github.com/foks-proj/go-foks/proto/lib"
 	"github.com/foks-proj/go-foks/proto/rem"
@@ -20,9 +21,16 @@ func liveRename(t *testing.T, ctx context.Context, client *rem.UserClient, merkl
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = client.ChangeUsername(ctx, rem.ChangeUsernameArg{UsernameUtf8: "GoRenamed", Full: &rem.ChangedUsernameFullUpdateArg{Link: *made.Link, UsernameCommitmentKey: *made.UsernameCommitmentKey, Rur: reservation, NextTreeLocation: *made.NextTreeLocation}})
+	// These generated Go RPCs exercise all three owner-only operations. The
+	// server must keep their wire format and existing NoChange retry behavior.
+	rename := rem.ChangeUsernameArg{UsernameUtf8: "GoRenamed", Full: &rem.ChangedUsernameFullUpdateArg{Link: *made.Link, UsernameCommitmentKey: *made.UsernameCommitmentKey, Rur: reservation, NextTreeLocation: *made.NextTreeLocation}}
+	err = client.ChangeUsername(ctx, rename)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var noChange core.NoChangeError
+	if err = client.ChangeUsername(ctx, rename); !errors.As(err, &noChange) {
+		t.Fatalf("identical full rename should return NoChange: %v", err)
 	}
 	resolved, err := client.ResolveUsername(ctx, rem.ResolveUsernameArg{N: "gorenamed", Auth: rem.NewLoadUserChainAuthWithOpenvhost()})
 	if err != nil || !resolved.Eq(user.uid) {
@@ -44,9 +52,10 @@ func liveRename(t *testing.T, ctx context.Context, client *rem.UserClient, merkl
 	if err = client.ChangeUsername(ctx, rem.ChangeUsernameArg{UsernameUtf8: "GORENAMED"}); err != nil {
 		t.Fatal(err)
 	}
-	if err = client.ChangeUsername(ctx, rem.ChangeUsernameArg{UsernameUtf8: "GORENAMED"}); err == nil {
-		t.Fatal("identical display should return NoChange")
+	if err = client.ChangeUsername(ctx, rem.ChangeUsernameArg{UsernameUtf8: "GORENAMED"}); !errors.As(err, &noChange) {
+		t.Fatalf("identical display should return NoChange: %v", err)
 	}
+	t.Log("official Go interactive owner reservation, full rename, display rename and retries succeeded")
 }
 
 func liveBot(t *testing.T, ctx context.Context, owner *rem.UserClient, reg *rem.RegClient, merkle *rem.MerkleQueryClient, user *goLiveUser, address string, roots *x509.CertPool) {
