@@ -127,7 +127,8 @@ impl RpcStatus {
 
 /// Encodes a successful response for a method whose result is `Void`.
 pub fn encode_void_success_response_at(sequence: u64) -> Result<Vec<u8>> {
-    let mut content = Vec::new();
+    crate::response_budget::reserve_response(256, true)?;
+    let mut content = Vec::with_capacity(64);
     content.push(0x94);
     encode_unsigned(METHOD_RESPONSE, &mut content);
     encode_unsigned(sequence, &mut content);
@@ -140,7 +141,11 @@ pub fn encode_void_success_response_at(sequence: u64) -> Result<Vec<u8>> {
 
 /// Encodes a typed v0.1.9 application error response.
 pub fn encode_status_response_at(status: &RpcStatus, sequence: u64) -> Result<Vec<u8>> {
-    let mut content = Vec::new();
+    let capacity = status_capacity(status, 0)?;
+    // Includes the positional Value tree, intermediate status encoding, envelope
+    // and framed copy. Charge before constructing any of these representations.
+    crate::response_budget::reserve_response(capacity.saturating_mul(16), capacity <= 1024)?;
+    let mut content = Vec::with_capacity(capacity);
     content.push(0x94);
     encode_unsigned(METHOD_RESPONSE, &mut content);
     encode_unsigned(sequence, &mut content);
@@ -149,6 +154,56 @@ pub fn encode_status_response_at(status: &RpcStatus, sequence: u64) -> Result<Ve
     // a nil result value on error), so the response's result slot is bare nil.
     content.push(0xc0);
     frame(&content, DEFAULT_MAX_FRAME_LENGTH)
+}
+
+fn status_capacity(status: &RpcStatus, depth: usize) -> Result<usize> {
+    if depth > 64 {
+        return Err(crate::Error::FrameTooLarge {
+            received: usize::MAX,
+            maximum: DEFAULT_MAX_FRAME_LENGTH,
+        });
+    }
+    let payload = match status {
+        RpcStatus::OAuth2Auth(inner) => status_capacity(inner, depth + 1)?,
+        RpcStatus::NoChange(s)
+        | RpcStatus::OAuth2(s)
+        | RpcStatus::BadArguments(s)
+        | RpcStatus::Duplicate(s)
+        | RpcStatus::MerkleVerify(s)
+        | RpcStatus::KvRace(s)
+        | RpcStatus::NotFound(s)
+        | RpcStatus::KeyNotFound(s)
+        | RpcStatus::PermissionDenied(s)
+        | RpcStatus::RevokeRace(s)
+        | RpcStatus::TeamError(s)
+        | RpcStatus::TeamRace(s)
+        | RpcStatus::TeamBearerTokenStale(s)
+        | RpcStatus::TeamCertificate(s)
+        | RpcStatus::TeamRoster(s)
+        | RpcStatus::TeamKey(s)
+        | RpcStatus::TeamRemovalKey(s)
+        | RpcStatus::TeamExplore(s)
+        | RpcStatus::Realtime(s)
+        | RpcStatus::RtRace(s)
+        | RpcStatus::RtAmbiguousChannel(s)
+        | RpcStatus::RtNotFound(s)
+        | RpcStatus::RtMessageOrder(s)
+        | RpcStatus::TeamAdHocInvalidChange(s) => s.len(),
+        RpcStatus::StaleCache(v) => v.directories.iter().fold(0usize, |total, d| {
+            total
+                .saturating_add(64)
+                .saturating_add(d.entries.len().saturating_mul(64))
+        }),
+        _ => 0,
+    };
+    let capacity = payload.saturating_add(128);
+    if capacity > DEFAULT_MAX_FRAME_LENGTH {
+        return Err(crate::Error::FrameTooLarge {
+            received: capacity,
+            maximum: DEFAULT_MAX_FRAME_LENGTH,
+        });
+    }
+    Ok(capacity)
 }
 
 fn encode_status(status: &RpcStatus, output: &mut Vec<u8>) -> Result<()> {

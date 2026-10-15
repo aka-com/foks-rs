@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, OptionalExtension as _, Transaction, TransactionBehavior};
 
 use crate::{
@@ -167,12 +168,12 @@ impl Database {
         let global: i64 = transaction.query_row(
             "SELECT count(*) FROM passphrase_login_challenges",
             [],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         let per_user: i64 = transaction.query_row(
             "SELECT count(*) FROM passphrase_login_challenges WHERE uid = ?1",
             [uid],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if usize::try_from(global).unwrap_or(usize::MAX)
             >= self.config.maximum_active_passphrase_challenges
@@ -320,7 +321,7 @@ fn ensure_user(transaction: &Transaction<'_>, uid: &[u8]) -> Result<()> {
     let present: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM users WHERE uid = ?1)",
         [uid],
-        |row| row.get(0),
+        |row| row.budgeted_get(0),
     )?;
     if present {
         Ok(())
@@ -387,14 +388,14 @@ pub(crate) fn snapshot(connection: &Connection, uid: &[u8]) -> Result<Option<Pas
             [uid],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
+                    row.budgeted_get(5)?,
+                    row.budgeted_get(6)?,
+                    row.budgeted_get(7)?,
                 ))
             },
         )
@@ -468,7 +469,7 @@ fn require_current_owner_puk(
         "SELECT max(generation) FROM shared_keys
          WHERE uid = ?1 AND role_type = 3 AND visibility = 0",
         [uid],
-        |row| row.get(0),
+        |row| row.budgeted_get(0),
     )?;
     let Some(generation) = generation else {
         return Err(Error::AuthorizationChanged);
@@ -530,7 +531,7 @@ fn rate_limited(connection: &Connection, config: &Config, uid: &[u8], now: u64) 
         "SELECT count(*) FROM bad_passphrase_attempts
          WHERE uid = ?1 AND attempted_at > ?2",
         params![uid, sql_integer(cutoff)?],
-        |row| row.get(0),
+        |row| row.budgeted_get(0),
     )?;
     Ok(usize::try_from(count).unwrap_or(usize::MAX) >= config.maximum_bad_passphrase_attempts)
 }

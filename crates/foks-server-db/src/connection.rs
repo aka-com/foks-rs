@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 #[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(unix)]
@@ -221,14 +222,14 @@ impl Database {
     pub fn integrity_check(&self) -> Result<bool> {
         let result: String =
             self.connection
-                .pragma_query_value(None, "integrity_check", |row| row.get(0))?;
+                .pragma_query_value(None, "integrity_check", |row| row.budgeted_get(0))?;
         Ok(result == "ok")
     }
 
     pub fn quick_check(&self) -> Result<bool> {
         let result: String = self
             .connection
-            .pragma_query_value(None, "quick_check", |row| row.get(0))?;
+            .pragma_query_value(None, "quick_check", |row| row.budgeted_get(0))?;
         Ok(result == "ok")
     }
 
@@ -260,7 +261,7 @@ impl ReadDatabase {
     pub fn integrity_check(&self) -> Result<bool> {
         let result: String =
             self.connection
-                .pragma_query_value(None, "integrity_check", |row| row.get(0))?;
+                .pragma_query_value(None, "integrity_check", |row| row.budgeted_get(0))?;
         Ok(result == "ok")
     }
 
@@ -427,9 +428,11 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
     connection.pragma_update(None, "synchronous", "FULL")?;
     connection.pragma_update(None, "trusted_schema", false)?;
     connection.pragma_update(None, "temp_store", "MEMORY")?;
-    let page_size: i64 = connection.pragma_query_value(None, "page_size", |row| row.get(0))?;
+    let page_size: i64 =
+        connection.pragma_query_value(None, "page_size", |row| row.budgeted_get(0))?;
     let page_size = u64::try_from(page_size).map_err(|_| crate::Error::IntegerRange)?;
-    let page_count: i64 = connection.pragma_query_value(None, "page_count", |row| row.get(0))?;
+    let page_count: i64 =
+        connection.pragma_query_value(None, "page_count", |row| row.budgeted_get(0))?;
     let current_bytes = u64::try_from(page_count)
         .map_err(|_| crate::Error::IntegerRange)?
         .checked_mul(page_size)
@@ -461,16 +464,21 @@ fn configure_reader(connection: &Connection, config: &Config) -> Result<()> {
 
 fn pragmas(connection: &Connection) -> Result<Pragmas> {
     let read_count = |name| -> Result<u64> {
-        let value: i64 = connection.pragma_query_value(Some("main"), name, |row| row.get(0))?;
+        let value: i64 =
+            connection.pragma_query_value(Some("main"), name, |row| row.budgeted_get(0))?;
         u64::try_from(value).map_err(|_| crate::Error::IntegerRange)
     };
     Ok(Pragmas {
-        foreign_keys: connection.pragma_query_value(None, "foreign_keys", |row| row.get(0))?,
-        journal_mode: connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?,
-        synchronous: connection.pragma_query_value(None, "synchronous", |row| row.get(0))?,
+        foreign_keys: connection
+            .pragma_query_value(None, "foreign_keys", |row| row.budgeted_get(0))?,
+        journal_mode: connection
+            .pragma_query_value(None, "journal_mode", |row| row.budgeted_get(0))?,
+        synchronous: connection
+            .pragma_query_value(None, "synchronous", |row| row.budgeted_get(0))?,
         busy_timeout_millis: read_count("busy_timeout")?,
         wal_autocheckpoint_pages: read_count("wal_autocheckpoint")?,
         wal_reuse_limit_bytes: read_count("journal_size_limit")?,
-        trusted_schema: connection.pragma_query_value(None, "trusted_schema", |row| row.get(0))?,
+        trusted_schema: connection
+            .pragma_query_value(None, "trusted_schema", |row| row.budgeted_get(0))?,
     })
 }

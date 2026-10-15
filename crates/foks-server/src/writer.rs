@@ -22,6 +22,8 @@ struct Call<F, T> {
         Arc<crate::ServerMetrics>,
         crate::metrics::realtime::ReconcileSource,
     )>,
+    // Drop captured buffers before returning their allocation allowance.
+    resources: Option<Arc<crate::net::memory::Request>>,
 }
 
 impl<F, T> Task for Call<F, T>
@@ -31,6 +33,7 @@ where
 {
     fn run(self: Box<Self>, database: &mut Database) {
         let Self {
+            resources,
             operation,
             response,
             queued_at,
@@ -40,7 +43,11 @@ where
         let queue_wait = queued_at.elapsed();
         timing.observe_queue_wait(queue_wait);
         let started = Instant::now();
-        let result = operation(database);
+        let result = if let Some(resources) = resources.as_ref() {
+            resources.sync(|| operation(database))
+        } else {
+            operation(database)
+        };
         let execution = started.elapsed();
         timing.observe_execution(execution);
         if let Some((metrics, source)) = reconciliation {
@@ -289,6 +296,7 @@ impl WriterHandle {
             .queue
             .sender
             .try_send(Message::Task(Box::new(Call {
+                resources: crate::net::memory::current(),
                 operation,
                 response,
                 queued_at: Instant::now(),

@@ -18,7 +18,7 @@ use foks_rpc::{
 use foks_snowpack::{decode, Value};
 use rustls::pki_types::CertificateDer;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{watch, Semaphore};
 
 use crate::auth::Principal;
 use crate::identity::validate_signup;
@@ -53,6 +53,8 @@ pub(crate) struct ServerData {
     execution: Arc<Semaphore>,
     realtime_polling: Arc<Semaphore>,
     request_memory: Arc<Semaphore>,
+    small_request_memory: Arc<Semaphore>,
+    memory: Arc<super::memory::Pools>,
     kex_relay: Arc<kex::Relay>,
     realtime: crate::services::realtime::RealtimeService,
 }
@@ -172,6 +174,10 @@ impl ServerData {
                 config.limits.maximum_in_flight_requests.min(32),
             )),
             request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
+            small_request_memory: Arc::new(Semaphore::new(
+                config.limits.maximum_control_memory_bytes,
+            )),
+            memory: super::memory::Pools::new(config.limits),
             kex_relay: Arc::new(kex::Relay::default()),
             realtime: crate::services::realtime::RealtimeService::new(Arc::clone(&config.metrics)),
         })
@@ -1331,7 +1337,8 @@ pub(crate) async fn serve(
             let _request_timer =
                 crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
             service_data.metrics.request_rate_limited();
-            let response = encode_status_response_at(&RpcStatus::RateLimited, 0)?;
+            let memory = service_data.memory.request(None);
+            let response = memory.sync(|| encode_status_response_at(&RpcStatus::RateLimited, 0))?;
             write_response(&mut stream, &response, limits.io_timeout).await?;
             service_data.metrics.response_completed();
             return Ok(());
@@ -1347,7 +1354,12 @@ pub(crate) async fn serve(
                     &mut stream,
                     length,
                     limits.maximum_frame_bytes,
-                    Arc::clone(&service_data.request_memory),
+                    Arc::clone(if length <= 4096 {
+                        &service_data.small_request_memory
+                    } else {
+                        &service_data.request_memory
+                    }),
+                    Arc::clone(&service_data.memory),
                 ),
             ) => result,
         };
@@ -1381,6 +1393,7 @@ pub(crate) async fn serve(
         service_data.metrics.request_started();
         let _request_timer = crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
         let sequence = call.sequence();
+        let argument_bytes = call.argument().len();
         let data = Arc::clone(service_data);
         let certificate = peer_certificate.clone();
         let routed = route_call(call, listener);
@@ -1393,8 +1406,16 @@ pub(crate) async fn serve(
             Ok(call) if call.route.id == crate::rpc::RouteId::RealTimeRtPollInbox
         );
         let sso_poll = matches!(&routed,Ok(call) if call.route.id==crate::rpc::RouteId::RegPollOAuth2SessionCompletion);
+        let chunk_download = matches!(&routed, Ok(call) if call.route.id == crate::rpc::RouteId::KvStoreGetEncryptedChunk);
+        if !request_memory.admit_working(argument_bytes, chunk_download) {
+            let response = request_memory
+                .sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
+            write_response(&mut stream, &response, limits.io_timeout).await?;
+            service_data.metrics.request_rate_limited();
+            return Ok(());
+        }
         let outcome = if sso_poll {
-            let _request_memory = request_memory;
+            let _request_memory = Arc::clone(&request_memory);
             let call = match routed {
                 Ok(call) => call,
                 Err(_) => unreachable!("recognized OIDC poll"),
@@ -1409,11 +1430,12 @@ pub(crate) async fn serve(
                     .map_err(|_| RpcStatus::TransactionRetry)
             };
             let response = tokio::select! {
-                result=result=>match result {Ok(bytes)=>bytes,Err(status)=>encode_status_response_at(&status,sequence)?},
+                result=request_memory.run(result)=>match result {Ok(bytes)=>bytes,Err(status)=>request_memory.sync(|| encode_status_response_at(&status,sequence))?},
                 _=stream.get_ref().0.readable()=>return Ok(()),
                 _=stop.changed()=>break,
             };
             RequestOutcome {
+                _memory: Arc::clone(&request_memory),
                 response,
                 route,
                 disconnect_before_response: false,
@@ -1422,7 +1444,7 @@ pub(crate) async fn serve(
             // Go-compatible KEX receives can remain open for up to an hour.
             // Await the relay directly rather than occupying a blocking worker;
             // the listener's active-connection semaphore remains the bound.
-            let _request_memory = request_memory;
+            let _request_memory = Arc::clone(&request_memory);
             let _handler_timer =
                 crate::ServerMetrics::handler_timer(Arc::clone(&service_data.metrics));
             let call = match routed {
@@ -1436,16 +1458,17 @@ pub(crate) async fn serve(
                 call.route.method,
             ) {
                 RequestOutcome {
+                    _memory: Arc::clone(&request_memory),
                     response: Vec::new(),
                     route,
                     disconnect_before_response: true,
                 }
             } else {
                 let response = tokio::select! {
-                    result = handlers::kex_receive_response(service_data.as_ref(), call) => {
+                    result = request_memory.run(handlers::kex_receive_response(service_data.as_ref(), call)) => {
                         match result {
                             Ok(response) => response,
-                            Err(status) => encode_status_response_at(&status, sequence)?,
+                            Err(status) => request_memory.sync(|| encode_status_response_at(&status, sequence))?,
                         }
                     }
                     // Snowpack is request/response serial. Readability while
@@ -1463,13 +1486,14 @@ pub(crate) async fn serve(
                     }
                 };
                 RequestOutcome {
+                    _memory: Arc::clone(&request_memory),
                     response,
                     route,
                     disconnect_before_response: false,
                 }
             }
         } else if realtime_poll {
-            let _request_memory = request_memory;
+            let _request_memory = Arc::clone(&request_memory);
             let call = match routed {
                 Ok(call) => call,
                 Err(_) => unreachable!("realtime poll was recognized above"),
@@ -1481,6 +1505,7 @@ pub(crate) async fn serve(
                 call.route.method,
             ) {
                 RequestOutcome {
+                    _memory: Arc::clone(&request_memory),
                     response: Vec::new(),
                     route,
                     disconnect_before_response: true,
@@ -1491,14 +1516,14 @@ pub(crate) async fn serve(
                         let _poll_permit = poll_permit;
                         if let Some(certificate) = certificate {
                             tokio::select! {
-                                result = handlers::realtime_poll_response(
+                                result = request_memory.run(handlers::realtime_poll_response(
                                     service_data.as_ref(),
                                     call,
                                     certificate,
-                                ) => {
+                                )) => {
                                     match result {
                                         Ok(response) => response,
-                                        Err(status) => encode_status_response_at(&status, sequence)?,
+                                        Err(status) => request_memory.sync(|| encode_status_response_at(&status, sequence))?,
                                     }
                                 }
                                 result = stream.get_ref().0.readable() => {
@@ -1511,12 +1536,16 @@ pub(crate) async fn serve(
                                 }
                             }
                         } else {
-                            encode_status_response_at(&permission_denied(), sequence)?
+                            request_memory.sync(|| {
+                                encode_status_response_at(&permission_denied(), sequence)
+                            })?
                         }
                     }
-                    Err(_) => encode_status_response_at(&RpcStatus::RateLimited, sequence)?,
+                    Err(_) => request_memory
+                        .sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?,
                 };
                 RequestOutcome {
+                    _memory: Arc::clone(&request_memory),
                     response,
                     route,
                     disconnect_before_response: false,
@@ -1528,84 +1557,93 @@ pub(crate) async fn serve(
                 limits.request_timeout,
                 &mut stop,
                 move || -> Result<RequestOutcome> {
-                    // A timed-out blocking handler can still own decoded request
-                    // memory, so keep its reservation in the same closure.
-                    let _request_memory = request_memory;
-                    let _handler_timer =
-                        crate::ServerMetrics::handler_timer(Arc::clone(&data.metrics));
-                    let principal = if listener == Listener::Authenticated {
-                        let certificate =
-                            CertificateDer::from(certificate.ok_or(crate::Error::Config(
-                                "authenticated TLS session has no client certificate",
-                            ))?);
-                        let now = data.clock.now_micros()?;
-                        let database = match data.read_database() {
-                            Ok(database) => database,
-                            Err(status) => {
-                                return Ok(RequestOutcome {
-                                    response: encode_status_response_at(&status, sequence)?,
-                                    route: None,
-                                    disconnect_before_response: false,
-                                });
+                    let scope = Arc::clone(&request_memory);
+                    scope.sync(|| {
+                        // A timed-out blocking handler can still own decoded request
+                        // memory, so keep its reservation in the same closure.
+                        let _request_memory = Arc::clone(&request_memory);
+                        let _handler_timer =
+                            crate::ServerMetrics::handler_timer(Arc::clone(&data.metrics));
+                        let principal = if listener == Listener::Authenticated {
+                            let certificate =
+                                CertificateDer::from(certificate.ok_or(crate::Error::Config(
+                                    "authenticated TLS session has no client certificate",
+                                ))?);
+                            let now = data.clock.now_micros()?;
+                            let database = match data.read_database() {
+                                Ok(database) => database,
+                                Err(status) => {
+                                    return Ok(RequestOutcome {
+                                        _memory: Arc::clone(&request_memory),
+                                        response: encode_status_response_at(&status, sequence)?,
+                                        route: None,
+                                        disconnect_before_response: false,
+                                    });
+                                }
+                            };
+                            Some(Principal::authenticate(&certificate, &database, now)?)
+                        } else {
+                            None
+                        };
+                        let mut route = None;
+                        let response = match routed {
+                            Ok(call) => {
+                                let protocol = call.route.protocol;
+                                let method = call.route.method;
+                                route = Some(call.route);
+                                if data.should_disconnect(
+                                    crate::SessionFaultPoint::BeforeDurableMutation,
+                                    protocol,
+                                    method,
+                                ) {
+                                    return Ok(RequestOutcome {
+                                        _memory: Arc::clone(&request_memory),
+                                        response: Vec::new(),
+                                        route,
+                                        disconnect_before_response: true,
+                                    });
+                                }
+                                let mut request_data = data.as_ref().clone();
+                                request_data.peer_ip = Some(peer_ip);
+                                let authorization = if !call.route.supported {
+                                    Err(RpcStatus::Unsupported)
+                                } else if let Some(principal) = principal.as_ref() {
+                                    request_data.authorize_principal(principal).map(|()| {
+                                        request_data.writer =
+                                            request_data.writer.as_ref().map(|w| {
+                                                w.for_authenticated_request(
+                                                    principal.uid(),
+                                                    principal.device_id(),
+                                                    request_data.clock.clone(),
+                                                )
+                                            });
+                                    })
+                                } else {
+                                    Ok(())
+                                };
+                                match authorization.and_then(|()| {
+                                    handlers::response(&request_data, call, principal.as_ref())
+                                }) {
+                                    Ok(response) => response,
+                                    Err(status) => encode_status_response_at(&status, sequence)?,
+                                }
+                            }
+                            Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
+                                &RpcStatus::BadArguments(
+                                    "request exceeds the method limit".to_owned(),
+                                ),
+                                sequence,
+                            )?,
+                            Err(RouteError::Unknown { .. } | RouteError::WrongListener) => {
+                                encode_status_response_at(&RpcStatus::Unsupported, sequence)?
                             }
                         };
-                        Some(Principal::authenticate(&certificate, &database, now)?)
-                    } else {
-                        None
-                    };
-                    let mut route = None;
-                    let response = match routed {
-                        Ok(call) => {
-                            let protocol = call.route.protocol;
-                            let method = call.route.method;
-                            route = Some(call.route);
-                            if data.should_disconnect(
-                                crate::SessionFaultPoint::BeforeDurableMutation,
-                                protocol,
-                                method,
-                            ) {
-                                return Ok(RequestOutcome {
-                                    response: Vec::new(),
-                                    route,
-                                    disconnect_before_response: true,
-                                });
-                            }
-                            let mut request_data = data.as_ref().clone();
-                            request_data.peer_ip = Some(peer_ip);
-                            let authorization = if !call.route.supported {
-                                Err(RpcStatus::Unsupported)
-                            } else if let Some(principal) = principal.as_ref() {
-                                request_data.authorize_principal(principal).map(|()| {
-                                    request_data.writer = request_data.writer.as_ref().map(|w| {
-                                        w.for_authenticated_request(
-                                            principal.uid(),
-                                            principal.device_id(),
-                                            request_data.clock.clone(),
-                                        )
-                                    });
-                                })
-                            } else {
-                                Ok(())
-                            };
-                            match authorization.and_then(|()| {
-                                handlers::response(&request_data, call, principal.as_ref())
-                            }) {
-                                Ok(response) => response,
-                                Err(status) => encode_status_response_at(&status, sequence)?,
-                            }
-                        }
-                        Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
-                            &RpcStatus::BadArguments("request exceeds the method limit".to_owned()),
-                            sequence,
-                        )?,
-                        Err(RouteError::Unknown { .. } | RouteError::WrongListener) => {
-                            encode_status_response_at(&RpcStatus::Unsupported, sequence)?
-                        }
-                    };
-                    Ok(RequestOutcome {
-                        response,
-                        route,
-                        disconnect_before_response: false,
+                        Ok(RequestOutcome {
+                            _memory: Arc::clone(&request_memory),
+                            response,
+                            route,
+                            disconnect_before_response: false,
+                        })
                     })
                 },
             )
@@ -1614,7 +1652,9 @@ pub(crate) async fn serve(
                 BoundedExecution::Completed(outcome) => outcome?,
                 BoundedExecution::Saturated => {
                     service_data.metrics.request_rate_limited();
-                    let response = encode_status_response_at(&RpcStatus::RateLimited, sequence)?;
+                    let memory = service_data.memory.request(None);
+                    let response = memory
+                        .sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
                     write_response(&mut stream, &response, limits.io_timeout).await?;
                     service_data.metrics.response_completed();
                     return Ok(());
@@ -1630,9 +1670,13 @@ pub(crate) async fn serve(
                 BoundedExecution::Stopped => break,
             }
         };
-        if outcome.disconnect_before_response {
+        // An operation may already have committed before output allocation fails.
+        // Preserve that ambiguity: never translate admission failure to an
+        // Unsupported or retryable status that implies a known non-write.
+        if outcome.disconnect_before_response || outcome._memory.failed() {
             return Ok(());
         }
+        let _memory = outcome._memory;
         let response = outcome.response;
         let route = outcome.route;
         if let Some(route) = route {
@@ -1673,6 +1717,8 @@ struct RequestOutcome {
     response: Vec<u8>,
     route: Option<&'static crate::rpc::RouteSpec>,
     disconnect_before_response: bool,
+    // Fields drop in declaration order: buffers must go before reservations.
+    _memory: Arc<super::memory::Request>,
 }
 
 enum BoundedExecution<T> {
@@ -1762,7 +1808,8 @@ async fn read_call_body_async<R: AsyncRead + Unpin>(
     length: usize,
     maximum: usize,
     request_memory: Arc<Semaphore>,
-) -> foks_rpc::Result<(foks_rpc::InboundMessage, OwnedSemaphorePermit)> {
+    memory: Arc<super::memory::Pools>,
+) -> foks_rpc::Result<(foks_rpc::InboundMessage, Arc<super::memory::Request>)> {
     let reserved = length
         .checked_mul(2)
         .ok_or(foks_rpc::Error::FrameTooLarge {
@@ -1784,7 +1831,10 @@ async fn read_call_body_async<R: AsyncRead + Unpin>(
         })?;
     let mut content = vec![0; length];
     reader.read_exact(&mut content).await?;
-    Ok((foks_rpc::decode_message(&content)?, permit))
+    let memory = memory.request(Some(permit));
+    memory.classify_input(length);
+    let message = memory.sync(|| foks_rpc::decode_message(&content))?;
+    Ok((message, memory))
 }
 
 async fn read_byte_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<u8> {
@@ -1805,7 +1855,7 @@ async fn read_u32_async<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result
     Ok(u32::from_be_bytes(bytes))
 }
 
-async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
+pub(super) async fn write_response<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
     response: &[u8],
     timeout: std::time::Duration,
@@ -2098,6 +2148,7 @@ mod tests {
             first_length,
             foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
             Arc::clone(&budget),
+            super::super::memory::Pools::new(crate::SessionLimits::default()),
         )
         .await
         .unwrap();
@@ -2116,6 +2167,7 @@ mod tests {
             second_length,
             foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
             Arc::clone(&budget),
+            super::super::memory::Pools::new(crate::SessionLimits::default()),
         ));
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(10), &mut second)

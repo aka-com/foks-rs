@@ -1,4 +1,5 @@
 mod listener;
+pub(crate) mod memory;
 pub(crate) mod session;
 
 pub(crate) use listener::bind_addresses;

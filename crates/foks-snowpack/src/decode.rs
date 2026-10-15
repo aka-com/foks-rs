@@ -105,6 +105,9 @@ impl Decoder<'_> {
     }
 
     fn bytes(&mut self, length: usize) -> Result<Vec<u8>, Error> {
+        // Include protocol-schema copies derived from this generic tree. These
+        // remain charged even after an intermediate decoder value is dropped.
+        crate::reserve_allocation(length.saturating_mul(4).saturating_add(64))?;
         Ok(self.borrowed_bytes(length)?.to_vec())
     }
 
@@ -311,6 +314,12 @@ impl Decoder<'_> {
         if self.values.saturating_add(length) > MAXIMUM_DECODED_VALUES {
             return Err(self.error(ErrorKind::ValueLimit));
         }
+        crate::reserve_allocation(
+            length
+                .saturating_mul(std::mem::size_of::<Value>())
+                .saturating_mul(4)
+                .saturating_add(4096),
+        )?;
         let mut values = Zeroizing::new(Vec::with_capacity(length));
         for index in 0..length {
             self.path.push(PathSegment::Index(index));
@@ -326,6 +335,11 @@ impl Decoder<'_> {
         if !(0xa0..=0xbf).contains(&marker) {
             return Err(self.error(ErrorKind::InvalidVariantTag));
         }
+        crate::reserve_allocation(
+            std::mem::size_of::<Value>()
+                .saturating_mul(4)
+                .saturating_add(128),
+        )?;
         let mut tag = Zeroizing::new(self.bytes((marker & 0x1f) as usize)?);
         self.path.push(PathSegment::Variant(if self.sensitive {
             Vec::new()

@@ -2156,6 +2156,7 @@ dependencies = [
  "foks-crypto",
  "foks-merkle-store",
  "foks-proto",
+ "foks-snowpack",
  "libc",
  "rusqlite",
  "sha2 0.11.0",

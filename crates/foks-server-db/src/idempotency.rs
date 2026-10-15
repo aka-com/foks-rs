@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, OptionalExtension as _};
 
 use crate::{error::sql_integer, Database, Error, ReadDatabase, Result};
@@ -42,7 +43,14 @@ pub(crate) fn lookup(
             "SELECT request_hash, response_blob, created_at, expires_at
              FROM request_receipts WHERE idempotency_key = ?1",
             [idempotency_key],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                ))
+            },
         )
         .optional()?;
     let Some((stored_hash, response, created_at, expires_at)) = row else {

@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _};
 
 use crate::{Database, Error, ReadDatabase, ReadSnapshot, Result};
@@ -56,7 +57,12 @@ fn device_nag(connection: &rusqlite::Connection, uid: &[u8]) -> Result<Option<De
              WHERE u.uid = ?1
              GROUP BY u.uid, u.device_nag_cleared",
             [uid],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get::<_, i64>(0)?,
+                    row.budgeted_get::<_, i64>(1)?,
+                ))
+            },
         )
         .optional()?
         .map(|(cleared, num_active_devices)| {

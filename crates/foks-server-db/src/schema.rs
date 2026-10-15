@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{Connection, TransactionBehavior};
 
 use crate::{Error, Result};
@@ -34,8 +35,9 @@ const SCHEMA: &str = concat!(
 
 pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
     let application_id: i64 =
-        connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
-    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        connection.pragma_query_value(None, "application_id", |row| row.budgeted_get(0))?;
+    let version: i64 =
+        connection.pragma_query_value(None, "user_version", |row| row.budgeted_get(0))?;
     if application_id == 0 && version == 0 {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(SCHEMA)?;
@@ -48,8 +50,9 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Recheck under the write lock: another opener may already have upgraded.
         let application_id =
-            transaction.pragma_query_value(None, "application_id", |r| r.get(0))?;
-        let version = transaction.pragma_query_value(None, "user_version", |r| r.get(0))?;
+            transaction.pragma_query_value(None, "application_id", |r| r.budgeted_get(0))?;
+        let version =
+            transaction.pragma_query_value(None, "user_version", |r| r.budgeted_get(0))?;
         if application_id == APPLICATION_ID && matches!(version, 43..=50) {
             if version <= 47 {
                 if version == 43 {
@@ -74,7 +77,7 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
                     SELECT 1 FROM pragma_table_info('sso_policy') WHERE name='fence'
                 )",
                     [],
-                    |row| row.get(0),
+                    |row| row.budgeted_get(0),
                 )?;
                 if has_fence {
                     transaction.execute_batch(
@@ -87,7 +90,7 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
                     WHERE name='admission_hash'
                 )",
                     [],
-                    |row| row.get(0),
+                    |row| row.budgeted_get(0),
                 )?;
                 if has_admission_hash {
                     transaction.execute_batch(
@@ -130,8 +133,9 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
 
 pub(crate) fn validate_connection(connection: &Connection) -> Result<()> {
     let application_id: i64 =
-        connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
-    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        connection.pragma_query_value(None, "application_id", |row| row.budgeted_get(0))?;
+    let version: i64 =
+        connection.pragma_query_value(None, "user_version", |row| row.budgeted_get(0))?;
     validate(application_id, version)
 }
 

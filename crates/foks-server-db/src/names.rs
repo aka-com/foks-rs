@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
@@ -17,7 +18,7 @@ impl Database {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM devices WHERE uid=?1 AND (device_id=?2 OR subkey_id=?2) AND active=1)", params![uid, credential], |r|r.get(0))?;
+        let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM devices WHERE uid=?1 AND (device_id=?2 OR subkey_id=?2) AND active=1)", params![uid, credential], |r|r.budgeted_get(0))?;
         if !active {
             return Err(Error::AuthorizationChanged);
         }
@@ -117,7 +118,7 @@ fn uid_by_normalized_name(
         .query_row(
             "SELECT uid FROM names WHERE normalized_name = ?1 AND uid IS NOT NULL AND dead = 0",
             [normalized_name],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .optional()?)
 }
@@ -168,7 +169,7 @@ pub(crate) fn reserve_on(
         .query_row(
             "SELECT uid, expires_at FROM names WHERE normalized_name = ?1",
             [normalized_name],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )
         .optional()?;
     if existing.is_some_and(|(uid, expiry)| uid.is_some() || expiry.is_none_or(|value| value > now))

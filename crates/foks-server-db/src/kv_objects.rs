@@ -1,5 +1,6 @@
 //! Internal chunk placement. These types never appear in protocol messages.
 
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, Row};
 use sha2::{Digest as _, Sha256};
 
@@ -64,10 +65,10 @@ pub(crate) fn validate_encoded_chunk(
 }
 
 pub(crate) fn payload_from_row(row: &Row<'_>, start: usize) -> Result<KvChunkPayload> {
-    let ciphertext: Vec<u8> = row.get(start)?;
-    let digest: Option<Vec<u8>> = row.get(start + 1)?;
-    let bytes: Option<i64> = row.get(start + 2)?;
-    let encoded: Option<i64> = row.get(start + 3)?;
+    let ciphertext: Vec<u8> = row.budgeted_get(start)?;
+    let digest: Option<Vec<u8>> = row.budgeted_get(start + 1)?;
+    let bytes: Option<i64> = row.budgeted_get(start + 2)?;
+    let encoded: Option<i64> = row.budgeted_get(start + 3)?;
     match (digest, bytes, encoded) {
         (None, None, None) => Ok(KvChunkPayload::Inline(ciphertext)),
         (Some(digest), Some(bytes), Some(encoded)) if ciphertext.is_empty() => {
@@ -96,7 +97,7 @@ fn has_external_chunks(connection: &Connection) -> Result<bool> {
     Ok(connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM kv_file_chunks WHERE external_digest IS NOT NULL)",
         [],
-        |row| row.get(0),
+        |row| row.budgeted_get(0),
     )?)
 }
 
@@ -135,9 +136,9 @@ impl Database {
         let Some(row) = rows.next()? else {
             return Ok(None);
         };
-        let uid: Vec<u8> = row.get(0)?;
-        let file_id: Vec<u8> = row.get(1)?;
-        let offset = crate::error::unsigned(row.get(2)?)?;
+        let uid: Vec<u8> = row.budgeted_get(0)?;
+        let file_id: Vec<u8> = row.budgeted_get(1)?;
+        let offset = crate::error::unsigned(row.budgeted_get(2)?)?;
         Ok(Some(StoredKvChunkObject {
             key: KvChunkKey {
                 uid: uid
@@ -151,9 +152,13 @@ impl Database {
             chunk: StoredKvFileChunk {
                 payload: payload_from_row(row, 3)?,
                 offset,
-                final_chunk: row.get(7)?,
+                final_chunk: row.budgeted_get(7)?,
             },
-            exact_chunk: if external { None } else { Some(row.get(8)?) },
+            exact_chunk: if external {
+                None
+            } else {
+                Some(row.budgeted_get(8)?)
+            },
         }))
     }
 

@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use crate::{Config, Database, MaintenanceReport};
 use rusqlite::params;
 
@@ -46,7 +47,7 @@ impl Fixture {
             .unwrap();
         assert!(db
             .connection
-            .pragma_query_value(None, "foreign_keys", |r| r.get::<_, bool>(0))
+            .pragma_query_value(None, "foreign_keys", |r| r.budgeted_get::<_, bool>(0))
             .unwrap());
         db.connection
             .execute(
@@ -153,7 +154,7 @@ impl Fixture {
             .db
             .connection
             .query_row(&format!("SELECT count(*) FROM {table}{extra}"), [], |r| {
-                r.get(0)
+                r.budgeted_get(0)
             })
             .unwrap();
         usize::try_from(count).unwrap()

@@ -1,4 +1,5 @@
 //! Durable rollout policy. Provider availability never changes cohort membership or mode.
+use crate::allocation::RowAllocationExt as _;
 use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
 use rusqlite::{params, Connection, OptionalExtension as _, TransactionBehavior};
 
@@ -89,7 +90,7 @@ impl Database {
 
     /// Eligibility to claim one refresh is separate from permission to use ordinary services.
     pub fn sso_refresh_eligible(&self, uid: &[u8], now_ms: u64) -> Result<bool> {
-        Ok(self.connection.query_row("SELECT EXISTS(SELECT 1 FROM sso_access a JOIN sso_policy p ON p.host=a.host WHERE a.uid=?1 AND p.blocked_reason IS NULL AND a.config_hash=p.config_hash AND a.authorization_epoch=p.authorization_epoch AND a.state=0 AND a.interrupted=0 AND a.expires_at_ms<=?2)",params![uid,sql_integer(now_ms)?],|r|r.get(0))?)
+        Ok(self.connection.query_row("SELECT EXISTS(SELECT 1 FROM sso_access a JOIN sso_policy p ON p.host=a.host WHERE a.uid=?1 AND p.blocked_reason IS NULL AND a.config_hash=p.config_hash AND a.authorization_epoch=p.authorization_epoch AND a.state=0 AND a.interrupted=0 AND a.expires_at_ms<=?2)",params![uid,sql_integer(now_ms)?],|r|r.budgeted_get(0))?)
     }
 
     pub fn sso_policy(&self, host: &[u8; 33]) -> Result<Option<SsoPolicy>> {
@@ -119,7 +120,7 @@ impl Database {
         if read(&tx, host)?.is_some() {
             return Err(Error::AuthorizationChanged);
         }
-        let users: i64 = tx.query_row("SELECT count(*) FROM users", [], |r| r.get(0))?;
+        let users: i64 = tx.query_row("SELECT count(*) FROM users", [], |r| r.budgeted_get(0))?;
         if users != 0 && mode == SsoRolloutMode::Enforced {
             return Err(Error::Invalid("enforced activation requires an empty host"));
         }
@@ -228,9 +229,9 @@ impl ReadSnapshot<'_> {
 }
 pub(crate) fn read(c: &Connection, host: &[u8; 33]) -> Result<Option<SsoPolicy>> {
     Ok(c.query_row("SELECT rollout_id,config_hash,issuer,mode,blocked_reason,revision,authorization_epoch FROM sso_policy WHERE host=?1", [host], |r| {
-        let mode = match r.get::<_,u8>(3)? { 0=>SsoRolloutMode::Migration,1=>SsoRolloutMode::Enforced,_=>return Err(rusqlite::Error::InvalidQuery) };
-        let blocked_reason = match r.get::<_,Option<u8>>(4)? {None=>None,Some(1)=>Some(SsoProviderBlockReason::MissingConfiguration),Some(2)=>Some(SsoProviderBlockReason::ConfigurationMismatch),Some(3)=>Some(SsoProviderBlockReason::KeyUnavailable),Some(4)=>Some(SsoProviderBlockReason::Operator),_=>return Err(rusqlite::Error::InvalidQuery)};
-        Ok(SsoPolicy { host:*host,rollout_id:r.get(0)?,config_hash:r.get(1)?,issuer:r.get(2)?,mode,blocked_reason,revision:r.get::<_,i64>(5)? as u64,authorization_epoch:r.get::<_,i64>(6)? as u64 })
+        let mode = match r.budgeted_get::<_,u8>(3)? { 0=>SsoRolloutMode::Migration,1=>SsoRolloutMode::Enforced,_=>return Err(rusqlite::Error::InvalidQuery) };
+        let blocked_reason = match r.budgeted_get::<_,Option<u8>>(4)? {None=>None,Some(1)=>Some(SsoProviderBlockReason::MissingConfiguration),Some(2)=>Some(SsoProviderBlockReason::ConfigurationMismatch),Some(3)=>Some(SsoProviderBlockReason::KeyUnavailable),Some(4)=>Some(SsoProviderBlockReason::Operator),_=>return Err(rusqlite::Error::InvalidQuery)};
+        Ok(SsoPolicy { host:*host,rollout_id:r.budgeted_get(0)?,config_hash:r.budgeted_get(1)?,issuer:r.budgeted_get(2)?,mode,blocked_reason,revision:r.budgeted_get::<_,i64>(5)? as u64,authorization_epoch:r.budgeted_get::<_,i64>(6)? as u64 })
     }).optional()?)
 }
 fn status(c: &Connection, host: &[u8; 33]) -> Result<Option<SsoRolloutStatus>> {
@@ -238,7 +239,7 @@ fn status(c: &Connection, host: &[u8; 33]) -> Result<Option<SsoRolloutStatus>> {
     let Some(policy) = read(c, host)? else {
         return Ok(None);
     };
-    let (cohort,linked):(i64,i64) = c.query_row("SELECT count(*),coalesce(sum(EXISTS(SELECT 1 FROM sso_access a WHERE a.host=c.host AND a.uid=c.uid)),0) FROM sso_migration_cohort c WHERE c.host=?1", [host], |r|Ok((r.get(0)?,r.get(1)?)))?;
+    let (cohort,linked):(i64,i64) = c.query_row("SELECT count(*),coalesce(sum(EXISTS(SELECT 1 FROM sso_access a WHERE a.host=c.host AND a.uid=c.uid)),0) FROM sso_migration_cohort c WHERE c.host=?1", [host], |r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?)))?;
     Ok(Some(SsoRolloutStatus {
         policy,
         cohort: cohort as u64,
@@ -260,7 +261,7 @@ pub(crate) fn decision(c: &Connection, uid: &[u8], now_ms: u64) -> Result<SsoAcc
          FROM sso_policy p LEFT JOIN sso_access a ON a.host=p.host AND a.uid=?1
          LEFT JOIN sso_migration_cohort c ON c.host=p.host AND c.uid=?1",
             params![uid, sql_integer(now_ms)?],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )
         .optional()?;
     use SsoAccessDecision::*;
@@ -290,11 +291,11 @@ pub(crate) fn authorization_binding(
             params![uid, sql_integer(now_ms)?],
             |r| {
                 Ok((
-                    r.get::<_, [u8; 33]>(0)?,
-                    r.get::<_, [u8; 32]>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, Option<i64>>(3)?,
-                    r.get::<_, Option<bool>>(4)?.unwrap_or(false),
+                    r.budgeted_get::<_, [u8; 33]>(0)?,
+                    r.budgeted_get::<_, [u8; 32]>(1)?,
+                    r.budgeted_get::<_, i64>(2)?,
+                    r.budgeted_get::<_, Option<i64>>(3)?,
+                    r.budgeted_get::<_, Option<bool>>(4)?.unwrap_or(false),
                 ))
             },
         )

@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, Database, Error, Result};
@@ -28,7 +29,7 @@ impl Database {
         let count: i64 = transaction.query_row(
             "SELECT count(*) FROM team_names WHERE team_id IS NULL",
             [],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if usize::try_from(count).unwrap_or(usize::MAX)
             >= self.config.maximum_team_name_reservations
@@ -39,7 +40,7 @@ impl Database {
             .query_row(
                 "SELECT team_id, expires_at FROM team_names WHERE normalized_name = ?1",
                 [normalized_name],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
             )
             .optional()?;
         if existing.is_some() {

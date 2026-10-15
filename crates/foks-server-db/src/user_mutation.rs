@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, idempotency, Database, Error, Result};
@@ -127,7 +128,14 @@ impl Database {
                  JOIN merkle_roots r ON r.epoch = rh.epoch
                  WHERE h.uid = ?1",
                 [mutation.uid],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| {
+                    Ok((
+                        row.budgeted_get(0)?,
+                        row.budgeted_get(1)?,
+                        row.budgeted_get(2)?,
+                        row.budgeted_get(3)?,
+                    ))
+                },
             )
             .optional()?;
         let Some((sequence, tail_hash, root_epoch, root_hash)) = current else {
@@ -147,7 +155,7 @@ impl Database {
             .query_row(
                 "SELECT active FROM devices WHERE uid = ?1 AND device_id = ?2",
                 params![mutation.uid, mutation.signer_device_id],
-                |row| Ok(row.get::<_, i64>(0)? == 1),
+                |row| Ok(row.budgeted_get::<_, i64>(0)? == 1),
             )
             .optional()?
             .unwrap_or(false);
@@ -164,7 +172,7 @@ impl Database {
                 "SELECT EXISTS(SELECT 1 FROM names WHERE normalized_name=?1 AND uid IS NULL
                  AND reservation_token=?2 AND reservation_sequence=?3 AND expires_at=?4 AND expires_at>?5)",
                 params![name.normalized_name, name.token, sql_integer(name.name_sequence)?, sql_integer(expiry)?, sql_integer(mutation.now)?],
-                |r| r.get(0))?;
+                |r| r.budgeted_get(0))?;
             if !valid {
                 return Err(Error::Reservation);
             }
@@ -335,7 +343,7 @@ impl Database {
                 .query_row(
                     "SELECT exact_node FROM merkle_nodes WHERE node_hash = ?1",
                     [hash],
-                    |row| row.get(0),
+                    |row| row.budgeted_get(0),
                 )
                 .optional()?;
             match existing {
@@ -519,7 +527,7 @@ fn assert_no_racing_revoked_credential(
         sql_integer(mutation.cited_root_epoch)?
     ])?;
     while let Some(row) = rows.next()? {
-        let exact: Vec<u8> = row.get(0)?;
+        let exact: Vec<u8> = row.budgeted_get(0)?;
         let link = foks_proto::UserLink::decode(&exact)
             .map_err(|_| Error::Invalid("stored generic user link"))?;
         let decoded = link
@@ -543,7 +551,7 @@ fn enforce_credential_capacity(
     let active: i64 = transaction.query_row(
         "SELECT count(*) FROM devices WHERE uid = ?1 AND active = 1",
         [mutation.uid],
-        |row| row.get(0),
+        |row| row.budgeted_get(0),
     )?;
     if crate::error::unsigned(active)? >= config.maximum_active_credentials_per_user as u64 {
         return Err(Error::QuotaExceeded);
@@ -553,7 +561,7 @@ fn enforce_credential_capacity(
             "SELECT count(*) FROM devices
              WHERE uid = ?1 AND active = 1 AND substr(device_id, 1, 1) = ?2",
             params![mutation.uid, [foks_proto::ENTITY_BACKUP_KEY]],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if crate::error::unsigned(backups)? >= config.maximum_backup_credentials_per_user as u64 {
             return Err(Error::QuotaExceeded);

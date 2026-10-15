@@ -1,4 +1,5 @@
 //! Provider-independent owner proofs and durable nonsecret binding evidence.
+use crate::allocation::RowAllocationExt as _;
 use crate::{error::sql_integer, Database, Error, Result};
 use foks_proto::{
     IdentityChallenge, IdentityClaim, IdentityProof, IdentityStatus, SsoAccountState,
@@ -26,7 +27,7 @@ impl Database {
         let (total, source): (i64, i64) = tx.query_row(
             "SELECT count(*),coalesce(sum(source_hash=?1),0) FROM sso_identity_challenges",
             [source_hash],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?)),
         )?;
         if total >= 1024 || source >= 8 {
             return Err(Error::Capacity("identity challenges"));
@@ -81,7 +82,7 @@ impl Database {
         let cohort: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM sso_migration_cohort WHERE host=?1 AND uid=?2)",
             params![host, claim.uid.as_bytes()],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         let account_state = match (&p, &a, cohort) {
             (None, _, _) => SsoAccountState::DeviceOnly,
@@ -136,7 +137,7 @@ pub(crate) fn require_owner(
     if !matches!(credential.first(), Some(4 | 8 | 13)) {
         return Err(Error::AuthorizationChanged);
     }
-    let valid:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM devices d JOIN user_chain_heads h ON h.uid=d.uid WHERE d.uid=?1 AND d.active=1 AND d.role_type=3 AND (d.device_id=?2 OR (d.subkey_id=?2 AND substr(d.device_id,1,1)=x'08')) AND (?3 IS NULL OR h.seqno=?3))",params![uid,credential,sequence.map(sql_integer).transpose()?],|r|r.get(0))?;
+    let valid:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM devices d JOIN user_chain_heads h ON h.uid=d.uid WHERE d.uid=?1 AND d.active=1 AND d.role_type=3 AND (d.device_id=?2 OR (d.subkey_id=?2 AND substr(d.device_id,1,1)=x'08')) AND (?3 IS NULL OR h.seqno=?3))",params![uid,credential,sequence.map(sql_integer).transpose()?],|r|r.budgeted_get(0))?;
     if !valid {
         return Err(Error::AuthorizationChanged);
     }
@@ -161,7 +162,7 @@ pub(crate) fn reserve_authorization_binding(
     let count: i64 = c.query_row(
         "SELECT count(*) FROM sso_binding_receipts WHERE host=?1 AND uid=?2",
         params![a.host, a.uid],
-        |r| r.get(0),
+        |r| r.budgeted_get(0),
     )?;
     if count >= 4096 {
         return Err(Error::Capacity("SSO authorization bindings"));

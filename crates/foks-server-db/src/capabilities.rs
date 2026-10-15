@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result};
@@ -107,7 +108,7 @@ impl Database {
             "SELECT count(*) FROM team_view_tokens
              WHERE team_id = ?1 AND member_id = ?2",
             params![authority.team_id, authority.member_id],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         while usize::try_from(scoped).unwrap_or(usize::MAX)
             >= self.config.maximum_team_view_capabilities_per_pair
@@ -119,7 +120,7 @@ impl Database {
                      ORDER BY expires_at, token_hash
                      LIMIT 1",
                     params![authority.team_id, authority.member_id],
-                    |row| row.get(0),
+                    |row| row.budgeted_get(0),
                 )
                 .optional()?;
             let Some(oldest) = oldest else {
@@ -133,7 +134,7 @@ impl Database {
         }
         let global: i64 =
             transaction.query_row("SELECT count(*) FROM team_view_tokens", [], |row| {
-                row.get(0)
+                row.budgeted_get(0)
             })?;
         if usize::try_from(global).unwrap_or(usize::MAX)
             >= self.config.maximum_active_team_view_capabilities
@@ -202,14 +203,14 @@ impl Database {
                 params![token_hash, sql_integer(now)?],
                 |row| {
                     Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
+                        row.budgeted_get(0)?,
+                        row.budgeted_get(1)?,
+                        row.budgeted_get(2)?,
+                        row.budgeted_get(3)?,
+                        row.budgeted_get(4)?,
+                        row.budgeted_get(5)?,
+                        row.budgeted_get(6)?,
+                        row.budgeted_get(7)?,
                     ))
                 },
             )
@@ -252,12 +253,12 @@ impl Database {
         reclaim(&transaction, issue.now)?;
         let global: i64 =
             transaction.query_row("SELECT count(*) FROM team_admin_tokens", [], |row| {
-                row.get(0)
+                row.budgeted_get(0)
             })?;
         let scoped: i64 = transaction.query_row(
             "SELECT count(*) FROM team_admin_tokens WHERE team_id = ?1 AND holder_id = ?2",
             params![issue.binding.team_id, issue.binding.holder_id],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if usize::try_from(global).unwrap_or(usize::MAX)
             >= self.config.maximum_active_team_admin_capabilities
@@ -306,7 +307,7 @@ impl Database {
         let stored: Option<Vec<u8>> = transaction.query_row(
             "SELECT activation_hash FROM team_admin_tokens WHERE token_hash = ?1",
             [activation.token_hash],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if let Some(stored) = stored {
             if stored.as_slice() == activation.activation_hash {
@@ -415,15 +416,15 @@ fn resolve_team_view_token(
             params![token_hash, sql_integer(now)?],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    row.get(8)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
+                    row.budgeted_get(5)?,
+                    row.budgeted_get(6)?,
+                    row.budgeted_get(7)?,
+                    row.budgeted_get(8)?,
                 ))
             },
         )
@@ -484,7 +485,7 @@ fn admin_authority_query(
                 sql_integer(ptk_role_type)?,
                 sql_integer(ptk_generation)?
             ],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .optional()?;
     Ok(verify_key.map(|verify_key| TeamAdminAuthoritySnapshot {
@@ -511,12 +512,12 @@ pub(crate) fn admin_token_query(
             params![token_hash, sql_integer(now)?],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
+                    row.budgeted_get(5)?,
                 ))
             },
         )
@@ -583,7 +584,13 @@ fn authority_query(
                 source_visibility,
                 sql_integer(source_generation)?
             ],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                ))
+            },
         )
         .optional()?;
     row.map(|(verify_key, effective_role, effective_visibility)| {
@@ -639,7 +646,7 @@ fn team_view_token_active(
                  WHERE token_hash = ?1 AND expires_at > ?2
              )",
             params![token_hash, sql_integer(now)?],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .map_err(Into::into)
 }
@@ -664,15 +671,15 @@ fn challenge_row(
             [challenge_hash],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    row.get(8)?,
+                    row.budgeted_get(0)?,
+                    row.budgeted_get(1)?,
+                    row.budgeted_get(2)?,
+                    row.budgeted_get(3)?,
+                    row.budgeted_get(4)?,
+                    row.budgeted_get(5)?,
+                    row.budgeted_get(6)?,
+                    row.budgeted_get(7)?,
+                    row.budgeted_get(8)?,
                 ))
             },
         )

@@ -94,7 +94,15 @@ impl Relay {
                             && queued.message.sequence == argument.sequence
                             && queued.message.sender != argument.receiver
                     })
-                    .map(|queued| queued.message.clone())
+                    .map(|queued| {
+                        if crate::net::memory::current().is_some_and(|memory| {
+                            !memory.admit_working(queued.encoded_bytes, false)
+                        }) {
+                            return Err(RpcStatus::RateLimited);
+                        }
+                        Ok(queued.message.clone())
+                    })
+                    .transpose()?
             };
             if let Some(message) = message {
                 return Ok(message);

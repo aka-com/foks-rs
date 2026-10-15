@@ -1,5 +1,6 @@
 //! Bounded, restartable reclamation of uploads with no retained dirent reference.
 
+use crate::allocation::RowAllocationExt as _;
 use std::time::{Duration, Instant};
 
 use rusqlite::{params, OptionalExtension, Transaction};
@@ -27,7 +28,13 @@ pub(super) fn reclaim(transaction: &Transaction<'_>, cutoff: u64) -> Result<Uplo
     let cursor: (i64, Vec<u8>, Vec<u8>) = transaction.query_row(
         "SELECT updated_at, uid, file_id FROM kv_upload_maintenance WHERE singleton = 1",
         [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        |row| {
+            Ok((
+                row.budgeted_get(0)?,
+                row.budgeted_get(1)?,
+                row.budgeted_get(2)?,
+            ))
+        },
     )?;
     let candidates = {
         let mut statement = transaction.prepare(
@@ -46,9 +53,9 @@ pub(super) fn reclaim(transaction: &Transaction<'_>, cutoff: u64) -> Result<Uplo
             ],
             |row| {
                 Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
-                    row.get::<_, Vec<u8>>(2)?,
+                    row.budgeted_get::<_, i64>(0)?,
+                    row.budgeted_get::<_, Vec<u8>>(1)?,
+                    row.budgeted_get::<_, Vec<u8>>(2)?,
                 ))
             },
         )?;
@@ -98,7 +105,10 @@ pub(super) fn reclaim(transaction: &Transaction<'_>, cutoff: u64) -> Result<Uplo
              ORDER BY updated_at, uid, file_id LIMIT ?1",
         )?;
         let rows = statement.query_map([CANDIDATES as i64], |row| {
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+            Ok((
+                row.budgeted_get::<_, Vec<u8>>(0)?,
+                row.budgeted_get::<_, Vec<u8>>(1)?,
+            ))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
@@ -116,7 +126,7 @@ pub(super) fn reclaim(transaction: &Transaction<'_>, cutoff: u64) -> Result<Uplo
                  FROM kv_file_chunks WHERE uid = ?1 AND file_id = ?2
                  ORDER BY clear_offset LIMIT 1",
                     params![uid, file_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
                 )
                 .optional()?;
             let Some((offset, bytes)) = chunk else {

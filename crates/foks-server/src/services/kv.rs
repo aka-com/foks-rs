@@ -89,7 +89,7 @@ pub(crate) fn dispatch(
     route: RouteId,
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
+    reader: crate::read_pool::ReadLease,
     writer: &WriterHandle,
     clock: &Arc<dyn foks_server_db::Clock>,
     chunk_store: Option<&dyn crate::chunks::ChunkStore>,
@@ -99,7 +99,10 @@ pub(crate) fn dispatch(
             let snapshot = reader.snapshot().map_err(|_| RpcStatus::TransactionRetry)?;
             let authority = resolve_authority(argument, principal, &snapshot, clock)?;
             get_encrypted_chunk(argument, &snapshot, &authority)?
-        }; // Release the SQLite snapshot before object-store I/O.
+        };
+        // Returning a snapshot is not enough: the pooled connection must also
+        // become available before a remote store can block this transfer.
+        drop(reader);
         let offset = chunk.offset;
         let final_chunk = chunk.final_chunk;
         let ciphertext = crate::chunk_storage::ciphertext(chunk, chunk_store)
@@ -137,7 +140,23 @@ pub(crate) fn dispatch(
             _ => unreachable!("read-only KV routes were matched above"),
         };
     }
-    let authority = resolve_authority(argument, principal, reader, clock)?;
+    let authority = {
+        let snapshot = reader.snapshot().map_err(|_| RpcStatus::TransactionRetry)?;
+        resolve_authority(argument, principal, &snapshot, clock)?
+    };
+    // Upload authority is only a preflight; write_file_chunk rechecks it in the
+    // authoritative writer both before publication and before metadata commit.
+    if matches!(
+        route,
+        RouteId::KvStoreFileUploadInit | RouteId::KvStoreFileUploadChunk
+    ) {
+        drop(reader);
+        return if route == RouteId::KvStoreFileUploadInit {
+            file_upload_init(argument, principal, writer, &authority, chunk_store)
+        } else {
+            file_upload_chunk(argument, principal, writer, &authority, chunk_store)
+        };
+    }
     match route {
         RouteId::KvStoreMkdir => mkdir(argument, principal, reader, writer, &authority),
         RouteId::KvStoreFileUploadInit => {
@@ -282,7 +301,7 @@ fn usage(
 fn mkdir(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
+    reader: crate::read_pool::ReadLease,
     writer: &WriterHandle,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
@@ -312,9 +331,10 @@ fn mkdir(
     }
     let (key_role, key_visibility) = role_parts(directory.key.role);
     let uid = authority.party.clone();
-    let error_uid = uid.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
+    drop(snapshot);
+    drop(reader);
     writer
         .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
             if !kv_write_is_current(database, &write_authority, &device, now)? {
@@ -335,14 +355,14 @@ fn mkdir(
             )?;
             Ok(())
         })
-        .map_err(|error| map_write_error(error, reader, &error_uid))?;
+        .map_err(map_write_error)?;
     Ok(Response::Void)
 }
 
 fn put_root(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
+    reader: crate::read_pool::ReadLease,
     writer: &WriterHandle,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
@@ -359,9 +379,9 @@ fn put_root(
     }
     let (key_role, key_visibility) = role_parts(root.key.role);
     let uid = authority.party.clone();
-    let error_uid = uid.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
+    drop(reader);
     writer
         .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
             if !kv_write_is_current(database, &write_authority, &device, now)? {
@@ -383,7 +403,7 @@ fn put_root(
             })?;
             Ok(())
         })
-        .map_err(|error| map_write_error(error, reader, &error_uid))?;
+        .map_err(map_write_error)?;
     Ok(Response::Void)
 }
 
@@ -531,7 +551,7 @@ fn write_file_chunk(
 fn put_small_file_or_symlink(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
+    reader: crate::read_pool::ReadLease,
     writer: &WriterHandle,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
@@ -552,9 +572,9 @@ fn put_small_file_or_symlink(
         return Err(bad_arguments("KV node uses an unsupported content key"));
     }
     let uid = authority.party.clone();
-    let error_uid = uid.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
+    drop(reader);
     writer
         .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
             if !kv_write_is_current(database, &write_authority, &device, now)? {
@@ -568,14 +588,14 @@ fn put_small_file_or_symlink(
             })?;
             Ok(())
         })
-        .map_err(|error| map_write_error(error, reader, &error_uid))?;
+        .map_err(map_write_error)?;
     Ok(Response::Void)
 }
 
 fn put(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
+    reader: crate::read_pool::ReadLease,
     writer: &WriterHandle,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
@@ -609,12 +629,13 @@ fn put(
         })
         .collect::<Result<Vec<_>, RpcStatus>>()?;
     for dirent in &dirents {
-        require_directory_write_access(reader, authority, &dirent.parent)?;
+        require_directory_write_access(&reader, authority, &dirent.parent)?;
     }
     let uid = authority.party.clone();
-    let error_uid = uid.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
+    drop(snapshot);
+    drop(reader);
     writer
         .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
             if !kv_write_is_current(database, &write_authority, &device, now)? {
@@ -656,7 +677,7 @@ fn put(
             )?;
             Ok(())
         })
-        .map_err(|error| map_write_error(error, reader, &error_uid))?;
+        .map_err(map_write_error)?;
     Ok(Response::Void)
 }
 
@@ -855,7 +876,7 @@ fn cache_check(
 fn lock_acquire(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
+    reader: crate::read_pool::ReadLease,
     writer: &WriterHandle,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
@@ -871,10 +892,11 @@ fn lock_acquire(
     let duration = timeout_millis
         .checked_mul(1000)
         .ok_or_else(|| bad_arguments("KV lock duration overflows"))?;
-    require_directory_write_access(reader, authority, &parent)?;
+    require_directory_write_access(&reader, authority, &parent)?;
     let uid = authority.party.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
+    drop(reader);
     writer
         .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
             if !kv_write_is_current(database, &write_authority, &device, now)? {
@@ -890,7 +912,7 @@ fn lock_acquire(
 fn lock_release(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
+    reader: crate::read_pool::ReadLease,
     writer: &WriterHandle,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
@@ -900,10 +922,11 @@ fn lock_release(
         dirent,
         lock,
     } = lock_fields(&fields[1])?;
-    require_directory_write_access(reader, authority, &parent)?;
+    require_directory_write_access(&reader, authority, &parent)?;
     let uid = authority.party.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
+    drop(reader);
     writer
         .call_with_current_time(Arc::clone(&write_authority.clock), move |database, now| {
             if !kv_write_is_current(database, &write_authority, &device, now)? {
@@ -1276,11 +1299,7 @@ fn role_parts(role: foks_proto::Role) -> (u64, i64) {
     )
 }
 
-fn map_write_error(
-    error: crate::Error,
-    _reader: &foks_server_db::ReadDatabase,
-    _uid: &[u8],
-) -> RpcStatus {
+fn map_write_error(error: crate::Error) -> RpcStatus {
     if matches!(&error, crate::Error::Database(error) if error.is_quota()) {
         return RpcStatus::QuotaExceeded;
     }

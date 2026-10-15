@@ -1,4 +1,5 @@
 use super::*;
+use crate::allocation::RowAllocationExt as _;
 
 impl Database {
     pub fn web_prepare_invite(
@@ -12,7 +13,7 @@ impl Database {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let ctx = mutation(&tx, auth, now, true)?;
         cleanup(&tx, now)?;
-        let(all,own):(i64,i64)=tx.query_row("SELECT count(*),coalesce(sum(session_hash=?1 AND result_id IS NULL),0) FROM web_admin_nonces",[auth.session_hash],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        let(all,own):(i64,i64)=tx.query_row("SELECT count(*),coalesce(sum(session_hash=?1 AND result_id IS NULL),0) FROM web_admin_nonces",[auth.session_hash],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?)))?;
         if all >= 8192 || own >= 8 {
             return Err(Error::Capacity("invite forms"));
         }
@@ -45,7 +46,7 @@ impl Database {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let ctx = mutation(&tx, auth, now, true)?;
         let (admit,retain,result):(i64,i64,Option<[u8;16]>)=tx.query_row("SELECT admit_before_elapsed_us,receipt_retain_until_elapsed_us,result_id FROM web_admin_nonces WHERE
-             nonce_hash=?1 AND session_hash=?2 AND instance_epoch=?3",params![invite.nonce_hash,auth.session_hash,now.epoch],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?.ok_or(Error::OperationExpired)?;
+             nonce_hash=?1 AND session_hash=?2 AND instance_epoch=?3",params![invite.nonce_hash,auth.session_hash,now.epoch],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?,r.budgeted_get(2)?))).optional()?.ok_or(Error::OperationExpired)?;
         if unsigned(retain)? <= now.elapsed_us {
             return Err(Error::OperationExpired);
         }

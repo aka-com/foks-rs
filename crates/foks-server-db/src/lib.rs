@@ -2,11 +2,12 @@
 
 #![forbid(unsafe_code)]
 
+mod allocation;
 mod capabilities;
 mod capability_keys;
 mod certificates;
-mod clock;
 mod chunk_binding;
+mod clock;
 pub use chunk_binding::{ChunkStorageBinding, ChunkStorageBindingState};
 mod config;
 mod connection;

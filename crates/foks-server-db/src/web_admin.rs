@@ -1,5 +1,6 @@
 //! Web-session authorization is checked in the transaction, never from cookie
 //! fields or cached grants.
+use crate::allocation::RowAllocationExt as _;
 use crate::error::{sql_integer, unsigned};
 use crate::{
     AuthorizationBinding, Database, Error, InvitePolicy, InviteRegime, InviteSnapshot,
@@ -127,7 +128,7 @@ fn local_user(c: &Connection, host: &[u8; 33], uid: &[u8; 33]) -> Result<(String
         return Err(Error::AuthorizationChanged);
     }
     c.query_row("SELECT h.canonical_name,u.username_utf8 FROM host_metadata h CROSS JOIN users u WHERE h.singleton=1
-             AND h.host_id=?1 AND u.uid=?2",params![host,uid],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Vec<u8>>(1)?))).optional()?.map(|(h,u)|Ok::<_,Error>((h,String::from_utf8(u).map_err(|_|Error::Invalid("stored username"))?))).transpose()?.ok_or(Error::AuthorizationChanged)
+             AND h.host_id=?1 AND u.uid=?2",params![host,uid],|r|Ok((r.budgeted_get::<_,String>(0)?,r.budgeted_get::<_,Vec<u8>>(1)?))).optional()?.map(|(h,u)|Ok::<_,Error>((h,String::from_utf8(u).map_err(|_|Error::Invalid("stored username"))?))).transpose()?.ok_or(Error::AuthorizationChanged)
 }
 fn credential(
     c: &Connection,
@@ -156,7 +157,7 @@ fn grant_active(c: &Connection, host: &[u8; 33], uid: &[u8; 33]) -> Result<bool>
     Ok(c.query_row(
         "SELECT EXISTS(SELECT 1 FROM host_admin_grants WHERE host_id=?1 AND uid=?2 AND active=1)",
         params![host, uid],
-        |r| r.get(0),
+        |r| r.budgeted_get(0),
     )?)
 }
 fn load(c: &Connection, hash: &[u8; 32], session: bool) -> Result<WebSessionAuthorization> {
@@ -170,31 +171,31 @@ fn load(c: &Connection, hash: &[u8; 32], session: bool) -> Result<WebSessionAuth
              FROM web_login_tickets WHERE ticket_hash=?1"
     };
     c.query_row(sql, [hash], |r| {
-        let host = r.get(1)?;
-        let config: Option<[u8; 32]> = r.get(6)?;
+        let host = r.budgeted_get(1)?;
+        let config: Option<[u8; 32]> = r.budgeted_get(6)?;
         let authorization_binding = match config {
             None => AuthorizationBinding::Unconfigured,
             Some(config_hash) => AuthorizationBinding::Linked {
                 host,
                 config_hash,
-                policy_epoch: r.get::<_, i64>(7)? as u64,
-                account_generation: r.get::<_, i64>(8)? as u64,
+                policy_epoch: r.budgeted_get::<_, i64>(7)? as u64,
+                account_generation: r.budgeted_get::<_, i64>(8)? as u64,
             },
         };
         Ok(WebSessionAuthorization {
-            id: r.get(0)?,
+            id: r.budgeted_get(0)?,
             credential: WebCredential {
                 host,
-                uid: r.get(2)?,
-                credential: r.get(3)?,
-                certificate_expires_at_us: r.get::<_, i64>(4)? as u64,
+                uid: r.budgeted_get(2)?,
+                credential: r.budgeted_get(3)?,
+                certificate_expires_at_us: r.budgeted_get::<_, i64>(4)? as u64,
             },
-            epoch: r.get(5)?,
+            epoch: r.budgeted_get(5)?,
             authorization_binding,
-            expires: r.get::<_, i64>(9)? as u64,
-            deadline: r.get::<_, i64>(10)? as u64,
-            usable: r.get(11)?,
-            csrf: r.get(12)?,
+            expires: r.budgeted_get::<_, i64>(9)? as u64,
+            deadline: r.budgeted_get::<_, i64>(10)? as u64,
+            usable: r.budgeted_get(11)?,
+            csrf: r.budgeted_get(12)?,
         })
     })
     .optional()?
@@ -267,7 +268,9 @@ fn audit(
 ) -> Result<()> {
     c.execute("DELETE FROM admin_audit WHERE event_id IN (SELECT event_id FROM admin_audit WHERE occurred_at_us<=?1
              ORDER BY occurred_at_us,event_id LIMIT 128)",[sql_integer(now.saturating_sub(90*24*60*60*1_000_000))?])?;
-    let count: i64 = c.query_row("SELECT count(*) FROM admin_audit", [], |r| r.get(0))?;
+    let count: i64 = c.query_row("SELECT count(*) FROM admin_audit", [], |r| {
+        r.budgeted_get(0)
+    })?;
     if count >= 100_000 {
         c.execute("DELETE FROM admin_audit WHERE event_id IN (SELECT event_id FROM admin_audit ORDER BY event_id LIMIT 128)",[])?;
     }
@@ -281,7 +284,7 @@ fn capacity(c: &Connection, table: &str, uid: &[u8; 33], per_uid: i64, total: i6
     let (all, own): (i64, i64) = c.query_row(
         &format!("SELECT count(*),coalesce(sum(uid=?1),0) FROM {table}"),
         [uid],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?)),
     )?;
     if all >= total || own >= per_uid {
         return Err(Error::Capacity("browser records"));
@@ -303,7 +306,7 @@ fn confirmation(
             sql_integer(now.utc_us)?,
             sql_integer(now.elapsed_us)?
         ],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?)),
     )
     .optional()?
     .ok_or(Error::OperationExpired)

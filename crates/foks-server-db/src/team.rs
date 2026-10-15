@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
 use crate::{error::sql_integer, idempotency, Database, Error, Result};
@@ -171,7 +172,7 @@ impl Database {
         for target in mutation.required_local_view_permissions {
             let exists: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM team_local_view_permissions WHERE team_id=?1 AND target_id=?2)",
-                params![mutation.team_id, target], |row| row.get(0),
+                params![mutation.team_id, target], |row| row.budgeted_get(0),
             )?;
             if !exists {
                 return Err(Error::Invalid("local invitation view grant missing"));
@@ -181,7 +182,7 @@ impl Database {
             "SELECT r.epoch, r.root_hash FROM merkle_root_heads h
              JOIN merkle_roots r ON r.epoch = h.epoch WHERE h.singleton = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )?;
         if crate::error::unsigned(root.0)? != mutation.expected_root_epoch
             || root.1.as_slice() != mutation.expected_root_hash
@@ -194,8 +195,8 @@ impl Database {
             if mutation.expected_sequence != 1 || mutation.expected_tail_hash.is_some() {
                 return Err(Error::Invalid("team creation sequence"));
             }
-            let count: i64 =
-                transaction.query_row("SELECT count(*) FROM teams", [], |row| row.get(0))?;
+            let count: i64 = transaction
+                .query_row("SELECT count(*) FROM teams", [], |row| row.budgeted_get(0))?;
             if usize::try_from(count).unwrap_or(usize::MAX) >= self.config.maximum_teams {
                 return Err(Error::QuotaExceeded);
             }
@@ -258,7 +259,14 @@ impl Database {
                      FROM team_chain_heads h JOIN teams t ON t.team_id = h.team_id
                      WHERE h.team_id = ?1",
                     [mutation.team_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    |row| {
+                        Ok((
+                            row.budgeted_get(0)?,
+                            row.budgeted_get(1)?,
+                            row.budgeted_get(2)?,
+                            row.budgeted_get(3)?,
+                        ))
+                    },
                 )
                 .optional()?;
             let Some((sequence, tail, kind, host)) = head else {
@@ -401,7 +409,10 @@ impl Database {
             )?;
             let scopes = statement
                 .query_map([mutation.team_id], |row| {
-                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+                    Ok((
+                        row.budgeted_get::<_, Vec<u8>>(0)?,
+                        row.budgeted_get::<_, Vec<u8>>(1)?,
+                    ))
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             scopes
@@ -444,7 +455,7 @@ impl Database {
                         sql_integer(member.source_role_type)?,
                         member.source_visibility
                     ],
-                    |r| r.get(0),
+                    |r| r.budgeted_get(0),
                 )?;
                 newly_admitted |= !existing;
             }
@@ -684,7 +695,7 @@ impl Database {
                  WHERE t.target_team_id = m.team_id AND t.member_party_id = m.party_id
                    AND t.member_host_id = m.scoped_host_id)",
             params![mutation.team_id, team_host],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if missing_remote != 0 {
             return Err(Error::Invalid(
@@ -745,7 +756,7 @@ fn publish_merkle(
             .query_row(
                 "SELECT exact_node FROM merkle_nodes WHERE node_hash = ?1",
                 [hash],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()?;
         match existing {

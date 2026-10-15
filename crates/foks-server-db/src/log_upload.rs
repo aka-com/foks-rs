@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _};
 
 use crate::{Database, Error, Result};
@@ -43,7 +44,7 @@ impl Database {
         let active: i64 = self.connection.query_row(
             "SELECT count(*) FROM log_sends WHERE created_at >= ?1",
             [oldest_active],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if crate::error::unsigned(active)? >= MAXIMUM_ACTIVE_LOG_SEND_SESSIONS {
             return Err(Error::Capacity("active log-send sessions"));
@@ -68,7 +69,7 @@ impl Database {
             .query_row(
                 "SELECT created_at FROM log_sends WHERE log_send_id = ?1",
                 params![mutation.log_send_id],
-                |row| row.get::<_, i64>(0),
+                |row| row.budgeted_get::<_, i64>(0),
             )
             .optional()?;
         if session_created.is_none_or(|created| created < oldest_active) {
@@ -79,7 +80,7 @@ impl Database {
                  SELECT 1 FROM log_send_files WHERE log_send_id = ?1 AND file_id = ?2
              )",
             params![mutation.log_send_id, integer(mutation.file_id)?],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if file_exists {
             return Err(Error::Duplicate("log-send file"));
@@ -87,7 +88,7 @@ impl Database {
         let file_count: i64 = self.connection.query_row(
             "SELECT COUNT(*) FROM log_send_files WHERE log_send_id = ?1",
             params![mutation.log_send_id],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         if crate::error::unsigned(file_count)? >= MAXIMUM_LOG_SEND_FILES {
             return Err(Error::Capacity("log-send file count"));
@@ -137,7 +138,12 @@ impl Database {
                             .saturating_sub(LOG_SEND_SESSION_LIFETIME_MICROS),
                     )?,
                 ],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                |row| {
+                    Ok((
+                        row.budgeted_get::<_, i64>(0)?,
+                        row.budgeted_get::<_, i64>(1)?,
+                    ))
+                },
             )
             .optional()?;
         let Some((_content_length, block_count)) = metadata else {
@@ -168,7 +174,7 @@ impl Database {
                         .saturating_sub(LOG_SEND_SESSION_LIFETIME_MICROS)
                 )?,
             ],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )?;
         let block_bytes = u64::try_from(mutation.block.len()).map_err(|_| Error::IntegerRange)?;
         if crate::error::unsigned(file_bytes)?

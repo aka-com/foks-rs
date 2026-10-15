@@ -1,4 +1,5 @@
 //! Internal installation/storage binding; never part of the FOKS protocol.
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use crate::{Database, Error, KvChunkKey, ReadDatabase, Result};
@@ -33,7 +34,7 @@ fn read(connection: &Connection) -> Result<Option<ChunkStorageBinding>> {
     let Some(row) = rows.next()? else {
         return Ok(None);
     };
-    let state = match row.get::<_, i64>(0)? {
+    let state = match row.budgeted_get::<_, i64>(0)? {
         1 => ChunkStorageBindingState::Legacy,
         2 => ChunkStorageBindingState::PendingNew,
         3 => ChunkStorageBindingState::PendingAdoption,
@@ -49,21 +50,21 @@ fn read(connection: &Connection) -> Result<Option<ChunkStorageBinding>> {
             })
             .transpose()
     };
-    let host: Option<Vec<u8>> = row.get(2)?;
-    let uid: Vec<u8> = row.get(5)?;
-    let file: Vec<u8> = row.get(6)?;
-    let offset: i64 = row.get(7)?;
+    let host: Option<Vec<u8>> = row.budgeted_get(2)?;
+    let uid: Vec<u8> = row.budgeted_get(5)?;
+    let file: Vec<u8> = row.budgeted_get(6)?;
+    let offset: i64 = row.budgeted_get(7)?;
     Ok(Some(ChunkStorageBinding {
         state,
-        namespace_id: fixed(row.get(1)?)?,
+        namespace_id: fixed(row.budgeted_get(1)?)?,
         host_id: host
             .map(|v| {
                 v.try_into()
                     .map_err(|_| Error::Invalid("chunk binding host ID"))
             })
             .transpose()?,
-        locator: row.get(3)?,
-        scan_revision: crate::error::unsigned(row.get(4)?)?,
+        locator: row.budgeted_get(3)?,
+        scan_revision: crate::error::unsigned(row.budgeted_get(4)?)?,
         after: if uid.is_empty() && file.is_empty() && offset == -1 {
             None
         } else {
@@ -77,8 +78,8 @@ fn read(connection: &Connection) -> Result<Option<ChunkStorageBinding>> {
                 offset: crate::error::unsigned(offset)?,
             })
         },
-        verified_objects: crate::error::unsigned(row.get(8)?)?,
-        verified_bytes: crate::error::unsigned(row.get(9)?)?,
+        verified_objects: crate::error::unsigned(row.budgeted_get(8)?)?,
+        verified_bytes: crate::error::unsigned(row.budgeted_get(9)?)?,
     }))
 }
 
@@ -111,7 +112,7 @@ impl Database {
             .query_row(
                 "SELECT host_id FROM host_metadata WHERE singleton=1",
                 [],
-                |r| r.get(0),
+                |r| r.budgeted_get(0),
             )
             .optional()?
             .ok_or(Error::Invalid("chunk binding requires host bootstrap"))?;
@@ -119,7 +120,7 @@ impl Database {
         let revision: i64 = transaction.query_row(
             "SELECT revision FROM chunk_storage_revision WHERE singleton=1",
             [],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         if let Some(binding) = &current {
             if binding.state != ChunkStorageBindingState::Legacy {
@@ -144,7 +145,7 @@ impl Database {
         let external: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM kv_file_chunks WHERE external_digest IS NOT NULL)",
             [],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         let legacy = external || current.is_some();
         if legacy && !adopt {
@@ -181,7 +182,7 @@ impl Database {
             "SELECT uid,file_id,clear_offset,external_encoded_bytes FROM kv_file_chunks INDEXED BY kv_chunks_external
              WHERE external_digest IS NOT NULL AND (uid,file_id,clear_offset) > (?1,?2,?3)
              ORDER BY uid,file_id,clear_offset LIMIT 1", params![after_uid,after_file,after_offset],
-            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?;
+            |row| Ok((row.budgeted_get(0)?,row.budgeted_get(1)?,row.budgeted_get(2)?,row.budgeted_get(3)?))).optional()?;
         if !next.is_some_and(|(uid, file, offset, bytes)| {
             uid == key.uid
                 && file == key.file_id
@@ -235,7 +236,7 @@ impl Database {
             "SELECT EXISTS(SELECT 1 FROM kv_file_chunks WHERE external_digest IS NOT NULL
             AND (uid,file_id,clear_offset) > (?1,?2,?3))",
             params![uid, file, offset],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )?;
         if remaining {
             return Err(Error::Invalid("chunk adoption scan incomplete"));

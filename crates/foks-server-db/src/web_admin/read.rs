@@ -1,4 +1,5 @@
 use super::*;
+use crate::allocation::RowAllocationExt as _;
 
 impl ReadSnapshot<'_> {
     pub fn web_overview(
@@ -10,7 +11,7 @@ impl ReadSnapshot<'_> {
         let counts = if ctx.operator {
             Some(self.connection().query_row("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM host_admin_grants WHERE active=1),(SELECT
              count(*) FROM signup_invites),(SELECT count(*) FROM web_admin_sessions WHERE instance_epoch=?1 AND
-             revoked_at_us IS NULL AND expires_at_us>?2 AND deadline_elapsed_us>?3)",params![now.epoch,sql_integer(now.utc_us)?,sql_integer(now.elapsed_us)?],|r|Ok(WebOverview{accounts:r.get::<_,i64>(0)? as u64,operators:r.get::<_,i64>(1)? as u64,invites:r.get::<_,i64>(2)? as u64,sessions:r.get::<_,i64>(3)? as u64}))?)
+             revoked_at_us IS NULL AND expires_at_us>?2 AND deadline_elapsed_us>?3)",params![now.epoch,sql_integer(now.utc_us)?,sql_integer(now.elapsed_us)?],|r|Ok(WebOverview{accounts:r.budgeted_get::<_,i64>(0)? as u64,operators:r.budgeted_get::<_,i64>(1)? as u64,invites:r.budgeted_get::<_,i64>(2)? as u64,sessions:r.budgeted_get::<_,i64>(3)? as u64}))?)
         } else {
             None
         };
@@ -66,12 +67,12 @@ impl ReadSnapshot<'_> {
         let rows = q
             .query_map(params![uid, now.epoch, after], |r| {
                 Ok(WebSessionMetadata {
-                    id: r.get(0)?,
-                    uid: r.get(1)?,
-                    credential: r.get(2)?,
-                    created_at_us: r.get::<_, i64>(3)? as u64,
-                    expires_at_us: r.get::<_, i64>(4)? as u64,
-                    revoked: r.get(5)?,
+                    id: r.budgeted_get(0)?,
+                    uid: r.budgeted_get(1)?,
+                    credential: r.budgeted_get(2)?,
+                    created_at_us: r.budgeted_get::<_, i64>(3)? as u64,
+                    expires_at_us: r.budgeted_get::<_, i64>(4)? as u64,
+                    revoked: r.budgeted_get(5)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -108,12 +109,12 @@ impl ReadSnapshot<'_> {
         let rows = q
             .query_map([sql_integer(after)?], |r| {
                 Ok(AdminAuditEvent {
-                    id: r.get::<_, i64>(0)? as u64,
-                    actor_uid: r.get(1)?,
-                    action: r.get(2)?,
-                    target: r.get(3)?,
-                    revision: r.get::<_, Option<i64>>(4)?.map(|v| v as u64),
-                    occurred_at_us: r.get::<_, i64>(5)? as u64,
+                    id: r.budgeted_get::<_, i64>(0)? as u64,
+                    actor_uid: r.budgeted_get(1)?,
+                    action: r.budgeted_get(2)?,
+                    target: r.budgeted_get(3)?,
+                    revision: r.budgeted_get::<_, Option<i64>>(4)?.map(|v| v as u64),
+                    occurred_at_us: r.budgeted_get::<_, i64>(5)? as u64,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

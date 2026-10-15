@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use crate::{
     error::sql_integer, Database, Error, ReadDatabase, ReadSnapshot, Result, SsoSession,
     SsoSessionState,
@@ -158,8 +159,9 @@ pub(crate) fn require_signup(
     c: &rusqlite::Connection,
     binding: Option<&SsoAccountBinding>,
 ) -> Result<()> {
-    let configured: bool =
-        c.query_row("SELECT EXISTS(SELECT 1 FROM sso_policy)", [], |r| r.get(0))?;
+    let configured: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM sso_policy)", [], |r| {
+        r.budgeted_get(0)
+    })?;
     if configured != binding.is_some() {
         return Err(Error::AuthorizationChanged);
     }
@@ -213,7 +215,7 @@ pub(crate) fn bind(
             let eligible: bool = c.query_row(
                 "SELECT EXISTS(SELECT 1 FROM sso_migration_cohort WHERE host=?1 AND uid=?2)",
                 params![a.host, a.uid],
-                |r| r.get(0),
+                |r| r.budgeted_get(0),
             )?;
             if !eligible {
                 return Err(Error::AuthorizationChanged);
@@ -234,7 +236,7 @@ pub(crate) fn bind(
         .query_row(
             "SELECT uid FROM sso_access WHERE host=?1 AND issuer=?2 AND subject=?3",
             params![a.host, a.issuer, a.subject],
-            |r| r.get(0),
+            |r| r.budgeted_get(0),
         )
         .optional()?;
     if linked_uid.is_some_and(|uid| uid.as_slice() != a.uid) {
@@ -263,7 +265,7 @@ fn check_credential(
     credential: &[u8],
     sequence: u64,
 ) -> Result<()> {
-    let valid:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM devices d JOIN user_chain_heads h ON h.uid=d.uid WHERE d.uid=?1 AND (d.device_id=?2 OR d.subkey_id=?2) AND d.active=1 AND h.seqno=?3)",params![uid,credential,sql_integer(sequence)?],|r|r.get(0))?;
+    let valid:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM devices d JOIN user_chain_heads h ON h.uid=d.uid WHERE d.uid=?1 AND (d.device_id=?2 OR d.subkey_id=?2) AND d.active=1 AND h.seqno=?3)",params![uid,credential,sql_integer(sequence)?],|r|r.budgeted_get(0))?;
     if valid {
         Ok(())
     } else {
@@ -271,5 +273,5 @@ fn check_credential(
     }
 }
 pub(crate) fn read(c: &rusqlite::Connection, uid: &[u8]) -> Result<Option<SsoAccess>> {
-    Ok(c.query_row("SELECT host,uid,issuer,subject,config_hash,revision,state,expires_at_ms,ciphertext,authorization_epoch,authorization_generation,interrupted FROM sso_access WHERE uid=?1",[uid],|r|Ok(SsoAccess{host:r.get(0)?,uid:r.get(1)?,issuer:r.get(2)?,subject:r.get(3)?,config_hash:r.get(4)?,revision:r.get::<_,i64>(5)? as u64,state:SsoAccessState::decode(r.get(6)?)?,expires_at_ms:r.get::<_,i64>(7)? as u64,ciphertext:r.get(8)?,authorization_epoch:r.get::<_,i64>(9)? as u64,authorization_generation:r.get::<_,i64>(10)? as u64,interrupted:r.get(11)?})).optional()?)
+    Ok(c.query_row("SELECT host,uid,issuer,subject,config_hash,revision,state,expires_at_ms,ciphertext,authorization_epoch,authorization_generation,interrupted FROM sso_access WHERE uid=?1",[uid],|r|Ok(SsoAccess{host:r.budgeted_get(0)?,uid:r.budgeted_get(1)?,issuer:r.budgeted_get(2)?,subject:r.budgeted_get(3)?,config_hash:r.budgeted_get(4)?,revision:r.budgeted_get::<_,i64>(5)? as u64,state:SsoAccessState::decode(r.budgeted_get(6)?)?,expires_at_ms:r.budgeted_get::<_,i64>(7)? as u64,ciphertext:r.budgeted_get(8)?,authorization_epoch:r.budgeted_get::<_,i64>(9)? as u64,authorization_generation:r.budgeted_get::<_,i64>(10)? as u64,interrupted:r.budgeted_get(11)?})).optional()?)
 }

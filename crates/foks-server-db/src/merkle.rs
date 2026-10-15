@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use foks_merkle_store::{NodeReader, Result as MerkleResult};
 use rusqlite::{params, Connection, OptionalExtension as _};
 
@@ -35,7 +36,7 @@ impl ReadSnapshot<'_> {
             .query_row(
                 "SELECT epoch FROM merkle_leaves WHERE leaf_key = ?1",
                 params![key],
-                |row| row.get::<_, i64>(0),
+                |row| row.budgeted_get::<_, i64>(0),
             )
             .optional()?
             .map(crate::error::unsigned)
@@ -49,7 +50,7 @@ impl NodeReader for SqliteNodeReader<'_> {
             .query_row(
                 "SELECT exact_node FROM merkle_nodes WHERE node_hash = ?1",
                 [hash],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()
             .map_err(|error| foks_merkle_store::Error::Storage(error.to_string()))

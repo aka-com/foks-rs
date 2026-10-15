@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, Transaction, TransactionBehavior};
 
 use crate::{error::sql_integer, error::unsigned, Config, Database, Error, Result};
@@ -61,7 +62,7 @@ impl Database {
             "SELECT r.epoch, r.root_hash FROM merkle_root_heads h
              JOIN merkle_roots r ON r.epoch = h.epoch WHERE h.singleton = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )?;
         if unsigned(root.0)? != mutation.expected_root_epoch
             || root.1.as_slice() != mutation.expected_root_hash
@@ -141,7 +142,7 @@ fn insert_generic_link_inner(
                 "SELECT start_epoch FROM devices
                  WHERE uid = ?1 AND active = 1 AND device_id = ?2",
                 params![mutation.entity_id, mutation.signer_credential_id],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()?,
         foks_proto::ENTITY_NAMED_TEAM | foks_proto::ENTITY_AD_HOC_TEAM => transaction
@@ -154,7 +155,7 @@ fn insert_generic_link_inner(
                      WHERE k2.team_id = k.team_id AND k2.role_type = k.role_type
                        AND k2.visibility = k.visibility)",
                 params![mutation.entity_id, mutation.signer_credential_id],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()?,
         _ => None,
@@ -170,7 +171,7 @@ fn insert_generic_link_inner(
         .query_row(
             "SELECT root_hash FROM merkle_roots WHERE epoch = ?1",
             [sql_integer(mutation.link_root_epoch)?],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .optional()?;
     if cited_hash.as_deref() != Some(mutation.link_root_hash.as_slice()) {
@@ -181,7 +182,7 @@ fn insert_generic_link_inner(
             "SELECT seqno, link_hash FROM generic_chain_heads
              WHERE entity_id = ?1 AND chain_type = ?2",
             params![mutation.entity_id, sql_integer(mutation.chain_type)?],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )
         .optional()?;
     match head {
@@ -197,7 +198,7 @@ fn insert_generic_link_inner(
         let seed: Vec<u8> = transaction.query_row(
             "SELECT seed FROM subchain_tree_location_seeds WHERE entity_id = ?1",
             [mutation.entity_id],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         let seed: [u8; 32] = seed
             .try_into()
@@ -213,7 +214,7 @@ fn insert_generic_link_inner(
                 sql_integer(mutation.chain_type)?,
                 sql_integer(mutation.sequence)?
             ],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         location
             .try_into()
@@ -358,7 +359,7 @@ fn publish_merkle(transaction: &Transaction<'_>, mutation: &GenericMutation<'_>)
             .query_row(
                 "SELECT exact_node FROM merkle_nodes WHERE node_hash = ?1",
                 [hash],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )
             .optional()?;
         match existing {

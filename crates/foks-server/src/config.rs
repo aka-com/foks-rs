@@ -43,6 +43,14 @@ pub struct SessionLimits {
     /// Shared across all listeners. Each frame reserves twice its encoded
     /// length for the input buffer and decoded request representation.
     pub maximum_request_memory_bytes: usize,
+    /// Encoded response/envelope buffers, retained through socket transmission.
+    pub maximum_response_memory_bytes: usize,
+    /// Conservative codec, database-result and encrypted-transfer allowances.
+    /// Includes 16 MiB reserved for small requests. This is a concurrency cap,
+    /// not eagerly allocated memory; the minimum admits a maximum-size chunk.
+    pub maximum_working_memory_bytes: usize,
+    /// Separate bounded capacity for small status/void responses.
+    pub maximum_control_memory_bytes: usize,
     pub maximum_requests: usize,
     pub worker_threads: usize,
     pub maximum_read_connections: usize,
@@ -58,6 +66,9 @@ impl Default for SessionLimits {
         Self {
             maximum_frame_bytes: foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
             maximum_request_memory_bytes: 64 * 1024 * 1024,
+            maximum_response_memory_bytes: 128 * 1024 * 1024,
+            maximum_working_memory_bytes: 512 * 1024 * 1024,
+            maximum_control_memory_bytes: 1024 * 1024,
             maximum_requests: 4096,
             worker_threads: 4,
             maximum_read_connections: 32,
@@ -83,12 +94,18 @@ impl SessionLimits {
         if self.maximum_frame_bytes == 0
             || self.maximum_request_memory_bytes < maximum_frame_memory
             || self.maximum_request_memory_bytes > maximum_reservable
+            || self.maximum_response_memory_bytes < 2 * (foks_rpc::DEFAULT_MAX_FRAME_LENGTH + 128)
+            || self.maximum_response_memory_bytes > maximum_reservable
+            || self.maximum_working_memory_bytes < 512 * 1024 * 1024
+            || self.maximum_working_memory_bytes > maximum_reservable
+            || self.maximum_control_memory_bytes < 16384
+            || self.maximum_control_memory_bytes > maximum_reservable
             || self.maximum_requests == 0
             || self.worker_threads == 0
             || self.maximum_read_connections == 0
             || self.maximum_active_connections == 0
             || self.maximum_pending_connections == 0
-            || self.maximum_in_flight_requests == 0
+            || self.maximum_in_flight_requests < 2
             || self.maximum_active_connections > tokio::sync::Semaphore::MAX_PERMITS
             || self.maximum_in_flight_requests > tokio::sync::Semaphore::MAX_PERMITS
             || self.io_timeout.is_zero()
@@ -137,6 +154,16 @@ mod tests {
             ..SessionLimits::default()
         };
         assert!(execution.validate().is_err());
+        let single = SessionLimits {
+            maximum_in_flight_requests: 1,
+            ..SessionLimits::default()
+        };
+        assert!(single.validate().is_err());
+        let too_small = SessionLimits {
+            maximum_working_memory_bytes: 512 * 1024 * 1024 - 1,
+            ..SessionLimits::default()
+        };
+        assert!(too_small.validate().is_err());
         let memory = SessionLimits {
             maximum_request_memory_bytes: 2 * foks_rpc::DEFAULT_MAX_FRAME_LENGTH - 1,
             ..SessionLimits::default()

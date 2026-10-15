@@ -1,3 +1,4 @@
+use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, Connection, OptionalExtension as _, TransactionBehavior};
 
 use crate::{
@@ -48,7 +49,7 @@ impl Database {
         let (old, old_created_at): (Vec<u8>, i64) = transaction.query_row(
             "SELECT generation_id, created_at FROM capability_key_generations WHERE state = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
         )?;
         if now < unsigned(old_created_at)? {
             return Err(Error::Invalid(
@@ -66,7 +67,7 @@ impl Database {
                     WHERE key_generation = ?1 AND state = 1
              )",
             [&old],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )?;
         let retire_after = maximum_expiry
             .map(unsigned)
@@ -99,7 +100,7 @@ impl Database {
                 "SELECT generation_id FROM capability_key_generations
                  WHERE state = 2 AND retire_after <= ?1 ORDER BY generation_id",
             )?
-            .query_map([sql_integer(now)?], |row| row.get::<_, Vec<u8>>(0))?
+            .query_map([sql_integer(now)?], |row| row.budgeted_get::<_, Vec<u8>>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut revoked = Vec::with_capacity(candidates.len());
         for generation in candidates {
@@ -115,7 +116,7 @@ impl Database {
                     (SELECT count(*) FROM federation_team_view_permissions
                        WHERE key_generation = ?1 AND state = 1)",
                 params![generation, sql_integer(now)?],
-                |row| row.get(0),
+                |row| row.budgeted_get(0),
             )?;
             if references == 0 {
                 require_one(transaction.execute(
@@ -152,7 +153,7 @@ fn active_generation(connection: &Connection) -> Result<[u8; 16]> {
         .query_row(
             "SELECT generation_id FROM capability_key_generations WHERE state = 1",
             [],
-            |row| row.get::<_, Vec<u8>>(0),
+            |row| row.budgeted_get::<_, Vec<u8>>(0),
         )?
         .try_into()
         .map_err(|_| Error::Invalid("stored active capability key generation"))
@@ -167,7 +168,7 @@ pub(crate) fn require_active_generation(
             "SELECT 1 FROM capability_key_generations
              WHERE generation_id = ?1 AND state = 1",
             [generation],
-            |row| row.get(0),
+            |row| row.budgeted_get(0),
         )
         .optional()?;
     if active == Some(1) {
@@ -185,11 +186,11 @@ fn generations(connection: &Connection) -> Result<Vec<CapabilityKeyGeneration>> 
         )?
         .query_map([], |row| {
             Ok((
-                row.get::<_, Vec<u8>>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, Option<i64>>(4)?,
+                row.budgeted_get::<_, Vec<u8>>(0)?,
+                row.budgeted_get::<_, String>(1)?,
+                row.budgeted_get::<_, i64>(2)?,
+                row.budgeted_get::<_, i64>(3)?,
+                row.budgeted_get::<_, Option<i64>>(4)?,
             ))
         })?
         .map(|row| {

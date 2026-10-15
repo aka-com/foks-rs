@@ -496,12 +496,13 @@ impl S3Chunks {
     ) -> Result<T> {
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let timeout = self.timeout;
-        let task = remote_runtime()?.spawn(async move {
+        // Keep payload and result memory charged even when the waiter cancels.
+        let task = remote_runtime()?.spawn(crate::net::memory::retain_future(async move {
             let result = tokio::time::timeout(timeout, future)
                 .await
                 .unwrap_or(Err(Error::Chunk("object operation timed out")));
             let _ = sender.send(result);
-        });
+        }));
         // This also bounds waiting if runtime workers are overloaded. Abort is
         // cancellation, not a claim that an in-flight PUT could not complete.
         let result = receiver

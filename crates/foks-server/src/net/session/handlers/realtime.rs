@@ -213,7 +213,9 @@ fn poll_result(sequence: u64, inbox_version: u64, bumped: bool) -> Result<Vec<u8
 async fn blocking<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T, RpcStatus> + Send + 'static,
 ) -> Result<T, RpcStatus> {
-    tokio::task::spawn_blocking(operation)
+    let work = crate::net::memory::retain_work(operation);
+    tokio::task::spawn_blocking(move || work.run())
         .await
         .map_err(|_| RpcStatus::TransactionRetry)?
+        .into_inner()
 }
