@@ -91,7 +91,7 @@ export interface SheetDialogProps extends Omit<SheetProps, 'titleId'> {
 }
 
 /** The round server mark the settings and device sheets show beside a title. */
-export function ServerMarkGlyph({
+function ServerMarkGlyph({
   icon,
   danger = false,
 }: {

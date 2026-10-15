@@ -339,8 +339,11 @@ function TeamPartyRow({
 }): ReactNode {
   const name = teamPartyName(party);
   return (
-    <div className="prow">
-      <span className="who2">
+    <PartyRow
+      variant="roster"
+      party={party}
+      name={name}
+      mark={
         <span
           className="kico round"
           style={{ background: hue(name) }}
@@ -348,20 +351,14 @@ function TeamPartyRow({
         >
           {name.slice(0, 1).toUpperCase()}
         </span>
-        <span className="t">
-          <b>
-            <span>{name}</span>
-          </b>
-          <small>team on {teamPartyHost(party)}</small>
-        </span>
-      </span>
-      <span className="rowtail">
-        <RoleChip role={party.destination_role} />
+      }
+      caption={`team on ${teamPartyHost(party)}`}
+      actions={
         <Chip tone="warn" title={chipTitle}>
           {chip}
         </Chip>
-      </span>
-    </div>
+      }
+    />
   );
 }
 

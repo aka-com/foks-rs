@@ -21,33 +21,38 @@ export function RoleChip({
   );
 }
 
+interface PartyRowBase {
+  party: Party;
+  /** The name to draw; `partyName(party)` when absent. */
+  name?: string;
+  /** The line under the name; omitted when empty. */
+  caption?: string;
+}
+
 /**
  * `roster` is a row of a team's member list. `listing` is a row of the
  * details panel's Sharing list, which writes the role as `roleText` does, so
- * it reads the same as the item's access threshold above the list.
+ * it reads the same as the item's access threshold above the list. Only
+ * `roster` draws a mark and controls, so only its props declare them.
  */
-export type PartyRowVariant = 'roster' | 'listing';
+export type PartyRowProps =
+  | (PartyRowBase & { variant: 'listing' })
+  | (PartyRowBase & {
+      variant: 'roster';
+      /** The mark before the name. */
+      mark?: ReactNode;
+      /** Controls after the role chip, such as an actions menu. */
+      actions?: ReactNode;
+    });
 
-export function PartyRow({
-  party,
-  variant,
-  mark,
-  caption,
-  actions,
-}: {
-  party: Party;
-  variant: PartyRowVariant;
-  /** The mark before the name. Drawn by `roster` only. */
-  mark?: ReactNode;
-  /** The line under the name; omitted when empty. */
-  caption?: string;
-  /** Controls after the role chip, such as an actions menu. `roster` only. */
-  actions?: ReactNode;
-}): ReactNode {
-  const name = partyName(party);
+export type PartyRowVariant = PartyRowProps['variant'];
+
+export function PartyRow(props: PartyRowProps): ReactNode {
+  const { party, caption } = props;
+  const name = props.name ?? partyName(party);
   const you = party.label ? <Chip tone="you">you</Chip> : null;
   const small = caption ? <small>{caption}</small> : null;
-  if (variant === 'listing') {
+  if (props.variant === 'listing') {
     return (
       <div className="party">
         <span className="t">
@@ -62,7 +67,7 @@ export function PartyRow({
   return (
     <div className="prow">
       <span className="who2">
-        {mark}
+        {props.mark}
         <span className="t">
           <b>
             <span>{name}</span>
@@ -73,7 +78,7 @@ export function PartyRow({
       </span>
       <span className="rowtail">
         <RoleChip role={party.destination_role} />
-        {actions}
+        {props.actions}
       </span>
     </div>
   );

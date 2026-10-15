@@ -12,7 +12,7 @@
 
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
 import { chatAvailable, serverDisplayLabel } from '../model';
-import type { useSidebarInbox } from '../chat/inbox-provider';
+import type { TeamInbox } from '../chat/inbox-service';
 import type { DeviceMetadataStatus } from '../device-metadata';
 import { formatMilliseconds, formatTimings } from '../diagnostics/format';
 import { diagnosticLog, type TimingEvent } from '../diagnostics/log';
@@ -266,7 +266,7 @@ function reconnectDisabledFor(server: Server): boolean {
 export function summarizeSync(
   snapshot: AgentSnapshot,
   service: DesktopReconciliation,
-  inbox?: ReturnType<typeof useSidebarInbox>,
+  inbox?: ReadonlyMap<string, TeamInbox>,
   devices?: readonly DeviceMetadataStatus[],
 ): SyncSummary {
   const observations = service.scheduler.observations();

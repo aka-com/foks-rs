@@ -94,3 +94,27 @@ test('a listing party row writes the role as the item access line does', () => {
       '<span class="chip">Admin</span></div>',
   );
 });
+
+test('a party row draws the name its caller passes in place of the party name', () => {
+  const html = renderToStaticMarkup(
+    <PartyRow
+      variant="roster"
+      party={{ ...party('dana.okafor'), label: undefined }}
+      name="ops"
+      caption="team on example.org"
+    />,
+  );
+  assert.match(
+    html,
+    /<b><span>ops<\/span><\/b><small>team on example\.org<\/small>/,
+  );
+  assert.doesNotMatch(html, /dana\.okafor/);
+});
+
+test('a listing party row declares no mark or actions', () => {
+  const html = renderToStaticMarkup(
+    // @ts-expect-error `mark` exists only on the roster variant.
+    <PartyRow variant="listing" party={party('vitalik')} mark={<i />} />,
+  );
+  assert.doesNotMatch(html, /<i>/);
+});
