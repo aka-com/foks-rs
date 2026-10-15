@@ -32,6 +32,9 @@ struct ManagementState {
     writer: WriterHandle,
     readiness_in_flight: Arc<AtomicBool>,
     database_path: PathBuf,
+    /// Fixed for the process lifetime, so scrapes export them without a
+    /// database read.
+    capacity_limits: Vec<(foks_server_db::CapacityResource, u64)>,
     metrics: Arc<ServerMetrics>,
     sso: sso_sample::SsoSampler,
 }
@@ -54,6 +57,9 @@ impl ManagementServer {
         let thread_ready = Arc::clone(&ready);
         let (stop, receiver) = watch::channel(false);
         let database_path = database.path.clone();
+        let capacity_limits = foks_server_db::CapacityResource::ALL
+            .map(|resource| (resource, resource.limit(&database.database)))
+            .to_vec();
         let sso = sso_sample::SsoSampler::new(oidc_configured.then_some(database));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .thread_name("foks-server-management")
@@ -72,6 +78,7 @@ impl ManagementServer {
                     writer,
                     readiness_in_flight: Arc::new(AtomicBool::new(false)),
                     database_path,
+                    capacity_limits,
                     metrics,
                     sso,
                 },
@@ -225,6 +232,7 @@ async fn handle(
                     &state.metrics,
                     &state.writer,
                     &state.database_path,
+                    &state.capacity_limits,
                     sso.as_ref(),
                 ),
             )
@@ -315,6 +323,7 @@ fn prometheus(
     metrics: &ServerMetrics,
     writer: &WriterHandle,
     database_path: &Path,
+    capacity_limits: &[(foks_server_db::CapacityResource, u64)],
     sso: Option<&foks_server_db::SsoRolloutStatus>,
 ) -> String {
     let (database_bytes, wal_bytes) = match storage_bytes(database_path) {
@@ -511,8 +520,25 @@ fn prometheus(
     expiry_prometheus(&mut output, &metrics.expiry);
     checkpoint_prometheus(&mut output, &metrics.checkpoint);
     realtime_prometheus(&mut output, &metrics.realtime);
+    capacity_prometheus(&mut output, capacity_limits);
     sso_prometheus(&mut output, sso);
     output
+}
+
+/// Writes the configured limit of each resource that `foks-server usage`
+/// reports. Alerting compares `database_bytes` with `foks_database_bytes`; the
+/// other quantities are counted only by that command, which scans tables a
+/// scrape does not read.
+fn capacity_prometheus(output: &mut String, limits: &[(foks_server_db::CapacityResource, u64)]) {
+    use std::fmt::Write as _;
+    let _ = writeln!(output, "# TYPE foks_capacity_limit gauge");
+    for (resource, limit) in limits {
+        let _ = writeln!(
+            output,
+            "foks_capacity_limit{{resource=\"{}\"}} {limit}",
+            resource.label()
+        );
+    }
 }
 
 /// Writes written responses by route family and wire status code, and the
@@ -767,6 +793,37 @@ mod tests {
                 "# TYPE foks_oidc_cohort_linked gauge\nfoks_oidc_cohort_linked 7\n",
                 "# TYPE foks_oidc_cohort_unlinked gauge\nfoks_oidc_cohort_unlinked 2\n",
                 "# TYPE foks_oidc_cohort_locked_out gauge\nfoks_oidc_cohort_locked_out 2\n",
+            )
+        );
+    }
+
+    #[test]
+    fn capacity_limits_have_fixed_labels_and_configured_values() {
+        let config = foks_server_db::Config {
+            maximum_database_bytes: 1 << 30,
+            maximum_waitlist_entries: 25,
+            ..foks_server_db::Config::default()
+        };
+        let limits = foks_server_db::CapacityResource::ALL
+            .map(|resource| (resource, resource.limit(&config)))
+            .to_vec();
+        let mut text = String::new();
+        capacity_prometheus(&mut text, &limits);
+        assert_eq!(
+            text,
+            concat!(
+                "# TYPE foks_capacity_limit gauge\n",
+                "foks_capacity_limit{resource=\"merkle_epoch\"} 65535\n",
+                "foks_capacity_limit{resource=\"teams\"} 4096\n",
+                "foks_capacity_limit{resource=\"team_name_reservations\"} 4096\n",
+                "foks_capacity_limit{resource=\"invitation_certificates\"} 65536\n",
+                "foks_capacity_limit{resource=\"local_join_requests\"} 1000000\n",
+                "foks_capacity_limit{resource=\"remote_join_requests\"} 65536\n",
+                "foks_capacity_limit{resource=\"local_view_permissions\"} 1000000\n",
+                "foks_capacity_limit{resource=\"waitlist_entries\"} 25\n",
+                "foks_capacity_limit{resource=\"database_bytes\"} 1073741824\n",
+                "foks_capacity_limit{resource=\"kv_namespace_bytes\"} 17179869184\n",
+                "foks_capacity_limit{resource=\"kv_namespace_objects\"} 1000000\n",
             )
         );
     }

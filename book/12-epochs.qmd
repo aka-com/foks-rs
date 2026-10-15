@@ -223,11 +223,12 @@ it:
 
 Because epoch 65,536 cannot be published, a compatible tree cannot advance
 past epoch 65,535 at all. At one epoch per mutation, that is the number of
-mutations a v0.1.9-compatible host can accept in its lifetime. The crate's
-README states the situation and the way out: "Raising the ceiling requires a
-coordinated upstream canonicality/wire fix." An implementation that quietly
-emitted a different encoding would produce roots that every existing client
-rejects, which is worse than stopping.
+mutations a v0.1.9-compatible host can accept in its lifetime;
+`foks-server usage` reports the current epoch against 65,535. The
+`foks-merkle-store` README states the situation and the way out: "Raising the
+ceiling requires a coordinated upstream canonicality/wire fix." An
+implementation that quietly emitted a different encoding would produce roots
+that every existing client rejects, which is worse than stopping.
 
 The ceiling is the clearest example in the system of how canonical encoding
 and hash commitment interact. A rule about which MessagePack marker is

@@ -141,8 +141,10 @@ Initialization is non-overwriting and creates private data, key, and backup
 directories, an operator root, and a self-signed Ed25519 probe certificate for
 the canonical DNS name. Replace the generated probe certificate/key paths with
 operator-managed material before exposing a public deployment. Use
-`foks-server status` for an offline bootstrap/integrity report and
-`client-bootstrap` to write a post-bootstrap client import bundle. Example
+`foks-server status` for an offline bootstrap/integrity report,
+`foks-server usage` for stored usage against the capacity limits (see
+[Capacity limits](#capacity-limits)) and `client-bootstrap` to write a
+post-bootstrap client import bundle. Example
 systemd units and deployment notes are in [`../../packaging`](../../packaging).
 
 `server.toml` is parsed strictly: an unknown key or table is an error, so
@@ -222,7 +224,8 @@ bounded round trip through the SQLite writer. Metrics cover end-to-end request
 and actual handler duration (including work that outlives a client deadline,
 and the time an OIDC completion, KEX receive or realtime inbox long poll
 waits), writer queue wait and execution duration, database and WAL bytes, backup
-duration, saturation, backup outcomes, and transient `accept()` failures. They
+duration, saturation, backup outcomes, transient `accept()` failures, and the
+configured capacity limits (see [Capacity limits](#capacity-limits)). They
 use fixed, non-user-derived names and never export paths, identities, request
 values, or key material.
 
@@ -540,6 +543,24 @@ waitlist holds at most 10,000 entries by default.
 Passphrase history is limited to 4,096 generations. Login state is limited to
 4,096 live challenges globally and eight per UID; five bad proofs within the
 default ten-minute window temporarily rate-limit that UID.
+
+`foks-server usage --config server.toml` reports stored usage against each
+host-wide limit, one `resource=... used=... limit=... remaining=...` line per
+limit, or one JSON object with `--json`. The limits are the last Merkle epoch
+whose back-pointer array has a canonical encoding (65,535; see the
+`foks-merkle-store` README), teams, unexpired unclaimed team-name
+reservations, team invitation certificates (65,536), local and remote join
+requests (1,000,000 and 65,536, counting accepted and rejected requests),
+local view permissions (1,000,000), waitlist entries, main-database bytes
+including free pages, and the bytes and objects of the largest KV namespace
+against the per-namespace limits. The report also lists free database bytes,
+WAL bytes, the ten largest KV namespaces by stored bytes and the ten teams
+with the most stored realtime message bytes, by identifier only. It reads one
+snapshot over a read-only connection, so it runs while the server serves, but
+it scans every KV and realtime message row. `/metrics` therefore exports only
+the limits, as `foks_capacity_limit{resource}` with the same resource names;
+alerting can compare `foks_capacity_limit{resource="database_bytes"}` with
+`foks_database_bytes`.
 
 Namespace accounting charges encoded bytes actually stored, including upload
 envelopes and ciphertext duplication. Tombstone/history versions remain

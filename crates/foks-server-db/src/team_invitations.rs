@@ -5,6 +5,13 @@ use crate::{
 };
 use rusqlite::{params, Connection, OptionalExtension as _, TransactionBehavior};
 
+/// Host-wide row limits. Each check counts every stored row of its table,
+/// whatever the row's state; the capacity report reads the same constants.
+pub(crate) const MAXIMUM_INVITATION_CERTIFICATES: i64 = 65_536;
+pub(crate) const MAXIMUM_LOCAL_JOIN_REQUESTS: i64 = 1_000_000;
+pub(crate) const MAXIMUM_REMOTE_JOIN_REQUESTS: i64 = 65_536;
+pub(crate) const MAXIMUM_LOCAL_VIEW_PERMISSIONS: i64 = 1_000_000;
+
 pub struct InvitationActor<'a> {
     pub uid: &'a [u8],
     pub credential: &'a [u8],
@@ -130,7 +137,7 @@ impl Database {
             [upload.team],
             |r| r.get(0),
         )?;
-        if count >= 64 || total_team >= 4096 || global >= 65536 {
+        if count >= 64 || total_team >= 4096 || global >= MAXIMUM_INVITATION_CERTIFICATES {
             return Err(Error::QuotaExceeded);
         }
         tx.execute(
@@ -193,7 +200,7 @@ pub(crate) fn insert_local_permission(
     let existing:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM user_local_view_permissions WHERE viewer_uid=?1 AND target_id=?2 UNION ALL SELECT 1 FROM team_local_view_permissions WHERE team_id=?1 AND target_id=?2)",params![viewer,target],|r|r.get(0))?;
     if !existing {
         let total:i64=c.query_row("SELECT (SELECT count(*) FROM user_local_view_permissions)+(SELECT count(*) FROM team_local_view_permissions)",[],|r|r.get(0))?;
-        if total >= 1_000_000 {
+        if total >= MAXIMUM_LOCAL_VIEW_PERMISSIONS {
             return Err(Error::QuotaExceeded);
         }
     }
@@ -311,7 +318,7 @@ pub(crate) fn commit_local_invitation_acceptance(
     let total: i64 = c.query_row("SELECT count(*) FROM team_local_join_requests", [], |r| {
         r.get(0)
     })?;
-    if team_count >= 1000 || joiner_count >= 100 || total >= 1_000_000 {
+    if team_count >= 1000 || joiner_count >= 100 || total >= MAXIMUM_LOCAL_JOIN_REQUESTS {
         return Err(Error::QuotaExceeded);
     }
     let (floor, visibility): (i64, i64) = c.query_row(
@@ -519,7 +526,7 @@ impl Database {
             tx.query_row("SELECT count(*) FROM team_remote_join_requests", [], |r| {
                 r.get(0)
             })?;
-        if pending >= 1000 || total >= 65536 {
+        if pending >= 1000 || total >= MAXIMUM_REMOTE_JOIN_REQUESTS {
             return Err(Error::QuotaExceeded);
         }
         // No ciphertext deduplication: Go issues a new RSVP for every successful send.

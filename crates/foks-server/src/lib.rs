@@ -32,6 +32,7 @@ mod services;
 pub mod sso;
 mod standalone;
 mod status;
+pub mod usage;
 pub mod waitlist;
 mod writer;
 

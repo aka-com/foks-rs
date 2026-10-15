@@ -4,6 +4,7 @@
 
 mod capabilities;
 mod capability_keys;
+mod capacity;
 mod certificates;
 mod clock;
 mod config;
@@ -47,6 +48,9 @@ pub use capabilities::{
     TeamAdminTokenIssue, TeamViewAuthoritySnapshot,
 };
 pub use capability_keys::{CapabilityKeyGeneration, CapabilityKeyGenerationState};
+pub use capacity::{
+    CapacityReport, CapacityResource, CapacityUsage, KvNamespaceUsage, RealtimeTeamUsage,
+};
 pub use certificates::{StoredCertificate, StoredCredentialBinding};
 pub use clock::{Clock, SystemClock};
 pub use config::Config;

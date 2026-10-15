@@ -47,6 +47,8 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         "foks_accept_errors_total{kind=\"other\"}",
         "foks_admission_rejected_total{reason=\"source_connections\"}",
         "foks_admission_rejected_total{reason=\"account_realtime_polls\"}",
+        "foks_capacity_limit{resource=\"merkle_epoch\"} 65535\n",
+        "foks_capacity_limit{resource=\"database_bytes\"}",
     ] {
         assert!(metrics.contains(name));
     }

@@ -1193,3 +1193,38 @@ fn response_byte_limits_fail_explicitly_without_truncating_history() {
 }
 
 mod reconciliation;
+#[test]
+fn capacity_report_sums_stored_messages_per_team() {
+    let mut f = Fixture::new();
+    f.db.rt_create_channel(&f.owner, &f.create, 1_000_000)
+        .unwrap();
+    let first = f.send(2);
+    f.db.rt_send(&f.owner, &first, 1_001_000).unwrap();
+    let mut second = f.send(3);
+    second.send.expected_previous_sequence = 1;
+    second.send.metadata.previous_id = first.send.metadata.id;
+    second.send.metadata.previous_sequence = 1;
+    f.db.rt_send(&f.member, &second, 1_002_000).unwrap();
+    let bytes: i64 =
+        f.db.connection
+            .query_row(
+                "SELECT sum(length(envelope) + length(exact_message)) FROM rt_messages",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+    let reader = f.reader();
+    let report = reader.snapshot().unwrap().capacity_report(0).unwrap();
+    assert_eq!(
+        report.realtime_teams,
+        [crate::RealtimeTeamUsage {
+            team_id: id(ENTITY_NAMED_TEAM, 3),
+            bytes: u64::try_from(bytes).unwrap(),
+            messages: 2,
+        }]
+    );
+    assert_eq!(
+        report.usage(crate::CapacityResource::Teams).unwrap().used,
+        1
+    );
+}

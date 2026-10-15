@@ -45,6 +45,16 @@ enum Command {
         #[arg(long)]
         config: PathBuf,
     },
+    /// Reports stored usage against each host-wide limit, the largest KV
+    /// namespaces and the teams with the most realtime message bytes. Reads a
+    /// snapshot, so the server may be running.
+    Usage {
+        #[arg(long)]
+        config: PathBuf,
+        /// Prints one JSON object instead of `key=value` lines.
+        #[arg(long)]
+        json: bool,
+    },
     /// Writes a pinned-client import bundle after the server has bootstrapped.
     ClientBootstrap {
         #[arg(long)]
@@ -434,6 +444,7 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             print_effective,
         } => config_check(config, print_effective),
         Command::Status { config } => status(config),
+        Command::Usage { config, json } => usage(config, json),
         Command::ClientBootstrap { config, output } => client_bootstrap(config, output),
         Command::Backup(arguments) => backup(arguments),
         Command::Restore(arguments) => restore(arguments),
@@ -674,6 +685,25 @@ fn status(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             .integrity_ok
             .map_or("not-run".to_owned(), |value| value.to_string()),
     );
+    Ok(())
+}
+
+fn usage(path: PathBuf, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(path)?;
+    foks_server::installation::validate_artifacts(&config)?;
+    let report = foks_server::usage::usage_report(
+        &config.database,
+        config.database_config(),
+        now_microseconds()?,
+    )?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&foks_server::usage::report_json(&report))?
+        );
+    } else {
+        print!("{}", foks_server::usage::report_text(&report));
+    }
     Ok(())
 }
 

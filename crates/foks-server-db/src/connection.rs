@@ -109,11 +109,16 @@ impl DatabasePathIdentity {
 #[must_use = "repository reads are pinned only while the snapshot is alive"]
 pub struct ReadSnapshot<'connection> {
     transaction: Transaction<'connection>,
+    config: &'connection Config,
 }
 
 impl ReadSnapshot<'_> {
     pub(crate) fn connection(&self) -> &Connection {
         &self.transaction
+    }
+
+    pub(crate) fn config(&self) -> &Config {
+        self.config
     }
 }
 
@@ -254,6 +259,7 @@ impl ReadDatabase {
     pub fn snapshot(&self) -> Result<ReadSnapshot<'_>> {
         Ok(ReadSnapshot {
             transaction: self.connection.unchecked_transaction()?,
+            config: &self.config,
         })
     }
 
