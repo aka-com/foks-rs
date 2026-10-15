@@ -4,12 +4,13 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react';
-import type { ToastController, ToastOptions } from '../../kit/toasts';
+import type { ToastController } from '../../kit/toasts';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import type { LocationStore } from '../location';
 import { nameOf, storeOf, type AgentSnapshot, type Item } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { NavigationPrompt } from '../navigation-guard';
+import { useShellServices } from '../shell-services';
 import type { DropUpload } from '../screens/items-screen';
 import {
   DEFAULT_READ_ROLE,
@@ -25,7 +26,6 @@ import {
   Takeover,
   type ShellBlock,
 } from './blocking-shell';
-import type { CommandErrorHandler } from './catalog-runtime';
 import { PanelErrorBoundary } from './fault-boundaries';
 import type { useShellNavigation } from './navigation-runtime';
 
@@ -90,16 +90,8 @@ export function useDroppedUpload({
 }
 
 export function ShellOverlays({
-  shown,
-  bridge,
-  accessNow,
   workflow,
   setWorkflow,
-  refresh,
-  commandError,
-  mutationError,
-  refreshSnapshot,
-  reloadCatalog,
   restoreTrash,
   setResumeDraft,
   setConcealSignal,
@@ -111,21 +103,8 @@ export function ShellOverlays({
   block,
   recoverAgentReadiness,
 }: {
-  shown: AgentSnapshot;
-  bridge: Bridge;
-  accessNow: () => number;
   workflow: WriteWorkflow;
   setWorkflow: Dispatch<SetStateAction<WriteWorkflow>>;
-  refresh: (
-    message: string,
-    profile?: string,
-    options?: ToastOptions,
-  ) => Promise<void>;
-  commandError: CommandErrorHandler;
-  mutationError: MutationFailureHandler;
-  refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
-  /** Reads one profile's catalog again, or every profile's without one. */
-  reloadCatalog: (profile?: string) => Promise<AgentSnapshot>;
   restoreTrash: (item: Item, destination: string) => Promise<void>;
   setResumeDraft: Dispatch<SetStateAction<ResumeDraft | null>>;
   setConcealSignal: Dispatch<SetStateAction<number>>;
@@ -137,6 +116,7 @@ export function ShellOverlays({
   block: ShellBlock | null;
   recoverAgentReadiness: (reconnect: boolean) => Promise<void>;
 }): ReactNode {
+  const { bridge, commandError, refreshSnapshot } = useShellServices();
   return (
     <>
       {/* A workflow sheet that fails to render is closed; the navigation
@@ -152,14 +132,8 @@ export function ShellOverlays({
         }}
       >
         <WriteOverlay
-          snapshot={shown}
-          accessNow={accessNow}
-          bridge={bridge}
           workflow={workflow}
           setWorkflow={setWorkflow}
-          onApplied={refresh}
-          onError={commandError}
-          onMutationError={mutationError}
           onRefreshConflict={async (item, draft, operation) => {
             const next = await refreshSnapshot();
             const current = next.items.find(
@@ -210,7 +184,6 @@ export function ShellOverlays({
             else toasts.show('This item was already deleted elsewhere.');
           }}
           onRestoreTrash={restoreTrash}
-          onReload={reloadCatalog}
           onDiscardConflict={() => {
             setWorkflow(null);
             setResumeDraft(null);

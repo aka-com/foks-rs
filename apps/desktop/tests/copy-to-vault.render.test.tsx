@@ -16,7 +16,7 @@ import type {
 } from '../src/bridge';
 import type { LocationStore } from '../src/location';
 import { installDom } from './lib/dom-harness';
-import { workflowScope } from './lib/workflow-scope';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -303,16 +303,15 @@ async function ambiguousCopyScope(vault: string): Promise<string | undefined> {
     },
   };
   const scopes: (string | undefined)[] = [];
-  const sheet = createElement(CopyItemSheet, {
+  const TestShell = await loadTestShell();
+  const sheet = createElement(TestShell, {
     snapshot: FIXTURE,
     bridge,
-    item,
-    setWorkflow: () => {},
-    onApplied: async () => {},
-    onMutationError: async (_failure, options) => {
+    mutationError: async (_failure, options) => {
       scopes.push(options?.item?.path);
     },
     accessNow: () => Math.floor(Date.now() / 1000),
+    children: createElement(CopyItemSheet, { item, setWorkflow: () => {} }),
   });
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
@@ -320,7 +319,7 @@ async function ambiguousCopyScope(vault: string): Promise<string | undefined> {
     createElement(OverlayProvider, {
       backgroundRef: { current: null },
       portalRoot,
-      children: await workflowScope(sheet, FIXTURE),
+      children: sheet,
     }),
   );
   const dialog = await rendered.findByRole('dialog', { name: 'Copy to vault' });

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ToastOptions } from '../../kit/toasts';
 import {
   Band,
   Button,
@@ -12,7 +11,6 @@ import {
   SheetDialog,
 } from '../components';
 import type {
-  Bridge,
   KvRoleInput,
   PasswordImportOutcome,
   PasswordImportPreview,
@@ -28,13 +26,13 @@ import {
   storeNavigationOrder,
   storeOf,
 } from '../model';
-import type { AgentSnapshot, StoreRef } from '../model';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { StoreRef } from '../model';
 import { useSheetGuard } from '../navigation-guard';
 import { joinPath, validFolderPath } from './item-moves';
 import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from './item-roles';
 import { AccessBlock, storeOption, writeBlockReason } from './store-choice';
 import type { WriteWorkflow } from './write-workflows';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 
 /** The folder imported logins go to unless another is chosen. */
 export const IMPORT_FOLDER = '/logins';
@@ -112,29 +110,20 @@ export function importFolderProblem(folder: string): string | null {
  * is missing.
  */
 export function ImportPasswordsSheet({
-  snapshot,
-  bridge,
   workflow,
   setWorkflow,
-  onApplied,
-  onMutationError,
-  onReload,
-  accessNow,
 }: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   workflow: { storeId: StoreRef; initialFolder?: string };
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (
-    message: string,
-    profile?: string,
-    options?: ToastOptions,
-  ) => Promise<void>;
-  onMutationError: MutationFailureHandler;
-  /** Reads the catalog of `profile` again and resolves with it. */
-  onReload: (profile?: string) => Promise<AgentSnapshot>;
-  accessNow: () => number;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    refresh: onApplied,
+    mutationError: onMutationError,
+    reloadCatalog: onReload,
+    accessNow,
+  } = useShellServices();
   const [preview, setPreview] = useState<PasswordImportPreview | null>(null);
   const [picking, setPicking] = useState(false);
   const [storeId, setStoreId] = useState(() =>

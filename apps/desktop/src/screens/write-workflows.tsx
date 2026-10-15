@@ -50,13 +50,11 @@ import type {
   AgentSnapshot,
 } from '../model';
 import { normalizeCommandError } from '../bridge';
-import type { Bridge, KvRoleInput } from '../bridge';
+import type { KvRoleInput } from '../bridge';
 import type { GuardVerdict } from '../location';
 import { NavigationPrompt, useSheetGuard } from '../navigation-guard';
 import { useFileDrop } from '../file-drop';
-import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '../../kit/toasts';
-import type { ToastOptions } from '../../kit/toasts';
 import { itemActionProblem } from './store-access';
 import { useTrashOrigins } from './trash-origins';
 import {
@@ -68,6 +66,7 @@ import { AccessBlock, storeOption, writeBlockReason } from './store-choice';
 import { CopyItemSheet } from './copy-item-sheet';
 import { ImportPasswordsSheet } from './import-passwords-sheet';
 import { ExportPasswordsSheet } from './export-passwords-sheet';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 
 export { writeBlockReason };
 
@@ -314,26 +313,19 @@ export function workflowForError(
 }
 
 interface NewSheetProps {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'new' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (message: string, profile?: string) => Promise<void>;
-  onError: (error: unknown) => void;
-  onMutationError: MutationFailureHandler;
-  accessNow: () => number;
 }
 
-function NewSheet({
-  snapshot,
-  bridge,
-  workflow,
-  setWorkflow,
-  onApplied,
-  onError,
-  onMutationError,
-  accessNow,
-}: NewSheetProps): ReactNode {
+function NewSheet({ workflow, setWorkflow }: NewSheetProps): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    refresh: onApplied,
+    commandError: onError,
+    mutationError: onMutationError,
+    accessNow,
+  } = useShellServices();
   // If the specified store is not available locally, fall back to the default vault.
   const [storeId, setStoreId] = useTabSheetState('item.storeId', () =>
     storeOf(snapshot, workflow.storeId)
@@ -771,22 +763,19 @@ function NewSheet({
 }
 
 function NewFolderSheet({
-  snapshot,
-  bridge,
   workflow,
   setWorkflow,
-  onApplied,
-  onMutationError,
-  accessNow,
 }: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'new-folder' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (message: string, profile?: string) => Promise<void>;
-  onMutationError: MutationFailureHandler;
-  accessNow: () => number;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    refresh: onApplied,
+    mutationError: onMutationError,
+    accessNow,
+  } = useShellServices();
   const [name, setName] = useTabSheetState('folder.name', '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -919,22 +908,18 @@ function NewFolderSheet({
 }
 
 function ExistsSheet({
-  snapshot,
-  bridge,
   workflow,
   setWorkflow,
   onOpenExisting,
-  onError,
 }: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
   onOpenExisting: (
     workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>,
   ) => Promise<void>;
-  onError: (error: unknown) => void;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const { bridge, commandError: onError } = useShellServices();
   const clash = snapshot.items.find(
     (item) => item.store === workflow.storeId && item.path === workflow.path,
   );
@@ -1009,32 +994,16 @@ function ExistsSheet({
 }
 
 export function WriteOverlay({
-  snapshot,
-  bridge,
   workflow,
   setWorkflow,
-  onApplied,
-  onError,
-  onMutationError,
   onRefreshConflict,
   onDiscardConflict,
   onDeleteConflict,
   onOpenExisting,
   onRestoreTrash,
-  onReload,
-  accessNow = () => Date.now() / 1000,
 }: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   workflow: WriteWorkflow;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (
-    message: string,
-    profile?: string,
-    options?: ToastOptions,
-  ) => Promise<void>;
-  onError: (error: unknown, item?: Item) => void;
-  onMutationError: MutationFailureHandler;
   /**
    * Refreshes after an edit conflict and says what the conflict sheet gives
    * way to: nothing, when the item is there to review, or a new-item sheet
@@ -1053,101 +1022,43 @@ export function WriteOverlay({
   ) => Promise<void>;
   /** Moves a Trash entry to `destination`, outside Trash. */
   onRestoreTrash: (item: Item, destination: string) => Promise<void>;
-  /**
-   * Reads the catalog of `profile` again, or of every profile without one,
-   * and resolves with it, for moves in steps.
-   */
-  onReload: (profile?: string) => Promise<AgentSnapshot>;
-  accessNow?: () => number;
 }): ReactNode {
   if (!workflow) return null;
   // The sheet supplies its own dialog: Escape and the backdrop are decided by
   // the draft it holds, the same state its navigation guard answers from.
   if (workflow.kind === 'new')
-    return (
-      <NewSheet
-        snapshot={snapshot}
-        bridge={bridge}
-        workflow={workflow}
-        setWorkflow={setWorkflow}
-        onApplied={onApplied}
-        onError={(error) => onError(error)}
-        onMutationError={onMutationError}
-        accessNow={accessNow}
-      />
-    );
+    return <NewSheet workflow={workflow} setWorkflow={setWorkflow} />;
   if (workflow.kind === 'new-folder')
-    return (
-      <NewFolderSheet
-        snapshot={snapshot}
-        bridge={bridge}
-        workflow={workflow}
-        setWorkflow={setWorkflow}
-        onApplied={onApplied}
-        onMutationError={onMutationError}
-        accessNow={accessNow}
-      />
-    );
+    return <NewFolderSheet workflow={workflow} setWorkflow={setWorkflow} />;
   // The already-exists step carries the same draft, so it supplies its own
   // dialog for the same reason.
   if (workflow.kind === 'exists')
     return (
       <ExistsSheet
-        snapshot={snapshot}
-        bridge={bridge}
         workflow={workflow}
         setWorkflow={setWorkflow}
         onOpenExisting={onOpenExisting}
-        onError={(error) => onError(error)}
       />
     );
   if (workflow.kind === 'move' || workflow.kind === 'move-many')
     return (
       <MoveSheet
-        snapshot={snapshot}
-        bridge={bridge}
         items={workflow.kind === 'move' ? [workflow.item] : workflow.items}
         setWorkflow={setWorkflow}
-        onApplied={onApplied}
-        onMutationError={onMutationError}
-        onReload={onReload}
-        accessNow={accessNow}
       />
     );
   if (workflow.kind === 'copy')
-    return (
-      <CopyItemSheet
-        snapshot={snapshot}
-        bridge={bridge}
-        item={workflow.item}
-        setWorkflow={setWorkflow}
-        onApplied={onApplied}
-        onMutationError={onMutationError}
-        accessNow={accessNow}
-      />
-    );
+    return <CopyItemSheet item={workflow.item} setWorkflow={setWorkflow} />;
   if (workflow.kind === 'export')
     return (
       <ExportPasswordsSheet
-        snapshot={snapshot}
-        bridge={bridge}
         storeId={workflow.storeId}
         setWorkflow={setWorkflow}
-        onApplied={onApplied}
       />
     );
   if (workflow.kind === 'import')
     return (
-      <ImportPasswordsSheet
-        snapshot={snapshot}
-        bridge={bridge}
-        workflow={workflow}
-        setWorkflow={setWorkflow}
-        onApplied={onApplied}
-        onMutationError={onMutationError}
-        onReload={onReload}
-        accessNow={accessNow}
-      />
+      <ImportPasswordsSheet workflow={workflow} setWorkflow={setWorkflow} />
     );
   if (
     workflow.kind === 'bulk-move' ||
@@ -1158,37 +1069,20 @@ export function WriteOverlay({
       // The Undo of a bulk-trash run replaces it with a run of its own.
       <BulkProgressSheet
         key={workflow.kind}
-        snapshot={snapshot}
-        bridge={bridge}
         workflow={workflow}
         setWorkflow={setWorkflow}
-        onApplied={onApplied}
-        onMutationError={onMutationError}
-        onReload={onReload}
-        accessNow={accessNow}
       />
     );
   if (workflow.kind === 'restore-conflict')
     return (
       <RestoreConflictSheet
-        snapshot={snapshot}
         workflow={workflow}
         setWorkflow={setWorkflow}
         onRestoreTrash={onRestoreTrash}
       />
     );
   if (workflow.kind === 'empty-trash')
-    return (
-      <EmptyTrashSheet
-        snapshot={snapshot}
-        accessNow={accessNow}
-        workflow={workflow}
-        bridge={bridge}
-        setWorkflow={setWorkflow}
-        onApplied={onApplied}
-        onMutationError={onMutationError}
-      />
-    );
+    return <EmptyTrashSheet workflow={workflow} setWorkflow={setWorkflow} />;
   if (workflow.kind === 'conflict')
     return (
       <ConflictSheet
@@ -1196,18 +1090,12 @@ export function WriteOverlay({
         setWorkflow={setWorkflow}
         onRefreshConflict={onRefreshConflict}
         onDiscardConflict={onDiscardConflict}
-        onError={onError}
       />
     );
   return (
     <DeleteSheet
-      snapshot={snapshot}
-      accessNow={accessNow}
       workflow={workflow}
-      bridge={bridge}
       setWorkflow={setWorkflow}
-      onApplied={onApplied}
-      onMutationError={onMutationError}
       onDeleteConflict={onDeleteConflict}
     />
   );
@@ -1221,7 +1109,6 @@ function ConflictSheet({
   setWorkflow,
   onRefreshConflict,
   onDiscardConflict,
-  onError,
 }: {
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'conflict' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
@@ -1231,8 +1118,8 @@ function ConflictSheet({
     operation?: 'edit' | 'replace',
   ) => Promise<WriteWorkflow>;
   onDiscardConflict: () => void;
-  onError: (error: unknown, item?: Item) => void;
 }): ReactNode {
+  const { commandError: onError } = useShellServices();
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const replacing = workflow.operation === 'replace';
 
@@ -1339,24 +1226,21 @@ export const TRASH_UNAVAILABLE_COPY =
  * in a team whose Trash this account cannot set up.
  */
 function DeleteSheet({
-  snapshot,
-  accessNow,
   workflow,
-  bridge,
   setWorkflow,
-  onApplied,
-  onMutationError,
   onDeleteConflict,
 }: {
-  snapshot: AgentSnapshot;
-  accessNow: () => number;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'delete' }>;
-  bridge: Bridge;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (message: string, profile?: string) => Promise<void>;
-  onMutationError: MutationFailureHandler;
   onDeleteConflict: (item: Item) => Promise<void>;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    accessNow,
+    bridge,
+    refresh: onApplied,
+    mutationError: onMutationError,
+  } = useShellServices();
   const [deleting, setDeleting] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [failureMessage, setFailureMessage] = useState<string | null>(null);
@@ -1464,16 +1348,15 @@ function DeleteSheet({
  * The entry can be restored under a new name beside it; nothing is replaced.
  */
 function RestoreConflictSheet({
-  snapshot,
   workflow,
   setWorkflow,
   onRestoreTrash,
 }: {
-  snapshot: AgentSnapshot;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'restore-conflict' }>;
   setWorkflow: (workflow: WriteWorkflow) => void;
   onRestoreTrash: (item: Item, destination: string) => Promise<void>;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
   const [restoring, setRestoring] = useState(false);
   const { item, destination } = workflow;
   const copy = restoredCopyPath(destination, (path) =>
@@ -1545,22 +1428,19 @@ function RestoreConflictSheet({
  * whose write role this account lacks stay in Trash.
  */
 function EmptyTrashSheet({
-  snapshot,
-  accessNow,
   workflow,
-  bridge,
   setWorkflow,
-  onApplied,
-  onMutationError,
 }: {
-  snapshot: AgentSnapshot;
-  accessNow: () => number;
   workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'empty-trash' }>;
-  bridge: Bridge;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (message: string, profile?: string) => Promise<void>;
-  onMutationError: MutationFailureHandler;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    accessNow,
+    bridge,
+    refresh: onApplied,
+    mutationError: onMutationError,
+  } = useShellServices();
   const [listed] = useState(() => trashEntries(snapshot, workflow.store));
   const entries = useTrashOrigins(bridge, listed);
   const [emptying, setEmptying] = useState(false);

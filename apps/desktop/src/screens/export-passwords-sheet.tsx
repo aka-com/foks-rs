@@ -1,13 +1,12 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ToastOptions } from '../../kit/toasts';
 import { Band, Button, Field, Icon, Inset, SheetDialog } from '../components';
-import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import { isTrashPath, kindOf, storeOf } from '../model';
 import type { AgentSnapshot, StoreRef } from '../model';
 import { useSheetGuard } from '../navigation-guard';
 import type { WriteWorkflow } from './write-workflows';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 
 /** The passwords of `store` an export writes: what Files lists as one. */
 export function exportedPasswords(
@@ -34,22 +33,14 @@ function passwordCount(count: number): string {
  * to be typed.
  */
 export function ExportPasswordsSheet({
-  snapshot,
-  bridge,
   storeId,
   setWorkflow,
-  onApplied,
 }: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   storeId: StoreRef;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (
-    message: string,
-    profile?: string,
-    options?: ToastOptions,
-  ) => Promise<void>;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const { bridge, refresh: onApplied } = useShellServices();
   const [typed, setTyped] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

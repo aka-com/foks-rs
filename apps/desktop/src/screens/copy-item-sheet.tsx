@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ToastOptions } from '../../kit/toasts';
 import {
   Band,
   Button,
@@ -12,7 +11,7 @@ import {
   SectionLabel,
   SheetDialog,
 } from '../components';
-import type { Bridge, KvRoleInput } from '../bridge';
+import type { KvRoleInput } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import {
   canCreateInStore,
@@ -26,7 +25,6 @@ import {
   trashUnavailable,
 } from '../model';
 import type { AgentSnapshot, Item, Store } from '../model';
-import type { MutationFailureHandler } from '../mutation-recovery';
 import { useSheetGuard } from '../navigation-guard';
 import { FolderPicker, pickerFolders } from './folder-picker';
 import {
@@ -42,6 +40,7 @@ import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from './item-roles';
 import { itemActionProblem } from './store-access';
 import { AccessBlock, storeOption, writeBlockReason } from './store-choice';
 import type { WriteWorkflow } from './write-workflows';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 
 /**
  * The vault a copy goes to when the sheet opens: the first team this account
@@ -72,26 +71,19 @@ function initialFolder(
  * when it fails, the copy stays and the original is reported as kept.
  */
 export function CopyItemSheet({
-  snapshot,
-  bridge,
   item,
   setWorkflow,
-  onApplied,
-  onMutationError,
-  accessNow,
 }: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   item: Item;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (
-    message: string,
-    profile?: string,
-    options?: ToastOptions,
-  ) => Promise<void>;
-  onMutationError: MutationFailureHandler;
-  accessNow: () => number;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    refresh: onApplied,
+    mutationError: onMutationError,
+    accessNow,
+  } = useShellServices();
   const source = storeOf(snapshot, item.store);
   const [targetId, setTargetId] = useState(() => initialTarget(snapshot, item));
   const [folder, setFolder] = useState(() =>

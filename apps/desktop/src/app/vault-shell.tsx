@@ -256,7 +256,6 @@ export function VaultShell({
     refreshingSnapshot,
     hardwareRefresh,
     refreshSnapshot,
-    reloadCatalog,
     refresh,
     refreshAll,
   } = catalog;
@@ -1151,16 +1150,8 @@ export function VaultShell({
         </ChatInboxProvider>
       </div>
       <ShellOverlays
-        shown={shown}
-        bridge={bridge}
-        accessNow={accessNow}
         workflow={workflow}
         setWorkflow={setWorkflow}
-        refresh={refresh}
-        commandError={commandError}
-        mutationError={mutationError}
-        refreshSnapshot={refreshSnapshot}
-        reloadCatalog={reloadCatalog}
         restoreTrash={trash.restoreTo}
         setResumeDraft={setResumeDraft}
         setConcealSignal={setConcealSignal}

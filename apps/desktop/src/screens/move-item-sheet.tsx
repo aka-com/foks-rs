@@ -1,11 +1,9 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, Field, Inset, SectionLabel, SheetDialog } from '../components';
-import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import { isTrashPath, nameOf, storeOf } from '../model';
-import type { AgentSnapshot, Item } from '../model';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { Item } from '../model';
 import { noteMoved } from '../recent-favorites';
 import { useSheetGuard } from '../navigation-guard';
 import { FolderPicker, pickerFolders } from './folder-picker';
@@ -27,6 +25,7 @@ import type { MoveCheck } from './item-moves';
 import { newFolderRoles } from './item-roles';
 import { itemActionProblem } from './store-access';
 import type { WriteWorkflow } from './write-workflows';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 
 /**
  * Why the sheet cannot move `items`, given each item's reason or undefined:
@@ -68,25 +67,20 @@ function leftOutNote(
  * progress sheet, which moves them one at a time.
  */
 export function MoveSheet({
-  snapshot,
-  bridge,
   items,
   setWorkflow,
-  onApplied,
-  onMutationError,
-  onReload,
-  accessNow,
 }: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   items: readonly Item[];
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (message: string, profile?: string) => Promise<void>;
-  onMutationError: MutationFailureHandler;
-  /** Reads the catalog of `profile` again and resolves with it. */
-  onReload: (profile?: string) => Promise<AgentSnapshot>;
-  accessNow: () => number;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    refresh: onApplied,
+    mutationError: onMutationError,
+    reloadCatalog: onReload,
+    accessNow,
+  } = useShellServices();
   const first = items[0];
   const single = items.length === 1 ? first : null;
   const store = first ? storeOf(snapshot, first.store) : undefined;

@@ -6,6 +6,7 @@ import type { Bridge, ReadItemResponse } from '../src/bridge';
 import type { GuardVerdict, LocationStore } from '../src/location';
 import type { DetailsPanelProps } from '../src/screens/details-panel';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -263,6 +264,7 @@ test('an already-open Delete permanently sheet disables its action when access i
     (item) => item.path === '/logins/github.com',
   );
   const { WriteOverlay } = await import('../src/screens/write-workflows');
+  const TestShell = await loadTestShell();
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   let snapshot = p.props.snapshot;
@@ -280,20 +282,18 @@ test('an already-open Delete permanently sheet disables its action when access i
       portalRoot,
       children: createElement(ToastProvider, {
         controller,
-        children: createElement(WriteOverlay, {
+        children: createElement(TestShell, {
           snapshot,
           bridge: p.bridge,
-          workflow: { kind: 'delete', item: p.subject },
-          setWorkflow: () => {},
-          onApplied: async () => {},
-          onError: () => {},
-          onMutationError: async () => {},
-          onRefreshConflict: async () => null,
-          onDiscardConflict: () => {},
-          onDeleteConflict: async () => {},
-          onOpenExisting: async () => {},
-          onRestoreTrash: async () => {},
-          onReload: async () => snapshot,
+          children: createElement(WriteOverlay, {
+            workflow: { kind: 'delete', item: p.subject },
+            setWorkflow: () => {},
+            onRefreshConflict: async () => null,
+            onDiscardConflict: () => {},
+            onDeleteConflict: async () => {},
+            onOpenExisting: async () => {},
+            onRestoreTrash: async () => {},
+          }),
         }),
       }),
     });

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { anyDialogOpen } from '../../kit/overlay-primitives';
-import type { ToastOptions } from '../../kit/toasts';
 import { useToast } from '../../kit/toasts';
 import { Button, Icon, SheetDialog } from '../components';
 import type { Bridge } from '../bridge';
@@ -14,7 +13,6 @@ import {
   UNDO_DURATION_MS,
 } from '../model';
 import type { AgentSnapshot, Item } from '../model';
-import type { MutationFailureHandler } from '../mutation-recovery';
 import { noteMoved } from '../recent-favorites';
 import { useSheetGuard } from '../navigation-guard';
 import {
@@ -33,6 +31,7 @@ import {
 import type { BulkAction, BulkRow, BulkStatus } from './item-moves';
 import { itemActionProblem } from './store-access';
 import type { WriteWorkflow } from './write-workflows';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 
 export type BulkWorkflow = Extract<
   NonNullable<WriteWorkflow>,
@@ -214,32 +213,20 @@ function restoreWorkflow(
  * request certainly did not run.
  */
 export function BulkProgressSheet({
-  snapshot,
-  bridge,
   workflow,
   setWorkflow,
-  onApplied,
-  onMutationError,
-  onReload,
-  accessNow,
 }: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   workflow: BulkWorkflow;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (
-    message: string,
-    profile?: string,
-    options?: ToastOptions,
-  ) => Promise<void>;
-  onMutationError: MutationFailureHandler;
-  /**
-   * Reads the catalog of `profile` again, or of every profile without one,
-   * and resolves with it.
-   */
-  onReload: (profile?: string) => Promise<AgentSnapshot>;
-  accessNow: () => number;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    refresh: onApplied,
+    mutationError: onMutationError,
+    reloadCatalog: onReload,
+    accessNow,
+  } = useShellServices();
   const toasts = useToast();
   const [rows, setRows] = useState<readonly BulkRow[]>(() =>
     pendingRows(workflow.items),
