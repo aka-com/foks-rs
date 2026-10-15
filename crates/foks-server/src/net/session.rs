@@ -598,8 +598,9 @@ impl LongPoll<'_> {
                 disconnect_before_response: true,
             }));
         }
-        // A finished handler is answered even if the peer or the stop signal
-        // became ready at the same time.
+        // A finished handler wins over peer readability that became ready at
+        // the same time. A concurrent stop is not consumed here, so the write
+        // in `serve` can still close the connection without the response.
         let result = tokio::select! {
             biased;
             result = handler => result,
@@ -845,7 +846,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn every_long_poll_honors_an_armed_fault_before_awaiting_its_handler() {
+    async fn long_poll_run_honors_an_armed_fault_for_each_long_poll_route() {
         for id in LONG_POLL_ROUTES {
             let metrics = Arc::new(crate::ServerMetrics::default());
             let faults = crate::SessionFaults::default();

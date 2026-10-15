@@ -214,7 +214,7 @@ Incremental loads (`verify_user_chain_increment_at_root`, `user.rs:869-1019`) re
 
 So there is *no cross-request batching* in foks-rs: one mutation = one epoch, and "Root publication and signing are one atomic standalone commit" (comment in `services/merkle_query.rs`, `merkle_check_key_exists`). The `merkle_leaves.epoch` column records the epoch at which a key was last written, which is what `merkleCheckKeyExists` returns (`merkle_query.rs`).
 
-**Read path.** Reads use a separate WAL read pool (`read_database`, `session.rs:900-910`). `merkleLookup`/`merkleMultiLookup` (`services/merkle_query.rs`) select a root (current or a requested historical epoch, optionally requiring the signed form), validate the stored root's binding (`decode_stored_root` via `validated_root`, `merkle_query.rs`), and run `proof` per key. Proof-generation errors other than storage errors are reported as `MERKLE_VERIFY_ERROR` rather than retries ("Merkle integrity failures are not laundered as retries", test in `merkle_query.rs`).
+**Read path.** Reads use a separate WAL read pool (`MerkleQueries::read_database`, `services/merkle_query.rs`). `merkleLookup`/`merkleMultiLookup` (`services/merkle_query.rs`) select a root (current or a requested historical epoch, optionally requiring the signed form), validate the stored root's binding (`decode_stored_root` via `validated_root`, `merkle_query.rs`), and run `proof` per key. Proof-generation errors other than storage errors are reported as `MERKLE_VERIFY_ERROR` rather than retries ("Merkle integrity failures are not laundered as retries", test in `merkle_query.rs`).
 
 ---
 
