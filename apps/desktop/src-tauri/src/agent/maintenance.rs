@@ -607,6 +607,11 @@ impl AgentHandle {
         Ok(response)
     }
 
+    /// Whether a maintenance command or automatic recovery holds admission.
+    pub fn maintenance_in_progress(&self) -> bool {
+        self.maintenance_in_flight.load(Ordering::Acquire)
+    }
+
     pub fn maintenance_snapshot(&self) -> MaintenanceSnapshot {
         self.maintenance_snapshot
             .lock()

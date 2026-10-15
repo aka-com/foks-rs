@@ -1,7 +1,7 @@
 //! One-way application teardown. Only verified agent exit permits desktop exit.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter as _, Manager as _, State, WindowEvent};
@@ -17,9 +17,21 @@ pub const EXIT_STATE_EVENT: &str = "foks://exit-state";
 pub enum ExitState {
     #[default]
     Idle,
+    /// The first close or quit request, with what it found. `unsent`,
+    /// `mutation`, `maintenance` and `owned == false` are each a reason to ask
+    /// before stopping the agent; see [`asks_before_stopping`].
     Decision {
         pid: Option<u32>,
+        /// Chat messages queued in the renderer and not yet sent.
         unsent: usize,
+        /// A command holds a desktop mutation reservation.
+        mutation: bool,
+        /// State maintenance or automatic recovery holds admission.
+        maintenance: bool,
+        /// This app launched or adopted the agent answering on the socket,
+        /// and no other agent process uses this app's state directory. False
+        /// when the socket owner cannot be identified.
+        owned: bool,
     },
     Stopping {
         pid: Option<u32>,
@@ -47,17 +59,66 @@ pub enum ExitAction {
     ForceStop,
 }
 
+/// The device-local Ask before quitting preference, which the renderer
+/// stores and reports here. Until it reports one, every request asks.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum QuitConfirmation {
+    #[default]
+    Always,
+    /// Ask only when a request finds a reason in its decision; otherwise stop
+    /// the agent and quit without asking.
+    WhenPending,
+}
+
 #[derive(Default)]
 pub struct CloseGuard {
     unsent: AtomicUsize,
+    when_pending: AtomicBool,
     asking: AtomicBool,
     renderer_ready: AtomicBool,
     state: Mutex<ExitState>,
 }
 
+/// Whether `decision` must be shown before shutdown starts. A decision with
+/// no reason is skipped only when the preference allows it.
+fn asks_before_stopping(decision: &ExitState, confirmation: QuitConfirmation) -> bool {
+    match decision {
+        ExitState::Decision {
+            unsent,
+            mutation,
+            maintenance,
+            owned,
+            ..
+        } => {
+            confirmation == QuitConfirmation::Always
+                || *unsent > 0
+                || *mutation
+                || *maintenance
+                || !*owned
+        }
+        _ => true,
+    }
+}
+
 impl CloseGuard {
     pub fn set_unsent(&self, count: usize) {
         self.unsent.store(count, Ordering::Relaxed);
+    }
+
+    pub fn set_confirmation(&self, confirmation: QuitConfirmation) {
+        self.when_pending.store(
+            confirmation == QuitConfirmation::WhenPending,
+            Ordering::Relaxed,
+        );
+    }
+
+    fn confirmation(&self) -> QuitConfirmation {
+        if self.when_pending.load(Ordering::Relaxed) {
+            QuitConfirmation::WhenPending
+        } else {
+            QuitConfirmation::Always
+        }
     }
 
     pub fn state(&self) -> ExitState {
@@ -92,11 +153,24 @@ impl CloseGuard {
         }
         let repeated = *state != ExitState::Idle;
         if !repeated {
-            // Missing endpoint/ownership information never authorizes exit.
-            *state = ExitState::Decision {
-                pid: agent.process_info().pid,
-                unsent: self.unsent.load(Ordering::Relaxed),
-            };
+            let decision = decision(app, agent, self.unsent.load(Ordering::Relaxed));
+            // A request that finds nothing to interrupt starts shutdown at
+            // once when the preference allows it. The same Stopping state
+            // follows, so a failure still reaches the Failed questions.
+            if !asks_before_stopping(&decision, self.confirmation()) {
+                let ExitState::Decision { pid, .. } = decision else {
+                    unreachable!("decision() returns a decision");
+                };
+                enter(
+                    app,
+                    self,
+                    agent,
+                    state,
+                    ExitState::Stopping { pid, force: false },
+                );
+                return true;
+            }
+            *state = decision;
         }
         let snapshot = state.clone();
         drop(state);
@@ -109,6 +183,26 @@ impl CloseGuard {
             native_question(app, self, agent);
         }
         true
+    }
+}
+
+/// What a first request finds. Missing endpoint or ownership information
+/// reads as an agent this app does not own, so it never skips the question.
+fn decision(app: &tauri::AppHandle, agent: &AgentHandle, unsent: usize) -> ExitState {
+    let info = agent.process_info();
+    let owned = info.owned
+        && agent
+            .stale_agent_processes()
+            .iter()
+            .all(|process| Some(process.pid) == info.pid);
+    ExitState::Decision {
+        pid: info.pid,
+        unsent,
+        mutation: app
+            .try_state::<AppState>()
+            .is_none_or(|state| state.mutation_in_progress()),
+        maintenance: agent.maintenance_in_progress(),
+        owned,
     }
 }
 
@@ -152,11 +246,24 @@ fn apply_action(
     agent: &Arc<AgentHandle>,
     action: ExitAction,
 ) -> Result<(), AgentError> {
-    let mut state = guard
+    let state = guard
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let next = transition(&state, action)?;
+    enter(app, guard, agent, state, next);
+    Ok(())
+}
+
+/// Store and publish `next` under the lock that admitted it, and start the
+/// shutdown worker when `next` is [`ExitState::Stopping`].
+fn enter(
+    app: &tauri::AppHandle,
+    guard: &Arc<CloseGuard>,
+    agent: &Arc<AgentHandle>,
+    mut state: MutexGuard<'_, ExitState>,
+    next: ExitState,
+) {
     if matches!(next, ExitState::Stopping { .. }) {
         agent.begin_exit();
     }
@@ -203,7 +310,6 @@ fn apply_action(
             }
         });
     }
-    Ok(())
 }
 
 /// Native fallback shares the exact same transitions; it cannot bypass the
@@ -211,8 +317,8 @@ fn apply_action(
 fn native_question(app: &tauri::AppHandle, guard: &Arc<CloseGuard>, agent: &Arc<AgentHandle>) {
     let snapshot = guard.state();
     let (message, yes_label, no_label, yes, no) = match &snapshot {
-        ExitState::Decision { unsent, .. } => (
-            format!("Stop the FOKS agents using this app's local state and quit? Shutdown cannot be cancelled once it starts. {unsent} unsent messages will be discarded."),
+        ExitState::Decision { .. } => (
+            decision_message(&snapshot),
             "Stop agent and quit", "Keep FOKS open", ExitAction::StopAgent, ExitAction::Cancel,
         ),
         ExitState::Failed { error, .. } => (
@@ -256,6 +362,41 @@ fn native_question(app: &tauri::AppHandle, guard: &Arc<CloseGuard>, agent: &Arc<
         });
 }
 
+/// The native fallback's decision text. It names only the reasons present.
+fn decision_message(decision: &ExitState) -> String {
+    let mut message = String::from("Stop the FOKS agents using this app's local state and quit? Shutdown cannot be cancelled once it starts.");
+    let ExitState::Decision {
+        pid,
+        unsent,
+        mutation,
+        maintenance,
+        owned,
+    } = decision
+    else {
+        return message;
+    };
+    match unsent {
+        0 => {}
+        1 => message.push_str(" 1 unsent message will be discarded."),
+        count => message.push_str(&format!(" {count} unsent messages will be discarded.")),
+    }
+    if *mutation {
+        message.push_str(" A change is still in progress.");
+    }
+    if *maintenance {
+        message.push_str(" Maintenance of this device's FOKS data is in progress.");
+    }
+    if *mutation || *maintenance {
+        message.push_str(" Shutdown waits a few seconds for this work to finish.");
+    }
+    if pid.is_none() {
+        message.push_str(" FOKS could not identify the agent process.");
+    } else if !*owned {
+        message.push_str(" Quitting also stops an agent this app did not start, which other FOKS clients on this device may be using.");
+    }
+    message
+}
+
 #[tauri::command]
 pub fn set_unsent_messages(
     webview: tauri::Webview,
@@ -264,6 +405,17 @@ pub fn set_unsent_messages(
 ) -> Result<(), AgentError> {
     require_main_window(&webview)?;
     guard.set_unsent(count as usize);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_quit_confirmation(
+    webview: tauri::Webview,
+    guard: State<'_, Arc<CloseGuard>>,
+    confirmation: QuitConfirmation,
+) -> Result<(), AgentError> {
+    require_main_window(&webview)?;
+    guard.set_confirmation(confirmation);
     Ok(())
 }
 
@@ -321,11 +473,24 @@ pub fn intercept_exit_request(
 mod tests {
     use super::*;
 
+    fn idle_decision() -> ExitState {
+        ExitState::Decision {
+            pid: Some(4242),
+            unsent: 0,
+            mutation: false,
+            maintenance: false,
+            owned: true,
+        }
+    }
+
     #[test]
     fn teardown_is_irreversible_and_duplicate_actions_are_rejected() {
         let decision = ExitState::Decision {
             pid: None,
             unsent: 2,
+            mutation: false,
+            maintenance: false,
+            owned: false,
         };
         assert_eq!(
             transition(&decision, ExitAction::Cancel).unwrap(),
@@ -363,10 +528,153 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ExitState::Decision {
                 pid: None,
-                unsent: 2
+                unsent: 2,
+                mutation: true,
+                maintenance: false,
+                owned: false,
             })
             .unwrap(),
-            serde_json::json!({"state":"decision", "pid":null, "unsent":2})
+            serde_json::json!({
+                "state": "decision",
+                "pid": null,
+                "unsent": 2,
+                "mutation": true,
+                "maintenance": false,
+                "owned": false,
+            })
         );
+    }
+
+    #[test]
+    fn quit_confirmation_accepts_only_the_renderer_values() {
+        assert_eq!(
+            serde_json::from_value::<QuitConfirmation>(serde_json::json!("always")).unwrap(),
+            QuitConfirmation::Always
+        );
+        assert_eq!(
+            serde_json::from_value::<QuitConfirmation>(serde_json::json!("when-pending")).unwrap(),
+            QuitConfirmation::WhenPending
+        );
+        assert!(serde_json::from_value::<QuitConfirmation>(serde_json::json!("never")).is_err());
+        let guard = CloseGuard::default();
+        assert_eq!(guard.confirmation(), QuitConfirmation::Always);
+        guard.set_confirmation(QuitConfirmation::WhenPending);
+        assert_eq!(guard.confirmation(), QuitConfirmation::WhenPending);
+        guard.set_confirmation(QuitConfirmation::Always);
+        assert_eq!(guard.confirmation(), QuitConfirmation::Always);
+    }
+
+    #[test]
+    fn only_a_decision_without_reasons_is_skipped_and_only_when_allowed() {
+        assert!(asks_before_stopping(
+            &idle_decision(),
+            QuitConfirmation::Always
+        ));
+        assert!(!asks_before_stopping(
+            &idle_decision(),
+            QuitConfirmation::WhenPending
+        ));
+        let reasons = [
+            ExitState::Decision {
+                pid: Some(4242),
+                unsent: 1,
+                mutation: false,
+                maintenance: false,
+                owned: true,
+            },
+            ExitState::Decision {
+                pid: Some(4242),
+                unsent: 0,
+                mutation: true,
+                maintenance: false,
+                owned: true,
+            },
+            ExitState::Decision {
+                pid: Some(4242),
+                unsent: 0,
+                mutation: false,
+                maintenance: true,
+                owned: true,
+            },
+            // An agent that a CLI or another launch started may be shared.
+            ExitState::Decision {
+                pid: Some(4242),
+                unsent: 0,
+                mutation: false,
+                maintenance: false,
+                owned: false,
+            },
+            // An unidentified socket owner is never treated as this app's.
+            ExitState::Decision {
+                pid: None,
+                unsent: 0,
+                mutation: false,
+                maintenance: false,
+                owned: false,
+            },
+        ];
+        for decision in &reasons {
+            assert!(
+                asks_before_stopping(decision, QuitConfirmation::WhenPending),
+                "{decision:?}"
+            );
+        }
+        for state in [
+            ExitState::Idle,
+            ExitState::Finalizing,
+            ExitState::Failed {
+                pid: None,
+                error: "timeout".into(),
+            },
+        ] {
+            assert!(asks_before_stopping(&state, QuitConfirmation::WhenPending));
+        }
+    }
+
+    #[test]
+    fn native_decision_names_only_the_reasons_present() {
+        let quiet = decision_message(&idle_decision());
+        assert!(!quiet.contains("unsent"), "{quiet}");
+        assert!(!quiet.contains("in progress"), "{quiet}");
+        assert!(!quiet.contains("did not start"), "{quiet}");
+        let one = decision_message(&ExitState::Decision {
+            pid: Some(4242),
+            unsent: 1,
+            mutation: false,
+            maintenance: false,
+            owned: true,
+        });
+        assert!(
+            one.contains(" 1 unsent message will be discarded."),
+            "{one}"
+        );
+        let busy = decision_message(&ExitState::Decision {
+            pid: Some(4242),
+            unsent: 3,
+            mutation: true,
+            maintenance: true,
+            owned: false,
+        });
+        for part in [
+            " 3 unsent messages will be discarded.",
+            " A change is still in progress.",
+            " Maintenance of this device's FOKS data is in progress.",
+            " Shutdown waits a few seconds for this work to finish.",
+            " Quitting also stops an agent this app did not start",
+        ] {
+            assert!(busy.contains(part), "{busy}");
+        }
+        let unknown = decision_message(&ExitState::Decision {
+            pid: None,
+            unsent: 0,
+            mutation: false,
+            maintenance: false,
+            owned: false,
+        });
+        assert!(
+            unknown.contains("could not identify the agent process"),
+            "{unknown}"
+        );
+        assert!(!unknown.contains("did not start"), "{unknown}");
     }
 }

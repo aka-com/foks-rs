@@ -326,6 +326,27 @@ fn a_local_alias_reservation_leaves_the_catalog_load_running() {
 }
 
 #[test]
+fn mutation_in_progress_reports_a_reservation_in_any_scope() {
+    let state = phase_four_state(vec![]);
+    assert!(!state.mutation_in_progress());
+    let root = state.begin_mutation().unwrap();
+    assert!(state.mutation_in_progress());
+    drop(root);
+    assert!(!state.mutation_in_progress());
+    // The close guard reads the root view, so a narrower scope's reservation
+    // must count as well.
+    let profile = state.for_profile("a").unwrap();
+    let reservation = profile.begin_mutation().unwrap();
+    assert!(state.mutation_in_progress());
+    drop(reservation);
+    let aliases = state.for_local_aliases().unwrap();
+    let reservation = aliases.begin_mutation().unwrap();
+    assert!(state.mutation_in_progress());
+    drop(reservation);
+    assert!(!state.mutation_in_progress());
+}
+
+#[test]
 fn denied_expired_and_failed_profile_facts_do_not_authorize_chat() {
     for status in [
         serde_json::json!({"status":"missing"}),

@@ -339,6 +339,7 @@ pub fn run() {
             window_state::get_window_state,
             window_state::set_traffic_lights_visible,
             close_guard::set_unsent_messages,
+            close_guard::set_quit_confirmation,
             close_guard::exit_state,
             close_guard::handle_exit_action,
             commands::vault::list_stores,

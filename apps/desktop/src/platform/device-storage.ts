@@ -97,6 +97,8 @@ export const STORAGE_KEYS = {
   dismissedSetupChecklistTip: device('onboarding.dismissed.setup-checklist'),
   passwordGenerator: device('passwordGenerator'),
   trashAutoEmptyDays: device('trashAutoEmptyDays'),
+  /** `when-pending`, or unset for the default, `always`. */
+  quitConfirmation: device('quitConfirmation'),
   /**
    * Times keyed by a backup key's entity id, which names a key on a server
    * rather than a local profile.

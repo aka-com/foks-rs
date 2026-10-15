@@ -974,7 +974,13 @@ in place; an account whose access has stopped explains why the button is
 disabled). Preferences contains Desktop alerts — this device's desktop-alert
 and message-preview preferences, which the desktop persists locally; channel
 overrides stay in Chat's info panel, with a link here, and none of these
-preferences sync between devices. Device: Application (version, Lock now),
+preferences sync between devices. Its Quitting section sets Ask before quitting:
+Always (the default) or When work is pending, with which a window close or
+quit stops the agent without asking unless messages are unsent, a change or
+data maintenance is in progress, or the agent is not one this app launched or
+adopted (or cannot be identified). The renderer reports the choice to the
+native close guard (`set_quit_confirmation`), which asks every time until it
+has one. Device: Application (version, Lock now),
 Agent (status with Retry connection while it is not ready, socket with Copy),
 FOKS data (export, import, verify online, move the data folder) and a danger
 zone whose Reset this device runs the per-server reset once per profile, each

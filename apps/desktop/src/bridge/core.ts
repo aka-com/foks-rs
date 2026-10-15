@@ -158,7 +158,21 @@ export type Unlisten = () => void;
 
 export type ExitState =
   | { state: 'idle' }
-  | { state: 'decision'; pid: number | null; unsent: number }
+  | {
+      state: 'decision';
+      pid: number | null;
+      /** Chat messages queued in this window and not yet sent. */
+      unsent: number;
+      /** A change holds the desktop's mutation reservation. */
+      mutation: boolean;
+      /** Maintenance of this device's FOKS data is running. */
+      maintenance: boolean;
+      /**
+       * This app launched or adopted the agent, and no other agent process
+       * uses its local state. False when the agent cannot be identified.
+       */
+      owned: boolean;
+    }
   | { state: 'stopping'; pid: number | null; force: boolean }
   | { state: 'finalizing' }
   | { state: 'failed'; pid: number | null; error: string }
@@ -172,6 +186,12 @@ export type ExitAction =
   | 'cancel-force'
   | 'force-stop';
 
+/**
+ * This device's Ask before quitting preference. `when-pending` lets a close or
+ * quit that finds no reason in its decision stop the agent without asking.
+ */
+export type QuitConfirmation = 'always' | 'when-pending';
+
 export function decodeExitState(value: unknown): ExitState {
   const item = record(value, 'exit_state response');
   const state = string(item.state, 'exit_state.state');
@@ -182,7 +202,14 @@ export function decodeExitState(value: unknown): ExitState {
   if (state === 'decision') {
     const unsent = integer(item.unsent, 'exit_state.unsent');
     if (unsent < 0) throw new Error('exit_state.unsent must be non-negative');
-    return { state, pid, unsent };
+    return {
+      state,
+      pid,
+      unsent,
+      mutation: bool(item.mutation, 'exit_state.mutation'),
+      maintenance: bool(item.maintenance, 'exit_state.maintenance'),
+      owned: bool(item.owned, 'exit_state.owned'),
+    };
   }
   if (state === 'stopping')
     return { state, pid, force: bool(item.force, 'exit_state.force') };

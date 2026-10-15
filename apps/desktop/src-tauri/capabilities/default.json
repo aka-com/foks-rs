@@ -129,6 +129,7 @@
     "allow-set-account-passphrase",
     "allow-set-first-run-passphrase",
     "allow-set-local-account-alias",
+    "allow-set-quit-confirmation",
     "allow-set-server-label",
     "allow-set-traffic-lights-visible",
     "allow-set-unsent-messages",

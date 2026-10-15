@@ -515,6 +515,9 @@
       "accountStoreId": "required",
       "label": "required"
     },
+    "set_quit_confirmation": {
+      "confirmation": "required"
+    },
     "set_server_label": {
       "label": "optional",
       "profile": "required"

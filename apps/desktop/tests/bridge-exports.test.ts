@@ -114,6 +114,7 @@ const publicTypes = [
   'DropHoverEvent',
   'ExitAction',
   'ExitState',
+  'QuitConfirmation',
   'WindowStateEvent',
   'CreateGroupRequest',
   'GroupMemberRequest',

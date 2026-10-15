@@ -3325,20 +3325,29 @@ test('maintenance snapshots decode typed operation and restoration outcomes', ()
 });
 
 test('exit states allow unknown processes without accepting invalid PIDs', () => {
+  const reasons = { mutation: false, maintenance: true, owned: false };
   assert.deepEqual(
-    decodeExitState({ state: 'decision', pid: null, unsent: 0 }),
-    { state: 'decision', pid: null, unsent: 0 },
+    decodeExitState({ state: 'decision', pid: null, unsent: 0, ...reasons }),
+    { state: 'decision', pid: null, unsent: 0, ...reasons },
   );
   assert.deepEqual(
-    decodeExitState({ state: 'decision', pid: 45904, unsent: 2 }),
-    { state: 'decision', pid: 45904, unsent: 2 },
+    decodeExitState({ state: 'decision', pid: 45904, unsent: 2, ...reasons }),
+    { state: 'decision', pid: 45904, unsent: 2, ...reasons },
   );
+  // Each reason to ask is required: a missing one must not read as false.
+  for (const field of ['mutation', 'maintenance', 'owned'] as const) {
+    const partial: Record<string, unknown> = { ...reasons };
+    delete partial[field];
+    assert.throws(() =>
+      decodeExitState({ state: 'decision', pid: 45904, unsent: 0, ...partial }),
+    );
+  }
   assert.deepEqual(
     decodeExitState({ state: 'stopping', pid: 45904, force: true }),
     { state: 'stopping', pid: 45904, force: true },
   );
   assert.throws(() =>
-    decodeExitState({ state: 'decision', pid: 0, unsent: 0 }),
+    decodeExitState({ state: 'decision', pid: 0, unsent: 0, ...reasons }),
   );
   assert.throws(() =>
     decodeExitState({ state: 'failed', pid: 45904, error: null }),

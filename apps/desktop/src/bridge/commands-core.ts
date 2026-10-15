@@ -27,6 +27,7 @@ export const coreCommands: Pick<
   | 'windowState'
   | 'setTrafficLightsVisible'
   | 'setUnsentMessages'
+  | 'setQuitConfirmation'
   | 'lockApp'
   | 'unlockApp'
   | 'restartApp'
@@ -74,6 +75,8 @@ export const coreCommands: Pick<
     checked('set_traffic_lights_visible', { visible }, () => undefined),
   setUnsentMessages: (count) =>
     checked('set_unsent_messages', { count }, () => undefined),
+  setQuitConfirmation: (confirmation) =>
+    checked('set_quit_confirmation', { confirmation }, () => undefined),
   lockApp: () => checked('lock_app', undefined, decodeAppLockState),
   unlockApp: () => checked('unlock_app', undefined, decodeAppLockState),
   restartApp: () => invoke<void>('restart_app'),

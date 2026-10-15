@@ -133,6 +133,7 @@ const COMMANDS: &[&str] = &[
     "set_account_passphrase",
     "set_first_run_passphrase",
     "set_local_account_alias",
+    "set_quit_confirmation",
     "set_server_label",
     "set_traffic_lights_visible",
     "set_unsent_messages",

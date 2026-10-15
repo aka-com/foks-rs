@@ -1943,6 +1943,17 @@ impl AppState {
         Ok(Some(guard))
     }
 
+    /// Whether any scope holds a mutation reservation.
+    pub fn mutation_in_progress(&self) -> bool {
+        self.root.in_flight.load(Ordering::Acquire)
+            || self
+                .scopes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .values()
+                .any(|state| state.in_flight.load(Ordering::Acquire))
+    }
+
     /// Acquire this guard before any mutation. Refusal is immediate:
     /// a second write cannot proceed until the prior operation reconciles.
     pub fn begin_mutation(&self) -> Result<MutationGuard, AgentError> {

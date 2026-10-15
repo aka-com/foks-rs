@@ -8,7 +8,7 @@ import test from 'node:test';
 import { createElement, useRef, useState } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
-import type { Bridge, MaintenanceSnapshot } from '../src/bridge';
+import type { Bridge, ExitState, MaintenanceSnapshot } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
 
 const dom = installDom({
@@ -62,7 +62,14 @@ test('owned-agent exit decision uses sentence-case actions and includes volatile
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),
     native: true,
-    exitState: async () => ({ state: 'decision', pid: 45904, unsent: 2 }),
+    exitState: async () => ({
+      state: 'decision',
+      pid: 45904,
+      unsent: 2,
+      mutation: false,
+      maintenance: false,
+      owned: true,
+    }),
     handleExitAction: async (action) => {
       actions.push(action);
     },
@@ -91,6 +98,118 @@ test('owned-agent exit decision uses sentence-case actions and includes volatile
     rendered.queryByRole('button', { name: 'Quit and Stop Agent' }),
     null,
   );
+});
+
+test('the exit decision names each pending reason and an agent this app did not start', async () => {
+  const { FIXTURE, mockBridge, ExitGuard } = await modules();
+  const decision: Extract<ExitState, { state: 'decision' }> = {
+    state: 'decision',
+    pid: 45904,
+    unsent: 0,
+    mutation: false,
+    maintenance: false,
+    owned: true,
+  };
+  const render = async (state: typeof decision) => {
+    const rendered = ui.render(
+      createElement(
+        ExitGuard,
+        {
+          bridge: {
+            ...mockBridge(FIXTURE),
+            native: true,
+            exitState: async () => state,
+          },
+        },
+        createElement('div', null, 'Vault shell'),
+      ),
+    );
+    const text =
+      (
+        await rendered.findByRole('dialog', {
+          name: 'Stop FOKS Agent and quit?',
+        })
+      ).textContent ?? '';
+    ui.cleanup();
+    return text;
+  };
+
+  const quiet = await render(decision);
+  assert.doesNotMatch(quiet, /not been sent|in progress|did not start/);
+  assert.match(quiet, /FOKS will stop its background agent\./);
+
+  const busy = await render({ ...decision, mutation: true, maintenance: true });
+  assert.match(
+    busy,
+    /A change and maintenance of this device’s FOKS data are in progress\./,
+  );
+  assert.match(
+    await render({ ...decision, mutation: true }),
+    /A change is in progress\. Shutdown waits a few seconds/,
+  );
+  assert.match(
+    await render({ ...decision, maintenance: true }),
+    /Maintenance of this device’s FOKS data is in progress\./,
+  );
+
+  const shared = await render({ ...decision, owned: false });
+  assert.match(shared, /including an agent this app did not start/);
+  assert.doesNotMatch(shared, /its background agent/);
+
+  const unknown = await render({ ...decision, pid: null, owned: false });
+  assert.match(unknown, /could not identify the agent process/);
+});
+
+test('the exit guard reports the Ask before quitting preference to the native host', async () => {
+  const { FIXTURE, mockBridge, ExitGuard } = await modules();
+  const { rememberQuitConfirmation } = (await vite.ssrLoadModule(
+    '/src/quit-confirmation.ts',
+  )) as typeof import('../src/quit-confirmation');
+  const reported: string[] = [];
+  const bridge: Bridge = {
+    ...mockBridge(FIXTURE),
+    native: true,
+    setQuitConfirmation: async (confirmation) => {
+      reported.push(confirmation);
+    },
+  };
+  window.localStorage.setItem('quitConfirmation', 'when-pending');
+  try {
+    ui.render(
+      createElement(
+        ExitGuard,
+        { bridge },
+        createElement('div', null, 'Vault shell'),
+      ),
+    );
+    await ui.waitFor(() => assert.deepEqual(reported, ['when-pending']));
+    ui.act(() => rememberQuitConfirmation('always'));
+    await ui.waitFor(() =>
+      assert.deepEqual(reported, ['when-pending', 'always']),
+    );
+  } finally {
+    ui.act(() => rememberQuitConfirmation('always'));
+  }
+
+  // The mock bridge has no close guard to report to.
+  const mockReported: string[] = [];
+  ui.cleanup();
+  ui.render(
+    createElement(
+      ExitGuard,
+      {
+        bridge: {
+          ...mockBridge(FIXTURE),
+          setQuitConfirmation: async (confirmation) => {
+            mockReported.push(confirmation);
+          },
+        },
+      },
+      createElement('div', null, 'Vault shell'),
+    ),
+  );
+  await ui.act(async () => undefined);
+  assert.deepEqual(mockReported, []);
 });
 
 test('failed agent shutdown requires a separate force-stop confirmation', async () => {

@@ -594,7 +594,7 @@ test('a section address opens that page, each with the sub-navigation beside it'
   }
 });
 
-test('Preferences holds desktop alert preferences, the rail color and Trash emptying', async () => {
+test('Preferences holds desktop alert preferences, the rail color, Trash emptying and quitting', async () => {
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'preferences' },
   });
@@ -608,7 +608,7 @@ test('Preferences holds desktop alert preferences, the rail color and Trash empt
     [...main.querySelectorAll(':scope > .sec')].map(
       (label) => label.textContent,
     ),
-    ['Appearance', 'Desktop alerts', 'Trash', 'Onboarding tips'],
+    ['Appearance', 'Desktop alerts', 'Trash', 'Quitting', 'Onboarding tips'],
   );
   assert.equal(rendered.queryByRole('button', { name: 'Passphrase…' }), null);
   assert.ok(
@@ -634,6 +634,31 @@ test('Preferences holds desktop alert preferences, the rail color and Trash empt
     assert.equal(window.localStorage.getItem('trashAutoEmptyDays'), '30');
   } finally {
     window.localStorage.removeItem('trashAutoEmptyDays');
+  }
+  // Quitting asks every time until chosen otherwise, and the choice is kept.
+  const quitting = rendered.getByRole('group', { name: 'Ask before quitting' });
+  const pressed = (name: string) =>
+    ui
+      .within(quitting)
+      .getByRole('button', { name })
+      .getAttribute('aria-pressed');
+  assert.equal(pressed('Always'), 'true');
+  try {
+    ui.fireEvent.click(
+      ui.within(quitting).getByRole('button', { name: 'When work is pending' }),
+    );
+    assert.equal(
+      window.localStorage.getItem('quitConfirmation'),
+      'when-pending',
+    );
+    assert.equal(pressed('When work is pending'), 'true');
+    ui.fireEvent.click(
+      ui.within(quitting).getByRole('button', { name: 'Always' }),
+    );
+    assert.equal(window.localStorage.getItem('quitConfirmation'), null);
+    assert.equal(pressed('Always'), 'true');
+  } finally {
+    window.localStorage.removeItem('quitConfirmation');
   }
 });
 

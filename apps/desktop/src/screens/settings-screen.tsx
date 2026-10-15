@@ -8,6 +8,10 @@ import {
   TRASH_AUTO_EMPTY_CHOICES,
 } from '../trash-auto-empty';
 import { setAppearance, useAppearance, type Appearance } from '../appearance';
+import {
+  rememberQuitConfirmation,
+  useQuitConfirmation,
+} from '../quit-confirmation';
 /**
  * The Settings tab: a sub-navigation of three pages, held on screen beside
  * whichever one is open.
@@ -264,6 +268,8 @@ function PreferencesSection(): ReactNode {
       <NotificationSettings />
       <SectionLabel>Trash</SectionLabel>
       <TrashAutoEmptyPicker />
+      <SectionLabel>Quitting</SectionLabel>
+      <QuitConfirmationPicker />
       <SectionLabel>Onboarding tips</SectionLabel>
       <Inset className="settings-checkboxes">
         <label>
@@ -325,6 +331,45 @@ function TrashAutoEmptyPicker(): ReactNode {
       <p className="hint">
         Entries that have been in Trash this long are deleted permanently, for
         everyone, while this app runs. The choice applies to this device only.
+      </p>
+    </>
+  );
+}
+
+/**
+ * When closing the window or quitting FOKS asks before it stops the agent.
+ * The native close guard applies the choice; see `src/quit-confirmation.ts`.
+ */
+function QuitConfirmationPicker(): ReactNode {
+  const confirmation = useQuitConfirmation();
+  return (
+    <>
+      <Inset className="settings-inset middle wide">
+        <InsetRow label="Ask before quitting">
+          <div
+            className="seg txt"
+            role="group"
+            aria-label="Ask before quitting"
+          >
+            {(['always', 'when-pending'] as const).map((choice) => (
+              <button
+                type="button"
+                key={choice}
+                className={confirmation === choice ? 'on' : undefined}
+                aria-pressed={confirmation === choice}
+                onClick={() => rememberQuitConfirmation(choice)}
+              >
+                {choice === 'always' ? 'Always' : 'When work is pending'}
+              </button>
+            ))}
+          </div>
+        </InsetRow>
+      </Inset>
+      <p className="hint">
+        Quitting FOKS always stops its agent. With When work is pending, FOKS
+        asks first only when messages are unsent, a change or data maintenance
+        is in progress, or FOKS cannot confirm that this app started the agent.
+        The choice applies to this device only.
       </p>
     </>
   );

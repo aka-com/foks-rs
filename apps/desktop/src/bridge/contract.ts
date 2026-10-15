@@ -33,6 +33,7 @@ import type {
   ExitAction,
   ExitState,
   MaintenanceSnapshot,
+  QuitConfirmation,
   TimingBatch,
   Unlisten,
   WindowStateEvent,
@@ -175,6 +176,8 @@ export interface Bridge {
    * whenever the count changes and cleared when the unlocked shell goes.
    */
   setUnsentMessages(count: number): Promise<void>;
+  /** Reports the Ask before quitting preference to the close guard. */
+  setQuitConfirmation(confirmation: QuitConfirmation): Promise<void>;
   lockApp(): Promise<AppLockState>;
   unlockApp(): Promise<AppLockState>;
   restartApp(): Promise<void>;
