@@ -876,7 +876,7 @@ no agent operation and no protocol change.
 
 - `apps/desktop/src-tauri`: `capabilities/default.json`, `src/lib.rs` (the
   ACL resolution test), `src/applock.rs` and `src/applock/polkit.rs`,
-  `src/clipboard.rs`, `src/dragdrop.rs`, `src/commands/context.rs`
+  `src/clipboard.rs`, `src/dragdrop.rs`, `src/commands/context/grants.rs`
   (`record_drop_paths`, `upload_path`), `src/commands/vault.rs`
   (`read_item`, `copy_item_value`, `copy_item_field`, `open_item_url`,
   `download_file`),
