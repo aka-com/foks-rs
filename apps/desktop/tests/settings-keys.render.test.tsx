@@ -735,7 +735,7 @@ test('switching accounts from that notice leaves the lost key’s address behind
 });
 
 test('a key on a card is revoked under its enrollment, not removed here', async () => {
-  const card = `08${'5'.repeat(64)}`;
+  const card = `08${'5'.repeat(66)}`;
   const chosen: Location[] = [];
   const page = await renderDevices(await fixture(), {
     store: 'acct:personal',
@@ -766,7 +766,7 @@ test('a key on a card is revoked under its enrollment, not removed here', async 
 });
 
 test('the card this Mac is authenticated with is not told to remove itself', async () => {
-  const card = `08${'5'.repeat(64)}`;
+  const card = `08${'5'.repeat(66)}`;
   const page = await renderDevices(await fixture(), {
     store: 'acct:personal',
     device: card,

@@ -16,7 +16,11 @@ import {
   mockAccountHost,
 } from './accounts';
 import { mockCoreCommands } from './core';
-import { mockEnrollmentCommands } from './enrollment';
+import {
+  ENROLLMENT_HOST_MEMBERS,
+  mockEnrollmentCommands,
+  mockEnrollmentHost,
+} from './enrollment';
 import { FIXTURE } from './fixture';
 import { mockHost, type MockCommand } from './host';
 import {
@@ -26,7 +30,7 @@ import {
 } from './servers';
 import { mockState, type MockState } from './state';
 import { mockVaultCommands } from './vault';
-import { mockYubiCommands } from './yubikey';
+import { mockYubiHost, YUBI_HOST_MEMBERS } from './yubikey';
 import type { AgentSnapshot } from '../model/types';
 
 export { mockAppLifecycleRequests, type AppLifecycleRequest } from './core';
@@ -43,7 +47,9 @@ export {
  */
 export const MOCK_HOST_MEMBERS = [
   ...ACCOUNT_HOST_MEMBERS,
+  ...ENROLLMENT_HOST_MEMBERS,
   ...SERVER_HOST_MEMBERS,
+  ...YUBI_HOST_MEMBERS,
 ] as const;
 
 /**
@@ -71,7 +77,9 @@ export function mockHostCommands(
   return {
     ...mockVaultCommands(state),
     ...mockAccountHost(state),
+    ...mockEnrollmentHost(state),
     ...mockServerHost(state),
+    ...mockYubiHost(state),
   };
 }
 
@@ -82,9 +90,8 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   return createBridge(createTransport(mockHost(mockHostCommands(state))), {
     ...mockAccountCommands(state),
     ...mockCoreCommands(state),
-    ...mockEnrollmentCommands(state),
+    ...mockEnrollmentCommands(),
     ...mockServerCommands(state),
-    ...mockYubiCommands(state),
     native: false,
     fixtureSnapshot: snapshot,
     firstRunFixture: state.firstRunFixture,

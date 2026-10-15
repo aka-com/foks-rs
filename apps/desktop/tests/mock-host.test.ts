@@ -16,6 +16,7 @@ import {
 } from '../src/mock/mock-bridge';
 import { mockCommand, mockHost } from '../src/mock/host';
 import { mockState } from '../src/mock/state';
+import { MOCK_YUBI_COMMANDS } from '../src/mock/yubikey';
 import { accountWire, serverStatusWire } from '../src/mock/wire';
 import type { Account } from '../src/model/types';
 
@@ -245,10 +246,15 @@ test('the mock host answers every command its members send, and no other', async
   const request: unknown = new Proxy({}, { get: () => [] });
   for (const member of members) {
     const method = recorder[member];
-    // Called without arguments too, so a member whose command depends on an
-    // optional argument, such as listCatalog's progress listener, sends each
-    // of its commands.
-    for (const args of [[], [request, request, request, request]])
+    // runYubi sends the command its request names.
+    const calls =
+      member === 'runYubi'
+        ? MOCK_YUBI_COMMANDS.map((command) => [{ command, args: {} }])
+        : // Without arguments too, so a member whose command depends on an
+          // optional argument, such as listCatalog's progress listener,
+          // sends each of its commands.
+          [[], [request, request, request, request]];
+    for (const args of calls)
       try {
         await method(...args);
       } catch {
@@ -307,4 +313,31 @@ test('mock team and server failures carry the host codes and the transport norma
     ),
     false,
   );
+});
+
+test('mock enrollment answers pass the decoders and failures carry the host codes', async () => {
+  const bridge = mockBridge(FIXTURE);
+  // The fixture's key on a card has a hardware key id, which the decoder
+  // accepts only with 66 hex digits after its `08`.
+  assert.ok(
+    (await bridge.listAccountDevices('acct:personal')).some(
+      (device) =>
+        device.name === 'Pocket YubiKey' && /^08[0-9a-f]{66}$/.test(device.id),
+    ),
+  );
+  await assert.rejects(bridge.resumeDevicePairingOffer('acct:personal'), {
+    code: 'pending-operation-not-found',
+    origin: 'invoke',
+    ambiguous: false,
+  });
+  const offer = await bridge.startDevicePairing('acct:personal');
+  assert.deepEqual(
+    await bridge.resumeDevicePairingOffer('acct:personal'),
+    offer,
+  );
+  await assert.rejects(bridge.resetServer('personal', 'other', 'token'), {
+    code: 'invalid-request',
+    origin: 'invoke',
+    ambiguous: false,
+  });
 });

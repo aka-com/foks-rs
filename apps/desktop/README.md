@@ -364,13 +364,14 @@ are decisions, not details:
   quit/resume walk includes completed setup facts. It assembles one module per
   `src/bridge/commands-*.ts` factory (`accounts.ts`, `core.ts`,
   `enrollment.ts`, `servers.ts`, `vault.ts` and `yubikey.ts` in `src/mock/`),
-  which share the fixture's records through `src/mock/state.ts`. Its vault
-  commands, the account listing, the team roster and federation changes, and
-  every server command except `list_servers` answer at the wire level:
-  `createBridge` runs the same command factories over a transport whose host
-  is `mockHost` (`src/mock/host.ts`), so their JSON responses pass the native
-  decoders, and their CommandError rejections get the same origin and
-  mutation-ambiguity handling as the native host's. `MOCK_HOST_MEMBERS` in
+  which share the fixture's records through `src/mock/state.ts`. Its vault,
+  enrollment and YubiKey commands, the account listing, the team roster and
+  federation changes, and every server command except `list_servers` answer
+  at the wire level: `createBridge` runs the same command factories over a
+  transport whose host is `mockHost` (`src/mock/host.ts`), so their JSON
+  responses pass the native decoders, and their CommandError rejections get
+  the same origin and mutation-ambiguity handling as the native host's.
+  `MOCK_HOST_MEMBERS` in
   `mock-bridge.ts` lists the members outside the vault factory that answer
   there, and `tests/mock-host.test.ts` checks that the host answers exactly
   the commands those members send. The other commands still return decoded
