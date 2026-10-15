@@ -916,9 +916,17 @@ impl SoftStateStore {
         Ok(())
     }
 
-    /// Reclaims invisible stages left by a process crash. The caller must
-    /// ensure no other `SoftStateStore` is actively downloading into this
-    /// database while this maintenance operation runs.
+    /// Reclaims invisible stages left by a process crash, deleting every
+    /// stage that no projected entry references.
+    ///
+    /// Safe only while no other `SoftStateStore` owns an in-flight stage of
+    /// this database. This store refuses to run while it owns a stage, but it
+    /// cannot distinguish another store's live stage from an orphan. In
+    /// foks-client-app this means holding the exclusive profile operation
+    /// lock (`ProfileLock::operation`), which excludes shared checked sessions
+    /// that may be downloading. foks-client-app calls this, rate-limited, at
+    /// outermost exclusive checked-session entry before the session's
+    /// operation runs.
     pub fn reclaim_orphaned_large_files(&mut self) -> Result<usize> {
         if !self.owned_stages.is_empty() {
             return Err(Error::KvProjectionConflict(
@@ -1423,6 +1431,13 @@ impl SoftStateStore {
     /// mutation and marks the party projection incomplete. The next sync must
     /// re-fetch authenticated server state instead of accepting a cache check
     /// that cannot discover newly created dirents absent from its vector.
+    ///
+    /// Also deletes every unreferenced large-file stage of the party, with no
+    /// ownership check, so it carries the precondition of
+    /// [`Self::reclaim_orphaned_large_files`]: no other `SoftStateStore` may
+    /// own an in-flight stage of this database. In foks-client-app this means
+    /// the exclusive profile operation lock (`ProfileLock::operation`), under
+    /// which every local KV write runs.
     pub fn invalidate_directories(
         &mut self,
         host_id: &[u8],

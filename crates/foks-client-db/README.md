@@ -53,4 +53,6 @@ FOKS path-version vectors for cache checks, atomically replaces and prunes
 stale directory subtrees, and stages large-file plaintext in bounded chunk
 rows. Incomplete stages are invisible and normally reclaimed by the store that
 created them; an explicit exclusive-maintenance call reclaims stages left by a
-process crash. Completed files are read through a streaming writer API.
+process crash. foks-client-app makes that call, rate-limited, at outermost
+exclusive checked-session entry, where the profile operation lock excludes
+every other download. Completed files are read through a streaming writer API.

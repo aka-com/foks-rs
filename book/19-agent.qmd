@@ -214,9 +214,21 @@ silently accepted.
 
 Large files downloaded from the KV store stream directly into soft state
 in staged rows rather than through memory. A crash mid-download leaves an
-orphaned stage. `reclaim_orphaned_large_files` deletes stages no entry
-references, and refuses to run while the calling store owns any active
-stage, so a live download is never reclaimed from under itself.
+orphaned stage holding decrypted chunks. `reclaim_orphaned_large_files`
+deletes stages no entry references, and refuses to run while the calling
+store owns any active stage, so a live download is never reclaimed from
+under itself.
+
+It cannot recognize a stage another store is still filling, so it runs only
+where no other download can be in progress: at the outermost exclusive
+checked-session entry, after admission and before the session's operation.
+That entry holds the profile operation lock exclusively, which excludes
+shared read sessions in this and every other process, so no download of
+the profile is in flight. Shared and nested entry never reclaim. Like the
+Merkle root collection that runs at the same point, the pass is
+rate-limited to once a minute per soft database, and a failure is ignored
+rather than failing the operation. A local KV write also deletes the
+unreferenced stages of the party it modified, under the same lock.
 
 ## Resumable operations: journal first, send once, observe
 

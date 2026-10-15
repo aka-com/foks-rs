@@ -741,6 +741,7 @@ impl ClientCredentials {
         // outermost sessions hold exclusive profile/database locks. Optional
         // local maintenance must not prevent the user's operation on deferral.
         let _ = self.compact_session_merkle_roots(&checked);
+        let _ = crate::soft_maintenance::compact_soft_large_file_stages(&checked);
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);
@@ -940,6 +941,7 @@ impl ClientCredentials {
         // outermost sessions hold exclusive profile/database locks. Optional
         // local maintenance must not prevent the user's operation on deferral.
         let _ = self.compact_session_merkle_roots(&checked);
+        let _ = crate::soft_maintenance::compact_soft_large_file_stages(&checked);
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);
