@@ -60,8 +60,7 @@ export function ScreenRouter({
 }): ReactNode {
   const shown = useShellSnapshot();
   usePreloadVaultScreens();
-  const { bridge, accessNow, commandError, mutationError, refresh } =
-    useShellServices();
+  const { bridge, accessNow, mutationError, refresh } = useShellServices();
   const here = state.location;
   // An exposure review's Open: the item's store, with the item selected so
   // the details panel shows it and its Edit.
@@ -74,8 +73,6 @@ export function ScreenRouter({
   // the content pane until it has.
   const screen = listsItems(here) ? (
     <ItemsScreen
-      snapshot={shown}
-      bridge={bridge}
       state={state}
       locations={locations}
       onReveal={(item) => setRevealRequest(`${item.store}|${item.path}`)}
@@ -124,12 +121,10 @@ export function ScreenRouter({
           tab: 'people',
         })
       }
-      onCommandError={commandError}
       onUploadDroppedFile={uploadDroppedFile}
       // A modal workflow owns the drop while it is open; the new-item sheet
       // takes dropped files itself.
       dropEnabled={workflow === null}
-      accessNow={accessNow}
     />
   ) : here.kind === 'chat' ? (
     // The tab owns the team column and keeps it across a switch; the

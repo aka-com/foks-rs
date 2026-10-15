@@ -4,6 +4,7 @@ import { createElement, useSyncExternalStore } from 'react';
 import type { AgentSnapshot, Item, TrashEntry } from '../src/model';
 import type { CopyFieldRequest, ItemRequest } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -27,6 +28,7 @@ async function mount(accessNow?: () => number) {
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const TestShell = await loadTestShell();
   const toasts = new ToastController();
   const locations = new LocationStore({
     ...INITIAL_STATE,
@@ -67,26 +69,28 @@ async function mount(accessNow?: () => number) {
       locations.subscribe,
       locations.getSnapshot,
     );
-    return createElement(ItemsScreen, {
+    return createElement(TestShell, {
       snapshot,
       bridge,
-      state,
-      locations,
-      accessNow,
-      onReveal: (item: Item) => reveals.push(item),
-      onTrash: (item: Item) => deletions.push(item),
-      onMove: (item: Item) => moves.push(item),
-      onRestore: (entry: TrashEntry) => restores.push(entry),
-      onDeletePermanently: (item: Item) => permanent.push(item),
-      onNew: () => {},
-      onResume: async () => {},
-      onSettings: () => {},
-      onNewFolder: (storeId: string, path: string) =>
-        folders.push({ storeId, path }),
-      onTeamInfo: (storeId: string) => teamInfo.push(storeId),
-      onImport: (storeId: string, folder?: string) =>
-        imports.push({ storeId, ...(folder ? { folder } : {}) }),
-      onCommandError: (error: unknown) => failures.push(error),
+      ...(accessNow ? { accessNow } : {}),
+      commandError: (error: unknown) => failures.push(error),
+      children: createElement(ItemsScreen, {
+        state,
+        locations,
+        onReveal: (item: Item) => reveals.push(item),
+        onTrash: (item: Item) => deletions.push(item),
+        onMove: (item: Item) => moves.push(item),
+        onRestore: (entry: TrashEntry) => restores.push(entry),
+        onDeletePermanently: (item: Item) => permanent.push(item),
+        onNew: () => {},
+        onResume: async () => {},
+        onSettings: () => {},
+        onNewFolder: (storeId: string, path: string) =>
+          folders.push({ storeId, path }),
+        onTeamInfo: (storeId: string) => teamInfo.push(storeId),
+        onImport: (storeId: string, folder?: string) =>
+          imports.push({ storeId, ...(folder ? { folder } : {}) }),
+      }),
     });
   }
   const view = (snapshot: AgentSnapshot, blocking = false) =>

@@ -9,6 +9,7 @@ import test from 'node:test';
 import { createElement, useSyncExternalStore } from 'react';
 import type { AgentSnapshot, Item } from '../src/model';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -33,6 +34,7 @@ async function mount(snapshot: AgentSnapshot = FIXTURE) {
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const TestShell = await loadTestShell();
   const locations = new LocationStore({
     ...INITIAL_STATE,
     location: { kind: 'all' },
@@ -44,18 +46,19 @@ async function mount(snapshot: AgentSnapshot = FIXTURE) {
       locations.subscribe,
       locations.getSnapshot,
     );
-    return createElement(ItemsScreen, {
+    return createElement(TestShell, {
       snapshot,
       bridge,
-      state,
-      locations,
-      onReveal: () => {},
-      onTrash: () => {},
-      onMoveMany: () => {},
-      onNew: () => {},
-      onResume: async () => {},
-      onSettings: (storeId: string) => settings.push(storeId),
-      onCommandError: () => {},
+      children: createElement(ItemsScreen, {
+        state,
+        locations,
+        onReveal: () => {},
+        onTrash: () => {},
+        onMoveMany: () => {},
+        onNew: () => {},
+        onResume: async () => {},
+        onSettings: (storeId: string) => settings.push(storeId),
+      }),
     });
   }
   ui.render(

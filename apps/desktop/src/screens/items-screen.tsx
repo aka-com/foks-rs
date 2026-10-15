@@ -54,6 +54,7 @@ import {
 import type { FilterKind } from '../components';
 import type { FoksIconName } from '../icons';
 import { PageHeader } from '../shell/page-header';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 import {
   KINDS,
   KIND_LIST,
@@ -830,9 +831,11 @@ function VaultDropZone({
 
 /* --------------------------------------------------------------- screen -- */
 
+/**
+ * The screen reads the snapshot, the bridge, the lease clock and the
+ * command-error handler from the shell services.
+ */
 export interface ItemsScreenProps {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   state: LocationState;
   locations: LocationStore;
   /** Opens the selected item's value in the details panel, already revealed. */
@@ -864,12 +867,10 @@ export interface ItemsScreenProps {
   onSettings: (storeId: string) => void;
   onTeamInfo?: (storeId: string, trigger?: HTMLElement) => void;
   onNewFolder?: (storeId: string, path: string) => void;
-  onCommandError: (error: unknown, item?: Item) => void;
   /** Saves a file dropped on the vault's content area. */
   onUploadDroppedFile?: (upload: DropUpload) => Promise<void>;
   /** Cleared while a modal workflow owns the drop, such as the new-item sheet. */
   dropEnabled?: boolean;
-  accessNow?: () => number;
 }
 
 /** Single-line row height now that metadata is displayed in table columns. */
@@ -949,8 +950,6 @@ function ChosenRowsFocus({
 }
 
 export function ItemsScreen({
-  snapshot,
-  bridge,
   state,
   locations,
   onReveal,
@@ -969,11 +968,15 @@ export function ItemsScreen({
   onSettings,
   onTeamInfo,
   onNewFolder,
-  onCommandError,
   onUploadDroppedFile,
   dropEnabled = true,
-  accessNow = () => Date.now() / 1000,
 }: ItemsScreenProps): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    accessNow,
+    commandError: onCommandError,
+  } = useShellServices();
   const sidebar = usePaneResize<HTMLDivElement>(PANE_SIZES.files);
   // Rows chosen together, valid only for the view they were chosen in.
   const [multi, setMulti] = useState<{ scope: string; rows: MultiSelection }>({
