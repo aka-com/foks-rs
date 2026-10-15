@@ -4,14 +4,11 @@ import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import { securityKeyPinProblem } from '../security-key-pin';
-import {
-  Button,
-  Inset,
-  InsetRow,
-  PanelSheet,
-  SecurityKeyPinField,
-} from './index';
-import type { PanelPresentation } from './index';
+import { Button } from './button';
+import { Inset, InsetRow } from './inset';
+import { PanelSheet } from './panel-sheet';
+import type { PanelPresentation } from './panel-sheet';
+import { SecurityKeyPinField } from './security-key-pin-field';
 
 export function AdminPanel({
   bridge,

@@ -9,15 +9,12 @@ import {
   validSecurityKeyPin,
 } from '../security-key-pin';
 import type { BotAction, BotEnrollment } from '../bot-contract';
-import {
-  Button,
-  Inset,
-  InsetRow,
-  PanelSheet,
-  SecurityKeyPinField,
-  SegmentedControl,
-} from './index';
-import type { PanelPresentation } from './index';
+import { Button } from './button';
+import { Inset, InsetRow } from './inset';
+import { PanelSheet } from './panel-sheet';
+import type { PanelPresentation } from './panel-sheet';
+import { SecurityKeyPinField } from './security-key-pin-field';
+import { SegmentedControl } from './segmented-control';
 
 type BotPane = 'enroll' | 'load' | 'revoke';
 

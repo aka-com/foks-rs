@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Button } from './index';
+import { Button } from './button';
 import { connectionObservationFresh } from '../profile-connectivity';
 import type { ProfileConnectivity } from '../profile-connectivity';
 

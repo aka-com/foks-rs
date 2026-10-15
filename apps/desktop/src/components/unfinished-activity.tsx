@@ -10,7 +10,8 @@ import {
 } from '../data/operation-queries';
 import type { Bridge, PendingOperation } from '../bridge';
 import type { TeamStore } from '../model';
-import { Band, Button } from './index';
+import { Button } from './button';
+import { Band } from './notice';
 import { INVITATION_ACTIVITY } from '../invitation-activity';
 
 /** Formats pending and blocking operation counts for the summary band. */

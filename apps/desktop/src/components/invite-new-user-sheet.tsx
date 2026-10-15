@@ -27,21 +27,16 @@ import {
 } from '../security-key-pin';
 import { useMetadataRepository } from '../data/query-hooks';
 import { useSheetGuard, useTabSheetState } from '../navigation-guard';
-import {
-  Band,
-  Button,
-  Chip,
-  CopyBox,
-  Icon,
-  Inset,
-  InsetRow,
-  Notice,
-  PanelSheet,
-  RadioCard,
-  RadioGroup,
-  SectionLabel,
-  SecurityKeyPinField,
-} from './index';
+import { Button } from './button';
+import { Chip } from './chips';
+import { CopyBox } from './copy-box';
+import { Icon } from './icon';
+import { Inset, InsetRow } from './inset';
+import { Band, Notice } from './notice';
+import { PanelSheet } from './panel-sheet';
+import { RadioCard, RadioGroup } from './radio-card';
+import { SectionLabel } from './section-label';
+import { SecurityKeyPinField } from './security-key-pin-field';
 
 type ApprovalRole = Extract<InvitationGrantRole, 'member' | 'admin'>;
 

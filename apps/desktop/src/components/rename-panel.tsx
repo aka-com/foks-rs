@@ -9,14 +9,11 @@ import { checkRenameRows } from '../rename-status';
 import { normalizeCommandError } from '../bridge';
 import { useSheetGuard } from '../navigation-guard';
 import { securityKeyPinProblem } from '../security-key-pin';
-import {
-  Button,
-  Inset,
-  InsetRow,
-  PanelSheet,
-  SecurityKeyPinField,
-} from './index';
-import type { PanelPresentation } from './index';
+import { Button } from './button';
+import { Inset, InsetRow } from './inset';
+import { PanelSheet } from './panel-sheet';
+import type { PanelPresentation } from './panel-sheet';
+import { SecurityKeyPinField } from './security-key-pin-field';
 
 export function RenamePanel({
   bridge,

@@ -23,16 +23,14 @@ import {
 import { securityKeyPinRefusal } from '../security-key-pin';
 import type { TeamStore } from '../model';
 import { useMetadataRepository } from '../data/query-hooks';
-import {
-  Button,
-  Chip,
-  Icon,
-  Inset,
-  PanelSheet,
-  SectionLabel,
-  SecurityKeyPinField,
-  SegmentedControl,
-} from './index';
+import { Button } from './button';
+import { Chip } from './chips';
+import { Icon } from './icon';
+import { Inset } from './inset';
+import { PanelSheet } from './panel-sheet';
+import { SectionLabel } from './section-label';
+import { SecurityKeyPinField } from './security-key-pin-field';
+import { SegmentedControl } from './segmented-control';
 
 type View = 'attention' | 'issued';
 

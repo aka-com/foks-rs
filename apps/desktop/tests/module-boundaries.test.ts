@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+
+import layering from '../layers.json';
 
 const root = fileURLToPath(new URL('../src/', import.meta.url));
 async function sources(directory: string): Promise<string[]> {
@@ -62,9 +64,10 @@ async function imports(path: string): Promise<string[]> {
 
 /**
  * Every module a file names, including type-only imports and re-exports,
- * dynamic `import()` calls and `import('...')` types.
+ * `import('...')` types and, unless `dynamic` is false, dynamic `import()`
+ * calls.
  */
-async function references(path: string): Promise<string[]> {
+async function references(path: string, dynamic = true): Promise<string[]> {
   const source = ts.createSourceFile(
     path,
     await readFile(path, 'utf8'),
@@ -80,6 +83,7 @@ async function references(path: string): Promise<string[]> {
     )
       found.push(node.moduleSpecifier.text);
     else if (
+      dynamic &&
       ts.isCallExpression(node) &&
       node.expression.kind === ts.SyntaxKind.ImportKeyword &&
       node.arguments[0] &&
@@ -98,33 +102,69 @@ async function references(path: string): Promise<string[]> {
   return found;
 }
 
-for (const domain of ['bridge', 'navigation'])
-  test(`${domain} internal modules have no runtime cycles or imports of their public facade`, async () => {
+/**
+ * The file a relative specifier names, as the bundler resolves it: the exact
+ * path, then with a `.ts` or `.tsx` extension, then the folder's `index.ts`.
+ * Package specifiers resolve to nothing.
+ */
+function resolveSpecifier(
+  file: string,
+  specifier: string,
+  known: ReadonlySet<string>,
+): string | undefined {
+  if (!specifier.startsWith('.')) return undefined;
+  const base = resolve(dirname(file), specifier);
+  return [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')].find(
+    (candidate) => known.has(candidate),
+  );
+}
+
+/** The compatibility facade each folder has beside it at the src/ root. */
+const FACADES: Readonly<Record<string, string>> = {
+  bridge: 'bridge.ts',
+  navigation: 'location.ts',
+};
+
+/**
+ * Runtime import cycles that exist and are left for the chat restructuring:
+ * the inbox provider renders the unread badge and the channel creation
+ * provider, which read the inbox through the provider's own hooks.
+ */
+const KNOWN_CYCLE_EDGES = new Set(
+  [
+    'chat/channel-creation-provider.tsx -> chat/inbox-provider.tsx',
+    'chat/unread-badge.tsx -> chat/inbox-provider.tsx',
+  ].map((edge) =>
+    edge
+      .split(' -> ')
+      .map((path) => join(root, path))
+      .join(' -> '),
+  ),
+);
+
+const folders = (await readdir(root, { withFileTypes: true }))
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name);
+
+for (const domain of folders)
+  test(`${domain} internal modules have no runtime cycles or imports of their public facade or barrel`, async () => {
     const files = await sources(join(root, domain));
-    const facade = join(
-      root,
-      `${domain === 'navigation' ? 'location' : domain}.ts`,
-    );
-    const known = new Set([...files, facade]);
+    const barrel = join(root, domain, 'index.ts');
+    const facade = FACADES[domain] && join(root, FACADES[domain]);
+    const known = new Set(facade ? [...files, facade] : files);
     const edges = new Map<string, string[]>();
     for (const file of files) {
       const dependencies = (await imports(file)).flatMap((specifier) => {
-        if (!specifier.startsWith('.')) return [];
-        const base = resolve(dirname(file), specifier);
-        const target = [
-          `${base}.ts`,
-          `${base}.tsx`,
-          join(base, 'index.ts'),
-        ].find((candidate) => known.has(candidate));
+        const target = resolveSpecifier(file, specifier, known);
         return target ? [target] : [];
       });
-      if (file !== join(root, domain, 'index.ts')) {
+      if (file !== barrel) {
         assert.ok(
-          !dependencies.includes(facade),
+          !facade || !dependencies.includes(facade),
           `${file} imports its compatibility facade`,
         );
         assert.ok(
-          !dependencies.includes(join(root, domain, 'index.ts')),
+          !dependencies.includes(barrel),
           `${file} imports its public barrel`,
         );
       }
@@ -138,11 +178,45 @@ for (const domain of ['bridge', 'navigation'])
       );
       if (done.has(file)) return;
       for (const dependency of edges.get(file) ?? [])
-        visit(dependency, [...stack, file]);
+        if (!KNOWN_CYCLE_EDGES.has(`${file} -> ${dependency}`))
+          visit(dependency, [...stack, file]);
       done.add(file);
     };
     for (const file of files) visit(file, []);
   });
+
+test('no layer names a module in a folder layers.json forbids it', async () => {
+  // eslint.config.mjs matches the same table against import specifiers. This
+  // resolves each specifier to a file, so any spelling of a path into a
+  // forbidden folder is caught, and it covers `import('...')` types. Dynamic
+  // imports are not checked: bridge/selection.ts reaches the mock by one.
+  const app = fileURLToPath(new URL('../', import.meta.url));
+  const files = [
+    ...(await sources(root)),
+    ...(await sources(join(app, 'kit'))),
+  ];
+  const known = new Set(files);
+  const under = (file: string, path: string) =>
+    file.startsWith(join(app, path) + sep);
+  const problems: string[] = [];
+  for (const layer of layering.layers) {
+    const except = new Set((layer.except ?? []).map((path) => join(app, path)));
+    for (const file of files)
+      if (layer.paths.some((path) => under(file, path)))
+        for (const specifier of await references(file, false)) {
+          const target = resolveSpecifier(file, specifier, known);
+          if (
+            target &&
+            !except.has(target) &&
+            layer.forbid.some((path) => under(target, path))
+          )
+            problems.push(
+              `${relative(app, file)} imports ${relative(app, target)}: ${layer.description}`,
+            );
+        }
+  }
+  assert.deepEqual(problems, []);
+});
 
 test('metadata resource services do not call secret-bearing or mutation bridge APIs', async () => {
   const files = await sources(join(root, 'resources'));

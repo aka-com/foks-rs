@@ -2,13 +2,11 @@ import { useState } from 'react';
 import { useWorkflowAccess } from '../workflow-context';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import { useSheetGuard } from '../navigation-guard';
-import {
-  Button,
-  Field,
-  Inset,
-  PanelSheet,
-  type PanelPresentation,
-} from './index';
+import { Button } from './button';
+import { Field } from './field';
+import { Inset } from './inset';
+import { PanelSheet } from './panel-sheet';
+import type { PanelPresentation } from './panel-sheet';
 
 export function LocalAliasPanel({
   bridge,

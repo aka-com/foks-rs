@@ -16,19 +16,15 @@ import {
   settleInvitationWrite,
 } from '../invitation-writes';
 import { securityKeyPinRefusal } from '../security-key-pin';
-import {
-  Button,
-  Chip,
-  Icon,
-  Inset,
-  InsetRow,
-  PanelSheet,
-  RadioCard,
-  RadioGroup,
-  SectionLabel,
-  SecurityKeyPinField,
-} from './index';
-import type { PanelPresentation } from './index';
+import { Button } from './button';
+import { Chip } from './chips';
+import { Icon } from './icon';
+import { Inset, InsetRow } from './inset';
+import { PanelSheet } from './panel-sheet';
+import type { PanelPresentation } from './panel-sheet';
+import { RadioCard, RadioGroup } from './radio-card';
+import { SectionLabel } from './section-label';
+import { SecurityKeyPinField } from './security-key-pin-field';
 import { serverDisplayLabel } from '../model';
 import type { Server, TeamStore } from '../model';
 import { INVITATION_ACTIVITY } from '../invitation-activity';

@@ -1,0 +1,81 @@
+{
+  "layers": [
+    {
+      "name": "kit",
+      "description": "The presentation kit outside src/ depends on no application module.",
+      "paths": ["kit"],
+      "forbid": ["src"]
+    },
+    {
+      "name": "model",
+      "description": "The pure model depends on no data, platform, mock or view module.",
+      "paths": ["src/model"],
+      "forbid": [
+        "src/app",
+        "src/bridge",
+        "src/chat",
+        "src/components",
+        "src/data",
+        "src/diagnostics",
+        "src/mock",
+        "src/platform",
+        "src/resources",
+        "src/scheduling",
+        "src/screens",
+        "src/shell"
+      ]
+    },
+    {
+      "name": "data and platform",
+      "description": "Data, bridge, scheduling, diagnostics and navigation modules depend on no view, shell, application or mock module. The bridge reads the chat host contract, src/chat/local-contract.ts.",
+      "paths": [
+        "src/bridge",
+        "src/data",
+        "src/diagnostics",
+        "src/navigation",
+        "src/platform",
+        "src/resources",
+        "src/scheduling"
+      ],
+      "forbid": [
+        "src/app",
+        "src/chat",
+        "src/components",
+        "src/mock",
+        "src/screens",
+        "src/shell"
+      ],
+      "except": ["src/chat/local-contract.ts"]
+    },
+    {
+      "name": "mock",
+      "description": "The mock bridge and fixture depend on no view, shell or application module.",
+      "paths": ["src/mock"],
+      "forbid": ["src/app", "src/components", "src/screens", "src/shell"]
+    },
+    {
+      "name": "components",
+      "description": "Shared components depend on no screen, chat, shell, application or mock module.",
+      "paths": ["src/components"],
+      "forbid": ["src/app", "src/chat", "src/mock", "src/screens", "src/shell"]
+    },
+    {
+      "name": "shell",
+      "description": "The window chrome depends on no application or mock module.",
+      "paths": ["src/shell"],
+      "forbid": ["src/app", "src/mock"]
+    },
+    {
+      "name": "features",
+      "description": "Screens and chat depend on no application or mock module.",
+      "paths": ["src/chat", "src/screens"],
+      "forbid": ["src/app", "src/mock"]
+    },
+    {
+      "name": "app",
+      "description": "The composition root reaches the mock only through the bridge selection.",
+      "paths": ["src/app"],
+      "forbid": ["src/mock"]
+    }
+  ]
+}

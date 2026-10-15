@@ -28,16 +28,13 @@ import type { TeamStore } from '../model';
 import { serverDisplayLabel } from '../model';
 import type { JoinServer } from './invitation-panel';
 import { useMetadataRepository } from '../data/query-hooks';
-import {
-  Button,
-  Chip,
-  Icon,
-  Inset,
-  InsetRow,
-  Notice,
-  SectionLabel,
-  SecurityKeyPinField,
-} from './index';
+import { Button } from './button';
+import { Chip } from './chips';
+import { Icon } from './icon';
+import { Inset, InsetRow } from './inset';
+import { Notice } from './notice';
+import { SectionLabel } from './section-label';
+import { SecurityKeyPinField } from './security-key-pin-field';
 
 export function MembershipRequests({
   bridge,

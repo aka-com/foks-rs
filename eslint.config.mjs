@@ -1,8 +1,57 @@
 // @ts-check
+import { readFileSync } from 'node:fs';
 import js from '@eslint/js';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
+
+/**
+ * The desktop's import layers, from apps/desktop/layers.json: each layer's
+ * folders may not import from the folders it forbids. A relative specifier is
+ * matched when the forbidden folder follows its leading `../` segments, so
+ * `../../screens/x` from src/data/ is reported and `../chat-contract` is not.
+ * apps/desktop/tests/module-boundaries.test.ts checks the same table against
+ * resolved paths, type positions included.
+ *
+ * @type {{ layers: { description: string, paths: string[], forbid: string[], except?: string[] }[] }}
+ */
+const desktopLayers = JSON.parse(
+  readFileSync(new URL('./apps/desktop/layers.json', import.meta.url), 'utf8'),
+);
+
+/** @param {string} text */
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** @param {(typeof desktopLayers.layers)[number]} layer */
+function desktopLayerRule(layer) {
+  const folders = layer.forbid.map((path) => {
+    const allowed = (layer.except ?? [])
+      .filter((file) => file.startsWith(`${path}/`))
+      .map((file) =>
+        escapeRegExp(file.slice(path.length + 1).replace(/\.tsx?$/, '')),
+      );
+    const name = escapeRegExp(path.split('/').pop() ?? path);
+    return allowed.length > 0
+      ? `${name}(/(?!(${allowed.join('|')})$)|$)`
+      : `${name}(/|$)`;
+  });
+  return {
+    files: layer.paths.map((path) => `apps/desktop/${path}/**/*.{ts,tsx}`),
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: `^(\\.\\./)+(${folders.join('|')})`,
+              message: layer.description,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
 
 export default tseslint.config(
   {
@@ -100,4 +149,5 @@ export default tseslint.config(
       'react-hooks/refs': 'error',
     },
   },
+  ...desktopLayers.layers.map(desktopLayerRule),
 );
