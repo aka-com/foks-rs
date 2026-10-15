@@ -145,6 +145,36 @@ operator-managed material before exposing a public deployment. Use
 `client-bootstrap` to write a post-bootstrap client import bundle. Example
 systemd units and deployment notes are in [`../../packaging`](../../packaging).
 
+`server.toml` is parsed strictly: an unknown key or table is an error, so
+`config-check` does not accept a misspelled setting. Besides the paths,
+listeners, backup schedule and `[waitlist]` table, it holds three limit
+tables. `init` writes them with their defaults; an omitted key or table takes
+the same default.
+
+- `[limits]` sets the RPC session limits and the writer queue:
+  `worker_threads` (4), `maximum_read_connections` (32),
+  `maximum_active_connections` (256), `maximum_pending_connections` (32),
+  `maximum_in_flight_requests` (64), `request_timeout_seconds` (30) and
+  `maximum_pending_writes` (64). The `serve` flags of the same names set the
+  same values.
+- `[rate_limits]` sets the per-IP token buckets: `connection_burst` (512),
+  `connections_per_second` (256), `request_burst` (2,000),
+  `requests_per_second` (1,000) and `maximum_tracked_ips` (4,096).
+- `[storage]` sets database capacity: `maximum_database_bytes` (64 GiB),
+  `maximum_teams` (4,096), `maximum_team_members` (64),
+  `maximum_kv_namespace_bytes` (16 GiB) and `maximum_kv_namespace_objects`
+  (1,000,000). Other database limits keep their compiled defaults. Every
+  command that reads `server.toml` opens the database with these limits;
+  `serve` has no flags for them and uses the defaults.
+
+Each value must be non-zero. `maximum_team_members` bounds the rows of one
+team roster and must not exceed 1,024, the number of roster rows a realtime
+mutation scans when it records message recipients; a larger roster could not
+create channels or send messages. A configured `[web_admin]` listener requires
+at least 3 read connections and 2 writer slots. `config-check` reports the
+first condition that fails, and `config-check --print-effective` also prints
+the configuration that `serve-config` would run, defaults included, as TOML.
+
 The lower-level `serve` command remains available when every artifact and
 listener should be supplied individually:
 
@@ -209,8 +239,8 @@ startup and print a warning when it stays below the estimate; the example unit
 sets `LimitNOFILE=65536`.
 
 Connection and request token buckets are enforced per source IP with bounded
-tracking memory. CLI flags set their refill rates, bursts, and maximum tracked
-IP count. Saturated connection admission is dropped; a framed request that
+tracking memory. The `[rate_limits]` table or the `serve` flags set their
+refill rates, bursts, and maximum tracked IP count. Saturated connection admission is dropped; a framed request that
 exceeds its bucket receives FOKS status 1012 and the connection closes.
 
 Automatic backups are opt-in:

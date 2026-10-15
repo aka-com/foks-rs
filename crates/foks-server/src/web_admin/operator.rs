@@ -8,7 +8,7 @@ pub fn set_grant(
     now: u64,
 ) -> Result<foks_server_db::HostAdminGrant> {
     let guard = DatabaseWriterGuard::acquire(&config.database)?;
-    let mut db = guard.open_database(Default::default())?;
+    let mut db = guard.open_database(config.database_config())?;
     let host: [u8; 33] = db
         .host_bootstrap()?
         .ok_or(Error::Config("host has not bootstrapped"))?
@@ -22,7 +22,7 @@ pub fn grants(
     after: &[u8],
 ) -> Result<Vec<foks_server_db::HostAdminGrant>> {
     Ok(
-        foks_server_db::ReadDatabase::open(&config.database, Default::default())?
+        foks_server_db::ReadDatabase::open(&config.database, config.database_config())?
             .admin_grants(after)?,
     )
 }

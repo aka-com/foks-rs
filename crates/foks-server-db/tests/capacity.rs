@@ -259,6 +259,23 @@ fn oversized_dirents_and_unsafe_capacity_configuration_are_rejected() {
             "KV capacity exceeds the client synchronization limits"
         ))
     ));
+
+    let path = test.path.with_file_name("unsafe-team-capacity.sqlite");
+    let config = foks_server_db::Config {
+        maximum_team_members: foks_server_db::RealtimeLimits::FANOUT_MEMBERS + 1,
+        ..foks_server_db::Config::default()
+    };
+    assert!(matches!(
+        foks_server_db::Database::open(&path, config),
+        Err(Error::Invalid(
+            "team member limit exceeds the realtime fanout limit"
+        ))
+    ));
+    let config = foks_server_db::Config {
+        maximum_team_members: foks_server_db::RealtimeLimits::FANOUT_MEMBERS,
+        ..foks_server_db::Config::default()
+    };
+    assert!(foks_server_db::Database::open(&path, config).is_ok());
 }
 
 #[test]

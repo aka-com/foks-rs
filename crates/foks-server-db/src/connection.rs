@@ -403,6 +403,13 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
             "KV capacity exceeds the client synchronization limits",
         ));
     }
+    // Realtime mutations refuse a roster with more rows than the fanout
+    // bound, so a larger team could not create channels or send messages.
+    if config.maximum_team_members > crate::RealtimeLimits::FANOUT_MEMBERS {
+        return Err(crate::Error::Invalid(
+            "team member limit exceeds the realtime fanout limit",
+        ));
+    }
     let reuse_limit =
         i64::try_from(config.wal_reuse_limit_bytes).map_err(|_| crate::Error::IntegerRange)?;
     connection.pragma_update(Some("main"), "journal_size_limit", reuse_limit)?;

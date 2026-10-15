@@ -3,7 +3,13 @@ use std::num::NonZeroUsize;
 use std::sync::Mutex;
 use std::time::Instant;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+/// Refill rates and bursts of the per-source-IP connection and request token
+/// buckets. It is also the `[rate_limits]` table of an installation
+/// configuration.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct RateLimitConfig {
     pub connection_burst: u32,
     pub connections_per_second: u32,
