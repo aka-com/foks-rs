@@ -190,11 +190,10 @@ export function usePaneResize<T extends HTMLElement = HTMLElement>(
 
   // A separator removed mid-drag receives no further pointer events.
   useLayoutEffect(() => {
-    const active = drag.current;
-    if (enabled || !active) return;
-    drag.current = null;
-    setPreferred(active.previous);
-    setDragging(false);
+    if (!enabled) finish(false);
+    // `finish` reads only refs and state setters, so the closure from an
+    // earlier render behaves identically.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
   useLayoutEffect(() => {

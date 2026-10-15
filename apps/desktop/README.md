@@ -566,8 +566,8 @@ authenticated in the catalog.
 
 ### The rail
 
-`nav.side.rail` is a fixed six-tab rail, 200px wide and blue
-(`--rail`, `--rail-ink`, `--rail-line`, `--rail-active` in
+`nav.side.rail` is a six-tab rail, 150px wide by default (resizable up to
+240px) and blue (`--rail`, `--rail-ink`, `--rail-line`, `--rail-active` in
 `apps/desktop/kit/tokens.css`). It does not enumerate stores. Its tabs are
 Accounts, Chat, Files, Teams, Devices and Settings; `railTabOf(location)` in
 `src/location.ts` decides which one a location belongs to, so All items and a
@@ -614,7 +614,7 @@ width is the one the reader chose: a collapsed rail does not expand on hover or
 on focus. The toggle is in the topbar, not in the rail, and writes
 `sideCollapsed` to `localStorage` through `src/sidebar-prefs.ts`. Item
 selection and navigation leave that chosen width unchanged. The open rail,
-the Files folder tree and the Chat column share one separator,
+the Files folder tree and the Chat column share one separator hook,
 `usePaneResize` in `src/components/use-pane-resize.tsx`, whose
 `PANE_SIZES` table gives each pane's storage key, CSS variable and bounds. A
 drag commits on release; Escape, pointer cancellation and lost pointer
@@ -1775,12 +1775,12 @@ and reader computations are client-side presentation models without protocol equ
 changes directly in this stylesheet.
 
 Layout is a separate concern from color, and its custom properties are
-declared on `.app` rather than on `:root`: `--side-track`, `--side-w-open`
-(224px), `--side-w`, `--side-pad`, `--side-head-pad`, `--side-open-content`
-and `--details-w` (300px; `--side-w-open` is 200px where the rail is drawn).
-The rail animates its own width instead of the
-grid track, which avoids interpolating `grid-template-columns`, and
-`.app.side-narrow` is what sets the collapsed width (`56px`).
+declared on the shell rather than on `:root`: `--side-w-open` (150px) and
+`--side-w` on `.window`, and `--side-track`, `--side-pad`, `--side-head-pad`,
+`--side-open-content` and `--details-w` (300px) on `.app`. The rail animates
+its own width instead of the grid track, which avoids interpolating
+`grid-template-columns`, and `.window:has(>.app.side-narrow)` is what sets
+the collapsed width (`--side-w: 56px`).
 
 The one edit is the token block. Measured against `ui/styles.css`, the mock's
 48 `:root` tokens split **35 identical / 5 same-name-different-value / 8
