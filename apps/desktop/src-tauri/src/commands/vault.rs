@@ -433,6 +433,7 @@ fn download_with_interval(
         .call(Operation::ReadKv {
             store: store.clone(),
             path: item.metadata.path.clone(),
+            dirent_id: item.metadata.dirent_id,
             version: item.metadata.version,
         })
         .map_err(AgentError::from_desktop)?;
@@ -446,6 +447,7 @@ fn download_with_interval(
     };
     let metadata_matches = read.store == store
         && read.path == item.metadata.path
+        && read.dirent_id == item.metadata.dirent_id
         && read.version == item.metadata.version
         && read.node_type == item.metadata.node_type
         && size_matches
@@ -530,6 +532,7 @@ fn download_with_interval(
                     .call(Operation::ReadKvChunk {
                         store: store.clone(),
                         path: item.metadata.path.clone(),
+                        dirent_id: item.metadata.dirent_id,
                         version: item.metadata.version,
                         offset,
                         length,
@@ -549,6 +552,7 @@ fn download_with_interval(
                 })?;
                 let valid = chunk.store == store
                     && chunk.path == item.metadata.path
+                    && chunk.dirent_id == item.metadata.dirent_id
                     && chunk.version == item.metadata.version
                     && chunk.offset == offset
                     && !content.is_empty()

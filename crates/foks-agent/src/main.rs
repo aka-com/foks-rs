@@ -4880,6 +4880,7 @@ fn dispatch_result_inner(
         Operation::ReadKv {
             store,
             path,
+            dirent_id,
             version,
         } => {
             let profile = kv_store_profile(&store).to_owned();
@@ -4887,14 +4888,19 @@ fn dispatch_result_inner(
                 read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
             with_vault(state_dir, &session, |session, vault| {
                 let report = match &store {
-                    KvStoreRef::Account(store) => {
-                        session.read_kv_entry(&store.account_alias, &path, version, vault)?
-                    }
+                    KvStoreRef::Account(store) => session.read_kv_entry(
+                        &store.account_alias,
+                        &path,
+                        dirent_id,
+                        version,
+                        vault,
+                    )?,
                     KvStoreRef::Team(store) => session.read_team_kv_entry(
                         &store.account_alias,
                         &store.team_alias,
                         &store.team_id,
                         &path,
+                        dirent_id,
                         version,
                         vault,
                     )?,
@@ -4902,6 +4908,7 @@ fn dispatch_result_inner(
                 Ok(serde_json::to_value(KvReadResult {
                     store,
                     path: report.path,
+                    dirent_id: report.dirent_id,
                     version: report.version,
                     node_type: report.node_type,
                     size: report.size,
@@ -4915,6 +4922,7 @@ fn dispatch_result_inner(
         Operation::ReadKvChunk {
             store,
             path,
+            dirent_id,
             version,
             offset,
             length,
@@ -4934,6 +4942,7 @@ fn dispatch_result_inner(
                     KvStoreRef::Account(store) => session.read_kv_chunk(
                         &store.account_alias,
                         &path,
+                        dirent_id,
                         version,
                         offset,
                         length,
@@ -4944,6 +4953,7 @@ fn dispatch_result_inner(
                         &store.team_alias,
                         &store.team_id,
                         &path,
+                        dirent_id,
                         version,
                         offset,
                         length,
@@ -4953,6 +4963,7 @@ fn dispatch_result_inner(
                 Ok(serde_json::to_value(KvChunkResult {
                     store,
                     path: report.path,
+                    dirent_id: report.dirent_id,
                     version: report.version,
                     offset: report.offset,
                     content: report.content,
@@ -7724,11 +7735,13 @@ mod tests {
             Operation::ReadKv {
                 store: KvStoreRef::Account(account.clone()),
                 path: "/entry".into(),
+                dirent_id: [0; 16],
                 version: 1,
             },
             Operation::ReadKvChunk {
                 store: KvStoreRef::Account(account),
                 path: "/entry".into(),
+                dirent_id: [0; 16],
                 version: 1,
                 offset: 0,
                 length: 10,
@@ -9458,6 +9471,7 @@ mod tests {
         let chunk = |length: u32| Operation::ReadKvChunk {
             store: store.clone(),
             path: "/large".to_owned(),
+            dirent_id: [0; 16],
             version: 1,
             offset: 0,
             length,

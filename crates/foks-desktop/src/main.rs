@@ -215,6 +215,9 @@ enum Command {
         store: KvStoreArguments,
         path: String,
         version: u64,
+        /// Entry identity from the catalog, as 32 hexadecimal characters.
+        #[arg(long)]
+        dirent_id: String,
     },
     KvCreateText {
         #[command(flatten)]
@@ -515,6 +518,17 @@ enum BackendCall {
         header: KvUploadHeader,
         source: File,
     },
+}
+
+fn parse_dirent_id(value: &str) -> Result<[u8; 16], Box<dyn std::error::Error>> {
+    if value.len() != 32 || !value.is_ascii() {
+        return Err("dirent identity must contain 32 hexadecimal characters".into());
+    }
+    let mut result = [0; 16];
+    for (index, byte) in result.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)?;
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -890,9 +904,11 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             store,
             path,
             version,
+            dirent_id,
         } => Operation::ReadKv {
             store: store.kv_store_ref()?,
             path: checked_kv_path(path)?,
+            dirent_id: parse_dirent_id(&dirent_id)?,
             version,
         },
         Command::KvCreateText {
@@ -1601,6 +1617,7 @@ mod tests {
                 },
                 path: "/password".to_owned(),
                 version: 9,
+                dirent_id: "00".repeat(16),
             })
         };
         assert!(matches!(

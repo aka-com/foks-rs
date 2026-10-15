@@ -484,6 +484,7 @@ impl CheckedProfileSession<'_> {
         };
         Ok(KvChunkReport {
             path: path.to_owned(),
+            dirent_id: entry.dirent_id,
             version,
             offset,
             content: chunk.content,

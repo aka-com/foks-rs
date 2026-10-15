@@ -252,10 +252,12 @@ impl foks_desktop::AgentTransport for ReadTransport {
             Operation::ReadKv {
                 store,
                 path,
+                dirent_id,
                 version,
             } => serde_json::to_value(KvReadResult {
                 store,
                 path,
+                dirent_id,
                 version,
                 node_type: "small-file".to_owned(),
                 size: Some(READ_VALUE.len() as u64),
@@ -282,10 +284,12 @@ impl foks_desktop::AgentTransport for DownloadTransport {
             Operation::ReadKv {
                 store,
                 path,
+                dirent_id,
                 version,
             } => serde_json::to_value(KvReadResult {
                 store,
                 path,
+                dirent_id,
                 version,
                 node_type: "file".to_owned(),
                 // Model a legacy file without the optional size extension;
@@ -299,6 +303,7 @@ impl foks_desktop::AgentTransport for DownloadTransport {
             Operation::ReadKvChunk {
                 store,
                 path,
+                dirent_id,
                 version,
                 offset,
                 length,
@@ -307,6 +312,7 @@ impl foks_desktop::AgentTransport for DownloadTransport {
                 serde_json::to_value(KvChunkResult {
                     store,
                     path,
+                    dirent_id,
                     version,
                     offset,
                     content: vec![0x5a; count],
@@ -372,6 +378,7 @@ fn read_text_issues_exactly_one_version_bound_read() {
                 account_alias: "personal".to_owned(),
             }),
             path: "/wifi/password".to_owned(),
+            dirent_id: [7; 16],
             version: 7,
         }]
     );
@@ -1240,6 +1247,66 @@ fn blocked_agent_reads_cannot_return_secret_or_request_more_chunks_after_lock() 
             if chunk {
                 assert_eq!(download.calls.lock().unwrap().len(), 2);
             }
+        }
+    }
+}
+
+#[test]
+fn download_rejects_changed_entry_identity_without_publishing_or_leaving_temporary_files() {
+    struct Replacement {
+        inner: DownloadTransport,
+        between_chunks: bool,
+    }
+    impl foks_desktop::AgentTransport for Replacement {
+        fn call(
+            &self,
+            operation: Operation,
+        ) -> Result<serde_json::Value, foks_desktop::AgentError> {
+            let replace = if self.between_chunks {
+                matches!(&operation, Operation::ReadKvChunk { offset, .. } if *offset > 0)
+            } else {
+                matches!(&operation, Operation::ReadKv { .. })
+            };
+            let mut value = foks_desktop::AgentTransport::call(&self.inner, operation)?;
+            if replace {
+                value["dirent_id"] = serde_json::to_value([8; 16]).unwrap();
+            }
+            Ok(value)
+        }
+    }
+    for between_chunks in [false, true] {
+        for existing in [false, true] {
+            let total = u64::from(DOWNLOAD_CHUNK_BYTES) + 17;
+            let item = download_item(total);
+            let transport = Replacement {
+                inner: DownloadTransport {
+                    total,
+                    calls: Mutex::new(Vec::new()),
+                },
+                between_chunks,
+            };
+            let directory = tempfile::tempdir().unwrap();
+            let destination = directory.path().join("download.bin");
+            if existing {
+                std::fs::write(&destination, b"keep existing").unwrap();
+            }
+            let lock = crate::applock::AppLock::unlocked_for_test();
+            assert!(download_to_path(
+                Arc::new(transport),
+                &item,
+                &destination,
+                &lock.interval_for_test()
+            )
+            .is_err());
+            if existing {
+                assert_eq!(std::fs::read(&destination).unwrap(), b"keep existing");
+            } else {
+                assert!(!destination.exists());
+            }
+            assert_eq!(
+                std::fs::read_dir(directory.path()).unwrap().count(),
+                usize::from(existing)
+            );
         }
     }
 }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 34;
+pub const PROTOCOL_VERSION: u32 = 35;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -348,6 +348,7 @@ pub enum KvPrecondition {
 pub struct KvReadResult {
     pub store: KvStoreRef,
     pub path: String,
+    pub dirent_id: [u8; 16],
     pub version: u64,
     pub node_type: String,
     pub size: Option<u64>,
@@ -367,6 +368,7 @@ pub struct KvReadResult {
 pub struct KvChunkResult {
     pub store: KvStoreRef,
     pub path: String,
+    pub dirent_id: [u8; 16],
     pub version: u64,
     pub offset: u64,
     #[serde(with = "crate::base64_bytes")]
@@ -914,11 +916,13 @@ pub enum Operation {
     ReadKv {
         store: KvStoreRef,
         path: String,
+        dirent_id: [u8; 16],
         version: u64,
     },
     ReadKvChunk {
         store: KvStoreRef,
         path: String,
+        dirent_id: [u8; 16],
         version: u64,
         offset: u64,
         length: u32,
@@ -1911,16 +1915,19 @@ impl std::fmt::Debug for Operation {
             Self::ReadKv {
                 store,
                 path,
+                dirent_id,
                 version,
             } => formatter
                 .debug_struct("ReadKv")
                 .field("store", store)
                 .field("path", path)
+                .field("dirent_id", dirent_id)
                 .field("version", version)
                 .finish(),
             Self::ReadKvChunk {
                 store,
                 path,
+                dirent_id,
                 version,
                 offset,
                 length,
@@ -1928,6 +1935,7 @@ impl std::fmt::Debug for Operation {
                 .debug_struct("ReadKvChunk")
                 .field("store", store)
                 .field("path", path)
+                .field("dirent_id", dirent_id)
                 .field("version", version)
                 .field("offset", offset)
                 .field("length", length)
