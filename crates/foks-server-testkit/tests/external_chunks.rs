@@ -17,6 +17,16 @@ struct FaultStore {
 }
 
 impl ChunkStore for FaultStore {
+    fn locator(&self) -> foks_server::Result<String> {
+        self.inner.locator()
+    }
+    fn read_namespace_marker(&self) -> foks_server::Result<Option<Vec<u8>>> {
+        self.inner.read_namespace_marker()
+    }
+    fn create_namespace_marker_if_absent(&self, marker: &[u8]) -> foks_server::Result<()> {
+        self.inner.create_namespace_marker_if_absent(marker)
+    }
+
     fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> foks_server::Result<()> {
         if self.mode.load(Ordering::SeqCst) == 1 {
             return Err(foks_server::Error::Chunk("injected object put failure"));
@@ -45,6 +55,16 @@ struct GatedStore {
 }
 
 impl ChunkStore for GatedStore {
+    fn locator(&self) -> foks_server::Result<String> {
+        self.inner.locator()
+    }
+    fn read_namespace_marker(&self) -> foks_server::Result<Option<Vec<u8>>> {
+        self.inner.read_namespace_marker()
+    }
+    fn create_namespace_marker_if_absent(&self, marker: &[u8]) -> foks_server::Result<()> {
+        self.inner.create_namespace_marker_if_absent(marker)
+    }
+
     fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> foks_server::Result<()> {
         // The object is durable before the gate: authorization can change
         // during storage I/O, leaving an orphan but never a published chunk.
@@ -501,4 +521,155 @@ fn assert_files(
         );
         assert_eq!(&bytes, expected);
     }
+}
+
+#[test]
+fn binding_rejects_wrong_store_missing_marker_and_foreign_marker_even_without_chunks() {
+    let environment = TestEnvironment::new().unwrap();
+    environment.use_filesystem_chunks().unwrap();
+    let store = environment.filesystem_chunk_store().unwrap();
+    environment.start_server().unwrap().shutdown().unwrap();
+    let marker_path = environment.root().join("chunks/_foks_namespace_v1");
+    let marker = std::fs::read(&marker_path).unwrap();
+    let wrong = foks_server::chunks::ChunkStoreConfig::Filesystem {
+        directory: environment.root().join("wrong-chunks"),
+    }
+    .build()
+    .unwrap();
+    environment.set_chunk_store(wrong.clone()).unwrap();
+    assert!(environment.start_server().is_err());
+    assert!(foks_server::externalize_chunks(
+        environment.database_path(),
+        foks_server_db::Config::default(),
+        wrong.as_ref()
+    )
+    .is_err());
+    let backup_path = environment.root().join("wrong-backup");
+    assert!(
+        foks_server::backup_standalone_installation_with_chunk_store(
+            environment.database_path(),
+            environment.root().join("keys"),
+            [0x51; 32],
+            &backup_path,
+            foks_server_db::Config::default(),
+            Some(wrong.as_ref())
+        )
+        .is_err()
+    );
+    assert!(!backup_path.join("key-manifest.txt").exists());
+    environment.set_chunk_store(store.clone()).unwrap();
+    std::fs::remove_file(&marker_path).unwrap();
+    assert!(environment.start_server().is_err());
+    assert!(
+        !marker_path.exists(),
+        "active binding must not recreate a missing marker"
+    );
+    std::fs::write(&marker_path, b"foreign marker").unwrap();
+    assert!(environment.start_server().is_err());
+    std::fs::write(&marker_path, &marker).unwrap();
+    environment.start_server().unwrap().shutdown().unwrap();
+}
+
+#[test]
+fn legacy_external_adoption_is_explicit_resumable_and_preserves_wire_reads() {
+    let environment = TestEnvironment::new().unwrap();
+    environment.use_filesystem_chunks().unwrap();
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "legacy-adopt").unwrap();
+    let host = client.probe_and_pin().unwrap().pinned;
+    let account = client
+        .create_account(&host, &TestAccountSpec::new("legacyadopt", 0x71))
+        .unwrap();
+    let content = vec![0x41; 4 * 1024 * 1024 + 17];
+    put(&client, &host, &account, "adopt.bin", &content).unwrap();
+    server.shutdown().unwrap();
+    // Reconstruct a real version-50 database and unmarked legacy store.
+    let connection = rusqlite::Connection::open(environment.database_path()).unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../../foks-server-db/tests/fixtures/remove_chunk_binding.sql"
+        ))
+        .unwrap();
+    connection.pragma_update(None, "user_version", 50).unwrap();
+    drop(connection);
+    std::fs::remove_file(environment.root().join("chunks/_foks_namespace_v1")).unwrap();
+    assert!(environment.start_server().is_err());
+    let store = FaultStore {
+        inner: environment.filesystem_chunk_store().unwrap(),
+        mode: AtomicU8::new(0),
+    };
+    let failed = foks_server::adopt_chunk_store(
+        environment.database_path(),
+        foks_server_db::Config::default(),
+        &store,
+        |progress| {
+            assert_eq!(progress.verified_objects, 1);
+            store.mode.store(2, Ordering::SeqCst);
+        },
+    );
+    assert!(failed.is_err());
+    let binding = environment
+        .read_database()
+        .unwrap()
+        .chunk_storage_binding()
+        .unwrap()
+        .unwrap();
+    assert_eq!(binding.verified_objects, 1);
+    assert_eq!(
+        binding.state,
+        foks_server_db::ChunkStorageBindingState::PendingAdoption
+    );
+    assert!(store.read_namespace_marker().unwrap().is_none());
+    assert!(environment.start_server().is_err());
+    store.mode.store(0, Ordering::SeqCst);
+    let mut callbacks = 0;
+    let adopted = foks_server::adopt_chunk_store(
+        environment.database_path(),
+        foks_server_db::Config::default(),
+        &store,
+        |_| callbacks += 1,
+    )
+    .unwrap();
+    assert_eq!(adopted.verified_objects, 2);
+    assert_eq!(
+        callbacks, 1,
+        "verified first row is resumed without fetching it again"
+    );
+    assert_eq!(
+        environment
+            .read_database()
+            .unwrap()
+            .chunk_storage_binding()
+            .unwrap()
+            .unwrap()
+            .namespace_id,
+        binding.namespace_id
+    );
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "legacy-adopt").unwrap();
+    assert_files(&client, &host, &account, &[("adopt.bin", &content)]);
+    let backup = server.backup_named("adopted").unwrap();
+    let addresses = server.addresses();
+    server.shutdown().unwrap();
+    let restored = TestEnvironment::restore_backup(&backup, addresses).unwrap();
+    assert!(restored
+        .read_database()
+        .unwrap()
+        .chunk_storage_binding()
+        .unwrap()
+        .is_none());
+    restored.use_filesystem_chunks().unwrap();
+    let server = restored.start_server().unwrap();
+    assert_ne!(
+        restored
+            .read_database()
+            .unwrap()
+            .chunk_storage_binding()
+            .unwrap()
+            .unwrap()
+            .namespace_id,
+        binding.namespace_id
+    );
+    assert_files(&client, &host, &account, &[("adopt.bin", &content)]);
+    server.shutdown().unwrap();
 }

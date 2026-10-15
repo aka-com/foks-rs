@@ -20,6 +20,7 @@ pub fn externalize_chunks(
     }
     let guard = crate::DatabaseWriterGuard::acquire(database_path.as_ref())?;
     let mut database = guard.open_database(config)?;
+    crate::chunk_binding::initialize_offline(&mut database, store)?;
     let mut after = None;
     let mut converted = 0;
     while let Some(stored) = database.next_kv_chunk(after.as_ref(), false)? {
@@ -88,6 +89,10 @@ pub(crate) fn hydrate_backup(
     store: Option<&dyn ChunkStore>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
+    {
+        let reader = foks_server_db::ReadDatabase::open(path, config.clone())?;
+        crate::chunk_binding::verify_reader(&reader, store)?;
+    }
     let mut database = foks_server_db::Database::open(path, config)?;
     let mut after = None;
     while let Some(stored) = database.next_kv_chunk(after.as_ref(), true)? {
@@ -112,6 +117,7 @@ pub(crate) fn hydrate_backup(
         }
         after = Some(stored.key);
     }
+    database.clear_private_chunk_storage_binding()?;
     if database.checkpoint()?.outcome() != foks_server_db::CheckpointOutcome::Complete {
         return Err(Error::Chunk("backup hydration checkpoint incomplete"));
     }

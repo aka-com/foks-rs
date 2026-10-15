@@ -53,6 +53,11 @@ enum Command {
         #[arg(long)]
         config: PathBuf,
     },
+    /// Verifies and binds legacy external chunks; stop the server first.
+    AdoptChunkStore {
+        #[arg(long)]
+        config: PathBuf,
+    },
     /// Installs a validated backup into an empty installation.
     Restore(RestoreArguments),
     /// Atomically rewraps installation keys under a new operator root key.
@@ -401,6 +406,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::ClientBootstrap { config, output } => client_bootstrap(config, output),
         Command::Backup(arguments) => backup(arguments),
         Command::ExternalizeChunks { config } => externalize_chunks(config),
+        Command::AdoptChunkStore { config } => adopt_chunk_store(config),
         Command::Restore(arguments) => restore(arguments),
         Command::RotateOperatorRoot(arguments) => rotate_operator_root(arguments),
         Command::BeginHostKeyRotation { config } => rotate_host_key(config),
@@ -752,6 +758,31 @@ fn externalize_chunks(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         store.as_ref(),
     )?;
     println!("externalized {converted} encrypted chunks");
+    Ok(())
+}
+
+fn adopt_chunk_store(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Before first adoption, preserve a consistent offline SQLite backup (including committed WAL). Adoption pins the chosen store even if verification fails; there is no automatic reset or rebind.");
+    let config = foks_server::installation::load_config(path)?;
+    let store = config
+        .chunk_store
+        .ok_or("installation has no chunk-store configuration")?
+        .build()?;
+    let result = foks_server::adopt_chunk_store(
+        &config.database,
+        foks_server_db::Config::default(),
+        store.as_ref(),
+        |progress| {
+            eprintln!(
+                "verified {} external references ({} encoded bytes)",
+                progress.verified_objects, progress.verified_bytes
+            );
+        },
+    )?;
+    println!(
+        "chunk store bound; verified {} references ({} encoded bytes)",
+        result.verified_objects, result.verified_bytes
+    );
     Ok(())
 }
 

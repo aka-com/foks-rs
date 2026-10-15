@@ -6,6 +6,8 @@ mod capabilities;
 mod capability_keys;
 mod certificates;
 mod clock;
+mod chunk_binding;
+pub use chunk_binding::{ChunkStorageBinding, ChunkStorageBindingState};
 mod config;
 mod connection;
 mod device_nag;

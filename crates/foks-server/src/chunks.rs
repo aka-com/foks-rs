@@ -126,6 +126,11 @@ impl ChunkStoreConfig {
 
 /// Exact immutable object publication and bounded, integrity-checked retrieval.
 pub trait ChunkStore: Send + Sync {
+    /// Canonical non-secret placement descriptor; credentials/timeouts are excluded.
+    fn locator(&self) -> Result<String>;
+    /// Missing is distinct from an unavailable, malformed or oversized marker.
+    fn read_namespace_marker(&self) -> Result<Option<Vec<u8>>>;
+    fn create_namespace_marker_if_absent(&self, marker: &[u8]) -> Result<()>;
     fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> Result<()>;
     fn get(&self, digest: &[u8; 32], encoded_length: u64) -> Result<Vec<u8>>;
 }
@@ -238,7 +243,76 @@ fn create_directory_durable(directory: &Path) -> Result<()> {
     }
 }
 
+const NAMESPACE_MARKER: &str = "_foks_namespace_v1";
+const MAXIMUM_MARKER_BYTES: usize = 1024;
+
+fn check_marker_size(bytes: &[u8]) -> Result<()> {
+    if bytes.is_empty() || bytes.len() > MAXIMUM_MARKER_BYTES {
+        return Err(Error::Chunk("invalid storage namespace marker size"));
+    }
+    Ok(())
+}
+
 impl ChunkStore for FilesystemChunks {
+    fn locator(&self) -> Result<String> {
+        self.recheck()?;
+        let directory = self
+            .directory
+            .to_str()
+            .ok_or(Error::Chunk("chunk directory must be UTF-8"))?;
+        serde_json::to_string(&("filesystem", directory))
+            .map_err(|_| Error::Chunk("invalid chunk locator"))
+    }
+
+    fn read_namespace_marker(&self) -> Result<Option<Vec<u8>>> {
+        self.recheck()?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let file = match options.open(self.directory.join(NAMESPACE_MARKER)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.len() == 0
+            || metadata.len() > MAXIMUM_MARKER_BYTES as u64
+        {
+            return Err(Error::Chunk("invalid storage namespace marker"));
+        }
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        file.take(MAXIMUM_MARKER_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        check_marker_size(&bytes)?;
+        self.recheck()?;
+        Ok(Some(bytes))
+    }
+
+    fn create_namespace_marker_if_absent(&self, marker: &[u8]) -> Result<()> {
+        check_marker_size(marker)?;
+        self.recheck()?;
+        let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
+        temporary.write_all(marker)?;
+        temporary.as_file().sync_all()?;
+        self.recheck()?;
+        match temporary.persist_noclobber(self.directory.join(NAMESPACE_MARKER)) {
+            Ok(file) => file.sync_all()?,
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if self.read_namespace_marker()?.as_deref() != Some(marker) {
+                    return Err(Error::Chunk("storage namespace marker conflict"));
+                }
+            }
+            Err(error) => return Err(error.error.into()),
+        }
+        std::fs::File::open(&self.directory)?.sync_all()?;
+        self.recheck()
+    }
+
     fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> Result<()> {
         let length = checked_length(bytes.len() as u64)?;
         verify(digest, bytes, length)?;
@@ -353,6 +427,7 @@ impl HttpConnector for NoRedirectConnector {
 }
 
 struct S3Chunks {
+    locator: String,
     store: Arc<dyn ObjectStore>,
     prefix: object_store::path::Path,
     timeout: Duration,
@@ -390,7 +465,20 @@ impl S3Chunks {
         let store = builder
             .build()
             .map_err(|_| Error::Chunk("cannot initialize S3 chunk backend"))?;
+        let canonical_endpoint = endpoint
+            .as_deref()
+            .map(url::Url::parse)
+            .transpose()
+            .map_err(|_| Error::Chunk("invalid chunk endpoint"))?
+            .map(|url| url.to_string());
+        let canonical_prefix = object_store::path::Path::parse(prefix)
+            .map_err(|_| Error::Chunk("invalid chunk prefix"))?
+            .to_string();
+        let locator =
+            serde_json::to_string(&("s3", bucket, region, canonical_endpoint, canonical_prefix))
+                .map_err(|_| Error::Chunk("invalid chunk locator"))?;
         Ok(Self {
+            locator,
             store: Arc::new(store),
             prefix: object_store::path::Path::parse(prefix)
                 .map_err(|_| Error::Config("invalid object prefix"))?,
@@ -466,7 +554,80 @@ async fn read_remote(
     Ok(bytes)
 }
 
+async fn read_remote_marker(
+    store: &dyn ObjectStore,
+    path: &object_store::path::Path,
+) -> Result<Option<Vec<u8>>> {
+    let result = match store.get(path).await {
+        Ok(result) => result,
+        Err(object_store::Error::NotFound { .. }) => return Ok(None),
+        Err(_) => return Err(Error::Chunk("storage namespace marker read failed")),
+    };
+    let length = result.meta.size;
+    if length == 0 || length > MAXIMUM_MARKER_BYTES as u64 || result.range != (0..length) {
+        return Err(Error::Chunk("invalid storage namespace marker size"));
+    }
+    let mut stream = result.into_stream();
+    let mut bytes = Vec::with_capacity(length as usize);
+    while let Some(part) = stream.next().await {
+        let part = part.map_err(|_| Error::Chunk("storage namespace marker read failed"))?;
+        if part.len() > length as usize - bytes.len() {
+            return Err(Error::Chunk("oversized storage namespace marker"));
+        }
+        bytes.extend_from_slice(&part);
+    }
+    if bytes.len() != length as usize {
+        return Err(Error::Chunk("truncated storage namespace marker"));
+    }
+    Ok(Some(bytes))
+}
+
 impl ChunkStore for S3Chunks {
+    fn locator(&self) -> Result<String> {
+        Ok(self.locator.clone())
+    }
+
+    fn read_namespace_marker(&self) -> Result<Option<Vec<u8>>> {
+        let store = Arc::clone(&self.store);
+        let path = self.prefix.clone().join(NAMESPACE_MARKER);
+        self.run(async move { read_remote_marker(store.as_ref(), &path).await })
+    }
+
+    fn create_namespace_marker_if_absent(&self, marker: &[u8]) -> Result<()> {
+        check_marker_size(marker)?;
+        let marker = marker.to_vec();
+        let store = Arc::clone(&self.store);
+        let path = self.prefix.clone().join(NAMESPACE_MARKER);
+        self.run(async move {
+            match store
+                .put_opts(
+                    &path,
+                    marker.clone().into(),
+                    PutOptions {
+                        mode: PutMode::Create,
+                        ..PutOptions::default()
+                    },
+                )
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(
+                    object_store::Error::AlreadyExists { .. }
+                    | object_store::Error::Precondition { .. },
+                ) => {
+                    if read_remote_marker(store.as_ref(), &path).await?.as_deref()
+                        == Some(marker.as_slice())
+                    {
+                        Ok(())
+                    } else {
+                        Err(Error::Chunk("storage namespace marker conflict"))
+                    }
+                }
+                Err(_) => Err(Error::Chunk("storage namespace marker creation failed")),
+            }
+        })
+    }
+
     fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> Result<()> {
         let length = checked_length(bytes.len() as u64)?;
         verify(digest, bytes, length)?;
@@ -513,6 +674,70 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::Mutex;
     use std::time::Instant;
+
+    #[test]
+    fn filesystem_namespace_marker_is_bounded_immutable_and_not_a_chunk() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = FilesystemChunks::open(temporary.path()).unwrap();
+        assert!(store.read_namespace_marker().unwrap().is_none());
+        store
+            .create_namespace_marker_if_absent(b"marker-a")
+            .unwrap();
+        store
+            .create_namespace_marker_if_absent(b"marker-a")
+            .unwrap();
+        assert!(store
+            .create_namespace_marker_if_absent(b"marker-b")
+            .is_err());
+        assert_eq!(store.read_namespace_marker().unwrap().unwrap(), b"marker-a");
+        assert!(store.get(&chunk_digest(b"marker-a"), 8).is_err());
+        assert!(store
+            .create_namespace_marker_if_absent(&vec![0; MAXIMUM_MARKER_BYTES + 1])
+            .is_err());
+        std::fs::write(
+            temporary.path().join(NAMESPACE_MARKER),
+            vec![0; MAXIMUM_MARKER_BYTES + 1],
+        )
+        .unwrap();
+        assert!(store.read_namespace_marker().is_err());
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(temporary.path().join(NAMESPACE_MARKER)).unwrap();
+            std::os::unix::fs::symlink("missing", temporary.path().join(NAMESPACE_MARKER)).unwrap();
+            assert!(store.read_namespace_marker().is_err());
+            assert!(store
+                .create_namespace_marker_if_absent(b"marker-a")
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn s3_namespace_marker_missing_replay_conflict_and_unavailable() {
+        let mock = MockS3::start();
+        let store = mock.store();
+        assert!(store.read_namespace_marker().unwrap().is_none());
+        store
+            .create_namespace_marker_if_absent(b"marker-a")
+            .unwrap();
+        store
+            .create_namespace_marker_if_absent(b"marker-a")
+            .unwrap();
+        assert!(store
+            .create_namespace_marker_if_absent(b"marker-b")
+            .is_err());
+        assert_eq!(store.read_namespace_marker().unwrap().unwrap(), b"marker-a");
+        assert_eq!(
+            mock.state.puts.load(Ordering::Acquire),
+            mock.state.conditional.load(Ordering::Acquire)
+        );
+        mock.state.oversized.store(true, Ordering::Release);
+        assert!(store.read_namespace_marker().is_err());
+        mock.state.oversized.store(false, Ordering::Release);
+        mock.state.reject_put.store(true, Ordering::Release);
+        assert!(store
+            .create_namespace_marker_if_absent(b"marker-a")
+            .is_err());
+    }
 
     #[test]
     fn filesystem_immutable_replay_bounds_and_integrity() {

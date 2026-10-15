@@ -8,6 +8,8 @@
 
 mod auth;
 mod chunk_storage;
+mod chunk_binding;
+pub use chunk_binding::{adopt_chunk_store, ChunkAdoptionProgress};
 pub mod chunks;
 mod config;
 mod diagnostics;

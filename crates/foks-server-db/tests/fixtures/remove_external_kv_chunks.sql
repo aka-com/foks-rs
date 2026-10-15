@@ -1,4 +1,9 @@
 -- Test-only reconstruction of schema 49; apply before removing accounting.
+DROP TRIGGER IF EXISTS chunk_storage_revision_insert;
+DROP TRIGGER IF EXISTS chunk_storage_revision_delete;
+DROP TRIGGER IF EXISTS chunk_storage_revision_update;
+DROP TABLE IF EXISTS chunk_storage_binding;
+DROP TABLE IF EXISTS chunk_storage_revision;
 DROP TRIGGER kv_file_chunks_account_insert;
 DROP TRIGGER kv_file_chunks_account_delete;
 DROP TRIGGER kv_file_chunks_account_update;

@@ -210,10 +210,11 @@ fn read_validated_backup_artifacts(
     }
     // Database::open is the single authority on which prior schemas migrate.
     // Unsupported versions still fail; no backup-specific migration is added.
-    let migrated = foks_server_db::Database::open(&database_path, database_config.clone())?;
+    let mut migrated = foks_server_db::Database::open(&database_path, database_config.clone())?;
     if migrated.has_external_chunks()? {
         return Err(crate::Error::Chunk("backup is not self-contained"));
     }
+    migrated.clear_private_chunk_storage_binding()?;
     if migrated.checkpoint()?.outcome() != foks_server_db::CheckpointOutcome::Complete {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
             "backup migration checkpoint incomplete",
@@ -875,6 +876,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let bootstrap = writer.call(move |database| {
         load_or_bootstrap(database, bootstrap_keys.as_ref(), &bootstrap_input)
     })?;
+    crate::chunk_binding::initialize_online(&writer.handle(), config.chunk_store.as_deref())?;
     // Existing durable state is validated before PKI helpers can call their
     // create-on-first-bootstrap key APIs. A missing persisted purpose key must
     // fail closed rather than leave replacement material behind.

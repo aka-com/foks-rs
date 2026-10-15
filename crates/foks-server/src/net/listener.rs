@@ -60,6 +60,23 @@ impl RunningServer {
 
     pub(crate) fn start_bound(config: Config, listeners: BoundListeners) -> Result<Self> {
         config.limits.validate()?;
+        if let Some(database) = &config.read_database {
+            let reader =
+                foks_server_db::ReadDatabase::open(&database.path, database.database.clone())?;
+            if config.chunk_store.is_some()
+                && reader.chunk_storage_binding()?.is_none_or(|binding| {
+                    binding.state != foks_server_db::ChunkStorageBindingState::Active
+                })
+            {
+                let writer = config.writer.as_ref().ok_or(Error::Chunk(
+                    "chunk storage initialization requires writer ownership",
+                ))?;
+                crate::chunk_binding::initialize_online(writer, config.chunk_store.as_deref())?;
+            }
+            crate::chunk_binding::verify_reader(&reader, config.chunk_store.as_deref())?;
+        } else if config.chunk_store.is_some() {
+            return Err(Error::Chunk("chunk storage requires a bound database"));
+        }
         let BoundListeners {
             probe,
             public,
