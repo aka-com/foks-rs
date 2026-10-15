@@ -4,8 +4,11 @@
 @import './shell.css' layer(base);
 @import './app.css' layer(components);
 /* First-run rules sit in the first feature sublayer, so the rules of every
-   later feature still outrank them. */
+   later feature still outrank them. Settings rules come next, so the files,
+   chat, teams and search rules outrank them as they did when the settings
+   rules were in the components layer. */
 @import '../screens/first-run.css' layer(features.first-run);
+@import '../screens/settings.css' layer(features.settings);
 @import '../screens/files.css' layer(features.files);
 @import '../screens/chat.css' layer(features.chat);
 @import '../screens/chat-picker.css' layer(features.chat);

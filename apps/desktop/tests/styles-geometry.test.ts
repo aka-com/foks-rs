@@ -9,7 +9,9 @@ import { collectSourceFiles } from './lib/source';
 const TOKENS = new URL('../kit/tokens.css', import.meta.url);
 const STYLE_ENTRY = new URL('../src/styles/index.css', import.meta.url);
 const SHELL = new URL('../src/styles/shell.css', import.meta.url);
+const COMPONENTS = new URL('../src/styles/app.css', import.meta.url);
 const FIRST_RUN = new URL('../src/screens/first-run.css', import.meta.url);
+const SETTINGS = new URL('../src/screens/settings.css', import.meta.url);
 const CASCADE = ['tokens', 'base', 'components', 'features', 'overrides'];
 /**
  * Classes that only the first-run screens render and only the first-run sheet
@@ -29,6 +31,27 @@ const FIRST_RUN_ONLY_CLASSES = [
   'operation-actions',
   'res',
   'server-address-row',
+];
+/**
+ * Classes that only the settings pages render and only the settings sheet
+ * selects. `settings-inset` is not listed: the group pages render it too.
+ */
+const SETTINGS_ONLY_CLASSES = [
+  'account-fact-link',
+  'account-main',
+  'account-more',
+  'device-list-actions',
+  'devrow',
+  'people-attention',
+  'server-list-label',
+  'settings-checkboxes',
+  'settings-main',
+  'settingslayout',
+  'subnav-page',
+  'subnav-side',
+  'swatch',
+  'swatches',
+  'verified-mark',
 ];
 
 /**
@@ -157,36 +180,64 @@ test('the stylesheet entry imports every stylesheet into a declared layer', asyn
     );
 });
 
-test('first-run rules live in the first-run sheet, below the other features', async () => {
-  const components = (
-    await readFile(new URL('../src/styles/app.css', import.meta.url), 'utf8')
-  ).replace(/\/\*[\s\S]*?\*\//g, '');
+/**
+ * Fails if `sheet` no longer selects one of `classes`, so that the list cannot
+ * go stale, or if app.css selects one, so that a rule for the feature is not
+ * added back to the components layer.
+ */
+async function assertFeatureClasses(
+  sheet: URL,
+  classes: string[],
+): Promise<void> {
+  const components = (await readFile(COMPONENTS, 'utf8')).replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  );
+  const feature = await readFile(sheet, 'utf8');
+  for (const name of classes) {
+    const selector = new RegExp(`\\.${name}(?![\\w-])`);
+    assert.ok(
+      selector.test(feature),
+      `${label(sheet)} no longer selects .${name}`,
+    );
+    assert.equal(
+      selector.test(components),
+      false,
+      `app.css selects .${name}; the rule belongs in ${label(sheet)}`,
+    );
+  }
+}
+
+/** The `features.*` sublayers, in the order the entry declares them. */
+async function featureLayers(): Promise<string[]> {
   const entry = await readFile(STYLE_ENTRY, 'utf8');
+  return [...entry.matchAll(/layer\((features\.[\w-]+)\)/g)].map(
+    (match) => match[1],
+  );
+}
+
+test('first-run rules live in the first-run sheet, below the other features', async () => {
+  const components = (await readFile(COMPONENTS, 'utf8')).replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  );
 
   assert.equal(
     /\.(?:first-run-main|local-[\w-]+|setup-[\w-]+)\b/.test(components),
     false,
     'app.css holds a first-run rule; it belongs in screens/first-run.css',
   );
-  const firstRun = await readFile(FIRST_RUN, 'utf8');
-  for (const name of FIRST_RUN_ONLY_CLASSES) {
-    const selector = new RegExp(`\\.${name}(?![\\w-])`);
-    assert.ok(
-      selector.test(firstRun),
-      `first-run.css no longer selects .${name}`,
-    );
-    assert.equal(
-      selector.test(components),
-      false,
-      `app.css selects .${name}, a first-run class; the rule belongs in screens/first-run.css`,
-    );
-  }
+  await assertFeatureClasses(FIRST_RUN, FIRST_RUN_ONLY_CLASSES);
   // The first-run rules were in the components layer, under every feature's
   // rules; as the first feature sublayer they keep that order.
-  const features = [...entry.matchAll(/layer\((features\.[\w-]+)\)/g)].map(
-    (match) => match[1],
-  );
-  assert.equal(features[0], 'features.first-run');
+  assert.equal((await featureLayers())[0], 'features.first-run');
+});
+
+test('settings rules live in the settings sheet, in the sublayer after first-run', async () => {
+  await assertFeatureClasses(SETTINGS, SETTINGS_ONLY_CLASSES);
+  // The settings rules were in the components layer, under the files, chat,
+  // teams and search rules; the sublayer after first-run keeps that order.
+  assert.equal((await featureLayers())[1], 'features.settings');
 });
 
 test('only the entry point imports a stylesheet', async () => {

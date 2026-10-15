@@ -137,58 +137,6 @@
   color: var(--faint);
 }
 
-/* Settings sub-navigation */
-.settingslayout {
-  display: grid;
-  grid-template-columns: 160px 1fr;
-  flex: 1;
-  min-height: 0;
-}
-
-/* Sidebar width reset */
-.settingslayout .side {
-  width: auto;
-}
-
-.subnav-side .tabs {
-  flex-direction: column;
-  align-items: stretch;
-  padding: 14px 8px;
-  border-bottom: 0;
-}
-
-.subnav-side .tab {
-  justify-content: flex-start;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  padding: 0 10px;
-}
-
-.subnav-side .tab.on::after {
-  left: 0;
-  right: auto;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  height: auto;
-  border-radius: 2px;
-}
-
-.subnav-page {
-  min-width: 0;
-  overflow: auto;
-}
-
-/* Settings inset alignment */
-.settings-inset .fr.line {
-  align-items: center;
-}
-
-/* Inset footnotes */
-.settings-main .fn + .sec {
-  margin-top: 18px;
-}
-
 /* Data and roster tables */
 .roster {
   max-width: 880px;
@@ -499,92 +447,11 @@
   margin: 2px 0 0;
 }
 
-/* Account tool links */
-.settings-main .account-more {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.settings-main .device-list-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-  margin: 18px 0;
-}
-.settings-main .device-list-actions .freshness {
-  margin: 0;
-}
-.settings-inset .devrow {
-  cursor: pointer;
-}
-.settings-inset .devrow:hover {
-  background: var(--hover);
-}
-
-.settings-main .account-fact-link {
-  height: auto;
-  padding: 2px 0;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  box-shadow: none;
-  color: var(--accent-ink);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.settings-main .account-fact-link:not([disabled]):hover {
-  background: none;
-  text-decoration: underline;
-}
-
-/* A verified server states its trust with a mark beside the name, so it
-   reads as a property of the name rather than a second value. */
-.verified-mark {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 6px;
-  color: var(--ok-ink);
-  vertical-align: -2px;
-}
-
-.verified-mark .ic {
-  width: 15px;
-  height: 15px;
-  transform: translate(-1px, 1px);
-}
-
-.group-settings p.fn,
-.settings-main p.fn,
-.settings-main .fn {
+.group-settings p.fn {
   font-size: 12.5px;
   color: var(--muted);
   margin: 8px 2px 0;
   line-height: 1.5;
-}
-
-/* Account page block spacing */
-.settings-main.account-main > * + * {
-  margin-top: 18px;
-}
-.settings-main.account-main > .server-list-label + .settings-inset {
-  margin-top: 6px;
-}
-
-/* Top block margin */
-.settings-main.account-main > :first-child {
-  margin-top: 10px;
-}
-
-/* Attention band spacing */
-.account-main > .people-attention > .band {
-  margin: 0;
-}
-
-.account-main > .people-attention > .band + .band {
-  margin-top: 6px;
 }
 
 .inset.danger {
@@ -1672,55 +1539,7 @@
 .nav-rows .sec + .rowline {
   border-top: 1px solid var(--line-soft);
 }
-.radios[aria-label='What to add'] .radio {
-  align-items: center;
-}
-.radios[aria-label='What to add'] .radio .rb {
-  margin-top: 0;
-}
 
-/* Security key actions menu */
-.menu[aria-label='Security key operations'] {
-  width: 300px;
-  max-width: calc(100vw - 24px);
-  font-size: 13px;
-}
-.menu[aria-label='Security key operations'] button {
-  min-height: 30px;
-  line-height: 1.35;
-}
-.menu[aria-label='Security key operations'] .menu-separator {
-  margin: 4px 3px;
-}
-
-.inset.settings-checkboxes > label {
-  display: flex;
-  align-items: center;
-  font-size: 13px;
-  line-height: 20px;
-  cursor: pointer;
-  flex-direction: row-reverse;
-  flex-wrap: nowrap;
-  justify-content: space-between;
-  gap: 16px;
-  margin: 0;
-  padding: 12px 14px;
-  min-height: 44px;
-}
-.inset.settings-checkboxes > label + label {
-  border-top: 1px solid var(--line-soft);
-}
-.inset.settings-checkboxes input {
-  accent-color: var(--accent);
-  flex: none;
-  width: 16px;
-  height: 16px;
-  margin: 0;
-}
-.inset.settings-checkboxes label:has(input:disabled) {
-  cursor: default;
-  color: var(--muted);
-}
 .cli-server-fields .fr .k {
   width: 112px;
 }
@@ -1731,50 +1550,6 @@
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
-}
-
-/* Rail color picker */
-.settings-inset .fr:has(.swatches) {
-  align-items: center;
-  padding-top: 9px;
-  padding-bottom: 9px;
-}
-.swatches {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  padding: 2px 0;
-}
-.swatch {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  padding: 0;
-  font-size: 12px;
-  color: var(--muted);
-  border-radius: var(--radius-sm);
-}
-.swatch i {
-  display: block;
-  width: 36px;
-  height: 24px;
-  border-radius: 6px;
-  box-shadow: inset 0 0 0 1px var(--line);
-}
-.swatch.on {
-  color: var(--ink);
-  font-weight: 600;
-}
-.swatch.on i {
-  box-shadow:
-    0 0 0 2px var(--btn-bg),
-    0 0 0 3.5px var(--ink);
-}
-.swatch:focus-visible i {
-  box-shadow:
-    0 0 0 2px var(--btn-bg),
-    0 0 0 3.5px var(--accent);
 }
 
 .copybox .v pre.instructions {
