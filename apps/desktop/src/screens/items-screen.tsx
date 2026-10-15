@@ -1,7 +1,8 @@
 /**
  * The Files browser: a folder tree on the left and the selected folder's
  * contents in the middle. The details panel is a third column that the shell
- * mounts beside this screen; this file owns the tree and the list/grid views.
+ * mounts beside this screen; this file composes the tree and the list/grid
+ * views, whose rows, cards, tree rows and drop zone are in `files/`.
  *
  * The kind filter is located at the top of the sidebar above the item counts.
  * Search and the New button are located in the window header. The browser

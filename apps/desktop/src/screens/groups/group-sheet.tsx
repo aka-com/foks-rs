@@ -13,7 +13,6 @@ import type { Party } from '../../model';
 /** The team-management actions that open a sheet. */
 export type GroupSheetKind =
   'add' | 'promote' | 'demote' | 'remove' | 'add-team' | 'create';
-type Sheet = GroupSheetKind | null;
 
 /** Selects the sheet component for a team-management action. */
 export function GroupSheet({
@@ -22,7 +21,7 @@ export function GroupSheet({
   onInvite,
   ...base
 }: GroupSheetBaseProps & {
-  sheet: Exclude<Sheet, null>;
+  sheet: GroupSheetKind;
   target: Party | null;
   /** Starts the invitation flow for someone without a FOKS account. */
   onInvite?: () => void;

@@ -5,8 +5,6 @@ import { Band } from '../../components';
 import type { Store } from '../../model';
 import type { GroupSettingsTab } from '../../location';
 
-type Tab = GroupSettingsTab;
-
 /**
  * The one standing condition a tab states before its own content. A group
  * whose setup never finished never reaches a tab at all, so the only band left
@@ -17,7 +15,7 @@ export function SituationBand({
   tab,
 }: {
   store: Store;
-  tab: Tab;
+  tab: GroupSettingsTab;
 }): ReactNode {
   if (
     store.kind === 'team' &&

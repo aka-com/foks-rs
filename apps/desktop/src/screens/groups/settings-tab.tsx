@@ -30,8 +30,6 @@ import { memberReads } from '../../exposure-review';
 import type { GroupSheetKind } from './group-sheet';
 import { SituationBand } from './situation-band';
 
-type Sheet = GroupSheetKind | null;
-
 function itemsOf(snapshot: AgentSnapshot, store: string): Item[] {
   return catalog(snapshot).filter((item) => item.store === store);
 }
@@ -48,7 +46,7 @@ export function SettingsTab({
 }: {
   snapshot: AgentSnapshot;
   store: Extract<Store, { kind: 'team' }>;
-  onSheet: (sheet: Sheet, party?: Party) => void;
+  onSheet: (sheet: GroupSheetKind | null, party?: Party) => void;
   onNavigate: (location: Location) => void;
   onCopy: (text: string) => void;
   onRange?: (raise: boolean) => void;

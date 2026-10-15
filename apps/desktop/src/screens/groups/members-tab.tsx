@@ -39,8 +39,6 @@ import { sortRoster, targetReason } from '../../model/group-model';
 import type { GroupSheetKind } from './group-sheet';
 import { SituationBand } from './situation-band';
 
-type Sheet = GroupSheetKind | null;
-
 /** The mark before a member's name: an initial, or a machine's glyph. */
 function PartyMark({ party }: { party: Party }): ReactNode {
   const machine = isMachine(party);
@@ -72,7 +70,7 @@ function MemberRow({
   party: Party;
   manageable: boolean;
   menuOpen: boolean;
-  onSheet: (sheet: Sheet, party?: Party) => void;
+  onSheet: (sheet: GroupSheetKind | null, party?: Party) => void;
 }): ReactNode {
   const actionable = manageable && canTarget(snapshot, party);
   const reason = actionable
@@ -388,7 +386,7 @@ export function MembersTab({
 }: {
   snapshot: AgentSnapshot;
   store: Store;
-  onSheet: (sheet: Sheet, party?: Party) => void;
+  onSheet: (sheet: GroupSheetKind | null, party?: Party) => void;
   /**
    * Why the roster cannot be added to, and why no federated team can be added —
    * each row's own menu states its own reason, because the two are decided
