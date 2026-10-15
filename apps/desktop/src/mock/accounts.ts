@@ -1,8 +1,9 @@
 /**
  * The mock's account and team commands, the members of
  * `bridge/commands-accounts.ts`, over the shared store and roster records.
- * The account listing and the team changes answer at the wire level through
- * the mock host; the other members answer with decoded values.
+ * The account listing, the team changes, group discovery, the sign-in
+ * requests, `configureWebAdmin` and `botAccount` answer at the wire level
+ * through the mock host; the other members answer with decoded values.
  */
 
 import type {
@@ -16,7 +17,7 @@ import type { accountCommands } from '../bridge/commands-accounts';
 import { parseRole, roleRank, visibilityOf } from '../model/roles';
 import type { Store, StoreRef } from '../model/types';
 import type { RenameProgress } from '../rename-contract';
-import type { SsoPurpose } from '../sso-contract';
+import type { SsoAction, SsoPurpose } from '../sso-contract';
 import { mockCommand, type MockCommand } from './host';
 import { failure, type MockDomain, type MockState } from './state';
 import { accountWire } from './wire';
@@ -39,6 +40,11 @@ export const ACCOUNT_HOST_MEMBERS = [
   'addFederatedTeamMember',
   'removeFederatedGroup',
   'rerunFederatedTeamMemberAdd',
+  'discoverGroups',
+  'configureWebAdmin',
+  'botAccount',
+  'sso',
+  'openSsoBrowser',
 ] as const satisfies readonly (keyof ReturnType<typeof accountCommands>)[];
 
 /**
@@ -59,11 +65,26 @@ function assertNamedGroup(stores: readonly Store[], storeId: string): void {
 }
 
 /**
- * The commands of `ACCOUNT_HOST_MEMBERS`: the account listing and the team
- * roster and federation changes, answered with wire JSON.
+ * The commands of `ACCOUNT_HOST_MEMBERS`: the account listing, the team
+ * roster and federation changes, group discovery, the sign-in requests,
+ * `configure_web_admin` and `bot_account_request`, answered with wire JSON.
  */
 export function mockAccountHost(state: MockState): Record<string, MockCommand> {
-  const { snapshot, stores, accounts, restoreFirstRunAccount } = state;
+  const {
+    snapshot,
+    stores,
+    accounts,
+    restoreFirstRunAccount,
+    firstRunFixture,
+  } = state;
+  const ssoModes = new Map<string, SsoPurpose>();
+  const fixtureEngineeringStore = snapshot.stores.find(
+    (store) => store.id === 'team:eng',
+  );
+  const fixtureEngineering =
+    fixtureEngineeringStore?.kind === 'team'
+      ? fixtureEngineeringStore
+      : undefined;
   return {
     list_accounts: () => {
       restoreFirstRunAccount();
@@ -351,22 +372,137 @@ export function mockAccountHost(state: MockState): Record<string, MockCommand> {
         return { applied: true };
       },
     ),
+    discover_groups: mockCommand(
+      async ({
+        profile,
+        accountAlias,
+      }: {
+        profile: string;
+        accountAlias: string;
+      }) => {
+        if (
+          profile !== firstRunFixture.invited.profile ||
+          accountAlias !== 'sol'
+        ) {
+          return { accountAlias, groups: [] };
+        }
+        const engineering = stores.find(
+          (store) => store.id === fixtureEngineering?.id,
+        );
+        if (engineering?.kind === 'team') engineering.account = accountAlias;
+        if (
+          engineering?.kind === 'team' &&
+          !state.parties.some(
+            (party) =>
+              party.store === engineering.id && party.username === accountAlias,
+          )
+        ) {
+          state.parties = [
+            ...state.parties,
+            {
+              store: engineering.id,
+              username: accountAlias,
+              label: 'you',
+              party_kind: 'user',
+              generation: 1,
+              locally_manageable: true,
+              party_id_hex: `01${'6'.repeat(64)}`,
+              source_role: { role: 'Member', visibility: 0 },
+              destination_role: { role: 'Member', visibility: 0 },
+            },
+          ];
+        }
+        return {
+          accountAlias,
+          groups: [
+            {
+              alias: 'engineering',
+              accountAlias,
+              teamIdHex:
+                fixtureEngineering?.team_id_hex ?? `03${'3'.repeat(64)}`,
+              kind: 'named',
+              name: 'Engineering',
+              active: true,
+            },
+          ],
+        };
+      },
+    ),
+    configure_web_admin: () => ({ ok: true }),
+    bot_account_request: () => ({
+      rows: [],
+      message: 'Bot credentials require a connected agent.',
+    }),
+    sso_request: mockCommand(
+      ({
+        profile,
+        accountAlias,
+        action,
+      }: {
+        profile: string;
+        accountAlias: string;
+        action: SsoAction;
+      }) => {
+        const key = `${profile}/${accountAlias}`;
+        const begins =
+          action.action === 'begin' || action.action === 'begin-yubi-signup';
+        if (begins)
+          ssoModes.set(
+            key,
+            action.action === 'begin' ? action.purpose : 'signup',
+          );
+        return {
+          operationId:
+            action.action === 'account-status' ? null : '1'.repeat(32),
+          accountAlias,
+          purpose: ssoModes.get(key) ?? 'reauthenticate',
+          accountStatus:
+            action.action === 'account-status'
+              ? {
+                  state: 'linked',
+                  rolloutMode: 1,
+                  providerBlockedReason: 0,
+                  issuer: 'https://identity.example',
+                  authorizationEpoch: 1,
+                  authorizationGeneration: 1,
+                }
+              : null,
+          state:
+            action.action === 'account-status'
+              ? 'linked'
+              : begins
+                ? 'waiting'
+                : action.action === 'poll'
+                  ? 'ready'
+                  : action.action === 'cancel'
+                    ? 'cancelled'
+                    : action.action.startsWith('finish-')
+                      ? 'complete'
+                      : 'waiting',
+          browserAvailable: begins || action.action === 'status',
+          expiresAtMs: Date.now() + 600000,
+          serviceAccess: action.action.startsWith('finish-'),
+        };
+      },
+    ),
+    open_sso_browser: () => ({ ok: true }),
   };
 }
 
+/**
+ * The account members the mock answers with decoded values. The roster,
+ * federation and group detail listings return fixture records that carry
+ * facts their native responses do not. `openWebAdmin`, `setLocalAccountAlias`,
+ * `renameAccount` and `adapterClock` reject with plain `Error`s, which the
+ * mock host reports as faults in the mock rather than as host failures; each
+ * needs the CommandError its native command rejects with before it can
+ * answer there.
+ */
 export function mockAccountCommands(
   state: MockState,
 ): MockDomain<typeof accountCommands, (typeof ACCOUNT_HOST_MEMBERS)[number]> {
-  const { snapshot, stores, accounts, firstRunFixture } = state;
-  const ssoModes = new Map<string, SsoPurpose>();
+  const { accounts } = state;
   const renames = new Map<string, RenameProgress[]>();
-  const fixtureEngineeringStore = snapshot.stores.find(
-    (store) => store.id === 'team:eng',
-  );
-  const fixtureEngineering =
-    fixtureEngineeringStore?.kind === 'team'
-      ? fixtureEngineeringStore
-      : undefined;
   return {
     listGroupDetails: (storeId) =>
       Promise.resolve({
@@ -395,14 +531,9 @@ export function mockAccountCommands(
           .filter((entry) => entry.store === storeId)
           .map((entry) => ({ ...entry })),
       ),
-    configureWebAdmin: async () => ({ ok: true }),
     openWebAdmin: async () => {
       throw new Error('Host administration requires a connected host.');
     },
-    botAccount: async () => ({
-      rows: [],
-      message: 'Bot credentials require a connected agent.',
-    }),
     setLocalAccountAlias: async (store, label) => {
       if (
         !label ||
@@ -478,95 +609,6 @@ export function mockAccountCommands(
         admission: 'trusted',
         localTime: Math.floor(Date.now() / 1_000),
         resumesAt: null,
-      };
-    },
-    sso: async (profile, accountAlias, action) => {
-      const key = `${profile}/${accountAlias}`;
-      const begins =
-        action.action === 'begin' || action.action === 'begin-yubi-signup';
-      if (begins)
-        ssoModes.set(
-          key,
-          action.action === 'begin' ? action.purpose : 'signup',
-        );
-      return {
-        operationId: action.action === 'account-status' ? null : '1'.repeat(32),
-        accountAlias,
-        purpose: ssoModes.get(key) ?? 'reauthenticate',
-        accountStatus:
-          action.action === 'account-status'
-            ? {
-                state: 'linked',
-                rolloutMode: 1,
-                providerBlockedReason: 0,
-                issuer: 'https://identity.example',
-                authorizationEpoch: 1,
-                authorizationGeneration: 1,
-              }
-            : null,
-        state:
-          action.action === 'account-status'
-            ? 'linked'
-            : begins
-              ? 'waiting'
-              : action.action === 'poll'
-                ? 'ready'
-                : action.action === 'cancel'
-                  ? 'cancelled'
-                  : action.action.startsWith('finish-')
-                    ? 'complete'
-                    : 'waiting',
-        browserAvailable: begins || action.action === 'status',
-        expiresAtMs: Date.now() + 600000,
-        serviceAccess: action.action.startsWith('finish-'),
-      };
-    },
-    openSsoBrowser: async () => ({ ok: true }),
-    discoverGroups: async (profile, accountAlias) => {
-      if (
-        profile !== firstRunFixture.invited.profile ||
-        accountAlias !== 'sol'
-      ) {
-        return { accountAlias, groups: [] };
-      }
-      const engineering = stores.find(
-        (store) => store.id === fixtureEngineering?.id,
-      );
-      if (engineering?.kind === 'team') engineering.account = accountAlias;
-      if (
-        engineering?.kind === 'team' &&
-        !state.parties.some(
-          (party) =>
-            party.store === engineering.id && party.username === accountAlias,
-        )
-      ) {
-        state.parties = [
-          ...state.parties,
-          {
-            store: engineering.id,
-            username: accountAlias,
-            label: 'you',
-            party_kind: 'user',
-            generation: 1,
-            locally_manageable: true,
-            party_id_hex: `01${'6'.repeat(64)}`,
-            source_role: { role: 'Member', visibility: 0 },
-            destination_role: { role: 'Member', visibility: 0 },
-          },
-        ];
-      }
-      return {
-        accountAlias,
-        groups: [
-          {
-            alias: 'engineering',
-            accountAlias,
-            teamIdHex: fixtureEngineering?.team_id_hex ?? `03${'3'.repeat(64)}`,
-            kind: 'named',
-            name: 'Engineering',
-            active: true,
-          },
-        ],
       };
     },
   };

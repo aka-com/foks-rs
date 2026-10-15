@@ -18,7 +18,9 @@ import { mockCommand, mockHost } from '../src/mock/host';
 import { mockState } from '../src/mock/state';
 import { MOCK_YUBI_COMMANDS } from '../src/mock/yubikey';
 import { accountWire, serverStatusWire } from '../src/mock/wire';
+import type { YubiCommand } from '../src/bridge/yubikey';
 import type { Account } from '../src/model/types';
+import type { SsoAction } from '../src/sso-contract';
 
 /** A wire value as it crosses the IPC boundary. */
 const overWire = (value: unknown): unknown =>
@@ -340,4 +342,129 @@ test('mock enrollment answers pass the decoders and failures carry the host code
     origin: 'invoke',
     ambiguous: false,
   });
+});
+
+test('every mock YubiKey and account host response passes the bridge decoders', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const key = { profile: 'personal', alias: 'primary key' };
+  const card = {
+    deviceName: 'Pocket YubiKey',
+    cardSerial: 20993145,
+    signingSlot: 0x82,
+    pqSlot: 0x83,
+    pin: '123456',
+    puk: '12345678',
+    pinAttempts: 3,
+    pukAttempts: 3,
+  };
+  const passphrase = {
+    ...key,
+    pin: '123456',
+    passphrase: 'correct horse',
+    confirmation: 'correct horse',
+  };
+  const requests: YubiCommand[] = [
+    {
+      command: 'create_yubi_account',
+      args: {
+        ...card,
+        profile: 'personal',
+        alias: 'spare key',
+        username: 'satoshi',
+        email: 'satoshi@example.com',
+        invite: '',
+      },
+    },
+    { command: 'resume_yubi_account', args: { ...key, pin: '123456' } },
+    {
+      command: 'provision_yubi_device',
+      args: { ...card, accountStoreId: 'acct:personal', targetAlias: 'laptop' },
+    },
+    {
+      command: 'sync_yubi_account',
+      args: { ...key, pin: '123456', withFederation: true },
+    },
+    { command: 'yubi_pin_status', args: key },
+    {
+      command: 'change_yubi_pin',
+      args: { ...key, oldPin: '123456', newPin: '654321' },
+    },
+    { command: 'set_yubi_passphrase', args: passphrase },
+    { command: 'change_yubi_passphrase', args: passphrase },
+    {
+      command: 'verify_yubi_passphrase',
+      args: { ...key, pin: '123456', passphrase: 'correct horse' },
+    },
+    {
+      command: 'change_yubi_puk',
+      args: { ...key, oldPuk: '12345678', newPuk: '87654321' },
+    },
+    {
+      command: 'unblock_yubi_pin',
+      args: { ...key, puk: '12345678', newPin: '654321' },
+    },
+    { command: 'rotate_yubi_management_key', args: { ...key, pin: '123456' } },
+    { command: 'resume_yubi_management_key', args: key },
+    {
+      command: 'recover_yubi_management_key',
+      args: { accountStoreId: 'acct:personal', yubiAlias: 'primary key' },
+    },
+    { command: 'recover_yubi_subkey', args: { ...key, pin: '123456' } },
+    {
+      command: 'revoke_yubi_device',
+      args: {
+        accountStoreId: 'acct:personal',
+        yubiAlias: 'primary key',
+        confirmation: 'primary key',
+      },
+    },
+  ];
+  assert.deepEqual(
+    requests.map((request) => request.command).sort(),
+    [...MOCK_YUBI_COMMANDS].sort(),
+  );
+  for (const request of requests)
+    await assert.doesNotReject(bridge.runYubi(request), request.command);
+  assert.deepEqual(await bridge.listYubiCards('personal'), [
+    { serial: 20993145 },
+  ]);
+  assert.ok(
+    (await bridge.listYubiAccounts('personal')).some(
+      (entry) => entry.alias === 'spare key',
+    ),
+  );
+
+  assert.deepEqual(await bridge.configureWebAdmin('acme', 'work', 'browser'), {
+    ok: true,
+  });
+  assert.deepEqual(
+    await bridge.openSsoBrowser('acme', 'work', '1'.repeat(32)),
+    { ok: true },
+  );
+  assert.deepEqual(
+    await bridge.botAccount('acme', 'work', { action: 'list' }),
+    { rows: [], message: 'Bot credentials require a connected agent.' },
+  );
+  const ssoActions: SsoAction[] = [
+    { action: 'account-status', pin: null },
+    { action: 'begin', purpose: 'link-existing', pin: null },
+    { action: 'poll', operation_id: '1'.repeat(32) },
+  ];
+  for (const action of ssoActions)
+    await assert.doesNotReject(
+      bridge.sso('acme', 'work', action),
+      action.action,
+    );
+  assert.deepEqual(await bridge.discoverGroups('personal', 'personal'), {
+    accountAlias: 'personal',
+    groups: [],
+  });
+  const invited = bridge.firstRunFixture?.invited;
+  assert.ok(invited);
+  assert.deepEqual(
+    (
+      await bridge.discoverGroups(invited.profile, invited.accountAlias)
+    ).groups.map((group) => group.alias),
+    ['engineering'],
+  );
 });
