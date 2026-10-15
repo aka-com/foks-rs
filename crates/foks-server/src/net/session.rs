@@ -57,6 +57,8 @@ pub(crate) struct ServerData {
     memory: Arc<super::memory::Pools>,
     kex_relay: Arc<kex::Relay>,
     realtime: crate::services::realtime::RealtimeService,
+    // Exclusion outlives all contained resources, including abandoned work.
+    _storage_lease: Option<Arc<crate::storage_lease::StorageLease>>,
 }
 
 pub(crate) struct OwnedPassphraseMutation {
@@ -112,6 +114,11 @@ impl ServerData {
         rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     ) -> Result<Self> {
         crate::config::validate_vhost_management_host(&config.vhost_management_host)?;
+        let storage_lease = config
+            .read_database
+            .as_ref()
+            .map(|db| crate::storage_lease::StorageLease::shared(&db.path).map(Arc::new))
+            .transpose()?;
         let probe_response = Arc::clone(&config.probe_response);
         let probe = foks_proto::ProbeResponse::decode(&probe_response)?;
         let first = probe
@@ -135,6 +142,7 @@ impl ServerData {
             .ok_or(crate::Error::Config("invalid bootstrap probe endpoint"))?
             .to_owned();
         Ok(Self {
+            _storage_lease: storage_lease,
             sso: config.sso.clone(),
             web_admin: config.web_admin.clone(),
             vhost_management_host: config.vhost_management_host.clone(),

@@ -1016,8 +1016,8 @@ fn kv_file_chunk(
 ) -> Result<Option<StoredKvFileChunk>> {
     let mut statement = connection.prepare(
         "SELECT c.ciphertext, c.external_digest, c.external_ciphertext_bytes,
-                c.external_encoded_bytes, c.final_chunk
-         FROM kv_file_chunks c
+                c.external_encoded_bytes, c.final_chunk, o.object_id,o.namespace_id,o.object_key,o.key_format
+         FROM kv_file_chunks c LEFT JOIN chunk_objects o ON o.object_id=c.external_object_id
          JOIN kv_file_uploads f ON f.uid = c.uid AND f.file_id = c.file_id
          WHERE c.uid = ?1 AND c.file_id = ?2 AND c.clear_offset = ?3
            AND f.complete = 1 AND f.reclaiming = 0",
@@ -1027,7 +1027,7 @@ fn kv_file_chunk(
         return Ok(None);
     };
     Ok(Some(StoredKvFileChunk {
-        payload: crate::kv_objects::payload_from_row(row, 0)?,
+        payload: crate::kv_objects::payload_from_row(row, 0, 5)?,
         offset,
         final_chunk: row.budgeted_get(4)?,
     }))

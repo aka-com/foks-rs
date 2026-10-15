@@ -16,11 +16,57 @@ pub enum ChunkReservationAction {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChunkReservation {
     pub object_id: [u8; 32],
+    pub object_key: String,
+    pub key_format: u64,
     pub namespace_id: [u8; 16],
     pub digest: [u8; 32],
     pub encoded_bytes: u64,
     pub attempt_id: Option<[u8; 16]>,
     pub action: ChunkReservationAction,
+}
+impl ChunkReservation {
+    pub fn object(&self) -> ChunkObject {
+        ChunkObject {
+            object_id: self.object_id,
+            namespace_id: Some(self.namespace_id),
+            object_key: self.object_key.clone(),
+            key_format: self.key_format,
+            digest: self.digest,
+            encoded_bytes: self.encoded_bytes,
+        }
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChunkObject {
+    pub object_id: [u8; 32],
+    pub namespace_id: Option<[u8; 16]>,
+    pub object_key: String,
+    pub key_format: u64,
+    pub digest: [u8; 32],
+    pub encoded_bytes: u64,
+}
+impl ChunkObject {
+    pub fn legacy(digest: [u8; 32], encoded_bytes: u64) -> Self {
+        Self {
+            object_id: digest,
+            namespace_id: None,
+            object_key: object_key(&digest),
+            key_format: 1,
+            digest,
+            encoded_bytes,
+        }
+    }
+    pub fn validate_key(&self) -> Result<()> {
+        let expected = match self.key_format {
+            1 => object_key(&self.digest),
+            2 => format!("v2-{}", object_key(&self.object_id)),
+            _ => return Err(Error::Invalid("unknown physical key format")),
+        };
+        if self.object_key != expected {
+            return Err(Error::Invalid("physical key does not match incarnation"));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ChunkPhysicalUsage {
@@ -38,6 +84,9 @@ pub struct ChunkPhysicalUsage {
     pub missing_objects: u64,
     pub missing_referenced_objects: u64,
     pub oldest_attempt_micros: Option<u64>,
+    pub deleting_bytes: u64,
+    pub deleting_objects: u64,
+    pub tombstones: u64,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChunkInventoryCheckpoint {
@@ -86,11 +135,11 @@ fn usage(c: &Connection) -> Result<ChunkPhysicalUsage> {
     };
     let generation: i64 = r.budgeted_get(6)?;
     value.admission_rejections = unsigned(r.budgeted_get(7)?)?;
-    let (objects,bytes,unknown):(i64,i64,i64)=c.query_row("SELECT count(*),coalesce(sum(encoded_bytes),0),coalesce(sum(digest IS NULL),0) FROM chunk_objects WHERE references_count=0",[],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?,r.budgeted_get(2)?)))?;
+    let (objects,bytes,unknown):(i64,i64,i64)=c.query_row("SELECT count(*),coalesce(sum(encoded_bytes),0),coalesce(sum(digest IS NULL),0) FROM chunk_objects WHERE references_count=0 AND state!=5",[],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?,r.budgeted_get(2)?)))?;
     value.orphan_objects = unsigned(objects)?;
     value.orphan_bytes = unsigned(bytes)?;
     value.unknown_objects = unsigned(unknown)?;
-    let (unknown_bytes,missing):(i64,i64)=c.query_row("SELECT coalesce(sum(CASE WHEN digest IS NULL THEN encoded_bytes ELSE 0 END),0),coalesce(sum(inventory_seen!=?1),0) FROM chunk_objects",[generation],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?)))?;
+    let (unknown_bytes,missing):(i64,i64)=c.query_row("SELECT coalesce(sum(CASE WHEN digest IS NULL THEN encoded_bytes ELSE 0 END),0),coalesce(sum(inventory_seen!=?1),0) FROM chunk_objects WHERE state!=5",[generation],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?)))?;
     value.unknown_bytes = unsigned(unknown_bytes)?;
     value.missing_objects = unsigned(missing)?;
     let missing: i64 = c.query_row(
@@ -105,6 +154,10 @@ fn usage(c: &Connection) -> Result<ChunkPhysicalUsage> {
         |r| r.budgeted_get(0),
     )?;
     value.oldest_attempt_micros = oldest.map(unsigned).transpose()?;
+    let (bytes,objects,tombstones):(i64,i64,i64)=c.query_row("SELECT coalesce(sum(CASE WHEN state=4 THEN encoded_bytes ELSE 0 END),0),coalesce(sum(state=4),0),coalesce(sum(state=5),0) FROM chunk_objects",[],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?,r.budgeted_get(2)?)))?;
+    value.deleting_bytes = unsigned(bytes)?;
+    value.deleting_objects = unsigned(objects)?;
+    value.tombstones = unsigned(tombstones)?;
     Ok(value)
 }
 impl ReadDatabase {
@@ -151,8 +204,8 @@ impl Database {
         if !totals.5 {
             return reject(tx, "chunk inventory is incomplete");
         }
-        let stored:Option<(Vec<u8>,Option<Vec<u8>>,i64,i64)>=tx.query_row("SELECT object_id,namespace_id,encoded_bytes,state FROM chunk_objects WHERE object_key=?1",[object_key(digest)],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?,r.budgeted_get(2)?,r.budgeted_get(3)?))).optional()?;
-        if let Some((id, stored_ns, size, state)) = stored {
+        let stored:Option<(Vec<u8>,Option<Vec<u8>>,i64,i64,String,i64)>=tx.query_row("SELECT object_id,namespace_id,encoded_bytes,state,object_key,key_format FROM chunk_objects WHERE digest=?1 AND state IN(1,2,3)",[digest.as_slice()],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?,r.budgeted_get(2)?,r.budgeted_get(3)?,r.budgeted_get(4)?,r.budgeted_get(5)?))).optional()?;
+        if let Some((id, stored_ns, size, state, key, key_format)) = stored {
             if stored_ns.as_deref() != Some(ns.as_slice()) || unsigned(size)? != encoded_bytes {
                 return Err(Error::Invalid("physical object binding mismatch"));
             }
@@ -161,19 +214,10 @@ impl Database {
                 1 | 2 => ChunkReservationAction::Verify,
                 _ => return Err(Error::Invalid("physical object state")),
             };
-            // Inventory-only digest names need content verification before use.
-            let known: bool = tx.query_row(
-                "SELECT digest IS NOT NULL FROM chunk_objects WHERE object_id=?1",
-                [&id],
-                |r| r.budgeted_get(0),
-            )?;
-            let action = if known {
-                action
-            } else {
-                ChunkReservationAction::Verify
-            };
             let result = ChunkReservation {
                 object_id: id.try_into().map_err(|_| Error::Invalid("object ID"))?,
+                object_key: key,
+                key_format: unsigned(key_format)?,
                 namespace_id: ns,
                 digest: *digest,
                 encoded_bytes,
@@ -199,11 +243,22 @@ impl Database {
         {
             return reject(tx, "physical chunk capacity exhausted");
         }
-        tx.execute("INSERT INTO chunk_objects(object_id,namespace_id,object_key,digest,encoded_bytes,state,inventory_seen) VALUES(?1,?2,?3,?1,?4,1,(SELECT inventory_generation FROM chunk_object_totals WHERE singleton=1))",params![digest.as_slice(),ns.as_slice(),object_key(digest),sql_integer(encoded_bytes)?])?;
-        tx.execute("INSERT INTO chunk_object_attempts(attempt_id,object_id,namespace_id,outcome,created_at) VALUES(?1,?2,?3,1,?4)",params![attempt_id.as_slice(),digest.as_slice(),ns.as_slice(),sql_integer(now)?])?;
+        // Random admission IDs generate non-reusable physical incarnations. The
+        // hash is internal naming only, not client cryptography.
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"foks-object-incarnation-v2\0");
+        h.update(ns);
+        h.update(attempt_id);
+        let object_id: [u8; 32] = h.finalize().into();
+        let key = format!("v2-{}", object_key(&object_id));
+        tx.execute("INSERT INTO chunk_objects(object_id,namespace_id,object_key,digest,encoded_bytes,key_format,state,inventory_seen) VALUES(?1,?2,?3,?4,?5,2,1,(SELECT inventory_generation FROM chunk_object_totals WHERE singleton=1))",params![object_id.as_slice(),ns.as_slice(),key,digest.as_slice(),sql_integer(encoded_bytes)?])?;
+        tx.execute("INSERT INTO chunk_object_attempts(attempt_id,object_id,namespace_id,outcome,created_at) VALUES(?1,?2,?3,1,?4)",params![attempt_id.as_slice(),object_id.as_slice(),ns.as_slice(),sql_integer(now)?])?;
         tx.commit()?;
         Ok(ChunkReservation {
-            object_id: *digest,
+            object_id,
+            object_key: key,
+            key_format: 2,
             namespace_id: ns,
             digest: *digest,
             encoded_bytes,
@@ -314,14 +369,19 @@ impl Database {
             if entry.key.is_empty() || entry.key.len() > 1024 || entry.key == "_foks_namespace_v1" {
                 return Err(Error::Invalid("inventory object key"));
             }
-            let stored: Option<(Vec<u8>, i64)> = tx
+            let stored: Option<(Vec<u8>, i64, i64)> = tx
                 .query_row(
-                    "SELECT object_id,encoded_bytes FROM chunk_objects WHERE object_key=?1",
+                    "SELECT object_id,encoded_bytes,state FROM chunk_objects WHERE object_key=?1",
                     [&entry.key],
-                    |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?)),
+                    |r| Ok((r.budgeted_get(0)?, r.budgeted_get(1)?, r.budgeted_get(2)?)),
                 )
                 .optional()?;
-            if let Some((id, size)) = stored {
+            if let Some((id, size, state)) = stored {
+                if state == 5 {
+                    return Err(Error::Invalid(
+                        "retired object reappeared; collection safety violated",
+                    ));
+                }
                 if unsigned(size)? != entry.encoded_bytes {
                     return Err(Error::Invalid("inventory object length mismatch"));
                 }
@@ -375,6 +435,7 @@ fn inventory_checkpoint(c: &Connection) -> Result<ChunkInventoryCheckpoint> {
     })
 }
 fn validate_token(c: &Connection, t: &ChunkReservation, present: bool) -> Result<()> {
+    t.object().validate_key()?;
     if namespace(c)? != t.namespace_id {
         return Err(Error::Invalid("publication namespace changed"));
     }
@@ -383,7 +444,8 @@ fn validate_token(c: &Connection, t: &ChunkReservation, present: bool) -> Result
         len >= 0
             && len as u64 == t.encoded_bytes
             && digest.as_deref().is_none_or(|d| d == t.digest)
-            && key == object_key(&t.digest)
+            && key == t.object_key
+            && matches!(state, 1..=3)
             && (!present || state == 3 && digest.is_some())
     }) {
         return Err(Error::Invalid("publication token mismatch"));
@@ -393,7 +455,7 @@ fn validate_token(c: &Connection, t: &ChunkReservation, present: bool) -> Result
 /// Used inside the same transaction that creates an external reference.
 pub(crate) fn require_present(c: &Connection, digest: &[u8; 32], length: u64) -> Result<[u8; 32]> {
     let ns = namespace(c)?;
-    let id:Option<Vec<u8>>=c.query_row("SELECT object_id FROM chunk_objects WHERE digest=?1 AND namespace_id=?2 AND encoded_bytes=?3 AND state=3",params![digest.as_slice(),ns.as_slice(),sql_integer(length)?],|r|r.budgeted_get(0)).optional()?;
+    let id:Option<Vec<u8>>=c.query_row("SELECT object_id FROM chunk_objects WHERE digest=?1 AND namespace_id=?2 AND encoded_bytes=?3 AND state IN(1,2,3) AND state=3",params![digest.as_slice(),ns.as_slice(),sql_integer(length)?],|r|r.budgeted_get(0)).optional()?;
     id.ok_or(Error::Invalid("external object is not durably accounted"))?
         .try_into()
         .map_err(|_| Error::Invalid("object ID"))
@@ -432,7 +494,7 @@ mod tests {
             )
             .unwrap();
         db.connection.execute("INSERT INTO kv_file_uploads(uid,file_id,exact_metadata,created_at,updated_at) VALUES(?1,?2,X'',0,0)",params![[1u8;33].as_slice(),[2u8;16].as_slice()]).unwrap();
-        db.connection.execute("INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk,external_digest,external_ciphertext_bytes,external_encoded_bytes,external_object_id) VALUES(?1,?2,0,X'',0,X'',?3,1,10,?3)",params![[1u8;33].as_slice(),[2u8;16].as_slice(),digest.as_slice()]).unwrap();
+        db.connection.execute("INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk,external_digest,external_ciphertext_bytes,external_encoded_bytes,external_object_id) VALUES(?1,?2,0,X'',0,X'',?3,1,10,(SELECT object_id FROM chunk_objects WHERE digest=?3 AND state=3))",params![[1u8;33].as_slice(),[2u8;16].as_slice(),digest.as_slice()]).unwrap();
     }
     #[test]
     fn ambiguity_stays_charged_and_exact_positive_reconciliation_does_not_free_attempt() {
@@ -650,7 +712,7 @@ mod tests {
             &cp,
             &[
                 ChunkInventoryEntry {
-                    key: object_key(&[1; 32]),
+                    key: token.object_key.clone(),
                     encoded_bytes: 1,
                 },
                 ChunkInventoryEntry {

@@ -66,6 +66,18 @@ enum Command {
         #[arg(long)]
         restart: bool,
     },
+    /// Reclaim one offline batch of unreferenced, terminal filesystem objects.
+    /// S3 backends remain report-only until mutation termination is qualified.
+    CollectChunkStore {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long, default_value_t = 128)]
+        maximum_objects: usize,
+        #[arg(long,default_value_t=1024*1024*1024)]
+        maximum_bytes: u64,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Installs a validated backup into an empty installation.
     Restore(RestoreArguments),
     /// Atomically rewraps installation keys under a new operator root key.
@@ -424,6 +436,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::ExternalizeChunks { config } => externalize_chunks(config),
         Command::AdoptChunkStore { config } => adopt_chunk_store(config),
         Command::InventoryChunkStore { config, restart } => inventory_chunk_store(config, restart),
+        Command::CollectChunkStore {
+            config,
+            maximum_objects,
+            maximum_bytes,
+            dry_run,
+        } => collect_chunk_store(config, maximum_objects, maximum_bytes, dry_run),
         Command::Restore(arguments) => restore(arguments),
         Command::RotateOperatorRoot(arguments) => rotate_operator_root(arguments),
         Command::BeginHostKeyRotation { config } => rotate_host_key(config),
@@ -834,6 +852,31 @@ fn inventory_chunk_store(path: PathBuf, restart: bool) -> Result<(), Box<dyn std
         },
     )?;
     println!("inventory_complete={} present_bytes={} reserved_bytes={} uncertain_bytes={} objects={} unresolved_attempts={} admission_rejections={} orphan_objects={} orphan_bytes={} unknown_objects={} unknown_bytes={} missing_objects={} missing_referenced_objects={} oldest_attempt_micros={:?}",usage.inventory_complete,usage.present_bytes,usage.reserved_bytes,usage.uncertain_bytes,usage.objects,usage.unresolved_attempts,usage.admission_rejections,usage.orphan_objects,usage.orphan_bytes,usage.unknown_objects,usage.unknown_bytes,usage.missing_objects,usage.missing_referenced_objects,usage.oldest_attempt_micros);
+    Ok(())
+}
+
+fn collect_chunk_store(
+    path: PathBuf,
+    maximum_objects: usize,
+    maximum_bytes: u64,
+    dry_run: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = foks_server::installation::load_config(path)?;
+    let store = config
+        .chunk_store
+        .as_ref()
+        .ok_or("collection requires configured chunk storage")?
+        .build()?;
+    eprintln!("Offline collection requires exclusive installation ownership. Unknown objects and uncertain publishers remain charged. Remote backends are report-only.");
+    let report = foks_server::collect_chunk_store(
+        &config.database,
+        config.chunk_capacity.database_config()?,
+        store.as_ref(),
+        maximum_objects,
+        maximum_bytes,
+        dry_run,
+    )?;
+    println!("report_only={} backend_qualified={} ledger_candidates={} deleted_objects={} deleted_bytes={} charged_objects={} deleting_objects={} deleting_bytes={} tombstones={} unresolved_attempts={} unknown_objects={}",report.report_only,report.backend_qualified,report.eligible_objects,report.deleted_objects,report.deleted_bytes,report.usage.objects,report.usage.deleting_objects,report.usage.deleting_bytes,report.usage.tombstones,report.usage.unresolved_attempts,report.usage.unknown_objects);
     Ok(())
 }
 

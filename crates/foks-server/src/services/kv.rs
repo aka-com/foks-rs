@@ -487,7 +487,7 @@ fn put_file_chunk(
         };
         match token.action {
             foks_server_db::ChunkReservationAction::Publish => {
-                let result = store.put(&digest, &upload.exact_chunk);
+                let result = store.put_object(&token.object(), &upload.exact_chunk);
                 writer
                     .settle_chunk_publication(token.clone(), result.is_ok())
                     .map_err(|_| RpcStatus::TransactionRetry)?;
@@ -495,7 +495,7 @@ fn put_file_chunk(
             }
             foks_server_db::ChunkReservationAction::Verify => {
                 let bytes = store
-                    .get(&digest, token.encoded_bytes)
+                    .get_object(&token.object())
                     .map_err(|_| RpcStatus::TransactionRetry)?;
                 if bytes != upload.exact_chunk {
                     return Err(RpcStatus::TransactionRetry);

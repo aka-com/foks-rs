@@ -8,9 +8,8 @@ use crate::{error::sql_integer, Database, Error, ReadDatabase, Result, StoredKvF
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExternalKvChunk {
-    pub digest: [u8; 32],
+    pub object: crate::ChunkObject,
     pub ciphertext_bytes: u64,
-    pub encoded_bytes: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,7 +63,11 @@ pub(crate) fn validate_encoded_chunk(
     Ok(())
 }
 
-pub(crate) fn payload_from_row(row: &Row<'_>, start: usize) -> Result<KvChunkPayload> {
+pub(crate) fn payload_from_row(
+    row: &Row<'_>,
+    start: usize,
+    object_start: usize,
+) -> Result<KvChunkPayload> {
     let ciphertext: Vec<u8> = row.budgeted_get(start)?;
     let digest: Option<Vec<u8>> = row.budgeted_get(start + 1)?;
     let bytes: Option<i64> = row.budgeted_get(start + 2)?;
@@ -81,12 +84,30 @@ pub(crate) fn payload_from_row(row: &Row<'_>, start: usize) -> Result<KvChunkPay
             {
                 return Err(Error::Invalid("stored external KV chunk size"));
             }
-            Ok(KvChunkPayload::External(ExternalKvChunk {
-                digest: digest
+            let digest = digest
+                .try_into()
+                .map_err(|_| Error::Invalid("stored external digest"))?;
+            let id: Vec<u8> = row.budgeted_get(object_start)?;
+            let namespace: Option<Vec<u8>> = row.budgeted_get(object_start + 1)?;
+            let object = crate::ChunkObject {
+                object_id: id
                     .try_into()
-                    .map_err(|_| Error::Invalid("stored external KV chunk digest"))?,
-                ciphertext_bytes: bytes,
+                    .map_err(|_| Error::Invalid("stored object ID"))?,
+                namespace_id: namespace
+                    .map(|v| {
+                        v.try_into()
+                            .map_err(|_| Error::Invalid("stored object namespace"))
+                    })
+                    .transpose()?,
+                object_key: row.budgeted_get(object_start + 2)?,
+                key_format: crate::error::unsigned(row.budgeted_get(object_start + 3)?)?,
+                digest,
                 encoded_bytes: encoded,
+            };
+            object.validate_key()?;
+            Ok(KvChunkPayload::External(ExternalKvChunk {
+                object,
+                ciphertext_bytes: bytes,
             }))
         }
         _ => Err(Error::Invalid("stored KV chunk representation")),
@@ -130,11 +151,12 @@ impl Database {
             ("kv_chunks_inline", "external_digest IS NULL")
         };
         let sql = format!(
-            "SELECT uid,file_id,clear_offset,ciphertext,external_digest,
-            external_ciphertext_bytes,external_encoded_bytes,final_chunk,exact_upload_chunk
-            FROM kv_file_chunks INDEXED BY {index}
-            WHERE {predicate} AND (uid,file_id,clear_offset) > (?1,?2,?3)
-            ORDER BY uid,file_id,clear_offset LIMIT 1"
+            "SELECT c.uid,c.file_id,c.clear_offset,c.ciphertext,c.external_digest,
+            c.external_ciphertext_bytes,c.external_encoded_bytes,c.final_chunk,c.exact_upload_chunk,
+            o.object_id,o.namespace_id,o.object_key,o.key_format
+            FROM kv_file_chunks AS c INDEXED BY {index} LEFT JOIN chunk_objects o ON o.object_id=c.external_object_id
+            WHERE {predicate} AND (c.uid,c.file_id,c.clear_offset) > (?1,?2,?3)
+            ORDER BY c.uid,c.file_id,c.clear_offset LIMIT 1"
         );
         let mut statement = self.connection.prepare(&sql)?;
         let uid = after.map_or(&[][..], |key| key.uid.as_slice());
@@ -158,7 +180,7 @@ impl Database {
                 offset,
             },
             chunk: StoredKvFileChunk {
-                payload: payload_from_row(row, 3)?,
+                payload: payload_from_row(row, 3, 9)?,
                 offset,
                 final_chunk: row.budgeted_get(7)?,
             },
@@ -222,7 +244,7 @@ impl Database {
             || exact.len() > 9 * 1024 * 1024 + 1024
             || ciphertext.is_empty()
             || ciphertext.len() > 9 * 1024 * 1024
-            || exact.len() as u64 != expected.encoded_bytes
+            || exact.len() as u64 != expected.object.encoded_bytes
             || ciphertext.len() as u64 != expected.ciphertext_bytes
         {
             return Err(Error::Invalid("external KV chunk length"));
@@ -236,23 +258,24 @@ impl Database {
             ciphertext,
             key.offset,
             decoded.final_upload.is_some(),
-            Some(expected.digest),
+            Some(expected.object.digest),
         )?;
         Ok(self.connection.execute(
             "UPDATE kv_file_chunks SET ciphertext=?4,exact_upload_chunk=?5,
                 external_encoded_bytes=NULL,external_ciphertext_bytes=NULL,external_digest=NULL,external_object_id=NULL
              WHERE uid=?1 AND file_id=?2 AND clear_offset=?3 AND external_digest=?6
-                AND external_ciphertext_bytes=?7 AND external_encoded_bytes=?8 AND final_chunk=?9",
+                AND external_ciphertext_bytes=?7 AND external_encoded_bytes=?8 AND final_chunk=?9 AND external_object_id=?10",
             params![
                 key.uid,
                 key.file_id,
                 sql_integer(key.offset)?,
                 ciphertext,
                 exact,
-                expected.digest.as_slice(),
+                expected.object.digest.as_slice(),
                 sql_integer(expected.ciphertext_bytes)?,
-                sql_integer(expected.encoded_bytes)?,
-                decoded.final_upload.is_some()
+                sql_integer(expected.object.encoded_bytes)?,
+                decoded.final_upload.is_some(),
+                expected.object.object_id.as_slice()
             ],
         )? == 1)
     }

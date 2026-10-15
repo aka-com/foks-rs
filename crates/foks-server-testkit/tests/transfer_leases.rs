@@ -57,13 +57,17 @@ impl ChunkStore for Gated {
     ) -> foks_server::Result<foks_server::chunks::ChunkInventoryPage> {
         self.inner.inventory_page(cursor, maximum)
     }
-    fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> foks_server::Result<()> {
+    fn put_object(
+        &self,
+        object: &foks_server_db::ChunkObject,
+        bytes: &[u8],
+    ) -> foks_server::Result<()> {
         self.wait(1)?;
-        self.inner.put(digest, bytes)
+        self.inner.put_object(object, bytes)
     }
-    fn get(&self, digest: &[u8; 32], bytes: u64) -> foks_server::Result<Vec<u8>> {
+    fn get_object(&self, object: &foks_server_db::ChunkObject) -> foks_server::Result<Vec<u8>> {
         self.wait(2)?;
-        self.inner.get(digest, bytes)
+        self.inner.get_object(object)
     }
 }
 #[test]

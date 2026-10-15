@@ -450,6 +450,7 @@ pub fn backup_standalone_installation_with_chunk_store(
     database_config: foks_server_db::Config,
     chunk_store: Option<&dyn crate::chunks::ChunkStore>,
 ) -> Result<BackupArtifacts> {
+    let _storage_lease = crate::storage_lease::StorageLease::shared(database_path.as_ref())?;
     let source = foks_server_db::ReadDatabase::open(&database_path, database_config.clone())?;
     if !source.integrity_check()? {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
@@ -667,6 +668,7 @@ impl RunningStandaloneServer {
     /// snapshot in a new directory. The operator root key is intentionally
     /// never copied and must be restored through its original secret channel.
     pub fn backup(&self, destination: impl AsRef<std::path::Path>) -> Result<BackupArtifacts> {
+        let _storage_lease = crate::storage_lease::StorageLease::shared(&self.database_path)?;
         let manifest = self.bootstrap.key_manifest.encode();
         let source =
             foks_server_db::ReadDatabase::open(&self.database_path, self.database_config.clone())?;

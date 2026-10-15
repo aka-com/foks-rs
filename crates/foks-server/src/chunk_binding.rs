@@ -172,7 +172,7 @@ pub fn adopt_chunk_store(
                 let KvChunkPayload::External(reference) = &stored.chunk.payload else {
                     return Err(Error::Chunk("adoption returned inline data"));
                 };
-                let bytes = store.get(&reference.digest, reference.encoded_bytes)?;
+                let bytes = store.get_object(&reference.object)?;
                 crate::chunk_storage::decode_external(
                     reference,
                     stored.key.offset,
@@ -182,7 +182,7 @@ pub fn adopt_chunk_store(
                 binding = database.checkpoint_chunk_adoption(
                     &binding,
                     &stored.key,
-                    reference.encoded_bytes,
+                    reference.object.encoded_bytes,
                 )?;
                 progress(ChunkAdoptionProgress {
                     verified_objects: binding.verified_objects,
@@ -236,11 +236,11 @@ mod tests {
                 Ok(())
             }
         }
-        fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> Result<()> {
-            self.inner.put(digest, bytes)
+        fn put_object(&self, object: &foks_server_db::ChunkObject, bytes: &[u8]) -> Result<()> {
+            self.inner.put_object(object, bytes)
         }
-        fn get(&self, digest: &[u8; 32], length: u64) -> Result<Vec<u8>> {
-            self.inner.get(digest, length)
+        fn get_object(&self, object: &foks_server_db::ChunkObject) -> Result<Vec<u8>> {
+            self.inner.get_object(object)
         }
     }
 

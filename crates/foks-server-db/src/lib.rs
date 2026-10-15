@@ -7,12 +7,14 @@ mod capabilities;
 mod capability_keys;
 mod certificates;
 mod chunk_binding;
+mod chunk_collection;
 mod chunk_ledger;
 mod clock;
 pub use chunk_binding::{ChunkStorageBinding, ChunkStorageBindingState};
+pub use chunk_collection::ChunkDeletion;
 pub use chunk_ledger::{
-    ChunkInventoryCheckpoint, ChunkInventoryEntry, ChunkPhysicalUsage, ChunkReservation,
-    ChunkReservationAction,
+    ChunkInventoryCheckpoint, ChunkInventoryEntry, ChunkObject, ChunkPhysicalUsage,
+    ChunkReservation, ChunkReservationAction,
 };
 mod config;
 mod connection;

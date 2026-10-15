@@ -612,6 +612,7 @@ pub enum TestProfile {
     ProductionBenchmark,
     RealtimePollCapacity,
     RealtimeSingleReader,
+    StorageShutdown,
     RateLimited,
     BackupAutomation,
 }
@@ -654,10 +655,16 @@ impl TestProfile {
             | Self::ProductionBenchmark
             | Self::RealtimePollCapacity
             | Self::RealtimeSingleReader
+            | Self::StorageShutdown
             | Self::RateLimited
             | Self::BackupAutomation => foks_server_db::Config::default(),
         };
         let limits = foks_server::SessionLimits {
+            request_timeout: if matches!(self, Self::StorageShutdown) {
+                std::time::Duration::from_secs(2)
+            } else {
+                foks_server::SessionLimits::default().request_timeout
+            },
             maximum_read_connections: if matches!(self, Self::RealtimeSingleReader) {
                 1
             } else {

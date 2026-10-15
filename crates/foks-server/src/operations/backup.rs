@@ -108,6 +108,7 @@ fn run_backup(
     sequence: u64,
     cancelled: &AtomicBool,
 ) -> Result<u64> {
+    let _storage_lease = crate::storage_lease::StorageLease::shared(&source.database_path)?;
     let (now, database, host_key_files) = checked(
         Phase::BackupRead,
         (|| {

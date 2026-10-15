@@ -45,12 +45,12 @@ pub fn externalize_chunks(
         let token = database.reserve_chunk_object(&digest, exact.len() as u64, &attempt, now)?;
         match token.action {
             foks_server_db::ChunkReservationAction::Publish => {
-                let published = store.put(&digest, exact);
+                let published = store.put_object(&token.object(), exact);
                 database.settle_chunk_publication(&token, published.is_ok())?;
                 published?;
             }
             foks_server_db::ChunkReservationAction::Verify => {
-                let observed = store.get(&digest, exact.len() as u64)?;
+                let observed = store.get_object(&token.object())?;
                 if observed != exact {
                     return Err(Error::Chunk("conversion retry object mismatch"));
                 }
@@ -75,7 +75,9 @@ pub(crate) fn decode_external(
     final_chunk: bool,
     exact: &[u8],
 ) -> Result<foks_proto::KvUploadChunk> {
-    if exact.len() as u64 != reference.encoded_bytes || chunk_digest(exact) != reference.digest {
+    if exact.len() as u64 != reference.object.encoded_bytes
+        || chunk_digest(exact) != reference.object.digest
+    {
         return Err(Error::Chunk("object length or digest mismatch"));
     }
     let decoded = foks_proto::KvUploadChunk::decode(exact)?;
@@ -96,7 +98,7 @@ pub(crate) fn ciphertext(
         KvChunkPayload::Inline(bytes) => Ok(bytes),
         KvChunkPayload::External(reference) => {
             let store = store.ok_or(Error::Chunk("external reference has no configured store"))?;
-            let exact = store.get(&reference.digest, reference.encoded_bytes)?;
+            let exact = store.get_object(&reference.object)?;
             Ok(decode_external(&reference, chunk.offset, chunk.final_chunk, &exact)?.ciphertext)
         }
     }
@@ -122,7 +124,7 @@ pub(crate) fn hydrate_backup(
         let KvChunkPayload::External(reference) = &stored.chunk.payload else {
             return Err(Error::Chunk("hydration cursor returned inline data"));
         };
-        let exact = store.get(&reference.digest, reference.encoded_bytes)?;
+        let exact = store.get_object(&reference.object)?;
         let chunk = decode_external(
             reference,
             stored.key.offset,

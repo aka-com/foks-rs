@@ -8,9 +8,12 @@
 
 mod auth;
 mod chunk_binding;
+mod chunk_collection;
 mod chunk_ledger;
 mod chunk_storage;
+mod storage_lease;
 pub use chunk_binding::{adopt_chunk_store, ChunkAdoptionProgress};
+pub use chunk_collection::{collect_chunk_store, ChunkCollectionReport};
 pub use chunk_ledger::{inventory_chunk_store, ChunkCapacityConfig};
 pub mod chunks;
 mod config;

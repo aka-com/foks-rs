@@ -38,24 +38,28 @@ impl ChunkStore for FaultStore {
         self.inner.create_namespace_marker_if_absent(marker)
     }
 
-    fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> foks_server::Result<()> {
+    fn put_object(
+        &self,
+        object: &foks_server_db::ChunkObject,
+        bytes: &[u8],
+    ) -> foks_server::Result<()> {
         self.puts.fetch_add(1, Ordering::SeqCst);
         if self.mode.load(Ordering::SeqCst) == 1 {
             return Err(foks_server::Error::Chunk("injected object put failure"));
         }
-        self.inner.put(digest, bytes)?;
+        self.inner.put_object(object, bytes)?;
         if self.mode.load(Ordering::SeqCst) == 4 {
             return Err(foks_server::Error::Chunk("injected lost PUT reply"));
         }
         Ok(())
     }
 
-    fn get(&self, digest: &[u8; 32], length: u64) -> foks_server::Result<Vec<u8>> {
+    fn get_object(&self, object: &foks_server_db::ChunkObject) -> foks_server::Result<Vec<u8>> {
         let mode = self.mode.load(Ordering::SeqCst);
         if mode == 2 {
             return Err(foks_server::Error::Chunk("injected missing object"));
         }
-        let mut bytes = self.inner.get(digest, length)?;
+        let mut bytes = self.inner.get_object(object)?;
         if mode == 3 {
             bytes[0] ^= 1;
         }
@@ -91,10 +95,14 @@ impl ChunkStore for GatedStore {
         self.inner.create_namespace_marker_if_absent(marker)
     }
 
-    fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> foks_server::Result<()> {
+    fn put_object(
+        &self,
+        object: &foks_server_db::ChunkObject,
+        bytes: &[u8],
+    ) -> foks_server::Result<()> {
         // The object is durable before the gate: authorization can change
         // during storage I/O, leaving an orphan but never a published chunk.
-        self.inner.put(digest, bytes)?;
+        self.inner.put_object(object, bytes)?;
         self.entered.send(()).unwrap();
         let (_guard, timeout) = self
             .release
@@ -110,8 +118,8 @@ impl ChunkStore for GatedStore {
         Ok(())
     }
 
-    fn get(&self, digest: &[u8; 32], length: u64) -> foks_server::Result<Vec<u8>> {
-        self.inner.get(digest, length)
+    fn get_object(&self, object: &foks_server_db::ChunkObject) -> foks_server::Result<Vec<u8>> {
+        self.inner.get_object(object)
     }
 }
 
@@ -670,6 +678,24 @@ fn legacy_external_adoption_is_explicit_resumable_and_preserves_wire_reads() {
     put(&client, &host, &account, "adopt.bin", &content).unwrap();
     server.shutdown().unwrap();
     // Reconstruct a real version-50 database and unmarked legacy store.
+    // Version 50 used digest keys. Materialize exactly those historical objects
+    // before reconstructing its schema, rather than retaining modern v2 keys.
+    let historical_store = environment.filesystem_chunk_store().unwrap();
+    {
+        let db = foks_server_db::Database::open(environment.database_path(), Default::default())
+            .unwrap();
+        let mut after = None;
+        while let Some(chunk) = db.next_kv_chunk(after.as_ref(), true).unwrap() {
+            let foks_server_db::KvChunkPayload::External(reference) = &chunk.chunk.payload else {
+                panic!("external fixture");
+            };
+            let bytes = historical_store.get_object(&reference.object).unwrap();
+            historical_store
+                .put(&reference.object.digest, &bytes)
+                .unwrap();
+            after = Some(chunk.key);
+        }
+    }
     let connection = rusqlite::Connection::open(environment.database_path()).unwrap();
     connection
         .execute_batch(include_str!(
@@ -827,4 +853,366 @@ fn preexisting_unknown_objects_require_inventory_and_remain_charged_without_dele
     assert_eq!(report.unresolved_attempts, 0);
     assert_files(&client, &host, &account, &[("ready.bin", &vec![4; 8192])]);
     server.shutdown().unwrap();
+}
+
+struct BackupReadGate {
+    inner: Arc<dyn ChunkStore>,
+    entered: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+impl ChunkStore for BackupReadGate {
+    fn locator(&self) -> foks_server::Result<String> {
+        self.inner.locator()
+    }
+    fn read_namespace_marker(&self) -> foks_server::Result<Option<Vec<u8>>> {
+        self.inner.read_namespace_marker()
+    }
+    fn create_namespace_marker_if_absent(&self, marker: &[u8]) -> foks_server::Result<()> {
+        self.inner.create_namespace_marker_if_absent(marker)
+    }
+    fn namespace_is_empty(&self) -> foks_server::Result<bool> {
+        self.inner.namespace_is_empty()
+    }
+    fn inventory_page(
+        &self,
+        cursor: Option<&str>,
+        maximum: usize,
+    ) -> foks_server::Result<foks_server::chunks::ChunkInventoryPage> {
+        self.inner.inventory_page(cursor, maximum)
+    }
+    fn put_object(
+        &self,
+        object: &foks_server_db::ChunkObject,
+        bytes: &[u8],
+    ) -> foks_server::Result<()> {
+        self.inner.put_object(object, bytes)
+    }
+    fn get_object(&self, object: &foks_server_db::ChunkObject) -> foks_server::Result<Vec<u8>> {
+        self.entered.send(()).unwrap();
+        self.release
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(20))
+            .map_err(|_| foks_server::Error::Chunk("test backup gate timed out"))?;
+        self.inner.get_object(object)
+    }
+}
+
+#[test]
+fn standalone_backup_outlives_server_and_excludes_offline_collection_until_hydrated() {
+    let environment = TestEnvironment::new().unwrap();
+    environment.use_filesystem_chunks().unwrap();
+    let store = environment.filesystem_chunk_store().unwrap();
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "collection-backup").unwrap();
+    let host = client.probe_and_pin().unwrap().pinned;
+    let account = client
+        .create_account(&host, &TestAccountSpec::new("collectionbackup", 0x93))
+        .unwrap();
+    let bytes = vec![0x61; 8192];
+    put(&client, &host, &account, "saved.bin", &bytes).unwrap();
+    assert!(foks_server::collect_chunk_store(
+        environment.database_path(),
+        Default::default(),
+        store.as_ref(),
+        128,
+        1024 * 1024,
+        true
+    )
+    .is_err());
+    let (entered, entry) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let gate = Arc::new(BackupReadGate {
+        inner: store.clone(),
+        entered,
+        release: Mutex::new(released),
+    });
+    let db = environment.database_path().to_path_buf();
+    let keys = environment.root().join("keys");
+    let destination = environment.root().join("independent-backup");
+    let backup = std::thread::spawn(move || {
+        foks_server::backup_standalone_installation_with_chunk_store(
+            db,
+            keys,
+            [0x51; 32],
+            destination,
+            Default::default(),
+            Some(gate.as_ref()),
+        )
+    });
+    entry.recv_timeout(Duration::from_secs(5)).unwrap();
+    let addresses = server.addresses();
+    server.shutdown().unwrap();
+    let error = foks_server::collect_chunk_store(
+        environment.database_path(),
+        Default::default(),
+        store.as_ref(),
+        128,
+        1024 * 1024,
+        false,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("storage is in use"));
+    release.send(()).unwrap();
+    let backup = backup.join().unwrap().unwrap();
+    let dry = foks_server::collect_chunk_store(
+        environment.database_path(),
+        Default::default(),
+        store.as_ref(),
+        128,
+        1024 * 1024,
+        true,
+    )
+    .unwrap();
+    assert_eq!(dry.eligible_objects, 0);
+    // Simulate metadata retention removal; every retained reference has gone.
+    let c = rusqlite::Connection::open(environment.database_path()).unwrap();
+    c.execute_batch("PRAGMA foreign_keys=ON; DELETE FROM kv_file_uploads;")
+        .unwrap();
+    drop(c);
+    let dry = foks_server::collect_chunk_store(
+        environment.database_path(),
+        Default::default(),
+        store.as_ref(),
+        128,
+        1024 * 1024,
+        true,
+    )
+    .unwrap();
+    assert_eq!(dry.eligible_objects, 1);
+    assert_eq!(dry.deleted_objects, 0);
+    let collected = foks_server::collect_chunk_store(
+        environment.database_path(),
+        Default::default(),
+        store.as_ref(),
+        128,
+        1024 * 1024,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            collected.deleted_objects,
+            collected.usage.objects,
+            collected.usage.tombstones
+        ),
+        (1, 0, 1)
+    );
+    let again = foks_server::collect_chunk_store(
+        environment.database_path(),
+        Default::default(),
+        store.as_ref(),
+        128,
+        1024 * 1024,
+        false,
+    )
+    .unwrap();
+    assert_eq!(again.deleted_objects, 0);
+    let restored = TestEnvironment::restore_backup(&backup, addresses).unwrap();
+    let server = restored.start_server().unwrap();
+    assert_files(&client, &host, &account, &[("saved.bin", &bytes)]);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn abandoned_filesystem_read_keeps_storage_lease_after_server_shutdown() {
+    let environment =
+        TestEnvironment::with_profile(foks_server_testkit::TestProfile::StorageShutdown).unwrap();
+    environment.use_filesystem_chunks().unwrap();
+    let store = environment.filesystem_chunk_store().unwrap();
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "abandoned-read").unwrap();
+    let host = client.probe_and_pin().unwrap().pinned;
+    let account = client
+        .create_account(&host, &TestAccountSpec::new("abandonedread", 0x94))
+        .unwrap();
+    let bytes = vec![0x62; 8192];
+    put(&client, &host, &account, "held.bin", &bytes).unwrap();
+    server.shutdown().unwrap();
+    let c = rusqlite::Connection::open(environment.database_path()).unwrap();
+    let file: Vec<u8> = c
+        .query_row("SELECT file_id FROM kv_file_uploads LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    drop(c);
+    let mut node = [0; 17];
+    node[0] = 2;
+    node[1..].copy_from_slice(&file);
+    let node = foks_proto::KvNodeId(node);
+    let (entered, entry) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    environment
+        .set_chunk_store(Arc::new(BackupReadGate {
+            inner: store.clone(),
+            entered,
+            release: Mutex::new(released),
+        }))
+        .unwrap();
+    let server = environment.start_server().unwrap();
+    std::thread::scope(|scope| {
+        let read = scope.spawn(|| {
+            client.foks().read_user_kv_chunk(
+                &host,
+                &account.credential,
+                &account.authenticated.verified,
+                &account.authenticated.puks,
+                node,
+                0,
+                bytes.len(),
+            )
+        });
+        entry.recv_timeout(Duration::from_secs(5)).unwrap();
+        server.shutdown().unwrap();
+        let error = foks_server::collect_chunk_store(
+            environment.database_path(),
+            Default::default(),
+            store.as_ref(),
+            128,
+            1024 * 1024,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("storage is in use"));
+        release.send(()).unwrap();
+        let _ = read.join().unwrap();
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match foks_server::collect_chunk_store(
+            environment.database_path(),
+            Default::default(),
+            store.as_ref(),
+            128,
+            1024 * 1024,
+            true,
+        ) {
+            Ok(report) => {
+                assert_eq!(report.eligible_objects, 0);
+                break;
+            }
+            Err(error) if std::time::Instant::now() < deadline => {
+                assert!(error.to_string().contains("storage is in use"));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("storage lease did not release: {error}"),
+        }
+    }
+}
+
+struct LostDeleteReply {
+    inner: Arc<dyn ChunkStore>,
+    lose: std::sync::atomic::AtomicBool,
+}
+impl ChunkStore for LostDeleteReply {
+    fn locator(&self) -> foks_server::Result<String> {
+        self.inner.locator()
+    }
+    fn read_namespace_marker(&self) -> foks_server::Result<Option<Vec<u8>>> {
+        self.inner.read_namespace_marker()
+    }
+    fn create_namespace_marker_if_absent(&self, bytes: &[u8]) -> foks_server::Result<()> {
+        self.inner.create_namespace_marker_if_absent(bytes)
+    }
+    fn namespace_is_empty(&self) -> foks_server::Result<bool> {
+        self.inner.namespace_is_empty()
+    }
+    fn inventory_page(
+        &self,
+        cursor: Option<&str>,
+        maximum: usize,
+    ) -> foks_server::Result<foks_server::chunks::ChunkInventoryPage> {
+        self.inner.inventory_page(cursor, maximum)
+    }
+    fn put_object(
+        &self,
+        object: &foks_server_db::ChunkObject,
+        bytes: &[u8],
+    ) -> foks_server::Result<()> {
+        self.inner.put_object(object, bytes)
+    }
+    fn get_object(&self, object: &foks_server_db::ChunkObject) -> foks_server::Result<Vec<u8>> {
+        self.inner.get_object(object)
+    }
+    fn supports_collection(&self) -> bool {
+        self.inner.supports_collection()
+    }
+    fn delete_object(&self, object: &foks_server_db::ChunkObject) -> foks_server::Result<()> {
+        self.inner.delete_object(object)?;
+        if self.lose.swap(false, Ordering::SeqCst) {
+            Err(foks_server::Error::Chunk("injected lost delete reply"))
+        } else {
+            Ok(())
+        }
+    }
+}
+#[test]
+fn interrupted_delete_stays_charged_and_resumes_without_reusing_retired_key() {
+    let environment = TestEnvironment::new().unwrap();
+    environment.use_filesystem_chunks().unwrap();
+    environment.start_server().unwrap().shutdown().unwrap();
+    let inner = environment.filesystem_chunk_store().unwrap();
+    let bytes = b"unreferenced canonical encrypted bytes";
+    let digest = foks_server::chunks::chunk_digest(bytes);
+    let mut db =
+        foks_server_db::Database::open(environment.database_path(), Default::default()).unwrap();
+    let old = db
+        .reserve_chunk_object(&digest, bytes.len() as u64, &[1; 16], 1)
+        .unwrap();
+    inner.put_object(&old.object(), bytes).unwrap();
+    db.settle_chunk_publication(&old, true).unwrap();
+    drop(db);
+    let store = LostDeleteReply {
+        inner: inner.clone(),
+        lose: std::sync::atomic::AtomicBool::new(true),
+    };
+    assert!(foks_server::collect_chunk_store(
+        environment.database_path(),
+        Default::default(),
+        &store,
+        128,
+        1024 * 1024,
+        false
+    )
+    .is_err());
+    let usage = environment
+        .read_database()
+        .unwrap()
+        .chunk_physical_usage()
+        .unwrap();
+    assert_eq!(
+        (usage.objects, usage.deleting_bytes),
+        (1, bytes.len() as u64)
+    );
+    let mut db =
+        foks_server_db::Database::open(environment.database_path(), Default::default()).unwrap();
+    let new = db
+        .reserve_chunk_object(&digest, bytes.len() as u64, &[2; 16], 2)
+        .unwrap();
+    assert_ne!(old.object_key, new.object_key);
+    inner.put_object(&new.object(), bytes).unwrap();
+    db.settle_chunk_publication(&new, true).unwrap();
+    drop(db);
+    // A delayed old DELETE cannot touch the newly published incarnation.
+    inner.delete_object(&old.object()).unwrap();
+    assert_eq!(inner.get_object(&new.object()).unwrap(), bytes);
+    // Limit to one object: the persisted deleting intent must be resumed first.
+    let report = foks_server::collect_chunk_store(
+        environment.database_path(),
+        Default::default(),
+        &store,
+        1,
+        1024 * 1024,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            report.deleted_objects,
+            report.usage.objects,
+            report.usage.tombstones
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(inner.get_object(&new.object()).unwrap(), bytes);
 }

@@ -23,6 +23,7 @@ use sha2::{Digest, Sha256};
 use crate::{Error, Result};
 
 mod inventory;
+pub use foks_server_db::ChunkObject;
 pub use inventory::{ChunkInventoryEntry, ChunkInventoryPage};
 
 pub const MAXIMUM_ENCODED_CHUNK_BYTES: usize = 9 * 1024 * 1024 + 1024;
@@ -136,8 +137,22 @@ pub trait ChunkStore: Send + Sync {
     /// Missing is distinct from an unavailable, malformed or oversized marker.
     fn read_namespace_marker(&self) -> Result<Option<Vec<u8>>>;
     fn create_namespace_marker_if_absent(&self, marker: &[u8]) -> Result<()>;
-    fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> Result<()>;
-    fn get(&self, digest: &[u8; 32], encoded_length: u64) -> Result<Vec<u8>>;
+    fn put_object(&self, object: &ChunkObject, bytes: &[u8]) -> Result<()>;
+    fn get_object(&self, object: &ChunkObject) -> Result<Vec<u8>>;
+    fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> Result<()> {
+        self.put_object(&ChunkObject::legacy(*digest, bytes.len() as u64), bytes)
+    }
+    fn get(&self, digest: &[u8; 32], encoded_length: u64) -> Result<Vec<u8>> {
+        self.get_object(&ChunkObject::legacy(*digest, encoded_length))
+    }
+    /// Only local filesystem deletion is currently qualified. Remote mutation
+    /// retries do not establish termination of every potentially late PUT.
+    fn supports_collection(&self) -> bool {
+        false
+    }
+    fn delete_object(&self, _object: &ChunkObject) -> Result<()> {
+        Err(Error::Chunk("collection is not qualified for this backend"))
+    }
 }
 
 pub fn chunk_digest(bytes: &[u8]) -> [u8; 32] {
@@ -159,6 +174,7 @@ fn verify(digest: &[u8; 32], bytes: &[u8], length: usize) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn object_name(digest: &[u8; 32]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut name = String::with_capacity(64);
@@ -259,6 +275,27 @@ fn check_marker_size(bytes: &[u8]) -> Result<()> {
 }
 
 impl ChunkStore for FilesystemChunks {
+    fn supports_collection(&self) -> bool {
+        true
+    }
+    fn delete_object(&self, object: &ChunkObject) -> Result<()> {
+        object.validate_key()?;
+        self.recheck()?;
+        let path = self.directory.join(&object.object_key);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if !metadata.is_file() || metadata.file_type().is_symlink() {
+                    return Err(Error::Chunk("refusing to delete nonregular object"));
+                }
+                std::fs::remove_file(&path)?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        // Absence alone is not durable after an interrupted unlink.
+        std::fs::File::open(&self.directory)?.sync_all()?;
+        self.recheck()
+    }
     fn namespace_is_empty(&self) -> Result<bool> {
         self.empty()
     }
@@ -324,11 +361,16 @@ impl ChunkStore for FilesystemChunks {
         self.recheck()
     }
 
-    fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> Result<()> {
+    fn put_object(&self, object: &ChunkObject, bytes: &[u8]) -> Result<()> {
+        object.validate_key()?;
+        let digest = &object.digest;
+        if object.encoded_bytes != bytes.len() as u64 {
+            return Err(Error::Chunk("object publication length mismatch"));
+        }
         let length = checked_length(bytes.len() as u64)?;
         verify(digest, bytes, length)?;
         self.recheck()?;
-        let path = self.directory.join(object_name(digest));
+        let path = self.directory.join(&object.object_key);
         let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
         temporary.write_all(bytes)?;
         temporary.as_file().sync_all()?;
@@ -342,7 +384,7 @@ impl ChunkStore for FilesystemChunks {
             }
             Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Existing bytes may be from an interrupted earlier attempt.
-                self.get(digest, bytes.len() as u64)?;
+                self.get_object(object)?;
                 std::fs::File::open(&self.directory)?.sync_all()?;
                 Ok(())
             }
@@ -350,10 +392,13 @@ impl ChunkStore for FilesystemChunks {
         }
     }
 
-    fn get(&self, digest: &[u8; 32], encoded_length: u64) -> Result<Vec<u8>> {
+    fn get_object(&self, object: &ChunkObject) -> Result<Vec<u8>> {
+        object.validate_key()?;
+        let digest = &object.digest;
+        let encoded_length = object.encoded_bytes;
         let length = checked_length(encoded_length)?;
         self.recheck()?;
-        let path = self.directory.join(object_name(digest));
+        let path = self.directory.join(&object.object_key);
         let mut options = std::fs::OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
@@ -495,10 +540,6 @@ impl S3Chunks {
                 .map_err(|_| Error::Config("invalid object prefix"))?,
             timeout,
         })
-    }
-
-    fn path(&self, digest: &[u8; 32]) -> object_store::path::Path {
-        self.prefix.clone().join(object_name(digest))
     }
 
     fn run<T: Send + 'static>(
@@ -647,12 +688,17 @@ impl ChunkStore for S3Chunks {
         })
     }
 
-    fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> Result<()> {
+    fn put_object(&self, object: &ChunkObject, bytes: &[u8]) -> Result<()> {
+        object.validate_key()?;
+        let digest = &object.digest;
+        if object.encoded_bytes != bytes.len() as u64 {
+            return Err(Error::Chunk("object publication length mismatch"));
+        }
         let length = checked_length(bytes.len() as u64)?;
         verify(digest, bytes, length)?;
         let digest = *digest;
         let store = Arc::clone(&self.store);
-        let path = self.path(&digest);
+        let path = self.prefix.clone().join(object.object_key.as_str());
         let payload = bytes.to_vec();
         self.run(async move {
             let options = PutOptions {
@@ -675,11 +721,14 @@ impl ChunkStore for S3Chunks {
         })
     }
 
-    fn get(&self, digest: &[u8; 32], encoded_length: u64) -> Result<Vec<u8>> {
+    fn get_object(&self, object: &ChunkObject) -> Result<Vec<u8>> {
+        object.validate_key()?;
+        let digest = &object.digest;
+        let encoded_length = object.encoded_bytes;
         let length = checked_length(encoded_length)?;
         let digest = *digest;
         let store = Arc::clone(&self.store);
-        let path = self.path(&digest);
+        let path = self.prefix.clone().join(object.object_key.as_str());
         self.run(async move { read_remote(store.as_ref(), &path, &digest, length).await })
     }
 }
@@ -693,6 +742,48 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::Mutex;
     use std::time::Instant;
+
+    #[test]
+    fn filesystem_incarnations_and_idempotent_delete_never_reuse_digest_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = FilesystemChunks::open(directory.path()).unwrap();
+        let bytes = b"same canonical encrypted upload";
+        let digest = chunk_digest(bytes);
+        let object = |id: u8| ChunkObject {
+            object_id: [id; 32],
+            namespace_id: Some([1; 16]),
+            object_key: format!("v2-{}", object_name(&[id; 32])),
+            key_format: 2,
+            digest,
+            encoded_bytes: bytes.len() as u64,
+        };
+        let old = object(1);
+        let new = object(2);
+        store.put_object(&old, bytes).unwrap();
+        store.put_object(&new, bytes).unwrap();
+        store.delete_object(&old).unwrap();
+        store.delete_object(&old).unwrap();
+        assert!(store.get_object(&old).is_err());
+        assert_eq!(store.get_object(&new).unwrap(), bytes);
+        let mut unsafe_key = new.clone();
+        unsafe_key.object_key = "../escape".into();
+        assert!(store.delete_object(&unsafe_key).is_err());
+        assert!(store.put_object(&unsafe_key, bytes).is_err());
+        #[cfg(unix)]
+        {
+            let bad = object(3);
+            std::os::unix::fs::symlink(&new.object_key, directory.path().join(&bad.object_key))
+                .unwrap();
+            assert!(store.delete_object(&bad).is_err());
+            assert_eq!(store.get_object(&new).unwrap(), bytes);
+        }
+        let remote = MockS3::start();
+        let remote = remote.store();
+        assert!(!remote.supports_collection());
+        assert!(remote.delete_object(&new).is_err());
+        remote.put_object(&new, bytes).unwrap();
+        assert_eq!(remote.get_object(&new).unwrap(), bytes);
+    }
 
     #[test]
     fn inventory_pages_count_unknown_objects_and_preserve_opaque_provider_tokens() {
