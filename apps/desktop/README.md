@@ -613,7 +613,15 @@ and the attention dot on the avatar's, with the labels becoming tooltips. The
 width is the one the reader chose: a collapsed rail does not expand on hover or
 on focus. The toggle is in the topbar, not in the rail, and writes
 `sideCollapsed` to `localStorage` through `src/sidebar-prefs.ts`. Item
-selection and navigation leave that chosen width unchanged. First run
+selection and navigation leave that chosen width unchanged. The open rail,
+the Files folder tree and the Chat column share one separator,
+`usePaneResize` in `src/components/use-pane-resize.tsx`, whose
+`PANE_SIZES` table gives each pane's storage key, CSS variable and bounds. A
+drag commits on release; Escape, pointer cancellation and lost pointer
+capture restore the starting width. A narrow window bounds the displayed
+width and `aria-valuemax` without rewriting the stored width, and a
+double-click clears it. The rail's separator is rendered into `.app` and
+sets `--side-w-open` on `.window`. First run
 replaces the rail with its own step list, which is `nav.side` without `rail`
 and has no toggle; the blue styling is scoped to `.side.rail` for that reason.
 

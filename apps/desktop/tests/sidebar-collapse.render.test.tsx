@@ -219,6 +219,7 @@ test('the sidebar resizes by dragging, persists its width, and restores after co
   assert.equal(frame.style.getPropertyValue('--side-w-open'), '150px');
   // jsdom does not implement pointer capture or PointerEvent coordinates.
   handle.setPointerCapture = () => {};
+  handle.releasePointerCapture = () => {};
   ui.fireEvent(
     handle,
     new window.MouseEvent('pointerdown', {
@@ -251,5 +252,5 @@ test('the sidebar resizes by dragging, persists its width, and restores after co
   assert.equal(frame.style.getPropertyValue('--side-w-open'), '150px');
   ui.fireEvent.doubleClick(restored);
   assert.equal(frame.style.getPropertyValue('--side-w-open'), '150px');
-  assert.equal(window.localStorage.getItem('sidebarWidth'), '150');
+  assert.equal(window.localStorage.getItem('sidebarWidth'), null);
 });

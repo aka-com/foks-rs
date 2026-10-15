@@ -14,8 +14,7 @@ import { CollectionStatus } from '../components/collection-status';
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useChatSidebarResize } from './use-chat-sidebar-resize';
-import { Button, Icon } from '../components';
+import { Button, Icon, PANE_SIZES, usePaneResize } from '../components';
 import { chatAvailable, storeOf } from '../model';
 import type {
   AgentSnapshot,
@@ -97,7 +96,7 @@ export function ChatTab({
     style: sidebarStyle,
     handle: sidebarHandle,
     id: sidebarId,
-  } = useChatSidebarResize();
+  } = usePaneResize(PANE_SIZES.chat);
   const inbox = useSidebarInbox();
   const announcement = useArrivalAnnouncement(snapshot, inbox);
   // One clock for the whole tab: the column, the pane and the fallback all

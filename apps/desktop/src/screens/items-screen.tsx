@@ -40,14 +40,15 @@ import {
   treeKeyAction,
 } from './files-keyboard';
 import type { TreeEntry } from './files-keyboard';
-import { useFilesSidebarResize } from './use-files-sidebar-resize';
 import {
   Band,
   Button,
   Icon,
   MenuItem,
   Notice,
+  PANE_SIZES,
   SegmentedControl,
+  usePaneResize,
 } from '../components';
 import type { FilterKind } from '../components';
 import type { FoksIconName } from '../icons';
@@ -996,7 +997,7 @@ export function ItemsScreen({
   dropEnabled = true,
   accessNow = () => Date.now() / 1000,
 }: ItemsScreenProps): ReactNode {
-  const sidebar = useFilesSidebarResize();
+  const sidebar = usePaneResize<HTMLDivElement>(PANE_SIZES.files);
   // Rows chosen together, valid only for the view they were chosen in.
   const [multi, setMulti] = useState<{ scope: string; rows: MultiSelection }>({
     scope: '',

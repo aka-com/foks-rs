@@ -16,8 +16,7 @@ import { inventoryReadiness } from '../model';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Menu, Popover, anyDialogOpen } from '../../kit/overlay-primitives';
-import { Icon } from '../components';
-import { useSidebarResize } from './use-sidebar-resize';
+import { Icon, PANE_SIZES, usePaneResize } from '../components';
 import {
   localAliasOf,
   serverDisplayLabelOrLoading,
@@ -616,7 +615,7 @@ export function Sidebar({
   nativeChrome = false,
   blocked = false,
 }: SidebarProps): ReactNode {
-  const resize = useSidebarResize(!collapsed && !blocked);
+  const resize = usePaneResize(PANE_SIZES.rail, !collapsed && !blocked);
   const chatInbox = useSidebarInbox();
   const unread = snapshot ? chatUnreadTotal(snapshot, chatInbox) : null;
   const here = railTabOf(location);
@@ -685,6 +684,7 @@ export function Sidebar({
   return (
     <nav
       ref={resize.ref}
+      id={resize.id}
       className={[
         'side',
         'rail',

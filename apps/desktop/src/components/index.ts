@@ -23,3 +23,4 @@ export * from './security-key-pin-field';
 export * from './segmented-control';
 export * from './tabs';
 export * from './toggle';
+export * from './use-pane-resize';
