@@ -1,6 +1,8 @@
 use super::*;
 
 mod checked_move;
+mod uploads;
+pub use uploads::*;
 mod data;
 mod data_stat;
 pub use data_stat::*;
@@ -443,6 +445,44 @@ impl CheckedProfileSession<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn put_kv_file_upload_with_size<R: Read>(
+        &self,
+        alias: &str,
+        path: &str,
+        reader: &mut R,
+        expected_size: Option<u64>,
+        upload_id: [u8; 16],
+        precondition: KvMutationPrecondition,
+        read_role: KvRoleSummary,
+        write_role: KvRoleSummary,
+        mkdir_p: bool,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
+        self.put_kv_node_checked(
+            alias,
+            path,
+            precondition,
+            read_role,
+            write_role,
+            mkdir_p,
+            vault,
+            master_key,
+            |session, parent, name, options| {
+                session.bind_file_upload(upload_id)?;
+                session.put_file_with_size_bound(
+                    parent,
+                    name,
+                    reader,
+                    expected_size,
+                    options,
+                    precondition.dirent_id(),
+                )
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn put_team_kv_file_checked<R: Read>(
         &self,
         account_alias: &str,
@@ -501,6 +541,48 @@ impl CheckedProfileSession<'_> {
             vault,
             master_key,
             |session, parent, name, options| {
+                session.put_file_with_size_bound(
+                    parent,
+                    name,
+                    reader,
+                    expected_size,
+                    options,
+                    precondition.dirent_id(),
+                )
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_team_kv_file_upload_with_size<R: Read>(
+        &self,
+        account_alias: &str,
+        team_alias: &str,
+        team_id_hex: &str,
+        path: &str,
+        reader: &mut R,
+        expected_size: Option<u64>,
+        upload_id: [u8; 16],
+        precondition: KvMutationPrecondition,
+        read_role: KvRoleSummary,
+        write_role: KvRoleSummary,
+        mkdir_p: bool,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
+        self.put_team_kv_node_checked(
+            account_alias,
+            team_alias,
+            team_id_hex,
+            path,
+            precondition,
+            read_role,
+            write_role,
+            mkdir_p,
+            vault,
+            master_key,
+            |session, parent, name, options| {
+                session.bind_file_upload(upload_id)?;
                 session.put_file_with_size_bound(
                     parent,
                     name,
@@ -858,6 +940,63 @@ impl CheckedProfileSession<'_> {
             KvRoleSummary::Owner,
             Some((Role::OWNER, Role::OWNER)),
         )?;
+        let result = session.put_file(
+            parent,
+            &name,
+            reader,
+            KvWriteOptions {
+                read_role: Role::OWNER,
+                write_role: Role::OWNER,
+                overwrite,
+                expected_version: None,
+            },
+        )?;
+        Ok(KvWriteReport::from_path(
+            path,
+            result.dirent_version,
+            &result.path,
+        ))
+    }
+
+    pub fn put_kv_file_identified<R: Read>(
+        &self,
+        alias: &str,
+        path: &str,
+        reader: &mut R,
+        upload_id: [u8; 16],
+        overwrite: bool,
+        mkdir_p: bool,
+        vault: &mut AccountVault<'_>,
+        master_key: &[u8; 32],
+    ) -> Result<KvWriteReport> {
+        self.prepare_kv_upload(alias, None, upload_id, vault)?;
+        let (parent_path, name) = split_parent(path)?;
+        let loaded = vault.account(alias)?;
+        let host = self.pinned_host()?;
+        let authenticated = self
+            .client
+            .authenticate_and_pin(&host, &loaded.credential)?;
+        let mut mutations = EncryptedFileMutationStore::open(
+            &self.paths.protected_mutations,
+            derive_mutation_key(master_key),
+        )?;
+        let mut session = self.client.user_kv_write_session(
+            &host,
+            &loaded.credential,
+            &authenticated.verified,
+            &authenticated.puks,
+            &self.paths.soft_database,
+            &mut mutations,
+        )?;
+        let (parent, _tree) = resolve_write_parent(
+            &mut session,
+            &parent_path,
+            mkdir_p,
+            KvRoleSummary::Owner,
+            KvRoleSummary::Owner,
+            Some((Role::OWNER, Role::OWNER)),
+        )?;
+        session.bind_file_upload(upload_id)?;
         let result = session.put_file(
             parent,
             &name,

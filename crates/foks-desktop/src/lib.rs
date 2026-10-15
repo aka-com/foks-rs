@@ -1590,6 +1590,7 @@ fn file_mutation(
             .map_err(|_| "content size exceeds maximum upload limit")?;
         Ok(KvAccountMutation::Stream {
             header: KvUploadHeader {
+                upload_id: new_upload_id(total_length)?,
                 adapter: None,
                 store,
                 path,
@@ -1614,6 +1615,7 @@ fn file_upload_header(
     mkdir_p: bool,
 ) -> Result<KvUploadHeader, &'static str> {
     Ok(KvUploadHeader {
+        upload_id: new_upload_id(total_length)?,
         adapter: None,
         store,
         path,
@@ -4049,6 +4051,7 @@ mod tests {
             edit_kv_file_mutation(&item, vec![0; MAXIMUM_INLINE_KV_BYTES + 1]).unwrap(),
             KvAccountMutation::Stream {
                 header: KvUploadHeader {
+                    upload_id: Some(_),
                     adapter: None,
                     precondition: KvPrecondition::ExactEntry { version: 7, .. },
                     read_role: KvRole::Member { visibility: -1 },
@@ -4068,6 +4071,7 @@ mod tests {
         assert!(matches!(
             create_kv_file_upload(&account, "/large", 84 * 1024 * 1024).unwrap(),
             KvUploadHeader {
+                upload_id: Some(_),
                 adapter: None,
                 total_length: 88_080_384,
                 read_role: KvRole::Owner,
@@ -4082,6 +4086,7 @@ mod tests {
         assert!(matches!(
             edit_kv_file_upload(&file, 64).unwrap(),
             KvUploadHeader {
+                upload_id: None,
                 adapter: None,
                 total_length: 64,
                 read_role: KvRole::Member { visibility: -1 },
@@ -4094,6 +4099,7 @@ mod tests {
         assert!(matches!(
             edit_kv_file_upload(&item, 64).unwrap(),
             KvUploadHeader {
+                upload_id: None,
                 adapter: None,
                 total_length: 64,
                 read_role: KvRole::Member { visibility: -1 },
@@ -5070,4 +5076,21 @@ mod chat_transport_tests {
             AgentError::Cancelled
         );
     }
+}
+
+fn new_upload_id(length: u64) -> Result<Option<[u8; 16]>, &'static str> {
+    if length <= 2040 {
+        return Ok(None);
+    }
+    let mut id = [0; 16];
+    getrandom::fill(&mut id).map_err(|_| "upload identity randomness unavailable")?;
+    Ok(Some(id))
+}
+
+/// Allocate a stable local handle before opening a file or sending its stream.
+pub fn ensure_upload_identity(header: &mut KvUploadHeader) -> Result<(), &'static str> {
+    if header.upload_id.is_none() {
+        header.upload_id = new_upload_id(2041)?;
+    }
+    Ok(())
 }

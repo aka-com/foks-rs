@@ -62,6 +62,7 @@ fn a_kv_write_names_the_store_it_lands_in() {
     let team = team_ref("work.example", "personal", "engineering");
     let streamed = KvAccountMutation::Stream {
         header: KvUploadHeader {
+            upload_id: None,
             adapter: None,
             store: KvStoreRef::Team(team.clone()),
             path: "/upload".into(),

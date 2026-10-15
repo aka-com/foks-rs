@@ -1427,3 +1427,22 @@ fn an_unrefreshed_profile_reports_catalog_required_rather_than_a_missing_store()
     assert_eq!(error.code, "store-not-found");
     assert!(!error.retryable);
 }
+
+#[test]
+fn durable_upload_reconciliation_keeps_inflight_exclusion_and_does_not_clear_ambiguity() {
+    let state = AppState::new(std::sync::Arc::new(crate::agent::AgentHandle::new(
+        "/tmp/unused-upload-agent.sock".into(),
+    )));
+    state
+        .mutation_requires_refresh
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert!(state.begin_mutation().is_err());
+    let guard = state.begin_upload_reconciliation().unwrap();
+    assert!(state.begin_upload_reconciliation().is_err());
+    assert!(state.begin_mutation().is_err());
+    drop(guard);
+    assert!(state
+        .mutation_requires_refresh
+        .load(std::sync::atomic::Ordering::Acquire));
+    assert!(state.begin_mutation().is_err());
+}

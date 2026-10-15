@@ -822,6 +822,7 @@ mod tests {
     #[test]
     fn adapter_upload_reserves_the_profile_its_execution_actually_uses() {
         let header = foks_agent_proto::KvUploadHeader {
+            upload_id: None,
             adapter: Some(foks_agent_proto::data::DataSubmission {
                 scope: foks_agent_proto::data::DataScope {
                     profile: "adapter".into(),

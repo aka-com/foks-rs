@@ -716,6 +716,16 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       contents.delete(`${storeId}|${path}`);
       return { applied: true };
     },
+    listFileUploads: async () => ({
+      uploads: [],
+      capacity: { maxReservedBytes: 268435456, maxPending: 16 },
+    }),
+    resumeFileUpload: async () => {
+      throw failure('not-recorded', 'Upload is not recorded.');
+    },
+    cancelFileUpload: async () => {
+      throw failure('not-recorded', 'Upload is not recorded.');
+    },
     importDroppedFile: async ({ storeId, path, readRole, writeRole }) => {
       assertFree(storeId, path);
       const roles = createRoles(storeId, readRole, writeRole);

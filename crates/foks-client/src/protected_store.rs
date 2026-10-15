@@ -319,6 +319,20 @@ impl EncryptedFileMutationStore {
 }
 
 impl ProtectedMutationStore for EncryptedFileMutationStore {
+    fn cleanup_upload_temporaries(&mut self) -> Result<bool, ProtectedStoreError> {
+        let mut scan = self.temporary_scan()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        for _ in 0..64 {
+            if self.cleanup_temporary_until(&mut scan, deadline)?.complete {
+                return Ok(true);
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+        }
+        Ok(false)
+    }
+
     fn put_if_absent(&mut self, key: &[u8], material: &[u8]) -> Result<(), ProtectedStoreError> {
         let path = self.record_path(key)?;
         match self.read_record(&path, key) {

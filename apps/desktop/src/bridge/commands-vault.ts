@@ -1,3 +1,4 @@
+import { decodeFileUpload, decodeFileUploads } from './uploads';
 import { Channel } from '@tauri-apps/api/core';
 import type { Bridge } from './contract';
 import {
@@ -31,12 +32,29 @@ export const vaultCommands: Pick<
   | 'editTextItem'
   | 'moveItem'
   | 'removeItem'
+  | 'listFileUploads'
+  | 'resumeFileUpload'
+  | 'cancelFileUpload'
   | 'importDroppedFile'
   | 'pickImportFile'
   | 'releaseImportFile'
   | 'replaceDroppedFile'
   | 'pickAndReplaceFile'
 > = {
+  listFileUploads: (storeId) =>
+    checked('list_file_uploads', { storeId }, decodeFileUploads),
+  resumeFileUpload: (storeId, uploadId) =>
+    checkedMutation(
+      'resume_file_upload',
+      { storeId, uploadId },
+      decodeFileUpload,
+    ),
+  cancelFileUpload: (storeId, uploadId) =>
+    checkedMutation(
+      'cancel_file_upload',
+      { storeId, uploadId },
+      decodeFileUpload,
+    ),
   listCatalog: async (onPartial, fresh = false) => {
     if (!onPartial) return checked('list_catalog', { fresh }, decodeCatalog);
     const channel = new Channel<unknown>();

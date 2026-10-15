@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 33;
+pub const PROTOCOL_VERSION: u32 = 34;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -376,6 +376,9 @@ pub struct KvChunkResult {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct KvUploadHeader {
+    /// Caller allocated before source streaming; retries resume this durable operation.
+    #[serde(default)]
+    pub upload_id: Option<[u8; 16]>,
     #[serde(default)]
     pub adapter: Option<crate::data::DataSubmission>,
     pub store: KvStoreRef,
@@ -931,6 +934,21 @@ pub enum Operation {
         #[serde(default)]
         mkdir_p: bool,
     },
+    PrepareKvUpload {
+        store: KvStoreRef,
+        upload_id: [u8; 16],
+    },
+    ListKvUploads {
+        store: KvStoreRef,
+    },
+    ResumeKvUpload {
+        store: KvStoreRef,
+        upload_id: [u8; 16],
+    },
+    CancelKvUpload {
+        store: KvStoreRef,
+        upload_id: [u8; 16],
+    },
     PutKvStream {
         header: KvUploadHeader,
     },
@@ -1171,6 +1189,10 @@ impl Operation {
             Self::ReadKv { .. } => "ReadKv",
             Self::ReadKvChunk { .. } => "ReadKvChunk",
             Self::PutKv { .. } => "PutKv",
+            Self::PrepareKvUpload { .. } => "PrepareKvUpload",
+            Self::ListKvUploads { .. } => "ListKvUploads",
+            Self::ResumeKvUpload { .. } => "ResumeKvUpload",
+            Self::CancelKvUpload { .. } => "CancelKvUpload",
             Self::PutKvStream { .. } => "PutKvStream",
             Self::PutKvSymlink { .. } => "PutKvSymlink",
             Self::MkdirKv { .. } => "MkdirKv",
@@ -1272,6 +1294,7 @@ impl Operation {
                 | Self::ListYubiCards { .. }
                 | Self::ListYubiAccounts { .. }
                 | Self::YubiPinStatus { .. }
+                | Self::ListKvUploads { .. }
                 | Self::ListKv { .. }
                 | Self::ListTeamKv { .. }
                 | Self::ReadKv { .. }
@@ -1926,6 +1949,25 @@ impl std::fmt::Debug for Operation {
                 .field("write_role", write_role)
                 .field("precondition", precondition)
                 .field("mkdir_p", mkdir_p)
+                .finish(),
+            Self::PrepareKvUpload { store, upload_id } => formatter
+                .debug_struct("PrepareKvUpload")
+                .field("store", store)
+                .field("upload_id", upload_id)
+                .finish(),
+            Self::ListKvUploads { store } => formatter
+                .debug_struct("ListKvUploads")
+                .field("store", store)
+                .finish(),
+            Self::ResumeKvUpload { store, upload_id } => formatter
+                .debug_struct("ResumeKvUpload")
+                .field("store", store)
+                .field("upload_id", upload_id)
+                .finish(),
+            Self::CancelKvUpload { store, upload_id } => formatter
+                .debug_struct("CancelKvUpload")
+                .field("store", store)
+                .field("upload_id", upload_id)
                 .finish(),
             Self::PutKvStream { header } => formatter
                 .debug_struct("PutKvStream")

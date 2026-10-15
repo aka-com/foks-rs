@@ -405,7 +405,37 @@ fn capture_upload(arguments: Vec<OsString>) -> (Output, UploadTranscript) {
     let (socket, listener) = private_socket(directory.path());
     let server = std::thread::spawn(move || {
         let mut stream = accept_bounded(&listener);
-        let request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+        let mut request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+        if let Operation::PrepareKvUpload { upload_id, .. } = &request.operation {
+            let id = upload_id
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            stream
+                .write_all(
+                    &foks_agent_proto::encode(&Response::success(
+                        request.id,
+                        serde_json::json!({"state":"awaiting-source","upload_id":id}),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            drop(stream);
+            stream = accept_bounded(&listener);
+            request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+            assert!(
+                matches!(&request.operation,Operation::PutKvStream{header} if header.upload_id.is_some())
+            );
+            stream
+                .write_all(
+                    &foks_agent_proto::encode(&Response::success(
+                        request.id,
+                        serde_json::json!({"upload_ready":true}),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+        }
         let mut total = 0u64;
         let mut chunks = 0usize;
         let mut maximum_chunk = 0usize;
@@ -470,6 +500,7 @@ fn eighty_four_megabyte_file_uses_bounded_stream_frames_without_inline_content()
         transcript.request.operation,
         Operation::PutKvStream {
             header: foks_agent_proto::KvUploadHeader {
+                upload_id: Some(_),
                 adapter: None,
                 total_length: 88_080_384,
                 precondition: KvPrecondition::Create,
@@ -520,6 +551,7 @@ fn replacement_file_stream_is_bound_to_the_inspected_version_and_roles() {
         transcript.request.operation,
         Operation::PutKvStream {
             header: foks_agent_proto::KvUploadHeader {
+                upload_id: None,
                 adapter: None,
                 total_length: 16,
                 read_role: KvRole::Member { visibility: -16384 },

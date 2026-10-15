@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub use repositories::uploads::{UploadChunkRecord, UploadLimits, UploadOperation, UploadState};
 mod chat_limits;
 pub use chat_limits::ChatLimits;
 mod merkle_checkpoint;
@@ -795,6 +796,7 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         getrandom::fill(&mut write_token).map_err(|_| Error::Randomness)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(SCHEMA)?;
+        transaction.execute_batch(repositories::uploads::SCHEMA)?;
         transaction.execute(
             "INSERT INTO hard_state_metadata
                  (singleton, database_id, hard_state_revision, write_token)
@@ -815,7 +817,7 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
     }
     if version == 38 {
         merkle_checkpoint::migrate(connection)?;
-        return Ok(());
+        return initialize_or_verify(connection);
     }
     if version == 39 {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -836,10 +838,23 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
                      RENAME COLUMN admission_floor TO validated_time_floor;",
                 )?;
             }
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 40)?;
         }
         transaction.commit()?;
-        return Ok(());
+        return initialize_or_verify(connection);
+    }
+    if version == 40 {
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: u32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if current == 40 {
+            tx.execute_batch(repositories::uploads::SCHEMA)?;
+            for table in ["kv_uploads", "kv_upload_chunks", "kv_upload_limits"] {
+                install_table_revision_triggers(&tx, table)?;
+            }
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        tx.commit()?;
+        return initialize_or_verify(connection);
     }
     if version != SCHEMA_VERSION {
         return Err(Error::UnsupportedSchema {
@@ -3346,6 +3361,7 @@ mod tests {
     }
 
     include!("adapter_tests.rs");
+    include!("upload_tests.rs");
 
     fn snapshot() -> TestHostSnapshot {
         TestHostSnapshot {

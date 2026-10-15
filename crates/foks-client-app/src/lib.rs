@@ -270,10 +270,11 @@ pub use checkpoint::{
 #[cfg(test)]
 use kv::{display_component, split_parent};
 pub use kv::{
-    DataCatalogEntryReport, DataCatalogReport, DataMemberReport, DataMembershipReport,
-    DataMembershipsReport, DataStatReport, DataWriteKind, DataWriteOutcome, DataWriteSpec,
-    DataWriteStatus, KvCatalogEntry, KvCatalogReport, KvChunkReport, KvEntrySummary, KvListReport,
-    KvMutationPrecondition, KvReadReport, KvRoleSummary, KvWriteReport,
+    new_kv_upload_id, DataCatalogEntryReport, DataCatalogReport, DataMemberReport,
+    DataMembershipReport, DataMembershipsReport, DataStatReport, DataWriteKind, DataWriteOutcome,
+    DataWriteSpec, DataWriteStatus, KvCatalogEntry, KvCatalogReport, KvChunkReport, KvEntrySummary,
+    KvListReport, KvMutationPrecondition, KvReadReport, KvRoleSummary, KvUploadCapacity,
+    KvUploadReport, KvWriteReport,
 };
 pub use registry::{
     normalize_profile_label, Capability, CapabilityDenial, CheckedProfileSession,

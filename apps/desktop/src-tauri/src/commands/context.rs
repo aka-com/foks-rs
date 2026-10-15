@@ -1934,7 +1934,18 @@ impl AppState {
         self.reserve_mutation(false)
     }
 
+    /// Retry only an immutable durable upload handle, never an arbitrary stale mutation.
+    pub(super) fn begin_upload_reconciliation(&self) -> Result<MutationGuard, AgentError> {
+        self.reserve_mutation_mode(false, true)
+    }
     fn reserve_mutation(&self, initialize: bool) -> Result<MutationGuard, AgentError> {
+        self.reserve_mutation_mode(initialize, false)
+    }
+    fn reserve_mutation_mode(
+        &self,
+        initialize: bool,
+        reconcile_upload: bool,
+    ) -> Result<MutationGuard, AgentError> {
         let _coordination = self
             .catalog_coordination
             .lock()
@@ -1948,7 +1959,7 @@ impl AppState {
                 (self.scope == MutationScope::Root || *scope == self.scope)
                     && state.requires_refresh.load(Ordering::Acquire)
             });
-        if blocked {
+        if blocked && !reconcile_upload {
             let mut error = AgentError::new(
                 "ambiguous",
                 "Refresh the vault to verify the previous change before making another one.",

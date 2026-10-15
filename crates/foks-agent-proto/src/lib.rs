@@ -135,6 +135,7 @@ mod tests {
             },
             Operation::PutKvStream {
                 header: KvUploadHeader {
+                    upload_id: None,
                     adapter: None,
                     store,
                     path: "/secret".to_owned(),
@@ -659,7 +660,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 33);
+        assert_eq!(PROTOCOL_VERSION, 34);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -676,7 +677,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 33);
+        assert_eq!(PROTOCOL_VERSION, 34);
         let request = Request::new(
             20,
             Operation::Chat {

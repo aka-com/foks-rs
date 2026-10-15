@@ -54,6 +54,7 @@ impl AgentBackend {
         };
         let result: DataWriteOutcome = if spec.kind == foks_agent_proto::data::DataWriteKind::Put {
             let header = foks_agent_proto::KvUploadHeader {
+                upload_id: None,
                 adapter: Some(submission),
                 store: foks_agent_proto::KvStoreRef::Account(foks_agent_proto::AccountStoreRef {
                     profile: self.account.profile.clone(),

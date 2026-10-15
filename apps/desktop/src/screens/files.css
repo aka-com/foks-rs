@@ -934,3 +934,19 @@
     display: none;
   }
 }
+
+.file-uploads {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.file-uploads > div {
+  max-height: 220px;
+  overflow: auto;
+}
+.file-uploads li {
+  margin-block: 8px;
+  overflow-wrap: anywhere;
+}
+.file-uploads button {
+  margin-inline-end: 8px;
+}

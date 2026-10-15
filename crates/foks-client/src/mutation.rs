@@ -26,6 +26,12 @@ pub enum ProtectedStoreError {
 /// backed secret store. Implementations must durably commit `put_if_absent`
 /// before returning and must never silently replace different bytes at a key.
 pub trait ProtectedMutationStore {
+    /// Called under exclusive profile ownership before releasing upload cleanup debt.
+    /// Backends with temporary durable files must remove and sync them first.
+    fn cleanup_upload_temporaries(&mut self) -> std::result::Result<bool, ProtectedStoreError> {
+        Ok(false)
+    }
+
     fn put_if_absent(
         &mut self,
         key: &[u8],
@@ -54,6 +60,10 @@ enum JournalOwner {
         completion: bool,
     },
     SsoSignup([u8; 16]),
+    Upload {
+        id: [u8; 16],
+        adapter: Option<([u8; 16], bool)>,
+    },
     AdapterSubmission(
         foks_proto::SubmissionHandle,
         foks_client_db::AdapterTimeSample,
@@ -100,6 +110,22 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
                 None => JournalOwner::Unowned,
             },
         )
+    }
+
+    pub(crate) fn prepare_upload_namespace(
+        &mut self,
+        draft: MutationDraft,
+        material: Zeroizing<Vec<u8>>,
+        id: [u8; 16],
+        adapter: Option<([u8; 16], bool)>,
+    ) -> Result<MutationOperation> {
+        crate::kv::uploads::validate_namespace_upload(
+            self.hard_database,
+            self.protected,
+            id,
+            &material,
+        )?;
+        self.prepare_linked(draft, material, JournalOwner::Upload { id, adapter })
     }
 
     pub(crate) fn prepare_sso_signup(
@@ -158,6 +184,9 @@ impl<'a, S: ProtectedMutationStore + ?Sized> MutationCoordinator<'a, S> {
             .put_if_absent(&material_ref, &protected_request)
             .map_err(protected_store_error)?;
         let recorded = match owner {
+            JournalOwner::Upload { id, adapter } => {
+                hard_store.record_upload_namespace(&operation, &id, adapter)
+            }
             JournalOwner::AdapterChild { parent, completion } => {
                 hard_store.record_child_mutation(&operation, &parent, completion)
             }

@@ -102,7 +102,7 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Another opener may have upgraded while this connection waited for the writer.
     let version: u32 = transaction.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if version == SCHEMA_VERSION {
+    if version == SCHEMA_VERSION || version == 40 {
         return Ok(());
     }
     if version != 38 {
@@ -178,7 +178,7 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
         )?;
     }
     transaction.execute("UPDATE hard_state_metadata SET hard_state_revision=hard_state_revision+1, write_token=randomblob(16) WHERE singleton=1", [])?;
-    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.pragma_update(None, "user_version", 40)?;
     transaction.commit()?;
     Ok(())
 }
@@ -272,6 +272,10 @@ mod tests {
                 "UPDATE merkle_heads SET evidence_kind=2, anchor_epoch=?1, evidence_bytes=?2",
                 params![i64::try_from(root.epoch() - 1).unwrap(), bytes],
             )
+            .unwrap();
+        store
+            .connection
+            .execute_batch(super::repositories::uploads::REMOVE_SCHEMA)
             .unwrap();
         // Recreate the actual v38 table/constraint and its canonical triggers.
         let tx = store.write_transaction().unwrap();

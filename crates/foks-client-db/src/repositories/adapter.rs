@@ -84,6 +84,26 @@ fn lookup(
 }
 
 impl HardStateStore {
+    pub fn adapter_submission_for_internal(
+        &self,
+        id: &[u8; 16],
+    ) -> Result<Option<AdapterSubmission>> {
+        let handle: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT handle FROM kv_adapter_submissions WHERE internal_id=?1",
+                [id.as_slice()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        handle
+            .map(|handle| {
+                let handle = handle.parse().map_err(|_| Error::AdapterIdentityConflict)?;
+                lookup(&self.connection, handle)
+            })
+            .transpose()
+            .map(Option::flatten)
+    }
     pub fn adapter_submission(
         &self,
         handle: SubmissionHandle,

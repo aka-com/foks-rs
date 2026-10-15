@@ -170,6 +170,34 @@ enum AccountCommand {
 
 #[derive(clap::Subcommand)]
 enum KvCommand {
+    /// List durable file uploads and their local recovery state.
+    Uploads {
+        profile: String,
+        #[arg(long)]
+        account_alias: String,
+    },
+    /// Resume immutable prepared ciphertext without its source file.
+    ResumeUpload {
+        profile: String,
+        #[arg(long)]
+        account_alias: String,
+        upload_id: String,
+    },
+    /// Stop a non-published upload and remove its local recovery material.
+    CancelUpload {
+        profile: String,
+        #[arg(long)]
+        account_alias: String,
+        upload_id: String,
+    },
+    /// Inspect or configure this profile's protected upload spool limit.
+    UploadCapacity {
+        profile: String,
+        #[arg(long)]
+        max_reserved_bytes: Option<u64>,
+        #[arg(long, default_value_t = 16)]
+        max_pending: u32,
+    },
     List {
         profile: String,
         #[arg(long)]
@@ -1049,6 +1077,58 @@ fn kv_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let registry = ProfileRegistry::open(state_dir)?;
     match command {
+        KvCommand::Uploads {
+            profile,
+            account_alias,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let report = session.list_kv_uploads(&account_alias, vault)?;
+                output(json, &report, "Durable file uploads")
+            })
+        }
+        KvCommand::ResumeUpload {
+            profile,
+            account_alias,
+            upload_id,
+        } => {
+            let id = parse_upload_id(&upload_id)?;
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.resume_kv_upload(&account_alias, id, vault, master)?;
+                output(json, &report, "File upload resumed and verified")
+            })
+        }
+        KvCommand::CancelUpload {
+            profile,
+            account_alias,
+            upload_id,
+        } => {
+            let id = parse_upload_id(&upload_id)?;
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, master| {
+                let report = session.cancel_kv_upload(&account_alias, id, vault, master)?;
+                output(
+                    json,
+                    &report,
+                    "Local upload recovery material removed; remote content is not undone",
+                )
+            })
+        }
+        KvCommand::UploadCapacity {
+            profile,
+            max_reserved_bytes,
+            max_pending,
+        } => {
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, _, _| {
+                let report = match max_reserved_bytes {
+                    Some(bytes) => session.set_kv_upload_capacity(bytes, max_pending)?,
+                    None => session.kv_upload_capacity()?,
+                };
+                output(json, &report, "Protected upload spool capacity")
+            })
+        }
         KvCommand::List {
             profile,
             account_alias,
@@ -1113,16 +1193,31 @@ fn kv_command(
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
             with_vault(state_dir, &session, |session, vault, master| {
+                let id = foks_client_app::new_kv_upload_id()?;
                 let mut file = File::open(input)?;
-                let report = session.put_kv_file(
-                    &account_alias,
-                    &path,
-                    &mut file,
-                    overwrite,
-                    mkdir_p,
-                    vault,
-                    master,
-                )?;
+                let report = if file.metadata()?.len() > 2040 {
+                    eprintln!("Upload recovery handle: {}", hex(&id));
+                    session.put_kv_file_identified(
+                        &account_alias,
+                        &path,
+                        &mut file,
+                        id,
+                        overwrite,
+                        mkdir_p,
+                        vault,
+                        master,
+                    )?
+                } else {
+                    session.put_kv_file(
+                        &account_alias,
+                        &path,
+                        &mut file,
+                        overwrite,
+                        mkdir_p,
+                        vault,
+                        master,
+                    )?
+                };
                 output(json, &report, "KV file committed and synchronized")
             })
         }
@@ -2760,4 +2855,15 @@ mod tests {
         assert_eq!(MemberAccessArgument::Restricted.visibility(), -0x4000);
         assert_eq!(MemberAccessArgument::Standard.visibility(), 0);
     }
+}
+
+fn parse_upload_id(input: &str) -> Result<[u8; 16], Box<dyn std::error::Error>> {
+    if input.len() != 32 {
+        return Err("upload handle must have 32 hexadecimal characters".into());
+    }
+    let mut id = [0; 16];
+    for (out, pair) in id.iter_mut().zip(input.as_bytes().chunks_exact(2)) {
+        *out = u8::from_str_radix(std::str::from_utf8(pair)?, 16)?;
+    }
+    Ok(id)
 }

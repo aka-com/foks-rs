@@ -410,7 +410,7 @@ impl CheckedProfileSession<'_> {
         Ok(absent_outcome(handle, status))
     }
 
-    fn finish_data_write(
+    pub(super) fn finish_data_write(
         &self,
         handle: SubmissionHandle,
         committed: bool,
@@ -464,6 +464,21 @@ impl CheckedProfileSession<'_> {
             return Err(foks_client_db::Error::AdapterCleanupDeferred.into());
         }
         let mut protected = self.data_mutations(master)?;
+        if let Some(upload) = hard.upload_for_adapter(&id)? {
+            if upload.state == foks_client_db::UploadState::RemoteVerified {
+                foks_client::verified_file_upload(
+                    &self.paths.hard_database,
+                    &mut protected,
+                    upload.id,
+                    &upload.host_id,
+                    &upload.uid,
+                    &upload.party_id,
+                )?;
+            } else if !upload.state.terminal() {
+                return Err(foks_client_db::Error::AdapterCleanupDeferred.into());
+            }
+            foks_client::cleanup_file_upload(&self.paths.hard_database, &mut protected, upload.id)?;
+        }
         for operation in std::iter::once(&parent).chain(children.iter().map(|(child, _)| child)) {
             if std::time::Instant::now() >= deadline {
                 return Err(foks_client_db::Error::AdapterCleanupDeferred.into());

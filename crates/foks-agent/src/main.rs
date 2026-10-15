@@ -1346,6 +1346,7 @@ struct UploadReader {
     total: u64,
     read: u64,
     committed: bool,
+    ready: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl UploadReader {
@@ -1357,12 +1358,26 @@ impl UploadReader {
             total,
             read: 0,
             committed: false,
+            ready: None,
         }
+    }
+    fn with_ready(
+        receiver: tokio::sync::mpsc::Receiver<UploadMessage>,
+        total: u64,
+        ready: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> Self {
+        let mut reader = Self::new(receiver, total);
+        reader.ready = ready;
+        reader
     }
 }
 
 impl std::io::Read for UploadReader {
     fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(ready) = self.ready.take() {
+            let _ = ready.send(());
+        }
+
         if output.is_empty() {
             return Ok(0);
         }
@@ -1471,6 +1486,9 @@ async fn handle_streaming_upload(
         }
     };
     let (sender, receiver) = tokio::sync::mpsc::channel(4);
+    let handshake = header.upload_id.is_some() && header.adapter.is_none();
+    let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+    let ready_sender = handshake.then_some(ready_sender);
     let cancellation = CancellationToken::new();
     let worker_cancellation = cancellation.clone();
     let worker_header = header.clone();
@@ -1494,8 +1512,9 @@ async fn handle_streaming_upload(
                     worker_cancellation,
                     &worker_header.store,
                     &worker_header.path,
-                    UploadReader::new(receiver, worker_header.total_length),
+                    UploadReader::with_ready(receiver, worker_header.total_length, ready_sender),
                     Some(worker_header.total_length),
+                    worker_header.upload_id,
                     worker_header.precondition,
                     worker_header.read_role,
                     worker_header.write_role,
@@ -1510,6 +1529,28 @@ async fn handle_streaming_upload(
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>((response, profile_permit))
     });
     let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+    if handshake {
+        match tokio::time::timeout(timeout, ready_receiver).await {
+            Ok(Ok(())) => {
+                write_response(
+                    stream,
+                    &Response::success(request_id, serde_json::json!({"upload_ready":true})),
+                    timeout,
+                )
+                .await?
+            }
+            Ok(Err(_)) => {
+                drop(sender);
+                let (response, _profile_permit) = worker.await??;
+                write_response(stream, &response, timeout).await?;
+                return Ok(());
+            }
+            Err(_) => {
+                cancellation.cancel();
+                return Err("upload readiness deadline exceeded".into());
+            }
+        }
+    }
     let mut offset = 0u64;
     let mut committed = false;
     for _ in 0..MAXIMUM_STREAM_FRAMES {
@@ -3037,6 +3078,7 @@ fn put_kv_reader<R: std::io::Read>(
     path: &str,
     mut reader: R,
     expected_size: Option<u64>,
+    upload_id: Option<[u8; 16]>,
     precondition: KvPrecondition,
     read_role: KvRole,
     write_role: KvRole,
@@ -3045,6 +3087,39 @@ fn put_kv_reader<R: std::io::Read>(
     let session =
         read_cache::open_profile_session(registry, kv_store_profile(store), timeout, cancellation)?;
     with_vault_and_master(state_dir, &session, |session, vault, master| {
+        if let Some(upload_id) = upload_id {
+            let report = match store {
+                KvStoreRef::Account(store) => session.put_kv_file_upload_with_size(
+                    &store.account_alias,
+                    path,
+                    &mut reader,
+                    expected_size,
+                    upload_id,
+                    wire_precondition(precondition),
+                    wire_role_to_app(read_role),
+                    wire_role_to_app(write_role),
+                    mkdir_p,
+                    vault,
+                    master,
+                )?,
+                KvStoreRef::Team(store) => session.put_team_kv_file_upload_with_size(
+                    &store.account_alias,
+                    &store.team_alias,
+                    &store.team_id,
+                    path,
+                    &mut reader,
+                    expected_size,
+                    upload_id,
+                    wire_precondition(precondition),
+                    wire_role_to_app(read_role),
+                    wire_role_to_app(write_role),
+                    mkdir_p,
+                    vault,
+                    master,
+                )?,
+            };
+            return Ok(serde_json::to_value(report)?);
+        }
         let report = match store {
             KvStoreRef::Account(store) => session.put_kv_file_checked_with_size(
                 &store.account_alias,
@@ -4910,11 +4985,98 @@ fn dispatch_result_inner(
                 &path,
                 std::io::Cursor::new(content.as_slice()),
                 Some(content_size),
+                None,
                 precondition,
                 read_role,
                 write_role,
                 mkdir_p,
             )
+        }
+        Operation::PrepareKvUpload { store, upload_id } => {
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, _| {
+                let report = match &store {
+                    KvStoreRef::Account(s) => {
+                        session.prepare_kv_upload(&s.account_alias, None, upload_id, vault)?
+                    }
+                    KvStoreRef::Team(s) => session.prepare_kv_upload(
+                        &s.account_alias,
+                        Some(&s.team_id),
+                        upload_id,
+                        vault,
+                    )?,
+                };
+                Ok(serde_json::to_value(report)?)
+            })
+        }
+        Operation::ListKvUploads { store } => {
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, _| {
+                let uploads = match &store {
+                    KvStoreRef::Account(s) => session.list_kv_uploads(&s.account_alias, vault)?,
+                    KvStoreRef::Team(s) => {
+                        session.list_team_kv_uploads(&s.account_alias, &s.team_id, vault)?
+                    }
+                };
+                Ok(serde_json::json!({"uploads":uploads,"capacity":session.kv_upload_capacity()?}))
+            })
+        }
+        Operation::ResumeKvUpload { store, upload_id } => {
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                let report = match &store {
+                    KvStoreRef::Account(s) => {
+                        session.resume_kv_upload(&s.account_alias, upload_id, vault, master)?
+                    }
+                    KvStoreRef::Team(s) => session.resume_team_kv_upload(
+                        &s.account_alias,
+                        &s.team_alias,
+                        &s.team_id,
+                        upload_id,
+                        vault,
+                        master,
+                    )?,
+                };
+                Ok(serde_json::to_value(report)?)
+            })
+        }
+        Operation::CancelKvUpload { store, upload_id } => {
+            let session = read_cache::open_profile_session(
+                &registry,
+                kv_store_profile(&store),
+                timeout,
+                cancellation,
+            )?;
+            with_vault_and_master(state_dir, &session, |session, vault, master| {
+                let report = match &store {
+                    KvStoreRef::Account(s) => {
+                        session.cancel_kv_upload(&s.account_alias, upload_id, vault, master)?
+                    }
+                    KvStoreRef::Team(s) => session.cancel_team_kv_upload(
+                        &s.account_alias,
+                        &s.team_id,
+                        upload_id,
+                        vault,
+                        master,
+                    )?,
+                };
+                Ok(serde_json::to_value(report)?)
+            })
         }
         Operation::PutKvStream { .. } => Err(Box::new(AgentRequestError(
             "streaming KV upload requires the streaming connection path",

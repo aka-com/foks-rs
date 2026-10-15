@@ -7,6 +7,7 @@ pub enum ProtectedRecordOwner {
     Chat(ChatOperation),
     Sso(SsoFlow),
     Team(TeamMutationOperation),
+    Upload(UploadOperation),
 }
 
 /// Private cursor; a caller must discard it when hard-state metadata changes.
@@ -23,11 +24,12 @@ impl HardStateStore {
         &self,
         cursor: &mut ProtectedOwnerCursor,
     ) -> Result<Option<ProtectedRecordOwner>> {
-        const TABLES: [&str; 4] = [
+        const TABLES: [&str; 5] = [
             "mutation_operations",
             "chat_operations",
             "sso_flows",
             "team_mutation_operations",
+            "kv_uploads",
         ];
         while let Some(table) = TABLES.get(cursor.table) {
             let id: Option<[u8;16]> = self.connection.query_row(
@@ -44,6 +46,7 @@ impl HardStateStore {
                 1 => self.chat_operation(&id)?.map(ProtectedRecordOwner::Chat),
                 2 => self.sso_flow(&id)?.map(ProtectedRecordOwner::Sso),
                 3 => self.team_mutation(&id)?.map(ProtectedRecordOwner::Team),
+                4 => self.upload(&id)?.map(ProtectedRecordOwner::Upload),
                 _ => unreachable!("table selected above"),
             }
             .ok_or(Error::InvalidMutationOperation(

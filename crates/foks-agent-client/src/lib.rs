@@ -148,8 +148,49 @@ impl AgentClient {
         reader: &mut R,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Response> {
+        let deadline = std::time::Instant::now() + self.timeout;
+        if header.adapter.is_none() {
+            if let Some(upload_id) = header.upload_id {
+                let prepared = self.call_cancellable(
+                    Operation::PrepareKvUpload {
+                        store: header.store.clone(),
+                        upload_id,
+                    },
+                    cancelled,
+                )?;
+                if matches!(
+                    &prepared.result,
+                    foks_agent_proto::ResponseResult::Error { .. }
+                ) {
+                    return Ok(prepared);
+                }
+                let expected_upload = upload_id
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                match &prepared.result {
+                    foks_agent_proto::ResponseResult::Success { value }
+                        if value.get("state").and_then(|value| value.as_str())
+                            == Some("awaiting-source")
+                            && value.get("upload_id").and_then(|value| value.as_str())
+                                == Some(expected_upload.as_str()) =>
+                    {
+                        ()
+                    }
+                    _ => return Err(Error::ResponseBinding),
+                }
+            }
+        }
+        check_upload_cancelled(cancelled, deadline)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let response = upload_platform(&self.socket, self.timeout, id, header, reader, cancelled)?;
+        let response = upload_platform(
+            &self.socket,
+            deadline.saturating_duration_since(std::time::Instant::now()),
+            id,
+            header,
+            reader,
+            cancelled,
+        )?;
         if response.id != Some(id) {
             return Err(Error::Ambiguous(Box::new(Error::ResponseBinding)));
         }
@@ -201,6 +242,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
     let deadline = std::time::Instant::now() + timeout;
     check_upload_cancelled(cancelled, deadline)?;
     let total = header.total_length;
+    let handshake = header.upload_id.is_some() && header.adapter.is_none();
     let mut stream = connect_platform(socket, cancelled, deadline)?;
     check_upload_cancelled(cancelled, deadline)?;
     transport::write_all(
@@ -209,6 +251,21 @@ fn upload_platform<R: std::io::Read + ?Sized>(
         cancelled,
         deadline,
     )?;
+    if handshake {
+        let ready = read_response_cancellable(&mut stream, cancelled, deadline)?;
+        if ready.id != Some(id) {
+            return Err(Error::ResponseBinding);
+        }
+        match &ready.result {
+            foks_agent_proto::ResponseResult::Error { .. } => return Ok(ready),
+            foks_agent_proto::ResponseResult::Success { value }
+                if value.get("upload_ready").and_then(|v| v.as_bool()) == Some(true) =>
+            {
+                ()
+            }
+            _ => return Err(Error::ResponseBinding),
+        }
+    }
     let mut buffer = Zeroizing::new(vec![0u8; MAXIMUM_UPLOAD_FRAME_BYTES]);
     let mut offset = 0u64;
     while offset < total {
@@ -569,6 +626,7 @@ mod tests {
             assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
         });
         let header = KvUploadHeader {
+            upload_id: None,
             adapter: None,
             store: KvStoreRef::Account(AccountStoreRef {
                 profile: "local".into(),
@@ -682,6 +740,7 @@ mod tests {
                 .unwrap();
         });
         let header = KvUploadHeader {
+            upload_id: None,
             adapter: None,
             store: KvStoreRef::Account(AccountStoreRef {
                 profile: "local".to_owned(),
@@ -742,6 +801,7 @@ mod tests {
             }
         }
         let header = KvUploadHeader {
+            upload_id: None,
             adapter: None,
             store: KvStoreRef::Account(AccountStoreRef {
                 profile: "local".into(),
@@ -790,6 +850,7 @@ mod tests {
         });
         let length = 2 * 1024 * 1024;
         let header = KvUploadHeader {
+            upload_id: None,
             adapter: None,
             store: KvStoreRef::Account(AccountStoreRef {
                 profile: "local".to_owned(),
@@ -813,6 +874,98 @@ mod tests {
             }
         ));
         release.send(()).ok();
+        server.join().unwrap();
+    }
+    #[test]
+    fn durable_upload_waits_for_registration_and_consumption_before_source_reads() {
+        use foks_agent_proto::{AccountStoreRef, KvPrecondition, KvRole, KvStoreRef};
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_ready = ready.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+            assert!(
+                matches!(request.operation,Operation::PrepareKvUpload{upload_id,..} if upload_id==[4;16])
+            );
+            stream
+                .write_all(
+                    &foks_agent_proto::encode(&Response::success(
+                        request.id,
+                        serde_json::json!({"state":"awaiting-source","upload_id":"04".repeat(16)}),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            drop(stream);
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+            assert!(matches!(request.operation, Operation::PutKvStream { .. }));
+            server_ready.store(true, Ordering::Release);
+            stream
+                .write_all(
+                    &foks_agent_proto::encode(&Response::success(
+                        request.id,
+                        serde_json::json!({"upload_ready":true}),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            let chunk = foks_agent_proto::decode_upload_frame(&read_frame(&mut stream)).unwrap();
+            assert!(matches!(
+                chunk.payload,
+                KvUploadPayload::Chunk { offset: 0, .. }
+            ));
+            let commit = foks_agent_proto::decode_upload_frame(&read_frame(&mut stream)).unwrap();
+            assert!(matches!(commit.payload, KvUploadPayload::Commit));
+            stream
+                .write_all(
+                    &foks_agent_proto::encode(&Response::success(
+                        request.id,
+                        serde_json::json!({"version":1}),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+        });
+        struct Source {
+            ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            sent: bool,
+        }
+        impl std::io::Read for Source {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                assert!(
+                    self.ready.load(Ordering::Acquire),
+                    "source read before durable readiness"
+                );
+                if self.sent {
+                    return Ok(0);
+                }
+                out[0] = 3;
+                self.sent = true;
+                Ok(1)
+            }
+        }
+        let header = KvUploadHeader {
+            upload_id: Some([4; 16]),
+            adapter: None,
+            store: KvStoreRef::Account(AccountStoreRef {
+                profile: "local".into(),
+                account_alias: "me".into(),
+            }),
+            path: "/file".into(),
+            total_length: 1,
+            read_role: KvRole::Owner,
+            write_role: KvRole::Owner,
+            precondition: KvPrecondition::Create,
+            mkdir_p: false,
+        };
+        AgentClient::new(&socket)
+            .put_kv_stream(header, &mut Source { ready, sent: false })
+            .unwrap();
         server.join().unwrap();
     }
 }

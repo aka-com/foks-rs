@@ -792,6 +792,10 @@ pub(super) fn upload_file(
     source: &Path,
     kind: MutationKind,
 ) -> Result<(), AgentError> {
+    foks_desktop::ensure_upload_identity(&mut header).map_err(invalid_request)?;
+    let upload_id = header
+        .upload_id
+        .map(|id| id.iter().map(|b| format!("{b:02x}")).collect::<String>());
     let (file, total_length) = open_regular_file(source)?;
     header.total_length = total_length;
     let mut reader = SourceReader {
@@ -821,9 +825,16 @@ pub(super) fn upload_file(
             ));
         }
     }
-    result
-        .map(|_| ())
-        .map_err(|error| map_mutation_error(error, kind))
+    result.map(|_| ()).map_err(|error| {
+        let mut error = map_mutation_error(error, kind);
+        if let Some(id) = upload_id {
+            error.message = format!(
+                "{} Upload handle: {id}. Open Uploads to inspect or resume prepared content.",
+                error.message
+            );
+        }
+        error
+    })
 }
 
 async fn apply_file_upload(
@@ -1573,4 +1584,105 @@ pub async fn pick_and_replace_file(
         .map_err(|error| AgentError::new("upload-source", error.to_string(), false))?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_file_upload(&state, header, source, MutationKind::Guarded).await
+}
+
+fn parse_upload_identity(text: &str) -> Result<[u8; 16], AgentError> {
+    if text.len() != 32
+        || !text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(invalid_request("Invalid upload handle."));
+    }
+    let mut id = [0; 16];
+    for (i, byte) in id.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16)
+            .map_err(|_| invalid_request("Invalid upload handle."))?;
+    }
+    Ok(id)
+}
+#[tauri::command]
+pub async fn list_file_uploads(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+) -> Result<serde_json::Value, AgentError> {
+    let unlocked = crate::applock::unlocked_generation(&app)?;
+    require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
+    let (store, _) = state.selected_store(&store_id)?;
+    let transport = state.agent.transport();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        transport
+            .call(Operation::ListKvUploads {
+                store: protocol_store(&store),
+            })
+            .map_err(AgentError::from_desktop)
+    })
+    .await
+    .map_err(|e| AgentError::unknown(e.to_string()))??;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
+    Ok(result)
+}
+async fn change_file_upload(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+    upload_id: String,
+    resume: bool,
+) -> Result<serde_json::Value, AgentError> {
+    let unlocked = crate::applock::unlocked_generation(&app)?;
+    require_main_window(&webview)?;
+    let state = state.for_store(&store_id)?;
+    let _permit = state.begin_upload_reconciliation()?;
+    let (store, _) = state.selected_store(&store_id)?;
+    let upload_id = parse_upload_identity(&upload_id)?;
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
+    state.invalidate_catalog_items(&store);
+    let transport = state.agent.transport();
+    let operation = if resume {
+        Operation::ResumeKvUpload {
+            store: protocol_store(&store),
+            upload_id,
+        }
+    } else {
+        Operation::CancelKvUpload {
+            store: protocol_store(&store),
+            upload_id,
+        }
+    };
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        transport.call(operation).map_err(AgentError::from_desktop)
+    })
+    .await
+    .map_err(|e| ambiguous_worker_failure(&state, e.to_string()))?;
+    if result.as_ref().is_err_and(|e| e.ambiguous) {
+        state
+            .mutation_requires_refresh
+            .store(true, Ordering::Release);
+    }
+    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
+    result
+}
+#[tauri::command]
+pub async fn resume_file_upload(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+    upload_id: String,
+) -> Result<serde_json::Value, AgentError> {
+    change_file_upload(app, webview, state, store_id, upload_id, true).await
+}
+#[tauri::command]
+pub async fn cancel_file_upload(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+    upload_id: String,
+) -> Result<serde_json::Value, AgentError> {
+    change_file_upload(app, webview, state, store_id, upload_id, false).await
 }

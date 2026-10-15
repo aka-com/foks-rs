@@ -1,3 +1,4 @@
+import { FileUploadsPanel } from './file-uploads';
 import { itemsReadiness } from '../model';
 import { CollectionStatus } from '../components/collection-status';
 /**
@@ -1597,6 +1598,13 @@ export function ItemsScreen({
             </div>
           </aside>
           <section className="lpane" aria-label="Folder contents">
+            {selectedStore ? (
+              <FileUploadsPanel
+                key={selectedStore.id}
+                bridge={bridge}
+                storeId={selectedStore.id}
+              />
+            ) : null}
             <div className="lt">
               <span className="where">
                 {state.query ? (
