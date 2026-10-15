@@ -502,15 +502,10 @@ fn active_capability_key(
     crate::keys::load_capability_generation(keys, generation).map_err(internal)
 }
 
-fn map_write_error(error: crate::Error) -> RpcStatus {
+pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::AuthorizationChanged
-        | crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
-            permission_denied()
-        }
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
-        _ => RpcStatus::TransactionRetry,
+        crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
+        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
     }
 }
 

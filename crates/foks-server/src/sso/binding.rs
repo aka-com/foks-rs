@@ -272,14 +272,15 @@ pub(crate) fn status(error: Error) -> foks_rpc::RpcStatus {
     use foks_rpc::RpcStatus;
     match error {
         Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
-        Error::Database(foks_server_db::Error::Capacity(_)) | Error::WriterQueue => {
-            RpcStatus::RateLimited
-        }
+        Error::Database(foks_server_db::Error::Capacity(_)) => RpcStatus::RateLimited,
+        // SSO routes report the flow failure itself; authenticated mutation
+        // routes wrap it in OAuth2Auth through the shared classes.
         Error::Sso(message) => RpcStatus::OAuth2(message.into()),
         Error::Oidc(foks_oidc::Error::ProviderUnavailable) => {
             RpcStatus::OAuth2("provider unavailable".into())
         }
-        _ => RpcStatus::OAuth2("authentication could not be verified".into()),
+        other => crate::status::shared(&other)
+            .unwrap_or_else(|| RpcStatus::OAuth2("authentication could not be verified".into())),
     }
 }
 

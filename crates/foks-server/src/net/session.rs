@@ -481,14 +481,10 @@ impl ServerData {
             Err(crate::Error::Database(foks_server_db::Error::StaleRoot)) => Err(
                 RpcStatus::RevokeRace("user chain or Merkle root changed".to_owned()),
             ),
-            Err(crate::Error::Database(foks_server_db::Error::QuotaExceeded)) => {
-                Err(RpcStatus::QuotaExceeded)
-            }
             Err(crate::Error::Database(foks_server_db::Error::OperationConflict)) => {
                 Err(bad_arguments("user mutation retry binding failed"))
             }
-            Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
-            Err(error) => Err(crate::error::mutation_failure_status(&error)
+            Err(error) => Err(crate::status::shared(&error)
                 .unwrap_or_else(|| bad_arguments("user mutation validation failed"))),
         }
     }
@@ -543,8 +539,7 @@ impl ServerData {
             Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
                 Err(RpcStatus::NameInUse)
             }
-            Err(error) => Err(crate::error::mutation_failure_status(&error)
-                .unwrap_or(RpcStatus::TransactionRetry)),
+            Err(error) => Err(crate::status::shared(&error).unwrap_or(RpcStatus::TransactionRetry)),
         }
     }
 
@@ -734,9 +729,7 @@ impl ServerData {
             Err(crate::Error::Database(
                 foks_server_db::Error::Reservation | foks_server_db::Error::OperationConflict,
             )) => Err(bad_arguments("signup reservation or retry binding failed")),
-            Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
-            Err(error) => Err(crate::error::mutation_failure_status(&error)
-                .unwrap_or(RpcStatus::TransactionRetry)),
+            Err(error) => Err(crate::status::shared(&error).unwrap_or(RpcStatus::TransactionRetry)),
         }
     }
 
@@ -829,8 +822,7 @@ impl ServerData {
                     .map_err(|_| RpcStatus::TransactionRetry)
             }
             Ok(None) => Err(RpcStatus::NotFound("active device not found".to_owned())),
-            Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
-            Err(_) => Err(RpcStatus::TransactionRetry),
+            Err(error) => Err(crate::status::shared(&error).unwrap_or(RpcStatus::TransactionRetry)),
         }
     }
 

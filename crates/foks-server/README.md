@@ -182,6 +182,11 @@ redirected to a loadable `server.toml`. The zone TTL is not a setting: the
 first start signs 60 seconds into the stored probe response, and later starts
 refuse a different value.
 
+A write that would grow the database past `maximum_database_bytes` fails in
+SQLite with `SQLITE_FULL`. Every RPC route reports it as FOKS status 1060
+(over quota), the same status as a write refused by a configured storage
+quota, and the status detail does not include SQLite error text.
+
 The lower-level `serve` command remains available when every artifact and
 listener should be supplied individually:
 

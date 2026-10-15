@@ -422,16 +422,14 @@ fn decode_root_status(root: &foks_server_db::RootSnapshot) -> Result<MerkleRoot,
     decode_root(root).map_err(internal)
 }
 
-fn map_write_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::error::mutation_failure_status(&error) {
+pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
+    if let Some(status) = crate::status::shared(&error) {
         return status;
     }
     match error {
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::InvitationAlreadyPending) => {
             RpcStatus::TeamInviteAlreadyAccepted
         }
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         crate::Error::Database(foks_server_db::Error::StaleRoot) => RpcStatus::StaleRoot,
         crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
         crate::Error::Database(foks_server_db::Error::PassphraseNotFound) => {

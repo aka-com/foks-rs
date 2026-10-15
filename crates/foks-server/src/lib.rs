@@ -31,6 +31,7 @@ pub mod rpc;
 mod services;
 pub mod sso;
 mod standalone;
+mod status;
 pub mod waitlist;
 mod writer;
 

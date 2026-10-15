@@ -1220,6 +1220,34 @@ mod tests {
     }
 
     #[test]
+    fn rejected_team_transitions_carry_fixed_text() {
+        use super::{map_create_error, map_edit_error};
+        use foks_rpc::RpcStatus;
+        let constraint = || {
+            crate::Error::Database(foks_server_db::Error::Sql(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+                Some("UNIQUE constraint failed: team_chain_links.team_id".into()),
+            )))
+        };
+        assert_eq!(
+            map_edit_error(constraint()),
+            RpcStatus::TeamError("team edit validation failed".into())
+        );
+        assert_eq!(
+            map_create_error(constraint()),
+            RpcStatus::TeamError("team creation validation failed".into())
+        );
+        assert_eq!(
+            map_edit_error(crate::Error::Signup("team roster is not sorted")),
+            RpcStatus::TeamError("team edit validation failed: team roster is not sorted".into())
+        );
+        assert_eq!(
+            map_edit_error(crate::Error::Signup("team member PUK is not current")),
+            RpcStatus::TeamRace("team member PUK changed during edit".into())
+        );
+    }
+
+    #[test]
     fn same_generation_stale_puk_cannot_receive_a_rotated_ptk() {
         let material =
             foks_crypto::derive_shared_public(&SecretSeed::new([7; 32]), ENTITY_PUK_VERIFY)
@@ -1262,23 +1290,21 @@ mod tests {
     }
 }
 
-fn map_edit_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::error::mutation_failure_status(&error) {
+pub(super) fn map_edit_error(error: crate::Error) -> RpcStatus {
+    if let Some(status) = crate::status::shared(&error) {
         return status;
     }
     match error {
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::StaleRoot) => {
             RpcStatus::TeamRace("team head or Merkle root changed".to_owned())
         }
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         crate::Error::Database(foks_server_db::Error::OperationConflict) => {
             bad_arguments("team edit retry binding failed")
         }
         crate::Error::Signup("team member PUK is not current") => {
             RpcStatus::TeamRace("team member PUK changed during edit".to_owned())
         }
-        other => RpcStatus::TeamError(format!("team edit validation failed: {other}")),
+        other => team_error("team edit validation failed", &other),
     }
 }
 
@@ -1296,33 +1322,38 @@ fn require_cited_root(
     Ok(root)
 }
 
-fn map_create_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::error::mutation_failure_status(&error) {
+pub(super) fn map_create_error(error: crate::Error) -> RpcStatus {
+    if let Some(status) = crate::status::shared(&error) {
         return status;
     }
     match error {
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
         crate::Error::Database(foks_server_db::Error::Reservation) => RpcStatus::Expired,
         crate::Error::Database(foks_server_db::Error::StaleRoot) => {
             RpcStatus::RevokeRace("team creation chain or Merkle root changed".to_owned())
         }
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         crate::Error::Database(foks_server_db::Error::OperationConflict) => {
             bad_arguments("team creation retry binding failed")
         }
-        other => RpcStatus::TeamError(format!("team creation validation failed: {other}")),
+        other => team_error("team creation validation failed", &other),
     }
 }
 
-fn map_write_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::error::mutation_failure_status(&error) {
+/// Reports a rejected team transition. Only the fixed validation messages of
+/// `Error::Signup` are appended; other errors can carry storage text.
+fn team_error(summary: &str, error: &crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::Signup(message) => RpcStatus::TeamError(format!("{summary}: {message}")),
+        _ => RpcStatus::TeamError(summary.to_owned()),
+    }
+}
+
+pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
+    if let Some(status) = crate::status::shared(&error) {
         return status;
     }
     match error {
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         _ => RpcStatus::TransactionRetry,
     }
 }

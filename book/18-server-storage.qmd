@@ -50,7 +50,9 @@ with that trade.
 The Rust server sets its writer connection to WAL mode with `synchronous =
 FULL` (every commit is flushed to stable storage before it is acknowledged),
 `foreign_keys = ON`, `trusted_schema = OFF`, and a hard page-count ceiling
-so that a full disk produces a clean quota error rather than corruption.
+so that a full disk produces a clean quota error rather than corruption. A
+write that reaches the ceiling fails with `SQLITE_FULL`, and every write route
+reports it to the client as status 1060 (over quota).
 
 | Writer connection pragma | Value |
 |---|---|

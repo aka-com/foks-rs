@@ -548,6 +548,9 @@ pub enum TestProfile {
     SmallCapacity,
     SmallTeamCapacity,
     SmallFederationCapacity,
+    /// Caps the database file at `TINY_DATABASE_BYTES`, so that ordinary
+    /// writes reach SQLite's `max_page_count` ceiling.
+    TinyDatabase,
     QueuePressure,
     TightIo,
     ProductionBenchmark,
@@ -560,6 +563,10 @@ pub enum TestProfile {
 }
 
 pub const WAITLIST_TEST_ENTRIES: u64 = 4;
+
+/// Database ceiling of `TestProfile::TinyDatabase`, about 1 MiB above the
+/// size of a new host with one account.
+const TINY_DATABASE_BYTES: u64 = 3 * 1024 * 1024;
 
 impl TestProfile {
     fn configuration(self) -> (foks_server_db::Config, foks_server::SessionLimits, usize) {
@@ -591,6 +598,10 @@ impl TestProfile {
                 maximum_active_remote_user_view_permissions: 3,
                 maximum_remote_team_view_permissions_per_team: 2,
                 maximum_active_remote_team_view_permissions: 3,
+                ..foks_server_db::Config::default()
+            },
+            Self::TinyDatabase => foks_server_db::Config {
+                maximum_database_bytes: TINY_DATABASE_BYTES,
                 ..foks_server_db::Config::default()
             },
             Self::Waitlist => foks_server_db::Config {

@@ -24,16 +24,14 @@ fn internal(_: impl std::fmt::Display) -> RpcStatus {
 fn denied() -> RpcStatus {
     RpcStatus::PermissionDenied("invitation authority".into())
 }
-fn write_error(e: crate::Error) -> RpcStatus {
-    crate::error::mutation_failure_status(&e).unwrap_or(match e {
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
+pub(super) fn write_error(e: crate::Error) -> RpcStatus {
+    crate::status::shared(&e).unwrap_or(match e {
         crate::Error::Database(foks_server_db::Error::InvitationAlreadyPending) => {
             RpcStatus::TeamInviteAlreadyAccepted
         }
         crate::Error::Database(foks_server_db::Error::InvitationDecisionConflict) => {
             RpcStatus::TeamRace("invitation decision conflict".into())
         }
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         _ => RpcStatus::TransactionRetry,
     })
 }

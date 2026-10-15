@@ -31,11 +31,10 @@ pub(crate) fn join_waitlist(
     foks_snowpack::encode(&Value::Binary(stored.to_vec())).map_err(map_write_error)
 }
 
-fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
+pub(super) fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
     match error.into() {
         // rate_limited is the route's declared status for a full waitlist.
-        crate::Error::WriterQueue
-        | crate::Error::Database(foks_server_db::Error::Capacity("waitlist")) => {
+        crate::Error::Database(foks_server_db::Error::Capacity("waitlist")) => {
             RpcStatus::RateLimited
         }
         crate::Error::Database(foks_server_db::Error::Invalid(message)) => {
@@ -44,11 +43,11 @@ fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
         crate::Error::Database(foks_server_db::Error::Duplicate(message)) => {
             RpcStatus::Duplicate(message.to_owned())
         }
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
     }
 }
 
-fn map_identifier_write_error(error: crate::Error) -> RpcStatus {
+pub(super) fn map_identifier_write_error(error: crate::Error) -> RpcStatus {
     if matches!(
         error,
         crate::Error::Database(foks_server_db::Error::Duplicate(_))

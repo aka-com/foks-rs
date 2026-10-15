@@ -263,13 +263,16 @@ impl RealtimeService {
         }
     }
 }
-fn write_error(error: crate::Error) -> RpcStatus {
+pub(super) fn write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::Database(e) => db_error(e),
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
     }
 }
 fn db_error(error: DbError) -> RpcStatus {
+    if let Some(status) = crate::status::storage(&error) {
+        return status;
+    }
     match error {
         DbError::AuthorizationChanged => {
             RpcStatus::PermissionDenied("realtime access denied".into())
@@ -287,7 +290,6 @@ fn db_error(error: DbError) -> RpcStatus {
         DbError::Invalid(_) | DbError::IntegerRange => {
             RpcStatus::BadArguments("invalid realtime value".into())
         }
-        DbError::QuotaExceeded => RpcStatus::QuotaExceeded,
         DbError::Capacity(_) => RpcStatus::Realtime("realtime service limit exceeded".into()),
         _ => RpcStatus::TransactionRetry,
     }

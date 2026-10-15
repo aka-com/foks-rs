@@ -171,8 +171,7 @@ impl Operations for ServerData {
                     crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
                         permission_denied()
                     }
-                    other => crate::error::mutation_failure_status(&other)
-                        .unwrap_or(RpcStatus::TransactionRetry),
+                    other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
                 })
         } else {
             let full = arg.full.ok_or_else(|| {

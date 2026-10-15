@@ -36,4 +36,43 @@ mod tests {
         assert!(!protocol_time_is_nowish(now_micros, now_micros));
         assert!(!protocol_time_is_nowish(0, now_micros));
     }
+
+    #[test]
+    fn every_write_mapper_reports_shared_failure_classes() {
+        use crate::status::contract::{assert_shared_classes, wrapped_sso};
+        type Mapper = fn(crate::Error) -> foks_rpc::RpcStatus;
+        let mappers: [(&str, Mapper); 19] = [
+            ("federation", super::federation::map_write_error),
+            ("generic", super::generic::map_write_error),
+            ("kv write", super::kv::map_write_error),
+            ("kv upload", super::kv::map_upload_error),
+            ("kv lock", super::kv::map_lock_error),
+            ("log upload", super::log_upload::map_write_error),
+            (
+                "log upload identifier",
+                super::log_upload::map_identifier_write_error,
+            ),
+            ("realtime", super::realtime::write_error),
+            ("registration", super::registration::map_write_error),
+            (
+                "registration passphrase",
+                super::registration::map_passphrase_write_error,
+            ),
+            ("team edit", super::team_admin::map_edit_error),
+            ("team create", super::team_admin::map_create_error),
+            ("team admin", super::team_admin::map_write_error),
+            ("team invitations", super::team_invitations::write_error),
+            ("team loader", super::team_loader::map_write_error),
+            ("yubi", super::user::map_yubi_write_error),
+            ("device nag", super::user::map_device_nag_write_error),
+            ("waitlist", super::waitlist::map_write_error),
+            (
+                "waitlist identifier",
+                super::waitlist::map_identifier_write_error,
+            ),
+        ];
+        for (route, map) in mappers {
+            assert_shared_classes(route, wrapped_sso, map);
+        }
+    }
 }

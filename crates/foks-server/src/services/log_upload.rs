@@ -82,9 +82,8 @@ fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
     RpcStatus::BadArguments(error.to_string())
 }
 
-fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
+pub(super) fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
     match error.into() {
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::Capacity(
             "active log-send sessions" | "log-send bytes",
         )) => RpcStatus::RateLimited,
@@ -98,12 +97,11 @@ fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
         crate::Error::Database(foks_server_db::Error::Duplicate(message)) => {
             RpcStatus::Duplicate(message.to_owned())
         }
-        crate::Error::Database(error) if error.is_quota() => RpcStatus::QuotaExceeded,
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
     }
 }
 
-fn map_identifier_write_error(error: crate::Error) -> RpcStatus {
+pub(super) fn map_identifier_write_error(error: crate::Error) -> RpcStatus {
     if matches!(
         error,
         crate::Error::Database(foks_server_db::Error::Duplicate(_))

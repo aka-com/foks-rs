@@ -492,3 +492,23 @@ fn block_epoch_is_authenticated_in_session_envelopes() {
         .unwrap();
     assert!(service.browser_start(&state(&arg)).is_err());
 }
+
+#[test]
+fn sso_status_reports_shared_failure_classes_and_unwrapped_flow_errors() {
+    use crate::status::contract::assert_shared_classes;
+    assert_shared_classes(
+        "sso",
+        |message| foks_rpc::RpcStatus::OAuth2(message.into()),
+        status,
+    );
+    assert_eq!(
+        status(Error::Database(foks_server_db::Error::Capacity(
+            "SSO flows"
+        ))),
+        foks_rpc::RpcStatus::RateLimited
+    );
+    assert_eq!(
+        status(Error::Database(foks_server_db::Error::NotFound("SSO flow"))),
+        foks_rpc::RpcStatus::OAuth2("authentication could not be verified".into())
+    );
+}
