@@ -231,8 +231,9 @@ response. If its write is still in the writer queue at that point, the writer
 does not run it: it opens no transaction for the job and counts it in
 `foks_writer_expired_total`. A write that the handler submits after that point
 is refused without entering the queue and is counted the same way. A write that
-has already started runs to completion. A rising count means that writes wait in the queue for longer than
-the request timeout.
+has already started runs to completion. A rising count means that handlers,
+including their wait in the writer queue, take longer than the request timeout
+before their writes start.
 
 `foks_requests_total{family,status}` counts written responses by route family
 (the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for
