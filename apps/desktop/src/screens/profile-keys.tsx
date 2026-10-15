@@ -1,6 +1,6 @@
-import { useDeviceQueries, metadataFreshness } from '../device-cache';
+import { useDeviceQueries, metadataFreshness } from '../data/device-cache';
 import { FreshnessCaption } from '../components/metadata-status';
-import { useMetadataQuery } from '../query-hooks';
+import { useMetadataQuery } from '../data/query-hooks';
 import { useState } from 'react';
 import type { Bridge } from '../bridge';
 import { Button, Inset, InsetRow, SectionLabel } from '../components';

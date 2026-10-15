@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { failureOutcome, synchronizeApplied } from '../src/operation-outcome';
+import {
+  failureOutcome,
+  synchronizeApplied,
+} from '../src/data/operation-outcome';
 const error = (code: string, ambiguous = false) => ({
   code,
   message: code,

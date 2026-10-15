@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Bridge, CheckedServer, ServerStatusSnapshot } from '../../bridge';
 import type { AgentSnapshot, Server } from '../../model';
-import type { MutationFailureHandler } from '../../mutation-recovery';
+import type { MutationFailureHandler } from '../../data/mutation-recovery';
 import { serverBinding, ServerCheckController } from './server-workflow';
 
 interface Reports {

@@ -3,7 +3,10 @@ import test from 'node:test';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 import { projectCatalog } from '../src/bridge/snapshot-projection';
-import { mergeProfileSnapshot, failCatalogRefresh } from '../src/catalog-state';
+import {
+  mergeProfileSnapshot,
+  failCatalogRefresh,
+} from '../src/data/catalog-state';
 import {
   groupDetailReadiness,
   inventoryReadiness,

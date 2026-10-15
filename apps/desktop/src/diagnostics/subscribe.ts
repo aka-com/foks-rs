@@ -6,8 +6,8 @@
  */
 
 import type { Bridge } from '../bridge';
-import type { CatalogCoordinator } from '../catalog-coordinator';
-import type { MetadataRepository } from '../metadata-repository';
+import type { CatalogCoordinator } from '../data/catalog-coordinator';
+import type { MetadataRepository } from '../data/metadata-repository';
 import { observeProfileWork } from '../scheduling/profile-work';
 import type { ReconciliationScheduler } from '../scheduling/reconciliation';
 import {

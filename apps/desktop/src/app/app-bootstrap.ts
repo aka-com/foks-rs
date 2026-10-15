@@ -1,4 +1,4 @@
-import { refreshActivitiesFor } from '../refresh-activity';
+import { refreshActivitiesFor } from '../data/refresh-activity';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   isAgentReadinessError,
@@ -15,8 +15,8 @@ import { profileInventoryComplete, serverAvailability } from '../model';
 import type { AgentSnapshot } from '../model';
 import { initialScene } from './scenes';
 import { MaintenanceOwnership } from './maintenance-ownership';
-import { DeviceCache } from '../device-cache';
-import { DeviceMetadata } from '../device-metadata';
+import { DeviceCache } from '../data/device-cache';
+import { DeviceMetadata } from '../data/device-metadata';
 import { deviceAlertRegistry } from '../data/device-alert';
 
 /**

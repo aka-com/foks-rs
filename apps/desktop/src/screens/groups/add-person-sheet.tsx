@@ -23,7 +23,7 @@ import {
   serverDisplayLabelForStore as displayServerName,
 } from '../../model';
 import { useSheetGuard, useTabSheetState } from '../../navigation-guard';
-import { markProfileRostersStale } from '../../roster-staleness';
+import { markProfileRostersStale } from '../../data/roster-staleness';
 import { GroupMark } from '../../components/group-mark';
 import {
   DetailUnavailable,

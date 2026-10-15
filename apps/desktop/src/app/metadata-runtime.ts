@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { RefObject } from 'react';
 import type { Bridge } from '../bridge';
-import { DeviceCache } from '../device-cache';
-import { DeviceMetadata, isDeviceQuery } from '../device-metadata';
+import { DeviceCache } from '../data/device-cache';
+import { DeviceMetadata, isDeviceQuery } from '../data/device-metadata';
 import { deviceAlertRegistry } from '../data/device-alert';
 import { accountStopped, type AgentSnapshot } from '../model';
-import { readRecoveryFor } from '../query-read-recovery';
-import type { QueryKey } from '../metadata-repository';
+import { readRecoveryFor } from '../data/query-read-recovery';
+import type { QueryKey } from '../data/metadata-repository';
 import { isStoreUsageQuery } from '../store-usage';
 
 /**

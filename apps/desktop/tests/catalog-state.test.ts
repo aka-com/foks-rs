@@ -7,7 +7,7 @@ import {
   markCatalogRefresh,
   mergeProfileSnapshot,
   projectCatalogFreshness,
-} from '../src/catalog-state';
+} from '../src/data/catalog-state';
 import { FIXTURE } from '../src/fixture';
 import type { AgentSnapshot } from '../src/model';
 import { mockBridge } from '../src/mock-bridge';

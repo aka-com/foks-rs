@@ -15,7 +15,7 @@ import { attentionItems, setupChecklist } from '../attention';
 import type { AppLockState, Bridge, ItemField } from '../bridge';
 import { useChatMigration } from '../chat/migration';
 import { ChatInboxProvider } from '../chat/inbox-provider';
-import { DeviceCacheContext } from '../device-cache';
+import { DeviceCacheContext } from '../data/device-cache';
 import {
   FIRST_RUN_PROGRESS_EVENT,
   storedFirstRunCheckpoint,
@@ -43,7 +43,7 @@ import {
   type DeviceLabel,
 } from '../model';
 import { NavigationGuardProvider, useTabSheetState } from '../navigation-guard';
-import { MetadataRepositoryContext } from '../query-hooks';
+import { MetadataRepositoryContext } from '../data/query-hooks';
 import { followMoves } from '../recent-favorites';
 import {
   systemLeaseExpiryClock,
@@ -70,7 +70,7 @@ import {
   teamRequestsBadge,
   usePendingMembershipCounts,
   useTeamRequestCounts,
-} from '../operation-queries';
+} from '../data/operation-queries';
 import {
   initialWriteWorkflow,
   type WriteWorkflow,
@@ -91,7 +91,7 @@ import { shellBlock, shellChrome } from './blocking-shell';
 import { useCatalogRuntime } from './catalog-runtime';
 import type { MaintenanceOwnership } from './maintenance-ownership';
 import { useMetadataRuntime } from './metadata-runtime';
-import { DeviceMetadataContext } from '../device-metadata';
+import { DeviceMetadataContext } from '../data/device-metadata';
 import {
   ShellServicesProvider,
   ShellSnapshotProvider,
@@ -140,7 +140,7 @@ interface VaultShellProps {
   store?: LocationStore;
   firstRunStart?: 'who' | 'local' | null;
   managedProfile?: string | null;
-  initialDeviceCache?: import('../device-cache').DeviceCache;
+  initialDeviceCache?: import('../data/device-cache').DeviceCache;
   onLock: () => Promise<boolean>;
   retireBoot: () => void;
   /** Resolves when the active boot catalog load completes, or immediately if none is running. */

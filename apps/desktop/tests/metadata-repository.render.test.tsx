@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { installDom } from './lib/dom-harness';
-import { MetadataRepository } from '../src/metadata-repository';
-import type { MetadataQuery } from '../src/metadata-repository';
-import { useMetadataQuery } from '../src/query-hooks';
+import { MetadataRepository } from '../src/data/metadata-repository';
+import type { MetadataQuery } from '../src/data/metadata-repository';
+import { useMetadataQuery } from '../src/data/query-hooks';
 
 installDom({ url: 'http://localhost/', timers: true, act: true });
 let ui: typeof import('@testing-library/react');

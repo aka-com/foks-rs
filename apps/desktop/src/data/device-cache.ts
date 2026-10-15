@@ -3,18 +3,18 @@ import { createContext, useCallback, useContext, useMemo, useRef } from 'react';
 import {
   requireWorkflow,
   workflowAvailability,
-} from './model/workflow-availability';
-import type { AgentSnapshot } from './model/types';
-import { scheduleProfileWork } from './scheduling/profile-work';
+} from '../model/workflow-availability';
+import type { AgentSnapshot } from '../model/types';
+import { scheduleProfileWork } from '../scheduling/profile-work';
 import type {
   AccountDevice,
   BackupEnrollment,
   Bridge,
   YubiEnrollment,
-} from './bridge';
-import type { StoreRef } from './model';
-import type { DeviceLists } from './data/device-model';
-import { NO_DEVICES } from './data/device-model';
+} from '../bridge';
+import type { StoreRef } from '../model';
+import type { DeviceLists } from './device-model';
+import { NO_DEVICES } from './device-model';
 import { MetadataRepository } from './metadata-repository';
 import type { QuerySnapshot } from './metadata-repository';
 import { useMetadataQuery, useMetadataRepository } from './query-hooks';

@@ -771,7 +771,7 @@ test('incomplete group recovery describes durable creation evidence', async () =
 
 test('an explicit team refresh reads one profile and waives the roster reuse', async () => {
   const { resetProfileRosterStaleness, consumeProfileRosterStaleness } =
-    await import('../src/roster-staleness');
+    await import('../src/data/roster-staleness');
   const snapshot = await fixture();
   const store = snapshot.stores.find((store) => store.id === 'team:household');
   assert.ok(store);

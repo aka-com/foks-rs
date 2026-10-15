@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import { AccessLifetime } from '../../data/access-lifetime';
 import { useToast } from '../../../kit/toasts';
 import { runDeviceMutation } from './operation-controller';
-import { attemptRead } from '../../commands/command-policy';
-import type { MutationPolicy } from '../../commands/command-policy';
+import { attemptRead } from '../../data/command-policy';
+import type { MutationPolicy } from '../../data/command-policy';
 
 export function useDeviceOperation(scope: string) {
   const toasts = useToast();

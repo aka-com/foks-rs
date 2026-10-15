@@ -23,10 +23,10 @@ import {
   useShellDeviceMetadata,
   emptyDeviceMetadata,
   noDeviceSubscription,
-} from '../device-metadata';
+} from '../data/device-metadata';
 import { diagnosticLog, type TimingEvent } from '../diagnostics/log';
 import { useCopyDiagnostics } from '../diagnostics/use-copy-diagnostics';
-import type { DesktopReconciliation } from '../desktop-reconciliation';
+import type { DesktopReconciliation } from '../data/desktop-reconciliation';
 import { Button, Icon } from '../components';
 import {
   clockTime,

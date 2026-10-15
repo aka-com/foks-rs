@@ -1,7 +1,7 @@
 import { AccessLifetime } from '../../data/access-lifetime';
 import { enqueueProfileWork, sharedServerStatus } from '../../bridge';
 import type { Bridge, CheckedServer, ServerStatusSnapshot } from '../../bridge';
-import { attemptMutation } from '../../commands/command-policy';
+import { attemptMutation } from '../../data/command-policy';
 import { serverAvailability } from '../../model';
 import { canReadServer } from './server-model';
 import type { AgentSnapshot, Server } from '../../model';

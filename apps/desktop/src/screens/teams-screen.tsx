@@ -1,6 +1,6 @@
 import { inventoryReadiness, groupDetailReadiness } from '../model';
 import { CollectionStatus } from '../components/collection-status';
-import { synchronizeApplied } from '../operation-outcome';
+import { synchronizeApplied } from '../data/operation-outcome';
 import { useTabSheetState } from '../navigation-guard';
 /**
  * The Teams tab: every named team and ad-hoc share on this Mac in one list,
@@ -19,7 +19,7 @@ import type { ReactNode } from 'react';
 import { Band, Button, Chip, Icon, MenuButton, MenuItem } from '../components';
 import { InvitationPanel } from '../components/invitation-panel';
 import { InviteNewUserSheet } from '../components/invite-new-user-sheet';
-import { useTeamRequestCounts } from '../operation-queries';
+import { useTeamRequestCounts } from '../data/operation-queries';
 import {
   commandRecovery,
   enqueueProfileWork,
@@ -50,8 +50,8 @@ import type {
 import type { Bridge } from '../bridge';
 import { accountAtLocation, normalizeTeamsLocation } from '../location';
 import type { Location, NavigateOptions, TeamsSheetIntent } from '../location';
-import type { MutationFailureHandler } from '../mutation-recovery';
-import { markProfileRostersStale } from '../roster-staleness';
+import type { MutationFailureHandler } from '../data/mutation-recovery';
+import { markProfileRostersStale } from '../data/roster-staleness';
 import { PageHeader } from '../shell/page-header';
 import { useToast } from '../../kit/toasts';
 import { GroupMark } from '../components/group-mark';
@@ -209,7 +209,7 @@ function TeamRow({
   snapshot: AgentSnapshot;
   store: TeamStore;
   /** Membership requests waiting on this team, drawn as a chip on the row. */
-  requests?: import('../operation-queries').TeamRequestCount;
+  requests?: import('../data/operation-queries').TeamRequestCount;
   menu: ReactNode;
   onOpen: () => void;
   onContextMenu: (point: { x: number; y: number }) => void;

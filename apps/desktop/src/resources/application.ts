@@ -1,5 +1,8 @@
 import type { AppInfo, Bridge } from '../bridge';
-import type { MetadataQuery, MetadataRepository } from '../metadata-repository';
+import type {
+  MetadataQuery,
+  MetadataRepository,
+} from '../data/metadata-repository';
 
 export const appInfoKey = ['application-info'] as const;
 

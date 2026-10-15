@@ -8,7 +8,7 @@ import type { ToastController } from '../../kit/toasts';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import type { LocationStore } from '../location';
 import { nameOf, storeOf, type AgentSnapshot, type Item } from '../model';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { NavigationPrompt } from '../navigation-guard';
 import { useShellServices } from '../shell-services';
 import type { DropUpload } from '../screens/items-screen';

@@ -11,7 +11,7 @@
 import { normalizeCommandError } from '../bridge';
 import { displayPath, isTrashPath, nameOf } from '../model';
 import type { AgentSnapshot, Item } from '../model';
-import { failureOutcome } from '../operation-outcome';
+import { failureOutcome } from '../data/operation-outcome';
 
 /* ---------------------------------------------------------------- paths -- */
 

@@ -19,7 +19,10 @@ import {
   type AgentSnapshot,
   type TeamStore,
 } from '../src/model';
-import { failCatalogRefresh, markCatalogRefresh } from '../src/catalog-state';
+import {
+  failCatalogRefresh,
+  markCatalogRefresh,
+} from '../src/data/catalog-state';
 import { settle } from './lib/dom-harness';
 
 const tick = () => new Promise<void>((done) => setImmediate(done));

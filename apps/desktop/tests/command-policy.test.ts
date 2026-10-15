@@ -4,7 +4,7 @@ import {
   attemptMutation,
   attemptRead,
   reportMutationOutcome,
-} from '../src/commands/command-policy';
+} from '../src/data/command-policy';
 
 const failure = (code: string, ambiguous = false) => ({
   code,

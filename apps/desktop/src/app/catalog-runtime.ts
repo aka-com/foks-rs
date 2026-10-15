@@ -1,4 +1,4 @@
-import { refreshActivitiesFor } from '../refresh-activity';
+import { refreshActivitiesFor } from '../data/refresh-activity';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import type { ToastController, ToastOptions } from '../../kit/toasts';
@@ -11,19 +11,19 @@ import type { Bridge } from '../bridge';
 import {
   CatalogCoordinator,
   CatalogReadRetiredError,
-} from '../catalog-coordinator';
-import { CatalogReadGate } from '../catalog-read-gate';
+} from '../data/catalog-coordinator';
+import { CatalogReadGate } from '../data/catalog-read-gate';
 import {
   changedCatalogProfiles,
   failWholeCatalogRefresh,
   markCatalogRefresh,
-} from '../catalog-state';
+} from '../data/catalog-state';
 import { storeOf, type AgentSnapshot, type Item } from '../model';
 import {
   reconcileMutationFailure,
   type MutationFailureHandler,
-} from '../mutation-recovery';
-import { synchronizeApplied } from '../operation-outcome';
+} from '../data/mutation-recovery';
+import { synchronizeApplied } from '../data/operation-outcome';
 
 export type CommandErrorHandler = (
   error: unknown,

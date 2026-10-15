@@ -10,16 +10,13 @@ import { LowerRoleSheet } from './groups/lower-role-sheet';
 import { RemoveMemberSheet } from './groups/remove-member-sheet';
 import { canTarget, demotionFor, partySubtitle } from './groups/sheet-support';
 import type { GroupSheetBaseProps } from './groups/sheet-support';
-import {
-  attemptMutation,
-  reportMutationOutcome,
-} from '../commands/command-policy';
+import { attemptMutation, reportMutationOutcome } from '../data/command-policy';
 import { useTabSheetState } from '../navigation-guard';
 import { UnfinishedActivity } from '../components/unfinished-activity';
 import { InviteNewUserSheet } from '../components/invite-new-user-sheet';
 import { InvitationActivitySheet } from '../components/invitation-activity-sheet';
 import { MembershipRequests } from '../components/membership-requests';
-import { useTeamRequestCounts } from '../operation-queries';
+import { useTeamRequestCounts } from '../data/operation-queries';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -76,9 +73,9 @@ import { useSidebarInbox } from '../chat/inbox-provider';
 import { listChannels } from '../chat/presentation';
 import { GROUP_SETTINGS_TABS } from '../location';
 import type { GroupSettingsTab, Location, NavigateOptions } from '../location';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { useSheetGuard } from '../navigation-guard';
-import { markProfileRostersStale } from '../roster-staleness';
+import { markProfileRostersStale } from '../data/roster-staleness';
 import { PageHeader } from '../shell/page-header';
 import { NewChatSheet } from './chat-new';
 import {

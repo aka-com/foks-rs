@@ -7,7 +7,7 @@ import { FIXTURE } from '../src/fixture';
 import {
   MetadataRepository,
   RetiredQueryError,
-} from '../src/metadata-repository';
+} from '../src/data/metadata-repository';
 import {
   APP_INFO_FRESHNESS,
   appInfoKey,
@@ -25,8 +25,11 @@ import {
   teamRequestsBadge,
   type TeamRequestCount,
   TEAM_REQUEST_FRESHNESS,
-} from '../src/operation-queries';
-import { accountDeviceKey, profileEnrollmentKey } from '../src/device-cache';
+} from '../src/data/operation-queries';
+import {
+  accountDeviceKey,
+  profileEnrollmentKey,
+} from '../src/data/device-cache';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

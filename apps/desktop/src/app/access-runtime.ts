@@ -6,7 +6,7 @@ import {
   LeaseExpiryCoordinator,
   type LeaseExpiryClock,
 } from '../scheduling/lease-expiry';
-import type { useDesktopReconciliation } from '../use-desktop-reconciliation';
+import type { useDesktopReconciliation } from '../data/use-desktop-reconciliation';
 import type { CommandErrorHandler } from './catalog-runtime';
 
 export function useAccessRuntime({

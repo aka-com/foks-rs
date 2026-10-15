@@ -1,5 +1,5 @@
-import { INVITATION_ACTIVITY } from './invitation-activity';
-import type { InvitationActivityDetail } from './invitation-activity';
+import { INVITATION_ACTIVITY } from '../invitation-activity';
+import type { InvitationActivityDetail } from '../invitation-activity';
 
 /**
  * Profiles whose cached team rosters must be read again on the next

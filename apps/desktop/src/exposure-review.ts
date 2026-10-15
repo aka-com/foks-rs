@@ -59,7 +59,7 @@ import type {
   Store,
   StoreRef,
 } from './model';
-import { failureOutcome } from './operation-outcome';
+import { failureOutcome } from './data/operation-outcome';
 import { STORAGE_KEYS, storedRecord } from './platform/device-storage';
 
 /** Reviews beyond this many are dropped, oldest first. */

@@ -17,7 +17,7 @@ import type { ReactNode } from 'react';
 import { installDom } from './lib/dom-harness';
 import { loadTestShell } from './lib/test-shell';
 import type { Bridge } from '../src/bridge';
-import { CatalogCoordinator } from '../src/catalog-coordinator';
+import { CatalogCoordinator } from '../src/data/catalog-coordinator';
 import type { Location } from '../src/location';
 import type { AgentSnapshot, TeamStore } from '../src/model';
 

@@ -11,7 +11,7 @@
  */
 
 import type { ReactNode } from 'react';
-import type { metadataFreshness } from '../device-cache';
+import type { metadataFreshness } from '../data/device-cache';
 
 function timeOf(milliseconds: number): string {
   return new Date(milliseconds).toLocaleTimeString([], {

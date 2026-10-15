@@ -1,11 +1,11 @@
 import { refreshActivitiesFor } from './refresh-activity';
 import { useEffect, useMemo, useRef } from 'react';
-import type { Bridge } from './bridge';
+import type { Bridge } from '../bridge';
 import {
   isAgentReadinessError,
   loadProfileSnapshot,
   normalizeCommandError,
-} from './bridge';
+} from '../bridge';
 import {
   failCatalogRefresh,
   markCatalogRefresh,
@@ -20,14 +20,14 @@ import {
 import {
   connectionFactsUnchanged,
   observeProfileConnection,
-} from './profile-connectivity';
-import { scheduleProfileWork } from './scheduling/profile-work';
-import type { AgentSnapshot, Server } from './model';
-import { discoveryAccounts, reconcileTeamDiscovery } from './team-discovery';
+} from '../profile-connectivity';
+import { scheduleProfileWork } from '../scheduling/profile-work';
+import type { AgentSnapshot, Server } from '../model';
+import { discoveryAccounts, reconcileTeamDiscovery } from '../team-discovery';
 import type {
   ReconciliationClock,
   ReconciliationContext,
-} from './scheduling/reconciliation';
+} from '../scheduling/reconciliation';
 
 interface Options {
   bridge: Bridge;

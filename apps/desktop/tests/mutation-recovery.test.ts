@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { reconcileMutationFailure } from '../src/mutation-recovery';
+import { reconcileMutationFailure } from '../src/data/mutation-recovery';
 
 test('mutation failure triggers a single state refresh without replaying the write', async () => {
   let refreshes = 0;

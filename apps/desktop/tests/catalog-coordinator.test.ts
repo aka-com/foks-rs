@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   CatalogCoordinator,
   CatalogReadRetiredError,
-} from '../src/catalog-coordinator';
+} from '../src/data/catalog-coordinator';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

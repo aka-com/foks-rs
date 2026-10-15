@@ -1,12 +1,12 @@
-import type { RefreshOperation } from '../refresh-activity';
+import type { RefreshOperation } from '../data/refresh-activity';
 import {
   catalogItemsComplete,
   catalogStoreComplete,
   projectCatalogFreshness,
   sameStoreIdentity,
-} from '../catalog-state';
+} from '../data/catalog-state';
 import { itemKey, serverDisplayLabel, serverFactAvailability } from '../model';
-import { consumeProfileRosterStaleness } from '../roster-staleness';
+import { consumeProfileRosterStaleness } from '../data/roster-staleness';
 import type {
   AgentSnapshot,
   AgentStatus,

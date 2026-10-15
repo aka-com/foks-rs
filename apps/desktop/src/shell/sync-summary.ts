@@ -13,10 +13,10 @@
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
 import { chatAvailable, serverDisplayLabel } from '../model';
 import type { TeamInbox } from '../chat/inbox-service';
-import type { DeviceMetadataStatus } from '../device-metadata';
+import type { DeviceMetadataStatus } from '../data/device-metadata';
 import { formatMilliseconds, formatTimings } from '../diagnostics/format';
 import { diagnosticLog, type TimingEvent } from '../diagnostics/log';
-import type { DesktopReconciliation } from '../desktop-reconciliation';
+import type { DesktopReconciliation } from '../data/desktop-reconciliation';
 import type {
   ReconciliationKind,
   ReconciliationSnapshot,
@@ -24,7 +24,7 @@ import type {
 import {
   profileRefreshKey,
   profileConnectivityKey,
-} from '../desktop-reconciliation';
+} from '../data/desktop-reconciliation';
 import { connectionSecurityFailure } from '../profile-connectivity';
 import { normalizeCommandError } from '../bridge';
 

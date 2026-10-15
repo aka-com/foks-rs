@@ -1,5 +1,5 @@
-import { normalizeCommandError } from './bridge';
-import type { CommandError } from './bridge';
+import { normalizeCommandError } from '../bridge';
+import type { CommandError } from '../bridge';
 
 /** A confirmed write stays applied even when its read model cannot be loaded. */
 export type AppliedOutcome<T> =

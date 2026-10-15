@@ -1,19 +1,19 @@
-import { RefreshActivities } from '../src/refresh-activity';
+import { RefreshActivities } from '../src/data/refresh-activity';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { metadataFreshness } from '../src/device-cache';
+import { metadataFreshness } from '../src/data/device-cache';
 import {
   DesktopReconciliation,
   profileConnectivityKey,
   profileRefreshKey,
-} from '../src/desktop-reconciliation';
+} from '../src/data/desktop-reconciliation';
 import { FIXTURE } from '../src/fixture';
 import {
   failWholeCatalogRefresh,
   markCatalogRefresh,
-} from '../src/catalog-state';
+} from '../src/data/catalog-state';
 import { FreshnessCaption } from '../src/components/metadata-status';
 import { diagnosticLog } from '../src/diagnostics/log';
 import { JobTimes } from '../src/shell/sync-popover';

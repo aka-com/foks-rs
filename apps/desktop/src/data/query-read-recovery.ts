@@ -1,4 +1,4 @@
-import { normalizeCommandError } from './bridge';
+import { normalizeCommandError } from '../bridge';
 import type {
   MetadataRepository,
   QueryLoadContext,

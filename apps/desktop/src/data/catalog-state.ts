@@ -1,11 +1,11 @@
-import type { CatalogDto } from './bridge';
+import type { CatalogDto } from '../bridge';
 import type {
   AgentSnapshot,
   CatalogFreshness,
   CatalogFreshnessEntry,
   ServerFailure,
   Store,
-} from './model';
+} from '../model';
 
 export function sameStoreIdentity(a: Store, b: Store): boolean {
   return (

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CatalogReadGate } from '../src/catalog-read-gate';
+import { CatalogReadGate } from '../src/data/catalog-read-gate';
 const flush = async () => {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 };

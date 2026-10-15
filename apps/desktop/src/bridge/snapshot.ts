@@ -1,9 +1,9 @@
 import {
   refreshActivitiesFor,
   type RefreshOperation,
-} from '../refresh-activity';
-import { mergeProfileSnapshot } from '../catalog-state';
-import { CatalogReadRetiredError } from '../catalog-coordinator';
+} from '../data/refresh-activity';
+import { mergeProfileSnapshot } from '../data/catalog-state';
+import { CatalogReadRetiredError } from '../data/catalog-coordinator';
 import { profileInventoryComplete, serverFactAvailability } from '../model';
 import type { AgentSnapshot, AgentStatus } from '../model';
 import {

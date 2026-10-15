@@ -42,7 +42,7 @@ import {
   storeDescription,
   teamCaption,
 } from '../model';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { MutationFailureHandler } from '../data/mutation-recovery';
 import type { Server, StoreRef, TeamStore, AgentSnapshot } from '../model';
 import { PageHeader } from '../shell/page-header';
 import { AccountMark } from '../components/account-mark';

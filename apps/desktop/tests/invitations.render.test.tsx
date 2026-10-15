@@ -628,9 +628,11 @@ test('an invitation action discards the profile’s journal of unfinished operat
   const { InvitationPanel } =
     await import('../src/components/invitation-panel');
   const { mockBridge } = await import('../src/mock-bridge');
-  const { MetadataRepository } = await import('../src/metadata-repository');
-  const { MetadataRepositoryContext } = await import('../src/query-hooks');
-  const { pendingOperationsQuery } = await import('../src/operation-queries');
+  const { MetadataRepository } =
+    await import('../src/data/metadata-repository');
+  const { MetadataRepositoryContext } = await import('../src/data/query-hooks');
+  const { pendingOperationsQuery } =
+    await import('../src/data/operation-queries');
   let now = 0;
   let reads = 0;
   const repository = new MetadataRepository(() => now);

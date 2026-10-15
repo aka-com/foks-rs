@@ -10,7 +10,7 @@ import test from 'node:test';
 import { attentionItems, setupChecklist } from '../src/attention';
 import { FIXTURE } from '../src/fixture';
 import type { AgentSnapshot, Notification } from '../src/model';
-import type { TeamRequestCount } from '../src/operation-queries';
+import type { TeamRequestCount } from '../src/data/operation-queries';
 import { DeviceAlertRegistry } from '../src/data/device-alert';
 
 const NOW = Date.UTC(2026, 9, 11);

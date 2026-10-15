@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useDeviceCache } from '../device-cache';
-import { useMetadataRepository } from '../query-hooks';
+import { useDeviceCache } from '../data/device-cache';
+import { useMetadataRepository } from '../data/query-hooks';
 import { useSheetGuard, useTabSheetState } from '../navigation-guard';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import type { InvitationAction, InvitationRow } from '../invitation-contract';

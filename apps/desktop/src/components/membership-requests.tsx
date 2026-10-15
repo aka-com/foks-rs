@@ -3,7 +3,7 @@ import type { CollectionReadiness } from '../model';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { normalizeCommandError, type Bridge } from '../bridge';
-import { useDeviceCache } from '../device-cache';
+import { useDeviceCache } from '../data/device-cache';
 import { INVITATION_ACTIVITY } from '../invitation-activity';
 import type { InvitationActivityDetail } from '../invitation-activity';
 import type { InvitationAction, InvitationRow } from '../invitation-contract';
@@ -27,7 +27,7 @@ import { securityKeyPinRefusal } from '../security-key-pin';
 import type { TeamStore } from '../model';
 import { serverDisplayLabel } from '../model';
 import type { JoinServer } from './invitation-panel';
-import { useMetadataRepository } from '../query-hooks';
+import { useMetadataRepository } from '../data/query-hooks';
 import {
   Button,
   Chip,

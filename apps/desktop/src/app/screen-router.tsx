@@ -3,7 +3,7 @@ import type { AgentLifecycle } from '../agent-lifecycle';
 import type { Location, LocationStore, NavigateOptions } from '../location';
 import { storeOf } from '../model';
 import type { DeviceLabel, Item } from '../model';
-import { markProfileRostersStale } from '../roster-staleness';
+import { markProfileRostersStale } from '../data/roster-staleness';
 import { ChatTab } from '../screens/chat-tab';
 import { DevicesScreen } from '../screens/devices-screen';
 import { GroupSettingsScreen } from '../screens/groups-screen';

@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { Bridge } from '../src/bridge';
-import { MetadataRepository } from '../src/metadata-repository';
+import { MetadataRepository } from '../src/data/metadata-repository';
 import {
   MetadataRepositoryContext,
   useMetadataQuery,
   useMetadataRepository,
-} from '../src/query-hooks';
+} from '../src/data/query-hooks';
 import { appInfoQuery } from '../src/resources/application';
 import { installDom } from './lib/dom-harness';
 

@@ -5,12 +5,12 @@ import {
   isAgentSessionError,
   isTerminalCommandError,
   normalizeCommandError,
-} from './bridge';
-import type { Bridge, PendingOperation } from './bridge';
-import { plural, storeOperationAvailability } from './model';
-import type { AgentSnapshot, StoreRef, TeamStore } from './model';
-import { INVITATION_ACTIVITY } from './invitation-activity';
-import type { InvitationActivityDetail } from './invitation-activity';
+} from '../bridge';
+import type { Bridge, PendingOperation } from '../bridge';
+import { plural, storeOperationAvailability } from '../model';
+import type { AgentSnapshot, StoreRef, TeamStore } from '../model';
+import { INVITATION_ACTIVITY } from '../invitation-activity';
+import type { InvitationActivityDetail } from '../invitation-activity';
 import { useDeviceCache } from './device-cache';
 import {
   useMetadataQueries,
@@ -18,8 +18,8 @@ import {
   useMetadataRepository,
 } from './query-hooks';
 import type { MetadataRepository } from './metadata-repository';
-import type { InvitationReply } from './invitation-contract';
-import { manageReason } from './model/group-model';
+import type { InvitationReply } from '../invitation-contract';
+import { manageReason } from '../model/group-model';
 
 export const pendingOperationKey = (profile: string) =>
   ['pending-operations', profile] as const;

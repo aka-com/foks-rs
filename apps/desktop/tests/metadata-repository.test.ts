@@ -3,12 +3,12 @@ import test from 'node:test';
 import {
   MetadataRepository,
   RetiredQueryError,
-} from '../src/metadata-repository';
-import { ReadRecoveryCoordinator } from '../src/query-read-recovery';
+} from '../src/data/metadata-repository';
+import { ReadRecoveryCoordinator } from '../src/data/query-read-recovery';
 import {
   invitationRecoveryQuery,
   pendingOperationsQuery,
-} from '../src/operation-queries';
+} from '../src/data/operation-queries';
 import type { Bridge } from '../src/bridge';
 import type { TeamStore } from '../src/model';
 

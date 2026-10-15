@@ -19,7 +19,7 @@ import {
   scheduleProfileWork,
 } from '../src/scheduling/profile-work';
 import { ReconciliationScheduler } from '../src/scheduling/reconciliation';
-import { CatalogCoordinator } from '../src/catalog-coordinator';
+import { CatalogCoordinator } from '../src/data/catalog-coordinator';
 
 class Clock implements TimingClock {
   wall = 1_700_000_000_000;

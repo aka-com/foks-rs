@@ -16,13 +16,13 @@ import { enqueueProfileWork } from './bridge';
 import type { Bridge, StoreUsage } from './bridge';
 import { itemsReadiness } from './model';
 import type { AgentSnapshot, Store } from './model';
-import { useMetadataQuery, useMetadataRepository } from './query-hooks';
+import { useMetadataQuery, useMetadataRepository } from './data/query-hooks';
 import type {
   MetadataQuery,
   MetadataRepository,
   QueryKey,
   QuerySnapshot,
-} from './metadata-repository';
+} from './data/metadata-repository';
 
 export const storeUsageKey = (store: Store) =>
   ['store-usage', store.server, store.id] as const;

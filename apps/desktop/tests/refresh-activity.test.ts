@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   RefreshActivities,
   refreshActivitiesFor,
-} from '../src/refresh-activity';
+} from '../src/data/refresh-activity';
 import { loadSnapshot, type Bridge } from '../src/bridge';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';

@@ -25,14 +25,15 @@ installDom({
 const VIEW = 'cd'.repeat(16);
 let ui: typeof import('@testing-library/react');
 let OverlayProvider: typeof import('../kit/overlay-primitives').OverlayProvider;
-let DesktopReconciliation: typeof import('../src/desktop-reconciliation').DesktopReconciliation;
+let DesktopReconciliation: typeof import('../src/data/desktop-reconciliation').DesktopReconciliation;
 let Topbar: typeof import('../src/shell/topbar').Topbar;
 let FIXTURE: typeof import('../src/fixture').FIXTURE;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
   ({ OverlayProvider } = await import('../kit/overlay-primitives'));
-  ({ DesktopReconciliation } = await import('../src/desktop-reconciliation'));
+  ({ DesktopReconciliation } =
+    await import('../src/data/desktop-reconciliation'));
   ({ Topbar } = await import('../src/shell/topbar'));
   ({ FIXTURE } = await import('../src/fixture'));
 });

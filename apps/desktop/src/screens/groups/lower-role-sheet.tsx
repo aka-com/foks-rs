@@ -22,7 +22,7 @@ import {
 } from '../../exposure-review';
 import { groupDetailFailure, parseRole, partyName } from '../../model';
 import type { Party } from '../../model';
-import { markProfileRostersStale } from '../../roster-staleness';
+import { markProfileRostersStale } from '../../data/roster-staleness';
 import { ExposureSummary, unstoredReview } from '../exposure-review';
 import { GroupMark } from '../../components/group-mark';
 import {

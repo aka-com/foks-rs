@@ -21,7 +21,7 @@ import {
   type Item,
   type TrashEntry,
 } from '../model';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { itemActionProblem } from '../screens/store-access';
 import type { WriteWorkflow } from '../screens/write-workflow-model';
 import { matchesShortcut, typingTarget } from '../shortcuts';

@@ -58,7 +58,7 @@ import {
 import type { Location, NavigateOptions, SettingsSection } from '../location';
 import { useSheetGuard } from '../navigation-guard';
 import { purgeProfiles } from '../platform/device-storage';
-import { useMetadataQuery, useMetadataRepository } from '../query-hooks';
+import { useMetadataQuery, useMetadataRepository } from '../data/query-hooks';
 import { appInfoQuery } from '../resources/application';
 import {
   accountStores,
@@ -74,7 +74,7 @@ import {
   rememberRailColor,
   storedRailColor,
 } from '../rail-theme';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { agentLifecycleLabel, type AgentLifecycle } from '../agent-lifecycle';
 import { NotificationSettings } from '../chat/notification-provider';
 import { ServersSection } from './servers-screen';

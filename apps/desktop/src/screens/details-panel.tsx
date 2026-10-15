@@ -58,7 +58,7 @@ import type {
   ReadItemResponse,
 } from '../bridge';
 import { useFileDrop } from '../file-drop';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { COPY_LABELS, copyAndAnnounce } from './item-copy';
 import {
   isFavorite,

@@ -1,7 +1,7 @@
 import { inventoryReadiness } from '../model';
 import { CollectionStatus } from '../components/collection-status';
-import { useDeviceMetadata } from '../device-cache';
-import { synchronizeApplied } from '../operation-outcome';
+import { useDeviceMetadata } from '../data/device-cache';
+import { synchronizeApplied } from '../data/operation-outcome';
 import { refreshConnectedCards } from './devices/hardware-controller';
 import { useDeviceOperation } from './devices/use-device-operation';
 import { useWorkflowAccess } from '../workflow-context';
@@ -71,7 +71,7 @@ import type {
   Location,
   NavigateOptions,
 } from '../location';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { PageHeader } from '../shell/page-header';
 import { AddDeviceSheet } from './devices/sheets/add-device-sheet';
 import { EnrollSheet } from './devices/sheets/enroll-sheet';

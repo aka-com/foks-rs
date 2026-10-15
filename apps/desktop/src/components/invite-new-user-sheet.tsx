@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { normalizeCommandError, type Bridge } from '../bridge';
-import { useDeviceCache } from '../device-cache';
+import { useDeviceCache } from '../data/device-cache';
 import type { InvitationAction, InvitationRow } from '../invitation-contract';
 import {
   forgetInvitationLabel,
@@ -25,7 +25,7 @@ import {
   securityKeyPinRefusal,
   validSecurityKeyPin,
 } from '../security-key-pin';
-import { useMetadataRepository } from '../query-hooks';
+import { useMetadataRepository } from '../data/query-hooks';
 import { useSheetGuard, useTabSheetState } from '../navigation-guard';
 import {
   Band,

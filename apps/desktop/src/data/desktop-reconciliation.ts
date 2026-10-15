@@ -1,6 +1,6 @@
 import { RefreshActivities } from './refresh-activity';
-import type { Account, AgentSnapshot, CatalogFreshnessEntry } from './model';
-import { discoveryAccounts } from './team-discovery';
+import type { Account, AgentSnapshot, CatalogFreshnessEntry } from '../model';
+import { discoveryAccounts } from '../team-discovery';
 import {
   ReconciliationScheduler,
   type ReconciliationClock,
@@ -8,7 +8,7 @@ import {
   type ReconciliationJob,
   type ReconciliationSnapshot,
   type ReconciliationTrigger,
-} from './scheduling/reconciliation';
+} from '../scheduling/reconciliation';
 
 export interface DesktopReconciliationReads {
   activities?: RefreshActivities;

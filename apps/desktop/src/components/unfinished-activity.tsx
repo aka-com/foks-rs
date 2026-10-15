@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { useDeviceCache } from '../device-cache';
-import { useMetadataQuery, useMetadataRepository } from '../query-hooks';
+import { useDeviceCache } from '../data/device-cache';
+import { useMetadataQuery, useMetadataRepository } from '../data/query-hooks';
 import {
   invitationRecoveryQuery,
   reportableTeamRequestError,
-} from '../operation-queries';
+} from '../data/operation-queries';
 import type { Bridge, PendingOperation } from '../bridge';
 import type { TeamStore } from '../model';
 import { Band, Button } from './index';

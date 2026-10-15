@@ -2,8 +2,8 @@ import { normalizeCommandError } from './bridge';
 import { INVITATION_ACTIVITY } from './invitation-activity';
 import type { InvitationRole, InvitationRow } from './invitation-contract';
 import type { InvitationGrantRole } from './invitation-labels';
-import type { MetadataRepository } from './metadata-repository';
-import { pendingOperationKey } from './operation-queries';
+import type { MetadataRepository } from './data/metadata-repository';
+import { pendingOperationKey } from './data/operation-queries';
 import { securityKeyPinRefusal } from './security-key-pin';
 
 export function settleInvitationWrite(

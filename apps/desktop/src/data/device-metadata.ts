@@ -1,11 +1,11 @@
 /** Shell-owned subscriptions to the same device queries used by account pages. */
 import { createContext, useContext } from 'react';
-import { isAgentReadinessError, normalizeCommandError } from './bridge';
+import { isAgentReadinessError, normalizeCommandError } from '../bridge';
 import type { DeviceCache } from './device-cache';
 import type { MetadataQuery } from './metadata-repository';
-import { accountStores, type AgentSnapshot } from './model';
-import { workflowAvailability } from './model/workflow-availability';
-import type { DeviceAlertRegistry } from './data/device-alert';
+import { accountStores, type AgentSnapshot } from '../model';
+import { workflowAvailability } from '../model/workflow-availability';
+import type { DeviceAlertRegistry } from './device-alert';
 
 type Query = Pick<
   MetadataQuery<unknown>,

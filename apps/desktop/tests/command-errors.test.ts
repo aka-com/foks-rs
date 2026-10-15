@@ -15,7 +15,10 @@ import {
 } from '../src/bridge/transport';
 import { tauriBridge } from '../src/bridge/tauri';
 import { loadSnapshot } from '../src/bridge/snapshot';
-import { failureOutcome, synchronizeApplied } from '../src/operation-outcome';
+import {
+  failureOutcome,
+  synchronizeApplied,
+} from '../src/data/operation-outcome';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 

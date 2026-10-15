@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DesktopReconciliation } from '../src/desktop-reconciliation';
+import { DesktopReconciliation } from '../src/data/desktop-reconciliation';
 import { FIXTURE } from '../src/fixture';
 import type { AgentSnapshot } from '../src/model';
 import {

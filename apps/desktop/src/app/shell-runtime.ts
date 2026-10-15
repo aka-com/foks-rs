@@ -21,7 +21,7 @@ import {
   type WriteWorkflow,
 } from '../screens/write-workflow-model';
 import type { LeaseExpiryClock } from '../scheduling/lease-expiry';
-import { useDesktopReconciliation } from '../use-desktop-reconciliation';
+import { useDesktopReconciliation } from '../data/use-desktop-reconciliation';
 import type { CatalogRuntime } from './catalog-runtime';
 import type { MaintenanceOwnership } from './maintenance-ownership';
 

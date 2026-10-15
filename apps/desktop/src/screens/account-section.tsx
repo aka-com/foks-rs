@@ -1,9 +1,9 @@
 import { inventoryReadiness } from '../model';
 import { CollectionStatus } from '../components/collection-status';
 import { useToast } from '../../kit/toasts';
-import { synchronizeApplied } from '../operation-outcome';
-import { useDeviceMetadata } from '../device-cache';
-import type { metadataFreshness } from '../device-cache';
+import { synchronizeApplied } from '../data/operation-outcome';
+import { useDeviceMetadata } from '../data/device-cache';
+import type { metadataFreshness } from '../data/device-cache';
 import { useWorkflowAccess } from '../workflow-context';
 import { workflowAvailability } from '../model/workflow-availability';
 import { FreshnessCaption } from '../components/metadata-status';
@@ -74,7 +74,7 @@ import type {
 } from '../model';
 import type { Server } from '../model';
 import type { Location, NavigateOptions } from '../location';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { PageHeader } from '../shell/page-header';
 import { storeUsageText, useStoreUsage } from '../store-usage';
 import { AccountMark } from '../components/account-mark';

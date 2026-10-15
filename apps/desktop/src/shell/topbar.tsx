@@ -12,7 +12,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { Button, Icon, SearchField } from '../components';
-import type { DesktopReconciliation } from '../desktop-reconciliation';
+import type { DesktopReconciliation } from '../data/desktop-reconciliation';
 import { SYNC_STATUS_ID, SyncPopover, useSyncSummary } from './sync-popover';
 import { AttentionControl } from './attention-centre';
 import type { AttentionCentreProps } from './attention-centre';

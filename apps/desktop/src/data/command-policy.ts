@@ -1,7 +1,7 @@
 import { normalizeCommandError } from '../bridge';
 import type { CommandError } from '../bridge';
-import { failureOutcome, synchronizeApplied } from '../operation-outcome';
-import type { AppliedOutcome } from '../operation-outcome';
+import { failureOutcome, synchronizeApplied } from './operation-outcome';
+import type { AppliedOutcome } from './operation-outcome';
 
 export type CommandPolicy =
   | { kind: 'read-recovery' }

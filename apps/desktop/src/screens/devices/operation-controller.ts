@@ -8,8 +8,8 @@ import type { useWorkflowAccess } from '../../workflow-context';
 import {
   attemptMutation,
   reportMutationOutcome,
-} from '../../commands/command-policy';
-import type { MutationPolicy } from '../../commands/command-policy';
+} from '../../data/command-policy';
+import type { MutationPolicy } from '../../data/command-policy';
 import type { CommandError } from '../../bridge';
 
 export function queuedDeviceWork<T>(

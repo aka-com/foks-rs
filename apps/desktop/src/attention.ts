@@ -30,8 +30,8 @@ import {
   settingsServerFlag,
   usernameOf,
 } from './model';
-import { teamRequestTotals } from './operation-queries';
-import type { TeamRequestCount } from './operation-queries';
+import { teamRequestTotals } from './data/operation-queries';
+import type { TeamRequestCount } from './data/operation-queries';
 import type { recoveryPhraseTests } from './recovery-phrase-tests';
 import type { DeviceAlertSnapshot } from './data/device-alert';
 import { deviceAlertReasons } from './data/device-alert';

@@ -18,7 +18,7 @@ import {
 } from '../../model';
 import type { AccountStore } from '../../model';
 import { useSheetGuard, useTabSheetState } from '../../navigation-guard';
-import { markProfileRostersStale } from '../../roster-staleness';
+import { markProfileRostersStale } from '../../data/roster-staleness';
 import {
   serverTeamName,
   SUGGESTED_GROUP,

@@ -1,6 +1,6 @@
 import type { Bridge } from '../../bridge';
 import type { useWorkflowAccess } from '../../workflow-context';
-import { attemptRead } from '../../commands/command-policy';
+import { attemptRead } from '../../data/command-policy';
 
 export async function refreshConnectedCards(
   bridge: Bridge,

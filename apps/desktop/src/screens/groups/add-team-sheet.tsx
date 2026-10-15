@@ -31,7 +31,7 @@ import {
   workflowMessage,
 } from '../../model/workflow-availability';
 import { useTabSheetState } from '../../navigation-guard';
-import { markProfileRostersStale } from '../../roster-staleness';
+import { markProfileRostersStale } from '../../data/roster-staleness';
 import { GroupMark } from '../../components/group-mark';
 import { manageReason } from '../../model/group-model';
 import {

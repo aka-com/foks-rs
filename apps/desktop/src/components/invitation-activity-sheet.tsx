@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, PendingOperation } from '../bridge';
-import { useDeviceCache } from '../device-cache';
+import { useDeviceCache } from '../data/device-cache';
 import type { InvitationAction, InvitationRow } from '../invitation-contract';
 import {
   forgetInvitationLabel,
@@ -22,7 +22,7 @@ import {
 } from '../invitation-writes';
 import { securityKeyPinRefusal } from '../security-key-pin';
 import type { TeamStore } from '../model';
-import { useMetadataRepository } from '../query-hooks';
+import { useMetadataRepository } from '../data/query-hooks';
 import {
   Button,
   Chip,

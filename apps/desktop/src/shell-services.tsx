@@ -13,7 +13,7 @@ import type { ToastOptions } from '../kit/toasts';
 import type { CommandErrorHandler } from './app/catalog-runtime';
 import type { Bridge } from './bridge';
 import type { AgentSnapshot } from './model/types';
-import type { MutationFailureHandler } from './mutation-recovery';
+import type { MutationFailureHandler } from './data/mutation-recovery';
 
 /**
  * Every member keeps its identity while the shell is mounted, unless the

@@ -138,7 +138,7 @@ test('web admin needs user-sync, not device administration, and rechecks submit'
 });
 
 test('metadata dispatch checks current account capability before either device or backup reads', async () => {
-  const { DeviceCache } = await import('../src/device-cache');
+  const { DeviceCache } = await import('../src/data/device-cache');
   const { mockBridge } = await import('../src/mock-bridge');
   const current = await fixture();
   let reads = 0;
@@ -166,7 +166,7 @@ test('metadata dispatch checks current account capability before either device o
 });
 
 test('shared metadata preflight keeps its root snapshot source after a view leaves', async () => {
-  const module = await import('../src/device-cache');
+  const module = await import('../src/data/device-cache');
   const { mockBridge } = await import('../src/mock-bridge');
   const initial = await fixture();
   let current = initial,

@@ -20,8 +20,8 @@ import type {
   Store,
   StoreRef,
 } from '../../model';
-import type { MutationFailureHandler } from '../../mutation-recovery';
-import { synchronizeApplied } from '../../operation-outcome';
+import type { MutationFailureHandler } from '../../data/mutation-recovery';
+import { synchronizeApplied } from '../../data/operation-outcome';
 import { useToast } from '../../../kit/toasts';
 
 export const VIS_MIN = -32768;

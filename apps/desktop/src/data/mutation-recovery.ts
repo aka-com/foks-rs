@@ -1,6 +1,6 @@
 import { failureOutcome } from './operation-outcome';
-import { normalizeCommandError } from './bridge';
-import type { Item } from './model';
+import { normalizeCommandError } from '../bridge';
+import type { Item } from '../model';
 
 export interface MutationFailureOptions {
   item?: Item;

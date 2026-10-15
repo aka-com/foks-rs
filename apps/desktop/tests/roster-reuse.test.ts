@@ -6,7 +6,7 @@ import { mockBridge } from '../src/mock-bridge';
 import {
   markProfileRostersStale,
   resetProfileRosterStaleness,
-} from '../src/roster-staleness';
+} from '../src/data/roster-staleness';
 import type { AgentSnapshot } from '../src/model';
 
 /**

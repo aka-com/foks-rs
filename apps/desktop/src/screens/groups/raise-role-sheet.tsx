@@ -18,7 +18,7 @@ import {
   partyName,
 } from '../../model';
 import type { Party } from '../../model';
-import { markProfileRostersStale } from '../../roster-staleness';
+import { markProfileRostersStale } from '../../data/roster-staleness';
 import { GroupMark } from '../../components/group-mark';
 import {
   canTarget,
