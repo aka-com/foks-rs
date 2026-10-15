@@ -34,8 +34,7 @@ pub fn selector(table: &[Decoder], index: usize) -> u8 {
     u8::try_from(index).unwrap()
 }
 
-/// Normalizes the three encoder return shapes: fallible, infallible, and the
-/// exact bytes retained from decoding.
+/// Normalizes the two encoder return shapes: fallible and infallible.
 trait Encoded {
     fn bytes(self) -> Option<Vec<u8>>;
 }
@@ -47,11 +46,6 @@ impl<E> Encoded for Result<Vec<u8>, E> {
 impl Encoded for Vec<u8> {
     fn bytes(self) -> Option<Vec<u8>> {
         Some(self)
-    }
-}
-impl Encoded for &[u8] {
-    fn bytes(self) -> Option<Vec<u8>> {
-        Some(self.to_vec())
     }
 }
 
@@ -115,6 +109,34 @@ macro_rules! exact {
                 Outcome::Encoded(bytes.to_vec())
             }
             Err(_) => Outcome::Rejected,
+        })
+    };
+}
+
+/// The `canonical!` check for types that convert only to and from a Snowpack
+/// value.
+macro_rules! value {
+    ($ty:ty) => {
+        (stringify!($ty), |bytes: &[u8]| {
+            let decode = |bytes: &[u8]| {
+                foks_snowpack::decode(bytes)
+                    .ok()
+                    .and_then(|value| <$ty>::decode_value(value).ok())
+            };
+            let Some(value) = decode(bytes) else {
+                return Outcome::Rejected;
+            };
+            let Ok(encoded) = foks_snowpack::encode(&value.to_value()) else {
+                return Outcome::Accepted;
+            };
+            let again = decode(&encoded)
+                .unwrap_or_else(|| panic!("{} rejects its own encoding", stringify!($ty)));
+            assert!(
+                foks_snowpack::encode(&again.to_value()).ok().as_ref() == Some(&encoded),
+                "{} encoding is not a fixed point",
+                stringify!($ty)
+            );
+            Outcome::Encoded(encoded)
         })
     };
 }
@@ -214,30 +236,21 @@ pub static PROTO: &[Decoder] = &[
     canonical!(SecretBox),
     decode!(SubkeySeed),
     decode!(SharedKeySeed),
-    decode!(KvPathVersionVector),
+    canonical!(KvPathVersionVector, decode, encode),
     exact!(KvRoot),
-    decode!(KvDirectory),
+    canonical!(KvDirectory, decode, encode),
     exact!(KvDirectoryPair),
     exact!(KvDirent),
     exact!(KvGetResponse),
     exact!(KvListResponse),
-    decode!(KvSmallFileBox),
-    decode!(KvLargeFileMetadata),
-    decode!(KvUploadChunk),
+    canonical!(KvSmallFileBox, decode, encode),
+    canonical!(KvLargeFileMetadata, decode, encode),
+    canonical!(KvUploadChunk, decode, encode),
     canonical!(KvNode),
-    decode!(KvUsage),
-    decode!(KvEncryptedChunk),
-    ("KvDirentName", |bytes| match foks_snowpack::decode(bytes) {
-        Ok(value) => accepted(KvDirentName::decode_value(value).is_ok()),
-        Err(_) => Outcome::Rejected,
-    }),
-    (
-        "KvSmallFilePlaintext",
-        |bytes| match foks_snowpack::decode(bytes) {
-            Ok(value) => accepted(KvSmallFilePlaintext::decode_value(value).is_ok()),
-            Err(_) => Outcome::Rejected,
-        },
-    ),
+    canonical!(KvUsage, decode, encode),
+    canonical!(KvEncryptedChunk, decode, encode),
+    value!(KvDirentName),
+    value!(KvSmallFilePlaintext),
     canonical!(PpePassphraseBox),
     canonical!(PpePukBox),
     canonical!(PpeParcel),

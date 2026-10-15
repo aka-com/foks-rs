@@ -25,6 +25,25 @@ fn corpus(target: &str) -> Vec<(String, Vec<u8>)> {
     seeds
 }
 
+/// Runs every decoder in `table` on a Go input and reports whether one
+/// accepted it.
+fn reaches(table: &[schema::Decoder], name: &str, bytes: &[u8]) -> bool {
+    let mut reached = false;
+    for (decoder, decode) in table {
+        match decode(bytes) {
+            Outcome::Rejected => {}
+            Outcome::Accepted => reached = true,
+            // Go encodes canonically, so an encoder that reproduces a
+            // different encoding would change signed or hashed bytes.
+            Outcome::Encoded(encoded) => {
+                assert!(encoded == bytes, "{decoder} re-encodes {name} differently");
+                reached = true;
+            }
+        }
+    }
+    reached
+}
+
 #[test]
 fn every_decoder_handles_every_go_fixture() {
     let fixtures = fixtures::snowp();
@@ -34,29 +53,31 @@ fn every_decoder_handles_every_go_fixture() {
     }
     let mut accepted = 0;
     for (name, bytes) in &fixtures {
-        let mut reached = false;
-        for (decoder, decode) in schema::PROTO {
-            match decode(bytes) {
-                Outcome::Rejected => {}
-                Outcome::Accepted => reached = true,
-                // Go encodes canonically, so an encoder that reproduces a
-                // different encoding would change signed or hashed bytes.
-                Outcome::Encoded(encoded) => {
-                    assert!(encoded == *bytes, "{decoder} re-encodes {name} differently");
-                    reached = true;
-                }
-            }
-        }
-        for (_, decode) in schema::SERVER {
-            decode(bytes);
-        }
-        accepted += usize::from(reached);
+        accepted += usize::from(reaches(schema::PROTO, name, bytes));
+        reaches(schema::SERVER, name, bytes);
     }
     // Most fixtures are typed values; the rest are raw IDs, inner payloads
     // and derivation inputs that no standalone decoder takes.
     assert!(
         accepted >= 116,
         "only {accepted} fixtures decode as a typed value"
+    );
+}
+
+#[test]
+fn every_decoder_handles_every_go_call_argument() {
+    let calls = fixtures::call_arguments();
+    assert_eq!(calls.len(), 90);
+    let mut accepted = 0;
+    for (name, bytes) in &calls {
+        reaches(schema::PROTO, name, bytes);
+        accepted += usize::from(reaches(schema::SERVER, name, bytes));
+    }
+    // The rest are calls, such as the KV, signup and SSO requests, whose
+    // arguments the server decodes outside `foks_rpc::arguments`.
+    assert!(
+        accepted >= 58,
+        "only {accepted} Go call arguments reach a server decoder"
     );
 }
 
@@ -91,11 +112,12 @@ fn verify_seeds_pass_every_stage() {
     let seeds = corpus("verify");
     assert_eq!(seeds.len(), verify::STAGES.len());
     for (name, seed) in seeds {
-        let (stage, _) = verify::STAGES[usize::from(seed[0]) % verify::STAGES.len()];
+        let stage = &verify::STAGES[usize::from(seed[0]) % verify::STAGES.len()];
         assert_eq!(
             verify::run(&seed),
             Some(true),
-            "{stage} rejects verify/{name}"
+            "{} rejects verify/{name}",
+            stage.name
         );
     }
 }

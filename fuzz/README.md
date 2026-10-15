@@ -35,31 +35,51 @@ into production.
 `proto_schema`, `server_arguments` and `verify` use the first input byte as a
 selector over a table in `support/`. `proto_schema` reaches every typed
 `foks-proto` decoder, including the realtime types through `RealtimeWire`.
-Where a type has an encoder, a decoded value that encodes must decode again to
-the same encoding; KV types that retain their decoded bytes must return their
+Where a type has an encoder, including the KV types that convert only to and
+from a Snowpack value, a decoded value that encodes must decode again to the
+same encoding; KV types that retain their decoded bytes must return their
 input. `server_arguments` reaches every `foks_rpc::arguments` decoder and
 `RealtimeRequest::decode_argument` at each realtime method position, whose
 re-encoded request must decode to an equal request. `verify` authenticates the
 official foks.app probe and Merkle roots once, then replaces one input of
 `verify_public_host`, the self and non-self user chain, the team chain, the
 Merkle advance root or history, or the signed Merkle root, so mutations reach
-chain, proof and signature checks.
+chain, proof and signature checks. The user and team chain stages also run the
+root-epoch discovery for chain responses and persisted evidence. The increment
+stages replace the refresh response given to `verify_user_chain_increment`,
+`verify_non_self_user_chain_increment` and `verify_team_chain_increment`, whose
+prior state is the verified fixture chain.
 
 The 137 canonical Go v0.1.9 `.snowp` fixtures seed the `snowpack` corpus as
 they are, the `rpc` corpus as framed success responses, and the
 `proto_schema` and `server_arguments` corpora once per accepting decoder,
-behind its selector byte. Calls built by the client encoders around the fixture
-IDs add well-formed `server_arguments` seeds, and each `verify` stage is
-seeded with the fixture it accepts. Generated seeds are named `go-*` and
-`call-*`. The seed tests (`cargo test --manifest-path fuzz/Cargo.toml --test
-corpus_seeds`) run every table entry on every fixture, require Go fixtures to
-re-encode to their exact bytes, and fail when a seed no longer selects the
-decoder in its name, which happens when a table changes order. Regenerate the
-seeds after protocol or table changes:
+behind its selector byte. The arguments of the Go `.frame` and `.rpc` request
+fixtures seed the same two corpora; these seeds are named `go-*-call`. Calls
+built by the client encoders around the fixture IDs add `server_arguments`
+seeds for calls that no Go request covers. Each `verify` stage is seeded with
+the fixture it accepts; the increment stages are seeded with the refresh
+response for a chain that has not advanced, derived from the fixture chain.
+Generated seeds are named `go-*` and `call-*`. The seed tests (`cargo test
+--manifest-path fuzz/Cargo.toml --test corpus_seeds`) run every table entry on
+every fixture and Go call argument, require Go inputs to re-encode to their
+exact bytes, and fail when a seed no longer selects the decoder in its name,
+which happens when a table changes order. Regenerate the seeds after protocol
+or table changes:
 
 ```sh
 cargo run --locked --manifest-path fuzz/Cargo.toml --example seed_corpus
 ```
+
+Twelve `server_arguments` selectors have no seed yet. No Go request fixture
+covers them, and their client encoders take signatures, registration
+challenges or signed links (`decode_post_generic_link`,
+`decode_post_team_membership_link`, `decode_passphrase_login`,
+`decode_set_passphrase`, `decode_change_passphrase`,
+`decode_put_yubi_management_key`, `decode_load_subkey_box` and the user and
+team `decode_grant_remote_view_permission_*` decoders), or `foks_rpc` has no
+client encoder for them (`decode_check_team_bearer_token`,
+`decode_check_team_view` and `decode_load_removal_for_member`). Their campaigns
+start from mutations of the other seeds.
 
 Pull requests run short campaigns and scheduled jobs run longer campaigns.
 Reproduce a failure with `cargo +nightly fuzz run TARGET ARTIFACT`; minimize with

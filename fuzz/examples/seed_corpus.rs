@@ -60,17 +60,20 @@ fn fixture_entity(path: &str) -> foks_proto::EntityId {
     foks_proto::EntityId::from_bytes(bytes).unwrap()
 }
 
-/// Server arguments built by the client encoders around the fixture IDs. Few
-/// Go fixtures are complete call arguments, so these give the server decoders
-/// well-formed starting points.
+/// Server arguments built by the client encoders around the fixture IDs, for
+/// calls that no Go request frame covers.
 fn server_arguments() -> Vec<(String, Vec<u8>)> {
     use foks_proto::{
-        Role, RtAppId, RtChannelId, RtHostId, RtListChannelsArgument, RtRecentsArgument,
-        RtSelectVhostArgument, RtTeamId,
+        Role, RtAppId, RtChannelId, RtChatCapabilitiesArgument, RtHostId, RtListChannelsArgument,
+        RtRecentsArgument, RtSelectVhostArgument, RtTeamId,
     };
-    use foks_rpc::RealtimeRequest;
+    use foks_rpc::{
+        arguments::{LogSendInitFileArgument, LogSendUploadBlockArgument},
+        RealtimeRequest,
+    };
     let uid = fixture_entity("user/uid.snowp");
     let device = fixture_entity("user/device-id.snowp");
+    let yubi = fixture_entity("user/yubi/yubi-id.snowp");
     let host = fixture_entity("foks.app/host-id.snowp");
     let team = fixture_entity("user/team-id.snowp");
     let calls = [
@@ -104,11 +107,11 @@ fn server_arguments() -> Vec<(String, Vec<u8>)> {
         ),
         (
             "get-subkey-box-challenge",
-            foks_rpc::encode_get_subkey_box_challenge_request(&device),
+            foks_rpc::encode_get_subkey_box_challenge_request(&yubi),
         ),
         (
             "get-yubi-management-key",
-            foks_rpc::encode_get_yubi_management_key_request(&device),
+            foks_rpc::encode_get_yubi_management_key_request(&yubi),
         ),
         (
             "clear-device-nag",
@@ -152,6 +155,43 @@ fn server_arguments() -> Vec<(String, Vec<u8>)> {
             "load-team-chain",
             foks_rpc::encode_load_team_chain_request(&team, &host, &[7; 16], 1),
         ),
+        (
+            "load-team-remote-view-tokens",
+            foks_rpc::encode_load_team_remote_view_tokens_request(
+                &foks_proto::FqTeam {
+                    team: team.clone(),
+                    host: host.clone(),
+                },
+                &[7; 16],
+                &[],
+            ),
+        ),
+        (
+            "log-send-init-file",
+            foks_rpc::encode_log_send_init_file_request_at(
+                &LogSendInitFileArgument {
+                    id: [7; 17],
+                    file_id: 1,
+                    filename: b"foks.log".to_vec(),
+                    content_length: 9,
+                    content_hash: [8; 32],
+                    block_count: 1,
+                },
+                1,
+            ),
+        ),
+        (
+            "log-send-upload-block",
+            foks_rpc::encode_log_send_upload_block_request_at(
+                &LogSendUploadBlockArgument {
+                    id: [7; 17],
+                    file_id: 1,
+                    block_number: 0,
+                    block: b"synthetic".to_vec(),
+                },
+                1,
+            ),
+        ),
     ];
     let mut arguments: Vec<_> = calls
         .into_iter()
@@ -161,6 +201,12 @@ fn server_arguments() -> Vec<(String, Vec<u8>)> {
         })
         .collect();
     for (name, request) in [
+        (
+            "chat-capabilities",
+            RealtimeRequest::ChatCapabilities(RtChatCapabilitiesArgument {
+                host: RtHostId::new(host.clone()).unwrap(),
+            }),
+        ),
         (
             "select-vhost",
             RealtimeRequest::SelectVhost(RtSelectVhostArgument {
@@ -208,16 +254,20 @@ fn seed_fixture_corpora() {
             &foks_rpc::encode_success_response_at(bytes, 0).unwrap(),
         );
     }
+    let calls = fixtures::call_arguments();
     seed_table("proto_schema", schema::PROTO, &fixtures);
+    seed_table("proto_schema", schema::PROTO, &calls);
     seed_table("server_arguments", schema::SERVER, &fixtures);
+    seed_table("server_arguments", schema::SERVER, &calls);
     seed_table("server_arguments", schema::SERVER, &server_arguments());
-    for (index, (stage, _)) in verify::STAGES.iter().enumerate() {
-        let (fixture, bytes) = verify::SEEDS[index];
+    let anchors = verify::anchors();
+    for (index, stage) in verify::STAGES.iter().enumerate() {
+        let (fixture, input) = stage.seed;
         let mut seeded = vec![u8::try_from(index).unwrap()];
-        seeded.extend_from_slice(bytes);
+        seeded.extend_from_slice(&input(anchors));
         seed(
             "verify",
-            &schema::seed_name(&format!("go-{fixture}"), stage),
+            &schema::seed_name(&format!("go-{fixture}"), stage.name),
             &seeded,
         );
     }
