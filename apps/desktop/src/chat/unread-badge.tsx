@@ -1,13 +1,10 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect } from 'react';
 import type { Bridge } from '../bridge';
 import type { AgentSnapshot, StoreRef } from '../model';
 import type { TeamInbox } from './inbox-service';
+import { useSidebarInbox } from './inbox-provider';
 import { useLocalAlerts } from './notification-provider';
 import { chatUnreadTotal } from './unread';
-
-const empty: ReadonlyMap<StoreRef, TeamInbox> = new Map();
-const noSubscribe = () => () => {};
-const emptySnapshot = () => empty;
 
 /**
  * The count the app icon shows: the number in the rail's Chat total, which
@@ -37,14 +34,8 @@ export function UnreadBadge({
   bridge: Bridge;
   snapshot: AgentSnapshot;
 }) {
-  const alerts = useLocalAlerts();
-  const service = alerts?.service;
-  const inbox = useSyncExternalStore(
-    service?.subscribe ?? noSubscribe,
-    service?.getSnapshot ?? emptySnapshot,
-    service?.getSnapshot ?? emptySnapshot,
-  );
-  const session = alerts?.session ?? null;
+  const inbox = useSidebarInbox();
+  const session = useLocalAlerts()?.session ?? null;
   const count =
     session && session.settings.badge !== false
       ? appIconCount(snapshot, inbox)

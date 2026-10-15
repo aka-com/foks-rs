@@ -5,7 +5,7 @@ import type {
 } from '../chat-contract';
 import type { TeamInbox } from './inbox-service';
 import { sameScope } from './scope';
-import { lastPosition } from './snapshots';
+import { lastPosition, readPosition } from './snapshots';
 
 // Lookup indexes refer to immutable shell DTOs; they are not channel authority.
 // Weak keys let old snapshots (and their decrypted previews) be collected.
@@ -42,6 +42,11 @@ export interface NotificationView {
    * established, which is the direction that would silently drop alerts.
    */
   position: bigint | null;
+  /**
+   * The newest sequence the reader has read in this channel, a pending local
+   * read included, or `null` when no conversation row states one.
+   */
+  read: bigint | null;
 }
 export function notificationView(
   entry: TeamInbox | undefined,
@@ -82,6 +87,7 @@ export function notificationView(
     fresh: entry.state === 'ready' && !entry.stale,
     degraded: entry.data.degraded,
     position: conversation ? lastPosition(conversation) : null,
+    read: conversation ? readPosition(conversation) : null,
   };
 }
 export interface NotificationChange {

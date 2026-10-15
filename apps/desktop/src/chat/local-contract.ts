@@ -83,6 +83,12 @@ export type LocalAction =
       body?: string;
       count: number;
       incomplete: boolean;
+      /**
+       * The reader has read every message the channel's earlier alerts stood
+       * for, so a platform that counts a channel's alerts in one entry starts
+       * its count again.
+       */
+      restart?: boolean;
     };
 export function decodeLocalSession(value: unknown): LocalSession {
   const bad = () => {

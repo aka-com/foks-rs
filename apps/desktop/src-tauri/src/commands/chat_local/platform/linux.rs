@@ -3,9 +3,11 @@
 //! KDE Plasma, dunst, mako and other notification daemons implement.
 //!
 //! A channel's alerts share one entry: each alert replaces the entry the
-//! channel already shows (`replaces_id`), and its text states every message
-//! the entry accounts for. The entry is forgotten when the service reports
-//! it closed, so the channel's next alert starts a new one.
+//! channel already shows (`replaces_id`), and its text counts every message
+//! the entry accounts for, after the newest preview while previews are on.
+//! An alert that follows a read of everything the entry stood for restarts
+//! the count in the same entry. The entry is forgotten when the service
+//! reports it closed, so the channel's next alert starts a new one.
 //!
 //! D-Bus calls run on one worker thread, in the order `display` and `clear`
 //! queue them, and never while `LocalState` is held: the worker and the
@@ -23,6 +25,9 @@ use zbus::zvariant::Value;
 
 /// The name the backend reports to the session state.
 pub const BACKEND: &str = "freedesktop";
+/// A channel's alerts share one entry, and only its newest alert can be
+/// activated, so a channel keeps one route.
+pub const GROUPED: bool = true;
 const SERVICE: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 const INTERFACE: &str = "org.freedesktop.Notifications";
@@ -402,6 +407,7 @@ struct Group {
     id: u32,
     count: u32,
     incomplete: bool,
+    preview: Option<String>,
 }
 /// What an alert is shown as: the entry it replaces (0 for a new one) and
 /// the channel's totals with this alert counted.
@@ -410,23 +416,30 @@ struct Entry {
     replaces: u32,
     count: u32,
     incomplete: bool,
+    /// The newest preview the entry has shown, which an alert without one
+    /// (the count of the messages past the first three) keeps.
+    preview: Option<String>,
     body: String,
 }
 impl Shown {
     fn prepare(&self, alert: &Alert) -> Entry {
-        let (replaces, count, incomplete) = match self.groups.get(&alert.group) {
+        let (replaces, count, incomplete, preview) = match self.groups.get(&alert.group) {
+            Some(group) if alert.restart => (group.id, alert.count, alert.incomplete, None),
             Some(group) => (
                 group.id,
                 group.count.saturating_add(alert.count),
                 group.incomplete || alert.incomplete,
+                group.preview.as_deref(),
             ),
-            None => (0, alert.count, alert.incomplete),
+            None => (0, alert.count, alert.incomplete, None),
         };
+        let preview = alert.preview.as_deref().or(preview).map(str::to_owned);
         Entry {
             replaces,
             count,
             incomplete,
-            body: grouped_text(alert.preview.as_deref(), count, incomplete),
+            body: grouped_text(preview.as_deref(), count, incomplete),
+            preview,
         }
     }
     fn record(&mut self, id: u32, alert: &Alert, entry: &Entry) {
@@ -440,6 +453,7 @@ impl Shown {
                 id,
                 count: entry.count,
                 incomplete: entry.incomplete,
+                preview: entry.preview.clone(),
             },
         );
     }
@@ -467,6 +481,7 @@ mod tests {
             preview: preview.map(Into::into),
             count,
             incomplete: false,
+            restart: false,
         }
     }
 
@@ -506,18 +521,41 @@ mod tests {
         let entry = shown.prepare(&first);
         assert_eq!(entry.body, "priya.n: hello");
         shown.record(3, &first, &entry);
+        let second = alert("t1", "general", Some("lee: hi"), 1);
+        let entry = shown.prepare(&second);
+        assert_eq!(entry.body, "lee: hi\n2 new chat messages.");
+        shown.record(3, &second, &entry);
+        // The count of the messages past the first three has no preview, so
+        // the entry keeps the last one it showed.
         let summary = Alert {
             incomplete: true,
-            ..alert("t2", "general", None, 2)
+            ..alert("t1", "general", None, 2)
         };
         let entry = shown.prepare(&summary);
         assert_eq!(
             entry.body,
-            "3 new chat messages. Some messages could not be checked."
+            "lee: hi\n4 new chat messages. Some messages could not be checked."
         );
         shown.record(3, &summary, &entry);
         assert_eq!(shown.take(), vec![3]);
         assert!(shown.groups.is_empty());
+    }
+
+    #[test]
+    fn an_alert_after_a_read_restarts_the_entry_count() {
+        let mut shown = Shown::default();
+        let first = alert("t1", "general", Some("priya.n: hello"), 3);
+        let entry = shown.prepare(&first);
+        shown.record(5, &first, &entry);
+        let after_read = Alert {
+            restart: true,
+            ..alert("t1", "general", None, 1)
+        };
+        let entry = shown.prepare(&after_read);
+        // The same entry is replaced, counting only the new message, and the
+        // preview of a message already read is not kept.
+        assert_eq!((entry.replaces, entry.count), (5, 1));
+        assert_eq!(entry.body, "New chat message.");
     }
 
     #[test]

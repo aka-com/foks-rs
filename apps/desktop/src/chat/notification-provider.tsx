@@ -421,7 +421,7 @@ export function NotificationSettings({
           Alerts are grouped by channel. The app icon count leaves out muted
           channels
           {freedesktop
-            ? '; on Linux only docks that read counts, such as Ubuntu Dock, show it.'
+            ? '; on Linux it is drawn only with libunity (libunity9) installed and a dock that reads counts, such as Ubuntu Dock.'
             : '.'}
         </p>
       ) : null}
@@ -429,14 +429,7 @@ export function NotificationSettings({
         session.available ? (
           <p>
             Alerts are shown by{' '}
-            {session.service ?? 'the desktop notification service'}.{' '}
-            <button
-              type="button"
-              className="chat-alert-link"
-              onClick={() => void recheck()}
-            >
-              Check again
-            </button>
+            {session.service ?? 'the desktop notification service'}.
           </p>
         ) : (
           <p role="alert">

@@ -644,9 +644,8 @@ on the Username row (the sheet defaults to Change and switches to Set or Verify
 in place; an account whose access has stopped explains why the button is
 disabled). Preferences contains Desktop alerts — this device's desktop-alert,
 message-preview and app-icon-count preferences, which the desktop persists
-locally; a
-channel's alert mode and mute stay in Chat's info panel, with a link here, and
-a team's alert default in its menu in the Chat column; none of these
+locally; a channel's alert mode and mute stay in Chat's info panel, with a link
+here, and a team's alert default in its menu in the Chat column; none of these
 preferences sync between devices. Device: Application (version, Lock now),
 Agent (status with Retry connection while it is not ready, socket with Copy),
 FOKS data (export, import, verify online, move the data folder) and a danger
@@ -825,12 +824,19 @@ application only) and by the freedesktop.org notification service
 Shell, KDE Plasma, dunst and other notification daemons implement
 (`chat_local/platform/`). Linux probes the service when a local alert session
 begins and when alerts are enabled; Preferences names the service, or says
-that none was found and offers Check again, which begins a new session. The
-alerts of one channel are grouped: macOS stacks them under one thread
-identifier, the channel's settings key, and Linux replaces the channel's entry
-in place, its text counting every message the entry stands for, until the
-service reports it closed. A click on an alert, or its Open action on Linux,
-opens the channel. Without previews an alert is titled "FOKS" and its text is
+that none was found and offers Check again, which begins a new session (and so
+would close the alerts already shown, which is why it is not offered while a
+service is found). The alerts of one channel are grouped: macOS stacks them
+under one thread identifier, the channel's settings key, and Linux replaces the
+channel's entry in place until the service reports it closed. The entry's text
+counts every message it stands for, after the newest message preview while
+previews are on; once the reader has read every message the channel's earlier
+alerts stood for (the inbox's read position, a pending local read included),
+the next alert restarts the count in the same entry. Because only an entry's
+newest alert can be activated, a channel keeps one route on Linux, and the
+bound of 64 routes per session, past which every alert shown is closed, counts
+channels there and alerts on macOS. A click on an alert, or its Open action on
+Linux, opens the channel. Without previews an alert is titled "FOKS" and its text is
 a count ("New chat message."). With previews, the title names the channel and
 team ("#general · Engineering", at most 128 characters on one line) and the
 text names the sender from the team roster, or by a short id, followed by the
@@ -841,8 +847,10 @@ app icon shows the number in the rail's Chat total, so muted and hidden
 channels are left out (`UnreadBadge` in `unread-badge.tsx`, through
 `set_unread_badge`); the native side refuses the count while the app is
 locked, removes it when the app locks and while "Show unread count on app
-icon" is off, and on Linux only docks that read the Unity launcher entry, such
-as Ubuntu Dock, draw it.
+icon" is off. On Linux the count is set on the Unity launcher entry, so it is
+drawn only when libunity is installed (`libunity9` on Debian and Ubuntu; the
+package does not depend on it) and a dock that reads the entry, such as Ubuntu
+Dock, is running; otherwise the setting has no visible effect.
 
 Mentions only alerts for a message whose first 256 characters name the reader
 as `@username` where the message renderer would draw a mention: the match runs

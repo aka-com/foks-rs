@@ -59,6 +59,8 @@ type Progress = {
    */
   fallback: GeometricInterval;
   failures: number;
+  /** The newest sequence this consumer's alerts for the channel stood for. */
+  alerted?: bigint;
   locallyDisabled?: boolean;
   deniedAt?: number;
 };
@@ -657,6 +659,18 @@ export class NotificationConsumer {
       // side shows "FOKS" and a count.
       const previews = this.session.settings.previews;
       const named = previews ? this.alertNames(p) : undefined;
+      // Once the reader has read every message the channel's earlier alerts
+      // stood for, a platform that keeps one entry per channel counts from
+      // these messages again rather than adding them to the entry's total.
+      let restart =
+        p.alerted !== undefined &&
+        p.view.read !== null &&
+        p.view.read >= p.alerted;
+      for (const m of candidates) {
+        const sequence = BigInt(m.sequence);
+        if (p.alerted === undefined || sequence > p.alerted)
+          p.alerted = sequence;
+      }
       for (const alert of notificationText(
         candidates,
         incomplete,
@@ -672,6 +686,7 @@ export class NotificationConsumer {
             channel: p.channel,
             ...alert,
             ...(named?.title ? { title: named.title } : {}),
+            ...(restart ? { restart: true } : {}),
             body: previews ? alert.body : undefined,
           });
         } catch {
@@ -680,6 +695,8 @@ export class NotificationConsumer {
               'Desktop alert could not be delivered. Chat is still connected.',
             );
         }
+        // The pass's later alerts add to the count its first one restarted.
+        restart = false;
       }
     } catch (cause) {
       if (!current()) return;

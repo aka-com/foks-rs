@@ -18,16 +18,22 @@ export const teamIdentity = (store: TeamStore): string =>
   key([store.server, store.account, store.alias, store.team_id_hex]);
 
 /**
- * The newest sequence the inbox states this conversation holds: the read
- * pointer plus what is unread, where a pending local read stands in for a
- * read pointer it has not overtaken yet. The agent derives the unread count
- * from the same stored row's last message, so this equals that row's head
- * and never falls below it.
+ * The newest sequence the reader has read in this conversation: the read
+ * pointer, or a pending local read that has not been overtaken yet.
  */
-export function lastPosition(conversation: ChatConversation): bigint {
+export function readPosition(conversation: ChatConversation): bigint {
   const read = BigInt(conversation.read_through);
   const pending = BigInt(conversation.pending_read ?? '0');
-  return (read > pending ? read : pending) + BigInt(conversation.unread);
+  return read > pending ? read : pending;
+}
+/**
+ * The newest sequence the inbox states this conversation holds: the read
+ * position (`readPosition`) plus what is unread. The agent derives the
+ * unread count from the same stored row's last message, so this equals that
+ * row's head and never falls below it.
+ */
+export function lastPosition(conversation: ChatConversation): bigint {
+  return readPosition(conversation) + BigInt(conversation.unread);
 }
 function samePreview(a: ChatPreview, b: ChatPreview): boolean {
   return (

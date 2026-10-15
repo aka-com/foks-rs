@@ -48,6 +48,9 @@ define_class!(
 );
 /// The name the backend reports to the session state.
 pub const BACKEND: &str = "macos";
+/// Notification Center keeps each alert of a channel, stacked under the
+/// channel's thread identifier, so each keeps its own route.
+pub const GROUPED: bool = false;
 pub fn available() -> bool {
     let bundle = NSBundle::mainBundle();
     bundle.bundleIdentifier().is_some() && bundle.bundlePath().to_string().ends_with(".app")

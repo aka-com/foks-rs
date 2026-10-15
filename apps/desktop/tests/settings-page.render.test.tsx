@@ -1450,11 +1450,14 @@ test('desktop alerts on Linux name the notification service and check for one ag
     name: 'Enable desktop alerts on this device',
   }) as HTMLInputElement;
   assert.equal(enable.disabled, true);
-  assert.ok(rendered.getByText(/only docks that read counts/));
+  assert.ok(rendered.getByText(/drawn only with libunity \(libunity9\)/));
   running = true;
   ui.fireEvent.click(rendered.getByRole('button', { name: 'check again' }));
   await rendered.findByText(/Alerts are shown by GNOME Shell\./);
   await ui.waitFor(() => assert.equal(enable.disabled, false));
+  // A check begins a new session, which closes the alerts already shown, so
+  // it is offered only while no service is found.
+  assert.equal(rendered.queryByRole('button', { name: /check again/i }), null);
   assert.deepEqual(
     actions.filter((action) => action === 'begin'),
     ['begin', 'begin'],

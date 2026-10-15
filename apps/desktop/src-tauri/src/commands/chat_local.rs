@@ -20,6 +20,10 @@ const KEYED_LIMIT: usize = 4096;
 const TITLE_CHARS: usize = 128;
 /// The most characters an alert's message preview holds.
 const BODY_CHARS: usize = 256;
+/// The most routes a session keeps; past it every route and every alert shown
+/// is cleared. Where the platform groups a channel's alerts it counts
+/// channels, otherwise alerts.
+const ROUTE_LIMIT: usize = 64;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -167,6 +171,11 @@ pub enum Action {
         body: Option<String>,
         count: u32,
         incomplete: bool,
+        /// The reader has read every message the channel's earlier alerts
+        /// stood for, so a platform that counts a channel's alerts together
+        /// starts its count again.
+        #[serde(default)]
+        restart: bool,
     },
 }
 #[derive(Serialize)]
@@ -353,6 +362,32 @@ impl Inner {
         self.routes.clear();
         true
     }
+    /// Records the route a new alert activates and returns its token, with
+    /// whether `ROUTE_LIMIT` cleared every other route, in which case the
+    /// caller clears the alerts shown. Where the platform shows a channel's
+    /// alerts as one entry (`grouped`), only the entry's newest alert can be
+    /// activated, so the route replaces the channel's existing one under the
+    /// same token, and the limit counts channels.
+    fn admit(&mut self, route: Route, grouped: bool) -> Result<(String, bool), AgentError> {
+        if grouped {
+            let existing = self
+                .routes
+                .iter()
+                .find(|(_, r)| r.group == route.group)
+                .map(|(token, _)| token.clone());
+            if let Some(token) = existing {
+                self.routes.insert(token.clone(), route);
+                return Ok((token, false));
+            }
+        }
+        let cleared = self.routes.len() >= ROUTE_LIMIT;
+        if cleared {
+            self.routes.clear();
+        }
+        let token = epoch()?;
+        self.routes.insert(token.clone(), route);
+        Ok((token, cleared))
+    }
     fn session(&self) -> Session {
         Session {
             epoch: self.epoch.clone(),
@@ -527,6 +562,7 @@ pub async fn chat_local(
             body,
             count,
             incomplete,
+            restart,
         } => {
             if !platform::available()
                 || inner.epoch != expected
@@ -548,15 +584,22 @@ pub async fn chat_local(
             if inner.settings.alert_mode(&scope, &channel) == AlertMode::None {
                 return Err(error("Channel alerts are disabled."));
             }
-            if inner.routes.len() >= 64 {
-                inner.routes.clear();
+            let previews = inner.settings.previews;
+            let group = key(&scope, &channel);
+            let route = Route {
+                store_id,
+                scope,
+                channel,
+                group: group.clone(),
+                generation,
+            };
+            let (token, cleared) = inner.admit(route, platform::GROUPED)?;
+            if cleared {
                 platform::clear();
             }
-            let token = epoch()?;
-            let previews = inner.settings.previews;
             let alert = Alert {
-                token: token.clone(),
-                group: key(&scope, &channel),
+                token,
+                group,
                 // Without previews an alert names no channel, team or sender.
                 title: title
                     .filter(|_| previews)
@@ -564,14 +607,8 @@ pub async fn chat_local(
                 preview: body.filter(|_| previews),
                 count,
                 incomplete,
+                restart,
             };
-            let route = Route {
-                store_id,
-                scope,
-                channel,
-                generation,
-            };
-            inner.routes.insert(token, route);
             crate::applock::require_unlocked_generation(app, generation)?;
             platform::display(app, &alert)?;
         }
@@ -846,13 +883,64 @@ mod tests {
             "count": 1,
             "incomplete": false,
         });
-        match serde_json::from_value::<Action>(display) {
-            Ok(Action::Display { title, body, .. }) => {
+        match serde_json::from_value::<Action>(display.clone()) {
+            Ok(Action::Display {
+                title,
+                body,
+                restart,
+                ..
+            }) => {
                 assert_eq!(title.as_deref(), Some("#general · Engineering"));
                 assert_eq!(body, None);
+                assert!(!restart);
             }
             _ => panic!("not a display action"),
         }
+        let mut restarted = display;
+        restarted["restart"] = true.into();
+        assert!(matches!(
+            serde_json::from_value::<Action>(restarted),
+            Ok(Action::Display { restart: true, .. })
+        ));
+    }
+
+    #[test]
+    fn grouped_alerts_keep_one_route_per_channel() {
+        let route = |channel: &str| {
+            let scope = test_scope("t");
+            Route {
+                store_id: "s".into(),
+                group: key(&scope, channel),
+                scope,
+                channel: channel.into(),
+                generation: 1,
+            }
+        };
+        let mut inner = Inner::default();
+        let (other, _) = inner.admit(route("random"), true).unwrap();
+        let mut tokens = BTreeSet::new();
+        // Many more alerts than the limit to one channel never clear the
+        // other channel's entry.
+        for _ in 0..ROUTE_LIMIT * 2 {
+            let (token, cleared) = inner.admit(route("general"), true).unwrap();
+            assert!(!cleared);
+            tokens.insert(token);
+        }
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(inner.routes.len(), 2);
+        assert!(inner.routes.contains_key(&other));
+        // An activated route is gone, so the channel's next alert has a new
+        // token.
+        let token = tokens.into_iter().next().unwrap();
+        inner.routes.remove(&token);
+        assert_ne!(inner.admit(route("general"), true).unwrap().0, token);
+        // Without grouping each alert keeps its own route up to the limit.
+        let mut inner = Inner::default();
+        for _ in 0..ROUTE_LIMIT {
+            assert!(!inner.admit(route("general"), false).unwrap().1);
+        }
+        assert!(inner.admit(route("general"), false).unwrap().1);
+        assert_eq!(inner.routes.len(), 1);
     }
 
     #[test]
@@ -867,7 +955,15 @@ mod tests {
             grouped_text(None, 1, true),
             "1 new chat message. Some messages could not be checked."
         );
-        assert_eq!(grouped_text(Some("lee: hi"), 4, true), "lee: hi");
+        assert_eq!(grouped_text(Some("lee: hi"), 1, false), "lee: hi");
+        assert_eq!(
+            grouped_text(Some("lee: hi"), 3, false),
+            "lee: hi\n3 new chat messages."
+        );
+        assert_eq!(
+            grouped_text(Some("lee: hi"), 4, true),
+            "lee: hi\n4 new chat messages. Some messages could not be checked."
+        );
         let alert = Alert {
             token: "t".into(),
             group: key(&test_scope("t"), "c"),
@@ -875,6 +971,7 @@ mod tests {
             preview: None,
             count: 2,
             incomplete: false,
+            restart: false,
         };
         // Alone, an alert after three others states only what it adds.
         assert_eq!(alert.body(), "2 additional chat messages.");
@@ -982,6 +1079,9 @@ pub struct Route {
     pub store_id: String,
     pub scope: ChatScope,
     pub channel: String,
+    /// The channel's key, as `Alert::group`.
+    #[serde(skip)]
+    group: String,
     #[serde(skip)]
     generation: u64,
 }
@@ -998,6 +1098,9 @@ pub struct Alert {
     /// The messages this alert accounts for.
     pub count: u32,
     pub incomplete: bool,
+    /// The reader has read what the channel's earlier alerts stood for.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    pub restart: bool,
 }
 impl Alert {
     /// The text of this alert alone.
@@ -1025,7 +1128,9 @@ fn alert_text(count: u32, incomplete: bool) -> String {
     }
 }
 /// The text of one entry that stands for `count` messages of a channel: the
-/// newest message's preview when there is one, else the count.
+/// count, and whether some messages could not be checked. With a preview of
+/// the newest message previewed, the preview comes first, and the count
+/// follows on a second line when the entry stands for more than that message.
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn grouped_text(preview: Option<&str>, count: u32, incomplete: bool) -> String {
     let messages = if count == 1 {
@@ -1033,12 +1138,16 @@ pub fn grouped_text(preview: Option<&str>, count: u32, incomplete: bool) -> Stri
     } else {
         format!("{count} new chat messages.")
     };
-    match (preview, incomplete, count) {
-        (Some(preview), _, _) => preview.to_owned(),
-        (None, true, 0) => alert_text(0, true),
-        (None, true, _) => format!("{messages} Some messages could not be checked."),
-        (None, false, 1) => alert_text(1, false),
-        (None, false, _) => messages,
+    let summary = match (incomplete, count) {
+        (true, 0) => alert_text(0, true),
+        (true, _) => format!("{messages} Some messages could not be checked."),
+        (false, 1) => alert_text(1, false),
+        (false, _) => messages,
+    };
+    match preview {
+        Some(preview) if count <= 1 && !incomplete => preview.to_owned(),
+        Some(preview) => format!("{preview}\n{summary}"),
+        None => summary,
     }
 }
 pub fn route_current(app: &tauri::AppHandle, token: &str) -> bool {
@@ -1088,8 +1197,10 @@ const BADGE_LIMIT: u32 = 9999;
 /// Draws the unread count on the app icon, or removes it for 0. The count is
 /// the rail's Chat total, which the shell computes from the inbox with this
 /// device's mutes applied. Refused while the app is locked; while the badge
-/// setting is off the count is removed instead. On Linux only docks that read
-/// the Unity launcher entry, such as Ubuntu Dock, draw it.
+/// setting is off the count is removed instead. On Linux the count is set on
+/// the Unity launcher entry, which needs libunity (`libunity9` on Debian and
+/// Ubuntu, which the package does not depend on) and a dock that reads the
+/// entry, such as Ubuntu Dock; without either nothing is drawn.
 #[tauri::command]
 pub fn set_unread_badge(
     webview: tauri::Webview,

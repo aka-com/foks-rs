@@ -490,6 +490,56 @@ test('muting a channel being watched stops its alerts, and unmuting watches it a
     c.stop();
   }
 });
+test('the first alert after the reader reads the alerted messages restarts the count', async () => {
+  const f = setup(entry(['a'], scope, 1));
+  // Message `head` arrives while the reader has read through `read`.
+  const arrive = (head: number, read: number) => {
+    f.rows.set(
+      'a',
+      Array.from({ length: head }, (_, i) => message(head - i)),
+    );
+    const e = entry(['a'], scope, head);
+    f.replace(
+      new Map([
+        [
+          'store',
+          {
+            ...e,
+            channelRevisions: new Map([['a', head]]),
+            data: {
+              ...e.data!,
+              conversations: e.data!.conversations.map((c) => ({
+                ...c,
+                read_through: String(read),
+                unread: String(head - read),
+              })),
+            },
+          },
+        ],
+      ]),
+    );
+  };
+  const restarts = () =>
+    displays(f.alerts).map((a) => (a as { restart?: boolean }).restart);
+  const c = f.make();
+  try {
+    await f.clock.flush();
+    arrive(2, 0);
+    await f.clock.flush();
+    arrive(3, 0);
+    await f.clock.flush();
+    // Unread, the earlier alert's message still counts toward the entry.
+    assert.deepEqual(restarts(), [undefined, undefined]);
+    arrive(4, 3);
+    await f.clock.flush();
+    assert.deepEqual(restarts(), [undefined, undefined, true]);
+    arrive(5, 3);
+    await f.clock.flush();
+    assert.deepEqual(restarts(), [undefined, undefined, true, undefined]);
+  } finally {
+    c.stop();
+  }
+});
 test('a team default of none silences its channels; a channel mode overrides it', async () => {
   const f = setup(entry(['a', 'b'], scope, 1));
   f.session.settings.teams[teamKey(scope)] = false;

@@ -10,6 +10,8 @@ pub use linux::*;
 #[cfg(not(unix))]
 pub const BACKEND: &str = "none";
 #[cfg(not(unix))]
+pub const GROUPED: bool = false;
+#[cfg(not(unix))]
 pub fn available() -> bool {
     false
 }
