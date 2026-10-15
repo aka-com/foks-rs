@@ -229,3 +229,38 @@ test('tests import application modules directly; only the entry-point test start
       users.push(file.slice(tests.length));
   assert.deepEqual(users, ['app-root.render.test.tsx']);
 });
+
+test('screen and shell model modules load without React or a view module', async () => {
+  // These hold the pure logic split out of view modules, so they can be
+  // unit-tested in node and read without the views around them.
+  const models = [
+    'shell/sync-summary.ts',
+    'screens/group-model.ts',
+    'screens/servers/server-model.ts',
+    'screens/write-workflow-model.ts',
+  ].map((path) => join(root, path));
+  const files = new Set(await sources(root));
+  const reached = new Set<string>();
+  const pending = models.map((model) => [model]);
+  for (let chain = pending.pop(); chain; chain = pending.pop()) {
+    const file = chain[chain.length - 1];
+    if (reached.has(file)) continue;
+    reached.add(file);
+    assert.ok(
+      !file.endsWith('.tsx'),
+      `A model module loads a view: ${chain.join(' -> ')}`,
+    );
+    for (const specifier of await imports(file)) {
+      assert.ok(
+        specifier !== 'react' && !specifier.startsWith('react-dom'),
+        `${chain.join(' -> ')} imports ${specifier}`,
+      );
+      if (!specifier.startsWith('.')) continue;
+      const base = resolve(dirname(file), specifier);
+      const target = [`${base}.ts`, `${base}.tsx`, join(base, 'index.ts')].find(
+        (candidate) => files.has(candidate),
+      );
+      if (target) pending.push([...chain, target]);
+    }
+  }
+});

@@ -13,7 +13,7 @@ import { listsItems } from '../screens/scope';
 import { SettingsScreen } from '../screens/settings-screen';
 import { TeamsScreen } from '../screens/teams-screen';
 import { useShellServices, useShellSnapshot } from '../shell-services';
-import type { WriteWorkflow } from '../screens/write-workflows';
+import type { WriteWorkflow } from '../screens/write-workflow-model';
 import type { TrashActions } from './trash-actions';
 
 export function ScreenRouter({

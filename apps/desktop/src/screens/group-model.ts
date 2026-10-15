@@ -17,7 +17,9 @@ import type {
   Account,
   AccountStore,
   AgentSnapshot,
+  Party,
   Server,
+  Store,
   StoreRef,
   TeamStore,
 } from '../model';
@@ -133,4 +135,45 @@ export function federationManageable(
   store: TeamStore,
 ): boolean {
   return manageReason(snapshot, store, 'federation') === undefined;
+}
+
+/**
+ * A roster in display order: higher roles first, and within a role the
+ * reader's own party first.
+ */
+export function sortRoster(parties: readonly Party[]): Party[] {
+  return [...parties].sort((left, right) => {
+    const rank =
+      roleRank(right.destination_role) - roleRank(left.destination_role);
+    if (rank) return rank;
+    if (left.label === 'you' && right.label !== 'you') return -1;
+    if (right.label === 'you' && left.label !== 'you') return 1;
+    return 0;
+  });
+}
+
+/** Why a member cannot be changed from here, for a disabled menu item. */
+export function targetReason(
+  snapshot: AgentSnapshot,
+  store: Store,
+  party: Party,
+  manageable: boolean,
+): string {
+  if (store.kind === 'team' && store.team_kind === 'adhoc')
+    return 'Memberships can’t be changed in an ad-hoc team.';
+  if (!manageable)
+    return 'Only an Admin or an Owner can change this team’s members.';
+  if (party.label === 'you')
+    return 'You cannot change your own role or remove your own account.';
+  if (party.party_kind !== 'user' || !party.locally_manageable)
+    return 'Members of an federated team are managed on their own server and cannot be changed or removed one by one.';
+  const mine = partiesOf(snapshot, party.store).find(
+    (candidate) => candidate.label === 'you',
+  );
+  if (
+    mine &&
+    roleRank(party.destination_role) >= roleRank(mine.destination_role)
+  )
+    return 'An Admin cannot change another Admin or the Owner.';
+  return 'This member cannot be changed from this device.';
 }

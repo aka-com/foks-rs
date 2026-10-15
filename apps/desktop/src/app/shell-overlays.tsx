@@ -12,14 +12,13 @@ import type { MutationFailureHandler } from '../mutation-recovery';
 import { NavigationPrompt } from '../navigation-guard';
 import { useShellServices } from '../shell-services';
 import type { DropUpload } from '../screens/items-screen';
+import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from '../screens/item-roles';
 import {
-  DEFAULT_READ_ROLE,
-  DEFAULT_WRITE_ROLE,
   conflictDraftWorkflow,
   droppedFileDraft,
-  WriteOverlay,
   type WriteWorkflow,
-} from '../screens/write-workflows';
+} from '../screens/write-workflow-model';
+import { WriteOverlay } from '../screens/write-workflows';
 import {
   AgentLostCard,
   AgentStopCard,

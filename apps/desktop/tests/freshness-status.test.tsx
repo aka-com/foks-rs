@@ -16,12 +16,12 @@ import {
 } from '../src/catalog-state';
 import { FreshnessCaption } from '../src/components/metadata-status';
 import { diagnosticLog } from '../src/diagnostics/log';
+import { JobTimes } from '../src/shell/sync-popover';
 import {
   diagnosticsText,
-  JobTimes,
   summarizeSync,
   syncStatusLabel,
-} from '../src/shell/sync-popover';
+} from '../src/shell/sync-summary';
 
 test('refresh rows use compact state labels', () => {
   const base = {

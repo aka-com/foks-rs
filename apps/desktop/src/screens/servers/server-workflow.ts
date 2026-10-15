@@ -3,6 +3,7 @@ import { enqueueProfileWork, sharedServerStatus } from '../../bridge';
 import type { Bridge, CheckedServer, ServerStatusSnapshot } from '../../bridge';
 import { attemptMutation } from '../../commands/command-policy';
 import { serverAvailability } from '../../model';
+import { canReadServer } from './server-model';
 import type { AgentSnapshot, Server } from '../../model';
 
 export const serverBinding = (server: Server): string =>
@@ -11,13 +12,6 @@ export const serverBinding = (server: Server): string =>
     server.configuredEndpoint,
     server.host_id,
   ]);
-
-export function canReadServer(server: Server): boolean {
-  return (
-    server.trust.status !== 'blocked' &&
-    !server.restrictions.some((row) => row.kind === 'schema-incompatible')
-  );
-}
 
 function canCheckServer(snapshot: AgentSnapshot, server: Server): boolean {
   const availability = serverAvailability(snapshot, server);

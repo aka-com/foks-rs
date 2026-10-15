@@ -90,9 +90,10 @@ import type {
 import { normalizeCommandError } from '../bridge';
 import type { Bridge, ItemField } from '../bridge';
 import { useFileDrop } from '../file-drop';
-import { fileDropPath, writeBlockReason } from './write-workflows';
+import { fileDropPath } from './write-workflow-model';
+import { writeBlockReason } from './store-choice';
 import { exportedPasswords } from './export-passwords-sheet';
-import type { NewKind } from './write-workflows';
+import type { NewKind } from './write-workflow-model';
 import { copyActions, copyAndAnnounce } from './item-copy';
 import {
   ALL_ITEMS,

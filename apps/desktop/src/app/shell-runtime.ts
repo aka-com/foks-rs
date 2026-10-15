@@ -19,7 +19,7 @@ import type { AgentSnapshot, Item } from '../model';
 import {
   workflowForError,
   type WriteWorkflow,
-} from '../screens/write-workflows';
+} from '../screens/write-workflow-model';
 import type { LeaseExpiryClock } from '../scheduling/lease-expiry';
 import { useDesktopReconciliation } from '../use-desktop-reconciliation';
 import type { CatalogRuntime } from './catalog-runtime';

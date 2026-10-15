@@ -24,7 +24,7 @@ import {
 import type { MoveCheck } from './item-moves';
 import { newFolderRoles } from './item-roles';
 import { itemActionProblem } from './store-access';
-import type { WriteWorkflow } from './write-workflows';
+import type { WriteWorkflow } from './write-workflow-model';
 import { useShellServices, useShellSnapshot } from '../shell-services';
 
 /**

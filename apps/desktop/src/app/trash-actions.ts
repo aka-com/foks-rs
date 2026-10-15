@@ -23,7 +23,7 @@ import {
 } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { itemActionProblem } from '../screens/store-access';
-import type { WriteWorkflow } from '../screens/write-workflows';
+import type { WriteWorkflow } from '../screens/write-workflow-model';
 import { matchesShortcut, typingTarget } from '../shortcuts';
 import { storedTrashAutoEmpty } from '../trash-auto-empty';
 
