@@ -214,8 +214,9 @@ and the server rejects every non-loopback bind address. A reverse proxy that
 needs remote access must connect to this loopback listener and provide its own
 authenticated transport. Readiness requires both completed startup and a
 bounded round trip through the SQLite writer. Metrics cover end-to-end request
-and actual handler duration (including work that outlives a client deadline),
-writer queue wait and execution duration, database and WAL bytes, backup
+and actual handler duration (including work that outlives a client deadline,
+and the time an OIDC completion, KEX receive or realtime inbox long poll
+waits), writer queue wait and execution duration, database and WAL bytes, backup
 duration, saturation, backup outcomes, and transient `accept()` failures. They
 use fixed, non-user-derived names and never export paths, identities, request
 values, or key material.

@@ -209,6 +209,19 @@ impl Operations for ServerData {
     }
 }
 
+/// Waits for the OIDC flow named by the argument to complete.
+pub(super) async fn poll_oauth2_session_response(
+    data: &ServerData,
+    call: RoutedCall,
+) -> Result<Vec<u8>, RpcStatus> {
+    let service = data.sso.as_ref().ok_or(RpcStatus::Unsupported)?;
+    let argument = foks_proto::PollOAuth2SessionArgument::decode(call.call.argument())
+        .map_err(|_| super::super::bad_arguments("invalid OIDC poll"))?;
+    let bytes = service.poll(argument).await?;
+    encode_success_response_at(&bytes, call.call.sequence())
+        .map_err(|error| crate::status::internal(error, "sso_poll"))
+}
+
 pub(super) fn response(
     operations: &impl Operations,
     call: RoutedCall,

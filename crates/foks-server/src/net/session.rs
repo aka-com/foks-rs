@@ -12,7 +12,7 @@ use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
 
 use crate::auth::Principal;
 use crate::keys::HostKeyProvider;
-use crate::rpc::{route_call, Listener, RouteError};
+use crate::rpc::{route_call, Listener, RouteError, RouteId, RouteSpec};
 use crate::services::merkle_query::{validate_host_argument_against, MerkleQueries};
 use crate::services::IdentityPorts;
 use crate::{Entropy, Result, SessionLimits, WriterHandle};
@@ -320,144 +320,27 @@ pub(crate) async fn serve(
         let family = routed
             .as_ref()
             .map_or(crate::metrics::UNROUTED, |call| call.route.protocol);
-        let kex_receive = matches!(
-            &routed,
-            Ok(call) if call.route.id == crate::rpc::RouteId::KexReceive
-        );
-        let realtime_poll = matches!(
-            &routed,
-            Ok(call) if call.route.id == crate::rpc::RouteId::RealTimeRtPollInbox
-        );
-        let sso_poll = matches!(&routed,Ok(call) if call.route.id==crate::rpc::RouteId::RegPollOAuth2SessionCompletion);
-        let outcome = if sso_poll {
-            let _request_memory = request_memory;
-            let call = match routed {
-                Ok(call) => call,
-                Err(_) => unreachable!("recognized OIDC poll"),
-            };
-            let route = Some(call.route);
-            let result = async {
-                let service = data.sso.as_ref().ok_or(RpcStatus::Unsupported)?;
-                let arg = foks_proto::PollOAuth2SessionArgument::decode(call.call.argument())
-                    .map_err(|_| bad_arguments("invalid OIDC poll"))?;
-                let bytes = service.poll(arg).await?;
-                foks_rpc::encode_success_response_at(&bytes, sequence)
-                    .map_err(|error| crate::status::internal(error, "sso_poll"))
-            };
-            let (response, status) = tokio::select! {
-                result = result => encode_result(result, sequence)?,
-                _ = stream.get_ref().0.readable() => return Ok(()),
-                _ = stop.changed() => break,
-            };
-            RequestOutcome {
-                response,
-                status,
-                route,
-                disconnect_before_response: false,
+        let outcome = match routed {
+            Ok(call) if call.route.id == RouteId::RegPollOAuth2SessionCompletion => {
+                let poll = service_data.long_poll(call.route, sequence, request_memory);
+                let handler = handlers::sso_poll_response(service_data.as_ref(), call);
+                poll.run(stream.get_ref().0.readable(), &mut stop, handler)
+                    .await?
             }
-        } else if kex_receive {
-            // Go-compatible KEX receives can remain open for up to an hour.
-            // Await the relay directly rather than occupying a blocking worker;
-            // the listener's active-connection semaphore remains the bound.
-            let _request_memory = request_memory;
-            let _handler_timer =
-                crate::ServerMetrics::handler_timer(Arc::clone(&service_data.metrics));
-            let call = match routed {
-                Ok(call) => call,
-                Err(_) => unreachable!("KEX receive was recognized above"),
-            };
-            let route = Some(call.route);
-            if service_data.should_disconnect(
-                crate::SessionFaultPoint::BeforeDurableMutation,
-                call.route.protocol,
-                call.route.method,
-            ) {
-                RequestOutcome {
-                    response: Vec::new(),
-                    status: STATUS_OK,
-                    route,
-                    disconnect_before_response: true,
-                }
-            } else {
-                let (response, status) = tokio::select! {
-                    result = handlers::kex_receive_response(service_data.as_ref(), call) => {
-                        encode_result(result, sequence)?
-                    }
-                    // Snowpack is request/response serial. Readability while
-                    // this response is pending is therefore either a client
-                    // cancellation/control frame or socket shutdown. Closing
-                    // promptly drops the relay future and active-connection
-                    // permit instead of retaining an abandoned Go long poll.
-                    result = stream.get_ref().0.readable() => {
-                        let _ = result;
-                        return Ok(());
-                    }
-                    result = stop.changed() => {
-                        let _ = result;
-                        break;
-                    }
-                };
-                RequestOutcome {
-                    response,
-                    status,
-                    route,
-                    disconnect_before_response: false,
-                }
+            Ok(call) if call.route.id == RouteId::KexReceive => {
+                let poll = service_data.long_poll(call.route, sequence, request_memory);
+                let handler = handlers::kex_receive_response(service_data.as_ref(), call);
+                poll.run(stream.get_ref().0.readable(), &mut stop, handler)
+                    .await?
             }
-        } else if realtime_poll {
-            let _request_memory = request_memory;
-            let call = match routed {
-                Ok(call) => call,
-                Err(_) => unreachable!("realtime poll was recognized above"),
-            };
-            let route = Some(call.route);
-            if service_data.should_disconnect(
-                crate::SessionFaultPoint::BeforeDurableMutation,
-                call.route.protocol,
-                call.route.method,
-            ) {
-                RequestOutcome {
-                    response: Vec::new(),
-                    status: STATUS_OK,
-                    route,
-                    disconnect_before_response: true,
-                }
-            } else {
-                let (response, status) =
-                    match service_data.realtime_polling.clone().try_acquire_owned() {
-                        Ok(poll_permit) => {
-                            let _poll_permit = poll_permit;
-                            if let Some(certificate) = certificate {
-                                tokio::select! {
-                                    result = handlers::realtime_poll_response(
-                                        service_data.as_ref(),
-                                        call,
-                                        certificate,
-                                    ) => encode_result(result, sequence)?,
-                                    result = stream.get_ref().0.readable() => {
-                                        let _ = result;
-                                        return Ok(());
-                                    }
-                                    result = stop.changed() => {
-                                        let _ = result;
-                                        break;
-                                    }
-                                }
-                            } else {
-                                encode_result(Err(permission_denied()), sequence)?
-                            }
-                        }
-                        Err(_) => encode_result(Err(RpcStatus::RateLimited), sequence)?,
-                    };
-                RequestOutcome {
-                    response,
-                    status,
-                    route,
-                    disconnect_before_response: false,
-                }
+            Ok(call) if call.route.id == RouteId::RealTimeRtPollInbox => {
+                let poll = service_data.long_poll(call.route, sequence, request_memory);
+                let handler =
+                    handlers::realtime_poll_response(service_data.as_ref(), call, certificate);
+                poll.run(stream.get_ref().0.readable(), &mut stop, handler)
+                    .await?
             }
-        } else {
-            match execute_bounded(
+            routed => match execute_bounded(
                 Arc::clone(&service_data.execution),
                 limits.request_timeout,
                 &mut stop,
@@ -546,7 +429,7 @@ pub(crate) async fn serve(
             )
             .await?
             {
-                BoundedExecution::Completed(outcome) => outcome?,
+                BoundedExecution::Completed(outcome) => Some(outcome?),
                 BoundedExecution::Saturated => {
                     service_data.metrics.request_rate_limited();
                     let response = encode_status_response_at(&RpcStatus::RateLimited, sequence)?;
@@ -565,7 +448,12 @@ pub(crate) async fn serve(
                     )));
                 }
                 BoundedExecution::Stopped => break,
-            }
+            },
+        };
+        // A long poll ends without an outcome when the peer becomes readable
+        // or the server stops; either way the connection closes unanswered.
+        let Some(outcome) = outcome else {
+            break;
         };
         if outcome.disconnect_before_response {
             return Ok(());
@@ -662,6 +550,77 @@ where
                 Err(_) => Ok(BoundedExecution::TimedOut),
             }
         }
+    }
+}
+
+/// One long-poll request: the SSO completion poll, a KEX receive or a
+/// realtime inbox poll. A Go-compatible long poll can remain open for a long
+/// time, so it is awaited on the connection task rather than a blocking worker;
+/// the listener's active-connection semaphore bounds how many run at once.
+struct LongPoll<'a> {
+    metrics: &'a Arc<crate::ServerMetrics>,
+    faults: Option<&'a crate::SessionFaults>,
+    route: &'static RouteSpec,
+    sequence: u64,
+    /// The decoded request stays reserved until the poll answers.
+    request_memory: OwnedSemaphorePermit,
+}
+
+impl LongPoll<'_> {
+    /// Applies the request fault check and handler timer that bounded
+    /// requests get, then awaits `handler`. Returns `None` when the
+    /// connection should close without a response: `peer_readable` completed
+    /// or the server is stopping.
+    async fn run<P, H>(
+        self,
+        peer_readable: P,
+        stop: &mut watch::Receiver<bool>,
+        handler: H,
+    ) -> Result<Option<RequestOutcome>>
+    where
+        P: std::future::Future,
+        H: std::future::Future<Output = std::result::Result<Vec<u8>, RpcStatus>>,
+    {
+        let _request_memory = self.request_memory;
+        let _handler_timer = crate::ServerMetrics::handler_timer(Arc::clone(self.metrics));
+        let route = self.route;
+        if self.faults.is_some_and(|faults| {
+            faults.disconnect(
+                crate::SessionFaultPoint::BeforeDurableMutation,
+                route.protocol,
+                route.method,
+            )
+        }) {
+            return Ok(Some(RequestOutcome {
+                response: Vec::new(),
+                status: STATUS_OK,
+                route: Some(route),
+                disconnect_before_response: true,
+            }));
+        }
+        // A finished handler is answered even if the peer or the stop signal
+        // became ready at the same time.
+        let result = tokio::select! {
+            biased;
+            result = handler => result,
+            // Snowpack is request/response serial. Readability while this
+            // response is pending is therefore either a client
+            // cancellation/control frame or socket shutdown. Closing promptly
+            // drops the handler future, which releases relay waiters and poll
+            // permits instead of retaining an abandoned Go long poll.
+            _ = peer_readable => return Ok(None),
+            result = stop.changed() => {
+                let _ = result;
+                return Ok(None);
+            }
+        };
+        let (response, status) = encode_result(result, self.sequence)?;
+        Ok(Some(RequestOutcome {
+            response,
+            status,
+            route: Some(route),
+            disconnect_before_response: false,
+        }))
     }
 }
 
@@ -776,6 +735,21 @@ fn timeout_error(message: &'static str) -> std::io::Error {
 }
 
 impl ServerData {
+    fn long_poll(
+        &self,
+        route: &'static RouteSpec,
+        sequence: u64,
+        request_memory: OwnedSemaphorePermit,
+    ) -> LongPoll<'_> {
+        LongPoll {
+            metrics: &self.metrics,
+            faults: self.session_faults.as_deref(),
+            route,
+            sequence,
+            request_memory,
+        }
+    }
+
     fn should_disconnect(
         &self,
         point: crate::SessionFaultPoint,
@@ -841,6 +815,131 @@ impl ServerData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LONG_POLL_ROUTES: [RouteId; 3] = [
+        RouteId::RegPollOAuth2SessionCompletion,
+        RouteId::KexReceive,
+        RouteId::RealTimeRtPollInbox,
+    ];
+
+    fn route_spec(id: RouteId) -> &'static RouteSpec {
+        crate::rpc::ROUTES
+            .iter()
+            .find(|route| route.id == id)
+            .unwrap()
+    }
+
+    fn long_poll<'a>(
+        metrics: &'a Arc<crate::ServerMetrics>,
+        faults: &'a crate::SessionFaults,
+        memory: &Arc<Semaphore>,
+        id: RouteId,
+    ) -> LongPoll<'a> {
+        LongPoll {
+            metrics,
+            faults: Some(faults),
+            route: route_spec(id),
+            sequence: 7,
+            request_memory: Arc::clone(memory).try_acquire_owned().unwrap(),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn every_long_poll_honors_an_armed_fault_before_awaiting_its_handler() {
+        for id in LONG_POLL_ROUTES {
+            let metrics = Arc::new(crate::ServerMetrics::default());
+            let faults = crate::SessionFaults::default();
+            let memory = Arc::new(Semaphore::new(1));
+            let route = route_spec(id);
+            faults.arm(
+                crate::SessionFaultPoint::BeforeDurableMutation,
+                route.protocol,
+                route.method,
+            );
+            let (_stop, mut stop) = watch::channel(false);
+            let polled = std::cell::Cell::new(false);
+            let outcome = long_poll(&metrics, &faults, &memory, id)
+                .run(std::future::pending::<()>(), &mut stop, async {
+                    polled.set(true);
+                    Ok(Vec::new())
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(outcome.disconnect_before_response, "{id:?}");
+            assert_eq!(outcome.route.map(|route| route.id), Some(id));
+            assert!(!polled.get(), "{id:?}");
+            assert_eq!(faults.hits(), 1, "{id:?}");
+            assert_eq!(metrics.snapshot().handler_duration_observations, 1);
+            assert_eq!(memory.available_permits(), 1);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn long_poll_results_are_encoded_and_timed() {
+        let metrics = Arc::new(crate::ServerMetrics::default());
+        let faults = crate::SessionFaults::default();
+        let memory = Arc::new(Semaphore::new(1));
+        let (_stop, mut stop) = watch::channel(false);
+
+        let response = foks_rpc::encode_success_response_at(&[0x91, 0x01], 7).unwrap();
+        let outcome = long_poll(
+            &metrics,
+            &faults,
+            &memory,
+            RouteId::RegPollOAuth2SessionCompletion,
+        )
+        .run(std::future::pending::<()>(), &mut stop, async {
+            Ok(response.clone())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!outcome.disconnect_before_response);
+        assert_eq!(outcome.response, response);
+        assert_eq!(outcome.status, STATUS_OK);
+
+        let outcome = long_poll(&metrics, &faults, &memory, RouteId::RealTimeRtPollInbox)
+            .run(std::future::pending::<()>(), &mut stop, async {
+                Err(RpcStatus::RateLimited)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            outcome.response,
+            encode_status_response_at(&RpcStatus::RateLimited, 7).unwrap()
+        );
+        assert_eq!(outcome.status, RpcStatus::RateLimited.code());
+        assert_eq!(metrics.snapshot().handler_duration_observations, 2);
+        assert_eq!(faults.hits(), 0);
+        assert_eq!(memory.available_permits(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn long_polls_close_unanswered_when_the_peer_is_readable_or_the_server_stops() {
+        let metrics = Arc::new(crate::ServerMetrics::default());
+        let faults = crate::SessionFaults::default();
+        let memory = Arc::new(Semaphore::new(1));
+        let (stop_sender, mut stop) = watch::channel(false);
+        let pending = std::future::pending::<std::result::Result<Vec<u8>, RpcStatus>>;
+
+        let outcome = long_poll(&metrics, &faults, &memory, RouteId::KexReceive)
+            .run(std::future::ready(()), &mut stop, pending())
+            .await
+            .unwrap();
+        assert!(outcome.is_none());
+        assert_eq!(memory.available_permits(), 1);
+
+        stop_sender.send(true).unwrap();
+        let outcome = long_poll(&metrics, &faults, &memory, RouteId::RealTimeRtPollInbox)
+            .run(std::future::pending::<()>(), &mut stop, pending())
+            .await
+            .unwrap();
+        assert!(outcome.is_none());
+        assert_eq!(memory.available_permits(), 1);
+        assert_eq!(metrics.snapshot().handler_duration_observations, 2);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn timed_out_execution_remains_bounded_until_work_finishes() {
