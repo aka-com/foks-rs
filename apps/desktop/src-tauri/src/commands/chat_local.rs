@@ -12,17 +12,24 @@ use std::{
     io::{Read, Write},
     sync::Mutex,
 };
-#[cfg(target_os = "macos")]
-use tauri::Emitter;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 /// The most entries each keyed setting holds.
 const KEYED_LIMIT: usize = 4096;
-#[derive(Clone, Default, Serialize, Deserialize)]
+/// The most characters an alert's title holds: a channel name and its team's.
+const TITLE_CHARS: usize = 128;
+/// The most characters an alert's message preview holds.
+const BODY_CHARS: usize = 256;
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub enabled: bool,
     pub previews: bool,
+    /// Whether the app icon shows the unread count. Written only when off,
+    /// so a file that leaves it at its default stays readable by a build from
+    /// before the setting existed.
+    #[serde(default = "shown", skip_serializing_if = "is_shown")]
+    pub badge: bool,
     /// A channel's own alert mode, by channel key.
     pub overrides: BTreeMap<String, AlertMode>,
     /// The channels and teams muted on this device, by channel key or team
@@ -36,6 +43,24 @@ pub struct Settings {
     /// team key.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub teams: BTreeMap<String, AlertMode>,
+}
+fn shown() -> bool {
+    true
+}
+fn is_shown(value: &bool) -> bool {
+    *value
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            enabled: false,
+            previews: false,
+            badge: true,
+            overrides: BTreeMap::new(),
+            muted: BTreeSet::new(),
+            teams: BTreeMap::new(),
+        }
+    }
 }
 /// Which new messages raise a desktop alert. Stored as `true` (all), `false`
 /// (none) or `"mentions"`, so a file written before mentions-only existed,
@@ -113,6 +138,7 @@ pub enum Action {
     Configure {
         enabled: Option<bool>,
         previews: Option<bool>,
+        badge: Option<bool>,
         #[serde(rename = "storeId")]
         store_id: Option<String>,
         scope: Option<ChatScope>,
@@ -135,6 +161,9 @@ pub enum Action {
         store_id: String,
         scope: ChatScope,
         channel: String,
+        /// The channel and team, as the shell names them; shown as the
+        /// alert's title while previews are on.
+        title: Option<String>,
         body: Option<String>,
         count: u32,
         incomplete: bool,
@@ -144,6 +173,12 @@ pub enum Action {
 pub struct Session {
     pub epoch: String,
     pub available: bool,
+    /// Which system shows desktop alerts: "macos", "freedesktop" (the
+    /// org.freedesktop.Notifications service) or "none".
+    pub backend: &'static str,
+    /// The notification service's own name, where the system reports one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
     pub settings: Settings,
     pub activation: Option<Route>,
     #[serde(rename = "migrationRemaining", skip_serializing_if = "Option::is_none")]
@@ -322,6 +357,8 @@ impl Inner {
         Session {
             epoch: self.epoch.clone(),
             available: platform::available(),
+            backend: platform::BACKEND,
+            service: platform::service(),
             activation: None,
             migration_remaining: None,
             settings: self.settings.clone(),
@@ -359,15 +396,14 @@ pub async fn chat_local(
     ) {
         let generation = crate::applock::unlocked_generation(app)?;
         if !platform::permission().await {
-            // Its own code: the shell offers the settings pane for this one
-            // refusal, and states the rest as plain failures.
-            return Err(AgentError::new(
-                "chat-notification-permission",
-                "Desktop alerts were not permitted. Check macOS notification settings.",
-                false,
-            ));
+            return Err(platform::refusal());
         }
         crate::applock::require_unlocked_generation(app, generation)?;
+    }
+    if matches!(&action, Action::Begin) {
+        // A notification service started after FOKS is found on the next
+        // session.
+        platform::refresh().await;
     }
     if matches!(&action, Action::RecoverIntents {}) {
         let generation = crate::applock::unlocked_generation(app)?;
@@ -429,6 +465,7 @@ pub async fn chat_local(
         Action::Configure {
             enabled,
             previews,
+            badge,
             store_id,
             scope,
             channel,
@@ -444,6 +481,12 @@ pub async fn chat_local(
             }
             if let Some(value) = previews {
                 settings.previews = value;
+            }
+            if let Some(value) = badge {
+                settings.badge = value;
+                if !value {
+                    set_badge(app, None);
+                }
             }
             if let Some(scope) = scope {
                 // Revalidate the catalog binding rather than accepting an alias-only key.
@@ -480,6 +523,7 @@ pub async fn chat_local(
             store_id,
             scope,
             channel,
+            title,
             body,
             count,
             incomplete,
@@ -494,7 +538,10 @@ pub async fn chat_local(
             verify_scope(&state, &inner, &store_id, &scope)?;
             if !foks_agent_proto::chat::valid_chat_id(&channel)
                 || count > 100
-                || body.as_ref().is_some_and(|b| b.chars().count() > 256)
+                || body
+                    .as_ref()
+                    .is_some_and(|b| b.chars().count() > BODY_CHARS)
+                || title.as_deref().is_some_and(|t| !valid_title(t))
             {
                 return Err(error("Invalid local alert."));
             }
@@ -506,20 +553,27 @@ pub async fn chat_local(
                 platform::clear();
             }
             let token = epoch()?;
+            let previews = inner.settings.previews;
+            let alert = Alert {
+                token: token.clone(),
+                group: key(&scope, &channel),
+                // Without previews an alert names no channel, team or sender.
+                title: title
+                    .filter(|_| previews)
+                    .unwrap_or_else(|| "FOKS".to_owned()),
+                preview: body.filter(|_| previews),
+                count,
+                incomplete,
+            };
             let route = Route {
                 store_id,
                 scope,
                 channel,
                 generation,
             };
-            let text = if inner.settings.previews {
-                body.unwrap_or_else(|| alert_text(count, incomplete))
-            } else {
-                alert_text(count, incomplete)
-            };
-            inner.routes.insert(token.clone(), route);
+            inner.routes.insert(token, route);
             crate::applock::require_unlocked_generation(app, generation)?;
-            platform::display(app, &token, &text)?;
+            platform::display(app, &alert)?;
         }
         Action::End { .. } | Action::RecoverIntents {} => unreachable!(),
     }
@@ -740,6 +794,93 @@ mod tests {
     }
 
     #[test]
+    fn the_badge_setting_defaults_on_and_is_written_only_when_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s");
+        // A file from before the setting existed loads with the badge on.
+        std::fs::write(
+            &p,
+            b"{\"enabled\":true,\"previews\":false,\"overrides\":{}}",
+        )
+        .unwrap();
+        let mut settings = load(&p).unwrap();
+        assert!(settings.badge);
+        assert!(Settings::default().badge);
+        assert_eq!(badge_count(&settings, 0), None);
+        assert_eq!(badge_count(&settings, 3), Some(3));
+        assert_eq!(badge_count(&settings, 123_456), Some(9999));
+        save(&p, &settings).unwrap();
+        assert!(!String::from_utf8(std::fs::read(&p).unwrap())
+            .unwrap()
+            .contains("badge"));
+        settings.badge = false;
+        assert_eq!(badge_count(&settings, 3), None);
+        save(&p, &settings).unwrap();
+        assert!(!load(&p).unwrap().badge);
+        let parse = |value: serde_json::Value| match serde_json::from_value::<Action>(value) {
+            Ok(Action::Configure { badge, .. }) => badge,
+            _ => panic!("not a configure action"),
+        };
+        assert_eq!(
+            parse(serde_json::json!({"action": "configure", "badge": false})),
+            Some(false)
+        );
+        assert_eq!(parse(serde_json::json!({"action": "configure"})), None);
+    }
+
+    #[test]
+    fn alert_titles_are_bounded_single_lines() {
+        assert!(valid_title("#general · Engineering"));
+        assert!(valid_title(&"x".repeat(TITLE_CHARS)));
+        assert!(!valid_title(&"x".repeat(TITLE_CHARS + 1)));
+        assert!(!valid_title(""));
+        assert!(!valid_title("#general\nEngineering"));
+        assert!(!valid_title("#general\u{1b}[31m"));
+        let display = serde_json::json!({
+            "action": "display",
+            "epoch": "e",
+            "storeId": "s",
+            "scope": serde_json::to_value(test_scope("t")).unwrap(),
+            "channel": "c",
+            "title": "#general · Engineering",
+            "count": 1,
+            "incomplete": false,
+        });
+        match serde_json::from_value::<Action>(display) {
+            Ok(Action::Display { title, body, .. }) => {
+                assert_eq!(title.as_deref(), Some("#general · Engineering"));
+                assert_eq!(body, None);
+            }
+            _ => panic!("not a display action"),
+        }
+    }
+
+    #[test]
+    fn grouped_text_counts_every_message_of_the_entry() {
+        assert_eq!(grouped_text(None, 1, false), "New chat message.");
+        assert_eq!(grouped_text(None, 4, false), "4 new chat messages.");
+        assert_eq!(
+            grouped_text(None, 0, true),
+            "New chat activity. Some messages could not be checked."
+        );
+        assert_eq!(
+            grouped_text(None, 1, true),
+            "1 new chat message. Some messages could not be checked."
+        );
+        assert_eq!(grouped_text(Some("lee: hi"), 4, true), "lee: hi");
+        let alert = Alert {
+            token: "t".into(),
+            group: key(&test_scope("t"), "c"),
+            title: "FOKS".into(),
+            preview: None,
+            count: 2,
+            incomplete: false,
+        };
+        // Alone, an alert after three others states only what it adds.
+        assert_eq!(alert.body(), "2 additional chat messages.");
+    }
+
+    #[test]
     fn configure_tells_a_cleared_mode_from_an_unchanged_one() {
         let parse = |value: serde_json::Value| match serde_json::from_value::<Action>(value) {
             Ok(Action::Configure { mode, muted, .. }) => (mode, muted),
@@ -842,8 +983,37 @@ pub struct Route {
     pub scope: ChatScope,
     pub channel: String,
     #[serde(skip)]
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     generation: u64,
+}
+/// One desktop alert, as a platform shows it.
+#[derive(Clone)]
+pub struct Alert {
+    /// The route's token, which an activation hands back.
+    pub token: String,
+    /// The channel's key: a platform shows the alerts that share it together.
+    pub group: String,
+    pub title: String,
+    /// The message text, while previews are on and the shell supplied it.
+    pub preview: Option<String>,
+    /// The messages this alert accounts for.
+    pub count: u32,
+    pub incomplete: bool,
+}
+impl Alert {
+    /// The text of this alert alone.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn body(&self) -> String {
+        self.preview
+            .clone()
+            .unwrap_or_else(|| alert_text(self.count, self.incomplete))
+    }
+}
+/// A title the shell may give an alert: bounded, and without control
+/// characters, which a notification service could draw as line breaks.
+fn valid_title(title: &str) -> bool {
+    !title.is_empty()
+        && title.chars().count() <= TITLE_CHARS
+        && !title.chars().any(char::is_control)
 }
 fn alert_text(count: u32, incomplete: bool) -> String {
     if incomplete {
@@ -854,7 +1024,23 @@ fn alert_text(count: u32, incomplete: bool) -> String {
         format!("{count} additional chat messages.")
     }
 }
-#[cfg(target_os = "macos")]
+/// The text of one entry that stands for `count` messages of a channel: the
+/// newest message's preview when there is one, else the count.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn grouped_text(preview: Option<&str>, count: u32, incomplete: bool) -> String {
+    let messages = if count == 1 {
+        "1 new chat message.".to_owned()
+    } else {
+        format!("{count} new chat messages.")
+    };
+    match (preview, incomplete, count) {
+        (Some(preview), _, _) => preview.to_owned(),
+        (None, true, 0) => alert_text(0, true),
+        (None, true, _) => format!("{messages} Some messages could not be checked."),
+        (None, false, 1) => alert_text(1, false),
+        (None, false, _) => messages,
+    }
+}
 pub fn route_current(app: &tauri::AppHandle, token: &str) -> bool {
     let local = app.state::<LocalState>();
     let Ok(inner) = local.0.lock() else {
@@ -866,7 +1052,6 @@ pub fn route_current(app: &tauri::AppHandle, token: &str) -> bool {
             && crate::applock::require_unlocked_generation(app, r.generation).is_ok()
     })
 }
-#[cfg(target_os = "macos")]
 pub fn activate(app: &tauri::AppHandle, token: &str) {
     let local = app.state::<LocalState>();
     if let Ok(mut inner) = local.0.lock() {
@@ -880,7 +1065,6 @@ pub fn activate(app: &tauri::AppHandle, token: &str) {
     }
     let _ = app.emit_to(crate::MAIN, "foks://chat-notification", ());
 }
-#[cfg(target_os = "macos")]
 pub fn delivery_failed(app: &tauri::AppHandle) {
     let _ = app.emit_to(crate::MAIN, "foks://chat-notification-error", ());
 }
@@ -888,6 +1072,41 @@ pub fn conceal(app: &tauri::AppHandle) {
     let local = app.state::<LocalState>();
     if let Ok(mut inner) = local.0.lock() {
         inner.generation = None;
+        // Under the lock `set_unread_badge` takes, so a count it read before
+        // the app locked cannot be drawn after this.
+        set_badge(app, None);
     }
     platform::clear();
+}
+fn set_badge(app: &tauri::AppHandle, count: Option<i64>) {
+    if let Some(window) = app.get_webview_window(crate::MAIN) {
+        let _ = window.set_badge_count(count);
+    }
+}
+/// The most the app icon's count shows; a larger total is drawn as this.
+const BADGE_LIMIT: u32 = 9999;
+/// Draws the unread count on the app icon, or removes it for 0. The count is
+/// the rail's Chat total, which the shell computes from the inbox with this
+/// device's mutes applied. Refused while the app is locked; while the badge
+/// setting is off the count is removed instead. On Linux only docks that read
+/// the Unity launcher entry, such as Ubuntu Dock, draw it.
+#[tauri::command]
+pub fn set_unread_badge(
+    webview: tauri::Webview,
+    local: State<'_, LocalState>,
+    count: u32,
+) -> Result<serde_json::Value, AgentError> {
+    require_main_window(&webview)?;
+    let app = webview.app_handle();
+    let inner = local
+        .0
+        .lock()
+        .map_err(|_| error("Local alerts unavailable."))?;
+    crate::applock::require_unlocked(app)?;
+    set_badge(app, badge_count(&inner.settings, count));
+    Ok(serde_json::json!({"ok": true}))
+}
+/// The count the app icon shows: none for 0 or while the setting is off.
+fn badge_count(settings: &Settings, count: u32) -> Option<i64> {
+    (settings.badge && count > 0).then(|| i64::from(count.min(BADGE_LIMIT)))
 }

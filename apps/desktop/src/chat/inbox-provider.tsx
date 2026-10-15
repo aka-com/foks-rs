@@ -17,6 +17,8 @@ import type { Bridge } from '../bridge';
 import type { AgentSnapshot } from '../model';
 import type { ChatScope } from '../chat-contract';
 import { readerUsername } from './mentions';
+import { partyNames } from './presentation';
+import { UnreadBadge } from './unread-badge';
 import type { ChatClock } from './clock';
 import { ChatInboxService } from './inbox-service';
 import { diagnosticLog } from '../diagnostics/log';
@@ -70,6 +72,16 @@ export function ChatInboxProvider({
   const username = useCallback(
     (storeId: string, scope: ChatScope) =>
       readerUsername(latest.current, storeId, scope.store.account_alias),
+    [],
+  );
+  // The team and sender names a previewed alert carries, read the same way.
+  const labels = useCallback(
+    (storeId: string) => ({
+      team:
+        latest.current.stores.find((store) => store.id === storeId)?.name ??
+        null,
+      names: partyNames(latest.current, storeId),
+    }),
     [],
   );
   useLayoutEffect(() => {
@@ -131,7 +143,9 @@ export function ChatInboxProvider({
         onNavigate={onNavigate}
         clock={clock}
         username={username}
+        labels={labels}
       >
+        <UnreadBadge bridge={bridge} snapshot={snapshot} />
         <ChatSendProvider
           enabled={enabled}
           bridge={bridge}

@@ -9,9 +9,20 @@ import { sha256Hex } from './sha256';
 export type LocalAlertMode = boolean | 'mentions';
 /** The most entries each keyed setting holds, as the native settings bound it. */
 export const LOCAL_KEYED_LIMIT = 4096;
+/** The most characters an alert's title holds, as `chat_local.rs` bounds it. */
+export const ALERT_TITLE_CHARS = 128;
+/** The most characters of its own name a notification service reports. */
+const SERVICE_NAME_CHARS = 64;
+/** Which system shows desktop alerts, as the native session reports it. */
+export type AlertBackend = 'macos' | 'freedesktop' | 'none';
 export interface LocalSettings {
   enabled: boolean;
   previews: boolean;
+  /**
+   * Whether the app icon shows the unread count. The native settings write
+   * it only when off, so absent means on.
+   */
+  badge?: boolean;
   /** A channel's own alert mode, by {@link notificationKey}. */
   overrides: Record<string, LocalAlertMode>;
   /**
@@ -26,6 +37,13 @@ export interface LocalSession {
   migrationRemaining?: number;
   epoch: string;
   available: boolean;
+  /**
+   * Which system shows desktop alerts: macOS Notification Center, a
+   * freedesktop.org notification service (Linux), or none.
+   */
+  backend?: AlertBackend;
+  /** The notification service's own name, such as "GNOME Shell". */
+  service?: string;
   settings: LocalSettings;
   activation?: { storeId: string; scope: ChatScope; channel: string };
 }
@@ -39,6 +57,7 @@ export type LocalAction =
       action: 'configure';
       enabled?: boolean;
       previews?: boolean;
+      badge?: boolean;
       storeId?: string;
       scope?: ChatScope;
       /**
@@ -56,6 +75,11 @@ export type LocalAction =
       storeId: string;
       scope: ChatScope;
       channel: string;
+      /**
+       * The channel and team, shown as the alert's title while previews are
+       * on; at most {@link ALERT_TITLE_CHARS} characters, on one line.
+       */
+      title?: string;
       body?: string;
       count: number;
       incomplete: boolean;
@@ -96,6 +120,15 @@ export function decodeLocalSession(value: unknown): LocalSession {
   if (
     typeof s.enabled !== 'boolean' ||
     typeof s.previews !== 'boolean' ||
+    (s.badge !== undefined && typeof s.badge !== 'boolean') ||
+    (v.backend !== undefined &&
+      v.backend !== 'macos' &&
+      v.backend !== 'freedesktop' &&
+      v.backend !== 'none') ||
+    (v.service !== undefined &&
+      (typeof v.service !== 'string' ||
+        !v.service ||
+        Array.from(v.service).length > SERVICE_NAME_CHARS)) ||
     !overrides ||
     !teams ||
     !Array.isArray(muted) ||
@@ -135,9 +168,12 @@ export function decodeLocalSession(value: unknown): LocalSession {
     ...(activation ? { activation } : {}),
     epoch: v.epoch,
     available: v.available,
+    ...(v.backend !== undefined ? { backend: v.backend } : {}),
+    ...(v.service !== undefined ? { service: v.service } : {}),
     settings: {
       enabled: s.enabled,
       previews: s.previews,
+      ...(s.badge !== undefined ? { badge: s.badge } : {}),
       overrides: Object.fromEntries(overrides),
       muted: muted as string[],
       teams: Object.fromEntries(teams),
@@ -181,6 +217,12 @@ export function teamKey(scope: ChatScope): string {
 /** Whether a team is muted on this device; see {@link LocalSettings.muted}. */
 export function teamMuted(settings: LocalSettings, scope: ChatScope): boolean {
   return settings.muted.includes(teamKey(scope));
+}
+/** Why desktop alerts are unavailable, as the shell states it. */
+export function alertsUnavailableReason(session: LocalSession): string {
+  return session.backend === 'freedesktop'
+    ? 'No desktop notification service was found.'
+    : 'Desktop alerts are unavailable in this build.';
 }
 /** A channel's or team's alert mode in the terms the shell offers. */
 export type AlertChoice = 'all' | 'mentions' | 'none';

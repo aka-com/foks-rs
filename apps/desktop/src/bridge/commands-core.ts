@@ -41,6 +41,7 @@ export const coreCommands: Pick<
   | 'autoRecoverAgent'
   | 'chatLocal'
   | 'openNotificationSettings'
+  | 'setUnreadBadge'
   | 'relocateClientState'
   | 'maintainClientState'
   | 'clientStateMaintenanceStatus'
@@ -93,6 +94,7 @@ export const coreCommands: Pick<
   chatLocal: (action) => checked('chat_local', { action }, decodeLocalSession),
   openNotificationSettings: () =>
     checked('open_notification_settings', undefined, decodeCopy),
+  setUnreadBadge: (count) => checked('set_unread_badge', { count }, decodeCopy),
   relocateClientState: () =>
     checked('relocate_client_state', {}, decodeMaintenanceSnapshot),
   maintainClientState: (action) =>

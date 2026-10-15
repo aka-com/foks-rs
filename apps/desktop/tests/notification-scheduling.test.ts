@@ -12,6 +12,7 @@ import type { ChatInboxService, TeamInbox } from '../src/chat/inbox-service';
 import {
   NotificationConsumer,
   NOTIFICATION_LIMITS,
+  type AlertLabels,
   type NotificationMetric,
 } from '../src/chat/notification-consumer';
 import {
@@ -196,6 +197,7 @@ function setup(initial = entry()) {
   const make = (
     limits: { queued: number; baselines: number } = NOTIFICATION_LIMITS,
     username?: (storeId: string, scope: ChatScope) => string | null,
+    labels?: (storeId: string) => AlertLabels,
   ) =>
     new NotificationConsumer(
       bridge,
@@ -206,6 +208,7 @@ function setup(initial = entry()) {
       (e) => events.push(e),
       limits,
       username,
+      labels,
     );
   return {
     clock,
@@ -539,7 +542,8 @@ test('mentions only alerts for messages whose text names the reader', async () =
     assert.deepEqual(names, [['store', 'a']]);
     assert.deepEqual(
       displays(f.alerts).map((a) => (a as { body?: string }).body),
-      ['and @Sam.Ortiz, see above'],
+      // Without a roster the sender is named by a short id.
+      ['other: and @Sam.Ortiz, see above'],
     );
   } finally {
     c.stop();
@@ -552,6 +556,41 @@ test('mentions only alerts for messages whose text names the reader', async () =
     f.update({ channelRevisions: new Map([['a', 3]]) });
     await f.clock.flush();
     assert.equal(displays(f.alerts).length, 1);
+  } finally {
+    d.stop();
+  }
+});
+test('a previewed alert names its channel, team and sender; without previews it names none', async () => {
+  const f = setup(entry(['a'], scope, 1));
+  f.rows.set('a', [message(2), message(1)]);
+  const labels = (id: string): AlertLabels => {
+    assert.equal(id, 'store');
+    return { team: 'Engineering', names: new Map([['other', 'priya.n']]) };
+  };
+  f.session.settings.previews = true;
+  const c = f.make(NOTIFICATION_LIMITS, undefined, labels);
+  try {
+    await f.clock.flush();
+    f.update({ channelRevisions: new Map([['a', 2]]) });
+    await f.clock.flush();
+    const [shown] = displays(f.alerts) as { title?: string; body?: string }[];
+    assert.equal(shown.title, '#general · Engineering');
+    assert.equal(shown.body, 'priya.n: private text');
+  } finally {
+    c.stop();
+  }
+  f.session.settings.previews = false;
+  f.alerts.length = 0;
+  f.rows.set('a', [message(3), message(2), message(1)]);
+  const d = f.make(NOTIFICATION_LIMITS, undefined, labels);
+  try {
+    await f.clock.flush();
+    f.update({ channelRevisions: new Map([['a', 3]]) });
+    await f.clock.flush();
+    const [shown] = displays(f.alerts) as Record<string, unknown>[];
+    assert.ok(shown);
+    assert.equal('title' in shown, false);
+    assert.equal(shown.body, undefined);
   } finally {
     d.stop();
   }

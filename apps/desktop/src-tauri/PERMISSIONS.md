@@ -71,8 +71,15 @@ Key architectural considerations regarding command permissions:
 
 Also absent, and for the same reason:
 
-- **No notification permissions.** Desktop notifications are unused; FOKS links
-  neither `tauri-plugin-notification` nor `notify-rust`.
+- **No notification permissions.** The webview cannot show a notification
+  itself: FOKS links neither `tauri-plugin-notification` nor `notify-rust`, and
+  the capability grants no notification API. Desktop alerts are raised by
+  native code behind the `chat_local` command, which checks the main window,
+  the unlocked generation and the stored alert settings first, through
+  `UNUserNotificationCenter` on macOS and the `org.freedesktop.Notifications`
+  service on the session bus (`zbus`) on Linux. `set_unread_badge` draws the
+  app icon's unread count behind the same main-window check and is refused
+  while the app is locked.
 - **No plugin permissions at all.** `tauri-plugin-dialog` and
   `tauri-plugin-clipboard-manager` are registered in `run()` and their webview
   APIs are unreachable: `dialog:default` (`allow-message`, `allow-save`,

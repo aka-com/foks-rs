@@ -269,7 +269,7 @@ export function useTeamRequestCounts(
 
 /**
  * The Teams tab's rail badge: the sum of every named team's request count,
- * in `railChatUnread`'s own shape. A team whose count is not known yet
+ * in `chatUnreadTotal`'s own shape. A team whose count is not known yet
  * contributes nothing and does not suppress the total.
  */
 export function teamRequestsBadge(

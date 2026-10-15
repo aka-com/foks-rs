@@ -71,6 +71,7 @@ import type { ListedChannel } from '../chat/presentation';
 import { useChatInbox } from '../chat/inbox-provider';
 import {
   alertChoice,
+  alertsUnavailableReason,
   notificationKey,
   storedAlertMode,
   teamKey,
@@ -1014,8 +1015,10 @@ export function ChatTeamColumn({
                     value={contextTeamMode}
                     reason={
                       localReason ??
-                      (localSettings && !alerts.session?.available
-                        ? 'Desktop alerts are unavailable in this build.'
+                      (localSettings &&
+                      alerts.session &&
+                      !alerts.session.available
+                        ? alertsUnavailableReason(alerts.session)
                         : undefined)
                     }
                     muted={contextTeamMuted}

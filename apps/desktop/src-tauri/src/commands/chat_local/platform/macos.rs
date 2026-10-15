@@ -46,10 +46,18 @@ define_class!(
         }
     }
 );
+/// The name the backend reports to the session state.
+pub const BACKEND: &str = "macos";
 pub fn available() -> bool {
     let bundle = NSBundle::mainBundle();
     bundle.bundleIdentifier().is_some() && bundle.bundlePath().to_string().ends_with(".app")
 }
+/// The Notification Center names no service.
+pub fn service() -> Option<String> {
+    None
+}
+/// Availability is a property of the bundle, which does not change.
+pub async fn refresh() {}
 pub fn install(app: &tauri::AppHandle) {
     if !available() {
         return;
@@ -121,22 +129,33 @@ pub async fn permission() -> bool {
         _ => false,
     }
 }
-pub fn display(app: &tauri::AppHandle, token: &str, body: &str) -> Result<(), AgentError> {
+/// Its own code: the shell offers the settings pane for this one refusal,
+/// and states the rest as plain failures.
+pub fn refusal() -> AgentError {
+    AgentError::new(
+        "chat-notification-permission",
+        "Desktop alerts were not permitted. Check macOS notification settings.",
+        false,
+    )
+}
+pub fn display(app: &tauri::AppHandle, alert: &super::super::Alert) -> Result<(), AgentError> {
     if !available() {
         return Err(super::super::error(
             "Desktop alerts require the packaged macOS application.",
         ));
     }
     let content = UNMutableNotificationContent::new();
-    content.setTitle(&NSString::from_str("FOKS"));
-    content.setBody(&NSString::from_str(body));
+    content.setTitle(&NSString::from_str(&alert.title));
+    content.setBody(&NSString::from_str(&alert.body()));
+    // Notification Center stacks the alerts of one channel together.
+    content.setThreadIdentifier(&NSString::from_str(&alert.group));
     let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
-        &NSString::from_str(token),
+        &NSString::from_str(&alert.token),
         &content,
         None,
     );
     let app = app.clone();
-    let token = token.to_owned();
+    let token = alert.token.clone();
     let callback = RcBlock::new(move |error: *mut NSError| {
         if !error.is_null() || !super::super::route_current(&app, &token) {
             let ids = objc2_foundation::NSArray::from_retained_slice(&[NSString::from_str(&token)]);

@@ -20,9 +20,11 @@ import type { ChatClock } from './clock';
 import type { ChatInboxService } from './inbox-service';
 import type { AlertChoice, LocalAction, LocalSession } from './local-contract';
 import { NotificationConsumer } from './notification-consumer';
+import type { AlertLabels } from './notification-consumer';
 import { diagnosticLog } from '../diagnostics/log';
 import {
   alertChoice,
+  alertsUnavailableReason,
   inheritedAlerts,
   notificationKey,
   storedAlertMode,
@@ -38,6 +40,11 @@ const Context = createContext<{
   permission: boolean;
   /** Opens the system pane where that refusal is undone. */
   openSettings: () => Promise<void>;
+  /**
+   * Starts a new local session, which probes the notification service
+   * again; a service started after FOKS is then found.
+   */
+  recheck: () => Promise<void>;
   /**
    * Applies a change and resolves to the error it was refused with, or to
    * `''` once it is saved. A change sent while another is saving is dropped
@@ -64,6 +71,7 @@ export function NotificationProvider({
   onNavigate,
   clock,
   username,
+  labels,
 }: {
   bridge: Bridge;
   service: ChatInboxService;
@@ -76,6 +84,11 @@ export function NotificationProvider({
    * without it, that mode raises no alerts.
    */
   username?: (storeId: string, scope: ChatScope) => string | null;
+  /**
+   * A store's team name and its people's names, which a previewed alert's
+   * title and text name the team and sender with.
+   */
+  labels?: (storeId: string) => AlertLabels;
 }) {
   const [session, setSession] = useState<LocalSession | null>(null),
     [error, setError] = useState(''),
@@ -147,6 +160,7 @@ export function NotificationProvider({
       },
       undefined,
       username,
+      labels,
     );
     return () => {
       consumer.stop();
@@ -154,7 +168,7 @@ export function NotificationProvider({
         .chatLocal({ action: 'end', epoch: session.epoch })
         .catch(() => {});
     };
-  }, [bridge, service, session, clock, username]);
+  }, [bridge, service, session, clock, username, labels]);
   useEffect(() => {
     if (!session || !onNavigate) return;
     let active = true;
@@ -249,6 +263,25 @@ export function NotificationProvider({
     },
     [bridge],
   );
+  const recheck = useCallback(async () => {
+    if (configuring.current) return;
+    configuring.current = true;
+    const owner = lifetime.current;
+    setError('');
+    setPermission(false);
+    try {
+      const next = await bridge.chatLocal({ action: 'begin' });
+      if (owner.active && lifetime.current === owner) setSession(next);
+      else
+        void bridge
+          .chatLocal({ action: 'end', epoch: next.epoch })
+          .catch(() => {});
+    } catch (cause) {
+      if (owner.active && lifetime.current === owner) setError(failure(cause));
+    } finally {
+      configuring.current = false;
+    }
+  }, [bridge]);
   const openSettings = useCallback(async () => {
     try {
       await bridge.openNotificationSettings();
@@ -259,7 +292,15 @@ export function NotificationProvider({
   }, [bridge]);
   return (
     <Context.Provider
-      value={{ session, error, permission, openSettings, configure, service }}
+      value={{
+        session,
+        error,
+        permission,
+        openSettings,
+        recheck,
+        configure,
+        service,
+      }}
     >
       {children}
     </Context.Provider>
@@ -314,7 +355,9 @@ export function NotificationSettings({
   const context = useContext(Context);
   const muted = useProjectedMute(context?.service, storeId, channel);
   if (!context) return null;
-  const { session, error, permission, openSettings, configure } = context;
+  const { session, error, permission, openSettings, recheck, configure } =
+    context;
+  const freedesktop = session?.backend === 'freedesktop';
   const key = scope && channel ? notificationKey(scope, channel) : '';
   const override = key ? session?.settings.overrides[key] : undefined;
   const mode = override === undefined ? 'inherit' : alertChoice(override);
@@ -353,10 +396,63 @@ export function NotificationSettings({
                 })
               }
             />
-            <span>Include message previews</span>
+            <span>Show message previews</span>
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              disabled={!session}
+              checked={session ? session.settings.badge !== false : false}
+              onChange={(e) =>
+                void configure({
+                  action: 'configure',
+                  badge: e.target.checked,
+                })
+              }
+            />
+            <span>Show unread count on app icon</span>
           </label>
         </Inset>
       )}
+      {!storeId && session ? (
+        <p>
+          A preview names the channel, team and sender and shows the start of
+          the message; without previews an alert reads “New chat message.”
+          Alerts are grouped by channel. The app icon count leaves out muted
+          channels
+          {freedesktop
+            ? '; on Linux only docks that read counts, such as Ubuntu Dock, show it.'
+            : '.'}
+        </p>
+      ) : null}
+      {!storeId && session && freedesktop ? (
+        session.available ? (
+          <p>
+            Alerts are shown by{' '}
+            {session.service ?? 'the desktop notification service'}.{' '}
+            <button
+              type="button"
+              className="chat-alert-link"
+              onClick={() => void recheck()}
+            >
+              Check again
+            </button>
+          </p>
+        ) : (
+          <p role="alert">
+            No desktop notification service was found. Start one, such as the
+            one in GNOME Shell, KDE Plasma or dunst, then{' '}
+            <button
+              type="button"
+              className="chat-alert-link"
+              onClick={() => void recheck()}
+            >
+              check again
+            </button>
+            . Unread counts in FOKS still work.
+          </p>
+        )
+      ) : null}
       {storeId && scope && channel && key && (
         <Inset className="chat-alert-mode">
           <InsetRow label="Alerts">
@@ -394,10 +490,10 @@ export function NotificationSettings({
           </InsetRow>
         </Inset>
       )}
-      {session && !session.available ? (
+      {session && !session.available && (storeId || !freedesktop) ? (
         <p role="alert">
           {noteIcon ? <Icon name={noteIcon} /> : null}
-          Desktop alerts are unavailable in this build.
+          {alertsUnavailableReason(session)}
         </p>
       ) : null}
       {error &&

@@ -182,8 +182,8 @@ identify them accurately:
   permanently unknown when no authorized exact read-back exists.
 - The pinned Go client cannot open rotated invitation certificates because its
   stacked-signature verifier uses the reverse order.
-- Reliable minimized/background operation, native multi-window ownership,
-  post-quit operation and non-macOS native notifications remain deferred.
+- Reliable minimized/background operation, native multi-window ownership and
+  post-quit operation remain deferred.
 - Extended channel management, edits, deletion, reactions, threads, mentions and
   attachments remain disabled. The desktop's Mentions only alert mode matches
   `@username` in message text on the device; it is not a protocol mention.

@@ -245,6 +245,11 @@ export interface Bridge {
   chatLocal(action: LocalAction): Promise<LocalSession>;
   /** Opens the system pane where desktop alerts are permitted. */
   openNotificationSettings(): Promise<CopyResponse>;
+  /**
+   * Draws the unread count on the app icon, or removes it for 0. Refused
+   * while the app is locked; drawn as nothing while the badge setting is off.
+   */
+  setUnreadBadge(count: number): Promise<CopyResponse>;
   openChatLink(url: string): Promise<CopyResponse>;
   copyText(text: string): Promise<CopyResponse>;
   initializeClientState(): Promise<AgentStatus>;

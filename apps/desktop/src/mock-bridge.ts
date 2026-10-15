@@ -202,6 +202,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   const notificationSettings = {
     enabled: false,
     previews: false,
+    badge: true,
     overrides: {} as Record<string, LocalAlertMode>,
     muted: new Set<string>(),
     teams: {} as Record<string, LocalAlertMode>,
@@ -1015,6 +1016,8 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           notificationSettings.enabled = action.enabled;
         if (action.previews !== undefined)
           notificationSettings.previews = action.previews;
+        if (action.badge !== undefined)
+          notificationSettings.badge = action.badge;
         if (action.scope) {
           const [key, modes] = action.channel
             ? [
@@ -1036,6 +1039,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
           : {}),
         epoch: '0'.repeat(32),
         available: true,
+        backend: 'none',
         settings: {
           ...notificationSettings,
           overrides: { ...notificationSettings.overrides },
@@ -1160,6 +1164,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     openSsoBrowser: async () => ({ ok: true }),
     openChatLink: async () => ({ ok: true }),
     openNotificationSettings: async () => ({ ok: true }),
+    setUnreadBadge: async () => ({ ok: true }),
     copyText: async () => ({ ok: true }),
     initializeClientState: async () => ({ state: 'ready' }),
     discoverGoProfiles: async () => ({ installed: false, candidates: [] }),

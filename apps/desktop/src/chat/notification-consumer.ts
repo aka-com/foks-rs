@@ -11,7 +11,8 @@ import type { ChatInboxService } from './inbox-service';
 import type { AlertChoice, LocalSession } from './local-contract';
 import { channelAlerts } from './local-contract';
 import { mentionsReader } from './mentions';
-import { incoming, notificationText } from './notification-policy';
+import { alertTitle, incoming, notificationText } from './notification-policy';
+import { channelTitle, senderName } from './presentation';
 import { messageVisible } from './visibility';
 import {
   classifyNotificationChange,
@@ -66,6 +67,11 @@ type Job = {
   controller: AbortController;
   release(): void;
 };
+/** What an alert's title and preview name a store's team and senders by. */
+export interface AlertLabels {
+  team: string | null;
+  names: ReadonlyMap<string, string>;
+}
 export type NotificationMetric =
   | { kind: 'state'; queued: number; baselines: number; active: number }
   | {
@@ -116,12 +122,41 @@ export class NotificationConsumer {
       storeId: string,
       scope: ChatScope,
     ) => string | null = () => null,
+    /**
+     * A store's team name and its people's names by party id, which an
+     * alert's title and preview name the team and sender with while previews
+     * are on. Without it a preview names the sender by a short id.
+     */
+    private labels: (storeId: string) => AlertLabels = () => ({
+      team: null,
+      names: new Map(),
+    }),
   ) {
     this.admission = notificationAdmission(bridge);
     this.timer = new DeadlineTimer(clock, () => this.scan());
     this.off = service.subscribe(() => this.kick());
     this.offAdmission = this.admission.subscribe(() => this.kick());
     this.kick();
+  }
+  /**
+   * The title and sender names a previewed alert of a channel carries: the
+   * channel as the inbox lists it and its team, and the team's people.
+   */
+  private alertNames(p: Progress) {
+    let labels: AlertLabels;
+    try {
+      labels = this.labels(p.id);
+    } catch {
+      labels = { team: null, names: new Map() };
+    }
+    const channel = this.service
+      .getSnapshot()
+      .get(p.id)
+      ?.data?.channels.find((row) => row.id === p.channel);
+    return {
+      title: channel ? alertTitle(channelTitle(channel), labels.team) : null,
+      sender: (id: string | null) => senderName(id, labels.names),
+    };
   }
   private metric(event: NotificationMetric) {
     try {
@@ -618,7 +653,15 @@ export class NotificationConsumer {
         rows: bounded.length,
         bytes,
       });
-      for (const alert of notificationText(candidates, incomplete)) {
+      // Without previews an alert carries no name and no text: the native
+      // side shows "FOKS" and a count.
+      const previews = this.session.settings.previews;
+      const named = previews ? this.alertNames(p) : undefined;
+      for (const alert of notificationText(
+        candidates,
+        incomplete,
+        named?.sender,
+      )) {
         if (!current()) return;
         try {
           await this.bridge.chatLocal({
@@ -628,7 +671,8 @@ export class NotificationConsumer {
             scope: p.view.scope,
             channel: p.channel,
             ...alert,
-            body: this.session.settings.previews ? alert.body : undefined,
+            ...(named?.title ? { title: named.title } : {}),
+            body: previews ? alert.body : undefined,
           });
         } catch {
           if (!this.stopped)

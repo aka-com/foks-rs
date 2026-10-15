@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { incoming, notificationText } from '../src/chat/notification-policy';
+import {
+  alertTitle,
+  incoming,
+  notificationText,
+} from '../src/chat/notification-policy';
 import { CHAT_NOTIFICATION_TEXT_CHARS } from '../src/chat-limits';
 import {
+  ALERT_TITLE_CHARS,
+  alertsUnavailableReason,
   channelAlerts,
   decodeLocalSession,
   notificationKey,
@@ -96,6 +102,38 @@ test('notification bodies are cut to the shared bound in characters, not UTF-16 
     false,
   );
   assert.equal(alert.body, '\u{1F600}'.repeat(CHAT_NOTIFICATION_TEXT_CHARS));
+});
+test('a previewed body names its sender within the shared bound', () => {
+  const names = (id: string | null) => (id === OTHER ? 'priya.n' : 'lee');
+  const [first, second] = notificationText(
+    [
+      message(1),
+      {
+        ...message(2),
+        content: {
+          kind: 'text',
+          text: 'x'.repeat(CHAT_NOTIFICATION_TEXT_CHARS),
+        },
+      },
+    ],
+    false,
+    names,
+  );
+  assert.equal(first.body, 'priya.n: hello');
+  assert.equal(Array.from(second.body!).length, CHAT_NOTIFICATION_TEXT_CHARS);
+  assert.ok(second.body!.startsWith('priya.n: xxx'));
+  // A name cannot break the alert's first line.
+  const [broken] = notificationText([message(1)], false, () => 'a\nb');
+  assert.equal(broken.body, 'a b: hello');
+});
+test('an alert title names the channel and its team within the native bound', () => {
+  assert.equal(alertTitle('#general', 'Engineering'), '#general · Engineering');
+  assert.equal(alertTitle('#general', null), '#general');
+  assert.equal(alertTitle('#general', ' \n '), '#general');
+  const long = alertTitle('#general', 'T'.repeat(500));
+  assert.equal(Array.from(long).length, ALERT_TITLE_CHARS);
+  assert.ok(long.endsWith('T…'));
+  assert.equal(alertTitle('#general', 'A\u0007B'), '#general · A B');
 });
 test('local preference keys bind actor, host, team and channel without persisting aliases', () => {
   const key = notificationKey(scope, 'c');
@@ -251,6 +289,30 @@ test('local settings decoder rejects invalid persisted identities and invalid fl
     },
   };
   assert.deepEqual(decodeLocalSession(full), full);
+  // The badge setting is written only when off; the backend and service
+  // name what shows alerts.
+  const linux = {
+    ...base,
+    backend: 'freedesktop',
+    service: 'GNOME Shell',
+    settings: { ...base.settings, badge: false },
+  };
+  assert.deepEqual(decodeLocalSession(linux), linux);
+  assert.equal(
+    alertsUnavailableReason(decodeLocalSession(linux)),
+    'No desktop notification service was found.',
+  );
+  assert.equal(
+    alertsUnavailableReason(decodeLocalSession(base)),
+    'Desktop alerts are unavailable in this build.',
+  );
+  for (const invalid of [
+    { ...linux, backend: 'windows' },
+    { ...linux, service: '' },
+    { ...linux, service: 'x'.repeat(65) },
+    { ...linux, settings: { ...linux.settings, badge: 'yes' } },
+  ])
+    assert.throws(() => decodeLocalSession(invalid));
   for (const settings of [
     { ...base.settings, overrides: { [key]: 'some' } },
     { ...base.settings, teams: { [key]: 'all' } },

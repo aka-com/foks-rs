@@ -642,8 +642,9 @@ never-checked and lapsed rows, and Open for the server's own page, which holds
 that server's security keys and its own reset. Passphrase… sits beside Change…
 on the Username row (the sheet defaults to Change and switches to Set or Verify
 in place; an account whose access has stopped explains why the button is
-disabled). Preferences contains Desktop alerts — this device's desktop-alert
-and message-preview preferences, which the desktop persists locally; a
+disabled). Preferences contains Desktop alerts — this device's desktop-alert,
+message-preview and app-icon-count preferences, which the desktop persists
+locally; a
 channel's alert mode and mute stay in Chat's info panel, with a link here, and
 a team's alert default in its menu in the Chat column; none of these
 preferences sync between devices. Device: Application (version, Lock now),
@@ -814,9 +815,34 @@ every message; the native side refuses a desktop alert by the same order, from
 the mutes it stores. Each change to these settings, a mute included, clears the
 desktop alerts already delivered and restarts the notification consumer, which
 takes a fresh baseline for every watched channel. A settings file that holds a
-mute, a team default or Mentions only cannot be read by a desktop build from
-before these settings existed: that build refuses the whole file, and its local
-alert settings fail until the file is removed.
+mute, a team default, Mentions only or an app icon count turned off cannot be
+read by a desktop build from before these settings existed: that build refuses
+the whole file, and its local alert settings fail until the file is removed.
+
+Desktop alerts are shown by Notification Center on macOS (packaged
+application only) and by the freedesktop.org notification service
+(`org.freedesktop.Notifications` on the session bus) on Linux, which GNOME
+Shell, KDE Plasma, dunst and other notification daemons implement
+(`chat_local/platform/`). Linux probes the service when a local alert session
+begins and when alerts are enabled; Preferences names the service, or says
+that none was found and offers Check again, which begins a new session. The
+alerts of one channel are grouped: macOS stacks them under one thread
+identifier, the channel's settings key, and Linux replaces the channel's entry
+in place, its text counting every message the entry stands for, until the
+service reports it closed. A click on an alert, or its Open action on Linux,
+opens the channel. Without previews an alert is titled "FOKS" and its text is
+a count ("New chat message."). With previews, the title names the channel and
+team ("#general · Engineering", at most 128 characters on one line) and the
+text names the sender from the team roster, or by a short id, followed by the
+start of the message, within the 256-character bound the native side admits;
+the renderer supplies both, and the native side refuses a title it cannot show
+on one line. A service that reads body markup receives the text escaped. The
+app icon shows the number in the rail's Chat total, so muted and hidden
+channels are left out (`UnreadBadge` in `unread-badge.tsx`, through
+`set_unread_badge`); the native side refuses the count while the app is
+locked, removes it when the app locks and while "Show unread count on app
+icon" is off, and on Linux only docks that read the Unity launcher entry, such
+as Ubuntu Dock, draw it.
 
 Mentions only alerts for a message whose first 256 characters name the reader
 as `@username` where the message renderer would draw a mention: the match runs

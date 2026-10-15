@@ -1413,6 +1413,108 @@ test('device notification preferences are reachable without a channel and recove
   assert.equal(rendered.queryByLabelText('Channel alerts'), null);
 });
 
+test('desktop alerts on Linux name the notification service and check for one again', async () => {
+  const actions: string[] = [];
+  let running = false;
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'preferences' },
+    decorate: (base) => ({
+      ...base,
+      chatLocal: async (action) => {
+        actions.push(action.action);
+        return {
+          epoch: 'aa'.repeat(16),
+          available: running,
+          backend: 'freedesktop',
+          ...(running ? { service: 'GNOME Shell' } : {}),
+          settings: {
+            enabled: false,
+            previews: false,
+            overrides: {},
+            muted: [],
+            teams: {},
+          },
+        };
+      },
+    }),
+  });
+  const missing = await rendered.findByText(
+    /No desktop notification service was found/,
+  );
+  assert.equal(missing.getAttribute('role'), 'alert');
+  assert.equal(
+    rendered.queryByText('Desktop alerts are unavailable in this build.'),
+    null,
+  );
+  const enable = rendered.getByRole('checkbox', {
+    name: 'Enable desktop alerts on this device',
+  }) as HTMLInputElement;
+  assert.equal(enable.disabled, true);
+  assert.ok(rendered.getByText(/only docks that read counts/));
+  running = true;
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'check again' }));
+  await rendered.findByText(/Alerts are shown by GNOME Shell\./);
+  await ui.waitFor(() => assert.equal(enable.disabled, false));
+  assert.deepEqual(
+    actions.filter((action) => action === 'begin'),
+    ['begin', 'begin'],
+  );
+});
+
+test('the app icon count follows its setting and clears when the shell unmounts', async () => {
+  const counts: number[] = [];
+  const configured: unknown[] = [];
+  let badge = true;
+  const rendered = await renderSettings(await fixture(), {
+    where: { section: 'preferences' },
+    decorate: (base) => ({
+      ...base,
+      setUnreadBadge: async (count) => {
+        counts.push(count);
+        return { ok: true };
+      },
+      chatLocal: async (action) => {
+        if (action.action === 'configure') {
+          configured.push(action);
+          if (action.badge !== undefined) badge = action.badge;
+        }
+        return {
+          epoch: 'aa'.repeat(16),
+          available: true,
+          backend: 'macos',
+          settings: {
+            enabled: true,
+            previews: false,
+            // The native settings leave the badge out while it is on.
+            ...(badge ? {} : { badge: false }),
+            overrides: {},
+            muted: [],
+            teams: {},
+          },
+        };
+      },
+    }),
+  });
+  const shown = (await rendered.findByRole('checkbox', {
+    name: 'Show unread count on app icon',
+  })) as HTMLInputElement;
+  await ui.waitFor(() => assert.equal(shown.checked, true));
+  assert.equal(rendered.queryByText(/only docks that read counts/), null);
+  // The fixture's inbox holds unread messages, which the icon counts.
+  await ui.waitFor(() => assert.ok((counts.at(-1) ?? 0) > 0));
+  const unread = counts.at(-1);
+  ui.fireEvent.click(shown);
+  await ui.waitFor(() => assert.equal(counts.at(-1), 0));
+  assert.equal(shown.checked, false);
+  assert.deepEqual(configured, [{ action: 'configure', badge: false }]);
+  ui.fireEvent.click(shown);
+  await ui.waitFor(() => assert.equal(counts.at(-1), unread));
+  assert.equal(shown.checked, true);
+  const sent = counts.length;
+  rendered.unmount();
+  assert.deepEqual(counts.slice(sent), [0]);
+});
+
 test('server security-key actions name the selected enrollment across accounts', async () => {
   const calls: unknown[] = [];
   const rendered = await renderSettings(await fixture(), {
