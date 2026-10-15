@@ -692,13 +692,7 @@ fn seconds(microseconds: u64) -> f64 {
 
 fn storage_bytes(database_path: &Path) -> std::result::Result<(u64, u64), ()> {
     let database_bytes = std::fs::metadata(database_path).map_err(|_| ())?.len();
-    let mut wal_path = database_path.as_os_str().to_os_string();
-    wal_path.push("-wal");
-    let wal_bytes = match std::fs::metadata(PathBuf::from(wal_path)) {
-        Ok(metadata) => metadata.len(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(_) => return Err(()),
-    };
+    let wal_bytes = crate::installation::wal_bytes(database_path).map_err(|_| ())?;
     Ok((database_bytes, wal_bytes))
 }
 
@@ -824,6 +818,8 @@ mod tests {
                 "foks_capacity_limit{resource=\"database_bytes\"} 1073741824\n",
                 "foks_capacity_limit{resource=\"kv_namespace_bytes\"} 17179869184\n",
                 "foks_capacity_limit{resource=\"kv_namespace_objects\"} 1000000\n",
+                "foks_capacity_limit{resource=\"kv_namespace_directories\"} 4096\n",
+                "foks_capacity_limit{resource=\"kv_namespace_dirents\"} 100000\n",
             )
         );
     }

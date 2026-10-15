@@ -15,9 +15,9 @@ versions, and encrypted OIDC sessions and access state. Authorization and
 capacity are rechecked in the committing transaction; read snapshots never
 publish a partially committed mutation or inbox wakeup.
 `ReadSnapshot::capacity_report` counts, in one snapshot, the stored rows and
-bytes that each host-wide limit checks, using the same limits and the same KV
-namespace accounting as the writer; it scans every KV and realtime message
-row.
+bytes that each permanent or storage limit checks, using the same limits and
+the same KV namespace accounting as the writer; it scans every KV and realtime
+message row.
 
 Database opens reject a symlink at the database leaf. On Unix, the main
 database must be a regular file with exactly one hardlink and a stable nonzero

@@ -1191,8 +1191,6 @@ fn response_byte_limits_fail_explicitly_without_truncating_history() {
         )
         .is_err());
 }
-
-mod reconciliation;
 #[test]
 fn capacity_report_sums_stored_messages_per_team() {
     let mut f = Fixture::new();
@@ -1228,3 +1226,58 @@ fn capacity_report_sums_stored_messages_per_team() {
         1
     );
 }
+#[test]
+fn capacity_report_lists_the_teams_with_the_most_message_bytes_first() {
+    let f = Fixture::new();
+    // Eleven teams with one message each, written with foreign keys off: the
+    // report reads only the stored rows.
+    // The last two hold the same bytes, so the smaller team ID is listed
+    // first, and the team with the fewest bytes is not listed.
+    let fixture = rusqlite::Connection::open(&f.db.path).unwrap();
+    fixture.pragma_update(None, "foreign_keys", false).unwrap();
+    for tag in 20..=30_u8 {
+        fixture
+            .execute(
+                "INSERT INTO rt_channels(channel_id, short_id, team_id, app_id, metadata)
+                 VALUES (?1, ?2, ?3, 1, x'')",
+                rusqlite::params![
+                    [tag; 16].as_slice(),
+                    1000 + i64::from(tag),
+                    id(ENTITY_NAMED_TEAM, tag)
+                ],
+            )
+            .unwrap();
+        fixture
+            .execute(
+                "INSERT INTO rt_messages(message_id, channel_id, sequence, sender, envelope,
+                                         exact_message, insert_time)
+                 VALUES (?1, ?1, 1, x'00', zeroblob(?2), x'01', 0)",
+                rusqlite::params![[tag; 16].as_slice(), 100 * i64::from(tag.min(29))],
+            )
+            .unwrap();
+    }
+    drop(fixture);
+    let reader = ReadDatabase::open_pooled(&f.db.path, Config::default()).unwrap();
+    let report = reader.snapshot().unwrap().capacity_report(0).unwrap();
+    assert_eq!(
+        report
+            .realtime_teams
+            .iter()
+            .map(|team| (team.team_id[1], team.bytes, team.messages))
+            .collect::<Vec<_>>(),
+        [
+            (29, 2901, 1),
+            (30, 2901, 1),
+            (28, 2801, 1),
+            (27, 2701, 1),
+            (26, 2601, 1),
+            (25, 2501, 1),
+            (24, 2401, 1),
+            (23, 2301, 1),
+            (22, 2201, 1),
+            (21, 2101, 1),
+        ]
+    );
+}
+
+mod reconciliation;

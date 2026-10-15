@@ -401,13 +401,7 @@ pub fn status(config: &InstallationConfig) -> crate::Result<InstallationStatus> 
     let database = foks_server_db::ReadDatabase::open(&config.database, config.database_config())?;
     let integrity_ok = database.integrity_check()?;
     let database_bytes = fs::metadata(&config.database)?.len();
-    let mut wal_name = config.database.as_os_str().to_os_string();
-    wal_name.push("-wal");
-    let wal_bytes = match fs::metadata(PathBuf::from(wal_name)) {
-        Ok(metadata) => metadata.len(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(error) => return Err(error.into()),
-    };
+    let wal_bytes = wal_bytes(&config.database)?;
     let bootstrap = database.host_bootstrap()?;
     Ok(InstallationStatus {
         initialized: bootstrap.is_some(),
@@ -417,6 +411,18 @@ pub fn status(config: &InstallationConfig) -> crate::Result<InstallationStatus> 
         wal_bytes,
         integrity_ok: Some(integrity_ok),
     })
+}
+
+/// Size of the SQLite write-ahead log beside `database`, or 0 when no log
+/// file exists.
+pub(crate) fn wal_bytes(database: &Path) -> std::io::Result<u64> {
+    let mut wal_name = database.as_os_str().to_os_string();
+    wal_name.push("-wal");
+    match fs::metadata(PathBuf::from(wal_name)) {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn client_bootstrap(config: &InstallationConfig) -> crate::Result<ClientBootstrap> {

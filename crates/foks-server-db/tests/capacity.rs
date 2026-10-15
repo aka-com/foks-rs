@@ -145,7 +145,7 @@ fn namespace_shape_limits_match_client_traversal_limits() {
         maximum_kv_directories: 1,
         ..foks_server_db::Config::default()
     };
-    let (mut test, _) = initialized(config);
+    let (mut test, _) = initialized(config.clone());
     assert!(matches!(
         test.database.put_kv_directory(&KvDirectoryMutation {
             uid: &UID,
@@ -159,6 +159,18 @@ fn namespace_shape_limits_match_client_traversal_limits() {
         }),
         Err(Error::QuotaExceeded)
     ));
+    let directories = foks_server_db::ReadDatabase::open_pooled(&test.path, config)
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .capacity_report(0)
+        .unwrap()
+        .usage(CapacityResource::KvNamespaceDirectories)
+        .unwrap();
+    assert_eq!(
+        (directories.used, directories.limit, directories.remaining()),
+        (1, 1, 0)
+    );
 
     let config = foks_server_db::Config {
         maximum_kv_dirents: 1,
@@ -213,6 +225,17 @@ fn namespace_shape_limits_match_client_traversal_limits() {
         ),
         Err(Error::QuotaExceeded)
     ));
+    let dirents = reader
+        .snapshot()
+        .unwrap()
+        .capacity_report(0)
+        .unwrap()
+        .usage(CapacityResource::KvNamespaceDirents)
+        .unwrap();
+    assert_eq!(
+        (dirents.used, dirents.limit, dirents.remaining()),
+        (1, 1, 0)
+    );
 }
 
 #[test]
@@ -398,6 +421,10 @@ fn capacity_report_counts_usage_as_the_limits_count_it() {
         (28, 28, 0)
     );
     assert_eq!(usage(CapacityResource::KvNamespaceObjects).used, 3);
+    assert_eq!(usage(CapacityResource::KvNamespaceDirectories).used, 1);
+    assert_eq!(usage(CapacityResource::KvNamespaceDirectories).limit, 4096);
+    assert_eq!(usage(CapacityResource::KvNamespaceDirents).used, 0);
+    assert_eq!(usage(CapacityResource::KvNamespaceDirents).limit, 100_000);
     assert_eq!(
         report.kv_namespaces,
         [KvNamespaceUsage {
@@ -436,6 +463,7 @@ fn capacity_report_lists_the_largest_namespaces_first() {
     let (test, _) = initialized(foks_server_db::Config::default());
     // Twelve more namespaces under the fixture host, each holding one node.
     // The report reads only stored rows, so they need no owning identity.
+    // The last two hold the same bytes, so the smaller ID is listed first.
     let fixture = rusqlite::Connection::open(&test.path).unwrap();
     for tag in 2..=13_u8 {
         let mut uid = [tag; 33];
@@ -454,7 +482,7 @@ fn capacity_report_lists_the_largest_namespaces_first() {
                 rusqlite::params![
                     uid.as_slice(),
                     [3_u8; 17].as_slice(),
-                    vec![0x41_u8; usize::from(tag) * 4]
+                    vec![0x41_u8; usize::from(tag.min(12)) * 4]
                 ],
             )
             .unwrap();
@@ -472,14 +500,21 @@ fn capacity_report_lists_the_largest_namespaces_first() {
             .collect::<Vec<_>>(),
         // The fixture namespace holds 18 bytes, between the 16- and 20-byte
         // namespaces.
-        [52, 48, 44, 40, 36, 32, 28, 24, 20, 18]
+        [48, 48, 44, 40, 36, 32, 28, 24, 20, 18]
+    );
+    assert_eq!(
+        report.kv_namespaces[..2]
+            .iter()
+            .map(|namespace| namespace.namespace_id[1])
+            .collect::<Vec<_>>(),
+        [12, 13]
     );
     assert_eq!(
         report
             .usage(CapacityResource::KvNamespaceBytes)
             .unwrap()
             .used,
-        52
+        48
     );
 }
 

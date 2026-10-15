@@ -1,8 +1,14 @@
-//! Stored usage against the host-wide limits at which writes are refused.
+//! Stored usage against the permanent and storage limits at which writes are
+//! refused. Caps on short-lived rows that expire, such as active capability
+//! tokens, remote view permissions and passphrase or recovery challenges, are
+//! not reported.
 //!
 //! The report reads one snapshot. It scans every KV and realtime message row,
 //! so it is meant for an operator command, not for each metrics scrape; the
 //! limits alone come from [`CapacityResource::limit`] without a database read.
+
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use rusqlite::Connection;
 
@@ -36,10 +42,16 @@ pub enum CapacityResource {
     /// Stored objects of the KV namespace with the most objects. The limit
     /// applies to each namespace separately.
     KvNamespaceObjects,
+    /// Directory heads of the KV namespace with the most directories. The
+    /// limit applies to each namespace separately.
+    KvNamespaceDirectories,
+    /// Directory-entry heads of the KV namespace with the most entries. The
+    /// limit applies to each namespace separately.
+    KvNamespaceDirents,
 }
 
 impl CapacityResource {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::MerkleEpoch,
         Self::Teams,
         Self::TeamNameReservations,
@@ -51,6 +63,8 @@ impl CapacityResource {
         Self::DatabaseBytes,
         Self::KvNamespaceBytes,
         Self::KvNamespaceObjects,
+        Self::KvNamespaceDirectories,
+        Self::KvNamespaceDirents,
     ];
 
     /// A fixed name for reports and metric labels.
@@ -67,6 +81,8 @@ impl CapacityResource {
             Self::DatabaseBytes => "database_bytes",
             Self::KvNamespaceBytes => "kv_namespace_bytes",
             Self::KvNamespaceObjects => "kv_namespace_objects",
+            Self::KvNamespaceDirectories => "kv_namespace_directories",
+            Self::KvNamespaceDirents => "kv_namespace_dirents",
         }
     }
 
@@ -84,6 +100,8 @@ impl CapacityResource {
             Self::DatabaseBytes => config.maximum_database_bytes,
             Self::KvNamespaceBytes => config.maximum_kv_namespace_bytes,
             Self::KvNamespaceObjects => config.maximum_kv_namespace_objects,
+            Self::KvNamespaceDirectories => config.maximum_kv_directories,
+            Self::KvNamespaceDirents => config.maximum_kv_dirents,
         }
     }
 }
@@ -146,8 +164,9 @@ impl CapacityReport {
 }
 
 impl ReadSnapshot<'_> {
-    /// Reports stored usage against each host-wide limit. `now` is in
-    /// microseconds and decides which team-name reservations have expired.
+    /// Reports stored usage against each limit in [`CapacityResource::ALL`].
+    /// `now` is in microseconds and decides which team-name reservations have
+    /// expired.
     pub fn capacity_report(&self, now: u64) -> Result<CapacityReport> {
         let connection = self.connection();
         let config = self.config();
@@ -194,6 +213,16 @@ impl ReadSnapshot<'_> {
                 CapacityResource::DatabaseBytes => database_bytes,
                 CapacityResource::KvNamespaceBytes => largest_bytes,
                 CapacityResource::KvNamespaceObjects => most_objects,
+                CapacityResource::KvNamespaceDirectories => count(
+                    "SELECT coalesce(max(heads), 0) FROM (
+                         SELECT count(*) AS heads FROM kv_directory_heads GROUP BY uid
+                     )",
+                )?,
+                CapacityResource::KvNamespaceDirents => count(
+                    "SELECT coalesce(max(heads), 0) FROM (
+                         SELECT count(*) AS heads FROM kv_dirent_heads GROUP BY uid
+                     )",
+                )?,
             };
             usage.push(CapacityUsage {
                 resource,
@@ -216,7 +245,8 @@ fn pragma(connection: &Connection, name: &str) -> Result<u64> {
 
 /// Returns the largest namespaces by bytes, the largest byte count and the
 /// largest object count. The terms match the namespace quota check in
-/// `kv::ensure_kv_capacity`, grouped over every namespace at once.
+/// `kv::ensure_kv_capacity`, grouped over every namespace at once. Only the
+/// listed namespaces are held in memory.
 fn kv_namespaces(connection: &Connection) -> Result<(Vec<KvNamespaceUsage>, u64, u64)> {
     let mut statement = connection.prepare(
         "SELECT uid, sum(bytes), sum(objects) FROM (
@@ -239,25 +269,29 @@ fn kv_namespaces(connection: &Connection) -> Result<(Vec<KvNamespaceUsage>, u64,
             row.get::<_, i64>(2)?,
         ))
     })?;
-    let mut namespaces = Vec::new();
+    // Ordered so that the greatest key ranks lowest (fewer bytes, then the
+    // larger ID); popping the maximum keeps the listed namespaces.
+    let mut listed = BinaryHeap::with_capacity(CapacityReport::LISTED_PARTIES + 1);
     let (mut largest_bytes, mut most_objects) = (0, 0);
     for row in rows {
         let (namespace_id, bytes, objects) = row?;
-        let usage = KvNamespaceUsage {
-            namespace_id,
-            bytes: unsigned(bytes)?,
-            objects: unsigned(objects)?,
-        };
-        largest_bytes = largest_bytes.max(usage.bytes);
-        most_objects = most_objects.max(usage.objects);
-        namespaces.push(usage);
+        let (bytes, objects) = (unsigned(bytes)?, unsigned(objects)?);
+        largest_bytes = largest_bytes.max(bytes);
+        most_objects = most_objects.max(objects);
+        listed.push((Reverse(bytes), namespace_id, objects));
+        if listed.len() > CapacityReport::LISTED_PARTIES {
+            listed.pop();
+        }
     }
-    namespaces.sort_by(|a, b| {
-        b.bytes
-            .cmp(&a.bytes)
-            .then_with(|| a.namespace_id.cmp(&b.namespace_id))
-    });
-    namespaces.truncate(CapacityReport::LISTED_PARTIES);
+    let namespaces = listed
+        .into_sorted_vec()
+        .into_iter()
+        .map(|(Reverse(bytes), namespace_id, objects)| KvNamespaceUsage {
+            namespace_id,
+            bytes,
+            objects,
+        })
+        .collect();
     Ok((namespaces, largest_bytes, most_objects))
 }
 

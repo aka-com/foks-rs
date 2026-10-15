@@ -1,5 +1,6 @@
-//! The `foks-server usage` report: stored usage against each host-wide limit,
-//! the largest KV namespaces and the teams with the most realtime messages.
+//! The `foks-server usage` report: stored usage against the permanent and
+//! storage limits, the largest KV namespaces and the teams with the most
+//! realtime messages.
 //!
 //! The report reads one snapshot through a read-only connection, so the
 //! server may be running. It scans every KV and realtime message row; its
@@ -36,13 +37,7 @@ pub fn usage_report(
     // same rows as the report a second time.
     let database = foks_server_db::ReadDatabase::open_pooled(database_path, database_config)?;
     let capacity = database.snapshot()?.capacity_report(now)?;
-    let mut wal_path = database_path.as_os_str().to_os_string();
-    wal_path.push("-wal");
-    let wal_bytes = match std::fs::metadata(wal_path) {
-        Ok(metadata) => metadata.len(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(error) => return Err(error.into()),
-    };
+    let wal_bytes = crate::installation::wal_bytes(database_path)?;
     Ok(UsageReport {
         capacity,
         wal_bytes,

@@ -45,9 +45,9 @@ enum Command {
         #[arg(long)]
         config: PathBuf,
     },
-    /// Reports stored usage against each host-wide limit, the largest KV
-    /// namespaces and the teams with the most realtime message bytes. Reads a
-    /// snapshot, so the server may be running.
+    /// Reports stored usage against the permanent and storage limits, the
+    /// largest KV namespaces and the teams with the most realtime message
+    /// bytes. Reads a snapshot, so the server may be running.
     Usage {
         #[arg(long)]
         config: PathBuf,
@@ -689,8 +689,10 @@ fn status(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn usage(path: PathBuf, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // load_config validates the configuration. The report reads only the
+    // database, so unlike `config-check` it does not read the key, TLS or OIDC
+    // files.
     let config = foks_server::installation::load_config(path)?;
-    foks_server::installation::validate_artifacts(&config)?;
     let report = foks_server::usage::usage_report(
         &config.database,
         config.database_config(),

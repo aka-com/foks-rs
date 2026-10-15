@@ -544,23 +544,27 @@ Passphrase history is limited to 4,096 generations. Login state is limited to
 4,096 live challenges globally and eight per UID; five bad proofs within the
 default ten-minute window temporarily rate-limit that UID.
 
-`foks-server usage --config server.toml` reports stored usage against each
-host-wide limit, one `resource=... used=... limit=... remaining=...` line per
-limit, or one JSON object with `--json`. The limits are the last Merkle epoch
-whose back-pointer array has a canonical encoding (65,535; see the
+`foks-server usage --config server.toml` reports stored usage against the
+permanent and storage limits, one `resource=... used=... limit=... remaining=...`
+line per limit, or one JSON object with `--json`. The limits are the last
+Merkle epoch whose back-pointer array has a canonical encoding (65,535; see the
 `foks-merkle-store` README), teams, unexpired unclaimed team-name
 reservations, team invitation certificates (65,536), local and remote join
 requests (1,000,000 and 65,536, counting accepted and rejected requests),
 local view permissions (1,000,000), waitlist entries, main-database bytes
-including free pages, and the bytes and objects of the largest KV namespace
-against the per-namespace limits. The report also lists free database bytes,
-WAL bytes, the ten largest KV namespaces by stored bytes and the ten teams
-with the most stored realtime message bytes, by identifier only. It reads one
-snapshot over a read-only connection, so it runs while the server serves, but
-it scans every KV and realtime message row. `/metrics` therefore exports only
-the limits, as `foks_capacity_limit{resource}` with the same resource names;
-alerting can compare `foks_capacity_limit{resource="database_bytes"}` with
-`foks_database_bytes`.
+including free pages, and, for the largest KV namespace by each measure, its
+bytes, objects, directories (4,096) and directory entries (100,000) against
+the per-namespace limits. Caps on short-lived rows that expire (active team
+capability tokens, remote view permissions, and passphrase and recovery
+challenges) are not reported. The report also lists free database bytes, WAL
+bytes, the ten largest KV namespaces by stored bytes and the ten teams with
+the most stored realtime message bytes, by identifier only. The command reads
+the configuration and the database but not the key, TLS or OIDC files. It
+reads one snapshot over a read-only connection, so it runs while the server
+serves, but it scans every KV and realtime message row. `/metrics` therefore
+exports only the limits, as `foks_capacity_limit{resource}` with the same
+resource names; alerting can compare
+`foks_capacity_limit{resource="database_bytes"}` with `foks_database_bytes`.
 
 Namespace accounting charges encoded bytes actually stored, including upload
 envelopes and ciphertext duplication. Tombstone/history versions remain
