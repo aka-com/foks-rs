@@ -46,7 +46,7 @@ async function harness() {
   const { FIXTURE } = await import('../src/fixture');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { WorkflowProvider } = await import('../src/workflow-context');
+  const { ShellSnapshotProvider } = await import('../src/shell-services');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const account = FIXTURE.stores.find(
@@ -85,7 +85,7 @@ async function harness() {
           controller: new ToastController(),
           children: createElement(guards.NavigationGuardProvider, {
             store,
-            children: createElement(WorkflowProvider, {
+            children: createElement(ShellSnapshotProvider, {
               snapshot: FIXTURE,
               children: node,
             }),

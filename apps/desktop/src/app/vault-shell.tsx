@@ -91,10 +91,14 @@ import { chatTeams } from '../screens/chat-teams';
 import { useAccessRuntime } from './access-runtime';
 import { AccessLifetime } from './access-lifetime';
 import { shellBlock, shellChrome } from './blocking-shell';
-import { useCatalogRuntime, useMutationError } from './catalog-runtime';
+import { useCatalogRuntime } from './catalog-runtime';
 import type { MaintenanceOwnership } from './maintenance-ownership';
 import { useMetadataRuntime } from './metadata-runtime';
 import { DeviceMetadataContext } from '../device-metadata';
+import {
+  ShellServicesProvider,
+  ShellSnapshotProvider,
+} from '../shell-services';
 import { diagnosticLog } from '../diagnostics/log';
 import {
   backendTimingSource,
@@ -120,6 +124,7 @@ import {
   type ResumeDraft,
 } from './shell-overlays';
 import { useTrashActions } from './trash-actions';
+import { useShellServicesRuntime } from './services-runtime';
 import { useShellRuntime } from './shell-runtime';
 import { ShellSearch } from './shell-search';
 import { useWindowRuntime } from './window-runtime';
@@ -278,7 +283,6 @@ export function VaultShell({
     handleAgentReadinessFailure,
     reconciliation,
   } = runtime;
-  const mutationError = useMutationError(commandError, catalog);
   // A team read that answers "this profile's vault has not been refreshed"
   // asks for that profile's catalog job, so the read that follows can find
   // the team again instead of waiting for the next scheduled refresh.
@@ -303,6 +307,8 @@ export function VaultShell({
     refreshSnapshotRef: runtime.refreshSnapshotRef,
     commandErrorRef: catalog.commandErrorRef,
   });
+  const services = useShellServicesRuntime({ bridge, accessNow, catalog });
+  const { mutationError } = services;
   const [resumeDraft, setResumeDraft] = useState<ResumeDraft | null>(null);
   const [revealRequest, setRevealRequest] = useState<string | null>(() =>
     scene.reveal && initialSelection
@@ -1175,7 +1181,11 @@ export function VaultShell({
         <MetadataRepositoryContext.Provider value={deviceCache.repository}>
           <DeviceCacheContext.Provider value={deviceCache}>
             <DeviceMetadataContext.Provider value={deviceMetadata}>
-              {shell}
+              <ShellServicesProvider services={services}>
+                <ShellSnapshotProvider snapshot={shown}>
+                  {shell}
+                </ShellSnapshotProvider>
+              </ShellServicesProvider>
             </DeviceMetadataContext.Provider>
           </DeviceCacheContext.Provider>
         </MetadataRepositoryContext.Provider>

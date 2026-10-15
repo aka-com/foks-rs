@@ -1,5 +1,4 @@
-import { createContext, useContext, useRef } from 'react';
-import type { ReactNode } from 'react';
+import { useContext, useRef } from 'react';
 import type { AgentSnapshot } from './model/types';
 import {
   requireWorkflow,
@@ -10,25 +9,15 @@ import type {
   WorkflowOperation,
   WorkflowTarget,
 } from './model/workflow-availability';
+import { ShellSnapshotContext } from './shell-services';
 
-const WorkflowContext = createContext<AgentSnapshot | undefined>(undefined);
-
-export function WorkflowProvider({
-  snapshot,
-  children,
-}: {
-  snapshot: AgentSnapshot;
-  children: ReactNode;
-}) {
-  return (
-    <WorkflowContext.Provider value={snapshot}>
-      {children}
-    </WorkflowContext.Provider>
-  );
-}
-
+/**
+ * Workflow availability against `snapshot`, or against the shell's snapshot
+ * when none is given. Outside a `ShellSnapshotProvider` and without a
+ * snapshot, every workflow is unavailable.
+ */
 export function useWorkflowAccess(snapshot?: AgentSnapshot) {
-  const context = useContext(WorkflowContext);
+  const context = useContext(ShellSnapshotContext);
   const latest = useRef(snapshot ?? context);
   latest.current = snapshot ?? context;
   const availability = (operation: WorkflowOperation, target: WorkflowTarget) =>

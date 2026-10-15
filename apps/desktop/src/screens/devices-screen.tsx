@@ -4,7 +4,7 @@ import { useDeviceMetadata } from '../device-cache';
 import { synchronizeApplied } from '../operation-outcome';
 import { refreshConnectedCards } from './devices/hardware-controller';
 import { useDeviceOperation } from './devices/use-device-operation';
-import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
+import { useWorkflowAccess } from '../workflow-context';
 import {
   workflowAvailability,
   workflowMessage,
@@ -727,7 +727,7 @@ export function DevicesScreen({
   );
 
   return (
-    <WorkflowProvider snapshot={snapshot}>
+    <>
       {/* One key's own page: the full id, and the one destructive action for
           that kind. It reads the page's own lists, so a sheet opened from it
           is the sheet the row would have opened. */}
@@ -1143,7 +1143,7 @@ export function DevicesScreen({
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-    </WorkflowProvider>
+    </>
   );
 }
 

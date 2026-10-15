@@ -13,6 +13,7 @@ import type { Bridge } from '../src/bridge';
 import type { Location, SettingsSection } from '../src/location';
 import type { AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -97,6 +98,7 @@ async function renderSettings(
   }: SettingsOptions = {},
 ) {
   const { SettingsScreen } = await import('../src/screens/settings-screen');
+  const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock-bridge');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
@@ -118,23 +120,27 @@ async function renderSettings(
         portalRoot,
         children: createElement(ToastProvider, {
           controller,
-          children: createElement(SettingsScreen, {
+          children: createElement(TestShell, {
             snapshot,
             bridge,
-            location: { kind: 'settings', ...at },
-            scene,
-            onNavigate: navigate,
-            onRefresh,
-            onRefreshSnapshot: async () => snapshot,
-            onError: (error: unknown) => {
-              throw error;
-            },
-            onMutationError: async (error: unknown) => {
-              onMutationError(error);
-            },
-            onLock: async () => true,
-            agentLifecycle: { state: 'ready' },
-            onRetryAgent: async () => {},
+            children: createElement(SettingsScreen, {
+              snapshot,
+              bridge,
+              location: { kind: 'settings', ...at },
+              scene,
+              onNavigate: navigate,
+              onRefresh,
+              onRefreshSnapshot: async () => snapshot,
+              onError: (error: unknown) => {
+                throw error;
+              },
+              onMutationError: async (error: unknown) => {
+                onMutationError(error);
+              },
+              onLock: async () => true,
+              agentLifecycle: { state: 'ready' },
+              onRetryAgent: async () => {},
+            }),
           }),
         }),
       }),

@@ -13,6 +13,7 @@ import type { Bridge } from '../src/bridge';
 import type { Location } from '../src/location';
 import type { StoreRef, AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -68,6 +69,7 @@ async function renderDevices(
   }: DevicesOptions = {},
 ) {
   const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock-bridge');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
@@ -81,23 +83,27 @@ async function renderDevices(
       portalRoot,
       children: createElement(ToastProvider, {
         controller,
-        children: createElement(DevicesScreen, {
+        children: createElement(TestShell, {
           snapshot,
           bridge,
-          location: {
-            kind: 'devices',
-            ...(at ? { store: at } : {}),
-            ...(section ? { section } : {}),
-            ...(device ? { device } : {}),
-          },
-          scene,
-          onNavigate,
-          onRefresh: async () => {},
-          onRefreshSnapshot: refresh,
-          onError,
-          onMutationError: async (error: unknown) => {
-            throw error;
-          },
+          children: createElement(DevicesScreen, {
+            snapshot,
+            bridge,
+            location: {
+              kind: 'devices',
+              ...(at ? { store: at } : {}),
+              ...(section ? { section } : {}),
+              ...(device ? { device } : {}),
+            },
+            scene,
+            onNavigate,
+            onRefresh: async () => {},
+            onRefreshSnapshot: refresh,
+            onError,
+            onMutationError: async (error: unknown) => {
+              throw error;
+            },
+          }),
         }),
       }),
     });

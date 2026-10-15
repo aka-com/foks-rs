@@ -10,6 +10,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 import type { Bridge } from '../src/bridge';
 import type { AgentSnapshot, Item } from '../src/model';
 
@@ -363,30 +364,37 @@ test('lowering a role lists only the items the new role no longer admits', async
 async function removeDeviceSheet(snapshot: AgentSnapshot) {
   const { DevicesScreen } = await import('../src/screens/devices-screen');
   const { mockBridge } = await import('../src/mock-bridge');
+  const TestShell = await loadTestShell();
   const device = snapshot.devices[1]?.id_hex.replace(/^02/, '04');
   assert.ok(device);
-  const page = async (at?: string) =>
-    providers(
-      createElement(DevicesScreen, {
+  const page = async (at?: string) => {
+    const bridge = mockBridge(snapshot);
+    return providers(
+      createElement(TestShell, {
         snapshot,
-        bridge: mockBridge(snapshot),
-        location: {
-          kind: 'devices',
-          store: 'acct:personal',
-          ...(at ? { device: at } : {}),
-        },
-        scene: 'devices',
-        onNavigate: () => {},
-        onRefresh: async () => {},
-        onRefreshSnapshot: async () => snapshot,
-        onError: (error: unknown) => {
-          throw error;
-        },
-        onMutationError: async (error: unknown) => {
-          throw error;
-        },
+        bridge,
+        children: createElement(DevicesScreen, {
+          snapshot,
+          bridge,
+          location: {
+            kind: 'devices',
+            store: 'acct:personal',
+            ...(at ? { device: at } : {}),
+          },
+          scene: 'devices',
+          onNavigate: () => {},
+          onRefresh: async () => {},
+          onRefreshSnapshot: async () => snapshot,
+          onError: (error: unknown) => {
+            throw error;
+          },
+          onMutationError: async (error: unknown) => {
+            throw error;
+          },
+        }),
       }),
     );
+  };
   const rendered = ui.render(await page(device));
   await ui.act(async () => {
     await Promise.resolve();

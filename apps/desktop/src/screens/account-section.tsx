@@ -4,7 +4,7 @@ import { useToast } from '../../kit/toasts';
 import { synchronizeApplied } from '../operation-outcome';
 import { useDeviceMetadata } from '../device-cache';
 import type { metadataFreshness } from '../device-cache';
-import { WorkflowProvider, useWorkflowAccess } from '../workflow-context';
+import { useWorkflowAccess } from '../workflow-context';
 import { workflowAvailability } from '../model/workflow-availability';
 import { FreshnessCaption } from '../components/metadata-status';
 import { LocalAliasPanel } from '../components/local-alias-panel';
@@ -522,7 +522,7 @@ export function AccountSection({
   );
 
   return (
-    <WorkflowProvider snapshot={snapshot}>
+    <>
       <PageHeader
         ruled
         title={identity?.title ?? 'Account'}
@@ -771,7 +771,7 @@ export function AccountSection({
           onError={(error) => void onMutationError(error)}
         />
       ) : null}
-    </WorkflowProvider>
+    </>
   );
 }
 

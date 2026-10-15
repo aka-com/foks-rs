@@ -6,7 +6,7 @@ export async function workflowScope(
   children: ReactNode,
   snapshot?: AgentSnapshot,
 ) {
-  const { WorkflowProvider } = await import('../../src/workflow-context');
+  const { ShellSnapshotProvider } = await import('../../src/shell-services');
   const { FIXTURE } = await import('../../src/fixture');
   const ready: AgentSnapshot = snapshot ?? {
     ...FIXTURE,
@@ -22,5 +22,5 @@ export async function workflowScope(
     })),
     observedExpiredLeases: [],
   };
-  return createElement(WorkflowProvider, { snapshot: ready, children });
+  return createElement(ShellSnapshotProvider, { snapshot: ready, children });
 }

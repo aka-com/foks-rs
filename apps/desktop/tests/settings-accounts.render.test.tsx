@@ -14,6 +14,7 @@ import type { Bridge } from '../src/bridge';
 import type { Location } from '../src/location';
 import type { AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -55,6 +56,7 @@ async function renderPeople(
   }: PeopleOptions = {},
 ) {
   const { AccountSection } = await import('../src/screens/account-section');
+  const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock-bridge');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
@@ -72,32 +74,36 @@ async function renderPeople(
       portalRoot,
       children: createElement(ToastProvider, {
         controller,
-        children: createElement(AccountSection, {
+        children: createElement(TestShell, {
           snapshot,
           bridge,
-          location: {
-            kind: 'settings',
-            section: 'account',
-            ...(at ? { store: at } : {}),
-          },
-          panel: { id: 'settings-sections-panel-account', labelledBy: 'tab' },
-          onNavigate,
-          onRefresh: async (message: string, profile?: string) => {
-            refreshed.push(message);
-            readBacks.push([message, profile]);
-            await holdRefresh?.();
-          },
-          onRefreshSnapshot: async () => {
-            refreshed.push('snapshot');
-            return snapshot;
-          },
-          onError: (error: unknown) => {
-            if (!collectErrors) throw error;
-            reported.push(error);
-          },
-          onMutationError: async (error: unknown) => {
-            throw error;
-          },
+          children: createElement(AccountSection, {
+            snapshot,
+            bridge,
+            location: {
+              kind: 'settings',
+              section: 'account',
+              ...(at ? { store: at } : {}),
+            },
+            panel: { id: 'settings-sections-panel-account', labelledBy: 'tab' },
+            onNavigate,
+            onRefresh: async (message: string, profile?: string) => {
+              refreshed.push(message);
+              readBacks.push([message, profile]);
+              await holdRefresh?.();
+            },
+            onRefreshSnapshot: async () => {
+              refreshed.push('snapshot');
+              return snapshot;
+            },
+            onError: (error: unknown) => {
+              if (!collectErrors) throw error;
+              reported.push(error);
+            },
+            onMutationError: async (error: unknown) => {
+              throw error;
+            },
+          }),
         }),
       }),
     });
