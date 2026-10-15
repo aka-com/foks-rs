@@ -571,7 +571,7 @@ fn map_display_rename_error(error: crate::Error) -> RpcStatus {
             RpcStatus::RevokeRace("username changed concurrently".into())
         }
         crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "display_rename"),
     }
 }
 

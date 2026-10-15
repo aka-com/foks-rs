@@ -279,7 +279,7 @@ pub(crate) fn status(error: Error) -> foks_rpc::RpcStatus {
         Error::Oidc(foks_oidc::Error::ProviderUnavailable) => {
             RpcStatus::OAuth2("provider unavailable".into())
         }
-        other => crate::status::shared(&other)
+        other => crate::status::shared(&other, "sso")
             .unwrap_or_else(|| RpcStatus::OAuth2("authentication could not be verified".into())),
     }
 }
@@ -290,7 +290,7 @@ pub(crate) fn status(error: Error) -> foks_rpc::RpcStatus {
 /// treats `OAuth2Auth` as a reauthentication requirement. Every other failure,
 /// `Capacity` included, is reported inside `OAuth2Auth`.
 pub(crate) fn access_status(error: Error) -> foks_rpc::RpcStatus {
-    crate::status::shared(&error)
+    crate::status::shared(&error, "sso_access")
         .unwrap_or_else(|| foks_rpc::RpcStatus::OAuth2Auth(Box::new(status(error))))
 }
 

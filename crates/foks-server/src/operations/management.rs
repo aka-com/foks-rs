@@ -324,6 +324,7 @@ fn prometheus(
             (0, 0)
         }
     };
+    let outcomes = metrics.request_outcomes();
     let metrics = metrics.snapshot();
     let writer = writer.metrics();
     let mut output = format!(
@@ -473,6 +474,10 @@ fn prometheus(
                 "foks_oidc_sample_failures_total",
                 metrics.oidc_sample_failures,
             ),
+            (
+                "foks_reader_pool_exhausted_total",
+                metrics.reader_pool_exhausted,
+            ),
         ] {
             let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
         }
@@ -486,11 +491,41 @@ fn prometheus(
             );
         }
     }
+    request_prometheus(
+        &mut output,
+        &outcomes,
+        &crate::diagnostics::operational::request_failures(),
+    );
     expiry_prometheus(&mut output, &metrics.expiry);
     checkpoint_prometheus(&mut output, &metrics.checkpoint);
     realtime_prometheus(&mut output, &metrics.realtime);
     sso_prometheus(&mut output, sso);
     output
+}
+
+/// Writes written responses by route family and wire status code, and the
+/// server faults that handlers reported as a transaction retry by handler site
+/// and reason code. Every label value is a fixed name from the server.
+fn request_prometheus(
+    output: &mut String,
+    outcomes: &[(&'static str, u64, u64)],
+    failures: &[(&'static str, &'static str, u64)],
+) {
+    use std::fmt::Write as _;
+    let _ = writeln!(output, "# TYPE foks_requests_total counter");
+    for (family, status, count) in outcomes {
+        let _ = writeln!(
+            output,
+            "foks_requests_total{{family=\"{family}\",status=\"{status}\"}} {count}"
+        );
+    }
+    let _ = writeln!(output, "# TYPE foks_request_internal_errors_total counter");
+    for (site, reason, count) in failures {
+        let _ = writeln!(
+            output,
+            "foks_request_internal_errors_total{{site=\"{site}\",reason=\"{reason}\"}} {count}"
+        );
+    }
 }
 
 /// Writes the OIDC rollout gauges. They are omitted when OIDC is not
@@ -666,6 +701,26 @@ mod tests {
         }
         assert!(text.contains("# TYPE foks_expiry_deleted_rows_total counter\n"));
         assert!(text.contains("# TYPE foks_expiry_empty_passes_total counter\n"));
+    }
+
+    #[test]
+    fn request_outcomes_and_internal_errors_have_fixed_labels() {
+        let mut text = String::new();
+        request_prometheus(
+            &mut text,
+            &[("KvStore", 0, 3), ("unrouted", 1012, 1)],
+            &[("kv_write", "busy", 2)],
+        );
+        assert_eq!(
+            text,
+            concat!(
+                "# TYPE foks_requests_total counter\n",
+                "foks_requests_total{family=\"KvStore\",status=\"0\"} 3\n",
+                "foks_requests_total{family=\"unrouted\",status=\"1012\"} 1\n",
+                "# TYPE foks_request_internal_errors_total counter\n",
+                "foks_request_internal_errors_total{site=\"kv_write\",reason=\"busy\"} 2\n",
+            )
+        );
     }
 
     #[test]

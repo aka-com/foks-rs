@@ -1208,7 +1208,7 @@ pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
             operation: 2,
             resource: 1,
         },
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "kv_write"),
     }
 }
 
@@ -1218,7 +1218,7 @@ pub(super) fn map_upload_error(error: crate::Error) -> RpcStatus {
         crate::Error::Database(
             foks_server_db::Error::Invalid(_) | foks_server_db::Error::IntegerRange,
         ) => bad_arguments("invalid KV upload transition"),
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "kv_upload"),
     }
 }
 
@@ -1230,7 +1230,7 @@ pub(super) fn map_lock_error(error: crate::Error) -> RpcStatus {
         crate::Error::Database(
             foks_server_db::Error::Invalid(_) | foks_server_db::Error::IntegerRange,
         ) => bad_arguments("invalid KV lock transition"),
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "kv_lock"),
     }
 }
 

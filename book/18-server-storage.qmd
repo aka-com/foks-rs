@@ -162,8 +162,10 @@ and dirent tables; the writer already ran it when it opened the database
 at startup. Offline commands and backup and restore verification keep the
 full check. The pool is a vector of idle connections behind a mutex; it
 opens connections lazily up to a maximum (default 32) and, when exhausted,
-returns `Error::ReaderPool` rather than waiting. A lease returns its
-connection to the pool on drop.
+returns `Error::ReaderPool` rather than waiting. The request is answered
+with status 1012 and counted in `foks_reader_pool_exhausted_total`, apart
+from the per-address rate limit. A lease returns its connection to the pool
+on drop.
 
 A `ReadSnapshot` wraps a read transaction on one of these connections and
 is the unit of consistency: every query inside it sees the same WAL state.

@@ -18,22 +18,22 @@ pub(crate) struct InvitationService<'a> {
 fn bad(_: impl std::fmt::Display) -> RpcStatus {
     RpcStatus::BadArguments("invalid invitation request".into())
 }
-fn internal(_: impl std::fmt::Display) -> RpcStatus {
-    RpcStatus::TransactionRetry
+fn internal(error: impl Into<crate::Error>) -> RpcStatus {
+    crate::status::internal(error, "team_invitations")
 }
 fn denied() -> RpcStatus {
     RpcStatus::PermissionDenied("invitation authority".into())
 }
 pub(super) fn write_error(e: crate::Error) -> RpcStatus {
-    crate::status::shared(&e).unwrap_or(match e {
+    match e {
         crate::Error::Database(foks_server_db::Error::InvitationAlreadyPending) => {
             RpcStatus::TeamInviteAlreadyAccepted
         }
         crate::Error::Database(foks_server_db::Error::InvitationDecisionConflict) => {
             RpcStatus::TeamRace("invitation decision conflict".into())
         }
-        _ => RpcStatus::TransactionRetry,
-    })
+        other => crate::status::unmapped(other, "team_invitations_write"),
+    }
 }
 fn fields(bytes: &[u8], n: usize) -> Result<Vec<Value>, RpcStatus> {
     if bytes.len() > 32768 {

@@ -290,21 +290,22 @@ pub(super) fn map_yubi_write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
         crate::Error::Database(foks_server_db::Error::Invalid(message)) => bad_arguments(message),
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "yubi_write"),
     }
 }
 
 fn map_yubi_database_error(error: foks_server_db::Error) -> RpcStatus {
     match error {
         foks_server_db::Error::AuthorizationChanged => permission_denied(),
-        other => crate::status::storage(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::storage(&other, "yubi_database")
+            .unwrap_or_else(|| crate::status::internal(other, "yubi_database")),
     }
 }
 
 pub(super) fn map_device_nag_write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "device_nag_write"),
     }
 }
 

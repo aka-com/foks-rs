@@ -266,11 +266,11 @@ impl RealtimeService {
 pub(super) fn write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::Database(e) => db_error(e),
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "realtime_write"),
     }
 }
 fn db_error(error: DbError) -> RpcStatus {
-    if let Some(status) = crate::status::storage(&error) {
+    if let Some(status) = crate::status::storage(&error, "realtime_write") {
         return status;
     }
     match error {
@@ -291,7 +291,7 @@ fn db_error(error: DbError) -> RpcStatus {
             RpcStatus::BadArguments("invalid realtime value".into())
         }
         DbError::Capacity(_) => RpcStatus::Realtime("realtime service limit exceeded".into()),
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::internal(other, "realtime_write"),
     }
 }
 

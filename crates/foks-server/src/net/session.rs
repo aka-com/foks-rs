@@ -13,7 +13,7 @@ use foks_rpc::{
         decode_merkle_check_key, decode_merkle_lookup, decode_merkle_multi_lookup,
         decode_merkle_optional_host,
     },
-    encode_status_response_at, RpcStatus,
+    encode_status_response_at, RpcStatus, STATUS_OK, STATUS_RATE_LIMIT_ERROR,
 };
 use foks_snowpack::{decode, Value};
 use rustls::pki_types::CertificateDer;
@@ -792,10 +792,10 @@ impl ServerData {
         match pool.checkout() {
             Ok(database) => Ok(database),
             Err(crate::Error::ReaderPool) => {
-                self.metrics.request_rate_limited();
+                self.metrics.reader_pool_exhausted();
                 Err(RpcStatus::RateLimited)
             }
-            Err(_) => Err(RpcStatus::TransactionRetry),
+            Err(error) => Err(crate::status::internal(error, "read_pool")),
         }
     }
 
@@ -1077,7 +1077,7 @@ fn map_user_mutation_error(error: crate::Error) -> RpcStatus {
         crate::Error::Database(foks_server_db::Error::OperationConflict) => {
             bad_arguments("user mutation retry binding failed")
         }
-        other => crate::status::shared(&other)
+        other => crate::status::shared(&other, "user_mutation")
             .unwrap_or_else(|| bad_arguments("user mutation validation failed")),
     }
 }
@@ -1085,7 +1085,7 @@ fn map_user_mutation_error(error: crate::Error) -> RpcStatus {
 fn map_reservation_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "username_reservation"),
     }
 }
 
@@ -1100,12 +1100,12 @@ fn map_signup_error(error: crate::Error) -> RpcStatus {
         crate::Error::Database(
             foks_server_db::Error::Reservation | foks_server_db::Error::OperationConflict,
         ) => bad_arguments("signup reservation or retry binding failed"),
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "signup"),
     }
 }
 
 fn map_certificate_error(error: crate::Error) -> RpcStatus {
-    crate::status::shared(&error).unwrap_or(RpcStatus::TransactionRetry)
+    crate::status::unmapped(error, "client_certificate")
 }
 
 fn map_merkle_proof_error(error: foks_merkle_store::Error) -> RpcStatus {
@@ -1113,7 +1113,9 @@ fn map_merkle_proof_error(error: foks_merkle_store::Error) -> RpcStatus {
         // Storage access can be transient. Every other proof failure means
         // that the selected authenticated root cannot be traversed as a
         // valid content-addressed tree and is the Go MERKLE_VERIFY_ERROR.
-        foks_merkle_store::Error::Storage(_) => RpcStatus::TransactionRetry,
+        error @ foks_merkle_store::Error::Storage(_) => {
+            crate::status::internal(error, "merkle_proof")
+        }
         _ => RpcStatus::MerkleVerify("Merkle proof verification failed".to_owned()),
     }
 }
@@ -1323,7 +1325,9 @@ pub(crate) async fn serve(
             service_data.metrics.request_rate_limited();
             let response = encode_status_response_at(&RpcStatus::RateLimited, 0)?;
             write_response(&mut stream, &response, limits.io_timeout).await?;
-            service_data.metrics.response_completed();
+            service_data
+                .metrics
+                .response_completed(crate::metrics::UNROUTED, STATUS_RATE_LIMIT_ERROR);
             return Ok(());
         }
         let read = tokio::select! {
@@ -1374,6 +1378,9 @@ pub(crate) async fn serve(
         let data = Arc::clone(service_data);
         let certificate = peer_certificate.clone();
         let routed = route_call(call, listener);
+        let family = routed
+            .as_ref()
+            .map_or(crate::metrics::UNROUTED, |call| call.route.protocol);
         let kex_receive = matches!(
             &routed,
             Ok(call) if call.route.id == crate::rpc::RouteId::KexReceive
@@ -1396,15 +1403,16 @@ pub(crate) async fn serve(
                     .map_err(|_| bad_arguments("invalid OIDC poll"))?;
                 let bytes = service.poll(arg).await?;
                 foks_rpc::encode_success_response_at(&bytes, sequence)
-                    .map_err(|_| RpcStatus::TransactionRetry)
+                    .map_err(|error| crate::status::internal(error, "sso_poll"))
             };
-            let response = tokio::select! {
-                result=result=>match result {Ok(bytes)=>bytes,Err(status)=>encode_status_response_at(&status,sequence)?},
-                _=stream.get_ref().0.readable()=>return Ok(()),
-                _=stop.changed()=>break,
+            let (response, status) = tokio::select! {
+                result = result => encode_result(result, sequence)?,
+                _ = stream.get_ref().0.readable() => return Ok(()),
+                _ = stop.changed() => break,
             };
             RequestOutcome {
                 response,
+                status,
                 route,
                 disconnect_before_response: false,
             }
@@ -1427,16 +1435,14 @@ pub(crate) async fn serve(
             ) {
                 RequestOutcome {
                     response: Vec::new(),
+                    status: STATUS_OK,
                     route,
                     disconnect_before_response: true,
                 }
             } else {
-                let response = tokio::select! {
+                let (response, status) = tokio::select! {
                     result = handlers::kex_receive_response(service_data.as_ref(), call) => {
-                        match result {
-                            Ok(response) => response,
-                            Err(status) => encode_status_response_at(&status, sequence)?,
-                        }
+                        encode_result(result, sequence)?
                     }
                     // Snowpack is request/response serial. Readability while
                     // this response is pending is therefore either a client
@@ -1454,6 +1460,7 @@ pub(crate) async fn serve(
                 };
                 RequestOutcome {
                     response,
+                    status,
                     route,
                     disconnect_before_response: false,
                 }
@@ -1472,42 +1479,40 @@ pub(crate) async fn serve(
             ) {
                 RequestOutcome {
                     response: Vec::new(),
+                    status: STATUS_OK,
                     route,
                     disconnect_before_response: true,
                 }
             } else {
-                let response = match service_data.realtime_polling.clone().try_acquire_owned() {
-                    Ok(poll_permit) => {
-                        let _poll_permit = poll_permit;
-                        if let Some(certificate) = certificate {
-                            tokio::select! {
-                                result = handlers::realtime_poll_response(
-                                    service_data.as_ref(),
-                                    call,
-                                    certificate,
-                                ) => {
-                                    match result {
-                                        Ok(response) => response,
-                                        Err(status) => encode_status_response_at(&status, sequence)?,
+                let (response, status) =
+                    match service_data.realtime_polling.clone().try_acquire_owned() {
+                        Ok(poll_permit) => {
+                            let _poll_permit = poll_permit;
+                            if let Some(certificate) = certificate {
+                                tokio::select! {
+                                    result = handlers::realtime_poll_response(
+                                        service_data.as_ref(),
+                                        call,
+                                        certificate,
+                                    ) => encode_result(result, sequence)?,
+                                    result = stream.get_ref().0.readable() => {
+                                        let _ = result;
+                                        return Ok(());
+                                    }
+                                    result = stop.changed() => {
+                                        let _ = result;
+                                        break;
                                     }
                                 }
-                                result = stream.get_ref().0.readable() => {
-                                    let _ = result;
-                                    return Ok(());
-                                }
-                                result = stop.changed() => {
-                                    let _ = result;
-                                    break;
-                                }
+                            } else {
+                                encode_result(Err(permission_denied()), sequence)?
                             }
-                        } else {
-                            encode_status_response_at(&permission_denied(), sequence)?
                         }
-                    }
-                    Err(_) => encode_status_response_at(&RpcStatus::RateLimited, sequence)?,
-                };
+                        Err(_) => encode_result(Err(RpcStatus::RateLimited), sequence)?,
+                    };
                 RequestOutcome {
                     response,
+                    status,
                     route,
                     disconnect_before_response: false,
                 }
@@ -1532,8 +1537,10 @@ pub(crate) async fn serve(
                         let database = match data.read_database() {
                             Ok(database) => database,
                             Err(status) => {
+                                let (response, status) = encode_result(Err(status), sequence)?;
                                 return Ok(RequestOutcome {
-                                    response: encode_status_response_at(&status, sequence)?,
+                                    response,
+                                    status,
                                     route: None,
                                     disconnect_before_response: false,
                                 });
@@ -1544,7 +1551,7 @@ pub(crate) async fn serve(
                         None
                     };
                     let mut route = None;
-                    let response = match routed {
+                    let result = match routed {
                         Ok(call) => {
                             let protocol = call.route.protocol;
                             let method = call.route.method;
@@ -1556,6 +1563,7 @@ pub(crate) async fn serve(
                             ) {
                                 return Ok(RequestOutcome {
                                     response: Vec::new(),
+                                    status: STATUS_OK,
                                     route,
                                     disconnect_before_response: true,
                                 });
@@ -1577,23 +1585,21 @@ pub(crate) async fn serve(
                             } else {
                                 Ok(())
                             };
-                            match authorization.and_then(|()| {
+                            authorization.and_then(|()| {
                                 handlers::response(&request_data, call, principal.as_ref())
-                            }) {
-                                Ok(response) => response,
-                                Err(status) => encode_status_response_at(&status, sequence)?,
-                            }
+                            })
                         }
-                        Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
-                            &RpcStatus::BadArguments("request exceeds the method limit".to_owned()),
-                            sequence,
-                        )?,
+                        Err(RouteError::RequestTooLarge { .. }) => Err(RpcStatus::BadArguments(
+                            "request exceeds the method limit".to_owned(),
+                        )),
                         Err(RouteError::Unknown { .. } | RouteError::WrongListener) => {
-                            encode_status_response_at(&RpcStatus::Unsupported, sequence)?
+                            Err(RpcStatus::Unsupported)
                         }
                     };
+                    let (response, status) = encode_result(result, sequence)?;
                     Ok(RequestOutcome {
                         response,
+                        status,
                         route,
                         disconnect_before_response: false,
                     })
@@ -1606,7 +1612,9 @@ pub(crate) async fn serve(
                     service_data.metrics.request_rate_limited();
                     let response = encode_status_response_at(&RpcStatus::RateLimited, sequence)?;
                     write_response(&mut stream, &response, limits.io_timeout).await?;
-                    service_data.metrics.response_completed();
+                    service_data
+                        .metrics
+                        .response_completed(family, STATUS_RATE_LIMIT_ERROR);
                     return Ok(());
                 }
                 BoundedExecution::TimedOut => {
@@ -1624,6 +1632,7 @@ pub(crate) async fn serve(
             return Ok(());
         }
         let response = outcome.response;
+        let status = outcome.status;
         let route = outcome.route;
         if let Some(route) = route {
             let protocol = route.protocol;
@@ -1654,15 +1663,29 @@ pub(crate) async fn serve(
             result = write_response(&mut stream, &response, limits.io_timeout) => result,
         };
         write?;
-        service_data.metrics.response_completed();
+        service_data.metrics.response_completed(family, status);
     }
     Ok(())
 }
 
 struct RequestOutcome {
     response: Vec<u8>,
+    /// The wire status code that `response` carries, `STATUS_OK` for a success.
+    status: u64,
     route: Option<&'static crate::rpc::RouteSpec>,
     disconnect_before_response: bool,
+}
+
+/// Encodes a handler result and returns the response frame with the wire
+/// status code it carries.
+fn encode_result(
+    result: std::result::Result<Vec<u8>, RpcStatus>,
+    sequence: u64,
+) -> Result<(Vec<u8>, u64)> {
+    match result {
+        Ok(response) => Ok((response, STATUS_OK)),
+        Err(status) => Ok((encode_status_response_at(&status, sequence)?, status.code())),
+    }
 }
 
 enum BoundedExecution<T> {

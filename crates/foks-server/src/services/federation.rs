@@ -505,7 +505,7 @@ fn active_capability_key(
 pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "federation_write"),
     }
 }
 
@@ -517,6 +517,6 @@ fn permission_denied() -> RpcStatus {
     RpcStatus::PermissionDenied("federation permission denied".to_owned())
 }
 
-fn internal(_: impl std::fmt::Display) -> RpcStatus {
-    RpcStatus::TransactionRetry
+fn internal(error: impl Into<crate::Error>) -> RpcStatus {
+    crate::status::internal(error, "federation")
 }

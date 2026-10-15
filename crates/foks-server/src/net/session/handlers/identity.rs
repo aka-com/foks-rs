@@ -58,7 +58,7 @@ fn denied() -> RpcStatus {
 fn status(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::Database(foks_server_db::Error::Capacity(_)) => RpcStatus::RateLimited,
-        other => crate::status::shared(&other).unwrap_or_else(denied),
+        other => crate::status::shared(&other, "identity_proof").unwrap_or_else(denied),
     }
 }
 

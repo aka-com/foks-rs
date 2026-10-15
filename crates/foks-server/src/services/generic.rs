@@ -300,7 +300,8 @@ pub(crate) fn load_for_entity(
     if start == 0 || start > maximum_start {
         return Err(bad_arguments("generic-chain start is out of range"));
     }
-    let start_index = usize::try_from(start - 1).map_err(internal)?;
+    let start_index =
+        usize::try_from(start - 1).map_err(|_| crate::status::invariant("generic"))?;
     let selected = &chain.links[start_index..];
     let exact_links = selected
         .iter()
@@ -382,7 +383,7 @@ fn stored_role(role_type: u64, visibility: i64) -> Result<Role, RpcStatus> {
     match role_type {
         1 => i16::try_from(visibility)
             .map(Role::member)
-            .map_err(internal),
+            .map_err(|_| internal(foks_server_db::Error::IntegerRange)),
         2 if visibility == 0 => Ok(Role::ADMIN),
         3 if visibility == 0 => Ok(Role::OWNER),
         _ => Err(RpcStatus::TransactionRetry),
@@ -423,7 +424,7 @@ fn decode_root_status(root: &foks_server_db::RootSnapshot) -> Result<MerkleRoot,
 }
 
 pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::status::shared(&error) {
+    if let Some(status) = crate::status::shared(&error, "generic_write") {
         return status;
     }
     match error {
@@ -450,6 +451,6 @@ fn bad_arguments(_: impl std::fmt::Display) -> RpcStatus {
     RpcStatus::BadArguments("invalid generic-chain request".to_owned())
 }
 
-fn internal(_: impl std::fmt::Display) -> RpcStatus {
-    RpcStatus::TransactionRetry
+fn internal(error: impl Into<crate::Error>) -> RpcStatus {
+    crate::status::internal(error, "generic")
 }

@@ -68,7 +68,7 @@ fn status(error: crate::Error) -> RpcStatus {
             RpcStatus::BadArguments("invalid administration request".into())
         }
         crate::Error::Database(foks_server_db::Error::Capacity(_)) => RpcStatus::RateLimited,
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "web_admin"),
     }
 }
 

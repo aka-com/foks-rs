@@ -47,10 +47,10 @@ pub(crate) fn reserve_name(
     // replayed losslessly during named-team creation.
     let expires_at_millis = (now / 1_000)
         .checked_add(RESERVATION_LIFETIME_MICROSECONDS / 1_000)
-        .ok_or_else(|| internal("team-name expiry overflow"))?;
+        .ok_or_else(|| crate::status::invariant("team_admin"))?;
     let expires_at = expires_at_millis
         .checked_mul(1_000)
-        .ok_or_else(|| internal("team-name expiry overflow"))?;
+        .ok_or_else(|| crate::status::invariant("team_admin"))?;
     let mut token = [0_u8; 17];
     entropy.fill(&mut token).map_err(internal)?;
     let reservation = UsernameReservation {
@@ -104,7 +104,7 @@ pub(crate) fn make_inert_token(
     let now = clock.now_micros().map_err(internal)?;
     let expires_at = now
         .checked_add(ADMIN_TOKEN_LIFETIME_MICROSECONDS)
-        .ok_or_else(|| internal("team-admin token expiry overflow"))?;
+        .ok_or_else(|| crate::status::invariant("team_admin"))?;
     let team_id = request.team.into_bytes();
     let holder_id = principal.uid().to_vec();
     let ptk_generation = request.generation;
@@ -1291,7 +1291,7 @@ mod tests {
 }
 
 pub(super) fn map_edit_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::status::shared(&error) {
+    if let Some(status) = crate::status::shared(&error, "team_edit") {
         return status;
     }
     match error {
@@ -1323,7 +1323,7 @@ fn require_cited_root(
 }
 
 pub(super) fn map_create_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::status::shared(&error) {
+    if let Some(status) = crate::status::shared(&error, "team_create") {
         return status;
     }
     match error {
@@ -1349,12 +1349,12 @@ fn team_error(summary: &str, error: &crate::Error) -> RpcStatus {
 }
 
 pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::status::shared(&error) {
+    if let Some(status) = crate::status::shared(&error, "team_admin_write") {
         return status;
     }
     match error {
         crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::internal(other, "team_admin_write"),
     }
 }
 
@@ -1362,8 +1362,8 @@ fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
     RpcStatus::BadArguments(error.to_string())
 }
 
-fn internal(_: impl std::fmt::Display) -> RpcStatus {
-    RpcStatus::TransactionRetry
+fn internal(error: impl Into<crate::Error>) -> RpcStatus {
+    crate::status::internal(error, "team_admin")
 }
 
 fn permission_denied() -> RpcStatus {

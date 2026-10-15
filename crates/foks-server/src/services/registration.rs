@@ -557,7 +557,7 @@ fn require_normalized_name(name: &[u8]) -> Result<(), RpcStatus> {
 }
 
 pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
-    crate::status::shared(&error).unwrap_or(RpcStatus::TransactionRetry)
+    crate::status::unmapped(error, "registration_write")
 }
 
 pub(super) fn map_passphrase_write_error(error: crate::Error) -> RpcStatus {
@@ -565,6 +565,6 @@ pub(super) fn map_passphrase_write_error(error: crate::Error) -> RpcStatus {
         crate::Error::Database(foks_server_db::Error::PassphraseRateLimited) => {
             RpcStatus::RateLimited
         }
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "registration_passphrase"),
     }
 }

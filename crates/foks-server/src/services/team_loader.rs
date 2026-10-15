@@ -696,7 +696,7 @@ pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
         crate::Error::Database(foks_server_db::Error::OperationConflict) => {
             bad_arguments("conflicting team-view activation replay")
         }
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "team_loader_write"),
     }
 }
 

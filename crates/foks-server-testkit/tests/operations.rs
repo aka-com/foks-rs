@@ -238,15 +238,18 @@ fn request_rate_limit_returns_typed_status_and_counts_rejection() {
     let environment = TestEnvironment::with_profile(TestProfile::RateLimited).unwrap();
     let server = environment.start_server().unwrap();
     let mut connection = connect_public(server.addresses().public_services, server.service_roots());
-    for _ in 0..2 {
-        let request = foks_rpc::encode_load_user_chain_request(&[1; 33], 0).unwrap();
-        connection.write_all(&request).unwrap();
-        connection.flush().unwrap();
-        assert!(matches!(
-            foks_rpc::read_void_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 0),
-            Err(RpcError::RemoteStatus { code: 1020, .. })
-        ));
-    }
+    let request = foks_rpc::encode_get_host_id_request_at(0).unwrap();
+    connection.write_all(&request).unwrap();
+    connection.flush().unwrap();
+    foks_rpc::read_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 0).unwrap();
+    // LoadUserChain is a User method, which the public listener refuses.
+    let request = foks_rpc::encode_load_user_chain_request(&[1; 33], 0).unwrap();
+    connection.write_all(&request).unwrap();
+    connection.flush().unwrap();
+    assert!(matches!(
+        foks_rpc::read_void_response(&mut connection, DEFAULT_MAX_FRAME_LENGTH, 0),
+        Err(RpcError::RemoteStatus { code: 1020, .. })
+    ));
     let request = foks_rpc::encode_load_user_chain_request(&[1; 33], 0).unwrap();
     connection.write_all(&request).unwrap();
     connection.flush().unwrap();
@@ -265,6 +268,28 @@ fn request_rate_limit_returns_typed_status_and_counts_rejection() {
     }
     assert_eq!(server.metrics().request_duration_observations, 3);
     assert_eq!(server.metrics().handler_duration_observations, 2);
+    let outcome_deadline = Instant::now() + Duration::from_secs(2);
+    while server.metrics().responses_completed < 3 {
+        assert!(
+            Instant::now() < outcome_deadline,
+            "response completion was not counted"
+        );
+        std::thread::yield_now();
+    }
+    let text = get(server.management_address(), "/metrics");
+    let outcomes: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("foks_requests_total{"))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            "foks_requests_total{family=\"Reg\",status=\"0\"} 1",
+            "foks_requests_total{family=\"unrouted\",status=\"1012\"} 1",
+            "foks_requests_total{family=\"unrouted\",status=\"1020\"} 1",
+        ]
+    );
+    assert_eq!(metric(&text, "foks_reader_pool_exhausted_total"), 0.0);
     let held = (0..20)
         .map(|_| TcpStream::connect(server.addresses().public_services).unwrap())
         .collect::<Vec<_>>();

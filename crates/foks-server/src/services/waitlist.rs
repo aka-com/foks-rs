@@ -43,7 +43,7 @@ pub(super) fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
         crate::Error::Database(foks_server_db::Error::Duplicate(message)) => {
             RpcStatus::Duplicate(message.to_owned())
         }
-        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+        other => crate::status::unmapped(other, "waitlist_write"),
     }
 }
 

@@ -220,6 +220,25 @@ duration, saturation, backup outcomes, and transient `accept()` failures. They
 use fixed, non-user-derived names and never export paths, identities, request
 values, or key material.
 
+`foks_requests_total{family,status}` counts written responses by route family
+(the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for
+a success). Responses written before a route is resolved have
+`family="unrouted"`: per-address rate-limit refusals, unknown methods, methods
+on the wrong listener and oversized arguments. A request that ends without a
+response, for example on a handler timeout, appears only in
+`foks_requests_started_total`. `foks_request_internal_errors_total{site,reason}`
+counts server faults that a handler reported as status 1014 (transaction
+retry). `site` names the handler's error mapper, such as `kv_write` or
+`team_admin`, and `reason` is a fixed class such as `busy`, `corrupt_storage`,
+`disk_full`, `io` or `internal`. Each site and reason also writes at most one
+stderr line per minute, `FOKS request failed: site=..., reason=...,
+count_since_last_line=...`, without error text. This counter is process-wide.
+Handler paths that still map an error to status 1014 inline, without a mapper,
+are not counted. `foks_reader_pool_exhausted_total` counts requests refused
+with status 1012 because every pooled read connection was in use;
+`foks_rate_limited_requests_total` counts only per-address token-bucket and
+handler-permit refusals.
+
 When OIDC is configured and the host has a rollout policy, `/metrics` also
 reports the `foks_oidc_*` rollout gauges: mode, provider block, authorization
 epoch and cohort counts. The sample runs on a blocking worker over one retained
