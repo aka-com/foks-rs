@@ -5,7 +5,6 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
 import type { ReactNode } from 'react';
 
 import { installDom } from './lib/dom-harness';
@@ -32,11 +31,12 @@ function render(sheet: ReactNode): void {
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   ui.render(
-    createElement(overlays.OverlayProvider, {
-      backgroundRef: { current: null },
-      portalRoot,
-      children: sheet,
-    }),
+    <overlays.OverlayProvider
+      backgroundRef={{ current: null }}
+      portalRoot={portalRoot}
+    >
+      {sheet}
+    </overlays.OverlayProvider>,
   );
 }
 
@@ -49,11 +49,13 @@ function header(name: string): Element {
 
 test('icon draws a server mark holding that icon beside the title', () => {
   render(
-    createElement(
-      components.SheetDialog,
-      { title: 'Add a server', icon: 'server', onClose: () => {} },
-      'Body',
-    ),
+    <components.SheetDialog
+      title="Add a server"
+      icon="server"
+      onClose={() => {}}
+    >
+      Body
+    </components.SheetDialog>,
   );
   const mark = header('Add a server').querySelector(':scope > .server-mark');
   assert.ok(mark, 'the header starts with a server mark');
@@ -63,11 +65,14 @@ test('icon draws a server mark holding that icon beside the title', () => {
 
 test('a danger sheet tints the server mark', () => {
   render(
-    createElement(
-      components.SheetDialog,
-      { title: 'Remove it?', icon: 'trash', danger: true, onClose: () => {} },
-      'Body',
-    ),
+    <components.SheetDialog
+      title="Remove it?"
+      icon="trash"
+      danger
+      onClose={() => {}}
+    >
+      Body
+    </components.SheetDialog>,
   );
   const dialog = ui.screen.getByRole('alertdialog', { name: 'Remove it?' });
   const mark = dialog.querySelector('.sheet > .hd > .server-mark');
@@ -77,16 +82,14 @@ test('a danger sheet tints the server mark', () => {
 
 test('an explicit glyph replaces the icon mark', () => {
   render(
-    createElement(
-      components.SheetDialog,
-      {
-        title: 'Custom',
-        icon: 'settings',
-        glyph: createElement('span', { className: 'custom-mark' }),
-        onClose: () => {},
-      },
-      'Body',
-    ),
+    <components.SheetDialog
+      title="Custom"
+      icon="settings"
+      glyph={<span className="custom-mark" />}
+      onClose={() => {}}
+    >
+      Body
+    </components.SheetDialog>,
   );
   const hd = header('Custom');
   assert.ok(hd.querySelector(':scope > .custom-mark'));
@@ -95,11 +98,9 @@ test('an explicit glyph replaces the icon mark', () => {
 
 test('a sheet with neither icon nor glyph draws no mark', () => {
   render(
-    createElement(
-      components.SheetDialog,
-      { title: 'Plain', onClose: () => {} },
-      'Body',
-    ),
+    <components.SheetDialog title="Plain" onClose={() => {}}>
+      Body
+    </components.SheetDialog>,
   );
   const hd = header('Plain');
   assert.equal(hd.firstElementChild?.className, 't');
