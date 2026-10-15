@@ -86,6 +86,25 @@ impl RecoveryLedger {
         self.append(json!({"event": "fault", "kind": kind}))
     }
 
+    /// Record a controller-observed phase without changing the recovery clock.
+    /// Labels must describe synthetic test actions, never contain credentials.
+    pub fn milestone(&mut self, phase: &str) -> io::Result<()> {
+        self.append(json!({"event": "milestone", "phase": phase}))
+    }
+
+    /// Begin checking one selected recovery target. Never combine successful
+    /// reads from divergent owners into evidence that one owner has every ack.
+    /// This clears observations/write eligibility but never resets the clock
+    /// or forgets previously acknowledged payloads.
+    pub fn begin_recovery_attempt(&mut self) -> io::Result<()> {
+        if self.fault.is_none() {
+            return Err(io::Error::other("no recovery fault active"));
+        }
+        self.observed_after_fault.clear();
+        self.wrote_after_fault = false;
+        self.append(json!({"event": "begin_recovery_attempt"}))
+    }
+
     /// Call after authenticated reads verified all prior acknowledgments and a
     /// new write was acknowledged and read back. This is a measured assertion,
     /// not cancellation: a slow blocking RPC can finish after the budget.
@@ -95,6 +114,13 @@ impl RecoveryLedger {
             .ok_or_else(|| io::Error::other("no recovery fault active"))?
             .elapsed();
         if !self.wrote_after_fault || self.observed_after_fault.len() != self.acknowledged.len() {
+            self.append(json!({
+                "event": "recovery_rejected",
+                "elapsed_ms": elapsed.as_millis(),
+                "acknowledged": self.acknowledged.len(),
+                "observed_after_fault": self.observed_after_fault.len(),
+                "wrote_after_fault": self.wrote_after_fault,
+            }))?;
             return Err(io::Error::other(
                 "recovery needs all acknowledged reads and a new write",
             ));
@@ -175,5 +201,33 @@ mod tests {
             serde_json::from_str(records.lines().last().unwrap()).unwrap();
         assert_eq!(last["event"], "recovered");
         assert_eq!(last["within_budget"], false);
+    }
+
+    #[test]
+    fn changing_recovery_target_cannot_union_observations_or_reset_the_clock() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("evidence.jsonl");
+        let mut ledger = RecoveryLedger::create(&path, Duration::from_secs(15)).unwrap();
+        assert!(ledger.begin_recovery_attempt().is_err());
+        ledger.acknowledged("before", b"original").unwrap();
+        ledger.fault("owner handoff").unwrap();
+        let fault = ledger.fault;
+        ledger.observed("before", b"original").unwrap();
+        ledger.acknowledged("first-owner", b"branch one").unwrap();
+        ledger.observed("first-owner", b"branch one").unwrap();
+        ledger.begin_recovery_attempt().unwrap();
+        assert_eq!(ledger.fault, fault);
+        ledger.acknowledged("second-owner", b"branch two").unwrap();
+        ledger.observed("before", b"original").unwrap();
+        ledger.observed("second-owner", b"branch two").unwrap();
+        assert!(ledger.recovered().is_err());
+        let records = std::fs::read_to_string(path).unwrap();
+        let last: serde_json::Value =
+            serde_json::from_str(records.lines().last().unwrap()).unwrap();
+        assert_eq!(last["event"], "recovery_rejected");
+        assert_eq!(last["acknowledged"], 3);
+        assert_eq!(last["observed_after_fault"], 2);
+        ledger.observed("first-owner", b"branch one").unwrap();
+        ledger.recovered().unwrap();
     }
 }

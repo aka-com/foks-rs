@@ -10,6 +10,9 @@ use foks_server_testkit::{
     BinaryServer, RecoveryLedger, TestAccountSpec, TestClient, TestEnvironment,
 };
 
+#[path = "recovery_harness/volume.rs"]
+mod volume;
+
 fn binary() -> PathBuf {
     std::env::var_os("FOKS_SERVER_BIN")
         .map(PathBuf::from)
