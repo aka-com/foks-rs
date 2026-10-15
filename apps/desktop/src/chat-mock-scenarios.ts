@@ -40,7 +40,7 @@ export const MOCK_CHAT_UNCERTAIN = 'f2'.repeat(16);
 export const MOCK_CHAT_REJECTED = 'f3'.repeat(16);
 /**
  * The message-order status a v0.1.9 host returns when it rejects a send; the
- * client records it, like five other statuses, as a definite rejection.
+ * client records it, like six other statuses, as a definite rejection.
  */
 export const MOCK_CHAT_REJECTION_CODE = 12006;
 

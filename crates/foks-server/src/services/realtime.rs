@@ -287,6 +287,7 @@ fn db_error(error: DbError) -> RpcStatus {
         DbError::Invalid(_) | DbError::IntegerRange => {
             RpcStatus::BadArguments("invalid realtime value".into())
         }
+        DbError::QuotaExceeded => RpcStatus::QuotaExceeded,
         DbError::Capacity(_) => RpcStatus::Realtime("realtime service limit exceeded".into()),
         _ => RpcStatus::TransactionRetry,
     }
@@ -335,6 +336,20 @@ mod tests {
         );
         assert!(after_commit::<()>(Err(DbError::AuthorizationChanged.into()), &notifier).is_err());
         assert_eq!(*notifier.0.lock().unwrap(), vec![target]);
+    }
+
+    #[test]
+    fn admission_refusals_are_quota_and_read_bounds_stay_generic() {
+        // Clients record 1060 as a definite rejection; 12001 leaves a
+        // mutation uncertain and shrinks history read windows.
+        assert!(matches!(
+            write_error(DbError::QuotaExceeded.into()),
+            RpcStatus::QuotaExceeded
+        ));
+        assert!(matches!(
+            db_error(DbError::Capacity("realtime page")),
+            RpcStatus::Realtime(_)
+        ));
     }
 
     #[tokio::test]

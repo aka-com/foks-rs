@@ -126,7 +126,9 @@ impl ChatSession<'_> {
 }
 
 // A completed remote error is not always a pre-commit rejection. In particular,
-// transaction-retry and generic realtime errors retain uncertainty.
+// transaction-retry and generic realtime errors retain uncertainty. A FOKS-RS
+// server returns the over-quota status only from admission checks before
+// commit; Go v0.1.9 realtime never returns it.
 fn definite_rejection(error: &Error) -> Option<i64> {
     match error {
         Error::Rpc(foks_rpc::Error::RemoteStatus { code, .. })
@@ -138,6 +140,7 @@ fn definite_rejection(error: &Error) -> Option<i64> {
                     | foks_rpc::STATUS_RT_RACE
                     | foks_rpc::STATUS_RT_NOT_FOUND_ERROR
                     | foks_rpc::STATUS_RT_MSG_ORDER_ERROR
+                    | foks_rpc::STATUS_OVER_QUOTA_ERROR
             ) =>
         {
             Some(*code as i64)

@@ -1441,6 +1441,113 @@ fn client_chat_recovers_original_operations_after_lost_responses() {
 }
 
 #[test]
+fn client_chat_channel_cap_is_a_definite_rejection() {
+    use foks_client_db::ChatOperationState as State;
+    let fixture = Fixture::start("chat-channel-cap");
+    let account = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("capowner", 0x3a))
+        .unwrap();
+    let secrets = NamedTeamSecrets {
+        member_min: SecretSeed::new([0x5a; 32]),
+        member: SecretSeed::new([0x6a; 32]),
+        admin: SecretSeed::new([0x7a; 32]),
+        owner: SecretSeed::new([0x8a; 32]),
+        removal_key: SecretSeed::new([0x9a; 32]),
+        team_name_commitment_key: [0xaa; 16],
+    };
+    let team = fixture
+        .client
+        .foks()
+        .create_single_owner_named_team(fixture.host(), &account.credential, "capteam", &secrets)
+        .unwrap();
+    let mut chat = fixture
+        .client
+        .foks()
+        .chat_session(fixture.host(), &account.credential, &team.team)
+        .unwrap();
+    let mut connection = chat.connection().unwrap();
+    let mut protected = fixture.client.open_protected_store().unwrap();
+    let first = chat
+        .prepare_channel(
+            &mut connection,
+            &mut protected,
+            "channel0",
+            "",
+            RtChannelTier::Bottom,
+        )
+        .unwrap();
+    chat.attempt_operation(&mut connection, &mut protected, &first.id)
+        .unwrap();
+    // Fill the server's 256-channel cap directly; a client prepare and attempt
+    // per channel takes about two seconds in this fixture.
+    let Response::Channels(set) = connection
+        .call(&Request::ListChannels(RtListChannelsArgument {
+            team: RtTeamId::new(team.team.clone()).unwrap(),
+            app: RtAppId::Chat,
+            last: 0,
+        }))
+        .unwrap()
+    else {
+        panic!()
+    };
+    let names = foks_crypto::derive_realtime_keys(&secrets.member_min, RtAppId::Chat).unwrap();
+    for index in 1..256u64 {
+        let mut metadata = set.channels[0].clone();
+        metadata.id.0[..8].copy_from_slice(&index.to_be_bytes());
+        metadata.name.boxed = names
+            .seal_text(
+                RtKeyType::ChannelName,
+                &RtText(format!("channel{index}")),
+                [index as u8; 16],
+            )
+            .unwrap();
+        metadata.updated_at = set.version + index;
+        metadata.last_message = None;
+        assert_eq!(
+            connection
+                .call(&Request::CreateChannel(RtCreateChannelArgument {
+                    set_version: metadata.updated_at,
+                    metadata,
+                }))
+                .unwrap(),
+            Response::Void
+        );
+    }
+    let refused = chat
+        .prepare_channel(
+            &mut connection,
+            &mut protected,
+            "channel256",
+            "",
+            RtChannelTier::Bottom,
+        )
+        .unwrap();
+    assert!(matches!(
+        chat.attempt_operation(&mut connection, &mut protected, &refused.id),
+        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: foks_rpc::STATUS_OVER_QUOTA_ERROR,
+            ..
+        }))
+    ));
+    // A definite rejection is terminal: it holds no pending slot and a later
+    // attempt reports the recorded outcome without contacting the server.
+    assert!(chat.list_pending().unwrap().is_empty());
+    let outcome = chat
+        .attempt_operation(&mut connection, &mut protected, &refused.id)
+        .unwrap();
+    assert_eq!(outcome.state, State::Rejected);
+    assert_eq!(
+        outcome.rejection_code,
+        Some(foks_rpc::STATUS_OVER_QUOTA_ERROR as i64)
+    );
+    assert_eq!(
+        chat.list_channels(&mut connection).unwrap().channels.len(),
+        256
+    );
+}
+
+#[test]
 pub(crate) fn client_chat_multi_team_refresh_budget() {
     struct Count<'a> {
         connection: &'a mut RealtimeConnection,

@@ -1618,7 +1618,7 @@ access. The state follows the header's time, and a line under the text says
 what happened, with only the actions the state allows. A rejection reads as
 its reason ("New messages arrived in #general first."), mapped from the closed
 set of codes `definite_rejection` in foks-client treats as refused before
-commit (1013, 1030, 12002, 12003, 12005 and 12006). The numeric code, its
+commit (1013, 1030, 1060, 12002, 12003, 12005 and 12006). The numeric code, its
 generated status name, the full operation ID with Copy ID, and the ledger
 state appear only in Message details. A failure the agent returns with a
 `chat-*` code is shown with the copy table in `error-copy.ts` rather than the

@@ -748,6 +748,56 @@ fn maximum_channel_metadata_can_accept_a_message_and_replay_ignores_precondition
     ));
 }
 #[test]
+fn channel_count_cap_refuses_as_quota_before_commit() {
+    let mut f = Fixture::new();
+    let create = |n: usize| {
+        let mut arg = f.create.clone();
+        arg.metadata.id.0[..8].copy_from_slice(&(n as u64).to_be_bytes());
+        arg.set_version = n as u64;
+        arg.metadata.updated_at = n as u64;
+        arg
+    };
+    for n in 1..=Limits::CHANNELS_PER_TEAM {
+        f.db.rt_create_channel(&f.owner, &create(n), 1000).unwrap();
+    }
+    assert!(matches!(
+        f.db.rt_create_channel(&f.owner, &create(Limits::CHANNELS_PER_TEAM + 1), 1000),
+        Err(Error::QuotaExceeded)
+    ));
+    assert_eq!(f.count("rt_channels"), Limits::CHANNELS_PER_TEAM as i64);
+    let version: i64 =
+        f.db.connection
+            .query_row("SELECT version FROM rt_channel_sets", [], |r| r.get(0))
+            .unwrap();
+    assert_eq!(version, Limits::CHANNELS_PER_TEAM as i64);
+}
+#[test]
+fn fanout_cap_refuses_mutations_as_quota_before_commit() {
+    let mut f = Fixture::new();
+    f.db.rt_create_channel(&f.owner, &f.create, 1000).unwrap();
+    let team = f.create.metadata.team.entity().as_bytes().to_vec();
+    // The fixture's owner and member plus these exceed the fanout bound by one.
+    for n in 0..Limits::FANOUT_MEMBERS - 1 {
+        let mut uid = id(ENTITY_USER, 0x40);
+        uid[1..9].copy_from_slice(&(n as u64).to_be_bytes());
+        f.db.connection.execute("INSERT INTO team_members(team_id,party_id,source_role_type,source_visibility,role_type,visibility,generation,verify_key,hepk_fingerprint) VALUES (?1,?2,3,0,1,0,1,zeroblob(33),zeroblob(32))",params![team,uid]).unwrap();
+    }
+    assert!(matches!(
+        f.db.rt_send(&f.owner, &f.send(2), 2000),
+        Err(Error::QuotaExceeded)
+    ));
+    assert_eq!(f.count("rt_messages"), 0);
+    let mut second = f.create.clone();
+    second.metadata.id = RtChannelId([2; 16]);
+    second.set_version = 2;
+    second.metadata.updated_at = 2;
+    assert!(matches!(
+        f.db.rt_create_channel(&f.owner, &second, 2000),
+        Err(Error::QuotaExceeded)
+    ));
+    assert_eq!(f.count("rt_channels"), 1);
+}
+#[test]
 fn concurrent_channel_creates_have_one_cas_winner() {
     let mut f = Fixture::new();
     f.db.rt_create_channel(&f.owner, &f.create, 100).unwrap();

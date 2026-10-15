@@ -175,7 +175,7 @@ pub fn status_phrase(code: u64) -> Option<&'static str> {
         STATUS_KEX_BAD_SECRET => "the pairing phrase did not match",
         STATUS_EXPIRED_ERROR => "the request has expired",
         STATUS_RATE_LIMIT_ERROR => "the server is rate limiting requests; try again shortly",
-        STATUS_OVER_QUOTA_ERROR => "the account is over its storage quota",
+        STATUS_OVER_QUOTA_ERROR => "the server reached a configured quota or capacity limit",
         STATUS_TIMEOUT_ERROR => "the server timed out",
         STATUS_NOT_IMPLEMENTED => "the server does not support this operation",
         STATUS_GENERIC_NOT_FOUND_ERROR => "the server has no such record",

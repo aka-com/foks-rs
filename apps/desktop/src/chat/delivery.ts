@@ -126,6 +126,7 @@ export function outgoingDelivery(
 const REJECTION_STATUS: Readonly<Record<number, string>> = {
   1013: 'STATUS_PERMISSION_ERROR',
   1030: 'STATUS_BAD_ARGS_ERROR',
+  1060: 'STATUS_OVER_QUOTA_ERROR',
   12002: 'STATUS_RT_CHANNEL_EXISTS_ERROR',
   12003: 'STATUS_RT_RACE',
   12005: 'STATUS_RT_NOT_FOUND_ERROR',
@@ -155,6 +156,8 @@ export function rejectionReason(
         return `Your role cannot create channels in ${team}.`;
       case 1030:
         return 'The server refused the channel as malformed.';
+      case 1060:
+        return `${team === 'this team' ? 'This team' : team} has reached the server’s limit on channels or members.`;
       case 12002:
         return `${team === 'this team' ? 'This team' : team} already has a channel with that name.`;
       case 12003:
@@ -169,6 +172,8 @@ export function rejectionReason(
       return `You can no longer post in ${channel}.`;
     case 1030:
       return 'The server refused the message as malformed.';
+    case 1060:
+      return 'The team has more members than the server delivers chat to.';
     case 12003:
       return `${channel === 'this channel' ? 'This channel' : channel} changed while the message was waiting.`;
     case 12005:
