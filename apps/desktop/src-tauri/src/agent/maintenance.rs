@@ -512,10 +512,13 @@ impl AgentHandle {
     }
 
     /// Recovery is limited to a missing, desktop-managed endpoint with a usable
-    /// replacement binary. External launcher paths must never become delete targets.
+    /// replacement binary and no launched agent still running. External
+    /// launcher paths must never become reset targets, and an agent that is
+    /// still starting (for example, waiting on a credential-store prompt) has
+    /// not shown that its state is unreadable.
     pub fn startup_reset_directory(&self) -> Option<PathBuf> {
         self.require_managed_endpoint().ok()?;
-        if self.socket.exists() {
+        if self.socket.exists() || self.startup_launch_running() {
             return None;
         }
         validate_agent_binary(&managed_agent_binary(&self.socket)?).ok()?;
@@ -525,7 +528,9 @@ impl AgentHandle {
             .then(|| root.to_owned())
     }
 
-    pub fn reset_startup_state(&self, confirmed_root: &Path) -> Result<(), AgentError> {
+    /// Moves the confirmed state root's entries into a sibling directory and
+    /// returns that directory's path.
+    pub fn reset_startup_state(&self, confirmed_root: &Path) -> Result<PathBuf, AgentError> {
         let root = self.startup_reset_directory().ok_or_else(|| {
             AgentError::new(
                 "agent-reset",
@@ -540,9 +545,10 @@ impl AgentHandle {
                 false,
             ));
         }
-        foks_client_app::portability::reset_unreadable_state(&root)
+        let moved = foks_client_app::portability::quarantine_unreadable_state(&root)
             .map_err(|error| AgentError::new("agent-reset", error.to_string(), false))?;
-        prepare_managed_crash_directory(&root.join("crashes"))
+        prepare_managed_crash_directory(&root.join("crashes"))?;
+        Ok(moved)
     }
 
     /// Retries agent restoration while excluding ordinary commands. A failed

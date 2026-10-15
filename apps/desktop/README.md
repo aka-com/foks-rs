@@ -697,7 +697,9 @@ rail's light says which one is in force.
 
 - **Starting.** The rail and topbar are displayed before a snapshot exists,
   dimmed and inert. The content area displays a spinner, "Starting the FOKS
-  agent…", and "Startup usually takes a few seconds." Internal step names remain hidden, and
+  agent…", and "Startup usually takes a few seconds." After 5 seconds without
+  catalog progress, the detail line names the Keychain or Secret Service prompt
+  an initialized agent can be waiting on. Internal step names remain hidden, and
   maintenance uses the same presentation as the first connection.
 - **Stopped** (`restart-required`, `recovery-required`, `restoration-failed`).
   The page remains visible behind a light veil below the topbar (`.stopveil`).

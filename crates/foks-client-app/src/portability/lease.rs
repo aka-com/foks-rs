@@ -385,11 +385,17 @@ fn require_no_locator(base: &Path, root: &Path) -> Result<()> {
     }
 }
 
-/// Delete local state files without parsing a potentially unsupported schema.
-/// Native credential-store entries are deliberately left alone: an unreadable
-/// envelope cannot authorize deleting an external credential namespace.
-/// Call only after explicit destructive confirmation. A failed deletion may be partial.
-pub fn reset_unreadable_state(root: &Path) -> Result<()> {
+/// Move local state files aside without parsing a potentially unsupported schema.
+///
+/// Every entry except the lock files moves into a new private sibling
+/// directory, `<root>.reset-<unix seconds>`, whose path is returned. Nothing is
+/// deleted. Native credential-store entries are deliberately left alone: an
+/// unreadable envelope cannot authorize deleting an external credential
+/// namespace, and the moved envelope still names that namespace, so moving the
+/// entries back restores the previous state. Call only after explicit
+/// confirmation. A failed move may be partial; entries already moved are in
+/// the sibling directory.
+pub fn quarantine_unreadable_state(root: &Path) -> Result<PathBuf> {
     let mut guard = ClientStateMaintenanceGuard::acquire(&[root.to_owned()])?;
     let root = guard.paths[0].clone();
     require_no_locator(&guard.base, &root)?;
@@ -402,7 +408,7 @@ pub fn reset_unreadable_state(root: &Path) -> Result<()> {
         }
     }
     // Also exclude older agents and launchers that predate the external lease.
-    // Keep these inodes in place so waiting processes cannot lock a deleted inode.
+    // Keep these inodes in place so waiting processes cannot lock a moved inode.
     let locks = [
         ".foks-rs.lock",
         "foks-rs.desktop-agent.lock",
@@ -417,20 +423,60 @@ pub fn reset_unreadable_state(root: &Path) -> Result<()> {
     if DirectoryIdentity::read(&root)? != identity {
         return Err(Error::StatePathChanged);
     }
+    let quarantine = create_quarantine_directory(&root, identity)?;
     for entry in fs::read_dir(&root)? {
         let entry = entry?;
         if locks.iter().any(|name| entry.file_name() == *name) {
             continue;
         }
-        // Do not follow symlinks into another directory.
-        if entry.file_type()?.is_dir() {
-            fs::remove_dir_all(entry.path())?;
-        } else {
-            fs::remove_file(entry.path())?;
-        }
+        // A rename moves a symlink itself, never the directory it names.
+        fs::rename(entry.path(), quarantine.join(entry.file_name()))?;
     }
+    File::open(&quarantine)?.sync_all()?;
     File::open(&root)?.sync_all()?;
-    Ok(())
+    Ok(quarantine)
+}
+
+/// Creates the private sibling that receives a quarantined state root's
+/// entries. It must share the root's file system so each entry moves by an
+/// atomic rename rather than a copy.
+fn create_quarantine_directory(root: &Path, identity: DirectoryIdentity) -> Result<PathBuf> {
+    let (Some(parent), Some(name)) = (root.parent(), root.file_name()) else {
+        return Err(Error::InvalidConfig("state root has no parent directory"));
+    };
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    for attempt in 0..100u32 {
+        let mut candidate = name.to_os_string();
+        candidate.push(match attempt {
+            0 => format!(".reset-{seconds}"),
+            _ => format!(".reset-{seconds}-{attempt}"),
+        });
+        let path = parent.join(candidate);
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt as _;
+            builder.mode(0o700);
+        }
+        match builder.create(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+        if DirectoryIdentity::read(&path)?.device != identity.device {
+            let _ = fs::remove_dir(&path);
+            return Err(Error::InvalidConfig(
+                "state root is not on the same file system as its parent directory",
+            ));
+        }
+        File::open(parent)?.sync_all()?;
+        return Ok(path);
+    }
+    Err(Error::InvalidConfig(
+        "could not create a directory for the moved local state",
+    ))
 }
 
 #[cfg(test)]
@@ -438,26 +484,87 @@ mod tests {
     use super::*;
 
     #[test]
-    fn startup_reset_removes_legacy_state_and_can_initialize_again() {
+    fn startup_reset_moves_legacy_state_aside_and_can_initialize_again() {
         let temporary = tempfile::tempdir().unwrap();
         let root = crate::prepare_private_directory(&temporary.path().join("state")).unwrap();
         fs::write(root.join(crate::STATE_CONFIG_FILE), "version = 0\n").unwrap();
         fs::create_dir(root.join("profiles")).unwrap();
         fs::write(root.join("profiles/secret"), "old local key").unwrap();
+        fs::write(root.join("agent.log"), "earlier failure").unwrap();
         let outside = temporary.path().join("outside");
         fs::create_dir(&outside).unwrap();
         fs::write(outside.join("keep"), "unrelated").unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+        let lock = private_lock(&root.join(".foks-rs.lock")).unwrap();
+        drop(lock);
 
-        reset_unreadable_state(&root).unwrap();
+        let moved = quarantine_unreadable_state(&root).unwrap();
+        assert_eq!(moved.parent(), root.parent());
+        assert!(moved
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("state.reset-"));
         assert!(!root.join(crate::STATE_CONFIG_FILE).exists());
         assert!(!root.join("profiles").exists());
+        assert!(!root.join("agent.log").exists());
+        assert!(root.join(".foks-rs.lock").exists());
+        assert!(!moved.join(".foks-rs.lock").exists());
+        assert_eq!(
+            fs::read_to_string(moved.join(crate::STATE_CONFIG_FILE)).unwrap(),
+            "version = 0\n"
+        );
+        assert_eq!(
+            fs::read_to_string(moved.join("profiles/secret")).unwrap(),
+            "old local key"
+        );
+        assert_eq!(
+            fs::read_to_string(moved.join("agent.log")).unwrap(),
+            "earlier failure"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::symlink_metadata(&moved).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert!(fs::symlink_metadata(moved.join("linked"))
+                .unwrap()
+                .file_type()
+                .is_symlink());
+        }
         assert!(outside.join("keep").exists());
         let credentials =
             crate::ClientCredentials::initialize(&root, crate::CredentialBackend::PrivateFile)
                 .unwrap();
         credentials.master_key().unwrap();
+        drop(credentials);
+
+        // A second reset takes a distinct directory, even within the same
+        // second, and leaves the first one's contents untouched.
+        let again = quarantine_unreadable_state(&root).unwrap();
+        assert_ne!(again, moved);
+        assert!(again.join(crate::STATE_CONFIG_FILE).exists());
+        assert!(moved.join("profiles/secret").exists());
+    }
+
+    /// Counts the directories a reset of `root` would have moved state into.
+    fn quarantine_siblings(root: &Path) -> usize {
+        let prefix = format!("{}.reset-", root.file_name().unwrap().to_str().unwrap());
+        fs::read_dir(root.parent().unwrap())
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(&prefix))
+            })
+            .count()
     }
 
     #[test]
@@ -468,17 +575,18 @@ mod tests {
         let marker = root.join("keep");
         fs::write(&marker, "state").unwrap();
         assert!(matches!(
-            reset_unreadable_state(&root),
+            quarantine_unreadable_state(&root),
             Err(Error::StateBusy)
         ));
         drop(lease);
         let lock = private_lock(&root.join(".foks-rs.lock")).unwrap();
         try_lock(&lock, true).unwrap();
         assert!(matches!(
-            reset_unreadable_state(&root),
+            quarantine_unreadable_state(&root),
             Err(Error::StateBusy)
         ));
         assert!(marker.exists());
+        assert_eq!(quarantine_siblings(&root), 0);
     }
 
     #[cfg(unix)]
@@ -491,22 +599,23 @@ mod tests {
         let socket = root.join("foks-rs.sock");
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         assert!(matches!(
-            reset_unreadable_state(&root),
+            quarantine_unreadable_state(&root),
             Err(Error::StateBusy)
         ));
         drop(listener);
         fs::remove_file(socket).unwrap();
         let alias = temporary.path().join("alias");
         std::os::unix::fs::symlink(&root, &alias).unwrap();
-        assert!(reset_unreadable_state(&alias).is_err());
+        assert!(quarantine_unreadable_state(&alias).is_err());
         let guard = ClientStateMaintenanceGuard::acquire(std::slice::from_ref(&root)).unwrap();
         let locator = locator_path(&guard.base, &root);
         crate::create_private_config(&locator, b"pending relocation").unwrap();
         drop(guard);
-        let result = reset_unreadable_state(&root);
+        let result = quarantine_unreadable_state(&root);
         fs::remove_file(locator).unwrap();
         assert!(matches!(result, Err(Error::StateRecoveryRequired)));
         assert!(marker.exists());
+        assert_eq!(quarantine_siblings(&root), 0);
     }
 
     #[test]

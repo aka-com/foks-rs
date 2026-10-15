@@ -46,6 +46,13 @@ pub struct AgentTakeover {
 
 const MAX_STARTUP_TAKEOVERS: usize = 4;
 
+/// How long startup waits for a launched agent that is still running to bind
+/// its socket. An initialized agent reads the vault key from the system
+/// credential store before it binds, and that read can wait on a Keychain or
+/// Secret Service prompt, so the bound matches the 60-second request timeout
+/// the desktop passes to the agent.
+const AGENT_STARTUP_DEADLINE: Duration = Duration::from_secs(60);
+
 /// The socket selected for this process and any state that this desktop owns.
 ///
 /// An explicit argument or environment socket is an external trust boundary:
@@ -290,6 +297,13 @@ pub struct AgentHandle {
     /// The agent's answer to the most recent successful Hello: its versions
     /// and the capabilities the status DTO reports.
     last_hello: Mutex<Option<foks_agent_proto::HelloReply>>,
+    /// A launched agent that was still running when its startup wait ended.
+    /// The next start waits on it again instead of launching a second agent
+    /// against the same state.
+    startup_launch: Mutex<Option<process::ManagedAgentLaunch>>,
+    /// The wait bound for a launched agent; [`AGENT_STARTUP_DEADLINE`] except
+    /// in tests.
+    startup_deadline: Duration,
     #[cfg(test)]
     managed_endpoint_override: bool,
 }
@@ -342,6 +356,8 @@ impl AgentHandle {
             maintenance_readiness: Arc::new(safe_selected_root),
             startup_gate,
             last_hello: Mutex::new(None),
+            startup_launch: Mutex::new(None),
+            startup_deadline: AGENT_STARTUP_DEADLINE,
             #[cfg(test)]
             managed_endpoint_override: false,
         }

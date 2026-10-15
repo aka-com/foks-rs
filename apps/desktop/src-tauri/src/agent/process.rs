@@ -273,6 +273,22 @@ impl ManagedAgentLaunch {
         }
     }
 
+    /// Describes a launched agent that is still running but has not bound its
+    /// socket after `waited`, with any output it has written so far.
+    pub(super) fn startup_timeout_error(&mut self, waited: Duration) -> AgentError {
+        let mut message = format!(
+            "The local background service process {} is still running but has not created its socket after {} seconds. \
+             It may be waiting for access to the system credential store; check for a Keychain or Secret Service prompt.",
+            self.pid,
+            waited.as_secs()
+        );
+        if let Some(diagnostic) = self.diagnostic() {
+            message.push_str("\n\nAgent output:\n");
+            message.push_str(&diagnostic);
+        }
+        AgentError::new("agent-start-timeout", message, true)
+    }
+
     fn diagnostic(&mut self) -> Option<String> {
         use std::io::{Read as _, Seek as _, SeekFrom};
 
@@ -1085,9 +1101,15 @@ impl AgentHandle {
                 }
                 Err(_) => {}
             }
-            let mut launch = self.launch_unless_exiting(binary, state_dir)?;
-            let mut replaced = false;
-            for _ in 0..50 {
+            let mut launch = match self.take_running_startup_launch() {
+                Some(launch) => launch,
+                None => self.launch_unless_exiting(binary, state_dir)?,
+            };
+            // Wait as long as the launched process is alive, up to the
+            // deadline: an initialized agent may be held at a credential-store
+            // prompt before it binds.
+            let started = Instant::now();
+            loop {
                 std::thread::sleep(Duration::from_millis(100));
                 match self.probe_status() {
                     Ok(response) => {
@@ -1096,17 +1118,21 @@ impl AgentHandle {
                     }
                     Err(error) if error.code == "version-mismatch" => {
                         last_error = Some(error);
-                        replaced = true;
                         break;
                     }
-                    Err(error) => last_error = Some(error),
+                    Err(_) => {}
                 }
                 if let Some(error) = launch.early_exit_error() {
                     return Err(error);
                 }
-            }
-            if !replaced {
-                break;
+                if started.elapsed() >= self.startup_deadline {
+                    let error = launch.startup_timeout_error(started.elapsed());
+                    *self
+                        .startup_launch
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(launch);
+                    return Err(error);
+                }
             }
         }
         Err(last_error.unwrap_or_else(|| {
@@ -1116,6 +1142,33 @@ impl AgentHandle {
                 true,
             )
         }))
+    }
+
+    /// Returns the agent left running by a timed-out startup wait, if it has
+    /// not exited since.
+    fn take_running_startup_launch(&self) -> Option<ManagedAgentLaunch> {
+        let mut launch = self
+            .startup_launch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()?;
+        launch.early_exit_error().is_none().then_some(launch)
+    }
+
+    /// Reports whether an agent left running by a timed-out startup wait is
+    /// still alive.
+    pub(super) fn startup_launch_running(&self) -> bool {
+        let mut slot = self
+            .startup_launch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let running = slot
+            .as_mut()
+            .is_some_and(|launch| launch.early_exit_error().is_none());
+        if !running {
+            *slot = None;
+        }
+        running
     }
 
     pub(super) fn require_managed_endpoint(&self) -> Result<(), AgentError> {

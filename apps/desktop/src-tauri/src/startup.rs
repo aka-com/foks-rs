@@ -1,9 +1,11 @@
 //! Displays blocking native dialogs and exits on fatal startup errors.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tauri::Manager as _;
-use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{
+    DialogExt as _, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
+};
 
 use crate::{
     agent::{AgentError, AgentHandle},
@@ -218,53 +220,100 @@ pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
             if error.code == "agent-takeover-declined" {
                 std::process::exit(0);
             }
-            let body = if !socket.exists() {
-                missing_socket(socket, &error)
+            let (title, kind, body) = if error.code == "agent-start-timeout" {
+                (
+                    "Agent Still Starting",
+                    MessageDialogKind::Warning,
+                    starting_agent(socket, &error),
+                )
+            } else if !socket.exists() {
+                (
+                    "Agent Connection Failed",
+                    MessageDialogKind::Error,
+                    missing_socket(socket, &error),
+                )
             } else {
-                unreachable_agent(socket, &error)
+                (
+                    "Agent Connection Failed",
+                    MessageDialogKind::Error,
+                    unreachable_agent(socket, &error),
+                )
             };
-            if let Some(root) = agent.startup_reset_directory() {
-                let reset = app
-                    .dialog()
-                    .message(format!(
-                        "{body}\n\nYou can delete this device's local FOKS state and start again."
-                    ))
-                    .parent(&window)
-                    .kind(MessageDialogKind::Error)
-                    .title("Agent Connection Failed")
-                    .buttons(MessageDialogButtons::OkCancelCustom(
-                        "Review Reset…".into(),
-                        "Quit".into(),
-                    ))
-                    .blocking_show();
-                if !reset {
-                    quit_after_agent_startup_error(app, agent);
+            let body = format!("{body}{}", agent_log_line(agent));
+            let root = match startup_recovery(&error, agent.startup_reset_directory()) {
+                StartupRecovery::Retry => {
+                    let retry = app
+                        .dialog()
+                        .message(body)
+                        .parent(&window)
+                        .kind(kind)
+                        .title(title)
+                        .buttons(MessageDialogButtons::OkCancelCustom(
+                            TRY_AGAIN.into(),
+                            QUIT.into(),
+                        ))
+                        .blocking_show();
+                    if !retry {
+                        quit_after_agent_startup_error(app, agent);
+                    }
+                    continue;
                 }
-                let confirmed = app
-                    .dialog()
-                    .message(reset_warning(&root))
-                    .parent(&window)
-                    .kind(MessageDialogKind::Warning)
-                    .title("Delete Local FOKS State?")
-                    .buttons(MessageDialogButtons::OkCancelCustom(
-                        "Delete Local State and Continue".into(),
-                        "Cancel".into(),
-                    ))
-                    .blocking_show();
-                if !confirmed {
-                    quit_after_agent_startup_error(app, agent);
-                }
-                if let Err(error) = agent.reset_startup_state(&root) {
-                    let body = format!(
-                        "Could not finish deleting local state at {}.\n\n{}\n\n\
-                         Deletion may be incomplete. Close other FOKS clients and agents before trying again.",
-                        root.display(), error.message,
-                    );
-                    fatal_agent_startup(app, agent, "Local State Reset Failed", &body);
-                }
-                continue;
+                StartupRecovery::RetryOrReset(root) => root,
+            };
+            let choice = app
+                .dialog()
+                .message(format!(
+                    "{body}\n\nIf the agent output reports a locked or denied system credential store, \
+                     resolve that and choose Try Again. Otherwise you can move this device's local FOKS \
+                     state aside and start again."
+                ))
+                .parent(&window)
+                .kind(MessageDialogKind::Error)
+                .title(title)
+                .buttons(MessageDialogButtons::YesNoCancelCustom(
+                    TRY_AGAIN.into(),
+                    REVIEW_RESET.into(),
+                    QUIT.into(),
+                ))
+                .blocking_show_with_result();
+            match startup_choice(&choice) {
+                StartupChoice::Retry => continue,
+                StartupChoice::Reset => {}
+                StartupChoice::Quit => quit_after_agent_startup_error(app, agent),
             }
-            fatal_agent_startup(app, agent, "Agent Connection Failed", &body);
+            let confirmed = app
+                .dialog()
+                .message(reset_warning(&root))
+                .parent(&window)
+                .kind(MessageDialogKind::Warning)
+                .title("Move Local FOKS State Aside?")
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Move State and Continue".into(),
+                    "Cancel".into(),
+                ))
+                .blocking_show();
+            if !confirmed {
+                quit_after_agent_startup_error(app, agent);
+            }
+            match agent.reset_startup_state(&root) {
+                Ok(moved) => {
+                    app.dialog()
+                        .message(moved_state_message(&root, &moved))
+                        .parent(&window)
+                        .kind(MessageDialogKind::Info)
+                        .title("Local FOKS State Moved")
+                        .blocking_show();
+                }
+                Err(error) => {
+                    fatal_agent_startup(
+                        app,
+                        agent,
+                        "Local State Reset Failed",
+                        &reset_failure_message(&root, &error),
+                    );
+                }
+            }
+            continue;
         }
         break;
     }
@@ -273,13 +322,96 @@ pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
     offer_additional_agent_cleanup(app, agent);
 }
 
+const TRY_AGAIN: &str = "Try Again";
+const REVIEW_RESET: &str = "Review Reset…";
+const QUIT: &str = "Quit";
+
+/// The recovery a startup failure dialog offers besides Quit.
+#[derive(Debug, Eq, PartialEq)]
+enum StartupRecovery {
+    /// Try Again only. The failure does not show that the local state is
+    /// unreadable: the agent may still be starting, or never ran.
+    Retry,
+    /// Try Again, or move the state in this root aside. The launched agent
+    /// exited before it created its socket.
+    RetryOrReset(PathBuf),
+}
+
+fn startup_recovery(error: &AgentError, reset_root: Option<PathBuf>) -> StartupRecovery {
+    match reset_root {
+        Some(root) if error.code == "agent-start-failed" => StartupRecovery::RetryOrReset(root),
+        _ => StartupRecovery::Retry,
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum StartupChoice {
+    Retry,
+    Reset,
+    Quit,
+}
+
+/// Maps the three-button dialog's result. Platforms report either the custom
+/// label or the underlying button; anything else, including closing the
+/// dialog, quits.
+fn startup_choice(result: &MessageDialogResult) -> StartupChoice {
+    match result {
+        MessageDialogResult::Yes => StartupChoice::Retry,
+        MessageDialogResult::No => StartupChoice::Reset,
+        MessageDialogResult::Custom(label) if label == TRY_AGAIN => StartupChoice::Retry,
+        MessageDialogResult::Custom(label) if label == REVIEW_RESET => StartupChoice::Reset,
+        _ => StartupChoice::Quit,
+    }
+}
+
+/// Names the managed agent's log, which holds the full output of every launch.
+fn agent_log_line(agent: &AgentHandle) -> String {
+    let log = agent_state_directory(agent).join("agent.log");
+    if log.is_file() {
+        format!("\n\nAgent log: {}", log.display())
+    } else {
+        String::new()
+    }
+}
+
 fn reset_warning(root: &Path) -> String {
     format!(
-        "Permanently delete all local FOKS state in {}?\n\n\
-         This deletes local account keys, profiles, trust history, cached data, and unfinished operations for every server on this device.\n\n\
-         Server data is not deleted. You can permanently lose access to your accounts without another enrolled device, a recovery phrase for an enrolled backup, or a usable external backup. Your account passphrase alone cannot restore deleted keys.\n\n\
-         This cannot be undone. FOKS will restart its background service and open setup. Old system credential-store entries may remain; they will not be reused by the new state.",
+        "Move all local FOKS state in {} into a new directory beside it and start again?\n\n\
+         FOKS will restart its background service and open setup with empty local state. \
+         The moved directory keeps the local account keys, profiles, trust history, cached data, unfinished operations, and agent log for every server on this device. \
+         Nothing is deleted, system credential-store entries are left in place, and server data is not affected.\n\n\
+         To return to the previous state, quit FOKS and replace the contents of {} with the contents of the moved directory.\n\n\
+         The moved directory still contains local keys. If you delete it, you can permanently lose access to your accounts without another enrolled device, \
+         a recovery phrase for an enrolled backup, or a usable external backup. Your account passphrase alone cannot restore deleted keys.",
         root.display(),
+        root.display(),
+    )
+}
+
+fn moved_state_message(root: &Path, moved: &Path) -> String {
+    format!(
+        "The local FOKS state from {} was moved to {}.\n\n\
+         FOKS will now start with empty local state and open setup. \
+         To return to the previous state, quit FOKS and replace the contents of {} with the contents of {}.",
+        root.display(),
+        moved.display(),
+        root.display(),
+        moved.display(),
+    )
+}
+
+fn reset_failure_message(root: &Path, error: &AgentError) -> String {
+    let name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!(
+        "Could not move the local state at {} aside.\n\n{}\n\n\
+         Nothing was deleted. Entries already moved are in a directory beside it named {}.reset- followed by a timestamp. \
+         Close other FOKS clients and agents before trying again.",
+        root.display(),
+        error.message,
+        name,
     )
 }
 
@@ -295,7 +427,16 @@ fn takeover_message(socket: &Path, pid: u32, executable: &Path) -> String {
 fn missing_socket(socket: &Path, error: &AgentError) -> String {
     format!(
         "FOKS could not connect to the local background service at {}.\n\n\
-         {}\n\nVerify the client state and foks-agent configuration, then relaunch the application.",
+         {}\n\nVerify the client state and foks-agent configuration, then try again.",
+        socket.display(),
+        error.message
+    )
+}
+
+fn starting_agent(socket: &Path, error: &AgentError) -> String {
+    format!(
+        "FOKS is still waiting for the local background service at {} to start.\n\n\
+         {}\n\nAfter responding to any credential prompt, choose Try Again to keep waiting.",
         socket.display(),
         error.message
     )
@@ -339,19 +480,75 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reset_warning_explains_scope_loss_and_continuation() {
+    fn reset_warning_explains_scope_recovery_and_continuation() {
         let warning = reset_warning(Path::new("/private/foks-state"));
         for text in [
             "/private/foks-state",
+            "new directory beside it",
             "every server",
+            "Nothing is deleted",
+            "credential-store entries are left in place",
+            "replace the contents of /private/foks-state",
             "permanently lose access",
             "passphrase alone cannot restore",
-            "cannot be undone",
             "open setup",
-            "Server data is not deleted",
+            "server data is not affected",
         ] {
             assert!(warning.contains(text), "missing warning: {text}");
         }
+        assert!(!warning.contains("cannot be undone"));
+        let moved = moved_state_message(
+            Path::new("/private/foks-state"),
+            Path::new("/private/foks-state.reset-1700000000"),
+        );
+        assert!(moved.contains("moved to /private/foks-state.reset-1700000000"));
+        assert!(moved.contains("replace the contents of /private/foks-state with"));
+        let failure = reset_failure_message(
+            Path::new("/private/foks-state"),
+            &AgentError::new("agent-reset", "state is busy", false),
+        );
+        assert!(failure.contains("state is busy"));
+        assert!(failure.contains("Nothing was deleted"));
+        assert!(failure.contains("named foks-state.reset-"));
+    }
+
+    #[test]
+    fn startup_reset_is_offered_only_after_the_launched_agent_exited() {
+        let root = PathBuf::from("/private/foks-state");
+        let exited = AgentError::new("agent-start-failed", "exited (exit status: 1)", true);
+        let waiting = AgentError::new("agent-start-timeout", "still running", true);
+        let busy = AgentError::new("agent-state", "state is busy", false);
+        assert_eq!(
+            startup_recovery(&exited, Some(root.clone())),
+            StartupRecovery::RetryOrReset(root.clone())
+        );
+        assert_eq!(startup_recovery(&exited, None), StartupRecovery::Retry);
+        assert_eq!(
+            startup_recovery(&waiting, Some(root.clone())),
+            StartupRecovery::Retry
+        );
+        assert_eq!(startup_recovery(&busy, Some(root)), StartupRecovery::Retry);
+    }
+
+    #[test]
+    fn startup_choice_maps_labels_and_quits_on_anything_else() {
+        let custom = |label: &str| MessageDialogResult::Custom(label.to_owned());
+        assert_eq!(startup_choice(&custom(TRY_AGAIN)), StartupChoice::Retry);
+        assert_eq!(startup_choice(&custom(REVIEW_RESET)), StartupChoice::Reset);
+        assert_eq!(startup_choice(&custom(QUIT)), StartupChoice::Quit);
+        assert_eq!(
+            startup_choice(&MessageDialogResult::Yes),
+            StartupChoice::Retry
+        );
+        assert_eq!(
+            startup_choice(&MessageDialogResult::No),
+            StartupChoice::Reset
+        );
+        assert_eq!(
+            startup_choice(&MessageDialogResult::Cancel),
+            StartupChoice::Quit
+        );
+        assert_eq!(startup_choice(&custom("Other")), StartupChoice::Quit);
     }
 
     #[test]
@@ -448,6 +645,17 @@ mod tests {
         ));
         assert!(message.contains("unsupported client state version"));
         assert!(message.contains("Verify the client state and foks-agent configuration"));
+    }
+
+    #[test]
+    fn the_still_starting_message_asks_for_the_prompt_and_a_retry() {
+        let error = AgentError::new("agent-start-timeout", "process 42 is still running", true);
+        let message = starting_agent(Path::new("/run/user/1000/foks-rs/agent.sock"), &error);
+        assert!(message.contains(
+            "still waiting for the local background service at /run/user/1000/foks-rs/agent.sock"
+        ));
+        assert!(message.contains("process 42 is still running"));
+        assert!(message.contains("choose Try Again"));
     }
 
     #[test]

@@ -312,6 +312,87 @@ fn managed_launch_reports_only_bounded_output_from_the_failed_process() {
     assert!(!error.message.contains("bind failed"));
 }
 
+#[cfg(unix)]
+#[test]
+fn startup_keeps_waiting_on_a_running_agent_instead_of_launching_another() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            if let Some(pid) = *MANAGED_AGENT_PID.lock().unwrap() {
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
+            }
+        }
+    }
+
+    let temporary = tempfile::tempdir_in("/tmp").unwrap();
+    let fixture = temporary.path().join("takeover-agent");
+    let source = temporary.path().join("agent.c");
+    std::fs::write(
+        &source,
+        include_str!("../../../tests/fixtures/takeover-agent.c"),
+    )
+    .unwrap();
+    assert!(Command::new("cc")
+        .arg(format!(
+            "-DPROTOCOL_VERSION={}",
+            foks_agent_proto::PROTOCOL_VERSION
+        ))
+        .arg("-o")
+        .arg(&fixture)
+        .arg(&source)
+        .status()
+        .unwrap()
+        .success());
+    // Stands in for an agent held at a credential-store prompt: it records
+    // each launch, writes a line of output, and binds only after a delay.
+    let launches = temporary.path().join("launches");
+    let binary = temporary.path().join("foks-agent");
+    std::fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\necho launched >> '{}'\necho 'foks-agent: reading vault key' >&2\nsleep 1\nexec '{}' \"$@\"\n",
+            launches.display(),
+            fixture.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = temporary.path().join("agent.sock");
+    let mut handle = AgentHandle::new(socket.clone());
+    let _cleanup = Cleanup;
+
+    handle.startup_deadline = Duration::from_millis(300);
+    let error = handle
+        .start_with_binary(&binary, &|_| panic!("no takeover is involved"))
+        .unwrap_err();
+    assert_eq!(error.code, "agent-start-timeout");
+    assert!(error.retryable);
+    assert!(error.message.contains("still running"));
+    assert!(error.message.contains("Keychain or Secret Service prompt"));
+    assert!(error
+        .message
+        .contains("Agent output:\nfoks-agent: reading vault key"));
+    assert!(handle.startup_launch_running());
+    assert!(!socket.exists());
+
+    // Try Again waits on the same process rather than launching a second
+    // agent against the same state.
+    handle.startup_deadline = Duration::from_secs(10);
+    let response = handle
+        .start_with_binary(&binary, &|_| panic!("no takeover is involved"))
+        .unwrap();
+    assert_eq!(success_value(response).unwrap()["state"], "ready");
+    assert_eq!(
+        std::fs::read_to_string(&launches).unwrap().lines().count(),
+        1
+    );
+    assert!(!handle.startup_launch_running());
+}
+
 #[test]
 fn packaged_agent_discovery_matches_the_platform_bundle_layout() {
     #[cfg(target_os = "macos")]

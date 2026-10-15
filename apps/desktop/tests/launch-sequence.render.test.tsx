@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import { createElement } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
 
@@ -48,9 +48,10 @@ async function modules() {
   const { FIRST_PAINT_DEADLINE_MS } = (await vite.ssrLoadModule(
     '/src/app/app-bootstrap.ts',
   )) as typeof import('../src/app/app-bootstrap');
-  const { startingProgressDetail } = (await vite.ssrLoadModule(
-    '/src/app/blocking-shell.tsx',
-  )) as typeof import('../src/app/blocking-shell');
+  const { STARTING_PROMPT_HINT_MS, Takeover, startingProgressDetail } =
+    (await vite.ssrLoadModule(
+      '/src/app/blocking-shell.tsx',
+    )) as typeof import('../src/app/blocking-shell');
   const { FIXTURE } = (await vite.ssrLoadModule(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
@@ -62,7 +63,9 @@ async function modules() {
     FIRST_PAINT_DEADLINE_MS,
     FIXTURE,
     mockBridge,
+    STARTING_PROMPT_HINT_MS,
     startingProgressDetail,
+    Takeover,
   };
 }
 
@@ -477,5 +480,37 @@ test('launch discovers no teams and reads the whole catalog once', async () => {
     assert.equal(reads, 1);
   } finally {
     rendered.unmount();
+  }
+});
+
+test('a slow agent start names the credential prompt it may be waiting on', async () => {
+  const { STARTING_PROMPT_HINT_MS, Takeover, startingProgressDetail } =
+    await modules();
+  const prompt = /Keychain or Secret Service prompt/;
+  assert.equal(
+    startingProgressDetail(undefined),
+    'Startup usually takes a few seconds.',
+  );
+  assert.match(startingProgressDetail(undefined, true), prompt);
+  // Catalog progress means the agent is serving; the hint no longer applies.
+  assert.doesNotMatch(
+    startingProgressDetail({ ready: 1, total: 4 }, true),
+    prompt,
+  );
+
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const rendered = ui.render(
+    createElement(Takeover, { block: { kind: 'starting' } }),
+  );
+  try {
+    const text = (): string => document.body.textContent ?? '';
+    assert.match(text(), /Startup usually takes a few seconds\./);
+    ui.act(() => mock.timers.tick(STARTING_PROMPT_HINT_MS - 1));
+    assert.doesNotMatch(text(), prompt);
+    ui.act(() => mock.timers.tick(1));
+    assert.match(text(), prompt);
+  } finally {
+    rendered.unmount();
+    mock.timers.reset();
   }
 });
