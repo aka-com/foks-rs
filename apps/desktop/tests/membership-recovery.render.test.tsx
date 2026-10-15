@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import type { Bridge, PendingOperation } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -23,6 +24,7 @@ for (const action of ['add', 'demote', 'promote'] as const) {
   test(`exposes and completes ${action} ${kind} after an interrupted change without reopening settings`, async () => {
     const { GroupSettingsScreen } =
       await import('../src/screens/groups-screen');
+    const TestShell = await loadTestShell();
     const { ToastProvider, ToastController } = await import('../kit/toasts');
     const { OverlayProvider } = await import('../kit/overlay-primitives');
     const { FIXTURE } = await import('../src/fixture');
@@ -82,18 +84,26 @@ for (const action of ['add', 'demote', 'promote'] as const) {
         portalRoot,
         children: createElement(ToastProvider, {
           controller: new ToastController(),
-          children: createElement(GroupSettingsScreen, {
+          children: createElement(TestShell, {
             snapshot: FIXTURE,
             bridge,
-            location: { kind: 'group-settings', ref: store.id, tab: 'people' },
-            onNavigate: () => {},
-            onApplied: async () => {},
-            onError: (error: unknown) => {
-              throw error;
-            },
-            onMutationError: async () => {
-              reconciled = true;
-            },
+            children: createElement(GroupSettingsScreen, {
+              snapshot: FIXTURE,
+              bridge,
+              location: {
+                kind: 'group-settings',
+                ref: store.id,
+                tab: 'people',
+              },
+              onNavigate: () => {},
+              onApplied: async () => {},
+              onError: (error: unknown) => {
+                throw error;
+              },
+              onMutationError: async () => {
+                reconciled = true;
+              },
+            }),
           }),
         }),
       }),
@@ -151,6 +161,7 @@ for (const action of ['add', 'demote', 'promote'] as const) {
 
 test('a failed pending-operation query reports one error and renders no recovery banner', async () => {
   const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
+  const TestShell = await loadTestShell();
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { FIXTURE } = await import('../src/fixture');
@@ -178,16 +189,20 @@ test('a failed pending-operation query reports one error and renders no recovery
       portalRoot,
       children: createElement(ToastProvider, {
         controller: new ToastController(),
-        children: createElement(GroupSettingsScreen, {
+        children: createElement(TestShell, {
           snapshot: FIXTURE,
           bridge,
-          location: { kind: 'group-settings', ref: store.id, tab: 'people' },
-          onNavigate: () => {},
-          onApplied: async () => {},
-          onError: (error: unknown) => {
-            reported.push(error);
-          },
-          onMutationError: async () => {},
+          children: createElement(GroupSettingsScreen, {
+            snapshot: FIXTURE,
+            bridge,
+            location: { kind: 'group-settings', ref: store.id, tab: 'people' },
+            onNavigate: () => {},
+            onApplied: async () => {},
+            onError: (error: unknown) => {
+              reported.push(error);
+            },
+            onMutationError: async () => {},
+          }),
         }),
       }),
     }),

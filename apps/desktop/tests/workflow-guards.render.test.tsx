@@ -13,6 +13,7 @@ import type { Bridge, GoProfileCandidate } from '../src/bridge';
 import type { GuardVerdict, Location, LocationStore } from '../src/location';
 import type { TeamStore, AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -201,16 +202,19 @@ async function groupSheet(
   bridge: Bridge = h.bridge(),
 ) {
   const { GroupSheet } = await import('../src/screens/groups-screen');
+  const TestShell = await loadTestShell();
   return h.mount(
-    createElement(GroupSheet, {
+    createElement(TestShell, {
       snapshot: h.fixture,
       bridge,
-      store: h.group,
-      sheet,
-      target: null,
-      onClose,
-      onApplied: async () => {},
-      onMutationError: async () => {},
+      children: createElement(GroupSheet, {
+        store: h.group,
+        sheet,
+        target: null,
+        onClose,
+        onApplied: async () => {},
+        onMutationError: async () => {},
+      }),
     }),
     true,
   );

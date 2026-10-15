@@ -15,6 +15,7 @@ import { createElement, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 import type { Bridge } from '../src/bridge';
 import { CatalogCoordinator } from '../src/catalog-coordinator';
 import type { Location } from '../src/location';
@@ -96,6 +97,7 @@ async function teams(
   options: TeamsOptions = {},
 ) {
   const { TeamsScreen } = await import('../src/screens/teams-screen');
+  const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock-bridge');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
@@ -117,28 +119,32 @@ async function teams(
   // the harness there, the way the shell's location store would.
   const Page = (): ReactNode => {
     const [location, setLocation] = useState(initial);
-    return createElement(TeamsScreen, {
+    return createElement(TestShell, {
       snapshot,
       bridge,
-      location,
-      scene: options.scene ?? 'groups',
-      onNavigate: (
-        next: Location,
-        navigateOptions?: { replace?: boolean; force?: boolean },
-      ) => {
-        onNavigate(next, navigateOptions);
-        if (options.follow && next.kind === 'teams') setLocation(next);
-      },
-      onRefresh: async () => {},
-      onRefreshSnapshot: options.refresh ?? (async () => snapshot),
-      onError: (error: unknown) => {
-        throw error;
-      },
-      onMutationError:
-        options.mutationError ??
-        (async (error: unknown) => {
+      children: createElement(TeamsScreen, {
+        snapshot,
+        bridge,
+        location,
+        scene: options.scene ?? 'groups',
+        onNavigate: (
+          next: Location,
+          navigateOptions?: { replace?: boolean; force?: boolean },
+        ) => {
+          onNavigate(next, navigateOptions);
+          if (options.follow && next.kind === 'teams') setLocation(next);
+        },
+        onRefresh: async () => {},
+        onRefreshSnapshot: options.refresh ?? (async () => snapshot),
+        onError: (error: unknown) => {
           throw error;
-        }),
+        },
+        onMutationError:
+          options.mutationError ??
+          (async (error: unknown) => {
+            throw error;
+          }),
+      }),
     });
   };
   const rendered = ui.render(

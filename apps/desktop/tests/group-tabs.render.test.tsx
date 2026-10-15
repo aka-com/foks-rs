@@ -12,6 +12,7 @@ import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { createElement, useState } from 'react';
 
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 import type { Bridge } from '../src/bridge';
 import type { GroupSettingsTab, Location } from '../src/location';
 import type { AgentSnapshot } from '../src/model';
@@ -59,6 +60,7 @@ async function group(
   } = {},
 ) {
   const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
+  const TestShell = await loadTestShell();
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { mockBridge } = await import('../src/mock-bridge');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
@@ -73,17 +75,21 @@ async function group(
     const [mounted, setMounted] = useState(true);
     setPageMounted = setMounted;
     return mounted
-      ? createElement(GroupSettingsScreen, {
+      ? createElement(TestShell, {
           snapshot,
           bridge,
-          location: { kind: 'group-settings', ref, tab },
-          ...(options.accessNow ? { accessNow: options.accessNow } : {}),
-          onNavigate: options.onNavigate ?? (() => {}),
-          onApplied: options.onApplied ?? (async () => {}),
-          onError: (error: unknown) => {
-            throw error;
-          },
-          onMutationError: options.onMutationError ?? (async () => {}),
+          children: createElement(GroupSettingsScreen, {
+            snapshot,
+            bridge,
+            location: { kind: 'group-settings', ref, tab },
+            ...(options.accessNow ? { accessNow: options.accessNow } : {}),
+            onNavigate: options.onNavigate ?? (() => {}),
+            onApplied: options.onApplied ?? (async () => {}),
+            onError: (error: unknown) => {
+              throw error;
+            },
+            onMutationError: options.onMutationError ?? (async () => {}),
+          }),
         })
       : createElement('p', null, 'Elsewhere');
   }

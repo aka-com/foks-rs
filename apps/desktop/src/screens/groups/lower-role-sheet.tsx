@@ -36,16 +36,17 @@ import {
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
 import { useToast } from '../../../kit/toasts';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
 
 export function LowerRoleSheet({
-  snapshot,
-  bridge,
   store,
   target,
   onClose,
   onApplied,
   onMutationError,
 }: GroupSheetBaseProps & { target: Party | null }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const { bridge } = useShellServices();
   const [demotion, setDemotion] = useState<RoleDto | null>(() =>
     target ? demotionFor(target) : null,
   );

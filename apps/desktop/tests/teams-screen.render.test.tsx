@@ -19,6 +19,7 @@ import { createElement } from 'react';
 import type { ReactNode } from 'react';
 
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 import type { Location, LocationStore, NavigateOptions } from '../src/location';
 
 installDom({
@@ -43,6 +44,7 @@ async function setup(
 ): Promise<{ store: LocationStore }> {
   const locations = await import('../src/location');
   const { TeamsScreen } = await import('../src/screens/teams-screen');
+  const TestShell = await loadTestShell();
   const { ScreenErrorBoundary, screenBoundaryKey, screenIdentity } =
     await import('../src/app/screen-error-boundary');
   const { NavigationGuardProvider } = await import('../src/navigation-guard');
@@ -74,21 +76,25 @@ async function setup(
               ? createElement(ScreenErrorBoundary, {
                   key: screenBoundaryKey(state.location),
                   identity: screenIdentity(state.location),
-                  children: createElement(TeamsScreen, {
+                  children: createElement(TestShell, {
                     snapshot,
                     bridge,
-                    location: state.location,
-                    scene,
-                    onNavigate: (next: Location, options?: NavigateOptions) =>
-                      store.navigate(next, options),
-                    onRefresh: async () => {},
-                    onRefreshSnapshot: async () => snapshot,
-                    onError: (error: unknown) => {
-                      throw error;
-                    },
-                    onMutationError: async (error: unknown) => {
-                      throw error;
-                    },
+                    children: createElement(TeamsScreen, {
+                      snapshot,
+                      bridge,
+                      location: state.location,
+                      scene,
+                      onNavigate: (next: Location, options?: NavigateOptions) =>
+                        store.navigate(next, options),
+                      onRefresh: async () => {},
+                      onRefreshSnapshot: async () => snapshot,
+                      onError: (error: unknown) => {
+                        throw error;
+                      },
+                      onMutationError: async (error: unknown) => {
+                        throw error;
+                      },
+                    }),
                   }),
                 })
               : createElement('p', null, 'Elsewhere'),

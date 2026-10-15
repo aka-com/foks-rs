@@ -29,16 +29,17 @@ import {
   VIS_MAX,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
 
 export function RaiseRoleSheet({
-  snapshot,
-  bridge,
   store,
   target,
   onClose,
   onApplied,
   onMutationError,
 }: GroupSheetBaseProps & { target: Party | null }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const { bridge } = useShellServices();
   const current = target ? parseRole(target.destination_role) : null;
   const mine = partiesOf(snapshot, store.id).find(
     (party) => party.label === 'you',

@@ -1904,8 +1904,6 @@ export function GroupSettingsScreen({
               // Remount when the sheet changes to reset its visibility band,
               // selected role, and validation errors.
               key={sheet}
-              snapshot={snapshot}
-              bridge={bridge}
               store={store}
               sheet={sheet}
               target={targetParty}

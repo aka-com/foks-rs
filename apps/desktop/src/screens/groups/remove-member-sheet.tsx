@@ -22,16 +22,17 @@ import {
   useSheetWrite,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
 
 export function RemoveMemberSheet({
-  snapshot,
-  bridge,
   store,
   target,
   onClose,
   onApplied,
   onMutationError,
 }: GroupSheetBaseProps & { target: Party | null }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const { bridge } = useShellServices();
   const { busy, write } = useSheetWrite(onApplied, onClose);
   const toasts = useToast();
   const requiredFailure = groupDetailFailure(snapshot, store.id, 'roster');

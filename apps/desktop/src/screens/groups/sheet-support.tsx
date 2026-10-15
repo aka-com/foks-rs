@@ -3,7 +3,7 @@ export { serverTeamName, teamAliasOf } from '../../name-normalization';
 
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { Bridge, RoleDto } from '../../bridge';
+import type { RoleDto } from '../../bridge';
 import { Button, Chip, InsetRow, Notice } from '../../components';
 import {
   actionableGroupMember,
@@ -186,10 +186,11 @@ export interface AppliedOptions {
   profile?: string;
 }
 
-/** Props shared by all team-management sheets. */
+/**
+ * Props shared by all team-management sheets. They read the snapshot and the
+ * bridge from the shell services.
+ */
 export interface GroupSheetBaseProps {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   store: Store;
   onClose: () => void;
   onApplied: (message: string, options?: AppliedOptions) => Promise<void>;

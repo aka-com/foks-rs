@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 import type { GroupSheetKind } from '../src/screens/groups-screen';
 import type { Party } from '../src/model';
 
@@ -25,6 +26,7 @@ async function sheet(kind: GroupSheetKind, target: string | null = null) {
   const { FIXTURE } = await import('../src/fixture');
   const { mockBridge } = await import('../src/mock-bridge');
   const { partiesOf } = await import('../src/model');
+  const TestShell = await loadTestShell();
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const store = FIXTURE.stores.find((entry) => entry.id === 'team:eng');
@@ -43,15 +45,17 @@ async function sheet(kind: GroupSheetKind, target: string | null = null) {
       portalRoot,
       children: createElement(ToastProvider, {
         controller: new ToastController(),
-        children: createElement(GroupSheet, {
+        children: createElement(TestShell, {
           snapshot: FIXTURE,
           bridge: mockBridge(FIXTURE),
-          store,
-          sheet: kind,
-          target: party,
-          onClose: () => {},
-          onApplied: async () => {},
-          onMutationError: async () => {},
+          children: createElement(GroupSheet, {
+            store,
+            sheet: kind,
+            target: party,
+            onClose: () => {},
+            onApplied: async () => {},
+            onMutationError: async () => {},
+          }),
         }),
       }),
     }),

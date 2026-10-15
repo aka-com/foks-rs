@@ -31,10 +31,9 @@ import {
   VisibilityStepper,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
 
 export function AddPersonSheet({
-  snapshot,
-  bridge,
   store,
   onClose,
   onInvite,
@@ -44,6 +43,8 @@ export function AddPersonSheet({
   /** Opens the invitation flow for a user without an account. */
   onInvite?: () => void;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const { bridge } = useShellServices();
   const [username, setUsername] = useTabSheetState('group.username', '');
   const [visibility, setVisibility] = useTabSheetState('group.visibility', 0);
   const [role, setRole] = useTabSheetState<RoleDto>('group.role', {

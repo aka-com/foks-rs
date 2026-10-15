@@ -14,6 +14,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 import type { Bridge, PendingOperation } from '../src/bridge';
 import type { AgentSnapshot } from '../src/model';
 
@@ -43,7 +44,9 @@ async function group(
   tab: 'people' | 'settings' = 'people',
 ) {
   const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
+  const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock-bridge');
+  const bridge = { ...mockBridge(snapshot), ...overrides };
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
@@ -54,16 +57,20 @@ async function group(
       portalRoot,
       children: createElement(ToastProvider, {
         controller: new ToastController(),
-        children: createElement(GroupSettingsScreen, {
+        children: createElement(TestShell, {
           snapshot,
-          bridge: { ...mockBridge(snapshot), ...overrides },
-          location: { kind: 'group-settings', ref, tab },
-          onNavigate: () => {},
-          onApplied: async () => {},
-          onError: (error: unknown) => {
-            throw error;
-          },
-          onMutationError: async () => {},
+          bridge,
+          children: createElement(GroupSettingsScreen, {
+            snapshot,
+            bridge,
+            location: { kind: 'group-settings', ref, tab },
+            onNavigate: () => {},
+            onApplied: async () => {},
+            onError: (error: unknown) => {
+              throw error;
+            },
+            onMutationError: async () => {},
+          }),
         }),
       }),
     }),

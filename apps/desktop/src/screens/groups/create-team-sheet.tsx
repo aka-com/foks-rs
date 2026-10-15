@@ -26,17 +26,18 @@ import {
   useSheetWrite,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
 
 type Kind = 'named' | 'adhoc';
 
 export function CreateTeamSheet({
-  snapshot,
-  bridge,
   store,
   onClose,
   onApplied,
   onMutationError,
 }: GroupSheetBaseProps): ReactNode {
+  const snapshot = useShellSnapshot();
+  const { bridge } = useShellServices();
   const [name, setName] = useTabSheetState('group.name', '');
   const [kind, setKind] = useTabSheetState<Kind>('group.createKind', 'named');
   const creationAccounts = snapshot.stores.filter(

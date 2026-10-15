@@ -84,23 +84,29 @@ async function teamPage(
   } = {},
 ) {
   const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
+  const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock-bridge');
+  const bridge = { ...mockBridge(snapshot), ...overrides };
   const rendered = ui.render(
     await providers(
-      createElement(GroupSettingsScreen, {
+      createElement(TestShell, {
         snapshot,
-        bridge: { ...mockBridge(snapshot), ...overrides },
-        location: { kind: 'group-settings', ref, tab },
-        onNavigate: () => {},
-        onApplied: async () => {},
-        onError: (error: unknown) => {
-          throw error;
-        },
-        onMutationError: async (error: unknown) => {
-          if (!failures) throw error;
-          failures.push(error);
-        },
-        onOpenItem: (item: Item) => opened.push(item),
+        bridge,
+        children: createElement(GroupSettingsScreen, {
+          snapshot,
+          bridge,
+          location: { kind: 'group-settings', ref, tab },
+          onNavigate: () => {},
+          onApplied: async () => {},
+          onError: (error: unknown) => {
+            throw error;
+          },
+          onMutationError: async (error: unknown) => {
+            if (!failures) throw error;
+            failures.push(error);
+          },
+          onOpenItem: (item: Item) => opened.push(item),
+        }),
       }),
     ),
   );
@@ -320,6 +326,7 @@ test('lowering a role lists only the items the new role no longer admits', async
   const snapshot = await fixture();
   const { GroupSheet } = await import('../src/screens/groups-screen');
   const { mockBridge } = await import('../src/mock-bridge');
+  const TestShell = await loadTestShell();
   const store = snapshot.stores.find((entry) => entry.id === 'team:eng');
   assert.ok(store);
   const priya = snapshot.parties.find(
@@ -328,17 +335,19 @@ test('lowering a role lists only the items the new role no longer admits', async
   assert.ok(priya);
   const rendered = ui.render(
     await providers(
-      createElement(GroupSheet, {
+      createElement(TestShell, {
         snapshot,
         bridge: mockBridge(snapshot),
-        store,
-        sheet: 'demote',
-        target: priya,
-        onClose: () => {},
-        onApplied: async () => {},
-        onMutationError: async (error: unknown) => {
-          throw error;
-        },
+        children: createElement(GroupSheet, {
+          store,
+          sheet: 'demote',
+          target: priya,
+          onClose: () => {},
+          onApplied: async () => {},
+          onMutationError: async (error: unknown) => {
+            throw error;
+          },
+        }),
       }),
     ),
   );

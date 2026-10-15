@@ -41,15 +41,16 @@ import {
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
 import { useToast } from '../../../kit/toasts';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
 
 export function AddTeamSheet({
-  snapshot,
-  bridge,
   store,
   onClose,
   onApplied,
   onMutationError,
 }: GroupSheetBaseProps): ReactNode {
+  const snapshot = useShellSnapshot();
+  const { bridge } = useShellServices();
   const [visibility, setVisibility] = useTabSheetState('group.visibility', 0);
   const remotes = snapshot.stores.filter(
     (candidate): candidate is Extract<Store, { kind: 'team' }> =>

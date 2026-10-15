@@ -778,8 +778,6 @@ export function TeamsScreen({
           // Each half of the add sheet answers for itself: the band and the
           // role given on one are not carried into the other.
           key={sheet.kind}
-          snapshot={snapshot}
-          bridge={bridge}
           store={sheet.store}
           sheet={sheet.kind}
           target={null}
