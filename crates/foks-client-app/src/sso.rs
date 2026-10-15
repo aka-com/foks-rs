@@ -75,12 +75,11 @@ fn apply_service_result<T>(report: &mut SsoReport, result: foks_client::Result<T
     }
 }
 fn pending_intent(p: &PendingSignup) -> Result<SsoIntent> {
-    let mut uid =
-        derive_shared_verify_key(&SecretSeed::new(p.puk_seed), ENTITY_PUK_VERIFY)?.into_bytes();
+    let mut uid = derive_shared_verify_key(&p.puk_seed.seed(), ENTITY_PUK_VERIFY)?.into_bytes();
     uid[0] = ENTITY_USER;
     Ok(SsoIntent {
         uid: EntityId::from_bytes(uid)?,
-        device: derive_device_public(&SecretSeed::new(p.device_seed))?.id,
+        device: derive_device_public(&p.device_seed.seed())?.id,
         purpose: foks_proto::SsoPurpose::Signup,
     })
 }
@@ -377,7 +376,7 @@ impl CheckedProfileSession<'_> {
             let auth = self.client.authorize_sso_signup(
                 &host,
                 id,
-                SsoSigningKey::Software(&SecretSeed::new(pending.device_seed)),
+                SsoSigningKey::Software(&pending.device_seed.seed()),
                 http,
                 &mut protected,
             )?;

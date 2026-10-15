@@ -36,10 +36,9 @@ impl CheckedProfileSession<'_> {
             uid: uid.as_bytes().to_vec(),
             destination: destination.as_str().into(),
         };
-        vault.store.put(
-            &policy_key(alias),
-            &Zeroizing::new(serde_json::to_vec(&policy)?),
-        )?;
+        vault
+            .store
+            .put(&policy_key(alias), &encode_private_json(&policy)?)?;
         Ok(())
     }
     pub fn web_admin_policy(
@@ -177,10 +176,8 @@ mod tests {
             let raw = v.store.get(&policy_key("work"))?;
             let mut p: Policy = serde_json::from_slice(&raw)?;
             p.uid[1] ^= 1;
-            v.store.put(
-                &policy_key("work"),
-                &Zeroizing::new(serde_json::to_vec(&p)?),
-            )?;
+            v.store
+                .put(&policy_key("work"), &encode_private_json(&p)?)?;
             assert!(matches!(
                 s.web_admin_policy("work", v),
                 Err(Error::WebAdmin(foks_client::WebAdminError::WrongAccount))

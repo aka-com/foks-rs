@@ -1,4 +1,4 @@
-use crate::{ClientCredentials, CredentialBackend, Error, Result};
+use crate::{encode_private_json, ClientCredentials, CredentialBackend, Error, Result};
 use foks_keystore::{EncryptedFileSecretStore, SecretStore};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -151,11 +151,7 @@ impl LocalChatIntentStore {
                 "legacy saved message identity changed",
             ));
         }
-        let input = Zeroizing::new(serde_json::to_vec(&(
-            &self._credentials.state_id,
-            key,
-            &record,
-        ))?);
+        let input = encode_private_json(&(&self._credentials.state_id, key, &record))?;
         let source = crate::hex(&foks_crypto::capability_mac(
             self.source_key.as_ref(),
             0x758c_e491_025a_d366,
@@ -291,11 +287,11 @@ impl LocalChatIntentStore {
                 "saved chat intent capacity reached; recover existing messages first",
             ));
         }
-        let bytes = Zeroizing::new(serde_json::to_vec(&Record {
+        let bytes = encode_private_json(&Record {
             profile: profile.to_owned(),
             binding: binding.to_vec(),
             intent: intent.clone(),
-        })?);
+        })?;
         self.store.put(&key, &bytes)?;
         Ok(())
     }

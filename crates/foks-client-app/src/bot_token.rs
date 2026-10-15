@@ -54,10 +54,9 @@ fn enrollment_key(id: &[u8; 16]) -> String {
 }
 impl PendingBot {
     fn save(&self, vault: &mut AccountVault<'_>) -> Result<()> {
-        vault.store.put(
-            &enrollment_key(&self.id),
-            &Zeroizing::new(serde_json::to_vec(self)?),
-        )?;
+        vault
+            .store
+            .put(&enrollment_key(&self.id), &encode_private_json(self)?)?;
         Ok(())
     }
     fn load(

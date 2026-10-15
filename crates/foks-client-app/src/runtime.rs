@@ -19,7 +19,7 @@ use serde::Serialize;
 use crate::team::{StoredTeamPtkRotation, StoredTeamRekey, StoredTeamRekeyChange, StoredTeamRole};
 use crate::{
     derive_mutation_key, hex, now_microseconds, random_array, AccountVault, Capability,
-    CheckedProfileSession, Error, ProfilePaths, Result,
+    CheckedProfileSession, Error, ProfilePaths, Result, SecretArray,
 };
 
 /// The durable identities of the refresh jobs a profile registers for each of
@@ -2596,7 +2596,7 @@ impl CheckedProfileSession<'_> {
                 .map(|key| {
                     Ok(StoredTeamPtkRotation {
                         role: StoredTeamRole::from_role(key.role),
-                        seed: random_array()?,
+                        seed: SecretArray::random()?,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -2744,7 +2744,7 @@ impl CheckedProfileSession<'_> {
         let seeds = pending
             .rotations
             .iter()
-            .map(|rotation| foks_proto::SecretSeed::new(rotation.seed))
+            .map(|rotation| rotation.seed.seed())
             .collect::<Vec<_>>();
         let rotations = pending
             .rotations
@@ -2834,7 +2834,7 @@ impl CheckedProfileSession<'_> {
         let seeds = pending
             .rotations
             .iter()
-            .map(|rotation| foks_proto::SecretSeed::new(rotation.seed))
+            .map(|rotation| rotation.seed.seed())
             .collect::<Vec<_>>();
         let rotations = pending
             .rotations
@@ -2948,7 +2948,7 @@ impl CheckedProfileSession<'_> {
         let seeds = pending
             .rotations
             .iter()
-            .map(|rotation| foks_proto::SecretSeed::new(rotation.seed))
+            .map(|rotation| rotation.seed.seed())
             .collect::<Vec<_>>();
         let rotations = pending
             .rotations

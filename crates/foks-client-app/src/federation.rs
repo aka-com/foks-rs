@@ -680,10 +680,11 @@ impl CheckedProfileSession<'_> {
                         "federated membership binding cannot be repurposed",
                     ));
                 }
-                stored.removal_key
+                stored.removal_key.seed()
             }
             None => {
-                let removal_key = random_array()?;
+                let removal_key = SecretArray::<32>::random()?;
+                let seed = removal_key.seed();
                 local_team
                     .federated_members
                     .push(super::team::StoredFederatedMembership {
@@ -697,7 +698,7 @@ impl CheckedProfileSession<'_> {
                         active: false,
                     });
                 local_vault.put_team(&local_team)?;
-                removal_key
+                seed
             }
         };
 
@@ -706,7 +707,7 @@ impl CheckedProfileSession<'_> {
             &local_team_id,
             remote_host.host_id(),
             &remote_team_id,
-            &removal_key,
+            removal_key.as_bytes(),
         )?;
         let mut local_mutations = EncryptedFileMutationStore::open(
             &self.paths.protected_mutations,
@@ -716,7 +717,6 @@ impl CheckedProfileSession<'_> {
             &remote.paths.protected_mutations,
             derive_mutation_key(master_key),
         )?;
-        let removal_key = SecretSeed::new(removal_key);
         let request = foks_client::AddFederatedTeamMemberRequest {
             remote_host: &remote_host,
             remote_credential: &remote_account.credential,
@@ -960,7 +960,7 @@ impl CheckedProfileSession<'_> {
                     )
                     .into());
                 }
-                let removal_key = SecretSeed::new(binding.removal_key);
+                let removal_key = binding.removal_key.seed();
                 let selector = foks_client::TeamMemberSelector {
                     party: &requested_team,
                     host: Some(&requested_host),
@@ -1028,14 +1028,14 @@ impl CheckedProfileSession<'_> {
                         &context.team_id,
                         &requested_host,
                         &requested_team,
-                        &binding.removal_key,
+                        binding.removal_key.as_bytes(),
                     )?,
                     rotations: roles
                         .iter()
                         .zip(&seeds)
                         .map(|(role, seed)| super::team::StoredTeamPtkRotation {
                             role: super::team::StoredTeamRole::from_role(*role),
-                            seed: *seed.as_bytes(),
+                            seed: SecretArray::from_seed(seed),
                         })
                         .collect(),
                 };
@@ -1061,7 +1061,7 @@ impl CheckedProfileSession<'_> {
         let seeds = pending
             .rotations
             .iter()
-            .map(|rotation| SecretSeed::new(rotation.seed))
+            .map(|rotation| rotation.seed.seed())
             .collect::<Vec<_>>();
         let rotations = pending
             .rotations
@@ -1124,7 +1124,7 @@ impl CheckedProfileSession<'_> {
                 .ok_or(Error::InvalidAccount(
                     "pending federation expulsion lost its protected removal key",
                 ))?;
-            let removal_key = SecretSeed::new(binding.removal_key);
+            let removal_key = binding.removal_key.seed();
             if foks_crypto::team_removal_key_commitment(&removal_key)?
                 != pending.removal_key_commitment
             {
@@ -2749,7 +2749,7 @@ impl CheckedProfileSession<'_> {
                     &local_team,
                     &remote_host,
                     &remote_team,
-                    &member.removal_key,
+                    member.removal_key.as_bytes(),
                 )?;
                 if candidate != job.job_id {
                     continue;

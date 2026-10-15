@@ -73,7 +73,7 @@ impl NativeManifestStore {
         {
             return Err(Error::InvalidConfig("native client manifest is invalid"));
         }
-        let bytes = Zeroizing::new(serde_json::to_vec(self)?);
+        let bytes = encode_private_json(self)?;
         if bytes.len() > MAXIMUM_NATIVE_MANIFEST_BYTES {
             return Err(Error::InvalidConfig("native client manifest is too large"));
         }

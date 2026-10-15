@@ -58,6 +58,7 @@ use foks_proto::{
     EntityId, InviteCode, KvNodeId, KvNodeType, Role, SecretSeed, ENTITY_PUK_VERIFY, ENTITY_USER,
 };
 use rustls::pki_types::CertificateDer;
+use secret_record::{encode_private_json, SecretArray};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
@@ -257,6 +258,7 @@ pub use chat::{chat_submission, ChatChannelInput, ChatMessageInput};
 mod checkpoint;
 mod kv;
 mod registry;
+mod secret_record;
 mod team;
 
 pub use account::{
