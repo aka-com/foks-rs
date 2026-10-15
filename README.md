@@ -91,7 +91,8 @@ ignore and skip entries for root-only crates are unused in the fuzz graph.
 
 Dependencies between workspace crates follow the layers in
 `tools/crate-layers.toml`, described in Appendix D of the book. The client and
-server gates run the check; run it and its tests directly with:
+server gates run the check, so both gates need Python 3.11 or newer (for
+`tomllib`); run it and its tests directly with:
 
 ```sh
 python3 scripts/check-crate-layers.py

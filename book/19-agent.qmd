@@ -7,13 +7,13 @@ own, and each would then need to coordinate with the others over shared
 files and locks. `foks-rs` instead runs one long-lived process, the
 *agent*, that owns the keys, the database locks, and the network sessions,
 and that the other three reach over a local socket. (The command-line tool
-predates the agent: its MCP, SSO, retention, invitation, web-administration,
-bot-token and rename commands use the socket, while its other commands still
-open the client state in-process; [Appendix D](appendix-d-crate-map.qmd)
-lists the dependency exceptions.) This chapter is about
-that process: how it protects its socket, how it bounds its own work, how
-it distinguishes evidence from cache, and how it makes operations safe to
-interrupt and resume.
+predates the agent: its account admin, bot, rename and sync commands, team
+invitations, and its MCP, SSO and retention commands use the socket, while
+its other commands still open the client state in-process;
+[Appendix D](appendix-d-crate-map.qmd) lists the dependency exceptions.)
+This chapter is about that process: how it protects its socket, how it
+bounds its own work, how it distinguishes evidence from cache, and how it
+makes operations safe to interrupt and resume.
 
 ## Why a daemon
 

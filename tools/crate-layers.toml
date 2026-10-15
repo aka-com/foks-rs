@@ -11,8 +11,9 @@
 #
 # An exception names the Rust source files (`sites`, repository-relative glob
 # patterns) that may use the dependency's crate. A source file in the
-# depending package that names the crate outside a line comment and matches no
-# site fails the check, so new uses of an exceptional edge are reviewed here.
+# depending package that names the crate on a line that does not begin with
+# `//` and matches no site fails the check, so new uses of an exceptional edge
+# are reviewed here.
 # An exception for an edge that no longer exists, or that the layer rules
 # already allow, also fails the check and has to be removed.
 #
@@ -22,21 +23,26 @@
 [workspace]
 package_roots = ["crates/foks-*", "apps/desktop/src-tauri"]
 
-# Encoding, cryptography, verification, RPC and protocol metadata shared by
-# client and server. Holds no local state and no credentials.
+# Encoding, cryptography, verification, Merkle construction and protocol
+# metadata shared by client and server. Holds no local state and no
+# credentials.
 [layer.core]
 packages = [
     "foks-compat-artifact",
     "foks-crypto",
     "foks-merkle-store",
-    "foks-oidc",
     "foks-proto",
     "foks-protocol-metadata",
-    "foks-rpc",
     "foks-snowpack",
     "foks-verify",
 ]
 may_depend_on = []
+
+# RPC framing and OIDC provider exchange, used to reach FOKS servers and
+# identity providers. Front ends do not depend on these crates directly.
+[layer.network]
+packages = ["foks-oidc", "foks-rpc"]
+may_depend_on = ["core"]
 
 # Credential stores and hardware keys.
 [layer.device]
@@ -52,20 +58,21 @@ may_depend_on = ["core"]
 # Client state, protocol client and application composition.
 [layer.client]
 packages = ["foks-client", "foks-client-app", "foks-client-db", "foks-go-interop"]
-may_depend_on = ["core", "device", "agent-protocol"]
+may_depend_on = ["core", "network", "device", "agent-protocol"]
 
 # The resident agent: the one process that opens client state and credentials
 # during normal operation.
 [layer.agent]
 packages = ["foks-agent"]
-may_depend_on = ["core", "device", "agent-protocol", "client"]
+may_depend_on = ["core", "network", "device", "agent-protocol", "client"]
 
 # The client side of the agent socket.
 [layer.agent-client]
 packages = ["foks-agent-client"]
 may_depend_on = ["core", "agent-protocol"]
 
-# Front ends reach client state and credentials only through the agent seam.
+# Front ends reach client state, credentials, servers and identity providers
+# through the agent seam; the exceptions below list where they do not.
 [layer.front-end]
 packages = ["foks-cli", "foks-desktop", "foks-desktop-app", "foks-mcp"]
 may_depend_on = ["core", "agent-protocol", "agent-client"]
@@ -73,18 +80,28 @@ may_depend_on = ["core", "agent-protocol", "agent-client"]
 # Server crates never depend on client, device, agent or front-end crates.
 [layer.server]
 packages = ["foks-server", "foks-server-db"]
-may_depend_on = ["core"]
+may_depend_on = ["core", "network"]
 
 [layer.test-support]
 packages = ["foks-server-testkit"]
-may_depend_on = ["core", "device", "agent-protocol", "client", "agent", "agent-client", "front-end", "server"]
+may_depend_on = [
+    "core",
+    "network",
+    "device",
+    "agent-protocol",
+    "client",
+    "agent",
+    "agent-client",
+    "front-end",
+    "server",
+]
 test_only = true
 
 # foks-rs predates the agent and remains a direct client: the init, profile,
 # account, kv, jobs, device, recovery, passphrase, team and yubi commands open
 # ClientCredentials and ProfileSession in-process, and `state` calls the
 # portability functions directly, including verify_imported_profile for
-# `state verify-online`. The account admin, bot and rename commands, team
+# `state verify-online`. The account admin, bot, rename and sync commands, team
 # invitations, mcp, sso and retention use the agent. The integration tests seed
 # state through foks-client-app and the encrypted-file keystore before starting
 # an agent.

@@ -161,11 +161,18 @@ class SyntheticGraphTests(unittest.TestCase):
         self.assertEqual(self.check(graph, policy), [])
 
         write(root, "crates/foks-cli/src/new.rs", "use foks_client as client;\n")
+        write(
+            root,
+            "crates/foks-cli/src/url.rs",
+            'let u = "https://h"; foks_client::f(); // trailing\n',
+        )
         policy["exception"][0]["sites"].append("crates/foks-cli/src/gone.rs")
         self.assertEqual(
             self.check(graph, policy),
             [
                 "crates/foks-cli/src/new.rs uses foks_client, but no foks-cli -> foks-client "
+                "exception lists it as a site",
+                "crates/foks-cli/src/url.rs uses foks_client, but no foks-cli -> foks-client "
                 "exception lists it as a site",
                 "exception foks-cli -> foks-client site crates/foks-cli/src/gone.rs matches no "
                 "file that uses foks_client",
@@ -252,8 +259,15 @@ class RepositoryPolicyTests(unittest.TestCase):
 
     def test_server_layer_excludes_client_crates(self):
         server = self.policy["layer"]["server"]
-        self.assertEqual(server["may_depend_on"], ["core"])
+        self.assertEqual(server["may_depend_on"], ["core", "network"])
         self.assertEqual(sorted(server["packages"]), ["foks-server", "foks-server-db"])
+
+    def test_front_end_layer_excludes_network_crates(self):
+        layer = self.policy["layer"]
+        self.assertEqual(layer["network"]["packages"], ["foks-oidc", "foks-rpc"])
+        self.assertEqual(
+            layer["front-end"]["may_depend_on"], ["core", "agent-protocol", "agent-client"]
+        )
 
 
 if __name__ == "__main__":

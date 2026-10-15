@@ -18,8 +18,9 @@ The script reports, and exits with status 1 on:
 - an exception for an edge that does not exist or that the layer rules already
   allow;
 - for an exception edge, a Rust source file in the depending package that
-  names the dependency's crate but matches none of the exception's `sites`,
-  and a `sites` pattern that matches no such file;
+  names the dependency's crate on a line that does not begin with `//` but
+  matches none of the exception's `sites`, and a `sites` pattern that matches
+  no such file;
 - a production (normal or build) path, direct or transitive, from any package
   to a package in a `test_only` layer.
 """
@@ -40,7 +41,7 @@ except ModuleNotFoundError:  # Python 3.10 and older
 REPOSITORY = Path(__file__).resolve().parent.parent
 DEFAULT_POLICY = REPOSITORY / "tools" / "crate-layers.toml"
 PRODUCTION_KINDS = (None, "build")
-LINE_COMMENT = re.compile(r"//.*")
+COMMENT_LINE = re.compile(r"\s*//")
 
 
 def load_policy(path):
@@ -105,10 +106,17 @@ def workspace_graph(metadata, root):
 
 
 def names_crate(path, identifier):
-    """Report whether a Rust source file names a crate outside line comments."""
+    """Report whether a Rust source file names a crate outside comment lines.
+
+    Only lines that begin with `//` are skipped. A trailing comment, or a `//`
+    inside a string literal, does not hide the rest of its line, so the check
+    may report a mention but does not miss a use.
+    """
     pattern = re.compile(rf"\b{re.escape(identifier)}\b")
     text = path.read_text(encoding="utf-8", errors="replace")
-    return any(pattern.search(LINE_COMMENT.sub("", line)) for line in text.splitlines())
+    return any(
+        pattern.search(line) and not COMMENT_LINE.match(line) for line in text.splitlines()
+    )
 
 
 def rust_sources(directory):

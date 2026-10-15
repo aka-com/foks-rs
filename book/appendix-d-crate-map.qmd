@@ -74,20 +74,23 @@ client and server gates (`tools/foks-client/check.sh`,
 
 | Layer | Crates | May depend on |
 |---|---|---|
-| core | `snowpack`, `proto`, `crypto`, `verify`, `rpc`, `merkle-store`, `oidc`, `protocol-metadata`, `compat-artifact` | core |
+| core | `snowpack`, `proto`, `crypto`, `verify`, `merkle-store`, `protocol-metadata`, `compat-artifact` | core |
+| network | `rpc`, `oidc` | core |
 | device | `keystore`, `yubi` | core |
 | agent-protocol | `agent-proto` | core |
-| client | `client-db`, `client`, `client-app`, `go-interop` | core, device, agent-protocol |
-| agent | `agent` | core, device, agent-protocol, client |
+| client | `client-db`, `client`, `client-app`, `go-interop` | core, network, device, agent-protocol |
+| agent | `agent` | core, network, device, agent-protocol, client |
 | agent-client | `agent-client` | core, agent-protocol |
 | front-end | `cli`, `mcp`, `desktop`, `desktop-app` | core, agent-protocol, agent-client |
-| server | `server-db`, `server` | core |
+| server | `server-db`, `server` | core, network |
 | test-support | `server-testkit` (test-only) | all of the above |
 
-Server crates therefore never depend on client, device or agent crates, and
-no package reaches `foks-server-testkit` through a production dependency,
-directly or transitively. Dev-dependencies are not layer-checked, but every
-path dependency must be a workspace package.
+Server crates therefore never depend on client, device or agent crates. Front
+ends never depend directly on `foks-rpc` or `foks-oidc`; outside the
+exceptions below, they reach FOKS servers and identity providers through the
+agent. No package reaches `foks-server-testkit` through a production
+dependency, directly or transitively. Dev-dependencies are not layer-checked,
+but every path dependency must be a workspace package.
 
 Edges that cross these rules are listed as exceptions, each with the source
 files that may use the dependency; a use in any other file fails the check.
@@ -97,10 +100,10 @@ files that may use the dependency; a use in any other file fails the check.
   `device`, `recovery`, `passphrase`, `team` and `yubi` open
   `ClientCredentials` and `ProfileSession` in-process, and `state` calls the
   `foks-client-app` portability functions directly, including
-  `verify_imported_profile` for `state verify-online`. The account admin, bot
-  and rename commands, team invitations, `mcp`, `sso` and `retention` use the
-  agent. The integration tests seed state through `foks-client-app` before
-  starting an agent.
+  `verify_imported_profile` for `state verify-online`. The account admin,
+  bot, rename and sync commands, team invitations, `mcp`, `sso` and
+  `retention` use the agent. The integration tests seed state through
+  `foks-client-app` before starting an agent.
 - `foks-desktop-app` → `foks-client-app`, `foks-keystore`, `foks-yubi`.
   Offline maintenance with the agent stopped (state export, import,
   relocation, import verification, reset of unreadable state, the state

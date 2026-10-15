@@ -51,23 +51,23 @@ separate process that outlives the window and that the command-line tool and
 the MCP server ([Chapter 21](21-mcp.qmd)) connect to as well.
 
 **The offline-maintenance exception.** State export, import, relocation,
-verification of an imported profile, and the reset of an unreadable state
-root run in the host after it has stopped the agent it owns. For these the
-host links `foks-client-app`, `foks-keystore` and `foks-yubi` and operates on
-the state root directly: it holds the client state leases, checks maintenance
+verification of an imported profile, and the reset of an unreadable state root
+run in the host after it has stopped the agent it owns. For these the host
+links `foks-client-app`, `foks-keystore` and `foks-yubi` and operates on the
+state root directly: it holds the client state leases, checks maintenance
 readiness, and, to verify an imported profile, opens `ClientCredentials` and
 `ProfileSession` and calls `verify_imported_profile` with YubiKey PINs and bot
 tokens read from private files the user selects, rechecking the app lock
 between steps. The opened credentials, PINs and tokens are dropped when the
-operation ends, and the agent is then started again. The host also calls stateless input validators from
-`foks-client-app` (profile labels, local aliases, server capabilities, login
-fields). `tools/crate-layers.toml` records these dependencies as exceptions to
-the rule that front ends reach client state only through the agent, and lists
-the host source files that may use each one; `scripts/check-crate-layers.py`,
-run by the CI client, server and desktop checks, fails when any other file
-uses them. Removing the exception would need an agent operation for import
-verification and a separate crate for the leases, readiness and reset
-functions and the validators.
+operation ends, and the agent is then started again. The host also calls
+stateless input validators from `foks-client-app` (profile labels, local
+aliases, server capabilities, login fields). `tools/crate-layers.toml` records
+these dependencies as exceptions to the rule that front ends reach client
+state only through the agent, and lists the host source files that may use
+each one; `scripts/check-crate-layers.py`, run by the CI client, server and
+desktop checks, fails when any other file uses them. Removing the exception
+would need an agent operation for import verification and a separate crate for
+the leases, readiness and reset functions and the validators.
 
 ## Exactly three core permissions
 
