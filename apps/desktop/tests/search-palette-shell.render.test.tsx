@@ -16,6 +16,7 @@ import type { Bridge, CopyFieldRequest, ItemRequest } from '../src/bridge';
 import type { Location, LocationStore } from '../src/location';
 import type { AgentSnapshot } from '../src/model';
 import { installDom } from './lib/dom-harness';
+import { loadDeferredScreens } from './lib/deferred-screens';
 
 installDom({
   url: 'http://localhost/',
@@ -26,6 +27,7 @@ installDom({
 let ui: typeof import('@testing-library/react');
 test.before(async () => {
   ui = await import('@testing-library/react');
+  await loadDeferredScreens();
 });
 test.afterEach(() => {
   ui.cleanup();

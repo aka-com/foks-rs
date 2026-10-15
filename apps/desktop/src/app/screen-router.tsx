@@ -1,19 +1,24 @@
+import { Suspense } from 'react';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import type { AgentLifecycle } from '../agent-lifecycle';
 import type { Location, LocationStore, NavigateOptions } from '../location';
 import { storeOf } from '../model';
 import type { DeviceLabel, Item } from '../model';
 import { markProfileRostersStale } from '../data/roster-staleness';
-import { ChatTab } from '../screens/chat-tab';
-import { DevicesScreen } from '../screens/devices-screen';
-import { GroupSettingsScreen } from '../screens/groups-screen';
 import { ItemsScreen, type DropUpload } from '../screens/items-screen';
 import { PlaceholderScreen } from '../screens/placeholder-screen';
 import { listsItems } from '../model/scope';
-import { SettingsScreen } from '../screens/settings-screen';
-import { TeamsScreen } from '../screens/teams-screen';
 import { useShellServices, useShellSnapshot } from '../shell-services';
 import type { WriteWorkflow } from '../screens/write-workflow-model';
+import {
+  ChatTab,
+  DevicesScreen,
+  GroupSettingsScreen,
+  ScreenLoading,
+  SettingsScreen,
+  TeamsScreen,
+  usePreloadVaultScreens,
+} from './deferred-screens';
 import type { TrashActions } from './trash-actions';
 
 export function ScreenRouter({
@@ -54,6 +59,7 @@ export function ScreenRouter({
   accessGenerations: ReadonlyMap<string, number>;
 }): ReactNode {
   const shown = useShellSnapshot();
+  usePreloadVaultScreens();
   const {
     bridge,
     accessNow,
@@ -85,7 +91,9 @@ export function ScreenRouter({
     agentLifecycle,
     onRetryAgent: () => recoverAgentReadiness(true),
   };
-  return listsItems(here) ? (
+  // Every screen but Files loads its chunk on first use; the fallback fills
+  // the content pane until it has.
+  const screen = listsItems(here) ? (
     <ItemsScreen
       snapshot={shown}
       bridge={bridge}
@@ -217,4 +225,5 @@ export function ScreenRouter({
   ) : (
     <PlaceholderScreen location={here} />
   );
+  return <Suspense fallback={<ScreenLoading />}>{screen}</Suspense>;
 }

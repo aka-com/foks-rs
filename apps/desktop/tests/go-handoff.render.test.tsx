@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement, StrictMode } from 'react';
 import type { Bridge, CommandError, GoProfileCandidate } from '../src/bridge';
 import { installDom, settle } from './lib/dom-harness';
+import { loadDeferredScreens } from './lib/deferred-screens';
 
 installDom({
   url: 'http://localhost/',
@@ -26,6 +27,7 @@ const candidate = {
 } satisfies GoProfileCandidate;
 test.before(async () => {
   ui = await import('@testing-library/react');
+  await loadDeferredScreens();
 });
 test.afterEach(() => {
   ui.cleanup();

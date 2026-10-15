@@ -27,6 +27,13 @@ test.before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
   await vite.ssrLoadModule('/src/main.tsx');
+  // The screens the shell loads on demand are transformed now, so a tab's
+  // first visit below waits on rendering rather than on Vite. The module is
+  // the instance main.tsx loaded, so its preloads are the ones the router reads.
+  const deferred = (await vite.ssrLoadModule(
+    '/src/app/deferred-screens.tsx',
+  )) as typeof import('../src/app/deferred-screens');
+  await deferred.preloadVaultScreens();
   // The frame is drawn before the snapshot arrives, so the account header is
   // what says the shell has finished booting.
   await testingLibrary.waitFor(() => {

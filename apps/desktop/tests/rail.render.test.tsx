@@ -11,6 +11,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 
 import { installDom } from './lib/dom-harness';
+import { loadDeferredScreens } from './lib/deferred-screens';
 import type { Location } from '../src/location';
 import type { Bridge } from '../src/bridge';
 
@@ -24,6 +25,7 @@ let ui: typeof import('@testing-library/react');
 
 test.before(async () => {
   ui = await import('@testing-library/react');
+  await loadDeferredScreens();
 });
 test.afterEach(() => ui.cleanup());
 

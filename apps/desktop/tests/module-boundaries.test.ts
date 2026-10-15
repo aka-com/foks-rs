@@ -294,6 +294,44 @@ test('every chat module is reachable from the application entry point', async ()
   );
 });
 
+test('the startup module graph statically imports no screen the shell loads on demand', async () => {
+  // src/app/deferred-screens.tsx loads each of these by dynamic import, so the
+  // build puts it in a chunk of its own. A static import of one from anywhere
+  // the entry point reaches puts it, and what it imports, back in the
+  // startup chunk without failing the build.
+  const files = await sources(root);
+  const known = new Set(files);
+  const deferredScreens = join(root, 'app', 'deferred-screens.tsx');
+  const resolved = async (
+    file: string,
+    specifiers: Promise<string[]>,
+  ): Promise<string[]> =>
+    (await specifiers).flatMap((specifier) => {
+      const target = resolveSpecifier(file, specifier, known);
+      return target ? [target] : [];
+    });
+  const staticTargets = new Set(
+    await resolved(deferredScreens, imports(deferredScreens)),
+  );
+  const deferred = (
+    await resolved(deferredScreens, references(deferredScreens))
+  ).filter((target) => !staticTargets.has(target));
+  assert.equal(deferred.length, 6, 'deferred-screens.tsx loads six screens');
+  const reached = new Set<string>();
+  const pending = [join(root, 'main.tsx')];
+  for (let file = pending.pop(); file; file = pending.pop()) {
+    if (reached.has(file)) continue;
+    reached.add(file);
+    pending.push(...(await resolved(file, imports(file))));
+  }
+  assert.deepEqual(
+    deferred
+      .filter((file) => reached.has(file))
+      .map((file) => relative(root, file)),
+    [],
+  );
+});
+
 test('application modules name other modules by relative path, so node loads them without Vite', async () => {
   const kit = fileURLToPath(new URL('../kit/', import.meta.url));
   for (const file of [...(await sources(root)), ...(await sources(kit))])

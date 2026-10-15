@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { installDom } from './lib/dom-harness';
+import { loadDeferredScreens } from './lib/deferred-screens';
 
 installDom({
   url: 'http://localhost/',
@@ -11,6 +12,7 @@ installDom({
 let ui: typeof import('@testing-library/react');
 test.before(async () => {
   ui = await import('@testing-library/react');
+  await loadDeferredScreens();
 });
 test.afterEach(() => {
   ui.cleanup();

@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  Suspense,
   type ReactNode,
 } from 'react';
 import { anyDialogOpen, OverlayProvider } from '../../kit/overlay-primitives';
@@ -55,7 +56,6 @@ import {
   subscribeRecoveryPhraseTests,
 } from '../recovery-phrase-tests';
 import { DetailsPanel } from '../screens/details-panel';
-import { FirstRunExperience } from '../screens/first-run-screen';
 import { unroutedNotices } from '../screens/unrouted-notices';
 import {
   ALL_ITEMS,
@@ -109,6 +109,7 @@ import {
   fixtureScenesAllowed,
 } from './scenes';
 import { PanelErrorBoundary } from './fault-boundaries';
+import { FirstRunExperience, ScreenLoading } from './deferred-screens';
 import { ScreenRouter } from './screen-router';
 import {
   ScreenErrorBoundary,
@@ -858,35 +859,37 @@ export function VaultShell({
             aria-hidden="true"
           />
           {here.kind === 'first-run' ? (
-            <FirstRunExperience
-              snapshot={shown}
-              bridge={bridge}
-              location={here}
-              onNavigate={(location) => locations.navigate(location)}
-              onRefreshSnapshot={refreshSnapshot}
-              concealSignal={concealSignal}
-              agentReady={
-                shown.agent.state === 'ready' &&
-                agentLifecycle.state === 'ready' &&
-                agentCatalogReady
-              }
-              onRetryAgent={() =>
-                recoverAgentReadiness(agentLifecycle.state === 'disconnected')
-              }
-              onAgentReadinessFailure={handleAgentReadinessFailure}
-              automaticEntry={automaticFirstRun}
-              managedProfile={managedProfile ?? undefined}
-              agent={chrome.agent}
-              blocked={chrome.blocked}
-              collapsed={sideCollapsed}
-              onToggleCollapsed={toggleSidebar}
-              devicesAlert={devicesAlertSummary(
-                shown,
-                deviceAlerts,
-                phraseTests,
-                alertsAt,
-              )}
-            />
+            <Suspense fallback={<ScreenLoading />}>
+              <FirstRunExperience
+                snapshot={shown}
+                bridge={bridge}
+                location={here}
+                onNavigate={(location) => locations.navigate(location)}
+                onRefreshSnapshot={refreshSnapshot}
+                concealSignal={concealSignal}
+                agentReady={
+                  shown.agent.state === 'ready' &&
+                  agentLifecycle.state === 'ready' &&
+                  agentCatalogReady
+                }
+                onRetryAgent={() =>
+                  recoverAgentReadiness(agentLifecycle.state === 'disconnected')
+                }
+                onAgentReadinessFailure={handleAgentReadinessFailure}
+                automaticEntry={automaticFirstRun}
+                managedProfile={managedProfile ?? undefined}
+                agent={chrome.agent}
+                blocked={chrome.blocked}
+                collapsed={sideCollapsed}
+                onToggleCollapsed={toggleSidebar}
+                devicesAlert={devicesAlertSummary(
+                  shown,
+                  deviceAlerts,
+                  phraseTests,
+                  alertsAt,
+                )}
+              />
+            </Suspense>
           ) : (
             <>
               <Sidebar
