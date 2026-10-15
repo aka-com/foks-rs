@@ -56,7 +56,7 @@ import {
 } from '../recovery-phrase-tests';
 import { DetailsPanel } from '../screens/details-panel';
 import { FirstRunExperience } from '../screens/first-run-screen';
-import { unroutedNotices } from '../screens/account-section';
+import { unroutedNotices } from '../screens/unrouted-notices';
 import {
   ALL_ITEMS,
   folderKey,
@@ -82,7 +82,7 @@ import { matchesShortcut, shortcutLabel } from '../shortcuts';
 import type { SearchAction } from '../shell/search-palette';
 import { Sidebar } from '../shell/sidebar';
 import { Topbar } from '../shell/topbar';
-import { requestNewChat } from '../screens/chat-tab';
+import { requestNewChat } from '../screens/new-chat-request';
 import { requestChatFind } from '../chat/find';
 import { chatTeams } from '../screens/chat-teams';
 import { useAccessRuntime } from './access-runtime';

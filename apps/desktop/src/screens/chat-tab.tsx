@@ -39,21 +39,7 @@ import {
   noChatReason,
   openingConversation,
 } from './chat-teams';
-
-/**
- * Wires the window header's "New channel" button to the active Chat tab.
- *
- * Because the header renders outside the Chat tab, it delegates channel creation
- * to the active tab. When ChatTab is mounted, this opens the channel creation
- * sheet for the currently open conversation. If ChatTab is unmounted, calling
- * this function is a no-op.
- */
-let newChatRequest: (() => void) | null = null;
-
-/** Opens the Chat tab's channel-creation sheet. The header's button calls this. */
-export function requestNewChat(): void {
-  newChatRequest?.();
-}
+import { receiveNewChat } from './new-chat-request';
 
 export interface ChatTabProps {
   snapshot: AgentSnapshot;
@@ -138,12 +124,7 @@ export function ChatTab({
     setNewChat({ team: ref, originRef: ref, originChannel: location.channel });
   // The header's "New channel" button reaches the mounted tab through this,
   // and reaches nothing once the tab unmounts.
-  useEffect(() => {
-    newChatRequest = openNewChat;
-    return () => {
-      if (newChatRequest === openNewChat) newChatRequest = null;
-    };
-  });
+  useEffect(() => receiveNewChat(openNewChat));
   // The ⓘ toggle takes focus back when the panel it opened closes.
   const infoToggle = useRef<HTMLButtonElement | null>(null);
   const conversation = useRef<HTMLElement | null>(null);
