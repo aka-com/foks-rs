@@ -1854,9 +1854,9 @@ fn seed_chain_boxes_accept_zero_padding_and_bind_the_receiver() {
     let mut other = opened.uid.as_bytes().to_vec();
     *other.last_mut().unwrap() ^= 1;
     let other = EntityId::from_bytes(other).unwrap();
-    let chain_box = |padding: &[u8]| {
+    let chain_box = |receiver: &EntityId, padding: &[u8]| {
         let plaintext =
-            shared_key_seed_plaintext(&editor, &opened.host, 1, Role::OWNER, &previous_seed)
+            shared_key_seed_plaintext(receiver, &opened.host, 1, Role::OWNER, &previous_seed)
                 .unwrap();
         let padded = Zeroizing::new([plaintext.as_slice(), padding].concat());
         let key = derive_key(&current_seed, 2, None).unwrap();
@@ -1877,7 +1877,7 @@ fn seed_chain_boxes_accept_zero_padding_and_bind_the_receiver() {
             },
         }
     };
-    let parcel = |padding: &[u8]| PukParcel {
+    let parcel = |receiver: &EntityId, padding: &[u8]| PukParcel {
         generation: 2,
         role: Role::OWNER,
         hybrid: shared.hybrid.clone(),
@@ -1888,7 +1888,7 @@ fn seed_chain_boxes_accept_zero_padding_and_bind_the_receiver() {
         sender: opened.uid.clone(),
         box_id: boxed.box_id,
         temp_dh_key: boxed.temp_dh_key.clone(),
-        seed_chain: vec![chain_box(padding)],
+        seed_chain: vec![chain_box(receiver, padding)],
     };
     let current = || SharedKeySeed {
         receiver: opened.uid.clone(),
@@ -1898,7 +1898,7 @@ fn seed_chain_boxes_accept_zero_padding_and_bind_the_receiver() {
         seed: SecretSeed::new(*current_seed.as_bytes()),
     };
 
-    let padded = parcel(&[0; 7]);
+    let padded = parcel(&editor, &[0; 7]);
     let history = open_shared_key_seed_chain(current(), &padded, &editor, &opened.host).unwrap();
     assert_eq!(history[0].seed, previous_seed);
     assert_eq!(history[1].seed, current_seed);
@@ -1906,16 +1906,22 @@ fn seed_chain_boxes_accept_zero_padding_and_bind_the_receiver() {
         open_shared_key_seed_chain(current(), &padded, &other, &opened.host),
         Err(Error::PukBinding)
     ));
-    // A team chain names the rotating editor, not the parcel recipient.
-    let history = open_team_shared_key_seed_chain(current(), &padded, &opened.host).unwrap();
+    // A team chain names the rotating editor, not the parcel recipient, so
+    // the team opener skips the receiver check that the PUK opener applies.
+    let team = parcel(&other, &[0; 7]);
+    let history = open_team_shared_key_seed_chain(current(), &team, &opened.host).unwrap();
     assert_eq!(history[0].seed, previous_seed);
-    assert_eq!(history[0].receiver, editor);
+    assert_eq!(history[0].receiver, other);
     assert!(matches!(
-        open_team_shared_key_seed_chain(current(), &padded, &other),
+        open_shared_key_seed_chain(current(), &team, &editor, &opened.host),
+        Err(Error::PukBinding)
+    ));
+    assert!(matches!(
+        open_team_shared_key_seed_chain(current(), &team, &other),
         Err(Error::PukBinding)
     ));
 
-    let nonzero = parcel(&[0, 0, 1]);
+    let nonzero = parcel(&editor, &[0, 0, 1]);
     for result in [
         open_shared_key_seed_chain(current(), &nonzero, &editor, &opened.host),
         open_team_shared_key_seed_chain(current(), &nonzero, &opened.host),
@@ -1927,9 +1933,13 @@ fn seed_chain_boxes_accept_zero_padding_and_bind_the_receiver() {
 #[test]
 fn seed_chain_plaintexts_bypass_the_non_zeroizing_prefix_decoder() {
     // The general prefix decoder copies the older seed into an ordinary
-    // `Value::Binary` that is dropped without erasure.
+    // `Value::Binary` that is dropped without erasure. The check covers
+    // hybrid.rs only, so it also requires the seed-chain decoder to stay there.
+    let hybrid = include_str!("hybrid.rs");
     let general_prefix_decoder = ["decode_prefix", "("].concat();
-    assert!(!include_str!("hybrid.rs").contains(&general_prefix_decoder));
+    assert!(!hybrid.contains(&general_prefix_decoder));
+    assert!(hybrid.contains("fn decode_padded_shared_key_seed("));
+    assert!(hybrid.contains("decode_prefix_sensitive(plaintext)"));
 }
 
 #[test]
