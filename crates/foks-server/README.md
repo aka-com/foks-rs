@@ -71,12 +71,13 @@ identifier grants nothing, and no route accepts it. Once `maximum_entries`
 `RateLimited`, including joins for listed addresses, so a full table does not
 reveal which addresses it holds. The cap is global: one client can fill it,
 after which the route refuses all joins until entries expire or the operator
-purges them. Maintenance deletes entries more than `retention_days` (default
-180) after their first join; a repeated join does not extend retention. The
-operator reads entries with `foks-server waitlist list`, writes them to a new
-owner-only JSON file with `waitlist export --output`, and deletes them with
-`waitlist purge --before-unix-seconds`, `--email` or `--all`. Listing and
-export read a snapshot; stop the serving process before a purge.
+purges them. Maintenance deletes entries more than `retention_days`
+(default 180) after their first join; a repeated join does not extend
+retention. The operator reads entries with `foks-server waitlist list`,
+writes them to a new owner-only JSON file with `waitlist export --output`,
+and deletes them with `waitlist purge --before-unix-seconds`, `--email` or
+`--all`. Listing and export read a snapshot; stop the serving process before
+a purge.
 
 Passphrases use the v0.1.9 V1 Argon2id parameters and PPE wire format. The
 server stores only the public verification key, salt, and encrypted SKMWK/PPE
