@@ -11,7 +11,7 @@ import { nameOf, storeOf, type AgentSnapshot, type Item } from '../model';
 import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { NavigationPrompt } from '../navigation-guard';
 import { useShellServices } from '../shell-services';
-import type { DropUpload } from '../screens/items-screen';
+import type { DropUpload } from '../screens/files/vault-drop-zone';
 import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from '../screens/item-roles';
 import {
   conflictDraftWorkflow,
