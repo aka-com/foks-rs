@@ -41,10 +41,11 @@ host/Merkle/user/team acceptance.
 absent, assigning a new database id. Exclusive admission of a pristine profile
 relies on this, and code inside a checked session uses it after admission has
 created the file. Reads that can run outside the profile lock, such as the
-import gate check, use `HardStateStore::open_existing`. It returns
-`StateMissing` for an absent or uninitialized file without writing to the
-filesystem, so a read after a profile reset does not recreate the database
-before the next exclusive admission.
+import gate check and the agent's scheduler probes, use
+`HardStateStore::open_existing`. It returns `StateMissing` for an absent or
+uninitialized file and rejects a file without the FOKS application id, in
+each case without writing to the filesystem, so a read after a profile reset
+does not recreate the database before the next exclusive admission.
 
 The separate soft-state schema stores complete verified KV roots,
 directories, dirent versions, and content projections. It reconstructs durable

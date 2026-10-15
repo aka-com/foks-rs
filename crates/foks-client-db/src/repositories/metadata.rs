@@ -37,8 +37,10 @@ impl HardStateStore {
     /// Returns [`Error::StateMissing`] when the file is absent or is an empty
     /// file left before initialization. Neither case writes to the
     /// filesystem, so a read after a profile reset does not recreate the
-    /// database with a new database id outside the profile lock. An existing
-    /// database is verified and migrated as [`HardStateStore::open`] does.
+    /// database with a new database id outside the profile lock. A file
+    /// without the FOKS application id is rejected before anything is
+    /// written to it. A FOKS database is verified and migrated as
+    /// [`HardStateStore::open`] does.
     pub fn open_existing(path: &Path) -> Result<Self> {
         let missing = |error: &std::io::Error| error.kind() == ErrorKind::NotFound;
         match std::fs::symlink_metadata(path) {
@@ -58,20 +60,10 @@ impl HardStateStore {
             }
             Err(error) => return Err(error),
         };
-        // Check before configure: switching an empty file to WAL writes a
-        // database header and creates sidecar files.
-        let application_id: i64 =
-            connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
-        let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if application_id == 0 && version == 0 {
-            let object_count: i64 = connection.query_row(
-                "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
-                [],
-                |row| row.get(0),
-            )?;
-            if object_count == 0 {
-                return Err(Error::StateMissing);
-            }
+        // Check before configure: switching an empty or foreign file to WAL
+        // writes a database header and creates sidecar files.
+        if hard_state_version(&connection)?.is_none() {
+            return Err(Error::StateMissing);
         }
         configure(&connection)?;
         initialize_or_verify(&mut connection)?;
@@ -176,8 +168,11 @@ mod tests {
         assert!(artifacts(&path).is_empty());
     }
 
+    // Removing the file between the existence check and the SQLite open
+    // takes a separate branch in open_existing; reaching it would need a
+    // hook between the two, so no test covers it.
     #[test]
-    fn open_existing_does_not_recreate_a_removed_database() {
+    fn open_existing_does_not_recreate_a_removed_database_or_its_sidecars() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("hard.sqlite3");
         drop(HardStateStore::open(&path).unwrap());
@@ -214,11 +209,32 @@ mod tests {
             .unwrap()
             .execute_batch("CREATE TABLE foreign_data (value INTEGER);")
             .unwrap();
+        let before = std::fs::read(&path).unwrap();
 
         assert!(matches!(
             HardStateStore::open_existing(&path),
             Err(Error::WrongApplicationId { found: 0, .. })
         ));
+        assert_eq!(artifacts(&path), vec![path.clone()]);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn open_existing_rejects_another_application_id_without_writing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hard.sqlite3");
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "application_id", 7)
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        assert!(matches!(
+            HardStateStore::open_existing(&path),
+            Err(Error::WrongApplicationId { found: 7, .. })
+        ));
+        assert_eq!(artifacts(&path), vec![path.clone()]);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
     #[test]
