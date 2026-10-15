@@ -95,6 +95,23 @@ test('notification candidates exclude baseline, own, unknown, duplicate and visi
   assert.equal(alerts[3].count, 17);
   assert.equal(alerts[3].incomplete, true);
 });
+test('previewed alerts go out oldest first, so the newest message is the last preview', () => {
+  const text = (sequence: number): ChatMessage => ({
+    ...message(sequence),
+    content: { kind: 'text', text: `m${sequence}` },
+  });
+  // Candidates arrive newest first, as history pages return them.
+  const alerts = notificationText([6, 5, 4, 3, 2].map(text), false);
+  assert.deepEqual(
+    alerts.map((a) => [a.body, a.count]),
+    [
+      ['m4', 1],
+      ['m5', 1],
+      ['m6', 1],
+      [undefined, 2],
+    ],
+  );
+});
 test('notification bodies are cut to the shared bound in characters, not UTF-16 units', () => {
   const long = '\u{1F600}'.repeat(CHAT_NOTIFICATION_TEXT_CHARS + 1);
   const [alert] = notificationText(
@@ -107,7 +124,6 @@ test('a previewed body names its sender within the shared bound', () => {
   const names = (id: string | null) => (id === OTHER ? 'priya.n' : 'lee');
   const [first, second] = notificationText(
     [
-      message(1),
       {
         ...message(2),
         content: {
@@ -115,6 +131,7 @@ test('a previewed body names its sender within the shared bound', () => {
           text: 'x'.repeat(CHAT_NOTIFICATION_TEXT_CHARS),
         },
       },
+      message(1),
     ],
     false,
     names,

@@ -830,16 +830,18 @@ service is found). The alerts of one channel are grouped: macOS stacks them
 under one thread identifier, the channel's settings key, and Linux replaces the
 channel's entry in place until the service reports it closed. The entry's text
 counts every message it stands for, after the newest message preview while
-previews are on; once the reader has read every message the channel's earlier
-alerts stood for (the inbox's read position, a pending local read included),
-the next alert restarts the count in the same entry. Because only an entry's
-newest alert can be activated, a channel keeps one route on Linux, and the
-bound of 64 routes per session, past which every alert shown is closed, counts
-channels there and alerts on macOS. A click on an alert, or its Open action on
-Linux, opens the channel. Without previews an alert is titled "FOKS" and its text is
-a count ("New chat message."). With previews, the title names the channel and
-team ("#general · Engineering", at most 128 characters on one line) and the
-text names the sender from the team roster, or by a short id, followed by the
+previews are on: the renderer sends the alerts for messages read in one check of
+the channel oldest first, so the newest message's preview is the last one the
+entry receives. Once the reader has read every message the channel's earlier
+alerts stood for (the inbox's read position, a pending local read included), the
+next alert restarts the count in the same entry. Because only an entry's newest
+alert can be activated, a channel keeps one route on Linux, and the bound of 64
+routes per session, past which every alert shown is closed, counts channels
+there and alerts on macOS. A click on an alert, or its Open action on Linux,
+opens the channel. Without previews an alert is titled "FOKS" and its text is a
+count ("New chat message."). With previews, the title names the channel and team
+("#general · Engineering", at most 128 characters on one line) and the text
+names the sender from the team roster, or by a short id, followed by the
 start of the message, within the 256-character bound the native side admits;
 the renderer supplies both, and the native side refuses a title it cannot show
 on one line. A service that reads body markup receives the text escaped. The

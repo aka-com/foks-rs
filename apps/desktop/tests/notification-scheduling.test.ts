@@ -645,6 +645,60 @@ test('a previewed alert names its channel, team and sender; without previews it 
     d.stop();
   }
 });
+test('one pass sends its previewed alerts oldest first, ending on the newest message', async () => {
+  const f = setup(entry(['a'], scope, 1));
+  const text = (sequence: number): ChatMessage => ({
+    ...message(sequence),
+    content: { kind: 'text', text: `m${sequence}` },
+  });
+  f.rows.set('a', [message(1)]);
+  f.session.settings.previews = true;
+  const c = f.make();
+  try {
+    await f.clock.flush();
+    // A first alert, read before the next pass, so that pass restarts.
+    f.rows.set('a', [text(2), message(1)]);
+    f.update({ channelRevisions: new Map([['a', 2]]) });
+    await f.clock.flush();
+    f.alerts.length = 0;
+    const e = entry(['a'], scope, 6);
+    f.rows.set('a', [text(6), text(5), text(4), text(3), text(2), message(1)]);
+    f.replace(
+      new Map([
+        [
+          'store',
+          {
+            ...e,
+            channelRevisions: new Map([['a', 6]]),
+            data: {
+              ...e.data!,
+              conversations: e.data!.conversations.map((c) => ({
+                ...c,
+                read_through: '2',
+                unread: '4',
+              })),
+            },
+          },
+        ],
+      ]),
+    );
+    await f.clock.flush();
+    assert.deepEqual(
+      displays(f.alerts).map((a) => {
+        const d = a as { body?: string; count: number; restart?: boolean };
+        return [d.body, d.count, d.restart];
+      }),
+      [
+        ['other: m4', 1, true],
+        ['other: m5', 1, undefined],
+        ['other: m6', 1, undefined],
+        [undefined, 1, undefined],
+      ],
+    );
+  } finally {
+    c.stop();
+  }
+});
 test('access loss waits for new authorized projection, then starts a fresh baseline', async () => {
   const f = setup(entry(['a'])),
     c = f.make();

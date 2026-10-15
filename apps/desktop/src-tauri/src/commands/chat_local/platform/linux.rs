@@ -416,8 +416,10 @@ struct Entry {
     replaces: u32,
     count: u32,
     incomplete: bool,
-    /// The newest preview the entry has shown, which an alert without one
-    /// (the count of the messages past the first three) keeps.
+    /// The last preview the entry has shown, which an alert without one (the
+    /// count of the messages past the newest three) keeps. The renderer sends
+    /// the alerts it raises together oldest first, so this is the preview of
+    /// the newest message.
     preview: Option<String>,
     body: String,
 }
@@ -525,7 +527,7 @@ mod tests {
         let entry = shown.prepare(&second);
         assert_eq!(entry.body, "lee: hi\n2 new chat messages.");
         shown.record(3, &second, &entry);
-        // The count of the messages past the first three has no preview, so
+        // The count of the messages past the newest three has no preview, so
         // the entry keeps the last one it showed.
         let summary = Alert {
             incomplete: true,

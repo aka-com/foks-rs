@@ -27,30 +27,36 @@ export function incoming(
   });
 }
 /**
- * The alerts a channel's new messages raise: one per message for the first
- * three, then one that counts the rest. With `sender`, a body starts with
- * the name it gives the message's sender; either way it is cut to
- * `CHAT_NOTIFICATION_TEXT_CHARS`, the bound the native side admits.
+ * The alerts a channel's new messages raise, given newest first: one per
+ * message for the newest three, oldest of them first, then one that counts
+ * the rest. The newest message is the last alert that carries a body, so a
+ * platform that keeps one entry per channel ends on its preview. With
+ * `sender`, a body starts with the name it gives the message's sender;
+ * either way it is cut to `CHAT_NOTIFICATION_TEXT_CHARS`, the bound the
+ * native side admits.
  */
 export function notificationText(
   messages: readonly ChatMessage[],
   incomplete: boolean,
   sender?: (id: string | null) => string,
 ): { body?: string; count: number; incomplete: boolean }[] {
-  const first = messages.slice(0, 3).map((m) => ({
-    body:
-      m.content.kind === 'text'
-        ? Array.from(
-            sender
-              ? `${singleLine(sender(m.sender))}: ${m.content.text}`
-              : m.content.text,
-          )
-            .slice(0, CHAT_NOTIFICATION_TEXT_CHARS)
-            .join('')
-        : undefined,
-    count: 1,
-    incomplete: false,
-  }));
+  const first = messages
+    .slice(0, 3)
+    .reverse()
+    .map((m) => ({
+      body:
+        m.content.kind === 'text'
+          ? Array.from(
+              sender
+                ? `${singleLine(sender(m.sender))}: ${m.content.text}`
+                : m.content.text,
+            )
+              .slice(0, CHAT_NOTIFICATION_TEXT_CHARS)
+              .join('')
+          : undefined,
+      count: 1,
+      incomplete: false,
+    }));
   if (messages.length > 3 || (incomplete && messages.length > 0))
     first.push({
       body: undefined,
