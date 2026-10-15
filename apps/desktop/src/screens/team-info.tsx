@@ -6,7 +6,6 @@ import {
 import { CollectionStatus } from '../components/collection-status';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Button } from '../components';
-import type { Bridge } from '../bridge';
 import type { Location, GroupSettingsTab } from '../location';
 import {
   groupDetailFailure,
@@ -22,7 +21,7 @@ import {
   storeDescription,
   storeOperationAvailability,
 } from '../model';
-import type { AgentSnapshot, TeamStore } from '../model';
+import type { TeamStore } from '../model';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelTitle, listChannels } from '../chat/presentation';
 import { federatedTeamMembers, memberCountOf } from '../model/team-members';
@@ -30,27 +29,26 @@ import { itemCountOf } from './group-tabs';
 import { manageReason } from '../model/group-model';
 import { GroupMark } from '../components/group-mark';
 import { storeUsageText, useStoreUsage } from '../store-usage';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 
-/** A read-only summary; membership changes keep their existing guarded pages. */
+/**
+ * A read-only summary; membership changes keep their existing guarded pages.
+ * The snapshot, the bridge, the lease clock and the error handler come from
+ * the shell services.
+ */
 export function TeamInfoPanel({
-  snapshot,
   store,
-  bridge,
   requestCount,
   onNavigate,
   onClose,
-  onError,
-  accessNow = () => Date.now() / 1000,
 }: {
-  snapshot: AgentSnapshot;
   store: TeamStore;
-  bridge: Bridge;
   requestCount?: import('../data/operation-queries').TeamRequestCount;
   onNavigate: (location: Location) => void;
   onClose: (restoreFocus?: boolean) => void;
-  onError: (error: unknown) => void;
-  accessNow?: () => number;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const { bridge, accessNow, commandError: onError } = useShellServices();
   const panel = useRef<HTMLElement>(null);
   const inbox = useSidebarInbox();
   useEffect(() => {

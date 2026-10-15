@@ -4,9 +4,11 @@ import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { createElement, StrictMode } from 'react';
 import type { Bridge, ReadItemResponse } from '../src/bridge';
 import type { GuardVerdict, LocationStore } from '../src/location';
+import type { Item } from '../src/model';
+import type { AgentSnapshot } from '../src/model/types';
 import type { DetailsPanelProps } from '../src/screens/details-panel';
 import { installDom } from './lib/dom-harness';
-import { loadTestShell } from './lib/test-shell';
+import { loadTestShell, type TestShellProps } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -21,9 +23,7 @@ test.afterEach(() => ui.cleanup());
 
 async function setup(
   readItem?: Bridge['readItem'],
-  selectItem?: (
-    item: DetailsPanelProps['snapshot']['items'][number],
-  ) => boolean,
+  selectItem?: (item: Item) => boolean,
   /** Present when the panel is mounted under a store's guard registry. */
   store?: LocationStore,
 ) {
@@ -37,17 +37,22 @@ async function setup(
     selectItem ?? ((item) => item.path === '/env/prod/DATABASE_URL'),
   )!;
   assert.ok(subject);
+  const TestShell = await loadTestShell();
   const bridge = mockBridge();
   const props: DetailsPanelProps = {
-    snapshot: FIXTURE,
-    bridge: readItem ? { ...bridge, readItem } : bridge,
     selection: { store: subject.store, path: subject.path },
     onClose: () => {},
     onTrash: () => {},
     onConflict: () => {},
-    onApplied: async () => {},
-    onCommandError: () => {},
-    onMutationError: async () => {},
+  };
+  // The services the panel reads from the shell; a test replaces one before
+  // the next draw.
+  const shell: Omit<TestShellProps, 'children'> & {
+    snapshot: AgentSnapshot;
+    bridge: Bridge;
+  } = {
+    snapshot: FIXTURE,
+    bridge: readItem ? { ...bridge, readItem } : bridge,
   };
   const panel = () =>
     createElement(OverlayProvider, {
@@ -55,7 +60,10 @@ async function setup(
       portalRoot: document.getElementById('overlays')!,
       children: createElement(ToastProvider, {
         controller: new ToastController(),
-        children: createElement(DetailsPanel, props),
+        children: createElement(TestShell, {
+          ...shell,
+          children: createElement(DetailsPanel, props),
+        }),
       }),
     });
   const draw = () =>
@@ -66,16 +74,16 @@ async function setup(
         ? createElement(NavigationGuardProvider, { store, children: panel() })
         : panel(),
     );
-  return { props, draw, subject, bridge };
+  return { props, shell, draw, subject, bridge };
 }
 
 for (const kind of ['Secret', 'File'] as const) {
   test(`${kind} actions remain visible but disabled after vault access is lost`, async () => {
     const p = await setup(undefined, (item) => item.kind === kind);
     const rendered = ui.render(p.draw());
-    p.props.snapshot = {
-      ...p.props.snapshot,
-      storeInventory: p.props.snapshot.storeInventory.map((entry) =>
+    p.shell.snapshot = {
+      ...p.shell.snapshot,
+      storeInventory: p.shell.snapshot.storeInventory.map((entry) =>
         entry.store === p.subject.store
           ? { ...entry, status: 'unavailable' as const }
           : entry,
@@ -148,12 +156,12 @@ test('an open edit disables Save after access loss without discarding the draft 
     writes++;
     return { applied: true };
   };
-  const original = p.props.snapshot;
+  const original = p.shell.snapshot;
   const rendered = ui.render(p.draw());
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
   const username = await rendered.findByLabelText('User name');
   ui.fireEvent.change(username, { target: { value: 'retained-draft' } });
-  p.props.snapshot = {
+  p.shell.snapshot = {
     ...original,
     storeInventory: original.storeInventory.map((entry) =>
       entry.store === p.subject.store
@@ -178,7 +186,7 @@ test('an open edit disables Save after access loss without discarding the draft 
   );
   ui.fireEvent.click(save);
   assert.equal(writes, 0);
-  p.props.snapshot = original;
+  p.shell.snapshot = original;
   rendered.rerender(p.draw());
   assert.equal(
     (
@@ -198,9 +206,9 @@ test('an open team edit disables Save when its write authorization is revoked', 
   const rendered = ui.render(p.draw());
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
   await rendered.findByRole('button', { name: 'Save changes' });
-  p.props.snapshot = {
-    ...p.props.snapshot,
-    parties: p.props.snapshot.parties.filter(
+  p.shell.snapshot = {
+    ...p.shell.snapshot,
+    parties: p.shell.snapshot.parties.filter(
       (party) => party.store !== p.subject.store || party.label !== 'you',
     ),
   };
@@ -224,14 +232,14 @@ test('access expiring between render and click disables Show and explains the re
     throw new Error('must not read');
   });
   let now = 1;
-  p.props.accessNow = () => now;
-  const store = p.props.snapshot.stores.find(
+  p.shell.accessNow = () => now;
+  const store = p.shell.snapshot.stores.find(
     (entry) => entry.id === p.subject.store,
   )!;
-  p.props.snapshot = {
-    ...p.props.snapshot,
+  p.shell.snapshot = {
+    ...p.shell.snapshot,
     observedExpiredLeases: [],
-    servers: p.props.snapshot.servers.map((server) =>
+    servers: p.shell.snapshot.servers.map((server) =>
       server.profileName === store.server
         ? {
             ...server,
@@ -267,7 +275,7 @@ test('an already-open Delete permanently sheet disables its action when access i
   const TestShell = await loadTestShell();
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  let snapshot = p.props.snapshot;
+  let snapshot = p.shell.snapshot;
   let writes = 0;
   p.bridge.removeItem = async () => {
     writes++;
@@ -319,7 +327,7 @@ test('an already-open Delete permanently sheet disables its action when access i
   );
   ui.fireEvent.click(remove);
   assert.equal(writes, 0);
-  snapshot = p.props.snapshot;
+  snapshot = p.shell.snapshot;
   rendered.rerender(draw());
   assert.equal(
     (
@@ -446,7 +454,7 @@ test('a pending read cannot reveal into a different selection', async () => {
   const p = await setup(() => pending);
   const r = ui.render(p.draw());
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
-  const other = p.props.snapshot.items.find((item) => item.kind === 'Secret')!;
+  const other = p.shell.snapshot.items.find((item) => item.kind === 'Secret')!;
   p.props.selection = { store: other.store, path: other.path };
   r.rerender(p.draw());
   await ui.act(async () => {
@@ -474,13 +482,13 @@ test('an access generation quarantines old read flights across expiry and renewa
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
   await ui.waitFor(() => assert.equal(reads, 1));
 
-  const store = p.props.snapshot.stores.find(
+  const store = p.shell.snapshot.stores.find(
     (entry) => entry.id === p.subject.store,
   );
   assert.ok(store);
-  p.props.snapshot = {
-    ...p.props.snapshot,
-    servers: p.props.snapshot.servers.map((server) =>
+  p.shell.snapshot = {
+    ...p.shell.snapshot,
+    servers: p.shell.snapshot.servers.map((server) =>
       server.profileName === store.server
         ? {
             ...server,
@@ -506,9 +514,9 @@ test('an access generation quarantines old read flights across expiry and renewa
   });
   assert.equal(r.queryByText('/expired-flight', { exact: false }), null);
 
-  p.props.snapshot = {
-    ...p.props.snapshot,
-    servers: p.props.snapshot.servers.map((server) =>
+  p.shell.snapshot = {
+    ...p.shell.snapshot,
+    servers: p.shell.snapshot.servers.map((server) =>
       server.profileName === store.server
         ? {
             ...server,
@@ -602,8 +610,8 @@ test('a mismatched version is rejected and Show retries the read', async () => {
 test('copy failures are forwarded to the shell error handler', async () => {
   const p = await setup();
   const handled: unknown[] = [];
-  p.props.bridge = {
-    ...p.props.bridge,
+  p.shell.bridge = {
+    ...p.shell.bridge,
     copyItemValue: async () => {
       throw {
         code: 'protocol',
@@ -614,7 +622,7 @@ test('copy failures are forwarded to the shell error handler', async () => {
       };
     },
   };
-  p.props.onCommandError = (error) => {
+  p.shell.commandError = (error) => {
     handled.push(error);
   };
   const r = ui.render(p.draw());
@@ -719,9 +727,9 @@ test('background version changes retain the draft and its original write precond
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
   const username = await rendered.findByLabelText('User name');
   ui.fireEvent.change(username, { target: { value: 'retained-draft' } });
-  p.props.snapshot = {
-    ...p.props.snapshot,
-    items: p.props.snapshot.items.map((item) =>
+  p.shell.snapshot = {
+    ...p.shell.snapshot,
+    items: p.shell.snapshot.items.map((item) =>
       item.store === p.subject.store && item.path === p.subject.path
         ? { ...item, version: item.version + 1 }
         : item,
@@ -770,9 +778,9 @@ test('background identity changes preserve the original edit target', async () =
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Edit' }));
   const username = await rendered.findByLabelText('User name');
   ui.fireEvent.change(username, { target: { value: 'retained-draft' } });
-  p.props.snapshot = {
-    ...p.props.snapshot,
-    items: p.props.snapshot.items.map((item) =>
+  p.shell.snapshot = {
+    ...p.shell.snapshot,
+    items: p.shell.snapshot.items.map((item) =>
       item.store === p.subject.store && item.path === p.subject.path
         ? { ...item, direntId: 'ab'.repeat(16) }
         : item,
@@ -912,7 +920,7 @@ test('reselecting the item being edited asks nothing; another item asks', async 
   ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
   const edited = p.props.selection;
   assert.ok(edited);
-  const other = p.props.snapshot.items.find(
+  const other = p.shell.snapshot.items.find(
     (item) => item.store !== edited.store || item.path !== edited.path,
   );
   assert.ok(other);
@@ -1060,8 +1068,8 @@ test('a login lists each field masked and shows only the field asked for', async
     undefined,
     (item) => item.path === '/logins/github.com',
   );
-  p.props.bridge = {
-    ...p.props.bridge,
+  p.shell.bridge = {
+    ...p.shell.bridge,
     readItem: async (request) => {
       reads++;
       return p.bridge.readItem(request);
@@ -1123,7 +1131,7 @@ test('a field the login lacks is reported, not copied, and reads as not set', as
   const { mockCopies } = await import('../src/mock/mock-bridge');
   const before = mockCopies.length;
   const handled: unknown[] = [];
-  p.props.onCommandError = (error) => {
+  p.shell.commandError = (error) => {
     handled.push(error);
   };
   const r = ui.render(p.draw());
@@ -1150,17 +1158,17 @@ test('a login saved outside /logins/ is a Password by its listed shape', async (
     shape: 'login' as const,
   };
   const snapshot = {
-    ...p.props.snapshot,
-    items: [...p.props.snapshot.items, login],
+    ...p.shell.snapshot,
+    items: [...p.shell.snapshot.items, login],
     plaintext: {
-      ...p.props.snapshot.plaintext,
+      ...p.shell.snapshot.plaintext,
       [`${login.store}|${login.path}`]:
         'user: admin\npassword: graf-77\nurl: https://grafana.internal',
     },
   };
   let saved = '';
-  p.props.snapshot = snapshot;
-  p.props.bridge = {
+  p.shell.snapshot = snapshot;
+  p.shell.bridge = {
     ...mockBridge(snapshot),
     editTextItem: async (request) => {
       saved = request.value;
@@ -1200,16 +1208,16 @@ async function setupLogin(
   };
   if (!shaped) delete (login as Partial<typeof login>).shape;
   const snapshot = {
-    ...p.props.snapshot,
-    items: [...p.props.snapshot.items, login],
+    ...p.shell.snapshot,
+    items: [...p.shell.snapshot.items, login],
     plaintext: {
-      ...p.props.snapshot.plaintext,
+      ...p.shell.snapshot.plaintext,
       [`${login.store}|${login.path}`]: text,
     },
   };
   const saved: string[] = [];
-  p.props.snapshot = snapshot;
-  p.props.bridge = {
+  p.shell.snapshot = snapshot;
+  p.shell.bridge = {
     ...mockBridge(snapshot),
     editTextItem: async (request) => {
       saved.push(request.value);

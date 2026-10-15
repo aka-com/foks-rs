@@ -5,6 +5,7 @@ import type { AgentSnapshot, TeamStore } from '../src/model';
 import type { Location } from '../src/location';
 import type { Bridge } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -26,6 +27,7 @@ async function mount(
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
+  const TestShell = await loadTestShell();
   const snapshot = transform(FIXTURE);
   const store = snapshot.stores.find(
     (store) => store.id === 'team:eng',
@@ -46,16 +48,20 @@ async function mount(
       snapshot: shown,
       bridge,
       enabled: false,
-      children: createElement(TeamInfoPanel, {
+      children: createElement(TestShell, {
         snapshot: shown,
-        store: shown.stores.find((entry) => entry.id === store.id) as TeamStore,
         bridge,
-        requestCount: 2,
-        onNavigate: (location) => navigations.push(location),
-        onClose: (restore) => closed.push(restore),
-        onError: (error) => {
+        commandError: (error) => {
           throw error;
         },
+        children: createElement(TeamInfoPanel, {
+          store: shown.stores.find(
+            (entry) => entry.id === store.id,
+          ) as TeamStore,
+          requestCount: 2,
+          onNavigate: (location) => navigations.push(location),
+          onClose: (restore) => closed.push(restore),
+        }),
       }),
     });
   let rendered!: ReturnType<typeof ui.render>;

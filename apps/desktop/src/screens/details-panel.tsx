@@ -47,7 +47,7 @@ import {
   storeNavigationOrder,
   storeOf,
 } from '../model';
-import type { Item, LoginFieldName, AgentSnapshot } from '../model';
+import type { Item, LoginFieldName } from '../model';
 import type { NavigationGuard, Selection } from '../location';
 import { useNavigationGuard } from '../navigation-guard';
 import { normalizeCommandError } from '../bridge';
@@ -58,7 +58,6 @@ import type {
   ReadItemResponse,
 } from '../bridge';
 import { useFileDrop } from '../file-drop';
-import type { MutationFailureHandler } from '../data/mutation-recovery';
 import { COPY_LABELS, copyAndAnnounce } from './item-copy';
 import {
   isFavorite,
@@ -69,6 +68,7 @@ import {
 import { itemActionProblem } from './store-access';
 import { copyProblem } from './item-moves';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 import { editorBound, useItemSecrets } from './item-secrets';
 
 const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
@@ -89,7 +89,6 @@ function fieldLabel(key: string): string {
 }
 
 const MASK = '••••••••••••';
-const systemAccessNow = (): number => Date.now() / 1000;
 
 /** Coalesces concurrent in-flight read requests for the same item. */
 const readFlights = new WeakMap<
@@ -190,9 +189,11 @@ function loginRows(shown: string | null): LoginRow[] {
   return rows;
 }
 
+/**
+ * The panel reads the snapshot, the bridge, the lease clock, the applied
+ * refresh and the error handlers from the shell services.
+ */
 export interface DetailsPanelProps {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   selection: Selection;
   /** Key of an item requested to be revealed immediately on render. */
   revealRequest?: string | null;
@@ -208,16 +209,10 @@ export interface DetailsPanelProps {
     draft: string,
     operation?: 'edit' | 'replace',
   ) => void;
-  /** Pass the affected profile so post-mutation refresh can reload only that profile. */
-  onApplied: (message: string, profile?: string) => Promise<void>;
-  onCommandError: (error: unknown, item?: Item) => void;
-  onMutationError: MutationFailureHandler;
   /** Signal counter incremented to clear revealed secrets from view state. */
   concealSignal?: number;
   /** Changes whenever access is revoked so old read flights cannot be reused. */
   accessGeneration?: number;
-  /** Current wall-clock seconds used by access checks at dispatch/result time. */
-  accessNow?: () => number;
   /** Unique unlocked-shell identity preventing reads from crossing lock cycles. */
   accessSession?: object;
   accessTicket?: import('../data/access-lifetime').AccessTicket;
@@ -230,8 +225,6 @@ export interface DetailsPanelProps {
 }
 
 export function DetailsPanel({
-  snapshot,
-  bridge,
   selection,
   revealRequest = null,
   onRevealHandled,
@@ -240,16 +233,20 @@ export function DetailsPanel({
   onMove,
   onCopyToVault,
   onConflict,
-  onApplied,
-  onCommandError,
-  onMutationError,
   concealSignal = 0,
   accessGeneration = 0,
-  accessNow = systemAccessNow,
   accessSession,
   accessTicket,
   resumeDraft = null,
 }: DetailsPanelProps): ReactNode {
+  const snapshot = useShellSnapshot();
+  const {
+    bridge,
+    accessNow,
+    refresh: onApplied,
+    commandError: onCommandError,
+    mutationError: onMutationError,
+  } = useShellServices();
   const panelRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const dismiss = (event: PointerEvent): void => {

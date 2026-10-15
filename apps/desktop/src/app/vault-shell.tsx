@@ -1054,12 +1054,8 @@ export function VaultShell({
               })}
             >
               <TeamInfoPanel
-                snapshot={shown}
                 store={infoStore}
-                bridge={bridge}
                 requestCount={teamRequestCounts.get(infoStore.id)}
-                accessNow={accessNow}
-                onError={commandError}
                 onNavigate={(location) => locations.navigate(location)}
                 onClose={(restoreFocus = true) => {
                   setTeamInfo(null);
@@ -1078,8 +1074,6 @@ export function VaultShell({
               })}
             >
               <DetailsPanel
-                snapshot={shown}
-                bridge={bridge}
                 revealRequest={revealRequest}
                 onRevealHandled={() => setRevealRequest(null)}
                 selection={state.selection}
@@ -1092,12 +1086,8 @@ export function VaultShell({
                 onConflict={(item, draft, operation) =>
                   setWorkflow({ kind: 'conflict', item, draft, operation })
                 }
-                onApplied={refresh}
-                onCommandError={commandError}
-                onMutationError={mutationError}
                 concealSignal={concealSignal}
                 accessGeneration={selectedAccessGeneration}
-                accessNow={accessNow}
                 accessSession={accessSession}
                 accessTicket={lifetime.capture(
                   state.selection
