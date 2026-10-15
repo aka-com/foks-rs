@@ -826,6 +826,12 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         return Ok(());
     };
+    // Neither migration path compares the migrated sqlite_schema with a fresh
+    // database before setting user_version; inspect_existing does, and
+    // migration_tests compares every supported predecessor. A check here
+    // would refuse to open a field database whose schema differs from
+    // INITIAL in a way the store does not depend on, which today fails only
+    // at snapshot inspection.
     if version == 38 {
         merkle_checkpoint::migrate(connection)?;
         return Ok(());
@@ -840,20 +846,7 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         let version: u32 =
             transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version == 39 || version == 40 {
-            let has_admission_floor: bool = transaction.query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM pragma_table_info('kv_adapter_clocks')
-                    WHERE name='admission_floor'
-                )",
-                [],
-                |row| row.get(0),
-            )?;
-            if has_admission_floor {
-                transaction.execute_batch(
-                    "ALTER TABLE kv_adapter_clocks
-                     RENAME COLUMN admission_floor TO validated_time_floor;",
-                )?;
-            }
+            rename_adapter_admission_floor(&transaction)?;
             add_adapter_boot_id(&transaction)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -865,6 +858,26 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
             found: version,
             supported: SCHEMA_VERSION,
         });
+    }
+    Ok(())
+}
+
+/// Version 40 renamed kv_adapter_clocks.admission_floor to
+/// validated_time_floor. Version 38 and 39 databases may carry either name.
+fn rename_adapter_admission_floor(transaction: &Transaction<'_>) -> Result<()> {
+    let has_admission_floor: bool = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM pragma_table_info('kv_adapter_clocks')
+            WHERE name='admission_floor'
+        )",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_admission_floor {
+        transaction.execute_batch(
+            "ALTER TABLE kv_adapter_clocks
+             RENAME COLUMN admission_floor TO validated_time_floor;",
+        )?;
     }
     Ok(())
 }

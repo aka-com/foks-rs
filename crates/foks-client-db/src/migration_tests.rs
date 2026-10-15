@@ -45,6 +45,9 @@ impl Predecessor {
 }
 
 /// Rewrites a current database into `predecessor`'s schema, keeping its rows.
+/// For version 38 the caller must first store every Merkle head as legacy
+/// evidence (kinds 1 to 3); the version 38 merkle_heads CHECK rejects
+/// `LocalCheckpoint` rows.
 pub(crate) fn rebuild_predecessor(transaction: &Transaction<'_>, predecessor: Predecessor) {
     if !predecessor.boot_id {
         transaction
