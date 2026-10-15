@@ -168,37 +168,6 @@
   margin: 0;
 }
 
-/* Teams list summary */
-.nav-rows .row .tail .summary {
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-/* Read-only nav row */
-.nav-rows .row.flat {
-  cursor: default;
-  border-bottom: 0;
-  /* Disclosure inset alignment */
-  padding: 9px 8px;
-}
-
-.nav-rows .row.flat:hover {
-  background: transparent;
-}
-
-.nav-rows .row.flat > .kic,
-.nav-rows .row.flat > .kico {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  font-size: 14px;
-}
-
-.nav-rows .row.flat > .kic .ic,
-.nav-rows .row.flat > .kico .ic {
-  font-size: 15px;
-}
-
 /* Group row line */
 .nav-rows .rowline {
   position: relative;

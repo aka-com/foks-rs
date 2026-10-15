@@ -255,7 +255,8 @@ test('first-run rules live in the first-run sheet, below the other features', as
 test('settings rules live in the settings sheet, in the sublayer after first-run', async () => {
   await assertFeatureClasses(SETTINGS, SETTINGS_ONLY_CLASSES);
   // The settings rules were in the components layer, under the files, chat,
-  // teams and search rules; the sublayer after first-run keeps that order.
+  // team details and search rules; the sublayer after first-run keeps that
+  // order.
   assert.equal((await featureLayers())[1], 'features.settings');
 });
 

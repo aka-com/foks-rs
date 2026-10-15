@@ -1835,8 +1835,11 @@ into `overrides`. A declaration in a later layer outranks one in an earlier
 layer whatever their specificity (`!important` reverses the order), so a
 feature's rules override the component rules without heavier selectors.
 `features.first-run` is the first sublayer and `features.settings` the
-second, so the rules of the other features still outrank them, as they did
-when those rules were in `app.css`. Within `features.teams`, `team-info.css`
+second, so the rules of the files, chat, team details and search sheets still
+outrank them, as they did when those rules were in `app.css`. The team rules
+in `teams.css` were in `app.css` with the settings rules and now outrank them
+by layer order; no settings rule and team rule set different values on the
+same element. Within `features.teams`, `team-info.css`
 is imported after `teams.css`, so the team details panel still wins a tie of
 specificity. Where a first-run rule must keep a component value, it declares
 the property as `revert-layer` rather than copying the value from `app.css`.

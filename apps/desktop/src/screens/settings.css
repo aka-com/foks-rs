@@ -149,20 +149,6 @@
   margin-top: 0;
 }
 
-/* Security key actions menu */
-.menu[aria-label='Security key operations'] {
-  width: 300px;
-  max-width: calc(100vw - 24px);
-  font-size: 13px;
-}
-.menu[aria-label='Security key operations'] button {
-  min-height: 30px;
-  line-height: 1.35;
-}
-.menu[aria-label='Security key operations'] .menu-separator {
-  margin: 4px 3px;
-}
-
 /* Preference checkboxes: desktop alerts and onboarding tips */
 .inset.settings-checkboxes > label {
   display: flex;
