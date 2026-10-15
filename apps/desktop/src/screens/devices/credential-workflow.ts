@@ -1,6 +1,6 @@
 import type { Bridge, YubiCommand } from '../../bridge';
 import type { AccountStore } from '../../model';
-import type { SimpleYubiAction, PassphraseMode } from '../device-sheets';
+import type { SimpleYubiAction, PassphraseMode } from './credential-actions';
 import type { useWorkflowAccess } from '../../workflow-context';
 
 export function credentialCommand({

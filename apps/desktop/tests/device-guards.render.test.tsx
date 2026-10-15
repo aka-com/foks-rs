@@ -40,7 +40,12 @@ function never<T>(): Promise<T> {
 const AWAY: Location = { kind: 'files' };
 
 async function harness() {
-  const sheets = await import('../src/screens/device-sheets');
+  const sheets = {
+    ...(await import('../src/screens/devices/sheets/pair-sheet')),
+    ...(await import('../src/screens/devices/sheets/passphrase-sheet')),
+    ...(await import('../src/screens/devices/sheets/phrase-sheet')),
+    ...(await import('../src/screens/devices/sheets/revoke-sheet')),
+  };
   const locations = await import('../src/location');
   const guards = await import('../src/navigation-guard');
   const { mockBridge } = await import('../src/mock-bridge');

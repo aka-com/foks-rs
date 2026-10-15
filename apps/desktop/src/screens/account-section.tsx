@@ -81,7 +81,9 @@ import { AccountMark } from '../components/account-mark';
 import { deviceEntries } from './device-model';
 import type { DeviceLists } from './device-model';
 import { GoProfileConnectSheet } from './go-profile-connect';
-import { EnrollSheet, PassphraseSheet, RecoverSheet } from './device-sheets';
+import { EnrollSheet } from './devices/sheets/enroll-sheet';
+import { PassphraseSheet } from './devices/sheets/passphrase-sheet';
+import { RecoverSheet } from './devices/sheets/recover-sheet';
 
 const ACTION_UNAVAILABLE =
   'Resolve this under Account servers, or in the team’s settings.';

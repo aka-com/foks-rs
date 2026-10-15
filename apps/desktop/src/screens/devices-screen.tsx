@@ -73,19 +73,17 @@ import type {
 } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
-import {
-  AddDeviceSheet,
-  EnrollSheet,
-  PairSheet,
-  PhraseSheet,
-  ProvisionSheet,
-  RemoveDeviceSheet,
-  RevokeBackupSheet,
-  RevokeSheet,
-  YubiActionSheet,
-  YUBI_WORKFLOWS,
-} from './device-sheets';
-import type { SimpleYubiAction } from './device-sheets';
+import { AddDeviceSheet } from './devices/sheets/add-device-sheet';
+import { EnrollSheet } from './devices/sheets/enroll-sheet';
+import { PairSheet } from './devices/sheets/pair-sheet';
+import { PhraseSheet } from './devices/sheets/phrase-sheet';
+import { ProvisionSheet } from './devices/sheets/provision-sheet';
+import { RemoveDeviceSheet } from './devices/sheets/remove-device-sheet';
+import { RevokeBackupSheet } from './devices/sheets/revoke-backup-sheet';
+import { RevokeSheet } from './devices/sheets/revoke-sheet';
+import { YubiActionSheet } from './devices/sheets/yubi-action-sheet';
+import { YUBI_WORKFLOWS } from './devices/credential-actions';
+import type { SimpleYubiAction } from './devices/credential-actions';
 import {
   deviceAt,
   deviceEntries,

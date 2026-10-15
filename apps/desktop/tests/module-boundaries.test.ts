@@ -235,6 +235,7 @@ test('screen and shell model modules load without React or a view module', async
   // unit-tested in node and read without the views around them.
   const models = [
     'shell/sync-summary.ts',
+    'screens/devices/credential-actions.ts',
     'screens/group-model.ts',
     'screens/servers/server-model.ts',
     'screens/write-workflow-model.ts',

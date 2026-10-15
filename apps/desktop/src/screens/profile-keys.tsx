@@ -6,8 +6,8 @@ import type { Bridge } from '../bridge';
 import { Button, Inset, InsetRow, SectionLabel } from '../components';
 import { useWorkflowAccess } from '../workflow-context';
 import type { AgentSnapshot, Server } from '../model';
-import { YubiActionSheet } from './device-sheets';
-import type { SimpleYubiAction } from './device-sheets';
+import { YubiActionSheet } from './devices/sheets/yubi-action-sheet';
+import type { SimpleYubiAction } from './devices/credential-actions';
 
 export function ProfileKeys({
   snapshot,
