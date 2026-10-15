@@ -3,6 +3,7 @@ import { transitionFirstRun } from '../../first-run-state';
 import type { FirstRunCheckpoint } from '../../first-run-state';
 import type { useFirstRunController } from '../../use-first-run-controller';
 import type { useSetupReconciliation } from './use-setup-reconciliation';
+import type { SetupSecrets } from './use-setup-secrets';
 
 /** Account protection commands: UI drafts are ephemeral; only receipts enter the checkpoint. */
 export function useProtectionActions({
@@ -10,16 +11,9 @@ export function useProtectionActions({
   agentReady,
   checkpoint,
   accountAlias,
-  passphrase,
-  confirmation,
-  generatedRecoveryPhrase,
-  phraseWritten,
+  secrets,
   setBusy,
   setMessage,
-  setPassphrase,
-  setConfirmation,
-  setPhraseWritten,
-  clearSecrets,
   send,
   commit,
   fail,
@@ -30,18 +24,15 @@ export function useProtectionActions({
   bridge: Bridge;
   agentReady: boolean;
   accountAlias: string;
-  passphrase: string;
-  confirmation: string;
-  generatedRecoveryPhrase: string | null;
-  phraseWritten: boolean;
+  secrets: SetupSecrets;
   setBusy: (busy: boolean) => void;
   setMessage: (message: string | null) => void;
-  setPassphrase: (phrase: string) => void;
-  setConfirmation: (phrase: string) => void;
-  setPhraseWritten: (written: boolean) => void;
-  clearSecrets: () => void;
   fail: ReturnType<typeof useSetupReconciliation>['fail'];
 }) {
+  const { passphrase, confirmation, setPassphrase, setConfirmation } = secrets;
+  const { generatedRecoveryPhrase, phraseWritten, setPhraseWritten } =
+    secrets.backup;
+  const clearSecrets = secrets.clear;
   const profile = checkpoint.profile;
   const continueProtection = async (): Promise<void> => {
     if (!agentReady) return;

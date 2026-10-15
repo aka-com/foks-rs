@@ -24,7 +24,12 @@ import { JoiningChoice } from './first-run/setup-method-choice';
 import { WaitingForTeamStep } from './first-run/waiting-for-team-step';
 import { SetupChecklistStep } from './first-run/setup-checklist-step';
 import { useProtectionActions } from './first-run/use-protection-actions';
-import { useRecoveryBackup } from './first-run/use-recovery-backup';
+import { useSetupSecrets } from './first-run/use-setup-secrets';
+import {
+  setupBusy,
+  setupLeaveBlocked,
+  setupMutating,
+} from './first-run/setup-busy';
 import {
   protectionNavigationPolicy,
   setupNavigationEvent,
@@ -249,16 +254,24 @@ function FirstRunSession({
       fixDeviceName(facts?.deviceName ?? suggestedDeviceName()),
   );
   const [email, setEmail] = useState('');
-  const [invite, setInvite] = useState('');
+  const secrets = useSetupSecrets();
+  const {
+    invite,
+    setInvite,
+    passphrase,
+    setPassphrase,
+    confirmation,
+    setConfirmation,
+    recoveryPhrase,
+    setRecoveryPhrase,
+    pairingPhrase,
+    setPairingPhrase,
+  } = secrets;
   const showSso =
     checkpoint.accountMethod === 'organization' || Boolean(checkpoint.sso);
   const [ssoPrimarySlot, setSsoPrimarySlot] = useState<HTMLElement | null>(
     null,
   );
-  const [passphrase, setPassphrase] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-  const [recoveryPhrase, setRecoveryPhrase] = useState('');
-  const [pairingPhrase, setPairingPhrase] = useState('');
   // The sign-in method the user picked on the sign-in step. Not persisted:
   // it is a choice within one page, and leaving the sign-in path clears it.
   const [chosenSigninMethod, setChosenSigninMethod] =
@@ -285,12 +298,10 @@ function FirstRunSession({
     setPhraseWritten,
     phraseOperation,
     prepare: prepareBackup,
-    clearBackup,
-    navigateBackup,
-  } = useRecoveryBackup();
+  } = secrets.backup;
   // Pending path selection before confirmation.
   const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
-  const [otherMutationBusy, setBusy] = useState(false);
+  const [accountBusy, setBusy] = useState(false);
   const [personalRefreshing, setPersonalRefreshing] = useState(false);
   const [personalRefreshError, setPersonalRefreshError] = useState<
     string | null
@@ -349,7 +360,13 @@ function FirstRunSession({
     checkpointRef,
     mounted,
     commit,
-    busy: otherMutationBusy || serverWorkflow.busy || phraseOperation !== null,
+    busy:
+      setupBusy({
+        account: accountBusy,
+        discovery: false,
+        serverCheck: serverWorkflow.busy,
+        phrase: phraseOperation !== null,
+      }) !== null,
     onRefreshSnapshot,
     setMessage,
     fail,
@@ -360,15 +377,14 @@ function FirstRunSession({
     discoveredGroups,
     outcome: discoveryOutcome,
   } = teamDiscovery;
-  const mutationBusy =
-    otherMutationBusy || serverWorkflow.busy || teamDiscovery.busy;
-  const busyOperation =
-    otherMutationBusy || teamDiscovery.busy
-      ? 'other'
-      : serverWorkflow.busy
-        ? 'server-check'
-        : null;
-  const busy = mutationBusy || phraseOperation !== null;
+  const busyWith = setupBusy({
+    account: accountBusy,
+    discovery: teamDiscovery.busy,
+    serverCheck: serverWorkflow.busy,
+    phrase: phraseOperation !== null,
+  });
+  const mutationBusy = setupMutating(busyWith);
+  const busy = busyWith !== null;
   const accountOperations = useAccountOperations({
     bridge,
     agentReady,
@@ -605,23 +621,17 @@ function FirstRunSession({
     ? snapshot.items.filter((item) => item.store === accountStore).length
     : 0;
 
+  const { clear: clearSecrets, navigate: navigateSecrets } = secrets;
   const go = useCallback(
     (next: FirstRunStateName): void => {
       const policy = protectionNavigationPolicy(
         { state, backupCommitted: checkpoint.backupCommitted },
         next,
       );
-      navigateBackup(policy);
+      navigateSecrets(policy);
       setMessage(null);
       setDuplicateAlias(null);
       setConnectionErrors({ copy: null, recover: null, pair: null });
-      setRecoveryPhrase('');
-      setPairingPhrase('');
-      setInvite('');
-      if (policy.clearPassphrase) {
-        setPassphrase('');
-        setConfirmation('');
-      }
       send(setupNavigationEvent(checkpointRef.current, next));
     },
     [
@@ -630,7 +640,7 @@ function FirstRunSession({
       send,
       setDuplicateAlias,
       state,
-      navigateBackup,
+      navigateSecrets,
     ],
   );
   const openExisting = useCallback((): void => {
@@ -737,40 +747,11 @@ function FirstRunSession({
     return progress;
   };
 
-  /**
-   * Whether a secret is visible when the guard is evaluated. `clearSecrets`
-   * updates this value before sidebar navigation, so the verdict reflects the
-   * cleared state without waiting for another render.
-   */
-  const secretsHeld = useRef(false);
-  secretsHeld.current = Boolean(
-    invite ||
-    passphrase ||
-    confirmation ||
-    recoveryPhrase ||
-    pairingPhrase ||
-    generatedRecoveryPhrase,
+  /** Why the sidebar's Leave setup is inert. */
+  const leaveDisabled = setupLeaveBlocked(
+    busyWith,
+    Boolean(checkpoint.provisioning),
   );
-
-  const clearSecrets = useCallback((): void => {
-    clearBackup();
-    setInvite('');
-    setPassphrase('');
-    setConfirmation('');
-    setRecoveryPhrase('');
-    setPairingPhrase('');
-    secretsHeld.current = false;
-  }, [clearBackup]);
-
-  /**
-   * Why the sidebar's Leave setup is inert: a write is out that this screen is
-   * the only report of. A provisioning that has been acknowledged is not one
-   * of them. That is what Finish later leaves behind.
-   */
-  const leaveDisabled =
-    mutationBusy &&
-    busyOperation !== 'server-check' &&
-    !checkpoint.provisioning;
 
   const {
     recoveryActions,
@@ -804,10 +785,10 @@ function FirstRunSession({
     (intent) =>
       (intent.kind === 'navigate' && intent.location.kind === 'first-run') ||
       FIRST_RUN_SETTLED.includes(state) ||
-      (!secretsHeld.current && !leaveDisabled)
+      (!secrets.held.current && !leaveDisabled)
         ? null
         : { verdict: 'refuse', reason: 'Finish or leave setup first.' },
-    [leaveDisabled, state],
+    [leaveDisabled, secrets.held, state],
   );
   useNavigationGuard(setupGuard);
 
@@ -1054,16 +1035,9 @@ function FirstRunSession({
     agentReady,
     checkpoint,
     accountAlias,
-    passphrase,
-    confirmation,
-    generatedRecoveryPhrase,
-    phraseWritten,
+    secrets,
     setBusy,
     setMessage,
-    setPassphrase,
-    setConfirmation,
-    setPhraseWritten,
-    clearSecrets,
     send,
     commit,
     fail,
