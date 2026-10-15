@@ -17,7 +17,7 @@ use crate::commands::validation::{
     MAXIMUM_RECOVERY_PHRASE_BYTES, MAXIMUM_SYNC_FACTS,
 };
 use foks_agent_proto::{Operation, SecretString};
-use foks_desktop::{CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
+use foks_desktop::{ops, CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -737,17 +737,10 @@ pub async fn prepare_owner_backup(
     crate::applock::require_unlocked(&app)?;
     let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    let account_alias = bounded_local_name(&account_alias, "Choose a valid account alias.")?;
-    let backup_alias = bounded_local_name(&backup_alias, "Enter a valid backup alias.")?;
-    let expected = backup_alias.clone();
-    let operation = Operation::PrepareOwnerBackup {
-        profile: profile.clone(),
-        account_alias,
-        backup_alias,
-    };
+    let operation =
+        ops::accounts::prepare_owner_backup_operation(&profile, &account_alias, &backup_alias)?;
     let value = read_profile_operation_value(&state, profile, operation).await?;
-    recovery_phrase_response(value, &expected)
+    recovery_phrase_response(value, &backup_alias)
 }
 
 #[tauri::command]
@@ -764,25 +757,16 @@ pub async fn commit_owner_backup(
     crate::applock::require_unlocked(&app)?;
     let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    let account_alias = bounded_local_name(&account_alias, "Choose a valid account alias.")?;
-    let backup_alias = bounded_local_name(&backup_alias, "Provide a valid backup alias.")?;
-    let expected_account = account_alias.clone();
-    let expected_backup = backup_alias.clone();
-    let phrase = bounded_secret(
-        phrase,
-        MAXIMUM_RECOVERY_PHRASE_BYTES,
-        "Recovery phrase must be a single line of at most 4,096 bytes.",
+    let phrase = Zeroizing::new(phrase);
+    let operation = ops::accounts::commit_owner_backup_operation(
+        &profile,
+        &account_alias,
+        &backup_alias,
+        &phrase,
     )?;
-    let operation = Operation::CommitOwnerBackup {
-        profile: profile.clone(),
-        account_alias,
-        backup_alias,
-        phrase,
-    };
     let value =
         apply_profile_operation_value(&state, profile, operation, MutationKind::Guarded).await?;
-    backup_commit_response(value, &expected_account, &expected_backup)
+    backup_commit_response(value, &account_alias, &backup_alias)
         .map_err(|error| ambiguous_mutation_response(&state, error.message))
 }
 

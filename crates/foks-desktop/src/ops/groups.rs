@@ -2,9 +2,7 @@
 
 use foks_agent_proto::{AccountStoreRef, Operation, TeamKind, TeamRole, TeamStoreRef};
 
-use super::{required_field, typed_entity_id_hex, InvalidInput};
-
-const USER_ID_PREFIX: &str = "01";
+use super::{required_field, valid_typed_entity_id_hex, InvalidInput, USER_ID_PREFIX};
 
 /// The local selector the agent resolves a team membership operation against.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -117,14 +115,20 @@ pub fn remove_team_member_operation(
 /// Membership edits name the member by its authenticated user party id, never
 /// by a username the agent would have to resolve again.
 fn user_party_id(party_id_hex: &str) -> Result<String, InvalidInput> {
-    typed_entity_id_hex(party_id_hex, USER_ID_PREFIX, "Select a valid user.")
+    if valid_typed_entity_id_hex(party_id_hex, USER_ID_PREFIX) {
+        Ok(party_id_hex.to_owned())
+    } else {
+        Err(InvalidInput::new("Select a valid user."))
+    }
 }
 
 /// Only the member role carries a visibility level; the agent rejects one on
 /// the admin and owner roles.
 fn member_visibility(role: TeamRole, visibility: i16) -> Result<(), InvalidInput> {
     if role != TeamRole::Member && visibility != 0 {
-        return Err(InvalidInput("Visibility applies only to the member role."));
+        return Err(InvalidInput::new(
+            "Visibility applies only to the member role.",
+        ));
     }
     Ok(())
 }
@@ -201,7 +205,7 @@ mod tests {
         ] {
             assert_eq!(
                 remove_team_member_operation(team(), party_id_hex).unwrap_err(),
-                InvalidInput("Select a valid user.")
+                InvalidInput::new("Select a valid user.")
             );
             assert!(
                 promote_team_member_operation(team(), party_id_hex, TeamRole::Admin, 0).is_err()
@@ -232,7 +236,7 @@ mod tests {
 
     #[test]
     fn visibility_applies_only_to_the_member_role() {
-        let error = InvalidInput("Visibility applies only to the member role.");
+        let error = InvalidInput::new("Visibility applies only to the member role.");
         assert_eq!(
             add_team_member_operation(team(), "jules", TeamRole::Admin, 3).unwrap_err(),
             error

@@ -15,6 +15,7 @@ use foks_agent_proto::{
     TeamKind, TeamRole, TeamStoreRef, YubiRetryConfiguration,
 };
 use foks_desktop::ops::groups::{self, LocalTeam};
+use foks_desktop::ops::{self, accounts};
 use foks_desktop::{CatalogItem, CatalogStoreRef, KvAccountMutation};
 
 #[derive(clap::Parser)]
@@ -572,45 +573,47 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             invite_file,
             passphrase_file,
             passphrase_confirmation_file,
-        } => Operation::CreateAccount {
-            profile,
-            alias,
-            username,
-            device_name,
-            email,
-            invite: match invite_file {
+        } => {
+            let invite = match invite_file {
                 Some(path) => read_invite(&path)?,
                 None => SecretString::new(""),
-            },
-            passphrase: match (passphrase_file, passphrase_confirmation_file) {
+            };
+            let passphrase = match (passphrase_file, passphrase_confirmation_file) {
                 (Some(path), Some(confirmation)) => {
                     Some(read_confirmed_secret(&path, &confirmation)?)
                 }
                 (None, None) => None,
                 _ => return Err("both passphrase files are required".into()),
-            },
-        },
-        Command::ResumeAccount { profile, alias } => Operation::ResumeAccount { profile, alias },
+            };
+            accounts::create_account_operation(accounts::NewAccount {
+                profile: &profile,
+                alias: &alias,
+                username: &username,
+                device_name: &device_name,
+                email: &email,
+                invite: invite.expose(),
+                passphrase,
+            })?
+        }
+        Command::ResumeAccount { profile, alias } => {
+            accounts::resume_account_operation(&profile, &alias)?
+        }
         Command::BackupPrepare {
             profile,
             account_alias,
             backup_alias,
-        } => Operation::PrepareOwnerBackup {
-            profile,
-            account_alias,
-            backup_alias,
-        },
+        } => accounts::prepare_owner_backup_operation(&profile, &account_alias, &backup_alias)?,
         Command::BackupCommit {
             profile,
             account_alias,
             backup_alias,
             phrase_file,
-        } => Operation::CommitOwnerBackup {
-            profile,
-            account_alias,
-            backup_alias,
-            phrase: read_secret(&phrase_file)?,
-        },
+        } => accounts::commit_owner_backup_operation(
+            &profile,
+            &account_alias,
+            &backup_alias,
+            read_secret(&phrase_file)?.expose(),
+        )?,
         Command::BackupList {
             profile,
             account_alias,
@@ -623,24 +626,24 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             target_alias,
             phrase_file,
             device_name,
-        } => Operation::RecoverOwnerAccount {
-            profile,
-            target_alias,
-            phrase: read_secret(&phrase_file)?,
-            device_name,
-            serial: positive_device_serial()?,
-        },
+        } => accounts::recover_owner_account_operation(
+            &profile,
+            &target_alias,
+            read_secret(&phrase_file)?.expose(),
+            &device_name,
+            positive_device_serial()?,
+        )?,
         Command::ResumeRecovery {
             profile,
             target_alias,
             phrase_file,
             device_name,
-        } => Operation::ResumeOwnerRecovery {
-            profile,
-            target_alias,
-            phrase: read_secret(&phrase_file)?,
-            device_name,
-        },
+        } => accounts::resume_owner_recovery_operation(
+            &profile,
+            &target_alias,
+            read_secret(&phrase_file)?.expose(),
+            &device_name,
+        )?,
         Command::DiscoverTeams {
             profile,
             account_alias,
@@ -1201,11 +1204,7 @@ impl KvRoleArguments {
 }
 
 fn checked_local_name(value: String, label: &str) -> Result<String, Box<dyn std::error::Error>> {
-    if (1..=64).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
+    if ops::valid_local_name(&value) {
         Ok(value)
     } else {
         Err(format!(
@@ -1216,11 +1215,8 @@ fn checked_local_name(value: String, label: &str) -> Result<String, Box<dyn std:
 }
 
 fn valid_team_id_hex(value: &str) -> bool {
-    value.len() == 66
-        && (value.starts_with("03") || value.starts_with("14"))
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    ops::valid_typed_entity_id_hex(value, ops::NAMED_TEAM_ID_PREFIX)
+        || ops::valid_typed_entity_id_hex(value, ops::AD_HOC_TEAM_ID_PREFIX)
 }
 
 fn checked_kv_path(path: String) -> Result<String, Box<dyn std::error::Error>> {
@@ -1365,10 +1361,10 @@ fn read_confirmed_secret(
 ) -> Result<SecretString, Box<dyn std::error::Error>> {
     let passphrase = read_secret(path)?;
     let confirmation = read_secret(confirmation_path)?;
-    if passphrase.expose() != confirmation.expose() {
-        return Err("passphrase confirmation does not match".into());
-    }
-    Ok(passphrase)
+    Ok(accounts::confirmed_passphrase(
+        passphrase.expose(),
+        confirmation.expose(),
+    )?)
 }
 
 fn read_secret(path: &std::path::Path) -> Result<SecretString, Box<dyn std::error::Error>> {

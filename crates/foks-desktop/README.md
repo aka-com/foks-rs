@@ -2,21 +2,29 @@
 
 `foks-desktop` is the renderer-independent command library and scripted backend
 used by the Tauri desktop. It retains `foks-desktop-backend` as a JSON shell for
-protocol transcripts. It does not provide the product executable; the only shipping desktop
-binary is `apps/desktop/src-tauri`'s `foks-desktop`.
+protocol transcripts. It does not provide the product executable; the only
+shipping desktop binary is `apps/desktop/src-tauri`'s `foks-desktop`. Agent
+calls in the Tauri app run on blocking workers, never the webview thread. The
+scripted backend accepts secrets only through private files, never process
+arguments.
 
 Operation builders that both the Tauri command layer and the backend call live
 in this library: the KV mutation and upload-header builders at the crate root,
-and team creation and membership builders in `ops::groups`. Each caller maps its
-own input (renderer DTOs or command-line arguments) onto the shared function, so
-the real-agent transcript (`scripts/test-foks-desktop-real-agent.sh`) exercises
-the input rules the app ships with. A rejected input is an `ops::InvalidInput`,
-which the Tauri layer reports as `invalid-request`. For example, an ad-hoc team
-has no server-side name, so `create_team_operation` ignores a supplied name for
-it in both callers. Account, backup, recovery, passphrase and security key
-operations are still built separately by each caller. Agent calls in that app run on blocking
-workers, never the webview thread. The scripted backend accepts secrets only
-through private files, never process arguments.
+account creation, owner backup and owner recovery builders in `ops::accounts`,
+and team creation and membership builders in `ops::groups`. The field checks
+they use (local names, bounded fields and secrets, typed entity ids, usernames,
+device names and recovery phrases) are public in `ops`, and the Tauri layer's
+other commands call them rather than keeping copies. Each caller maps its own
+input (renderer DTOs or command-line arguments and private files) onto the
+shared function, so the real-agent transcript
+(`scripts/test-foks-desktop-real-agent.sh`) exercises the input rules the app
+ships with for its account, backup, recovery, team and KV mutation steps. A
+rejected input is an `ops::InvalidInput`, which the Tauri layer reports as
+`invalid-request`. For example, an ad-hoc team has no server-side name, so
+`create_team_operation` ignores a supplied name for it in both callers. Server
+profile, passphrase, security key and device pairing operations have not been
+moved yet and are still built separately by each caller; `ISSUES.md` tracks
+the remainder.
 
 For the first-run onboarding transcript, invoke the backend sequentially per line;
 the process may exit between lines. `pending` provides the authenticated checkpoint

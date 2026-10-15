@@ -76,15 +76,16 @@ fn device_names_are_cleaned_before_desktop_validation() {
 
 #[test]
 fn recovery_phrase_accepts_wrapped_tokens_without_changing_the_secret() {
-    use crate::commands::validation::{pairing_phrase, recovery_phrase};
+    use crate::commands::validation::pairing_phrase;
+    use foks_desktop::ops::accounts::recovery_phrase;
     let phrase = foks_crypto::BackupKey::from_seed([0; 26])
         .unwrap()
         .phrase()
         .expose_joined();
     let wrapped = phrase.replace(' ', "\r\n");
-    assert!(recovery_phrase(wrapped).is_ok());
-    assert!(recovery_phrase(format!("{}\0", phrase.as_str())).is_err());
-    assert!(recovery_phrase("x".repeat(4097)).is_err());
+    assert!(recovery_phrase(&wrapped).is_ok());
+    assert!(recovery_phrase(&format!("{}\0", phrase.as_str())).is_err());
+    assert!(recovery_phrase(&"x".repeat(4097)).is_err());
     let phrase = foks_crypto::KexSecret::generate()
         .unwrap()
         .phrase()

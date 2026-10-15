@@ -3,28 +3,28 @@
 use crate::agent::AgentError;
 use crate::commands::context::MAIN;
 use foks_agent_proto::{SecretString, YubiRetryConfiguration};
+use foks_desktop::ops::{self, accounts};
 use foks_desktop::CatalogSnapshot;
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
+// The field checks and entity-id prefixes shared with `foks-desktop-backend`
+// live in `foks_desktop::ops`; the wrappers below only convert their error.
+pub(super) use accounts::{
+    MAXIMUM_INVITE_BYTES, MAXIMUM_PASSPHRASE_BYTES, MAXIMUM_RECOVERY_PHRASE_BYTES,
+};
+pub(super) use ops::{
+    valid_local_name, valid_typed_entity_id_hex, AD_HOC_TEAM_ID_PREFIX, BACKUP_ID_PREFIX,
+    DEVICE_ID_PREFIX, HOST_ID_PREFIX, NAMED_TEAM_ID_PREFIX, SUBKEY_ID_PREFIX, USER_ID_PREFIX,
+};
+
 /// Maximum text payload size (2048 bytes minus 8-byte framing header).
 pub(super) const MAXIMUM_TEXT_ITEM_BYTES: usize = 2048 - 8;
 pub(super) const MAXIMUM_CLIPBOARD_TEXT_BYTES: usize = 128 * 1024;
-pub(super) const MAXIMUM_INVITE_BYTES: usize = 4 * 1024;
-pub(super) const MAXIMUM_PASSPHRASE_BYTES: usize = 1024;
-pub(super) const MAXIMUM_RECOVERY_PHRASE_BYTES: usize = 4 * 1024;
 pub(super) const MAXIMUM_FIRST_RUN_ROWS: usize = 4 * 1024;
 pub(super) const MAXIMUM_SYNC_FACTS: usize = 10_000_000;
-const ENTITY_ID_HEX_BYTES: usize = 66;
-pub(super) const USER_ID_PREFIX: &str = "01";
-pub(super) const HOST_ID_PREFIX: &str = "02";
-pub(super) const NAMED_TEAM_ID_PREFIX: &str = "03";
-pub(super) const DEVICE_ID_PREFIX: &str = "04";
 const YUBI_ID_PREFIX: &str = "08";
 pub(super) const YUBI_ID_HEX_BYTES: usize = 68;
-pub(super) const SUBKEY_ID_PREFIX: &str = "0d";
-pub(super) const BACKUP_ID_PREFIX: &str = "10";
-pub(super) const AD_HOC_TEAM_ID_PREFIX: &str = "14";
 
 pub(super) fn require_profile_available(
     catalog: &CatalogSnapshot,
@@ -42,12 +42,7 @@ pub(super) fn require_profile_available(
 }
 
 pub(super) fn required_field(value: &str, message: &'static str) -> Result<String, AgentError> {
-    let value = value.trim();
-    if value.is_empty() {
-        Err(invalid_request(message))
-    } else {
-        Ok(value.to_owned())
-    }
+    Ok(ops::required_field(value, message)?)
 }
 
 pub(super) fn valid_response_text(value: &str, maximum_bytes: usize) -> bool {
@@ -57,31 +52,8 @@ pub(super) fn valid_response_text(value: &str, maximum_bytes: usize) -> bool {
         && !value.contains(['\0', '\r', '\n'])
 }
 
-pub(super) fn valid_local_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
 pub(super) fn bounded_local_name(value: &str, message: &'static str) -> Result<String, AgentError> {
-    if valid_local_name(value) {
-        Ok(value.to_owned())
-    } else {
-        Err(invalid_request(message))
-    }
-}
-
-fn valid_entity_id_hex(value: &str) -> bool {
-    value.len() == ENTITY_ID_HEX_BYTES
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-pub(super) fn valid_typed_entity_id_hex(value: &str, prefix: &str) -> bool {
-    valid_entity_id_hex(value) && value.starts_with(prefix)
+    Ok(ops::bounded_local_name(value, message)?)
 }
 
 pub(super) fn valid_device_member_id_hex(value: &str) -> bool {
@@ -143,12 +115,7 @@ pub(super) fn bounded_field(
     maximum_bytes: usize,
     message: &'static str,
 ) -> Result<String, AgentError> {
-    let value = required_field(value, message)?;
-    if value.len() > maximum_bytes || value.contains(['\0', '\r', '\n']) {
-        Err(invalid_request(message))
-    } else {
-        Ok(value)
-    }
+    Ok(ops::bounded_field(value, maximum_bytes, message)?)
 }
 
 pub(super) fn optional_bounded_field(
@@ -156,11 +123,7 @@ pub(super) fn optional_bounded_field(
     maximum_bytes: usize,
     message: &'static str,
 ) -> Result<String, AgentError> {
-    if value.len() > maximum_bytes || value.contains(['\0', '\r', '\n']) {
-        Err(invalid_request(message))
-    } else {
-        Ok(value.trim().to_owned())
-    }
+    Ok(ops::optional_bounded_field(value, maximum_bytes, message)?)
 }
 
 pub(super) fn confirmed_passphrase(
@@ -169,18 +132,7 @@ pub(super) fn confirmed_passphrase(
 ) -> Result<SecretString, AgentError> {
     let passphrase = Zeroizing::new(passphrase);
     let confirmation = Zeroizing::new(confirmation);
-    if passphrase.as_str() != confirmation.as_str() {
-        return Err(invalid_request("Passphrase confirmation does not match."));
-    }
-    if passphrase.is_empty()
-        || passphrase.len() > MAXIMUM_PASSPHRASE_BYTES
-        || passphrase.contains(['\0', '\r', '\n'])
-    {
-        return Err(invalid_request(
-            "A passphrase is required and cannot exceed 1,024 characters.",
-        ));
-    }
-    Ok(SecretString::new(passphrase.as_str()))
+    Ok(accounts::confirmed_passphrase(&passphrase, &confirmation)?)
 }
 
 pub(super) fn optional_confirmed_passphrase(
@@ -204,11 +156,7 @@ pub(super) fn bounded_secret(
     message: &'static str,
 ) -> Result<SecretString, AgentError> {
     let value = Zeroizing::new(value);
-    if value.is_empty() || value.len() > maximum_bytes || value.contains(['\0', '\r', '\n']) {
-        Err(invalid_request(message))
-    } else {
-        Ok(SecretString::new(value.as_str()))
-    }
+    Ok(ops::bounded_secret(&value, maximum_bytes, message)?)
 }
 
 pub(super) fn yubi_slots(signing_slot: u8, pq_slot: u8) -> Result<(u8, u8), AgentError> {
@@ -255,73 +203,8 @@ pub(super) fn pairing_phrase(value: String) -> Result<SecretString, AgentError> 
     Ok(SecretString::new(value.as_str()))
 }
 
-/// A username the server will accept, checked here so a space or capital is
-/// refused with a sentence instead of a normalization error from the client.
-pub(super) fn valid_username(value: &str) -> Result<String, AgentError> {
-    let value = bounded_field(value, 256, "Enter a username.")?;
-    if foks_verify::normalize_username(value.as_bytes()).is_none() {
-        return Err(invalid_request(
-            "Usernames use 3 to 25 letters, numbers, and single underscores.",
-        ));
-    }
-    Ok(value)
-}
-
-/// A device name the server will accept, by the same rules the client applies.
 pub(super) fn valid_device_name(value: &str) -> Result<String, AgentError> {
-    if value.len() > foks_agent_proto::MAXIMUM_DEVICE_NAME_BYTES {
-        return Err(invalid_request(
-            "Device name input cannot exceed 4,096 bytes.",
-        ));
-    }
-    let value = foks_client_app::fix_device_name(value);
-    if value.is_empty() {
-        return Err(invalid_request("Enter a device name."));
-    }
-    if value.chars().any(|c| {
-        c.is_control()
-            || matches!(c,
-        '\u{00ad}' | '\u{061c}' | '\u{200b}'..='\u{200f}' |
-        '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}')
-    }) {
-        return Err(invalid_request(
-            "Remove invisible formatting or control characters from the device name.",
-        ));
-    }
-    if foks_verify::normalize_device_name(value.as_bytes()).is_none() {
-        return Err(invalid_request(foks_client_app::DEVICE_NAME_RULES));
-    }
-    Ok(value)
-}
-
-/// A recovery phrase, parsed before it leaves the app so a typo is named by
-/// position rather than reported as a failed recovery.
-pub(super) fn recovery_phrase(value: String) -> Result<SecretString, AgentError> {
-    let value = Zeroizing::new(value);
-    if value.is_empty() || value.len() > MAXIMUM_RECOVERY_PHRASE_BYTES || value.contains('\0') {
-        return Err(invalid_request(
-            "Recovery phrase must contain at most 4,096 bytes and no null characters.",
-        ));
-    }
-    if let Err(error) = foks_crypto::BackupKey::from_phrase(&value) {
-        use foks_crypto::RecoveryPhraseError as E;
-        return Err(invalid_request(match error {
-            E::TokenCount { found } => format!(
-                "A recovery phrase has {} words and numbers; this one has {found}.",
-                foks_crypto::RECOVERY_PHRASE_TOKENS
-            ),
-            E::Word { index } => format!(
-                "Word {} of the recovery phrase is not a recognized word. Check its spelling.",
-                index + 1
-            ),
-            E::Number { index } | E::NumberRange { index } => format!(
-                "Number {} of the recovery phrase should be a whole number from 0 to 8191.",
-                index + 1
-            ),
-            _ => "That recovery phrase is not valid.".to_owned(),
-        }));
-    }
-    Ok(SecretString::new(value.as_str()))
+    Ok(accounts::valid_device_name(value)?)
 }
 
 pub(super) fn exact_profile_confirmation(
