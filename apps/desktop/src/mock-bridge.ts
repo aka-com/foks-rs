@@ -26,6 +26,7 @@ import type {
   RestoreTrashRequest,
 } from './bridge';
 import { roleDto, normalizeCommandError } from './bridge';
+import type { vaultCommands } from './bridge/commands-vault';
 import { createBridge } from './bridge/create';
 import { createTransport, type TransportChannel } from './bridge/transport';
 import { mockCommand, mockHost, type MockCommand } from './mock/host';
@@ -138,6 +139,20 @@ const MOCK_PASSWORD_IMPORT = {
 
 /** The personal account's one recovery phrase: the key the fixture phrase derives. */
 const FIXTURE_BACKUP_ID = `10${'4'.repeat(64)}`;
+
+/**
+ * The bridge members the mock implements directly instead of through the mock
+ * host: every member outside the command factories whose commands the host
+ * answers. Each key is required, including the optional native-only methods,
+ * which the mock sets to `undefined`. A member added to any other factory
+ * therefore fails the build until the mock supplies it, rather than reaching
+ * the mock host and rejecting at runtime.
+ */
+type MockOverrides = {
+  [
+    K in Exclude<keyof Bridge, keyof ReturnType<typeof vaultCommands>>
+  ]: Bridge[K];
+};
 
 export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   let connectionLoss =
@@ -2180,5 +2195,5 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
     onLockMenu: async () => () => {},
     onMaintenanceStatus: async () => () => {},
     onExitState: async () => () => {},
-  });
+  } satisfies MockOverrides);
 }

@@ -420,6 +420,8 @@ the transport over Tauri's IPC. The invitation actions and YubiKey commands
 that only read are listed once, in `INVITATION_READ_ACTIONS`
 (`src/invitation-contract.ts`) and `YUBI_READ_COMMANDS`
 (`src/bridge/commands-yubikey.ts`); every other one is sent as a mutation.
+The read-only invitation action `inbox-count` is not in the list and is also
+sent as a mutation.
 
 The per-action properties of `chat_request` are one table, `CHAT_ACTIONS` in
 `src/chat-contract.ts`: the result kind each action is answered with, whether

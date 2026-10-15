@@ -59,10 +59,13 @@ export type InvitationAction =
       source_team_alias?: string;
       source_role?: InvitationRole;
     };
+
 /**
  * The invitation actions that only read. The bridge sends every other action
  * as a mutation, whose failure with an unknown outcome is reported as
- * ambiguous.
+ * ambiguous. 'inbox-count' also only reads (the agent's `changes_catalog` is
+ * false for it) but is not listed: the bridge sends it as a mutation, and
+ * listing it would change how a failed team-badge count is reported.
  */
 export const INVITATION_READ_ACTIONS: readonly InvitationAction['action'][] = [
   'preview',

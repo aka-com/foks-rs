@@ -7,7 +7,12 @@
 
 import type { TransportChannel, TransportHost } from '../bridge/transport';
 
-/** One mock command: its Tauri arguments in, its wire response out. */
+/**
+ * One mock command: its Tauri arguments in, its wire response out. A handler
+ * reports a host failure by throwing a CommandError object, which crosses the
+ * boundary as JSON; any other throw is a fault in the mock and propagates as
+ * it was thrown.
+ */
 export type MockCommand = (
   args: Record<string, unknown> | undefined,
 ) => unknown;
@@ -46,7 +51,8 @@ export function mockHost(
       try {
         return serialized(await handler(args));
       } catch (error) {
-        throw serialized(error);
+        // An Error serializes to `{}`; rethrowing it keeps its message.
+        throw error instanceof Error ? error : serialized(error);
       }
     },
     listen: async () => () => undefined,

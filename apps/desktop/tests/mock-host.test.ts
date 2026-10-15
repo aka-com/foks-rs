@@ -1,10 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { decodeAccounts } from '../src/bridge/accounts-groups';
 import { createBridge } from '../src/bridge/create';
+import {
+  decodeServerStatus,
+  type ServerStatusSnapshot,
+} from '../src/bridge/servers';
 import { createTransport } from '../src/bridge/transport';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 import { mockCommand, mockHost } from '../src/mock/host';
+import { accountWire, serverStatusWire } from '../src/mock/wire';
+import type { Account } from '../src/model/types';
+
+/** A wire value as it crosses the IPC boundary. */
+const overWire = (value: unknown): unknown =>
+  JSON.parse(JSON.stringify(value)) as unknown;
 
 test('the mock host answers through the bridge decoders and rejects what they reject', async () => {
   let response: unknown = {
@@ -45,6 +56,102 @@ test('the mock host answers through the bridge decoders and rejects what they re
     origin: 'invoke',
     message: 'The mock host has no command store_usage.',
   });
+});
+
+test('a mock handler fault keeps its message through the transport', async () => {
+  const bridge = createBridge(
+    createTransport(
+      mockHost({
+        store_usage: () => {
+          throw new Error('The handler failed.');
+        },
+      }),
+    ),
+  );
+  await assert.rejects(bridge.storeUsage('acct:personal'), {
+    origin: 'invoke',
+    message: 'The handler failed.',
+  });
+});
+
+test('the mock wire encoders invert the bridge decoders', () => {
+  const accounts: Account[] = [
+    {
+      store: 'acct:personal',
+      server: 'foks.app',
+      alias: 'alice',
+      username: 'alice',
+    },
+    {
+      store: 'acct:work',
+      server: 'work.example',
+      localAlias: 'work',
+      alias: 'alice@work',
+      username: 'alice',
+    },
+  ];
+  assert.deepEqual(
+    decodeAccounts(overWire(accounts.map((account) => accountWire(account)))),
+    accounts,
+  );
+  const host = {
+    lookupName: 'foks.app',
+    canonicalName: 'foks.app',
+    hostId: '02' + 'ab'.repeat(32),
+    chain: 3,
+    epoch: 1,
+  };
+  const statuses: ServerStatusSnapshot[] = [
+    {
+      profile: 'foks.app',
+      configuredEndpoint: 'foks.app:443',
+      host,
+      leaseRequired: false,
+      leaseExpiresAt: null,
+      compatibility: { status: 'not-required' },
+      chatSupported: true,
+    },
+    {
+      profile: 'foks.app',
+      configuredEndpoint: 'foks.app:443',
+      host: null,
+      leaseRequired: true,
+      leaseExpiresAt: null,
+      compatibility: { status: 'required-unavailable' },
+      chatSupported: null,
+    },
+    {
+      profile: 'foks.app',
+      configuredEndpoint: 'foks.app:443',
+      host,
+      leaseRequired: true,
+      leaseExpiresAt: 1_900_000_000,
+      compatibility: {
+        status: 'required',
+        expiresAt: 1_900_000_000,
+        capabilities: ['signup', 'kv'],
+      },
+      chatSupported: false,
+    },
+    {
+      profile: 'foks.app',
+      configuredEndpoint: 'foks.app:443',
+      host,
+      leaseRequired: true,
+      leaseExpiresAt: 1_900_000_000,
+      compatibility: {
+        status: 'incompatible',
+        expiresAt: 1_900_000_000,
+        reason: 'protocol-mismatch',
+      },
+      chatSupported: true,
+    },
+  ];
+  for (const status of statuses)
+    assert.deepEqual(
+      decodeServerStatus(overWire(serverStatusWire(status))),
+      status,
+    );
 });
 
 test('mock vault failures carry the host codes and the transport normalization', async () => {
