@@ -1,6 +1,7 @@
 //! Vault catalogs, version-bound item reads and writes, and file transfer.
 
 use crate::agent::AgentError;
+use crate::applock::UnlockedInterval;
 use crate::commands::context::AppState;
 use crate::commands::execution::{
     ambiguous_worker_failure, apply_kv_mutation, map_mutation_error, MutationKind,
@@ -23,6 +24,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use tauri::{Manager as _, State};
 use tauri_plugin_dialog::DialogExt as _;
 use zeroize::Zeroizing;
@@ -320,19 +322,58 @@ pub struct DownloadResult {
     pub saved: bool,
 }
 
+/// Checks every agent call, including the chunk calls inside the shared read
+/// helper. The owned interval outlives a cancelled native command's worker.
+struct IntervalTransport {
+    inner: Arc<dyn foks_desktop::AgentTransport>,
+    interval: UnlockedInterval,
+}
+
+impl foks_desktop::AgentTransport for IntervalTransport {
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.interval
+            .check()
+            .map_err(|_| foks_desktop::AgentError::Cancelled)?;
+        let mut result = self.inner.call(operation);
+        if self.interval.checkpoint("after-agent-read").is_err() {
+            if let Ok(value) = &mut result {
+                clear_response(value);
+            }
+            return Err(foks_desktop::AgentError::Cancelled);
+        }
+        result
+    }
+}
+
+fn clear_response(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(value) => zeroize::Zeroize::zeroize(value),
+        serde_json::Value::Array(values) => values.iter_mut().for_each(clear_response),
+        serde_json::Value::Object(values) => values.values_mut().for_each(clear_response),
+        value => *value = serde_json::Value::Null,
+    }
+}
+
 pub(super) fn read_text(
-    transport: &dyn foks_desktop::AgentTransport,
+    transport: Arc<dyn foks_desktop::AgentTransport>,
     item: &CatalogItem,
+    interval: &UnlockedInterval,
 ) -> Result<ReadItemDto, AgentError> {
+    let transport = IntervalTransport {
+        inner: transport,
+        interval: interval.clone(),
+    };
+    let result = foks_desktop::read_catalog_item(&transport, item);
+    interval.check()?;
     let KvItemRead {
         path,
         version,
         value,
         ..
-    } = foks_desktop::read_catalog_item(transport, item).map_err(AgentError::from_desktop)?;
+    } = result.map_err(AgentError::from_desktop)?;
     let value = match value {
-        KvItemValue::File(bytes) => String::from_utf8(bytes.to_vec())
-            .map(Zeroizing::new)
+        KvItemValue::File(bytes) => std::str::from_utf8(&bytes)
+            .map(|text| Zeroizing::new(text.to_owned()))
             .map_err(|_| {
                 AgentError::new(
                     "not-text",
@@ -365,10 +406,28 @@ fn protocol_store(store: &CatalogStoreRef) -> KvStoreRef {
 }
 
 pub(super) fn download_to_path(
+    transport: Arc<dyn foks_desktop::AgentTransport>,
+    item: &CatalogItem,
+    destination: &Path,
+    interval: &UnlockedInterval,
+) -> Result<(), AgentError> {
+    let transport = IntervalTransport {
+        inner: transport,
+        interval: interval.clone(),
+    };
+    download_with_interval(&transport, item, destination, interval).or_else(|error| {
+        interval.check()?;
+        Err(error)
+    })
+}
+
+fn download_with_interval(
     transport: &dyn foks_desktop::AgentTransport,
     item: &CatalogItem,
     destination: &Path,
+    interval: &UnlockedInterval,
 ) -> Result<(), AgentError> {
+    interval.check()?;
     let store = protocol_store(&item.store);
     let value = transport
         .call(Operation::ReadKv {
@@ -429,21 +488,21 @@ pub(super) fn download_to_path(
                     false,
                 ));
             }
-            let mut content = read.content.take().ok_or_else(|| {
+            let content = Zeroizing::new(read.content.take().ok_or_else(|| {
                 AgentError::new(
                     "invalid-response",
                     "The agent response is missing file content.",
                     false,
                 )
-            })?;
+            })?);
             if Some(content.len() as u64) != read.size {
-                zeroize::Zeroize::zeroize(&mut content);
                 return Err(AgentError::new(
                     "invalid-response",
                     "The received file length does not match its catalog size.",
                     false,
                 ));
             }
+            interval.check()?;
             temporary.write_all(&content).map_err(|error| {
                 AgentError::new(
                     "download-write",
@@ -451,7 +510,6 @@ pub(super) fn download_to_path(
                     true,
                 )
             })?;
-            zeroize::Zeroize::zeroize(&mut content);
         }
         "file" => {
             if read.content.is_some() || read.symlink_target.is_some() {
@@ -480,24 +538,23 @@ pub(super) fn download_to_path(
                 let mut chunk: KvChunkResult = serde_json::from_value(value).map_err(|error| {
                     AgentError::new("invalid-response", error.to_string(), false)
                 })?;
-                let next = offset
-                    .checked_add(chunk.content.len() as u64)
-                    .ok_or_else(|| {
-                        AgentError::new(
-                            "invalid-response",
-                            "File download chunk offset calculation overflowed.",
-                            false,
-                        )
-                    })?;
+                let content = Zeroizing::new(std::mem::take(&mut chunk.content));
+                interval.check()?;
+                let next = offset.checked_add(content.len() as u64).ok_or_else(|| {
+                    AgentError::new(
+                        "invalid-response",
+                        "File download chunk offset calculation overflowed.",
+                        false,
+                    )
+                })?;
                 let valid = chunk.store == store
                     && chunk.path == item.metadata.path
                     && chunk.version == item.metadata.version
                     && chunk.offset == offset
-                    && !chunk.content.is_empty()
-                    && chunk.content.len() <= length as usize
+                    && !content.is_empty()
+                    && content.len() <= length as usize
                     && next <= MAXIMUM_DOWNLOAD_BYTES;
                 if !valid {
-                    zeroize::Zeroize::zeroize(&mut chunk.content);
                     return Err(AgentError::new(
                         "response-binding",
                         "The agent returned an invalid file chunk.",
@@ -505,8 +562,7 @@ pub(super) fn download_to_path(
                     ));
                 }
                 let eof = chunk.eof;
-                let write = temporary.write_all(&chunk.content);
-                zeroize::Zeroize::zeroize(&mut chunk.content);
+                let write = temporary.write_all(&content);
                 write.map_err(|error| {
                     AgentError::new(
                         "download-write",
@@ -515,6 +571,7 @@ pub(super) fn download_to_path(
                     )
                 })?;
                 offset = next;
+                interval.checkpoint("between-chunks")?;
                 if eof {
                     if item
                         .metadata
@@ -548,17 +605,31 @@ pub(super) fn download_to_path(
             true,
         )
     })?;
-    temporary.persist(destination).map_err(|error| {
-        AgentError::new(
-            "download-write",
-            format!(
-                "Could not save the downloaded file to destination: {}",
-                error.error
-            ),
-            true,
-        )
-    })?;
-    Ok(())
+    // All transfer and sync work precedes the short publication critical section.
+    // NamedTempFile removes the unpublished plaintext on every rejected path.
+    interval.publish(|| {
+        temporary.persist(destination).map_err(|error| {
+            AgentError::new(
+                "download-write",
+                format!(
+                    "Could not save the downloaded file to destination: {}",
+                    error.error
+                ),
+                true,
+            )
+        })?;
+        Ok(())
+    })
+}
+
+pub(super) fn select_download_destination<T>(
+    interval: &UnlockedInterval,
+    select: impl FnOnce() -> T,
+) -> Result<T, AgentError> {
+    interval.check()?;
+    let selected = select();
+    interval.checkpoint("after-dialog")?;
+    Ok(selected)
 }
 
 fn zeroize_read_payload(read: &mut KvReadResult) {
@@ -1181,13 +1252,18 @@ pub async fn read_item(
     path: String,
     version: u64,
 ) -> Result<ReadItemDto, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
     let item = state.selected_item(&store_id, &path, version)?;
     let transport = state.agent.transport();
-    tauri::async_runtime::spawn_blocking(move || read_text(transport.as_ref(), &item))
-        .await
-        .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))?
+    let worker_interval = interval.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || read_text(transport, &item, &worker_interval))
+            .await
+            .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))?;
+    // The renderer still needs its epoch check: an IPC reply already dispatched
+    // before locking can arrive afterward.
+    interval.publish(|| result)
 }
 
 #[tauri::command]
@@ -1199,17 +1275,20 @@ pub async fn copy_item_value(
     path: String,
     version: u64,
 ) -> Result<CommandAck, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
     let item = state.selected_item(&store_id, &path, version)?;
     let transport = state.agent.transport();
+    let worker_interval = interval.clone();
     let value = tauri::async_runtime::spawn_blocking(move || {
-        read_text(transport.as_ref(), &item).map(|read| read.value)
+        read_text(transport, &item, &worker_interval).map(|read| read.value)
     })
     .await
     .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))??;
-    crate::clipboard::copy_with_hygiene(&app, value)
-        .map_err(|error| AgentError::new("clipboard", error, true))?;
+    interval.publish(|| {
+        crate::clipboard::copy_with_hygiene(&app, value)
+            .map_err(|error| AgentError::new("clipboard", error, true))
+    })?;
     Ok(CommandAck { ok: true })
 }
 
@@ -1256,7 +1335,7 @@ pub async fn download_file(
     path: String,
     version: u64,
 ) -> Result<DownloadResult, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let interval = crate::applock::unlocked_interval(&app)?;
     require_main_window(&webview)?;
     let item = state.selected_item(&store_id, &path, version)?;
     let suggested = item
@@ -1267,15 +1346,19 @@ pub async fn download_file(
         .unwrap_or("download")
         .to_owned();
     let picker_app = app.clone();
+    let picker_interval = interval.clone();
     let destination = tauri::async_runtime::spawn_blocking(move || {
-        picker_app
-            .dialog()
-            .file()
-            .set_file_name(suggested)
-            .blocking_save_file()
+        select_download_destination(&picker_interval, || {
+            picker_app
+                .dialog()
+                .file()
+                .set_file_name(suggested)
+                .blocking_save_file()
+        })
     })
     .await
-    .map_err(|error| AgentError::unknown(format!("Save dialog failed: {error}")))?;
+    .map_err(|error| AgentError::unknown(format!("Save dialog failed: {error}")))??;
+    interval.check()?;
     let Some(destination) = destination else {
         return Ok(DownloadResult { saved: false });
     };
@@ -1283,8 +1366,9 @@ pub async fn download_file(
         .into_path()
         .map_err(|error| AgentError::new("download-path", error.to_string(), false))?;
     let transport = state.agent.transport();
+    let worker_interval = interval.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        download_to_path(transport.as_ref(), &item, &destination)
+        download_to_path(transport, &item, &destination, &worker_interval)
     })
     .await
     .map_err(|error| AgentError::unknown(format!("download failed: {error}")))??;
