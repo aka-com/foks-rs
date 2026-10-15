@@ -830,6 +830,11 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         merkle_checkpoint::migrate(connection)?;
         return Ok(());
     }
+    // Versions 39 and 40 differ from the current schema only in
+    // kv_adapter_clocks: version 40 renamed admission_floor (which version 38
+    // and 39 databases may carry) and version 41 added boot_id. Neither step
+    // changes a stored value, so both keep hard_state_revision and
+    // write_token, and the keyring rollback checkpoint still matches.
     if version == 39 || version == 40 {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 =
@@ -4454,6 +4459,8 @@ mod tests {
 }
 
 mod inspection;
+#[cfg(test)]
+mod migration_tests;
 
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
