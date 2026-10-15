@@ -553,6 +553,8 @@ pub enum TestProfile {
     /// writes reach SQLite's `max_page_count` ceiling.
     TinyDatabase,
     QueuePressure,
+    /// Stops waiting for a request handler after `SHORT_REQUEST_TIMEOUT`.
+    ShortRequestTimeout,
     TightIo,
     ProductionBenchmark,
     RealtimePollCapacity,
@@ -564,6 +566,9 @@ pub enum TestProfile {
 }
 
 pub const WAITLIST_TEST_ENTRIES: u64 = 4;
+
+/// Request execution timeout of `TestProfile::ShortRequestTimeout`.
+pub const SHORT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Database ceiling of `TestProfile::TinyDatabase`, about 1 MiB above the
 /// size of a new host with one account.
@@ -611,6 +616,7 @@ impl TestProfile {
             },
             Self::Default
             | Self::QueuePressure
+            | Self::ShortRequestTimeout
             | Self::TightIo
             | Self::ProductionBenchmark
             | Self::RealtimePollCapacity
@@ -660,6 +666,11 @@ impl TestProfile {
                 std::time::Duration::from_secs(5)
             } else {
                 foks_server::SessionLimits::default().io_timeout
+            },
+            request_timeout: if matches!(self, Self::ShortRequestTimeout) {
+                SHORT_REQUEST_TIMEOUT
+            } else {
+                foks_server::SessionLimits::default().request_timeout
             },
             ..foks_server::SessionLimits::default()
         };

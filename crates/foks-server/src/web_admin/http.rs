@@ -200,6 +200,7 @@ fn error(error: Error) -> Response<Body> {
         ) => StatusCode::CONFLICT,
         Error::Database(foks_server_db::Error::Capacity(_))
         | Error::WriterQueue
+        | Error::DeadlineExceeded
         | Error::ReaderPool => StatusCode::TOO_MANY_REQUESTS,
         Error::Config("admin unavailable" | "admin clock is fenced") => {
             StatusCode::SERVICE_UNAVAILABLE

@@ -103,7 +103,10 @@ impl RealtimeService {
         let result = writer.call_observed(Some((Arc::clone(&self.metrics), source)), move |db| {
             Ok(db.rt_reconcile_inbox(&actor, app, clock.now_micros()?)?)
         });
-        if matches!(&result, Err(crate::Error::WriterQueue)) {
+        if matches!(
+            &result,
+            Err(crate::Error::WriterQueue | crate::Error::DeadlineExceeded)
+        ) {
             self.metrics
                 .realtime
                 .source(source, |s| s.submission_failures += 1);

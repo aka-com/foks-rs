@@ -76,7 +76,7 @@ fn reason(error: &Error) -> Reason {
         Error::Io(error) => io_reason(error),
         Error::Database(error) => database_reason(error),
         Error::Merkle(foks_merkle_store::Error::Storage(_)) => Reason::Storage,
-        Error::WriterQueue | Error::ReaderPool => Reason::Busy,
+        Error::WriterQueue | Error::DeadlineExceeded | Error::ReaderPool => Reason::Busy,
         Error::Key(_) | Error::KeyCrypto | Error::Config(_) => Reason::InvalidState,
         _ => Reason::Internal,
     }

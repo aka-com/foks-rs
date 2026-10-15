@@ -226,6 +226,13 @@ duration, saturation, backup outcomes, and transient `accept()` failures. They
 use fixed, non-user-derived names and never export paths, identities, request
 values, or key material.
 
+A request whose handler exceeds `request_timeout_seconds` is closed without a
+response. If its write is still in the writer queue at that point, the writer
+does not run it: it opens no transaction for the job and counts it in
+`foks_writer_expired_total`. A write that has already started runs to
+completion. A rising count means that writes wait in the queue for longer than
+the request timeout.
+
 `foks_requests_total{family,status}` counts written responses by route family
 (the protocol name, such as `KvStore` or `Reg`) and wire status code (`0` for
 a success). Responses written before a route is resolved have

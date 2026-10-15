@@ -87,6 +87,7 @@ property of one actor.
    +-------------------------+
    | writer thread           |   one OS thread, one RW connection
    |   recv job              |
+   |   skip if past deadline |   (the request already timed out)
    |   re-check credential   |   (active_credential_owner, sso_require_access)
    |   sample clock          |
    |   run closure in txn    |
@@ -126,6 +127,17 @@ again inside the serialized transaction, where the answer is authoritative.
 reads the clock inside the closure, not at enqueue time, so timestamps stay
 monotone with the total order the writer imposes. A test pins this: a job
 queued behind a slow one records a time after the slow one finished.
+
+**A job whose request has timed out is skipped.** An RPC session waits at
+most the request execution timeout (30 s) for its handler, then closes the
+connection without a response, and the client treats the outcome as
+ambiguous. The handler's writer handle carries that deadline. If the writer
+reaches a queued job at or after it, the job is answered with
+`DeadlineExceeded` without opening a transaction and is counted in
+`foks_writer_expired_total`. The client already has to allow for the write
+having happened or not, so skipping a job that never started is safe, and
+under overload it keeps the writer on requests that are still waiting. A job
+that has started runs to completion; SQLite work is not cancelled midway.
 
 Queue wait and execution time are measured per job into counters that the
 metrics endpoint exposes, so an operator can see the queue filling before
@@ -191,7 +203,7 @@ mechanism differs by resource.
 | Realtime poll state reads | 16 readers (half the reader pool) | reads wait for a permit |
 | Request memory | 64 MiB, 2 × frame length reserved per frame | frames wait for permits |
 | Frame size | 16 MiB | rejected before allocation |
-| Request execution timeout | 30 s | connection closed |
+| Request execution timeout | 30 s | connection closed; a write still queued is skipped |
 | I/O timeout | 15 s | connection closed |
 
 Handlers run on blocking threads under a semaphore, and they acquire their

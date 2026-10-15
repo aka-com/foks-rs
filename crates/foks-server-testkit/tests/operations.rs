@@ -22,6 +22,7 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         "foks_requests_started_total",
         "foks_active_connections",
         "foks_writer_pending",
+        "foks_writer_expired_total",
         "foks_writer_queue_wait_seconds_count",
         "foks_writer_execution_duration_seconds_count",
         "foks_request_duration_seconds_count",

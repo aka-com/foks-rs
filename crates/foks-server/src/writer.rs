@@ -18,6 +18,8 @@ struct Call<F, T> {
     operation: F,
     response: SyncSender<Result<T>>,
     queued_at: Instant,
+    /// The end of the submitting request's execution budget, if any.
+    deadline: Option<Instant>,
     timing: Arc<WriterTiming>,
     reconciliation: Option<(
         Arc<crate::ServerMetrics>,
@@ -35,11 +37,21 @@ where
             operation,
             response,
             queued_at,
+            deadline,
             timing,
             reconciliation,
         } = *self;
         let queue_wait = queued_at.elapsed();
         timing.observe_queue_wait(queue_wait);
+        // The request that submitted this job has used its execution budget,
+        // and its session closes the connection without a response, so the
+        // client already treats the outcome as ambiguous. The job has not
+        // opened a transaction, and skipping it leaves no partial effect.
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            timing.expired.fetch_add(1, Ordering::Relaxed);
+            let _ = response.send(Err(Error::DeadlineExceeded));
+            return;
+        }
         let started = Instant::now();
         let result = operation(database);
         let execution = started.elapsed();
@@ -67,6 +79,7 @@ pub struct Writer {
 #[derive(Clone)]
 pub struct WriterHandle {
     authorization: Option<Arc<WriteAuthorization>>,
+    deadline: Option<Instant>,
     queue: Arc<WriterQueue>,
 }
 
@@ -87,6 +100,7 @@ struct WriterQueue {
 
 #[derive(Default)]
 struct WriterTiming {
+    expired: AtomicU64,
     queue_wait_observations: AtomicU64,
     queue_wait_microseconds_total: AtomicU64,
     queue_wait_microseconds_max: AtomicU64,
@@ -120,6 +134,9 @@ pub struct WriterMetrics {
     pub accepted: u64,
     pub rejected: u64,
     pub pending: u64,
+    /// Jobs skipped because their request deadline passed while they waited
+    /// in the queue.
+    pub expired: u64,
     pub queue_wait_observations: u64,
     pub queue_wait_microseconds_total: u64,
     pub queue_wait_microseconds_max: u64,
@@ -182,6 +199,7 @@ impl Writer {
             Ok(Ok(())) => Ok(Self {
                 handle: WriterHandle {
                     authorization: None,
+                    deadline: None,
                     queue: Arc::new(WriterQueue {
                         sender,
                         accepting: Mutex::new(true),
@@ -254,6 +272,20 @@ impl WriterHandle {
                 credential: credential.to_vec(),
                 clock,
             })),
+            deadline: self.deadline,
+        }
+    }
+
+    /// Returns a handle whose calls fail with `Error::DeadlineExceeded`,
+    /// without running their operation, if the writer reaches them at or
+    /// after `deadline`. A request handler passes the instant at which its
+    /// session stops waiting for the response. An operation that has started
+    /// runs to completion regardless of the deadline.
+    pub(crate) fn with_deadline(&self, deadline: Instant) -> Self {
+        Self {
+            authorization: self.authorization.clone(),
+            deadline: Some(deadline),
+            queue: self.queue.clone(),
         }
     }
 
@@ -311,6 +343,7 @@ impl WriterHandle {
             operation,
             response,
             queued_at: Instant::now(),
+            deadline: self.deadline,
             timing: Arc::clone(&self.queue.timing),
             reconciliation,
         }))) {
@@ -350,6 +383,7 @@ impl WriterHandle {
             accepted: self.queue.accepted.load(Ordering::Relaxed),
             rejected: self.queue.rejected.load(Ordering::Relaxed),
             pending: self.queue.pending.load(Ordering::Acquire),
+            expired: timing.expired.load(Ordering::Relaxed),
             queue_wait_observations: timing.queue_wait_observations.load(Ordering::Relaxed),
             queue_wait_microseconds_total: timing
                 .queue_wait_microseconds_total
@@ -559,6 +593,66 @@ mod tests {
         ));
         assert_eq!(writer.handle().metrics().rejected, 0);
         assert!(matches!(writer.shutdown(), Err(Error::Thread)));
+    }
+
+    #[test]
+    fn queued_call_past_its_deadline_is_skipped() {
+        let temporary = tempfile::tempdir().unwrap();
+        let writer = Arc::new(
+            Writer::start(
+                temporary.path().join("foks-server.sqlite"),
+                foks_server_db::Config::default(),
+                4,
+            )
+            .unwrap(),
+        );
+        let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = mpsc::sync_channel(1);
+        let blocker_writer = Arc::clone(&writer);
+        let blocker = thread::spawn(move || {
+            blocker_writer.call(move |_| {
+                entered_sender.send(()).unwrap();
+                release_receiver.recv().unwrap();
+                Ok(())
+            })
+        });
+        entered_receiver.recv().unwrap();
+
+        // The credential is unknown, so the authorization check would fail
+        // with AuthorizationChanged if the expired job reached it.
+        let deadline = Instant::now() + std::time::Duration::from_millis(50);
+        let clock: Arc<dyn foks_server_db::Clock> = Arc::new(TestClock(AtomicU64::new(0)));
+        let expiring = writer
+            .handle()
+            .with_deadline(deadline)
+            .for_authenticated_request(&[1; 33], &[2; 33], clock);
+        let expired = thread::spawn(move || {
+            expiring.call(|_| -> Result<()> { unreachable!("expired job ran") })
+        });
+        let current = writer
+            .handle()
+            .with_deadline(Instant::now() + std::time::Duration::from_secs(60));
+        let live = thread::spawn(move || current.call(|_| Ok(7)));
+        let queued = Instant::now() + std::time::Duration::from_secs(2);
+        while writer.handle().metrics().pending != 3 {
+            assert!(Instant::now() < queued, "jobs were not queued");
+            thread::yield_now();
+        }
+        thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        release_sender.send(()).unwrap();
+
+        blocker.join().unwrap().unwrap();
+        assert!(matches!(
+            expired.join().unwrap(),
+            Err(Error::DeadlineExceeded)
+        ));
+        assert_eq!(live.join().unwrap().unwrap(), 7);
+        let metrics = writer.handle().metrics();
+        assert_eq!(metrics.expired, 1);
+        assert_eq!(metrics.pending, 0);
+        assert_eq!(metrics.queue_wait_observations, 3);
+        assert_eq!(metrics.execution_observations, 2);
+        Arc::into_inner(writer).unwrap().shutdown().unwrap();
     }
 
     #[test]

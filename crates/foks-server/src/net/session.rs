@@ -333,6 +333,12 @@ pub(crate) async fn serve(
         let family = routed
             .as_ref()
             .map_or(crate::metrics::UNROUTED, |call| call.route.protocol);
+        // The end of a bounded handler's execution budget. It is taken just
+        // before the execution timeout below starts, so it does not follow the
+        // instant at which the session stops waiting and closes the
+        // connection. The request's writer skips a queued write that it has
+        // not started by then.
+        let deadline = std::time::Instant::now().checked_add(limits.request_timeout);
         let outcome = match routed {
             Ok(call) if call.route.id == RouteId::RegPollOAuth2SessionCompletion => {
                 let poll = service_data.long_poll(call.route, sequence, request_memory);
@@ -405,6 +411,12 @@ pub(crate) async fn serve(
                             }
                             let mut request_data = data.as_ref().clone();
                             request_data.peer_ip = Some(peer_ip);
+                            if let Some(deadline) = deadline {
+                                request_data.writer = request_data
+                                    .writer
+                                    .as_ref()
+                                    .map(|w| w.with_deadline(deadline));
+                            }
                             let authorization = if !call.route.supported {
                                 Err(RpcStatus::Unsupported)
                             } else if let Some(principal) = principal.as_ref() {

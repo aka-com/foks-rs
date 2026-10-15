@@ -2,7 +2,8 @@
 //!
 //! Each route family maps its own domain variants, such as a KV version race,
 //! a stale team head or a full waitlist, and passes every other error through
-//! [`shared`]. A full database, a saturated writer queue, a credential revoked
+//! [`shared`]. A full database, a saturated writer queue, a write skipped
+//! because its request deadline passed in the queue, a credential revoked
 //! while its write was queued and an SQLite fault that the request did not
 //! cause therefore carry the same status on every route. `Capacity` stays
 //! with each family: some of its values are retained-storage limits and
@@ -65,7 +66,9 @@ fn shared_status(error: &Error) -> Option<RpcStatus> {
         Error::Merkle(foks_merkle_store::Error::EpochLimitExceeded { .. }) => {
             Some(RpcStatus::MerkleVerify(error.to_string()))
         }
-        Error::WriterQueue | Error::ReaderPool => Some(RpcStatus::RateLimited),
+        Error::WriterQueue | Error::DeadlineExceeded | Error::ReaderPool => {
+            Some(RpcStatus::RateLimited)
+        }
         Error::Database(error) => storage_status(error),
         _ => None,
     }
@@ -155,6 +158,7 @@ pub(crate) mod contract {
                 RpcStatus::QuotaExceeded,
             ),
             (Error::WriterQueue, RpcStatus::RateLimited),
+            (Error::DeadlineExceeded, RpcStatus::RateLimited),
             (Error::ReaderPool, RpcStatus::RateLimited),
             (
                 Error::AuthorizationChanged,

@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use foks_client::{KvWriteOptions, SoftwareAccountRequest, SoftwareAccountSecrets};
 use foks_proto::{InviteCode, Role, SecretSeed, SoftwareSignupArgument};
-use foks_server_testkit::{TestAccountSpec, TestClient, TestEnvironment, TestProfile};
+use foks_server_testkit::{
+    TestAccountSpec, TestClient, TestEnvironment, TestProfile, SHORT_REQUEST_TIMEOUT,
+};
 use rustls::pki_types::{CertificateDer, ServerName};
 use std::io::Write as _;
 
@@ -291,6 +293,87 @@ fn full_writer_queue_returns_rate_limit_and_recovers_after_drain() {
         .acquire_lock(root, [0x44; 16], Duration::from_secs(30))
         .unwrap();
     session.release_lock(root, [0x44; 16], token).unwrap();
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn write_queued_past_its_request_deadline_is_skipped() {
+    let environment = TestEnvironment::with_profile(TestProfile::ShortRequestTimeout).unwrap();
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "deadline-client").unwrap();
+    let probe = client.probe_and_pin().unwrap();
+    let created = client
+        .create_account(&probe.pinned, &TestAccountSpec::new("deadlineuser", 0x95))
+        .unwrap();
+    let root = created.kv_projection[0].root_directory_id;
+    let mut protected = client.open_protected_store().unwrap();
+    let mut session = client
+        .foks()
+        .user_kv_write_session(
+            &probe.pinned,
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    let before = server.writer_handle().metrics();
+
+    // The writer holds one job and has a second queued, so the lock request
+    // waits in the queue until the session stops waiting for it and closes
+    // the connection without a response.
+    let pressure = server.saturate_writer_queue().unwrap();
+    let started = std::time::Instant::now();
+    let error = session
+        .acquire_lock(root, [0x45; 16], Duration::from_secs(30))
+        .unwrap_err();
+    assert!(started.elapsed() >= SHORT_REQUEST_TIMEOUT);
+    assert!(
+        !matches!(
+            error,
+            foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { .. })
+        ),
+        "{error}"
+    );
+    assert_eq!(pressure.metrics().pending, 3);
+
+    pressure.drain().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while server.writer_handle().metrics().pending != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "expired job was not answered"
+        );
+        std::thread::yield_now();
+    }
+    let after = server.writer_handle().metrics();
+    assert_eq!(after.expired, before.expired + 1);
+    // Only the two pressure jobs ran; the expired lock request was skipped
+    // before it opened a transaction.
+    assert_eq!(
+        after.execution_observations,
+        before.execution_observations + 2
+    );
+
+    // A lock committed by the skipped request would refuse this one until
+    // its 30 second timeout.
+    drop(session);
+    let mut session = client
+        .foks()
+        .user_kv_write_session(
+            &probe.pinned,
+            &created.credential,
+            &created.authenticated.verified,
+            &created.authenticated.puks,
+            client.soft_state_path(),
+            &mut protected,
+        )
+        .unwrap();
+    let token = session
+        .acquire_lock(root, [0x45; 16], Duration::from_secs(30))
+        .unwrap();
+    session.release_lock(root, [0x45; 16], token).unwrap();
     server.shutdown().unwrap();
 }
 
