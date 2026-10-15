@@ -1,16 +1,3 @@
-import { inventoryReadiness } from '../model';
-import { CollectionStatus } from '../components/collection-status';
-import { useDeviceMetadata } from '../data/device-cache';
-import { synchronizeApplied } from '../data/operation-outcome';
-import { refreshConnectedCards } from './devices/hardware-controller';
-import { useDeviceOperation } from './devices/use-device-operation';
-import { useWorkflowAccess } from '../workflow-context';
-import {
-  workflowAvailability,
-  workflowMessage,
-} from '../model/workflow-availability';
-import { FreshnessCaption } from '../components/metadata-status';
-import { useTabSheetState } from '../navigation-guard';
 /**
  * The Devices tab: one page per account, with no sub-navigation.
  *
@@ -26,6 +13,19 @@ import { useTabSheetState } from '../navigation-guard';
  * recovery phrase and keeps the enrollment name the agent stores.
  */
 
+import { inventoryReadiness } from '../model';
+import { CollectionStatus } from '../components/collection-status';
+import { useDeviceMetadata } from '../data/device-cache';
+import { synchronizeApplied } from '../data/operation-outcome';
+import { refreshConnectedCards } from './devices/hardware-controller';
+import { useDeviceOperation } from './devices/use-device-operation';
+import { useWorkflowAccess } from '../workflow-context';
+import {
+  workflowAvailability,
+  workflowMessage,
+} from '../model/workflow-availability';
+import { FreshnessCaption } from '../components/metadata-status';
+import { useTabSheetState } from '../navigation-guard';
 import {
   useCallback,
   useEffect,
@@ -44,27 +44,14 @@ import {
   Band,
   Button,
   Chip,
-  CopyBox,
   Icon,
   Inset,
   InsetRow,
   Notice,
   SectionLabel,
 } from '../components';
-import type {
-  AccountStore,
-  AgentSnapshot,
-  StoreRef,
-  DeviceLabel,
-  Item,
-} from '../model';
-import {
-  accountStores,
-  accountSubtitle,
-  plural,
-  serverDisplayLabelForStore,
-  usernameOf,
-} from '../model';
+import type { StoreRef, DeviceLabel, Item } from '../model';
+import { accountStores, plural, usernameOf } from '../model';
 import type {
   DevicesSheetIntent,
   Location,
@@ -81,7 +68,6 @@ import { RemoveDeviceSheet } from './devices/sheets/remove-device-sheet';
 import { RevokeBackupSheet } from './devices/sheets/revoke-backup-sheet';
 import { RevokeSheet } from './devices/sheets/revoke-sheet';
 import { YubiActionSheet } from './devices/sheets/yubi-action-sheet';
-import { YUBI_WORKFLOWS } from './devices/credential-actions';
 import type { SimpleYubiAction } from './devices/credential-actions';
 import {
   deviceAt,
@@ -91,7 +77,6 @@ import {
 } from '../data/device-model';
 import type { DeviceEntry } from '../data/device-model';
 import { UnavailableAccount } from './account-section';
-
 import { deviceAlertRegistry } from '../data/device-alert';
 import { RecoveryPhraseTestSheet } from './recovery-phrase-test-sheet';
 import { useExposureReviews } from '../exposure-review';
@@ -106,6 +91,8 @@ import {
   testedDate,
 } from '../recovery-phrase-tests';
 import type { RecoveryPhraseTestStatus } from '../recovery-phrase-tests';
+import { kindLabel, TestedChip } from './devices/device-labels';
+import { DeviceDetail } from './devices/device-detail';
 
 type Sheet =
   | 'add'
@@ -119,104 +106,6 @@ type Sheet =
   | 'revoke-backup'
   | 'test-backup'
   | null;
-
-/** The chip a recovery phrase's row and page carry: when it last matched here. */
-function TestedChip({
-  status,
-}: {
-  status: RecoveryPhraseTestStatus;
-}): ReactNode {
-  if (status.state === 'never')
-    return (
-      <Chip
-        tone="warn"
-        title="No written copy of this phrase has been tested on this device."
-      >
-        Last tested: never
-      </Chip>
-    );
-  return (
-    <Chip tone={status.state === 'current' ? 'ok' : 'warn'}>
-      {status.state === 'current' ? 'Tested' : 'Last tested'}{' '}
-      {testedDate(status.testedAt)}
-    </Chip>
-  );
-}
-
-/**
- * The nine card operations that are recovery paths for a key already in
- * trouble — what used to be the "More…" menu's `RECOVERY_ACTIONS`, one menu
- * entry per action. Each is now a button on the key's own page instead, and
- * the sheet it opens reads the same label either way.
- */
-type RecoveryAction =
-  | 'sync'
-  | 'set-passphrase'
-  | 'change-passphrase'
-  | 'verify-passphrase'
-  | 'recover-management'
-  | 'recover-subkey'
-  | 'resume-enrollment'
-  | 'resume-rotation'
-  | 'rotate';
-
-/**
- * The rows "Card operations" groups the nine `RecoveryAction`s into, on a
- * security key's own page: Sync (1) + Passphrase (3) + Recovery (5) = 9,
- * plus the Connected row's "Provision…" and "PIN status" — the eleven
- * operations the old "More…" menu and Connected row together held.
- */
-const CARD_OP_GROUPS: ReadonlyArray<{
-  label: string;
-  hint: string;
-  actions: readonly RecoveryAction[];
-}> = [
-  {
-    label: 'Sync',
-    hint: 'Refresh this account’s state on the card.',
-    actions: ['sync'],
-  },
-  {
-    label: 'Passphrase',
-    hint: 'Set, change or verify the key passphrase.',
-    actions: ['set-passphrase', 'change-passphrase', 'verify-passphrase'],
-  },
-  {
-    label: 'Recovery',
-    hint: 'Restore access if the card, its management key or its signing key is stuck.',
-    actions: [
-      'recover-management',
-      'recover-subkey',
-      'resume-enrollment',
-      'resume-rotation',
-      'rotate',
-    ],
-  },
-];
-
-/** The short label a `CARD_OP_GROUPS` button reads; the row it sits under
- * already carries the rest of the sentence. */
-const CARD_OP_LABELS: Readonly<Record<RecoveryAction, string>> = {
-  sync: 'Sync…',
-  'set-passphrase': 'Set…',
-  'change-passphrase': 'Change…',
-  'verify-passphrase': 'Verify…',
-  'recover-management': 'Restore management…',
-  'recover-subkey': 'Restore signing key…',
-  'resume-enrollment': 'Resume enrollment…',
-  'resume-rotation': 'Resume rotation…',
-  rotate: 'Rotate…',
-};
-
-/**
- * The word a row's caption, and a key's own "Kind" fact, name its type with,
- * on this page only. The shared model still calls a card enrollment an
- * "Enrollment" object — People reads that literal value unchanged — but
- * Devices calls the same object a security key everywhere else in its copy.
- */
-function kindLabel(kind: DeviceEntry['kind']): string {
-  return kind === 'Enrollment' ? 'Security key' : kind;
-}
 
 /**
  * The page reads the snapshot, the bridge, the catalog refreshes and the error
@@ -1142,498 +1031,5 @@ function OpenDevice({
     <Button size="sm" aria-label={`Open ${name}`} onClick={onOpen}>
       Open
     </Button>
-  );
-}
-
-/**
- * One key's page: every fact the agent reports about it, the full id with a
- * way to copy it, and the one destructive action its kind has.
- */
-function DeviceDetail({
-  snapshot,
-  store,
-  entry,
-  deviceEnrollment,
-  loading,
-  failed,
-  stopped,
-  cards,
-  metadataStatus,
-  stale,
-  refreshHardwareKeys,
-  onBack,
-  onNavigate,
-  onCopy,
-  onRemove,
-  onRevokeBackup,
-  testStatus,
-  onTestBackup,
-  onRevokeKey,
-  onProvision,
-  onYubiAction,
-}: {
-  snapshot: AgentSnapshot;
-  store: AccountStore;
-  /** The key the address names, once the lists have answered. */
-  entry?: DeviceEntry;
-  deviceEnrollment?: YubiEnrollment;
-  loading: boolean;
-  /** The lists never answered, so whether the key is listed is unknown. */
-  failed: boolean;
-  stopped: { stopped: boolean; reason: string };
-  /** The cards in this Mac's ports right now. */
-  cards: { serial: number }[];
-  metadataStatus: ReactNode;
-  /** The lists this page reads could not be refreshed. */
-  stale: boolean;
-  refreshHardwareKeys: ReactNode;
-  onBack: () => void;
-  onNavigate: (location: Location) => void;
-  onCopy: (text: string) => void;
-  onRemove: (device: AccountDevice) => void;
-  onRevokeBackup: (backup: BackupEnrollment) => void;
-  testStatus: (backup: BackupEnrollment) => RecoveryPhraseTestStatus;
-  onTestBackup: () => void;
-  onRevokeKey: (entry: YubiEnrollment) => void;
-  onProvision: () => void;
-  onYubiAction: (action: SimpleYubiAction, entry: YubiEnrollment) => void;
-}): ReactNode {
-  const access = useWorkflowAccess(snapshot);
-  const target = { profile: store.server, account: store.account };
-  if (!entry)
-    return (
-      <>
-        <PageHeader
-          ruled
-          title="Devices"
-          subtitle={accountSubtitle(snapshot, store)}
-        />
-        <div className="body">
-          <div className="settings-main">
-            <Notice
-              severity={
-                loading || stopped.stopped ? 'info' : failed ? 'warn' : 'crit'
-              }
-              title={
-                stopped.stopped
-                  ? 'Not listed while access is stopped'
-                  : loading
-                    ? 'Reading this account’s keys…'
-                    : failed
-                      ? 'Devices and keys could not be read'
-                      : 'This key is not on this account'
-              }
-              actions={
-                <>
-                  <Button variant="primary" onClick={onBack}>
-                    Back to Devices
-                  </Button>
-                  {refreshHardwareKeys}
-                </>
-              }
-            >
-              <p>
-                {stopped.stopped
-                  ? stopped.reason
-                  : loading
-                    ? 'Loading devices, recovery phrases, and security keys…'
-                    : failed
-                      ? 'Whether this key is still on this account is unknown until its devices, recovery phrases and security keys are read again.'
-                      : 'This key is no longer associated with this account on this device.'}
-              </p>
-            </Notice>
-            {metadataStatus}
-          </div>
-        </div>
-      </>
-    );
-
-  const source = entry.source;
-  const username = usernameOf(snapshot, store) ?? store.account;
-  const enrollment = source.kind === 'yubi' ? source.entry : undefined;
-  const revokeReason =
-    access.props('yubi-revoke', target).title ??
-    (enrollment && enrollment.state !== 'complete'
-      ? 'This enrollment is not complete'
-      : undefined);
-  return (
-    <>
-      <PageHeader
-        ruled
-        title={entry.name}
-        // An enrollment is the server's, not this account's, and the caption
-        // says so rather than naming an account the agent did not answer for.
-        subtitle={
-          entry.scope === 'profile'
-            ? `${kindLabel(entry.kind)} · on ${serverDisplayLabelForStore(snapshot, store)}`
-            : `${kindLabel(entry.kind)} · ${accountSubtitle(snapshot, store)}`
-        }
-        // The chip states what this key is, so it reads beside the name
-        // rather than among the header's actions.
-        badge={
-          entry.current ? (
-            <Chip tone="you">
-              {entry.kind === 'Key on a card'
-                ? 'Current key on a card'
-                : 'This device'}
-            </Chip>
-          ) : enrollment ? (
-            <Chip tone={enrollment.state === 'complete' ? 'ok' : 'warn'}>
-              {enrollment.state === 'complete' ? 'Enrolled' : 'Incomplete'}
-            </Chip>
-          ) : null
-        }
-        action={refreshHardwareKeys}
-      />
-      <div className="body">
-        <div className="settings-main">
-          <div
-            className="settings-section"
-            role="region"
-            aria-labelledby="device-facts-label"
-          >
-            <SectionLabel id="device-facts-label">This key</SectionLabel>
-            <Inset
-              className={`settings-inset middle wide${stale ? ' stale' : ''}`}
-            >
-              {entry.scope === 'profile' ? (
-                <InsetRow label="Server">
-                  <b>{serverDisplayLabelForStore(snapshot, store)}</b>
-                  <small>This enrollment applies across the server.</small>
-                </InsetRow>
-              ) : (
-                <InsetRow label="Account">
-                  <span className="namechip">
-                    <b>{username}</b> <Chip>{store.account}</Chip>
-                  </span>
-                  <small>
-                    on {serverDisplayLabelForStore(snapshot, store)}
-                  </small>
-                </InsetRow>
-              )}
-              {entry.role ? (
-                <InsetRow label="Role on the account">{entry.role}</InsetRow>
-              ) : null}
-              <InsetRow label="Kind">{kindLabel(entry.kind)}</InsetRow>
-              <InsetRow label={entry.keyLabel}>
-                {entry.keyId ? (
-                  <CopyBox text={entry.keyId} onCopy={onCopy}>
-                    <span className="mono">{entry.keyId}</span>
-                  </CopyBox>
-                ) : (
-                  <>
-                    {entry.name}
-                    <small>
-                      {enrollment?.cardSerial
-                        ? `Card serial ${enrollment.cardSerial}; no device key recorded.`
-                        : 'This enrollment cannot be matched to a card on this device.'}
-                    </small>
-                  </>
-                )}
-              </InsetRow>
-              {entry.current ? (
-                <InsetRow label="Status">
-                  Authenticated on this device now
-                </InsetRow>
-              ) : null}
-              {source.kind === 'backup' ? (
-                <InsetRow
-                  label="Last tested"
-                  action={
-                    <Button
-                      size="sm"
-                      {...access.props('backup-list', target)}
-                      onClick={onTestBackup}
-                    >
-                      Test…
-                    </Button>
-                  }
-                >
-                  <TestedChip status={testStatus(source.backup)} />
-                  <small>
-                    Type the written copy back in to check that it can recover
-                    this account. The check runs on this device.
-                  </small>
-                </InsetRow>
-              ) : null}
-            </Inset>
-            {metadataStatus}
-          </div>
-          {enrollment ? (
-            <CardOperations
-              enrollment={enrollment}
-              cards={cards}
-              stopped={stopped}
-              store={store}
-              onNavigate={onNavigate}
-              onProvision={onProvision}
-              onYubiAction={onYubiAction}
-            />
-          ) : null}
-          <div
-            className="settings-section"
-            role="region"
-            aria-labelledby="device-danger-label"
-          >
-            <SectionLabel className="danger-title" id="device-danger-label">
-              Danger zone
-            </SectionLabel>
-            <Inset className="settings-inset middle wide danger-box">
-              {/* A key on a card is the card's, whether or not this Mac is
-                  authenticated with it now: it is not removed the way another
-                  Mac is, so its kind decides this before its currency does. */}
-              {source.kind === 'device' && entry.kind === 'Key on a card' ? (
-                <InsetRow
-                  className="dangerrow"
-                  label="Revoked under its enrollment"
-                  action={
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        onNavigate({
-                          kind: 'devices',
-                          section: 'keys',
-                          store: store.id,
-                          ...(deviceEnrollment
-                            ? { device: `yubi:${deviceEnrollment.alias}` }
-                            : {}),
-                        })
-                      }
-                    >
-                      {deviceEnrollment
-                        ? `Open ${deviceEnrollment.alias}`
-                        : 'Go to Devices'}
-                    </Button>
-                  }
-                >
-                  <small>
-                    A key on a card is revoked under its enrollment, listed on
-                    Devices.
-                  </small>
-                </InsetRow>
-              ) : entry.current ? (
-                <InsetRow
-                  className="dangerrow"
-                  label="This device cannot be removed here"
-                  action={
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        onNavigate({ kind: 'settings', section: 'mac' })
-                      }
-                    >
-                      Open Settings
-                    </Button>
-                  }
-                >
-                  <small>
-                    To remove this device, use another enrolled device. Or, use
-                    the Reset this device option in Settings to erase local data
-                    and delete credentials across servers.
-                  </small>
-                </InsetRow>
-              ) : source.kind === 'device' ? (
-                <InsetRow
-                  className="dangerrow"
-                  label="Remove this device"
-                  action={
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      {...access.props('device-remove', target)}
-                      onClick={() => onRemove(source.device)}
-                    >
-                      Remove this device…
-                    </Button>
-                  }
-                >
-                  <small>
-                    {entry.name} loses access to every vault, team and chat on
-                    this account. Data already downloaded to it stays there.
-                  </small>
-                </InsetRow>
-              ) : source.kind === 'backup' ? (
-                <InsetRow
-                  className="dangerrow"
-                  label="Revoke this recovery phrase"
-                  action={
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      {...access.props('backup-revoke', target)}
-                      onClick={() => onRevokeBackup(source.backup)}
-                    >
-                      Revoke…
-                    </Button>
-                  }
-                >
-                  <small>
-                    The written-down phrase stops working, and revocation
-                    rotates every account key it could read.
-                  </small>
-                </InsetRow>
-              ) : (
-                <InsetRow
-                  className="dangerrow"
-                  label="Revoke this enrollment"
-                  action={
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      disabled={revokeReason !== undefined}
-                      title={revokeReason}
-                      onClick={() => onRevokeKey(source.entry)}
-                    >
-                      Revoke…
-                    </Button>
-                  }
-                >
-                  <small>
-                    Disconnects the key this enrollment was made on and updates
-                    account security.
-                  </small>
-                </InsetRow>
-              )}
-            </Inset>
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-/**
- * The maintenance operations a security key's card supports, grouped under
- * one heading on the enrollment's own page: what used to be the "More…" menu
- * on the list, plus "Provision…" and "PIN status", which used to be their own
- * buttons on a connected card's row. Every button here acts on this page's
- * own enrollment — there is no other one to guess at.
- */
-function CardOperations({
-  enrollment,
-  cards,
-  store,
-  onNavigate,
-  onProvision,
-  onYubiAction,
-}: {
-  enrollment: YubiEnrollment;
-  /** The cards in this Mac's ports right now. */
-  cards: { serial: number }[];
-  stopped: { stopped: boolean; reason: string };
-  store: AccountStore;
-  onNavigate: (location: Location) => void;
-  onProvision: () => void;
-  onYubiAction: (action: SimpleYubiAction, entry: YubiEnrollment) => void;
-}): ReactNode {
-  const access = useWorkflowAccess();
-  const target = { profile: store.server, account: enrollment.alias };
-  const why = access.props('yubi-provision', {
-    profile: store.server,
-    account: store.account,
-  }).title;
-  const cardConnected =
-    enrollment.cardSerial != null &&
-    cards.some((card) => card.serial === enrollment.cardSerial);
-  const pinReason =
-    access.props('yubi-pin', target).title ??
-    (cards.length === 0
-      ? 'No security key connected.'
-      : !cardConnected
-        ? 'This key’s card is not connected.'
-        : undefined);
-  // Every recovery action but "Resume enrollment" acts on a card whose
-  // account already exists; that one acts on a card whose account does not,
-  // so the two conditions are exact opposites rather than shades of one.
-  const opReason =
-    enrollment.state === 'complete'
-      ? undefined
-      : 'This enrollment is not complete.';
-  const resumeReason =
-    enrollment.state === 'pending'
-      ? undefined
-      : 'This enrollment is already complete.';
-  return (
-    <div
-      className="settings-section"
-      role="region"
-      aria-labelledby="device-card-label"
-    >
-      <SectionLabel id="device-card-label">Card operations</SectionLabel>
-      <Inset className="settings-inset middle wide">
-        <InsetRow
-          label="Connected"
-          action={
-            <>
-              <Button
-                size="sm"
-                disabled={why !== undefined}
-                title={why}
-                onClick={onProvision}
-              >
-                Provision…
-              </Button>
-              <Button
-                size="sm"
-                disabled={pinReason !== undefined}
-                title={pinReason}
-                onClick={() => onYubiAction('pin-status', enrollment)}
-              >
-                PIN status
-              </Button>
-            </>
-          }
-        >
-          Read from the card in the port, not from the account.
-        </InsetRow>
-        {CARD_OP_GROUPS.map((group) => (
-          <InsetRow
-            key={group.label}
-            label={group.label}
-            action={
-              <>
-                {group.actions.map((action) => {
-                  const reason =
-                    access.props(YUBI_WORKFLOWS[action], target).title ??
-                    (action === 'resume-enrollment' ? resumeReason : opReason);
-                  return (
-                    <Button
-                      key={action}
-                      size="sm"
-                      disabled={reason !== undefined}
-                      title={reason}
-                      onClick={() => onYubiAction(action, enrollment)}
-                    >
-                      {CARD_OP_LABELS[action]}
-                    </Button>
-                  );
-                })}
-              </>
-            }
-          >
-            {group.hint}
-          </InsetRow>
-        ))}
-        <InsetRow
-          label="PIN"
-          action={
-            <Button
-              size="sm"
-              onClick={() =>
-                onNavigate({
-                  kind: 'settings',
-                  section: 'account',
-                  profile: store.server,
-                })
-              }
-            >
-              Settings › Server
-            </Button>
-          }
-        >
-          Set in Settings › Server, along with the key’s other credentials.
-        </InsetRow>
-      </Inset>
-    </div>
   );
 }
