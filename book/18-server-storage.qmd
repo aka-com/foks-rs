@@ -185,8 +185,9 @@ mechanism differs by resource.
 | Reader pool | 32 connections | `Error::ReaderPool`; status 1012 |
 | Listener admission queue | 32 pending connections | `try_send` fails; connection dropped |
 | Active sessions per listener | 256 | accept loop waits for a permit |
+| Connections per source per listener | 32, loopback exempt | connection dropped |
 | Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
-| Long-poll handlers | min(64, 32) = 32 permits | as above |
+| Realtime inbox polls | 256 in total, 8 per account | status 1012 |
 | Request memory | 64 MiB, 2 × frame length reserved per frame | frames wait for permits |
 | Frame size | 16 MiB | rejected before allocation |
 | Request execution timeout | 30 s | connection closed |
@@ -209,7 +210,7 @@ exhausting memory.
 
 ### Token buckets
 
-Per-IP rate limiting uses the *token bucket*, a standard algorithm from
+Per-source rate limiting uses the *token bucket*, a standard algorithm from
 network traffic shaping. A bucket holds up to B tokens and is refilled at a
 rate of r tokens per second. Each admitted event removes one token; an
 event arriving when the bucket is empty is refused. The parameter B sets
@@ -220,16 +221,32 @@ remains.
 
 | Bucket | Burst (B) | Rate (r) |
 |---|---|---|
-| Connections per IP | 512 | 256 per second |
-| Framed requests per IP | 2,000 | 1,000 per second |
+| Connections per source | 512 | 256 per second |
+| Framed requests per source | 2,000 | 1,000 per second |
 
-The subtlety is memory. A naive per-IP map grows without bound when an
+A source is an IPv4 address or an IPv6 /64 prefix (the prefix length is
+configurable). An IPv6 host is usually assigned a whole /64 and can pick
+any address in it, so a bucket per full IPv6 address would give one host
+2^64 buckets.
+
+The subtlety is memory. A naive per-source map grows without bound when an
 attacker cycles source addresses. The server keeps its buckets in a
-least-recently-used cache capped at 4,096 addresses; when a new address
+least-recently-used cache capped at 4,096 sources; when a new source
 arrives at capacity, the bucket used longest ago is evicted. An evicted
-address that returns gets a full bucket, which is a small leniency in
+source that returns gets a full bucket, which is a small leniency in
 exchange for a hard memory bound. A request that exceeds its bucket gets
 status 1012 and the connection is closed.
+
+Token buckets limit the rate of new work, not how much a source holds at
+once. A source within its connection burst could otherwise open every
+active-session slot and keep each one with a long poll. Each listener
+therefore also counts the connections a source holds, from acceptance
+until the session ends, and closes a new connection beyond 32. Loopback
+peers are exempt, since behind a local TCP proxy every client would appear
+as one loopback source. Realtime inbox polls are limited in the same way per
+account rather than per source: one account holds at most 8, so it cannot
+take every poll slot from other users. Every refusal is counted in
+`foks_admission_rejected_total` with a `reason` label.
 
 ## Schema versioning and single-transaction upgrades
 

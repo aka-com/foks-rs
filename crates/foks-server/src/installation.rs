@@ -160,6 +160,7 @@ pub struct LimitsConfig {
     pub maximum_active_connections: usize,
     pub maximum_pending_connections: usize,
     pub maximum_in_flight_requests: usize,
+    pub maximum_realtime_polls_per_account: usize,
     pub request_timeout_seconds: u64,
     /// Writes queued for the SQLite writer before callers are refused.
     pub maximum_pending_writes: usize,
@@ -174,6 +175,7 @@ impl Default for LimitsConfig {
             maximum_active_connections: session.maximum_active_connections,
             maximum_pending_connections: session.maximum_pending_connections,
             maximum_in_flight_requests: session.maximum_in_flight_requests,
+            maximum_realtime_polls_per_account: session.maximum_realtime_polls_per_account,
             request_timeout_seconds: session.request_timeout.as_secs(),
             maximum_pending_writes: 64,
         }
@@ -188,6 +190,7 @@ impl LimitsConfig {
             maximum_active_connections: self.maximum_active_connections,
             maximum_pending_connections: self.maximum_pending_connections,
             maximum_in_flight_requests: self.maximum_in_flight_requests,
+            maximum_realtime_polls_per_account: self.maximum_realtime_polls_per_account,
             request_timeout: Duration::from_secs(self.request_timeout_seconds),
             ..crate::SessionLimits::default()
         }
@@ -199,6 +202,7 @@ impl LimitsConfig {
             || self.maximum_active_connections == 0
             || self.maximum_pending_connections == 0
             || self.maximum_in_flight_requests == 0
+            || self.maximum_realtime_polls_per_account == 0
             || self.request_timeout_seconds == 0
             || self.maximum_pending_writes == 0
         {
@@ -750,6 +754,7 @@ mod tests {
             maximum_active_connections = 7\n\
             maximum_pending_connections = 11\n\
             maximum_in_flight_requests = 13\n\
+            maximum_realtime_polls_per_account = 3\n\
             request_timeout_seconds = 17\n\
             maximum_pending_writes = 19\n\
             [rate_limits]\n\
@@ -758,6 +763,8 @@ mod tests {
             request_burst = 31\n\
             requests_per_second = 37\n\
             maximum_tracked_ips = 41\n\
+            ipv6_source_prefix = 56\n\
+            maximum_connections_per_source = 5\n\
             [storage]\n\
             maximum_database_bytes = 43\n\
             maximum_teams = 47\n\
@@ -774,6 +781,7 @@ mod tests {
                 maximum_active_connections: 7,
                 maximum_pending_connections: 11,
                 maximum_in_flight_requests: 13,
+                maximum_realtime_polls_per_account: 3,
                 request_timeout_seconds: 17,
                 maximum_pending_writes: 19,
             }
@@ -786,6 +794,8 @@ mod tests {
                 request_burst: 31,
                 requests_per_second: 37,
                 maximum_tracked_ips: 41,
+                ipv6_source_prefix: 56,
+                maximum_connections_per_source: 5,
             }
         );
         assert_eq!(
@@ -807,9 +817,10 @@ mod tests {
                 session.maximum_active_connections,
                 session.maximum_pending_connections,
                 session.maximum_in_flight_requests,
+                session.maximum_realtime_polls_per_account,
                 session.request_timeout,
             ),
-            (3, 5, 7, 11, 13, Duration::from_secs(17))
+            (3, 5, 7, 11, 13, 3, Duration::from_secs(17))
         );
         let database = config.database_config();
         assert_eq!(
@@ -894,7 +905,16 @@ mod tests {
         );
         assert_eq!(
             message(&|c| c.rate_limits.request_burst = 0),
-            "rate limit parameters and tracked IP capacity must be non-zero"
+            "rate limit parameters, tracked IP capacity and connections per source \
+             must be non-zero"
+        );
+        assert_eq!(
+            message(&|c| c.rate_limits.ipv6_source_prefix = 0),
+            "ipv6_source_prefix must be between 1 and 128"
+        );
+        assert_eq!(
+            message(&|c| c.limits.maximum_realtime_polls_per_account = 0),
+            "[limits] values must be non-zero"
         );
         assert_eq!(
             message(&|c| c.storage.maximum_teams = 0),

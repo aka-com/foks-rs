@@ -43,12 +43,15 @@ pub(super) async fn poll_response(
                 PollOutcome::TimedOut => s.timed_out_polls += 1,
                 PollOutcome::Failed => s.failed_polls += 1,
                 PollOutcome::Cancelled => s.cancelled_polls += 1,
+                // Counted in foks_admission_rejected_total, as a poll refused
+                // for want of a global permit is.
+                PollOutcome::Refused => {}
             });
         }
     }
     let guard = Guard(&data.metrics, &mut outcome);
     let result = poll_inner(data, call, certificate, guard.1).await;
-    if result.is_err() {
+    if result.is_err() && !matches!(guard.1, PollOutcome::Refused) {
         *guard.1 = PollOutcome::Failed;
     }
     result
@@ -59,6 +62,8 @@ enum PollOutcome {
     TimedOut,
     Failed,
     Cancelled,
+    /// The account already held its maximum concurrent polls.
+    Refused,
 }
 
 async fn poll_inner(
@@ -104,6 +109,15 @@ async fn poll_inner(
     let auth_principal = principal.clone();
     blocking(move || auth_data.authorize_principal(&auth_principal)).await?;
     let actor = crate::services::realtime::RealtimeService::actor(&principal, &data.host_id)?;
+    let Some(_account_poll) = data
+        .account_realtime_polls
+        .try_acquire(principal.uid().to_vec())
+    else {
+        data.metrics
+            .admission_rejected(crate::AdmissionRejection::AccountRealtimePolls);
+        *outcome = PollOutcome::Refused;
+        return Err(RpcStatus::RateLimited);
+    };
     let listener = data.realtime.listener(&actor, app)?;
     let writer = data
         .writer

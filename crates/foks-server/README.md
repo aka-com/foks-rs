@@ -154,12 +154,17 @@ the same default.
 - `[limits]` sets the RPC session limits and the writer queue:
   `worker_threads` (4), `maximum_read_connections` (32),
   `maximum_active_connections` (256), `maximum_pending_connections` (32),
-  `maximum_in_flight_requests` (64), `request_timeout_seconds` (30) and
-  `maximum_pending_writes` (64). The `serve` flags of the same names set the
-  same values.
-- `[rate_limits]` sets the per-IP token buckets: `connection_burst` (512),
-  `connections_per_second` (256), `request_burst` (2,000),
-  `requests_per_second` (1,000) and `maximum_tracked_ips` (4,096).
+  `maximum_in_flight_requests` (64), `maximum_realtime_polls_per_account`
+  (8), `request_timeout_seconds` (30) and `maximum_pending_writes` (64). The
+  `serve` flags of the same names set the same values.
+- `[rate_limits]` sets the per-source admission limits: the token buckets
+  `connection_burst` (512), `connections_per_second` (256), `request_burst`
+  (2,000) and `requests_per_second` (1,000), `maximum_tracked_ips` (4,096),
+  `ipv6_source_prefix` (64, at most 128) and
+  `maximum_connections_per_source` (32). The `serve` flags set the same
+  values; the token bucket and tracking flags are named
+  `--connection-rate-burst`, `--request-rate-burst` and
+  `--maximum-rate-limit-ips`.
 - `[storage]` sets database capacity: `maximum_database_bytes` (64 GiB),
   `maximum_teams` (4,096), `maximum_team_members` (64),
   `maximum_kv_namespace_bytes` (16 GiB) and `maximum_kv_namespace_objects`
@@ -237,8 +242,13 @@ count_since_last_line=...`, without error text. This counter is process-wide.
 Handler paths that still map an error to status 1014 inline, without a mapper,
 are not counted. `foks_reader_pool_exhausted_total` counts requests refused
 with status 1012 because every pooled read connection was in use;
-`foks_rate_limited_requests_total` counts only per-address token-bucket and
-handler-permit refusals.
+`foks_rate_limited_requests_total` counts only per-source token-bucket and
+handler-permit refusals. `foks_admission_rejected_total{reason}` counts every
+admission refusal by its cause: `connection_rate` and `request_rate` (the
+per-source token buckets), `source_connections` (the per-source connection
+limit), `admission_queue` (a full queue of accepted connections),
+`request_handlers` (every handler permit in use), and `realtime_polls` and
+`account_realtime_polls` (the realtime inbox poll limits).
 
 When OIDC is configured and the host has a rollout policy, `/metrics` also
 reports the `foks_oidc_*` rollout gauges: mode, provider block, authorization
@@ -274,11 +284,28 @@ descriptors, more than systemd's default soft `RLIMIT_NOFILE` of 1,024.
 startup and print a warning when it stays below the estimate; the example unit
 sets `LimitNOFILE=65536`.
 
-Connection and request token buckets are enforced per source IP with bounded
-tracking memory. The `[rate_limits]` table or the `serve` flags set their
-refill rates, bursts, and maximum tracked IP count. Saturated connection
-admission is dropped; a framed request that exceeds its bucket receives FOKS
-status 1012 and the connection closes.
+Connection and request token buckets are enforced per source with bounded
+tracking memory. A source is one IPv4 address, or one IPv6 prefix of
+`ipv6_source_prefix` bits (a /64 by default), so that a host cannot obtain a
+new bucket by choosing another address within its prefix. An IPv4-mapped IPv6
+peer is its IPv4 source. The `[rate_limits]` table or the `serve` flags set
+the refill rates, bursts, prefix length and maximum tracked source count. A
+connection whose bucket is empty is closed without a response; a framed
+request that exceeds its bucket receives FOKS status 1012 and the connection
+closes.
+
+Each listener also limits the connections one source holds at once, queued
+or active, to `maximum_connections_per_source`, so that one source cannot
+occupy all `maximum_active_connections` slots with long polls or slow
+requests. A connection over the limit is closed without a response. Loopback
+peers are exempt: they are local processes or a local TCP proxy, and behind
+such a proxy every client would share one source.
+
+A realtime inbox poll (`RtPollInbox`) holds its connection for up to 55
+seconds. One account, across all of its devices, can hold at most
+`maximum_realtime_polls_per_account` polls; the total is bounded by the
+authenticated listener's `maximum_active_connections`. A poll over either
+limit receives status 1012 (rate limited).
 
 Automatic backups are opt-in:
 

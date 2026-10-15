@@ -58,6 +58,7 @@ impl TestEnvironment {
                 request_burst: 2,
                 requests_per_second: 1,
                 maximum_tracked_ips: 16,
+                ..foks_server::RateLimitConfig::default()
             }
         } else {
             foks_server::RateLimitConfig::default()
@@ -628,6 +629,11 @@ impl TestProfile {
                 4
             } else {
                 foks_server::SessionLimits::default().maximum_in_flight_requests
+            },
+            maximum_realtime_polls_per_account: if matches!(self, Self::RealtimePollCapacity) {
+                4
+            } else {
+                foks_server::SessionLimits::default().maximum_realtime_polls_per_account
             },
             // TightIo intentionally uses one runtime worker: listener boundary
             // tests then prove a slow persistent session cannot occupy it.

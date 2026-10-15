@@ -40,7 +40,12 @@ pub(crate) struct ServerData {
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     execution: Arc<Semaphore>,
-    realtime_polling: Arc<Semaphore>,
+    /// Realtime inbox polls in progress. The route is served only on the
+    /// authenticated listener and each poll holds its connection, so the
+    /// bound is that listener's connection limit.
+    realtime_polls: Arc<Semaphore>,
+    /// Realtime inbox polls in progress per account UID.
+    account_realtime_polls: Arc<crate::rate_limit::KeyedLimit<Vec<u8>>>,
     request_memory: Arc<Semaphore>,
     kex_relay: Arc<kex::Relay>,
     realtime: crate::services::realtime::RealtimeService,
@@ -104,8 +109,9 @@ impl ServerData {
             metrics: Arc::clone(&config.metrics),
             rate_limiter,
             execution: Arc::new(Semaphore::new(config.limits.maximum_in_flight_requests)),
-            realtime_polling: Arc::new(Semaphore::new(
-                config.limits.maximum_in_flight_requests.min(32),
+            realtime_polls: Arc::new(Semaphore::new(config.limits.maximum_active_connections)),
+            account_realtime_polls: Arc::new(crate::rate_limit::KeyedLimit::new(
+                config.limits.maximum_realtime_polls_per_account,
             )),
             request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
             kex_relay: Arc::new(kex::Relay::default()),
@@ -261,7 +267,9 @@ pub(crate) async fn serve(
             service_data.metrics.request_started();
             let _request_timer =
                 crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
-            service_data.metrics.request_rate_limited();
+            service_data
+                .metrics
+                .request_rate_limited(crate::AdmissionRejection::RequestRate);
             let response = encode_status_response_at(&RpcStatus::RateLimited, 0)?;
             write_response(&mut stream, &response, limits.io_timeout).await?;
             service_data
@@ -431,7 +439,9 @@ pub(crate) async fn serve(
             {
                 BoundedExecution::Completed(outcome) => Some(outcome?),
                 BoundedExecution::Saturated => {
-                    service_data.metrics.request_rate_limited();
+                    service_data
+                        .metrics
+                        .request_rate_limited(crate::AdmissionRejection::RequestHandlers);
                     let response = encode_status_response_at(&RpcStatus::RateLimited, sequence)?;
                     write_response(&mut stream, &response, limits.io_timeout).await?;
                     service_data

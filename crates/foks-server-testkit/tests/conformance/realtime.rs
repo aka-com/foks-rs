@@ -159,6 +159,10 @@ pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
             &TestAccountSpec::new("rtpollcapacity", 0x30),
         )
         .unwrap();
+    let other_account = fixture
+        .client
+        .create_account(fixture.host(), &TestAccountSpec::new("rtpollother", 0x31))
+        .unwrap();
     let mut pollers = Vec::new();
     for _ in 0..4 {
         pollers.push(
@@ -229,6 +233,35 @@ pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
             }))
         ),
         "unexpected overflow result: {overflow_result:?}"
+    );
+    // The cap is per account: another account still polls while the first
+    // holds all of its slots.
+    let mut other = fixture
+        .client
+        .foks()
+        .realtime_connection(&fixture.probe.pinned, &other_account.credential)
+        .unwrap();
+    let Response::PollResult(other_result) = other
+        .call(&Request::PollInbox(RtPollInboxArgument {
+            poll: RtPollInbox {
+                app: RtAppId::Chat,
+                since: 0,
+                timeout_milliseconds: 200,
+            },
+        }))
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(!other_result.bumped);
+    let rejections = fixture.server.metrics().admission_rejections;
+    assert_eq!(
+        rejections[foks_server::AdmissionRejection::AccountRealtimePolls as usize],
+        1
+    );
+    assert_eq!(
+        rejections[foks_server::AdmissionRejection::RealtimePolls as usize],
+        0
     );
     for waiter in waiting {
         let Response::PollResult(result) = waiter.join().unwrap().unwrap() else {

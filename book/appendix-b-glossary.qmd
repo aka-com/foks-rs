@@ -254,7 +254,7 @@ points to where it is explained. Spellings follow the chapters.
 - **three tiers** — Frontends, the resident agent, and servers: local JSON IPC between the first two, Snowpack RPC over TLS between the second and third. (Chapter 2)
 - **TOCTOU (time-of-check to time-of-use)** — A race in which a checked property changes before it is relied upon; defended by identifying things by unforgeable handles (inode, process start time) and re-checking before acting. (Chapter 20)
 - **TOFU (trust on first use)** — Accepting an identity at first contact and requiring every later contact to match it; FOKS pins the genesis of a signed chain rather than a bare key. (Chapter 13)
-- **token bucket** — A rate limiter holding up to B tokens refilled at r per second, one token per admitted event; kept per IP in a 4,096-entry least-recently-used cache. (Chapter 18)
+- **token bucket** — A rate limiter holding up to B tokens refilled at r per second, one token per admitted event; kept per source (an IPv4 address or IPv6 /64) in a 4,096-entry least-recently-used cache. (Chapter 18)
 - **tombstone** — A directory entry whose node ID is all zero, written by `rm` and `mv` so the entry's version advances and any version vector that cited it is reported stale. (Chapter 14)
 - **tree location** — 32 random bytes chosen by the signer of link `n-1` and disclosed with link `n`, from which link `n`'s Merkle key is derived; subchains derive their first location from a seed by keyed hash. (Chapters 3, 10)
 - **trie** — A tree that stores keys by their digits, branching at depth `d` on the `d`-th digit. (Chapter 11)

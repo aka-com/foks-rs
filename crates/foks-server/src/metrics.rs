@@ -17,6 +17,50 @@ use std::time::{Duration, Instant};
 /// listener or an argument over the method limit.
 pub(crate) const UNROUTED: &str = "unrouted";
 
+/// A refused connection or request, labeled `reason` in
+/// `foks_admission_rejected_total`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdmissionRejection {
+    /// The source's connection token bucket was empty.
+    ConnectionRate,
+    /// The source already held its maximum connections on the listener.
+    SourceConnections,
+    /// The listener's queue of accepted connections was full.
+    AdmissionQueue,
+    /// The source's request token bucket was empty.
+    RequestRate,
+    /// Every blocking request handler permit was in use.
+    RequestHandlers,
+    /// Every realtime inbox poll permit was in use.
+    RealtimePolls,
+    /// The account already held its maximum realtime inbox polls.
+    AccountRealtimePolls,
+}
+
+impl AdmissionRejection {
+    pub const ALL: [Self; 7] = [
+        Self::ConnectionRate,
+        Self::SourceConnections,
+        Self::AdmissionQueue,
+        Self::RequestRate,
+        Self::RequestHandlers,
+        Self::RealtimePolls,
+        Self::AccountRealtimePolls,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ConnectionRate => "connection_rate",
+            Self::SourceConnections => "source_connections",
+            Self::AdmissionQueue => "admission_queue",
+            Self::RequestRate => "request_rate",
+            Self::RequestHandlers => "request_handlers",
+            Self::RealtimePolls => "realtime_polls",
+            Self::AccountRealtimePolls => "account_realtime_polls",
+        }
+    }
+}
+
 #[derive(Default)]
 struct DurationMetric {
     observations: AtomicU64,
@@ -95,6 +139,9 @@ pub struct ServerMetricsSnapshot {
     /// Transient accept() failures across all listeners, indexed by
     /// `AcceptErrorKind` discriminant.
     pub accept_errors: [u64; crate::AcceptErrorKind::ALL.len()],
+    /// Refused connections and requests, indexed by `AdmissionRejection`
+    /// discriminant.
+    pub admission_rejections: [u64; AdmissionRejection::ALL.len()],
 }
 
 #[derive(Default)]
@@ -136,6 +183,7 @@ pub struct ServerMetrics {
     reclaimed_upload_bytes: AtomicU64,
     upload_cleanup_deferred_passes: AtomicU64,
     accept_errors: [AtomicU64; crate::AcceptErrorKind::ALL.len()],
+    admission_rejections: [AtomicU64; AdmissionRejection::ALL.len()],
 }
 
 impl ServerMetrics {
@@ -220,6 +268,10 @@ impl ServerMetrics {
                 .accept_errors
                 .each_ref()
                 .map(|count| count.load(Ordering::Relaxed)),
+            admission_rejections: self
+                .admission_rejections
+                .each_ref()
+                .map(|count| count.load(Ordering::Relaxed)),
         }
     }
 
@@ -268,8 +320,15 @@ impl ServerMetrics {
         self.connections_accepted.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Counts a connection refused because the listener's admission queue
+    /// was full.
     pub(crate) fn connection_rejected(&self) {
         self.connections_rejected.fetch_add(1, Ordering::Relaxed);
+        self.admission_rejected(AdmissionRejection::AdmissionQueue);
+    }
+
+    pub(crate) fn admission_rejected(&self, reason: AdmissionRejection) {
+        self.admission_rejections[reason as usize].fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn connection_opened(&self) {
@@ -294,10 +353,14 @@ impl ServerMetrics {
     pub(crate) fn connection_rate_limited(&self) {
         self.rate_limited_connections
             .fetch_add(1, Ordering::Relaxed);
+        self.admission_rejected(AdmissionRejection::ConnectionRate);
     }
 
-    pub(crate) fn request_rate_limited(&self) {
+    /// Counts a request refused by the source's request token bucket
+    /// (`RequestRate`) or by saturated handler permits (`RequestHandlers`).
+    pub(crate) fn request_rate_limited(&self, reason: AdmissionRejection) {
         self.rate_limited_requests.fetch_add(1, Ordering::Relaxed);
+        self.admission_rejected(reason);
     }
 
     /// Counts a request refused because every pooled read connection was in

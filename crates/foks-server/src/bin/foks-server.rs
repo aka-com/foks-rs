@@ -320,6 +320,8 @@ struct ServeArguments {
     maximum_pending_connections: usize,
     #[arg(long, default_value_t = LimitsConfig::default().maximum_in_flight_requests)]
     maximum_in_flight_requests: usize,
+    #[arg(long, default_value_t = LimitsConfig::default().maximum_realtime_polls_per_account)]
+    maximum_realtime_polls_per_account: usize,
     #[arg(long, default_value_t = LimitsConfig::default().request_timeout_seconds)]
     request_timeout_seconds: u64,
     #[arg(long, default_value_t = LimitsConfig::default().maximum_pending_writes)]
@@ -334,6 +336,10 @@ struct ServeArguments {
     requests_per_second: u32,
     #[arg(long, default_value_t = RateLimitConfig::default().maximum_tracked_ips)]
     maximum_rate_limit_ips: usize,
+    #[arg(long, default_value_t = RateLimitConfig::default().ipv6_source_prefix)]
+    ipv6_source_prefix: u8,
+    #[arg(long, default_value_t = RateLimitConfig::default().maximum_connections_per_source)]
+    maximum_connections_per_source: usize,
     #[arg(long)]
     automatic_backup_directory: Option<PathBuf>,
     #[arg(long, default_value_t = 86_400)]
@@ -588,6 +594,7 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         maximum_active_connections: limits.maximum_active_connections,
         maximum_pending_connections: limits.maximum_pending_connections,
         maximum_in_flight_requests: limits.maximum_in_flight_requests,
+        maximum_realtime_polls_per_account: limits.maximum_realtime_polls_per_account,
         request_timeout_seconds: limits.request_timeout_seconds,
         maximum_pending_writes: limits.maximum_pending_writes,
         connection_rate_burst: rate_limits.connection_burst,
@@ -595,6 +602,8 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         request_rate_burst: rate_limits.request_burst,
         requests_per_second: rate_limits.requests_per_second,
         maximum_rate_limit_ips: rate_limits.maximum_tracked_ips,
+        ipv6_source_prefix: rate_limits.ipv6_source_prefix,
+        maximum_connections_per_source: rate_limits.maximum_connections_per_source,
         automatic_backup_directory: Some(config.backup_directory),
         automatic_backup_interval_seconds: config.backup_interval_seconds,
         automatic_backup_retain: config.backup_retain,
@@ -698,6 +707,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         maximum_active_connections: arguments.maximum_active_connections,
         maximum_pending_connections: arguments.maximum_pending_connections,
         maximum_in_flight_requests: arguments.maximum_in_flight_requests,
+        maximum_realtime_polls_per_account: arguments.maximum_realtime_polls_per_account,
         request_timeout_seconds: arguments.request_timeout_seconds,
         maximum_pending_writes: arguments.maximum_pending_writes,
     }
@@ -737,6 +747,8 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
             request_burst: arguments.request_rate_burst,
             requests_per_second: arguments.requests_per_second,
             maximum_tracked_ips: arguments.maximum_rate_limit_ips,
+            ipv6_source_prefix: arguments.ipv6_source_prefix,
+            maximum_connections_per_source: arguments.maximum_connections_per_source,
         },
         backup: arguments
             .automatic_backup_directory

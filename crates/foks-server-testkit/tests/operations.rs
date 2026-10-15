@@ -44,6 +44,8 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         "foks_checkpoint_remaining_frames",
         "foks_accept_errors_total{kind=\"emfile\"}",
         "foks_accept_errors_total{kind=\"other\"}",
+        "foks_admission_rejected_total{reason=\"source_connections\"}",
+        "foks_admission_rejected_total{reason=\"account_realtime_polls\"}",
     ] {
         assert!(metrics.contains(name));
     }
@@ -290,6 +292,13 @@ fn request_rate_limit_returns_typed_status_and_counts_rejection() {
         ]
     );
     assert_eq!(metric(&text, "foks_reader_pool_exhausted_total"), 0.0);
+    assert_eq!(
+        metric(
+            &text,
+            "foks_admission_rejected_total{reason=\"request_rate\"}"
+        ),
+        1.0
+    );
     let held = (0..20)
         .map(|_| TcpStream::connect(server.addresses().public_services).unwrap())
         .collect::<Vec<_>>();
@@ -301,6 +310,21 @@ fn request_rate_limit_returns_typed_status_and_counts_rejection() {
         );
         std::thread::yield_now();
     }
+    let text = get(server.management_address(), "/metrics");
+    assert!(
+        metric(
+            &text,
+            "foks_admission_rejected_total{reason=\"connection_rate\"}"
+        ) >= 1.0
+    );
+    // Loopback peers are exempt from the per-source connection allowance.
+    assert_eq!(
+        metric(
+            &text,
+            "foks_admission_rejected_total{reason=\"source_connections\"}"
+        ),
+        0.0
+    );
     drop(held);
     server.shutdown().unwrap();
 }

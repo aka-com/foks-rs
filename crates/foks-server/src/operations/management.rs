@@ -490,6 +490,15 @@ fn prometheus(
                 metrics.accept_errors[kind as usize]
             );
         }
+        let _ = writeln!(output, "# TYPE foks_admission_rejected_total counter");
+        for reason in crate::AdmissionRejection::ALL {
+            let _ = writeln!(
+                output,
+                "foks_admission_rejected_total{{reason=\"{}\"}} {}",
+                reason.label(),
+                metrics.admission_rejections[reason as usize]
+            );
+        }
     }
     request_prometheus(
         &mut output,

@@ -10,6 +10,7 @@ use tokio::task::JoinSet;
 use crate::fatal::{CoreThread, FatalSignal};
 use crate::net::retry_accept;
 use crate::net::session::{serve, ServerData};
+use crate::rate_limit::{SourceConnection, SourceConnections};
 use crate::rpc::Listener;
 use crate::{Config, Error, Result};
 
@@ -211,6 +212,16 @@ impl RunningServer {
     }
 }
 
+/// A connection that passed admission. It holds one connection of its
+/// source's allowance on the listener until the session ends, or until it
+/// is dropped from a full admission queue.
+struct Admitted<S> {
+    stream: S,
+    id: u64,
+    peer_ip: IpAddr,
+    _source: SourceConnection,
+}
+
 struct LivenessGuard(Arc<AtomicBool>);
 
 impl Drop for LivenessGuard {
@@ -329,7 +340,7 @@ async fn run_listener(
     context: ListenerContext,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
-    let (sender, mut receiver) = mpsc::channel::<(tokio::net::TcpStream, u64, IpAddr)>(
+    let (sender, mut receiver) = mpsc::channel::<Admitted<tokio::net::TcpStream>>(
         context.limits.maximum_pending_connections,
     );
     let listener = Arc::new(listener);
@@ -341,6 +352,7 @@ async fn run_listener(
         sender,
         Arc::clone(&context.metrics),
         Arc::clone(&context.rate_limiter),
+        SourceConnections::new(context.rate_limiter.config()),
         context.failure.clone(),
         stop.clone(),
     ));
@@ -361,7 +373,7 @@ async fn run_listener(
             }
             permit = Arc::clone(&active).acquire_owned() => permit.map_err(|_| Error::Thread)?,
         };
-        let Some((stream, id, peer_ip)) = (tokio::select! {
+        let Some(admitted) = (tokio::select! {
             result = stop.changed() => {
                 if result.is_err() || *stop.borrow() {
                     None
@@ -381,6 +393,12 @@ async fn run_listener(
         let session_stop = stop.clone();
         sessions.spawn(async move {
             let _permit = permit;
+            let Admitted {
+                stream,
+                id,
+                peer_ip,
+                _source,
+            } = admitted;
             let _active = ActiveConnectionMetric::new(Arc::clone(&session_context.metrics));
             let result = serve(
                 stream,
@@ -422,11 +440,15 @@ async fn run_listener(
 /// retried by `retry_accept`. Any other end is reported through `failure`
 /// as it happens, independently of the session loop, which can be blocked on
 /// an active-connection permit while long-lived sessions hold every permit.
+/// A connection is closed at once when its source's connection token bucket
+/// is empty or the source already holds `maximum_connections_per_source`
+/// queued or active connections on this listener.
 async fn accept_connections<S, F, Fut>(
     mut accept: F,
-    admission: mpsc::Sender<(S, u64, IpAddr)>,
+    admission: mpsc::Sender<Admitted<S>>,
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
+    sources: SourceConnections,
     failure: ListenerFailure,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()>
@@ -458,11 +480,20 @@ where
                     metrics.connection_rate_limited();
                     continue;
                 }
+                let Some(source) = sources.try_admit(peer.ip()) else {
+                    metrics.admission_rejected(crate::AdmissionRejection::SourceConnections);
+                    continue;
+                };
                 let id = next_connection_id;
                 next_connection_id = next_connection_id.wrapping_add(1);
                 // A full admission queue deliberately rejects new work. This keeps
                 // memory bounded and lets TCP/TLS clients retry with backoff.
-                match admission.try_send((stream, id, peer.ip())) {
+                match admission.try_send(Admitted {
+                    stream,
+                    id,
+                    peer_ip: peer.ip(),
+                    _source: source,
+                }) {
                     Ok(()) => metrics.connection_accepted(),
                     Err(_) => metrics.connection_rejected(),
                 }
@@ -526,6 +557,10 @@ mod tests {
     }
 
     impl Harness {
+        fn sources(&self) -> SourceConnections {
+            SourceConnections::new(self.rate_limiter.config())
+        }
+
         fn new() -> Self {
             Self {
                 metrics: Arc::new(crate::ServerMetrics::default()),
@@ -566,6 +601,7 @@ mod tests {
                     admission,
                     Arc::clone(&harness.metrics),
                     Arc::clone(&harness.rate_limiter),
+                    harness.sources(),
                     harness.failure.clone(),
                     stop,
                 ),
@@ -576,8 +612,13 @@ mod tests {
             panic!("accept loop did not end with the listener error");
         };
         assert_eq!(error.raw_os_error(), Some(libc::EBADF));
-        assert_eq!(admitted.try_recv().unwrap(), (7, 1, peer.ip()));
-        assert_eq!(admitted.try_recv().unwrap(), (8, 2, peer.ip()));
+        for (stream, id) in [(7, 1), (8, 2)] {
+            let connection = admitted.try_recv().unwrap();
+            assert_eq!(
+                (connection.stream, connection.id, connection.peer_ip),
+                (stream, id, peer.ip())
+            );
+        }
         let snapshot = harness.metrics.snapshot();
         assert_eq!(snapshot.connections_accepted, 2);
         let mut expected = [0; AcceptErrorKind::ALL.len()];
@@ -601,6 +642,7 @@ mod tests {
             admission,
             Arc::clone(&harness.metrics),
             Arc::clone(&harness.rate_limiter),
+            harness.sources(),
             harness.failure.clone(),
             stop_receiver,
         ));
@@ -626,6 +668,7 @@ mod tests {
                 admission,
                 Arc::clone(&harness.metrics),
                 Arc::clone(&harness.rate_limiter),
+                harness.sources(),
                 harness.failure.clone(),
                 stop,
             );
@@ -648,5 +691,112 @@ mod tests {
         drop_pending(&harness, stop_receiver);
         assert!(!harness.failure.live.load(Ordering::Acquire));
         assert_eq!(harness.failure.fatal.exited(), Some(CoreThread::Listener));
+    }
+
+    #[test]
+    fn a_source_holds_at_most_its_connection_allowance() {
+        let harness = Harness::new();
+        let sources = SourceConnections::new(crate::RateLimitConfig {
+            maximum_connections_per_source: 2,
+            ..crate::RateLimitConfig::default()
+        });
+        // Addresses in one IPv6 /64 are one source; loopback is exempt.
+        let peers = [
+            "[2001:db8::1]:4000",
+            "[2001:db8::2]:4000",
+            "[2001:db8::3]:4000",
+            "[2001:db8:0:1::1]:4000",
+            "127.0.0.1:4000",
+            "127.0.0.1:4001",
+            "127.0.0.1:4002",
+        ];
+        let script = peers
+            .iter()
+            .enumerate()
+            .map(|(stream, peer)| Ok((stream as u32, peer.parse().unwrap())))
+            .collect();
+        let (admission, mut admitted) = mpsc::channel(16);
+        let (stop, stop_receiver) = watch::channel(false);
+        let acceptor = harness.runtime.spawn(accept_connections(
+            scripted(script),
+            admission,
+            Arc::clone(&harness.metrics),
+            Arc::clone(&harness.rate_limiter),
+            sources,
+            harness.failure.clone(),
+            stop_receiver,
+        ));
+        let held = harness.runtime.block_on(async {
+            let mut held = Vec::new();
+            for _ in 0..6 {
+                held.push(
+                    tokio::time::timeout(Duration::from_secs(10), admitted.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                );
+            }
+            held
+        });
+        assert_eq!(
+            held.iter().map(|c| c.stream).collect::<Vec<_>>(),
+            [0, 1, 3, 4, 5, 6]
+        );
+        let snapshot = harness.metrics.snapshot();
+        assert_eq!(snapshot.connections_accepted, 6);
+        let mut expected = [0; crate::AdmissionRejection::ALL.len()];
+        expected[crate::AdmissionRejection::SourceConnections as usize] = 1;
+        assert_eq!(snapshot.admission_rejections, expected);
+        stop.send(true).unwrap();
+        harness
+            .runtime
+            .block_on(async { tokio::time::timeout(Duration::from_secs(10), acceptor).await })
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn a_connection_refused_by_a_full_admission_queue_releases_its_source_slot() {
+        let harness = Harness::new();
+        let sources = SourceConnections::new(crate::RateLimitConfig {
+            maximum_connections_per_source: 1,
+            ..crate::RateLimitConfig::default()
+        });
+        let first: SocketAddr = "192.0.2.7:4000".parse().unwrap();
+        let second: SocketAddr = "192.0.2.8:4000".parse().unwrap();
+        // The first connection fills the queue. Both connections from the
+        // second source are refused by the full queue; the second refusal
+        // shows that the first released the source's only slot.
+        let (admission, mut admitted) = mpsc::channel(1);
+        let (stop, stop_receiver) = watch::channel(false);
+        let acceptor = harness.runtime.spawn(accept_connections(
+            scripted(vec![Ok((1, first)), Ok((2, second)), Ok((3, second))]),
+            admission,
+            Arc::clone(&harness.metrics),
+            Arc::clone(&harness.rate_limiter),
+            sources,
+            harness.failure.clone(),
+            stop_receiver,
+        ));
+        harness.runtime.block_on(async {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while harness.metrics.snapshot().connections_rejected < 2 {
+                assert!(tokio::time::Instant::now() < deadline);
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            stop.send(true).unwrap();
+            tokio::time::timeout(Duration::from_secs(10), acceptor)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        });
+        let snapshot = harness.metrics.snapshot();
+        assert_eq!(snapshot.connections_accepted, 1);
+        let mut expected = [0; crate::AdmissionRejection::ALL.len()];
+        expected[crate::AdmissionRejection::AdmissionQueue as usize] = 2;
+        assert_eq!(snapshot.admission_rejections, expected);
+        assert_eq!(admitted.try_recv().unwrap().stream, 1);
     }
 }
