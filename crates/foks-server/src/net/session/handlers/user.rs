@@ -164,15 +164,7 @@ impl Operations for ServerData {
                     )?;
                     Ok(())
                 })
-                .map_err(|e| match e {
-                    crate::Error::Database(foks_server_db::Error::StaleRoot) => {
-                        RpcStatus::RevokeRace("username changed concurrently".into())
-                    }
-                    crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
-                        permission_denied()
-                    }
-                    other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
-                })
+                .map_err(map_display_rename_error)
         } else {
             let full = arg.full.ok_or_else(|| {
                 super::super::bad_arguments("normalized rename requires full update")
@@ -570,5 +562,32 @@ pub(super) fn response(
         )
         .map_err(|_| RpcStatus::Unsupported),
         _ => Err(RpcStatus::Unsupported),
+    }
+}
+
+fn map_display_rename_error(error: crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::Database(foks_server_db::Error::StaleRoot) => {
+            RpcStatus::RevokeRace("username changed concurrently".into())
+        }
+        crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
+        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::status::contract::{assert_shared_classes, wrapped_sso};
+
+    #[test]
+    fn display_rename_reports_shared_failure_classes() {
+        assert_shared_classes("display rename", wrapped_sso, map_display_rename_error);
+        assert_eq!(
+            map_display_rename_error(crate::Error::Database(
+                foks_server_db::Error::AuthorizationChanged
+            )),
+            permission_denied()
+        );
     }
 }

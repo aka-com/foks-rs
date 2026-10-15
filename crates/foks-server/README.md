@@ -185,7 +185,11 @@ refuse a different value.
 A write that would grow the database past `maximum_database_bytes` fails in
 SQLite with `SQLITE_FULL`. Every RPC route reports it as FOKS status 1060
 (over quota), the same status as a write refused by a configured storage
-quota, and the status detail does not include SQLite error text.
+quota, and the status detail does not include SQLite error text. On an SSO
+host this includes the access-token refresh that runs before an authenticated
+request: a full database during the refresh is reported as 1060, not wrapped
+in an OAuth2 authentication error that clients treat as a reauthentication
+requirement.
 
 The lower-level `serve` command remains available when every artifact and
 listener should be supplied individually:

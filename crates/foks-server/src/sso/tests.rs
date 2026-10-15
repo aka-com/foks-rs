@@ -512,3 +512,23 @@ fn sso_status_reports_shared_failure_classes_and_unwrapped_flow_errors() {
         foks_rpc::RpcStatus::OAuth2("authentication could not be verified".into())
     );
 }
+
+#[test]
+fn access_status_reports_shared_failure_classes_and_wraps_flow_errors() {
+    use crate::status::contract::{assert_shared_classes, wrapped_sso};
+    // A full database during the access refresh is not a reauthentication
+    // requirement.
+    assert_shared_classes("sso access", wrapped_sso, access_status);
+    assert_eq!(
+        access_status(Error::Database(foks_server_db::Error::Capacity(
+            "SSO refreshes"
+        ))),
+        foks_rpc::RpcStatus::OAuth2Auth(Box::new(foks_rpc::RpcStatus::RateLimited))
+    );
+    assert_eq!(
+        access_status(Error::Database(foks_server_db::Error::AuthorizationChanged)),
+        foks_rpc::RpcStatus::OAuth2Auth(Box::new(foks_rpc::RpcStatus::OAuth2(
+            "authentication could not be verified".into()
+        )))
+    );
+}

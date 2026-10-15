@@ -4,9 +4,9 @@
 //! a stale team head or a full waitlist, and passes every other error through
 //! [`shared`]. A full database, a saturated writer queue, a credential revoked
 //! while its write was queued and an SQLite fault that the request did not
-//! cause therefore carry the same status on every route. `Capacity` stays with each family: some of its
-//! values are retained-storage limits and others are concurrency caps that
-//! the route reports as rate limiting.
+//! cause therefore carry the same status on every route. `Capacity` stays
+//! with each family: some of its values are retained-storage limits and
+//! others are concurrency caps that the route reports as rate limiting.
 //!
 //! Statuses carry fixed strings. The `Display` text of [`Error`] can include
 //! SQLite messages and must not reach clients. The epoch-limit detail is the

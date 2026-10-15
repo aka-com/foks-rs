@@ -470,23 +470,7 @@ impl ServerData {
             })?;
             Ok(())
         });
-        match result {
-            Err(crate::Error::Database(foks_server_db::Error::Reservation)) => {
-                Err(bad_arguments("invalid rename reservation"))
-            }
-            Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
-                Err(RpcStatus::NameInUse)
-            }
-            Ok(()) => Ok(()),
-            Err(crate::Error::Database(foks_server_db::Error::StaleRoot)) => Err(
-                RpcStatus::RevokeRace("user chain or Merkle root changed".to_owned()),
-            ),
-            Err(crate::Error::Database(foks_server_db::Error::OperationConflict)) => {
-                Err(bad_arguments("user mutation retry binding failed"))
-            }
-            Err(error) => Err(crate::status::shared(&error)
-                .unwrap_or_else(|| bad_arguments("user mutation validation failed"))),
-        }
+        result.map_err(map_user_mutation_error)
     }
 
     fn reserve_username(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
@@ -536,10 +520,7 @@ impl ServerData {
             }
             .encoded()
             .map_err(|_| RpcStatus::TransactionRetry),
-            Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
-                Err(RpcStatus::NameInUse)
-            }
-            Err(error) => Err(crate::status::shared(&error).unwrap_or(RpcStatus::TransactionRetry)),
+            Err(error) => Err(map_reservation_error(error)),
         }
     }
 
@@ -710,27 +691,7 @@ impl ServerData {
             database.commit_identity_with_sso(&mutation, sso_binding.as_ref())?;
             Ok(())
         });
-        match result {
-            Err(crate::Error::Database(foks_server_db::Error::Duplicate(
-                "SSO provider identity",
-            ))) => Err(RpcStatus::OAuth2(
-                "provider identity is already linked to another account".into(),
-            )),
-            Ok(()) => Ok(()),
-            Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
-                Err(RpcStatus::NameInUse)
-            }
-            Err(crate::Error::Database(foks_server_db::Error::StaleRoot)) => {
-                Err(RpcStatus::StaleRoot)
-            }
-            Err(crate::Error::Database(foks_server_db::Error::BadInvite)) => {
-                Err(RpcStatus::BadInvite)
-            }
-            Err(crate::Error::Database(
-                foks_server_db::Error::Reservation | foks_server_db::Error::OperationConflict,
-            )) => Err(bad_arguments("signup reservation or retry binding failed")),
-            Err(error) => Err(crate::status::shared(&error).unwrap_or(RpcStatus::TransactionRetry)),
-        }
+        result.map_err(map_signup_error)
     }
 
     fn client_certificate_chain(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
@@ -759,7 +720,7 @@ impl ServerData {
         }
         if let Some(sso) = &self.sso {
             sso.ensure_access(uid.as_bytes(), device.as_bytes())
-                .map_err(|e| RpcStatus::OAuth2Auth(Box::new(crate::sso::status(e))))?;
+                .map_err(crate::sso::access_status)?;
         }
         let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
         let keys = Arc::clone(self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?);
@@ -822,7 +783,7 @@ impl ServerData {
                     .map_err(|_| RpcStatus::TransactionRetry)
             }
             Ok(None) => Err(RpcStatus::NotFound("active device not found".to_owned())),
-            Err(error) => Err(crate::status::shared(&error).unwrap_or(RpcStatus::TransactionRetry)),
+            Err(error) => Err(map_certificate_error(error)),
         }
     }
 
@@ -1102,6 +1063,49 @@ fn select_merkle_lookup_root(
         }
     }
     Ok(root)
+}
+
+fn map_user_mutation_error(error: crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::Database(foks_server_db::Error::Reservation) => {
+            bad_arguments("invalid rename reservation")
+        }
+        crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
+        crate::Error::Database(foks_server_db::Error::StaleRoot) => {
+            RpcStatus::RevokeRace("user chain or Merkle root changed".to_owned())
+        }
+        crate::Error::Database(foks_server_db::Error::OperationConflict) => {
+            bad_arguments("user mutation retry binding failed")
+        }
+        other => crate::status::shared(&other)
+            .unwrap_or_else(|| bad_arguments("user mutation validation failed")),
+    }
+}
+
+fn map_reservation_error(error: crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
+        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+    }
+}
+
+fn map_signup_error(error: crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::Database(foks_server_db::Error::Duplicate("SSO provider identity")) => {
+            RpcStatus::OAuth2("provider identity is already linked to another account".into())
+        }
+        crate::Error::Database(foks_server_db::Error::NameInUse) => RpcStatus::NameInUse,
+        crate::Error::Database(foks_server_db::Error::StaleRoot) => RpcStatus::StaleRoot,
+        crate::Error::Database(foks_server_db::Error::BadInvite) => RpcStatus::BadInvite,
+        crate::Error::Database(
+            foks_server_db::Error::Reservation | foks_server_db::Error::OperationConflict,
+        ) => bad_arguments("signup reservation or retry binding failed"),
+        other => crate::status::shared(&other).unwrap_or(RpcStatus::TransactionRetry),
+    }
+}
+
+fn map_certificate_error(error: crate::Error) -> RpcStatus {
+    crate::status::shared(&error).unwrap_or(RpcStatus::TransactionRetry)
 }
 
 fn map_merkle_proof_error(error: foks_merkle_store::Error) -> RpcStatus {
@@ -1868,13 +1872,32 @@ impl ServerData {
             )))
         })?;
         sso.ensure_access(principal.uid(), principal.device_id())
-            .map_err(|e| RpcStatus::OAuth2Auth(Box::new(crate::sso::status(e))))
+            .map_err(crate::sso::access_status)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_mappers_report_shared_failure_classes() {
+        use crate::status::contract::{assert_shared_classes, wrapped_sso};
+        type Mapper = fn(crate::Error) -> RpcStatus;
+        let mappers: [(&str, Mapper); 4] = [
+            ("user mutation", map_user_mutation_error),
+            ("username reservation", map_reservation_error),
+            ("signup", map_signup_error),
+            ("certificate", map_certificate_error),
+        ];
+        for (route, map) in mappers {
+            assert_shared_classes(route, wrapped_sso, map);
+        }
+        assert_eq!(
+            map_user_mutation_error(crate::Error::Signup("invalid user link")),
+            bad_arguments("user mutation validation failed")
+        );
+    }
 
     #[test]
     fn merkle_integrity_failures_are_not_laundered_as_retries() {

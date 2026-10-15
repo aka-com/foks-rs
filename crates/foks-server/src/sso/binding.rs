@@ -284,6 +284,16 @@ pub(crate) fn status(error: Error) -> foks_rpc::RpcStatus {
     }
 }
 
+/// Returns the status for an [`SsoService::ensure_access`] failure on an
+/// authenticated route. A failure in a shared class, such as a full database
+/// during the access refresh, keeps its shared status, because the client
+/// treats `OAuth2Auth` as a reauthentication requirement. Every other failure,
+/// `Capacity` included, is reported inside `OAuth2Auth`.
+pub(crate) fn access_status(error: Error) -> foks_rpc::RpcStatus {
+    crate::status::shared(&error)
+        .unwrap_or_else(|| foks_rpc::RpcStatus::OAuth2Auth(Box::new(status(error))))
+}
+
 fn poll_result(payload: &SsoSessionPayload, reservation: UsernameReservation) -> Result<Vec<u8>> {
     Ok(OAuth2PollResult {
         tokens: OAuth2TokenSet {

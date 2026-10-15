@@ -90,7 +90,7 @@ fn full_database_reports_over_quota_on_signup_team_creation_and_kv_writes() {
         client.foks().create_single_owner_adhoc_team(
             &probe.pinned,
             &owner.credential,
-            &secrets(0x10 + 4 * attempt as u8),
+            &secrets((0x10 + 4 * attempt) as u8),
         )
     });
     assert_over_quota("team creation", attempts, &error);
