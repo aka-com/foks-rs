@@ -334,10 +334,11 @@ pub(crate) async fn serve(
             .as_ref()
             .map_or(crate::metrics::UNROUTED, |call| call.route.protocol);
         // The end of a bounded handler's execution budget. It is taken just
-        // before the execution timeout below starts, so it does not follow the
-        // instant at which the session stops waiting and closes the
-        // connection. The request's writer skips a queued write that it has
-        // not started by then.
+        // before the execution timeout below starts, so it is no later than
+        // the instant at which the session stops waiting and closes the
+        // connection. The request's writer skips a write that it has not
+        // started by then. SSO access refreshes use their own writer handle
+        // without this deadline; see `WriterHandle::with_deadline`.
         let deadline = std::time::Instant::now().checked_add(limits.request_timeout);
         let outcome = match routed {
             Ok(call) if call.route.id == RouteId::RegPollOAuth2SessionCompletion => {

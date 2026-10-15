@@ -134,10 +134,15 @@ connection without a response, and the client treats the outcome as
 ambiguous. The handler's writer handle carries that deadline. If the writer
 reaches a queued job at or after it, the job is answered with
 `DeadlineExceeded` without opening a transaction and is counted in
-`foks_writer_expired_total`. The client already has to allow for the write
+`foks_writer_expired_total`. A job submitted after the deadline is refused
+the same way before it enters the queue, so it does not take a queue slot from
+a request that is still waiting. The client already has to allow for the write
 having happened or not, so skipping a job that never started is safe, and
 under overload it keeps the writer on requests that are still waiting. A job
 that has started runs to completion; SQLite work is not cancelled midway.
+The SSO access refresh that request authorization can trigger carries no
+deadline: it commits a claim, calls the provider and must then commit the
+rotated refresh token.
 
 Queue wait and execution time are measured per job into counters that the
 metrics endpoint exposes, so an operator can see the queue filling before

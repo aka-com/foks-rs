@@ -229,8 +229,9 @@ values, or key material.
 A request whose handler exceeds `request_timeout_seconds` is closed without a
 response. If its write is still in the writer queue at that point, the writer
 does not run it: it opens no transaction for the job and counts it in
-`foks_writer_expired_total`. A write that has already started runs to
-completion. A rising count means that writes wait in the queue for longer than
+`foks_writer_expired_total`. A write that the handler submits after that point
+is refused without entering the queue and is counted the same way. A write that
+has already started runs to completion. A rising count means that writes wait in the queue for longer than
 the request timeout.
 
 `foks_requests_total{family,status}` counts written responses by route family

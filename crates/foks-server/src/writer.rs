@@ -134,8 +134,8 @@ pub struct WriterMetrics {
     pub accepted: u64,
     pub rejected: u64,
     pub pending: u64,
-    /// Jobs skipped because their request deadline passed while they waited
-    /// in the queue.
+    /// Jobs skipped because their request deadline passed before they
+    /// started, either before submission or while they waited in the queue.
     pub expired: u64,
     pub queue_wait_observations: u64,
     pub queue_wait_microseconds_total: u64,
@@ -278,9 +278,13 @@ impl WriterHandle {
 
     /// Returns a handle whose calls fail with `Error::DeadlineExceeded`,
     /// without running their operation, if the writer reaches them at or
-    /// after `deadline`. A request handler passes the instant at which its
-    /// session stops waiting for the response. An operation that has started
-    /// runs to completion regardless of the deadline.
+    /// after `deadline`, or are submitted after it. A request handler passes
+    /// the instant at which its session stops waiting for the response. An
+    /// operation that has started runs to completion regardless of the
+    /// deadline. `SsoService` keeps its own handle without a deadline on
+    /// purpose: an access refresh commits a claim, calls the provider and then
+    /// commits the rotated refresh token, and that last write must not be
+    /// skipped once the claim has committed.
     pub(crate) fn with_deadline(&self, deadline: Instant) -> Self {
         Self {
             authorization: self.authorization.clone(),
@@ -329,6 +333,15 @@ impl WriterHandle {
             }
             operation(database)
         };
+        // A job submitted after its deadline would only occupy a queue slot
+        // until the writer reaches and skips it.
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.queue.timing.expired.fetch_add(1, Ordering::Relaxed);
+            return Err(Error::DeadlineExceeded);
+        }
         let (response, receiver) = mpsc::sync_channel(1);
         let accepting = self
             .queue
@@ -653,6 +666,29 @@ mod tests {
         assert_eq!(metrics.queue_wait_observations, 3);
         assert_eq!(metrics.execution_observations, 2);
         Arc::into_inner(writer).unwrap().shutdown().unwrap();
+    }
+
+    #[test]
+    fn call_submitted_after_its_deadline_is_not_queued() {
+        let temporary = tempfile::tempdir().unwrap();
+        let writer = Writer::start(
+            temporary.path().join("foks-server.sqlite"),
+            foks_server_db::Config::default(),
+            4,
+        )
+        .unwrap();
+        let expired = writer.handle().with_deadline(Instant::now());
+        assert!(matches!(
+            expired.call(|_| -> Result<()> { unreachable!("expired job ran") }),
+            Err(Error::DeadlineExceeded)
+        ));
+        let metrics = writer.handle().metrics();
+        assert_eq!(metrics.expired, 1);
+        assert_eq!(metrics.accepted, 0);
+        assert_eq!(metrics.rejected, 0);
+        assert_eq!(metrics.pending, 0);
+        assert_eq!(metrics.queue_wait_observations, 0);
+        writer.shutdown().unwrap();
     }
 
     #[test]
