@@ -129,6 +129,25 @@ test('the stylesheet entry imports every stylesheet into a declared layer', asyn
   );
 });
 
+test('first-run rules live in the first-run sheet, below the other features', async () => {
+  const components = (
+    await readFile(new URL('../src/styles/app.css', import.meta.url), 'utf8')
+  ).replace(/\/\*[\s\S]*?\*\//g, '');
+  const entry = await readFile(STYLE_ENTRY, 'utf8');
+
+  assert.equal(
+    /\.(?:first-run-main|local-[\w-]+|setup-[\w-]+)\b/.test(components),
+    false,
+    'app.css holds a first-run rule; it belongs in screens/first-run.css',
+  );
+  // The first-run rules were in the components layer, under every feature's
+  // rules; as the first feature sublayer they keep that order.
+  const features = [...entry.matchAll(/layer\((features\.[\w-]+)\)/g)].map(
+    (match) => match[1],
+  );
+  assert.equal(features[0], 'features.first-run');
+});
+
 test('only the entry point imports a stylesheet', async () => {
   // A stylesheet imported by a component sits outside the cascade layers and
   // outranks every layered rule; it also stops node from loading the module

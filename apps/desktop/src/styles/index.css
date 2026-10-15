@@ -3,6 +3,9 @@
 @import '../../kit/tokens.css' layer(tokens);
 @import './shell.css' layer(base);
 @import './app.css' layer(components);
+/* First-run rules sit in the first feature sublayer, so the rules of every
+   later feature still outrank them. */
+@import '../screens/first-run.css' layer(features.first-run);
 @import '../screens/files.css' layer(features.files);
 @import '../screens/chat.css' layer(features.chat);
 @import '../screens/chat-picker.css' layer(features.chat);
