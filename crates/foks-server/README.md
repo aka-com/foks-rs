@@ -202,7 +202,7 @@ retries at once for ECONNABORTED and the pending network errors, which concern
 only the connection that `accept()` dequeued, and after 50 ms otherwise. Only
 errors that invalidate the listening socket end the accept loop. Retries are
 counted in `foks_accept_errors_total{kind}`. With every connection limit
-reached, the `serve-config` defaults can use up to an estimated 1,199 file
+reached, the `serve-config` defaults can use up to an estimated 1,202 file
 descriptors, more than systemd's default soft `RLIMIT_NOFILE` of 1,024.
 `serve` and `serve-config` therefore raise the soft limit to the hard limit at
 startup and print a warning when it stays below the estimate; the example unit

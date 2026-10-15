@@ -52,7 +52,7 @@ impl SsoSampler {
         metrics: &ServerMetrics,
         now: Instant,
     ) -> Option<SsoRolloutStatus> {
-        let database = self.database.clone()?;
+        let database = self.database.as_ref()?;
         if let Some(status) = self.fresh(now) {
             return status;
         }
@@ -65,6 +65,7 @@ impl SsoSampler {
             return None;
         }
         let guard = InFlight(Arc::clone(&self.in_flight));
+        let database = database.clone();
         let reader = Arc::clone(&self.reader);
         let cached = Arc::clone(&self.cached);
         let task = tokio::task::spawn_blocking(move || {
@@ -104,15 +105,13 @@ fn read(
     database: &ReadDatabaseConfig,
 ) -> Result<Option<SsoRolloutStatus>> {
     let mut reader = reader.lock().map_err(|_| Error::Thread)?;
-    if reader.is_none() {
-        *reader = Some(ReadDatabase::open_pooled(
-            &database.path,
-            database.database.clone(),
-        )?);
-    }
-    let result = reader.as_ref().map_or(Ok(None), rollout_status);
-    if result.is_err() {
-        *reader = None;
+    let connection = match reader.take() {
+        Some(connection) => connection,
+        None => ReadDatabase::open_pooled(&database.path, database.database.clone())?,
+    };
+    let result = rollout_status(&connection);
+    if result.is_ok() {
+        *reader = Some(connection);
     }
     result
 }
@@ -173,7 +172,10 @@ mod tests {
         let (temporary, config) = database();
         let path = config.path.clone();
         let metrics = ServerMetrics::default();
-        let sampler = SsoSampler::new(Some(config));
+        let mut sampler = SsoSampler::new(Some(config));
+        // The first scrape must not time out on a loaded runner, or the
+        // cache and failure assertions would depend on scheduling.
+        sampler.timeout = Duration::from_secs(30);
         let runtime = runtime();
         let start = Instant::now();
 

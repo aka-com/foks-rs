@@ -45,9 +45,12 @@ space proportional to the existing tables, so allow for that work during a
 controlled writer restart and retain a backup. No upgrade runs inside recurring
 maintenance.
 
-`Database::open_existing` and `ReadDatabase::open` validate only: they refuse 43
-through 48 until the writer has upgraded them. All validating paths reject
-foreign, future and unsupported older versions. Upgraded files and backups
-cannot be opened by older binaries; there is no downgrade path. Other
-incompatible pre-release changes may still require replacement unless an
-explicit migration is provided.
+`Database::open_existing`, `ReadDatabase::open` and `ReadDatabase::open_pooled`
+validate only: they refuse 43 through 48 until the writer has upgraded them.
+`ReadDatabase::open` also checks that every stored KV tree fits the
+configuration, which reads every row of the KV head, node and dirent tables;
+`open_pooled`, used for a running server's read pools and metrics reader, skips
+that scan. All validating paths reject foreign, future and unsupported older
+versions. Upgraded files and backups cannot be opened by older binaries; there
+is no downgrade path. Other incompatible pre-release changes may still require
+replacement unless an explicit migration is provided.

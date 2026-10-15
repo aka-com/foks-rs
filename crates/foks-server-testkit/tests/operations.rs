@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use foks_rpc::{Error as RpcError, DEFAULT_MAX_FRAME_LENGTH};
-use foks_server_testkit::{TestEnvironment, TestProfile};
+use foks_server_testkit::{oidc::TestOidcProvider, TestEnvironment, TestProfile};
 
 #[test]
 fn health_readiness_and_metrics_are_isolated_on_management_http() {
@@ -49,6 +49,9 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
     }
     assert!(metric(&metrics, "foks_database_bytes") > 0.0);
     assert_eq!(metric(&metrics, "foks_storage_sample_failures_total"), 0.0);
+    // Without OIDC the rollout is never sampled and its gauges are omitted.
+    assert!(!metrics.contains("foks_oidc_rollout_mode"));
+    assert_eq!(metric(&metrics, "foks_oidc_sample_failures_total"), 0.0);
     assert!(!metrics.contains(environment.root().to_string_lossy().as_ref()));
     server.run_maintenance().unwrap();
     let after = get(address, "/metrics");
@@ -69,6 +72,25 @@ fn health_readiness_and_metrics_are_isolated_on_management_http() {
         1.0
     );
     assert!(get(address, "/missing").starts_with("HTTP/1.1 404 Not Found\r\n"));
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn oidc_rollout_gauges_are_exported_when_oidc_is_configured() {
+    let provider = TestOidcProvider::start();
+    let environment = TestEnvironment::new().unwrap();
+    let config = provider.config(environment.client_path("oidc", "secret").unwrap());
+    // Starting with OIDC activates the rollout policy, so a sample exists.
+    let server = environment.start_oidc_server(config).unwrap();
+    let address = server.management_address();
+    for _ in 0..2 {
+        let metrics = get(address, "/metrics");
+        assert!(metrics.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(metric(&metrics, "foks_oidc_rollout_mode") >= 1.0);
+        assert_eq!(metric(&metrics, "foks_oidc_provider_blocked"), 0.0);
+        assert_eq!(metric(&metrics, "foks_oidc_cohort_accounts"), 0.0);
+        assert_eq!(metric(&metrics, "foks_oidc_sample_failures_total"), 0.0);
+    }
     server.shutdown().unwrap();
 }
 
