@@ -15,11 +15,13 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "types": ["node", "vite/client"]
   },
   "include": [
     "vite.config.ts",
+    "bundle-budget.ts",
     "kit/**/*.ts",
     "kit/**/*.tsx",
     "src/**/*.ts",

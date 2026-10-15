@@ -2,12 +2,14 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+// The extension lets Vite's native config loader resolve the module.
+import { startupBudget } from './bundle-budget.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // The FOKS desktop frontend.
 export default defineConfig({
   root: here,
-  plugins: [react()],
+  plugins: [react(), startupBudget()],
   server: {
     host: '127.0.0.1',
     port: 1421,

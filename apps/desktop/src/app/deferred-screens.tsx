@@ -3,9 +3,11 @@
  *
  * The startup JavaScript holds the shell, the Files screen and the chat
  * providers; first-run setup, the Chat tab, Teams, Devices, Settings and team
- * settings load by dynamic import the first time one renders. While a chunk loads, the
- * nearest `<Suspense>` shows {@link ScreenLoading}. Once a screen's module has
- * loaded, the screen renders synchronously, without suspending again.
+ * settings load by dynamic import the first time one renders. While a chunk
+ * loads, the nearest `<Suspense>` shows {@link ScreenLoading}. Once a
+ * screen's module has loaded, the screen renders synchronously, without
+ * suspending again. The build fails when the startup JavaScript exceeds the
+ * budget in bundle-budget.ts.
  *
  * {@link usePreloadVaultScreens} loads the vault screens' chunks in idle time
  * after the screen router mounts, so later navigation does not wait on a

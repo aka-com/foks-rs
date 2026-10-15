@@ -304,6 +304,11 @@ npm run test:foks-ui      # serial node:test via tsx — model, location, invari
 tsc --noEmit -p apps/desktop/tsconfig.json
 ```
 
+`npm run build:frontend` fails when the startup JavaScript (the entry chunk
+and the chunks it imports statically) exceeds the budget in
+`bundle-budget.ts`. Code that only one of the screens in
+`src/app/deferred-screens.tsx` needs loads with that screen instead.
+
 The development server uses port **1421**.
 `npm run dev` builds and supervises the local server, agent, and Tauri
 app. `npm run dev:tauri` and `npm start` run the Tauri layer
