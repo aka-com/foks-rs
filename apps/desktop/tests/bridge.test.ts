@@ -5,9 +5,11 @@ import { readFile } from 'node:fs/promises';
 import {
   decodeAccounts,
   decodeCatalog,
+  decodeClipboardCopy,
   decodeCopy,
   decodeDownload,
   decodeMutation,
+  decodeTrashMutation,
   decodeCheckedProfile,
   decodePendingOperations,
   decodeRecoveryPhrase,
@@ -19,6 +21,7 @@ import {
   decodeAccountDevices,
   decodeBackupEnrollments,
   decodeBackupRevocation,
+  decodeRecoveryPhraseCheck,
   decodePairingOffer,
   decodeDeviceProvision,
   decodeDeviceRemoval,
@@ -36,6 +39,9 @@ import {
   decodeReadItem,
   decodeServers,
   decodeParties,
+  decodeLoginExport,
+  decodePasswordImportOutcome,
+  decodePasswordImportPreview,
   decodeFederation,
   decodeGroupDetails,
   discoverUnboundTeams,
@@ -49,7 +55,7 @@ import {
   selectBridge,
   tauriBridge,
 } from '../src/bridge';
-import type { Bridge, CatalogDto } from '../src/bridge';
+import type { Bridge, CatalogDto, PasswordImportOutcome } from '../src/bridge';
 import {
   canCreateInStore,
   PROTOCOL_CAPABILITIES,
@@ -78,7 +84,7 @@ test('mock mutations reject a recreated source with the same path and version', 
     version: original.version,
     direntId: original.direntId,
   };
-  await bridge.removeItem(request);
+  await bridge.trashItem(request);
   await bridge.createTextItem({
     value: 'test',
     storeId: original.store,
@@ -92,6 +98,7 @@ test('mock mutations reject a recreated source with the same path and version', 
   await assert.rejects(
     bridge.moveItem({ ...request, destination: '/aba-moved' }),
   );
+  await assert.rejects(bridge.trashItem(request));
   await assert.rejects(bridge.removeItem(request));
   assert.ok(
     (await bridge.listCatalog()).items.some(
@@ -274,6 +281,444 @@ test('decodeCatalog enforces schema validation and rejects malformed fields', ()
   );
 });
 
+test('decodeCatalog carries a small file shape only as login or other', () => {
+  const withShape = (shape: unknown) =>
+    decodeCatalog({ ...catalog, items: [{ ...catalog.items[0], shape }] });
+  assert.equal(withShape('login').items[0]?.shape, 'login');
+  assert.equal(withShape('other').items[0]?.shape, 'other');
+  // An agent that predates the field omits it; the key stays absent.
+  assert.equal('shape' in withShape(undefined).items[0], false);
+  for (const shape of ['text', 'Login', null, 1])
+    assert.throws(() => withShape(shape), /shape is not login or other/);
+});
+
+test('decodeCatalog validates a protocol symlink and then drops it', () => {
+  const link = { ...catalog.items[0], path: '/docs', kind: 'Link' };
+  assert.deepEqual(
+    decodeCatalog({ ...catalog, items: [link, catalog.items[0]] }).items,
+    catalog.items,
+  );
+  assert.throws(
+    () => decodeCatalog({ ...catalog, items: [{ ...link, version: 3.5 }] }),
+    /version must be a non-negative safe integer/,
+  );
+  assert.throws(
+    () =>
+      decodeCatalog({
+        ...catalog,
+        items: [{ ...catalog.items[0], kind: 'Symlink' }],
+      }),
+    /kind is not a FOKS node kind/,
+  );
+});
+
+test('copyItemField sends the exact version and the field to the host', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return { ok: true, clearAfterSeconds: 15 };
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    assert.deepEqual(
+      await tauriBridge.copyItemField({
+        storeId: 'opaque-store-ref',
+        path: '/work/github.com',
+        version: 4,
+        field: 'password',
+      }),
+      { ok: true, clearAfterSeconds: 15 },
+    );
+    assert.deepEqual(calls, [
+      [
+        'copy_item_field',
+        {
+          storeId: 'opaque-store-ref',
+          path: '/work/github.com',
+          version: 4,
+          field: 'password',
+        },
+      ],
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
+test('openItemUrl sends the exact version and receives no address', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return { ok: true };
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    assert.deepEqual(
+      await tauriBridge.openItemUrl({
+        storeId: 'opaque-store-ref',
+        path: '/work/github.com',
+        version: 4,
+      }),
+      { ok: true },
+    );
+    assert.deepEqual(calls, [
+      [
+        'open_item_url',
+        { storeId: 'opaque-store-ref', path: '/work/github.com', version: 4 },
+      ],
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
+test('Trash commands send the bound selection and decode the new path', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return command === 'remove_item' || command === 'empty_trash'
+            ? { applied: true }
+            : { applied: true, path: `/moved/${command}` };
+        },
+      },
+    },
+    configurable: true,
+  });
+  const selection = {
+    storeId: 'opaque-store-ref',
+    path: '/logins/github.com',
+    version: 4,
+    direntId: '07'.repeat(16),
+  };
+  try {
+    assert.deepEqual(await tauriBridge.trashItem(selection), {
+      applied: true,
+      path: '/moved/trash_item',
+    });
+    assert.deepEqual(
+      await tauriBridge.restoreTrashItem({
+        ...selection,
+        destination: '/logins/github.com (restored)',
+      }),
+      { applied: true, path: '/moved/restore_trash_item' },
+    );
+    assert.deepEqual(await tauriBridge.removeItem(selection), {
+      applied: true,
+    });
+    assert.deepEqual(
+      await tauriBridge.removeItem({ ...selection, outsideTrash: true }),
+      { applied: true },
+    );
+    const { storeId, ...entry } = selection;
+    assert.deepEqual(
+      await tauriBridge.emptyTrash({
+        storeId,
+        entries: [entry, { ...entry, path: '/.trash/owner/b', version: 2 }],
+      }),
+      { applied: true },
+    );
+    assert.deepEqual(calls, [
+      ['trash_item', selection],
+      [
+        'restore_trash_item',
+        { ...selection, destination: '/logins/github.com (restored)' },
+      ],
+      ['remove_item', { ...selection, outsideTrash: false }],
+      ['remove_item', { ...selection, outsideTrash: true }],
+      [
+        'empty_trash',
+        {
+          storeId,
+          entries: [entry, { ...entry, path: '/.trash/owner/b', version: 2 }],
+        },
+      ],
+    ]);
+    assert.throws(
+      () => decodeTrashMutation({ applied: true }),
+      /trash mutation response\.path/,
+    );
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
+test('Copy to vault sends the bound source and the target, with roles only when given', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return { applied: true };
+        },
+      },
+    },
+    configurable: true,
+  });
+  const source = {
+    storeId: 'opaque-source-ref',
+    path: '/logins/github.com',
+    version: 4,
+    direntId: '07'.repeat(16),
+  };
+  try {
+    assert.deepEqual(
+      await tauriBridge.copyItemToStore({
+        ...source,
+        targetStoreId: 'opaque-team-ref',
+        targetPath: '/shared/github.com',
+        readRole: 'Member:0',
+        writeRole: 'Admin',
+      }),
+      { applied: true },
+    );
+    await tauriBridge.copyItemToStore({
+      ...source,
+      targetStoreId: 'opaque-account-ref',
+      targetPath: '/github.com',
+    });
+    assert.deepEqual(calls, [
+      [
+        'copy_item_to_store',
+        {
+          ...source,
+          targetStoreId: 'opaque-team-ref',
+          targetPath: '/shared/github.com',
+          readRole: 'Member:0',
+          writeRole: 'Admin',
+        },
+      ],
+      [
+        'copy_item_to_store',
+        {
+          ...source,
+          targetStoreId: 'opaque-account-ref',
+          targetPath: '/github.com',
+        },
+      ],
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
+test('Password import sends the held id and destination and reports progress from the channel', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, Record<string, unknown> | undefined][] = [];
+  const preview = {
+    id: 'ab'.repeat(16),
+    fileName: 'export.csv',
+    entries: [
+      { name: 'Mail', folder: 'Work', document: false },
+      { name: 'GitHub', folder: '', document: true },
+    ],
+    skipped: [{ row: 4, reason: 'A note entry, not a login.' }],
+    ignoredColumns: ['login_totp'],
+  };
+  const outcomes = [
+    { index: 0, status: 'created' },
+    { index: 1, status: 'exists', message: 'Taken.' },
+  ];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (
+          command: string,
+          args: Record<string, unknown> | undefined,
+        ) => {
+          calls.push([command, args]);
+          if (command === 'begin_password_import')
+            return calls.length === 1 ? null : preview;
+          if (command === 'discard_password_import') return { ok: true };
+          const channel = args?.onProgress as {
+            onmessage: (value: unknown) => void;
+          };
+          channel.onmessage(outcomes[0]);
+          // A malformed progress message is dropped; the result has it all.
+          channel.onmessage({ index: 1, status: 'saved' });
+          channel.onmessage(outcomes[1]);
+          return outcomes;
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    assert.equal(await tauriBridge.beginPasswordImport(), null);
+    assert.deepEqual(await tauriBridge.beginPasswordImport(), preview);
+    const progress: PasswordImportOutcome[] = [];
+    assert.deepEqual(
+      await tauriBridge.commitPasswordImport(
+        {
+          importId: preview.id,
+          entries: [0, 1],
+          storeId: 'opaque-team-ref',
+          folder: '/logins',
+          readRole: 'Member:0',
+          writeRole: 'Admin',
+        },
+        (outcome) => progress.push(outcome),
+      ),
+      outcomes,
+    );
+    assert.deepEqual(progress, outcomes);
+    await tauriBridge.commitPasswordImport({
+      importId: preview.id,
+      entries: [1],
+      storeId: 'opaque-account-ref',
+      folder: '/',
+    });
+    assert.deepEqual(await tauriBridge.discardPasswordImport(preview.id), {
+      ok: true,
+    });
+    const commits = calls
+      .filter(([command]) => command === 'commit_password_import')
+      .map(([, args]) => {
+        const { onProgress, ...rest } = args ?? {};
+        assert.ok(onProgress, 'a progress channel is sent');
+        return rest;
+      });
+    assert.deepEqual(commits, [
+      {
+        importId: preview.id,
+        entries: [0, 1],
+        storeId: 'opaque-team-ref',
+        folder: '/logins',
+        readRole: 'Member:0',
+        writeRole: 'Admin',
+      },
+      {
+        importId: preview.id,
+        entries: [1],
+        storeId: 'opaque-account-ref',
+        folder: '/',
+      },
+    ]);
+    assert.deepEqual(calls.at(-1), [
+      'discard_password_import',
+      { importId: preview.id },
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+});
+
+test('Export passwords sends the store alone and decodes the counts', async () => {
+  const previousWindow = globalThis.window;
+  const calls: [string, unknown][] = [];
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: unknown) => {
+          calls.push([command, args]);
+          return { saved: true, exported: 4, skipped: 1 };
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    assert.deepEqual(await tauriBridge.exportLogins('opaque-store-ref'), {
+      saved: true,
+      exported: 4,
+      skipped: 1,
+    });
+    assert.deepEqual(calls, [
+      ['export_logins', { storeId: 'opaque-store-ref' }],
+    ]);
+  } finally {
+    if (previousWindow === undefined)
+      delete (globalThis as { window?: Window }).window;
+    else
+      Object.defineProperty(globalThis, 'window', {
+        value: previousWindow,
+        configurable: true,
+      });
+  }
+  assert.throws(() => decodeLoginExport({ saved: true, exported: 1 }));
+});
+
+test('password import decoders reject malformed previews and outcomes', () => {
+  const preview = {
+    id: 'id',
+    fileName: 'export.csv',
+    entries: [{ name: 'Mail', folder: '', document: false }],
+    skipped: [{ row: 2, name: 'Note', reason: 'A note entry, not a login.' }],
+    ignoredColumns: [],
+  };
+  assert.deepEqual(decodePasswordImportPreview(preview), preview);
+  for (const broken of [
+    { ...preview, entries: [{ name: 'Mail', folder: '' }] },
+    { ...preview, skipped: [{ row: '2', reason: 'x' }] },
+    { ...preview, ignoredColumns: undefined },
+    { ...preview, fileName: 3 },
+  ])
+    assert.throws(() => decodePasswordImportPreview(broken));
+  assert.deepEqual(
+    decodePasswordImportOutcome({ index: 2, status: 'failed' }),
+    {
+      index: 2,
+      status: 'failed',
+    },
+  );
+  for (const broken of [
+    { index: 2, status: 'saved' },
+    { index: -1, status: 'created' },
+    { index: 0, status: 'created', message: 4 },
+  ])
+    assert.throws(() => decodePasswordImportOutcome(broken));
+});
+
 test('action decoders reject partial or malformed responses', () => {
   assert.deepEqual(
     decodeReadItem({
@@ -295,6 +740,14 @@ test('action decoders reject partial or malformed responses', () => {
   );
   assert.deepEqual(decodeCopy({ ok: true }), { ok: true });
   assert.throws(() => decodeCopy({ ok: false }), /must be true/);
+  assert.deepEqual(decodeClipboardCopy({ ok: true, clearAfterSeconds: 15 }), {
+    ok: true,
+    clearAfterSeconds: 15,
+  });
+  assert.throws(
+    () => decodeClipboardCopy({ ok: true }),
+    /clearAfterSeconds must be a non-negative safe integer/,
+  );
   assert.deepEqual(decodeDownload({ saved: false }), { saved: false });
   assert.deepEqual(decodeMutation({ applied: true }), { applied: true });
   assert.deepEqual(decodeMutation({ applied: false }), { applied: false });
@@ -464,6 +917,10 @@ test('decoders successfully parse the full wire contract golden fixture', async 
   ]);
   assert.equal(decodeReadItem(fixture.readItem).version, 7);
   assert.deepEqual(decodeCopy(fixture.commandAck), { ok: true });
+  assert.deepEqual(decodeClipboardCopy(fixture.clipboardCopy), {
+    ok: true,
+    clearAfterSeconds: 30,
+  });
   assert.deepEqual(decodeDownload(fixture.cancelledDownload), { saved: false });
   assert.deepEqual(decodeMutation(fixture.appliedMutation), { applied: true });
   assert.deepEqual(decodeMutation(fixture.cancelledMutation), {
@@ -548,6 +1005,34 @@ test('decoders successfully parse the full wire contract golden fixture', async 
   assert.equal(
     decodeBackupRevocation(fixture.backupRevocation).userChainSequence,
     16,
+  );
+  const backupId = `10${'10'.repeat(32)}`;
+  assert.deepEqual(decodeRecoveryPhraseCheck(fixture.recoveryPhraseCheck), {
+    matchedBackupId: backupId,
+    matchedName: 'cage 32',
+    revoked: false,
+    backupAlias: 'paper',
+  });
+  assert.equal(
+    decodeRecoveryPhraseCheck(fixture.recoveryPhraseNearMiss).matchedBackupId,
+    null,
+  );
+  // Revocation or an alias needs a named key.
+  assert.throws(() =>
+    decodeRecoveryPhraseCheck({
+      matchedBackupId: null,
+      matchedName: null,
+      revoked: true,
+      backupAlias: null,
+    }),
+  );
+  assert.throws(() =>
+    decodeRecoveryPhraseCheck({
+      matchedBackupId: '04'.repeat(33),
+      matchedName: 'cage 32',
+      revoked: false,
+      backupAlias: 'paper',
+    }),
   );
   assert.equal(
     decodePairingOffer(fixture.pairingOffer).accountAlias,
@@ -1495,8 +1980,7 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
-    copyItemPath: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge, FIXTURE);
@@ -1671,8 +2155,7 @@ test('creates a notification when a server cannot be described instead of omitti
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
-    copyItemPath: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge, FIXTURE);
@@ -1736,8 +2219,7 @@ test('loadSnapshot does not fetch team rosters for blocked profiles', async () =
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
-    copyItemPath: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge);
@@ -1829,8 +2311,7 @@ test('loadSnapshot does not fetch members for an inactive team', async () => {
     readItem: async () => {
       throw new Error('not used');
     },
-    copyItemValue: async () => ({ ok: true }),
-    copyItemPath: async () => ({ ok: true }),
+    copyItemValue: async () => ({ ok: true, clearAfterSeconds: 30 }),
     downloadFile: async () => ({ saved: false }),
   };
   const snapshot = await loadSnapshot(bridge);
@@ -2463,24 +2944,17 @@ test('group item creation requires and preserves explicit read and write permiss
     readRole: 'Member:-32768',
     writeRole: 'Admin',
   });
-  await bridge.createLink({
-    storeId: 'team:eng',
-    path: '/shared/link',
-    target: '/shared/text',
-    readRole: 'Admin',
-    writeRole: 'Member:32767',
-  });
   await bridge.importDroppedFile({
     storeId: 'team:eng',
     path: '/shared/file',
     sourcePath: '/tmp/file',
     readRole: 'Member:0',
-    writeRole: 'Admin',
+    writeRole: 'Member:32767',
   });
   await bridge.createFolder({
     storeId: 'team:eng',
     path: '/shared/folder',
-    readRole: 'Owner',
+    readRole: 'Admin',
     writeRole: 'Owner',
   });
   const created = (await bridge.listCatalog()).items.filter(
@@ -2495,18 +2969,13 @@ test('group item creation requires and preserves explicit read and write permiss
         write: { role: 'Admin' },
       },
       {
-        path: '/shared/link',
-        read: { role: 'Admin' },
+        path: '/shared/file',
+        read: { role: 'Member', visibility: 0 },
         write: { role: 'Member', visibility: 32767 },
       },
       {
-        path: '/shared/file',
-        read: { role: 'Member', visibility: 0 },
-        write: { role: 'Admin' },
-      },
-      {
         path: '/shared/folder',
-        read: { role: 'Owner' },
+        read: { role: 'Admin' },
         write: { role: 'Owner' },
       },
     ],
@@ -2856,20 +3325,29 @@ test('maintenance snapshots decode typed operation and restoration outcomes', ()
 });
 
 test('exit states allow unknown processes without accepting invalid PIDs', () => {
+  const reasons = { mutation: false, maintenance: true, owned: false };
   assert.deepEqual(
-    decodeExitState({ state: 'decision', pid: null, unsent: 0 }),
-    { state: 'decision', pid: null, unsent: 0 },
+    decodeExitState({ state: 'decision', pid: null, unsent: 0, ...reasons }),
+    { state: 'decision', pid: null, unsent: 0, ...reasons },
   );
   assert.deepEqual(
-    decodeExitState({ state: 'decision', pid: 45904, unsent: 2 }),
-    { state: 'decision', pid: 45904, unsent: 2 },
+    decodeExitState({ state: 'decision', pid: 45904, unsent: 2, ...reasons }),
+    { state: 'decision', pid: 45904, unsent: 2, ...reasons },
   );
+  // Each reason to ask is required: a missing one must not read as false.
+  for (const field of ['mutation', 'maintenance', 'owned'] as const) {
+    const partial: Record<string, unknown> = { ...reasons };
+    delete partial[field];
+    assert.throws(() =>
+      decodeExitState({ state: 'decision', pid: 45904, unsent: 0, ...partial }),
+    );
+  }
   assert.deepEqual(
     decodeExitState({ state: 'stopping', pid: 45904, force: true }),
     { state: 'stopping', pid: 45904, force: true },
   );
   assert.throws(() =>
-    decodeExitState({ state: 'decision', pid: 0, unsent: 0 }),
+    decodeExitState({ state: 'decision', pid: 0, unsent: 0, ...reasons }),
   );
   assert.throws(() =>
     decodeExitState({ state: 'failed', pid: 45904, error: null }),
@@ -3321,4 +3799,75 @@ test('mock catalogs retain empty folder identities through a rename', async () =
     }),
     (error: unknown) => normalizeCommandError(error).code === 'invalid-request',
   );
+});
+
+test('the mock refuses a second selection in a store it wrote to until the catalog is read again', async () => {
+  const bridge = mockBridge(FIXTURE);
+  const listed = (await bridge.listCatalog()).items.filter(
+    (item) =>
+      item.store === 'acct:personal' &&
+      ['/logins/github.com', '/documents/passport-scan.pdf'].includes(
+        item.path,
+      ),
+  );
+  assert.equal(listed.length, 2);
+  const [first, second] = listed.map((item) => ({
+    storeId: item.store,
+    path: item.path,
+    version: item.version,
+    direntId: item.direntId,
+  }));
+  const { path } = await bridge.trashItem(first);
+  // The host discards the store's catalog items after a write, as here.
+  await assert.rejects(
+    bridge.trashItem(second),
+    (error: unknown) => normalizeCommandError(error).code === 'conflict',
+  );
+  await bridge.listCatalog();
+  const { path: other } = await bridge.trashItem(second);
+  const entries = (await bridge.listCatalog()).items.filter((item) =>
+    [path, other].includes(item.path),
+  );
+  await bridge.emptyTrash({
+    storeId: 'acct:personal',
+    entries: entries.map(({ path, version, direntId }) => ({
+      path,
+      version,
+      direntId,
+    })),
+  });
+  assert.ok(
+    !(await bridge.listCatalog()).items.some((item) =>
+      [path, other].includes(item.path),
+    ),
+  );
+});
+
+test('adapter clock status decodes only its own three fields', async () => {
+  const { decodeAdapterClock } = await import('../src/adapter-clock-contract');
+  for (const status of [
+    { admission: 'paused', localTime: 1_700_000_000, resumesAt: null },
+    { admission: 'behind', localTime: 1_700_000_000, resumesAt: 1_700_086_400 },
+  ])
+    assert.deepEqual(decodeAdapterClock(status), status);
+  for (const value of [
+    null,
+    [],
+    { admission: 'open', localTime: 1, resumesAt: null },
+    { admission: 'paused', localTime: -1, resumesAt: null },
+    { admission: 'paused', localTime: 1.5, resumesAt: null },
+    { admission: 'paused', resumesAt: null },
+    { admission: 'paused', localTime: 1 },
+    { admission: 'paused', localTime: 1, resumesAt: 2 },
+    { admission: 'behind', localTime: 1, resumesAt: null },
+    { admission: 'behind', localTime: 1, resumesAt: -2 },
+    { admission: 'paused', localTime: 1, resumesAt: null, digest: 'ab' },
+  ])
+    assert.throws(() => decodeAdapterClock(value), JSON.stringify(value));
+  const bridge = mockBridge(FIXTURE);
+  assert.equal(
+    (await bridge.adapterClock('personal', 'personal', false)).admission,
+    'trusted',
+  );
+  await assert.rejects(() => bridge.adapterClock('personal', 'missing', true));
 });

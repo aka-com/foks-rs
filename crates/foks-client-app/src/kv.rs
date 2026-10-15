@@ -1,4 +1,6 @@
 use super::*;
+use foks_agent_proto::KvEntryShape;
+use foks_client_db::KvSmallFileShape;
 
 mod checked_move;
 mod data;
@@ -1417,6 +1419,10 @@ pub struct KvCatalogEntry {
     pub size: Option<u64>,
     pub read_role: KvRoleSummary,
     pub write_role: KvRoleSummary,
+    /// Whether a small file holds a login, from the metadata traversal that
+    /// opened and discarded its plaintext. `None` for other node types.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<KvEntryShape>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -2007,6 +2013,10 @@ fn flatten_catalog_tree(tree: &[KvDirectoryProjection]) -> Result<Vec<KvCatalogE
                 size: None,
                 read_role: KvRoleSummary::from_role(read_role)?,
                 write_role: KvRoleSummary::from_role(write_role)?,
+                shape: entry.small_file_shape.map(|shape| match shape {
+                    KvSmallFileShape::Login => KvEntryShape::Login,
+                    KvSmallFileShape::Other => KvEntryShape::Other,
+                }),
             });
             if node_type == KvNodeType::Directory {
                 pending.push_back((node_id.object_id(), path));
@@ -2048,6 +2058,7 @@ mod tests {
             content: None,
             symlink: None,
             large_file_size: None,
+            small_file_shape: None,
         }
     }
 
@@ -2105,6 +2116,72 @@ mod tests {
     }
 
     #[test]
+    fn the_catalog_carries_a_small_file_shape_and_omits_it_for_other_nodes() {
+        let fixture = |name: &str| {
+            std::fs::read(format!(
+                "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/{name}"
+            ))
+            .unwrap()
+        };
+        let listing = foks_proto::KvListResponse::decode(&fixture("kv-list.snowp")).unwrap();
+        let node_of = |node_type| {
+            listing
+                .entries
+                .iter()
+                .find(|entry| entry.value.node_type().unwrap() == node_type)
+                .unwrap()
+                .value
+        };
+        let entry = |name: &[u8], node: KvNodeId, bytes: &str, shape| {
+            let mut entry = projected_entry(name);
+            entry.node_id = node.0;
+            entry.node_bytes = Some(fixture(bytes));
+            entry.small_file_shape = shape;
+            entry
+        };
+        let tree = [KvDirectoryProjection {
+            host_id: Vec::new(),
+            party_id: Vec::new(),
+            root_version: 9,
+            root_directory_id: [7; 16],
+            root_bytes: Vec::new(),
+            directory_id: [7; 16],
+            directory_version: 1,
+            directory_bytes: Vec::new(),
+            entries: vec![
+                entry(
+                    b"archive.bin",
+                    node_of(KvNodeType::File),
+                    "kv-large-node.snowp",
+                    None,
+                ),
+                entry(
+                    b"github.com",
+                    node_of(KvNodeType::SmallFile),
+                    "kv-small-node.snowp",
+                    Some(KvSmallFileShape::Login),
+                ),
+            ],
+        }];
+        let report = KvCatalogReport::from_tree(&tree).unwrap();
+        let shapes = report
+            .entries
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.shape))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shapes,
+            [
+                ("/archive.bin", None),
+                ("/github.com", Some(KvEntryShape::Login))
+            ]
+        );
+        let encoded = serde_json::to_value(&report).unwrap();
+        assert!(encoded["entries"][0].get("shape").is_none());
+        assert_eq!(encoded["entries"][1]["shape"], "login");
+    }
+
+    #[test]
     fn exact_legacy_large_file_read_reports_no_size_and_no_content() {
         let fixture = |name: &str| {
             std::fs::read(format!(
@@ -2143,6 +2220,7 @@ mod tests {
                 content: None,
                 symlink: None,
                 large_file_size: None,
+                small_file_shape: None,
             }],
         }];
         let report = read_report_from_fetched(

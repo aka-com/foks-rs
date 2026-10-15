@@ -8,7 +8,7 @@ use crate::*;
 mod clock;
 pub use clock::{
     AdapterClockState, AdapterTimeSample, MAX_NEW_SUBMISSION_AGE_SECONDS,
-    TERMINAL_RETENTION_SECONDS,
+    SKEW_SECONDS as ADAPTER_CLOCK_SKEW_SECONDS, TERMINAL_RETENTION_SECONDS,
 };
 
 const HANDLE_HASH_DOMAIN: u64 = 0x14d8_6ced_ea89_0362;
@@ -155,6 +155,25 @@ impl HardStateStore {
 
     pub fn adapter_clock(&self, host: &[u8], user: &[u8]) -> Result<Option<AdapterClockState>> {
         clock::read(&self.connection, host, user)
+    }
+
+    /// The clock state admission would hold at `sample`, without writing, or
+    /// `None` when admission would refuse the sample as untrusted. An account
+    /// with no anchor validates: its first admission establishes one. A
+    /// validated floor below `reject_issued_before` still refuses new handles
+    /// until the clock reaches that watermark.
+    pub fn validated_adapter_clock(
+        &self,
+        host: &[u8],
+        user: &[u8],
+        sample: AdapterTimeSample,
+    ) -> Result<Option<AdapterClockState>> {
+        let old = clock::read(&self.connection, host, user)?;
+        match clock::validate(old.as_ref(), sample) {
+            Ok(state) => Ok(Some(state)),
+            Err(Error::AdapterClockUntrusted) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     /// Validates unseen age, committing irreversible rejection before returning

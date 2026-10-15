@@ -374,6 +374,8 @@ fn configure(connection: &Connection, config: &Config) -> Result<()> {
         || config.maximum_active_remote_user_view_permissions == 0
         || config.maximum_remote_team_view_permissions_per_team == 0
         || config.maximum_active_remote_team_view_permissions == 0
+        || config.maximum_waitlist_entries == 0
+        || config.waitlist_retention.is_zero()
     {
         return Err(crate::Error::Invalid("zero database capacity limit"));
     }

@@ -149,6 +149,80 @@ pub(super) fn bind_account(
     })
 }
 
+/// Refuses a repair time that would leave writes paused after a reported
+/// success. A preview only displays the time and may be up to the admission
+/// skew away; a confirmation must be fresh. This runs before the profile lock
+/// and the identity check; the repair repeats the confirmation bound against
+/// the clock sample it writes.
+fn check_repair_time(
+    action: &foks_agent_proto::data::AdapterClockRepairAction,
+    now: u64,
+) -> Result<(), AgentRequestError> {
+    use foks_agent_proto::data::AdapterClockRepairAction;
+    match action {
+        AdapterClockRepairAction::Preview { unix_seconds }
+            if unix_seconds.abs_diff(now) > foks_client_db::ADAPTER_CLOCK_SKEW_SECONDS =>
+        {
+            Err(AgentRequestError(
+                "the proposed time must be within five minutes of this computer's clock; \
+                 correct the system clock, then confirm its current time",
+            ))
+        }
+        AdapterClockRepairAction::Confirm { unix_seconds, .. }
+            if unix_seconds.abs_diff(now) > foks_client_app::ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS =>
+        {
+            Err(AgentRequestError(
+                "the confirmed time must be within one minute of this computer's clock; \
+                 preview the current time again, then confirm it",
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Status reads the clock state without anchoring it. A repair runs only when
+/// the CLI or the desktop sends it; the MCP adapter has no tool that does, but
+/// the agent socket does not tell the callers apart. The repair re-anchors at
+/// this process's own monotonic clock, so it can only accept the computer's
+/// current time (see [`check_repair_time`]).
+pub(super) fn adapter_clock(
+    state_dir: &Path,
+    registry: &ProfileRegistry,
+    profile: String,
+    account_alias: String,
+    repair: Option<foks_agent_proto::data::AdapterClockRepairAction>,
+    timeout: Duration,
+    cancellation: CancellationToken,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    use foks_agent_proto::data::AdapterClockRepairAction;
+    if let Some(action) = &repair {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| Box::new(AgentRequestError("this computer's clock is before 1970")))?
+            .as_secs();
+        check_repair_time(action, now).map_err(Box::new)?;
+    }
+    let session =
+        crate::read_cache::open_profile_session(registry, &profile, timeout, cancellation)?;
+    with_vault(state_dir, &session, |session, vault| {
+        Ok(match repair {
+            None => serde_json::to_value(session.adapter_clock_status(&account_alias, vault)?)?,
+            Some(AdapterClockRepairAction::Preview { unix_seconds }) => serde_json::to_value(
+                session.adapter_clock_preview(&account_alias, unix_seconds, vault)?,
+            )?,
+            Some(AdapterClockRepairAction::Confirm {
+                unix_seconds,
+                confirmation_digest,
+            }) => serde_json::to_value(session.reanchor_adapter_clock(
+                &account_alias,
+                unix_seconds,
+                &confirmation_digest,
+                vault,
+            )?)?,
+        })
+    })
+}
+
 pub(super) fn read(
     state_dir: &Path,
     registry: &ProfileRegistry,
@@ -248,4 +322,34 @@ pub(super) fn read(
         session.check_data_identity(&scope.account_alias, &scope.host_id, &scope.user_id, vault)?;
         Ok(value)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use foks_agent_proto::data::AdapterClockRepairAction;
+
+    #[test]
+    fn a_confirmed_repair_time_must_be_fresher_than_a_previewed_one() {
+        let now = 1_700_000_000;
+        let preview = |unix_seconds| AdapterClockRepairAction::Preview { unix_seconds };
+        let confirm = |unix_seconds| AdapterClockRepairAction::Confirm {
+            unix_seconds,
+            confirmation_digest: "ab".repeat(32),
+        };
+        for seconds in [now - 300, now + 300] {
+            assert!(check_repair_time(&preview(seconds), now).is_ok());
+        }
+        for seconds in [now - 301, now + 301] {
+            assert!(check_repair_time(&preview(seconds), now).is_err());
+        }
+        for seconds in [now - 60, now + 60] {
+            assert!(check_repair_time(&confirm(seconds), now).is_ok());
+        }
+        // A preview confirmed four minutes later would have anchored the clock
+        // four minutes behind, leaving one minute of admission skew.
+        for seconds in [now - 61, now - 240, now + 61] {
+            assert!(check_repair_time(&confirm(seconds), now).is_err());
+        }
+    }
 }

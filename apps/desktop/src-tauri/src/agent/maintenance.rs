@@ -512,10 +512,13 @@ impl AgentHandle {
     }
 
     /// Recovery is limited to a missing, desktop-managed endpoint with a usable
-    /// replacement binary. External launcher paths must never become delete targets.
+    /// replacement binary and no launched agent still running. External
+    /// launcher paths must never become reset targets, and an agent that is
+    /// still starting (for example, waiting on a credential-store prompt) has
+    /// not shown that its state is unreadable.
     pub fn startup_reset_directory(&self) -> Option<PathBuf> {
         self.require_managed_endpoint().ok()?;
-        if self.socket.exists() {
+        if self.socket.exists() || self.startup_launch_running() {
             return None;
         }
         validate_agent_binary(&managed_agent_binary(&self.socket)?).ok()?;
@@ -525,7 +528,21 @@ impl AgentHandle {
             .then(|| root.to_owned())
     }
 
-    pub fn reset_startup_state(&self, confirmed_root: &Path) -> Result<(), AgentError> {
+    /// Reports whether the state root cannot be inspected without a system
+    /// credential-store prompt, as when the Keychain or Secret Service
+    /// collection is locked or access was denied. The check never prompts.
+    /// An agent that exited for this reason has not shown that its state is
+    /// unreadable.
+    pub fn startup_credentials_required(&self) -> bool {
+        matches!(
+            foks_keystore::without_user_interaction(|| self.require_auto_recovery_root()),
+            Err(error) if error.code == "agent-credentials-required"
+        )
+    }
+
+    /// Moves the confirmed state root's entries into a sibling directory and
+    /// returns that directory's path.
+    pub fn reset_startup_state(&self, confirmed_root: &Path) -> Result<PathBuf, AgentError> {
         let root = self.startup_reset_directory().ok_or_else(|| {
             AgentError::new(
                 "agent-reset",
@@ -540,9 +557,10 @@ impl AgentHandle {
                 false,
             ));
         }
-        foks_client_app::portability::reset_unreadable_state(&root)
+        let moved = foks_client_app::portability::quarantine_unreadable_state(&root)
             .map_err(|error| AgentError::new("agent-reset", error.to_string(), false))?;
-        prepare_managed_crash_directory(&root.join("crashes"))
+        prepare_managed_crash_directory(&root.join("crashes"))?;
+        Ok(moved)
     }
 
     /// Retries agent restoration while excluding ordinary commands. A failed
@@ -587,6 +605,11 @@ impl AgentHandle {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = TransportDisposition::Current;
         Ok(response)
+    }
+
+    /// Whether a maintenance command or automatic recovery holds admission.
+    pub fn maintenance_in_progress(&self) -> bool {
+        self.maintenance_in_flight.load(Ordering::Acquire)
     }
 
     pub fn maintenance_snapshot(&self) -> MaintenanceSnapshot {

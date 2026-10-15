@@ -12,6 +12,7 @@ import type { BotAction, BotReply } from '../bot-contract';
 import type { ChatAction, ChatReply } from '../chat-contract';
 import type { LocalAction, LocalSession } from '../chat/local-contract';
 import type { InvitationAction, InvitationReply } from '../invitation-contract';
+import type { AdapterClock } from '../adapter-clock-contract';
 import type { RenameAction, RenameProgress } from '../rename-contract';
 import type { SsoAction, SsoProgress } from '../sso-contract';
 import type {
@@ -32,6 +33,7 @@ import type {
   ExitAction,
   ExitState,
   MaintenanceSnapshot,
+  QuitConfirmation,
   TimingBatch,
   Unlisten,
   WindowStateEvent,
@@ -39,6 +41,7 @@ import type {
 import type {
   AccountDevice,
   BackupEnrollment,
+  RecoveryPhraseCheck,
   RecoveryPhraseResponse,
   BackupRevocation,
   DeviceProvision,
@@ -62,9 +65,10 @@ import type {
 } from './servers';
 import type {
   CatalogDto,
+  ClipboardCopyResponse,
+  CopyFieldRequest,
   CopyResponse,
   CreateFolderRequest,
-  CreateLinkRequest,
   CreateTextRequest,
   DownloadResponse,
   EditTextRequest,
@@ -73,8 +77,18 @@ import type {
   MutationResponse,
   ReadItemResponse,
   RemoveItemRequest,
+  StoreUsage,
   MoveItemRequest,
+  CopyItemToStoreRequest,
+  RestoreTrashRequest,
+  PermanentRemoveRequest,
+  EmptyTrashRequest,
+  TrashMutationResponse,
   ReplaceDroppedFileRequest,
+  PasswordImportPreview,
+  PasswordImportOutcome,
+  CommitPasswordImportRequest,
+  LoginExportResult,
 } from './vault-catalog';
 import type { YubiCommand, YubiEnrollment } from './yubikey';
 
@@ -126,6 +140,13 @@ export interface Bridge {
     accountAlias: string,
     action: RenameAction | null,
   ): Promise<RenameProgress[]>;
+  /** Reads the account's MCP write admission or, with `confirm`, re-anchors
+   *  it at the computer's current time, which the native side reads itself. */
+  adapterClock(
+    profile: string,
+    accountAlias: string,
+    confirm: boolean,
+  ): Promise<AdapterClock>;
   sso(
     profile: string,
     accountAlias: string,
@@ -139,7 +160,7 @@ export interface Bridge {
   chat(
     storeId: StoreRef,
     action: ChatAction,
-    viewId?: string,
+    viewId: string,
   ): Promise<ChatReply>;
   cancelChat(viewId: string): Promise<void>;
   readonly native: boolean;
@@ -155,6 +176,8 @@ export interface Bridge {
    * whenever the count changes and cleared when the unlocked shell goes.
    */
   setUnsentMessages(count: number): Promise<void>;
+  /** Reports the Ask before quitting preference to the close guard. */
+  setQuitConfirmation(confirmation: QuitConfirmation): Promise<void>;
   lockApp(): Promise<AppLockState>;
   unlockApp(): Promise<AppLockState>;
   restartApp(): Promise<void>;
@@ -189,16 +212,62 @@ export interface Bridge {
   listGroupDetails(storeId: StoreRef): Promise<GroupDetailsDto>;
   listParties(storeId: StoreRef): Promise<Party[]>;
   listFederation(storeId: StoreRef): Promise<FederationEntry[]>;
+  /**
+   * How much a vault stores on its server. The server decodes the vault's
+   * nodes for each request, so a view reads this when it opens rather than on
+   * a refresh cadence.
+   */
+  storeUsage(storeId: StoreRef): Promise<StoreUsage>;
   readItem(request: ItemRequest): Promise<ReadItemResponse>;
-  copyItemValue(request: ItemRequest): Promise<CopyResponse>;
-  copyItemPath(request: ItemRequest): Promise<CopyResponse>;
+  /** Copies an item's whole stored text; as `copyItemField` with `value`. */
+  copyItemValue(request: ItemRequest): Promise<ClipboardCopyResponse>;
+  /**
+   * Copies one field of an item, such as only a login's password. The host
+   * reads and parses the item; a field the item lacks fails with
+   * `field-missing`. The response gives the seconds until the host clears
+   * the clipboard.
+   */
+  copyItemField(request: CopyFieldRequest): Promise<ClipboardCopyResponse>;
+  /**
+   * Opens a login's website in the default browser. The host reads the
+   * item and its `url` field and opens only an http or https address; an
+   * item without a website fails with `field-missing`, and any other value
+   * with `website-unsupported`. The address is not returned.
+   */
+  openItemUrl(request: ItemRequest): Promise<CopyResponse>;
   downloadFile(request: ItemRequest): Promise<DownloadResponse>;
   createTextItem(request: CreateTextRequest): Promise<MutationResponse>;
-  createLink(request: CreateLinkRequest): Promise<MutationResponse>;
   createFolder(request: CreateFolderRequest): Promise<MutationResponse>;
   editTextItem(request: EditTextRequest): Promise<MutationResponse>;
   moveItem(request: MoveItemRequest): Promise<MutationResponse>;
-  removeItem(request: RemoveItemRequest): Promise<MutationResponse>;
+  /**
+   * Creates a copy of a secret or file in another store. The host reads
+   * the source at the listed version and dirent and writes the copy with a
+   * create-only precondition; the content never reaches the renderer, and
+   * the source is left unchanged.
+   */
+  copyItemToStore(request: CopyItemToStoreRequest): Promise<MutationResponse>;
+  /**
+   * Moves an item, or a folder with everything in it, into its read role's
+   * folder under `/.trash` in the same store. Resolves with the entry's
+   * Trash path.
+   */
+  trashItem(request: RemoveItemRequest): Promise<TrashMutationResponse>;
+  /** Moves a Trash entry to `destination`, outside Trash. */
+  restoreTrashItem(
+    request: RestoreTrashRequest,
+  ): Promise<TrashMutationResponse>;
+  /**
+   * Permanently removes an entry in Trash, recursively for a folder. The host
+   * refuses items outside Trash unless `outsideTrash` asks for a file in a
+   * team that has no Trash yet.
+   */
+  removeItem(request: PermanentRemoveRequest): Promise<MutationResponse>;
+  /**
+   * Permanently removes the given entries of one store's Trash in a single
+   * host mutation, with their `.origin` files and any left without an entry.
+   */
+  emptyTrash(request: EmptyTrashRequest): Promise<MutationResponse>;
   importDroppedFile(
     request: ImportDroppedFileRequest,
   ): Promise<MutationResponse>;
@@ -212,6 +281,29 @@ export interface Bridge {
   pickAndReplaceFile(
     request: ItemRequest & { direntId: string },
   ): Promise<MutationResponse>;
+  /**
+   * Opens a CSV export of another password manager in the native picker and
+   * has the host parse and hold it. Resolves with the names and folders of
+   * its logins, or null when the picker is cancelled; no field value and
+   * not the file's path reaches the renderer.
+   */
+  beginPasswordImport(): Promise<PasswordImportPreview | null>;
+  /**
+   * Saves the chosen logins of a held import one at a time, each with a
+   * create-only precondition, and resolves with every outcome. `onProgress`
+   * receives each outcome as it is known.
+   */
+  commitPasswordImport(
+    request: CommitPasswordImportRequest,
+    onProgress?: (outcome: PasswordImportOutcome) => void,
+  ): Promise<PasswordImportOutcome[]>;
+  /** Drops a held import. */
+  discardPasswordImport(importId: string): Promise<CommandAck>;
+  /**
+   * Writes the logins of a store as a plain-text CSV file chosen in the
+   * native save dialog. The host reads them; no value reaches the renderer.
+   */
+  exportLogins(storeId: StoreRef): Promise<LoginExportResult>;
   resumeGroupCreation(storeId: StoreRef): Promise<MutationResponse>;
   /**
    * Forgets the local record of a team whose creation never finished. Only a
@@ -337,6 +429,14 @@ export interface Bridge {
     backup: BackupEnrollment,
     confirmation: string,
   ): Promise<BackupRevocation>;
+  /**
+   * Compares a typed recovery phrase with the account's backup keys. The agent
+   * answers from this device's verified state and sends nothing to the server.
+   */
+  verifyRecoveryPhrase(
+    accountStoreId: StoreRef,
+    phrase: string,
+  ): Promise<RecoveryPhraseCheck>;
   startDevicePairing(accountStoreId: StoreRef): Promise<PairingOffer>;
   resumeDevicePairingOffer(accountStoreId: StoreRef): Promise<PairingOffer>;
   finishDevicePairing(accountStoreId: StoreRef): Promise<DeviceProvision>;
@@ -411,6 +511,8 @@ export interface Bridge {
   onNewItem(
     listener: (kind: 'Password' | 'Document') => void,
   ): Promise<Unlisten>;
+  /** The macOS application menu's Lock, which the renderer carries out. */
+  onLockMenu(listener: () => void): Promise<Unlisten>;
   onMaintenanceStatus(
     listener: (snapshot: MaintenanceSnapshot) => void,
   ): Promise<Unlisten>;

@@ -28,6 +28,8 @@ pub struct Config {
     pub metrics: Arc<crate::ServerMetrics>,
     pub rate_limits: RateLimitConfig,
     pub limits: SessionLimits,
+    /// Serves Reg.joinWaitList. When false the route answers Unsupported.
+    pub waitlist_enabled: bool,
 }
 
 #[derive(Clone)]

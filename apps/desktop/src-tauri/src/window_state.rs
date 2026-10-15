@@ -1,6 +1,9 @@
 use serde::Serialize;
 use tauri::{Emitter as _, WindowEvent};
 
+use crate::agent::AgentError;
+use crate::commands::require_main_window;
+
 pub const EVT_WINDOW_STATE: &str = "foks://window-state";
 
 #[derive(Clone, Copy, Serialize)]
@@ -17,8 +20,9 @@ fn current(window: &tauri::WebviewWindow) -> Result<WindowState, String> {
 }
 
 #[tauri::command]
-pub fn get_window_state(window: tauri::WebviewWindow) -> Result<WindowState, String> {
-    current(&window)
+pub fn get_window_state(window: tauri::WebviewWindow) -> Result<WindowState, AgentError> {
+    require_main_window(window.as_ref())?;
+    current(&window).map_err(AgentError::unknown)
 }
 
 fn emit(window: &tauri::WebviewWindow) {
@@ -83,11 +87,14 @@ fn apply_traffic_visibility(window: &tauri::WebviewWindow) -> Result<(), String>
 pub fn set_traffic_lights_visible(
     window: tauri::WebviewWindow,
     visible: bool,
-) -> Result<(), String> {
+) -> Result<(), AgentError> {
+    // TRAFFIC_VISIBLE is process-wide and observe() reapplies it to the main
+    // window on focus, so only the main window may set it.
+    require_main_window(window.as_ref())?;
     #[cfg(target_os = "macos")]
     {
         TRAFFIC_VISIBLE.store(visible, std::sync::atomic::Ordering::Relaxed);
-        apply_traffic_visibility(&window)
+        apply_traffic_visibility(&window).map_err(AgentError::unknown)
     }
     #[cfg(not(target_os = "macos"))]
     {

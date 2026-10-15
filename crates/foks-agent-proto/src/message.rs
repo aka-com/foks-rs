@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 34;
+pub const PROTOCOL_VERSION: u32 = 37;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -254,6 +254,25 @@ pub struct BackupEnrollmentSummary {
     pub backup_id_hex: String,
 }
 
+/// The answer to [`Operation::VerifyRecoveryPhrase`].
+///
+/// `matched_backup_id_hex` names the backup key the phrase derives when the
+/// account's verified user chain holds it. Without a match, `matched_name`
+/// may still name a backup key whose public name (the phrase's first word and
+/// number) the typed phrase shares, so the copy differs from that key's
+/// phrase in tokens 3 to 17. `revoked` and `backup_alias` describe whichever
+/// key is named.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryPhraseCheck {
+    pub account_alias: String,
+    pub matched_backup_id_hex: Option<String>,
+    pub matched_name: Option<String>,
+    pub revoked: bool,
+    pub backup_alias: Option<String>,
+    pub user_chain_sequence: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CompatibilityStatus {
@@ -327,6 +346,22 @@ pub struct KvEntryMetadata {
     pub size: Option<u64>,
     pub read_role: KvRole,
     pub write_role: KvRole,
+    /// Whether a small file holds a login. The listing computes it from
+    /// plaintext it opens to authenticate the node and then discards; it is
+    /// absent for every other node type and carries no field value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<KvEntryShape>,
+}
+
+/// The content classes [`KvEntryMetadata::shape`] distinguishes.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KvEntryShape {
+    /// UTF-8 text whose lines are all `key: value` lines, one with the key
+    /// `password`: the layout the desktop writes for a login.
+    Login,
+    /// Any other small file.
+    Other,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -446,19 +481,13 @@ pub enum AgentStatus {
         /// omitted when empty for wire compatibility with older agents.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         timers: Vec<TimerStatus>,
-        /// History accepts an exclusive `after` cursor. Older agents reject unknown fields.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        history_after: Option<bool>,
     },
 }
 
 impl AgentStatus {
     /// Constructs ready status without background-loop timings.
     pub fn ready() -> Self {
-        Self::Ready {
-            timers: Vec::new(),
-            history_after: None,
-        }
+        Self::Ready { timers: Vec::new() }
     }
 
     pub fn is_ready(&self) -> bool {
@@ -563,6 +592,18 @@ pub enum Operation {
     BindDataAccount {
         profile: String,
         account_alias: String,
+    },
+    /// Whether the account's adapter clock admits new assistant data writes.
+    AdapterClockStatus {
+        profile: String,
+        account_alias: String,
+    },
+    /// Re-anchors the account's adapter clock at a confirmed wall time. The
+    /// MCP adapter never sends this; the CLI and the desktop do.
+    RepairAdapterClock {
+        profile: String,
+        account_alias: String,
+        action: crate::data::AdapterClockRepairAction,
     },
     ReadData {
         scope: crate::data::DataScope,
@@ -690,6 +731,14 @@ pub enum Operation {
         account_alias: String,
         backup_alias: String,
         backup_id: String,
+    },
+    /// Compares a written-down recovery phrase with the backup keys in the
+    /// account's user chain as last verified on this device. Local only: it
+    /// contacts no server and writes no state.
+    VerifyRecoveryPhrase {
+        profile: String,
+        account_alias: String,
+        phrase: SecretString,
     },
     RecoverOwnerAccount {
         profile: String,
@@ -1100,6 +1149,8 @@ impl Operation {
             Self::DataWriteStatus { .. } => "DataWriteStatus",
             Self::PendingDataWrites { .. } => "PendingDataWrites",
             Self::BindDataAccount { .. } => "BindDataAccount",
+            Self::AdapterClockStatus { .. } => "AdapterClockStatus",
+            Self::RepairAdapterClock { .. } => "RepairAdapterClock",
             Self::ReadData { .. } => "ReadData",
             Self::Chat { action, .. } => action.operation_name(),
             Self::Ping => "Ping",
@@ -1133,6 +1184,7 @@ impl Operation {
             Self::PrepareOwnerBackup { .. } => "PrepareOwnerBackup",
             Self::CommitOwnerBackup { .. } => "CommitOwnerBackup",
             Self::RevokeOwnerBackup { .. } => "RevokeOwnerBackup",
+            Self::VerifyRecoveryPhrase { .. } => "VerifyRecoveryPhrase",
             Self::RecoverOwnerAccount { .. } => "RecoverOwnerAccount",
             Self::ResumeOwnerRecovery { .. } => "ResumeOwnerRecovery",
             Self::PassphraseStatus { .. } => "PassphraseStatus",
@@ -1246,6 +1298,12 @@ impl Operation {
         if let Self::Chat { action, .. } = self {
             return action.is_mutation();
         }
+        if let Self::RepairAdapterClock { action, .. } = self {
+            return matches!(
+                action,
+                crate::data::AdapterClockRepairAction::Confirm { .. }
+            );
+        }
         !matches!(
             self,
             Self::Ping
@@ -1253,6 +1311,7 @@ impl Operation {
                 | Self::RetentionStatus
                 | Self::DiscoverGoProfiles
                 | Self::BindDataAccount { .. }
+                | Self::AdapterClockStatus { .. }
                 | Self::ReadData { .. }
                 | Self::DataWriteStatus { .. }
                 | Self::PendingDataWrites { .. }
@@ -1266,6 +1325,7 @@ impl Operation {
                 | Self::ListPendingOperations { .. }
                 | Self::ListDevices { .. }
                 | Self::ListBackupEnrollments { .. }
+                | Self::VerifyRecoveryPhrase { .. }
                 | Self::DescribeServerStatus { .. }
                 | Self::PassphraseStatus { .. }
                 | Self::VerifyPassphrase { .. }
@@ -1375,6 +1435,11 @@ impl std::fmt::Debug for Operation {
                 .field("token", &"<redacted>")
                 .finish(),
             Self::BindDataAccount { .. } => formatter.write_str("BindDataAccount"),
+            Self::AdapterClockStatus { .. } => formatter.write_str("AdapterClockStatus"),
+            Self::RepairAdapterClock { action, .. } => formatter
+                .debug_struct("RepairAdapterClock")
+                .field("action", action)
+                .finish_non_exhaustive(),
             Self::ReadData { .. } => formatter.write_str("ReadData"),
             Self::PrepareDataWrite { .. } => formatter.write_str("PrepareDataWrite"),
             Self::ExecuteDataWrite { .. } => formatter.write_str("ExecuteDataWrite"),
@@ -1514,6 +1579,16 @@ impl std::fmt::Debug for Operation {
                 .field("account_alias", account_alias)
                 .field("backup_alias", backup_alias)
                 .field("backup_id", backup_id)
+                .finish(),
+            Self::VerifyRecoveryPhrase {
+                profile,
+                account_alias,
+                phrase: _,
+            } => formatter
+                .debug_struct("VerifyRecoveryPhrase")
+                .field("profile", profile)
+                .field("account_alias", account_alias)
+                .field("phrase", &"<redacted>")
                 .finish(),
             Self::RecoverOwnerAccount {
                 profile,
@@ -2300,6 +2375,22 @@ impl Response {
         Self::error_with_fields(None, code, message, ErrorFields::default())
     }
 
+    /// The agent's frozen refusal of a frame of another version, naming the
+    /// versions it accepts. See [`crate::hello`].
+    pub fn version_mismatch(id: Option<u64>) -> Self {
+        let supported = crate::SUPPORTED_PROTOCOL_VERSIONS;
+        Self::error_with_fields(
+            id,
+            ErrorCode::VersionMismatch,
+            "unsupported protocol version",
+            ErrorFields {
+                minimum_protocol: Some(supported.minimum),
+                maximum_protocol: Some(supported.maximum),
+                ..ErrorFields::default()
+            },
+        )
+    }
+
     pub fn error_with_fields(
         id: Option<u64>,
         code: ErrorCode,
@@ -2427,6 +2518,12 @@ pub struct ErrorFields {
     pub found_schema: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supported_schema: Option<u32>,
+    /// The agent protocol versions the agent accepts, set on
+    /// `version-mismatch`. These two keys are frozen; see [`crate::hello`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_protocol: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum_protocol: Option<u32>,
 }
 
 impl ErrorFields {
@@ -2437,6 +2534,8 @@ impl ErrorFields {
             && self.reason.is_none()
             && self.found_schema.is_none()
             && self.supported_schema.is_none()
+            && self.minimum_protocol.is_none()
+            && self.maximum_protocol.is_none()
     }
 
     fn bounded(mut self) -> Self {
@@ -2579,7 +2678,6 @@ mod tests {
         assert!(AgentStatus::ready().is_ready());
         assert!(AgentStatus::ready().timers().is_empty());
         let reported = AgentStatus::Ready {
-            history_after: None,
             timers: vec![TimerStatus {
                 name: "scheduler".to_owned(),
                 started_at_ms: Some(1_700_000_000_000),
@@ -2849,6 +2947,47 @@ mod tests {
                 "profile": "work",
                 "account_alias": "personal"
             })
+        );
+
+        let verify = Operation::VerifyRecoveryPhrase {
+            profile: "work".to_owned(),
+            account_alias: "personal".to_owned(),
+            phrase: SecretString::new("never print this written copy"),
+        };
+        assert!(!verify.is_mutation());
+        assert_eq!(verify.name(), "VerifyRecoveryPhrase");
+        assert!(!format!("{verify:?}").contains("written copy"));
+        assert_eq!(
+            serde_json::to_value(&verify).unwrap(),
+            serde_json::json!({
+                "operation": "verify-recovery-phrase",
+                "profile": "work",
+                "account_alias": "personal",
+                "phrase": "never print this written copy"
+            })
+        );
+        let near_miss: RecoveryPhraseCheck = serde_json::from_value(serde_json::json!({
+            "account_alias": "personal",
+            "matched_backup_id_hex": null,
+            "matched_name": "cage 32",
+            "revoked": false,
+            "backup_alias": "paper",
+            "user_chain_sequence": 4
+        }))
+        .unwrap();
+        assert_eq!(near_miss.matched_backup_id_hex, None);
+        assert_eq!(near_miss.matched_name.as_deref(), Some("cage 32"));
+        assert!(
+            serde_json::from_value::<RecoveryPhraseCheck>(serde_json::json!({
+                "account_alias": "personal",
+                "matched_backup_id_hex": null,
+                "matched_name": null,
+                "revoked": false,
+                "backup_alias": null,
+                "user_chain_sequence": 4,
+                "phrase": "echoed"
+            }))
+            .is_err()
         );
 
         let status = Operation::DescribeServerStatus {

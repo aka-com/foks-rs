@@ -28,6 +28,7 @@
       "memberRole",
       "teamItemCreateAccess",
       "cancelledDownload",
+      "clipboardCopy",
       "catalog",
       "readItem"
     ],
@@ -50,6 +51,8 @@
       "deviceRemoval",
       "backupEnrollment",
       "backupRevocation",
+      "recoveryPhraseCheck",
+      "recoveryPhraseNearMiss",
       "passphraseReport"
     ],
     "servers": [
@@ -93,6 +96,7 @@
     "CommandAck / CopyResponse": ["commandAck"],
     "MutationResponse": ["appliedMutation", "cancelledMutation"],
     "DownloadResponse": ["cancelledDownload"],
+    "ClipboardAck / ClipboardCopyResponse": ["clipboardCopy"],
     "RoleDto": ["memberRole", "catalog"],
     "CreateRoleRequest": ["teamItemCreateAccess"],
     "CatalogDto / StoreDto / ItemDto / CatalogInventoryDto": ["catalog"],
@@ -111,6 +115,7 @@
     "DeviceRemovalDto": ["deviceRemoval"],
     "BackupEnrollment": ["backupEnrollment"],
     "BackupRevocation": ["backupRevocation"],
+    "RecoveryPhraseCheck": ["recoveryPhraseCheck", "recoveryPhraseNearMiss"],
     "PassphraseReport": ["passphraseReport"],
     "CheckedProfileResponse": ["checkedProfile"],
     "Configured server metadata / ServerDto": ["configuredServer"],
@@ -140,7 +145,6 @@
       "CatalogFailureDto",
       "ItemRequest",
       "CreateTextRequest",
-      "CreateLinkRequest",
       "CreateFolderRequest / CreateFileRequest",
       "EditTextRequest",
       "RemoveItemRequest",

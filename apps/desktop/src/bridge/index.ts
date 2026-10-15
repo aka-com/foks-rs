@@ -23,6 +23,7 @@ export type {
   MaintenanceOperationOutcome,
   MaintenancePhase,
   MaintenanceSnapshot,
+  QuitConfirmation,
   Unlisten,
   WindowStateEvent,
 } from './core';

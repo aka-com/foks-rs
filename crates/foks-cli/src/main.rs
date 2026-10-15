@@ -310,6 +310,17 @@ enum RecoveryCommand {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Check a written-down recovery phrase against the account's backup keys.
+    ///
+    /// The comparison reads the user chain last verified on this device and
+    /// contacts no server.
+    Verify {
+        profile: String,
+        #[arg(long)]
+        account_alias: String,
+        #[arg(long)]
+        phrase_file: PathBuf,
+    },
     Recover {
         profile: String,
         #[arg(long)]
@@ -1405,6 +1416,18 @@ fn recovery_command(
                 )
             })
         }
+        RecoveryCommand::Verify {
+            profile,
+            account_alias,
+            phrase_file,
+        } => {
+            let phrase = read_phrase(&phrase_file)?;
+            let session = ProfileSession::open(&registry, &profile)?;
+            with_vault(state_dir, &session, |session, vault, _| {
+                let check = session.verify_recovery_phrase(&account_alias, phrase, vault)?;
+                output(json, &check, &recovery_check_sentence(&check))
+            })
+        }
         RecoveryCommand::Recover {
             profile,
             target_account_alias,
@@ -2260,6 +2283,33 @@ fn local_team_destination(
     }
 }
 
+/// The text-mode result of `recovery verify`. A near miss names the key the
+/// copy belongs to by its public name, which is the phrase's first word and
+/// number, so the difference lies in tokens 3 to 17.
+fn recovery_check_sentence(check: &foks_client_app::RecoveryPhraseCheck) -> String {
+    let name = check
+        .backup_alias
+        .as_deref()
+        .or(check.matched_name.as_deref())
+        .unwrap_or("an unnamed backup key");
+    match (&check.matched_backup_id_hex, check.revoked) {
+        (Some(_), false) => format!("recovery phrase matches backup key {name}"),
+        (Some(_), true) => {
+            format!("recovery phrase matches backup key {name}, which has been revoked")
+        }
+        (None, false) if check.matched_name.is_some() => format!(
+            "recovery phrase does not match; its first word and number name backup key {name}, so the difference is in tokens 3 to 17"
+        ),
+        (None, true) if check.matched_name.is_some() => format!(
+            "recovery phrase does not match; its first word and number name backup key {name}, which has been revoked, so even a corrected copy cannot recover the account"
+        ),
+        (None, _) => {
+            "recovery phrase does not match any backup key on this account as last verified on this device"
+                .to_owned()
+        }
+    }
+}
+
 fn read_phrase(path: &Path) -> Result<Zeroizing<String>, Box<dyn std::error::Error>> {
     read_phrase_tokens(path, 17, "backup")
 }
@@ -2458,6 +2508,34 @@ fn output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_check_sentences_name_the_key_and_the_tokens_to_compare() {
+        let check = |id: Option<&str>, name: Option<&str>, revoked, alias: Option<&str>| {
+            recovery_check_sentence(&foks_client_app::RecoveryPhraseCheck {
+                account_alias: "personal".to_owned(),
+                matched_backup_id_hex: id.map(str::to_owned),
+                matched_name: name.map(str::to_owned),
+                revoked,
+                backup_alias: alias.map(str::to_owned),
+                user_chain_sequence: 3,
+            })
+        };
+        let id = Some("10aa");
+        assert_eq!(
+            check(id, Some("cage 32"), false, Some("paper")),
+            "recovery phrase matches backup key paper"
+        );
+        assert_eq!(
+            check(id, Some("cage 32"), true, None),
+            "recovery phrase matches backup key cage 32, which has been revoked"
+        );
+        assert!(check(None, Some("cage 32"), false, Some("paper"))
+            .ends_with("name backup key paper, so the difference is in tokens 3 to 17"));
+        assert!(check(None, Some("cage 32"), true, None)
+            .contains("cage 32, which has been revoked, so even a corrected copy"));
+        assert!(check(None, None, false, None).starts_with("recovery phrase does not match any"));
+    }
 
     #[test]
     fn init_and_profile_commands_use_only_the_explicit_state_root() {

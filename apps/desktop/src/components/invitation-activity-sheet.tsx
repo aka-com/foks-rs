@@ -20,6 +20,7 @@ import {
   settleInvitationWrite,
   unfinishedOperation,
 } from '../invitation-writes';
+import { securityKeyPinRefusal } from '../security-key-pin';
 import type { TeamStore } from '../model';
 import { useMetadataRepository } from '../query-hooks';
 import {
@@ -27,9 +28,9 @@ import {
   Chip,
   Icon,
   Inset,
-  InsetRow,
   PanelSheet,
   SectionLabel,
+  SecurityKeyPinField,
   SegmentedControl,
 } from './index';
 
@@ -133,6 +134,9 @@ export function InvitationActivitySheet({
       await work();
     } catch (failure) {
       if (!live.current) return;
+      // A refused PIN is not offered again unchanged: one more refusal can
+      // block the PIN.
+      if (securityKeyPinRefusal(failure)) setPin('');
       if (hardwareUnlockRequested(failure)) {
         setNeedPin(true);
         setError('Enter the PIN for your security key to continue.');
@@ -465,16 +469,12 @@ export function InvitationActivitySheet({
       ) : null}
       {needPin ? (
         <Inset className="form">
-          <InsetRow label="Security key PIN">
-            <input
-              type="password"
-              autoComplete="off"
-              maxLength={32}
-              value={pin}
-              disabled={busy}
-              onChange={(e) => setPin(e.target.value)}
-            />
-          </InsetRow>
+          <SecurityKeyPinField
+            value={pin}
+            disabled={busy}
+            onChange={setPin}
+            refusal={error}
+          />
         </Inset>
       ) : null}
       <CollectionStatus

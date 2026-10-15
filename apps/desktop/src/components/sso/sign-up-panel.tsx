@@ -3,11 +3,13 @@
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Bridge } from '../../bridge';
+import { validSecurityKeyPin } from '../../security-key-pin';
 import type { SsoAction, SsoProgress } from '../../sso-contract';
 import { Button } from '../button';
 import { Inset, InsetRow } from '../inset';
 import { RadioCard, RadioGroup } from '../radio-card';
 import { SectionLabel } from '../section-label';
+import { SecurityKeyPinField } from '../security-key-pin-field';
 import { SsoOutcome, SsoStatus } from './sso-status';
 import { useSsoFlow } from './use-sso-flow';
 
@@ -117,7 +119,9 @@ export function SsoSignUpPanel({
       <Button
         variant="primary"
         title={flow.eligibility.title}
-        disabled={blocked || (flow.hardwareRequired && !flow.pin)}
+        disabled={
+          blocked || (flow.hardwareRequired && !validSecurityKeyPin(flow.pin))
+        }
         onClick={flow.finish}
       >
         Finish sign-up
@@ -148,16 +152,12 @@ export function SsoSignUpPanel({
         <SsoStatus progress={progress} />
         {flow.hardwareRequired ? (
           <Inset className="account-form">
-            <InsetRow label="Security key PIN">
-              <input
-                type="password"
-                autoComplete="off"
-                aria-label="Security key PIN"
-                value={flow.pin}
-                disabled={blocked}
-                onChange={(event) => flow.setPin(event.target.value)}
-              />
-            </InsetRow>
+            <SecurityKeyPinField
+              value={flow.pin}
+              disabled={blocked}
+              onChange={flow.setPin}
+              refusal={error}
+            />
           </Inset>
         ) : null}
         {errorLine}
@@ -220,16 +220,12 @@ export function SsoSignUpPanel({
                       onChange={(event) => flow.setSerial(event.target.value)}
                     />
                   </InsetRow>
-                  <InsetRow label="Security key PIN">
-                    <input
-                      type="password"
-                      autoComplete="off"
-                      aria-label="Security key PIN"
-                      value={flow.pin}
-                      disabled={blocked}
-                      onChange={(event) => flow.setPin(event.target.value)}
-                    />
-                  </InsetRow>
+                  <SecurityKeyPinField
+                    value={flow.pin}
+                    disabled={blocked}
+                    onChange={flow.setPin}
+                    refusal={error}
+                  />
                 </Inset>
                 <p>
                   Existing keys in slots 130 and 131 are checked before anything

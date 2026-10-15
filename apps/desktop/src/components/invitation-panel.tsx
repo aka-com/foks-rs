@@ -15,6 +15,7 @@ import {
   nativeRole,
   settleInvitationWrite,
 } from '../invitation-writes';
+import { securityKeyPinRefusal } from '../security-key-pin';
 import {
   Button,
   Chip,
@@ -25,6 +26,7 @@ import {
   RadioCard,
   RadioGroup,
   SectionLabel,
+  SecurityKeyPinField,
 } from './index';
 import type { PanelPresentation } from './index';
 import { serverDisplayLabel } from '../model';
@@ -175,6 +177,9 @@ export function InvitationPanel({
       setNeedPin(false);
     } catch (failure) {
       if (active.current !== identity) return;
+      // A refused PIN is not offered again unchanged: one more refusal can
+      // block the PIN.
+      if (securityKeyPinRefusal(failure)) setPin('');
       if (failure instanceof UnlockNeeded || hardwareUnlockRequested(failure)) {
         setNeedPin(true);
         setError('Enter the PIN for your security key to continue.');
@@ -393,16 +398,12 @@ export function InvitationPanel({
   ) : null;
   const pinRow = needPin ? (
     <Inset className="form">
-      <InsetRow label="Security key PIN">
-        <input
-          type="password"
-          autoComplete="off"
-          maxLength={32}
-          value={pin}
-          disabled={busy}
-          onChange={(event) => setPin(event.target.value)}
-        />
-      </InsetRow>
+      <SecurityKeyPinField
+        value={pin}
+        disabled={busy}
+        onChange={setPin}
+        refusal={error}
+      />
     </Inset>
   ) : null;
   const glyph = (

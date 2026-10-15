@@ -8,7 +8,14 @@ import type { RenameProgress } from '../rename-contract';
 import { checkRenameRows } from '../rename-status';
 import { normalizeCommandError } from '../bridge';
 import { useSheetGuard } from '../navigation-guard';
-import { Button, Inset, InsetRow, PanelSheet } from './index';
+import { securityKeyPinProblem } from '../security-key-pin';
+import {
+  Button,
+  Inset,
+  InsetRow,
+  PanelSheet,
+  SecurityKeyPinField,
+} from './index';
 import type { PanelPresentation } from './index';
 
 export function RenamePanel({
@@ -57,7 +64,7 @@ export function RenamePanel({
         : null,
   );
   const prepare = async () => {
-    if (!name || busy) return;
+    if (!name || busy || securityKeyPinProblem(pin)) return;
     const version = generation.current;
     setBusy(true);
     setError(null);
@@ -93,7 +100,7 @@ export function RenamePanel({
             variant="primary"
             busy={busy}
             title={eligibility.title}
-            disabled={disabled || !name}
+            disabled={disabled || !name || securityKeyPinProblem(pin) !== null}
             onClick={() => void prepare()}
           >
             {busy ? 'Preparing…' : 'Prepare rename'}
@@ -115,17 +122,14 @@ export function RenamePanel({
             onChange={(e) => setName(e.target.value)}
           />
         </InsetRow>
-        <InsetRow label="Security key PIN (enrolled keys only)">
-          <input
-            type="password"
-            autoComplete="off"
-            value={pin}
-            maxLength={32}
-            disabled={disabled}
-            title={eligibility.title}
-            onChange={(e) => setPin(e.target.value)}
-          />
-        </InsetRow>
+        <SecurityKeyPinField
+          label="Security key PIN (enrolled keys only)"
+          value={pin}
+          disabled={disabled}
+          title={eligibility.title}
+          onChange={setPin}
+          refusal={error}
+        />
       </Inset>
       {error && (
         <p role="alert" className="crit">

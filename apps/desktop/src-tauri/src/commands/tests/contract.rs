@@ -5,7 +5,7 @@ use crate::agent::{
 use crate::applock::LockStateDto;
 use crate::commands::accounts::{
     backup_enrollment_dtos, device_dtos, device_removal_response, AccountDto, BackupEnrollmentDto,
-    DeviceDto, DeviceRemovalDto, PassphraseReportDto, RecoveryPhraseDto,
+    DeviceDto, DeviceRemovalDto, PassphraseReportDto, RecoveryPhraseCheckDto, RecoveryPhraseDto,
 };
 use crate::commands::application::{AgentStatusDto, AppInfo};
 use crate::commands::enrollment::{
@@ -26,7 +26,7 @@ use crate::commands::types::{CommandAck, MutationDto, RoleDto};
 use crate::commands::validation::exact_profile_confirmation;
 use crate::commands::vault::{
     CatalogDto, CatalogFailureDto, CatalogInventoryDto, CatalogLocalMetadataDto, CatalogProfileDto,
-    CatalogStoreReadDto, DownloadResult, ItemDto, ReadItemDto, StoreDto,
+    CatalogStoreReadDto, ClipboardAck, DownloadResult, ItemDto, ReadItemDto, StoreDto,
 };
 use crate::commands::yubikey::{
     YubiAccountDto, YubiCardDto, YubiChangedDto, YubiEnrollmentDto, YubiFederationRefreshDto,
@@ -149,20 +149,20 @@ fn shared_agent_lifecycle_contract_matches_native_dtos() {
         [
             (
                 "ready",
-                AgentStatusDto::from(foks_agent_proto::AgentStatus::ready()),
+                AgentStatusDto::new(foks_agent_proto::AgentStatus::ready(), false),
             ),
             (
                 "readyWithHistory",
-                AgentStatusDto::from(foks_agent_proto::AgentStatus::Ready {
-                    timers: vec![],
-                    history_after: Some(true),
-                }),
+                AgentStatusDto::new(foks_agent_proto::AgentStatus::ready(), true),
             ),
             (
                 "bootstrap",
-                AgentStatusDto::from(foks_agent_proto::AgentStatus::Bootstrap {
-                    step: "unlock".to_owned(),
-                }),
+                AgentStatusDto::new(
+                    foks_agent_proto::AgentStatus::Bootstrap {
+                        step: "unlock".to_owned(),
+                    },
+                    false,
+                ),
             ),
         ],
     );
@@ -614,6 +614,14 @@ fn wire_contract_fixture_matches_serialized_shapes() {
         fixture["cancelledDownload"]
     );
     assert_eq!(
+        serde_json::to_value(ClipboardAck {
+            ok: true,
+            clear_after_seconds: 30,
+        })
+        .unwrap(),
+        fixture["clipboardCopy"]
+    );
+    assert_eq!(
         serde_json::to_value(MutationDto { applied: true }).unwrap(),
         fixture["appliedMutation"]
     );
@@ -719,6 +727,7 @@ fn wire_contract_fixture_matches_serialized_shapes() {
             version: 7,
             read: KvRole::Member { visibility: -16384 }.into(),
             write: KvRole::Admin.into(),
+            shape: Some("other"),
         }],
         failures: vec![
             CatalogFailureDto {
@@ -1005,6 +1014,24 @@ fn wire_contract_fixture_matches_serialized_shapes() {
     assert_eq!(
         serde_json::to_value(provision).unwrap(),
         fixture["deviceProvision"]
+    );
+    let check = RecoveryPhraseCheckDto {
+        matched_backup_id: Some("10".repeat(33)),
+        matched_name: Some("cage 32".to_owned()),
+        revoked: false,
+        backup_alias: Some("paper".to_owned()),
+    };
+    assert_eq!(
+        serde_json::to_value(&check).unwrap(),
+        fixture["recoveryPhraseCheck"]
+    );
+    assert_eq!(
+        serde_json::to_value(RecoveryPhraseCheckDto {
+            matched_backup_id: None,
+            ..check
+        })
+        .unwrap(),
+        fixture["recoveryPhraseNearMiss"]
     );
     let passphrase = PassphraseReportDto {
         generation: 2,

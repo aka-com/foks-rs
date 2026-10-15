@@ -5,9 +5,13 @@
  */
 
 import type { TimingEvent, TimingValue } from './log';
+import { RENDERER_FAULT } from './renderer-fault';
 
 export interface FormatOptions {
-  /** Milliseconds since the epoch; events older than the window are omitted. */
+  /**
+   * Milliseconds since the epoch. Events older than the window are omitted,
+   * except from the renderer faults table.
+   */
   now: number;
   /** Lines printed under the heading: version, agent, window state. */
   header?: readonly string[];
@@ -222,8 +226,22 @@ export function formatTimings(
   const commands = new Map<string, Stat>();
   const ops = new Map<string, Stat>();
   const chat = new Map<string, Stat>();
+  // Faults are instants, not steps; each row is one boundary and error type.
+  // The table reads every fault the log still holds, not only the window's:
+  // the fault screen can be copied long after the fault, and a reload
+  // discards the log. Recording is capped per label, so this stays small.
+  const faults = new Map<string, { n: number; first: number; last: number }>();
+  for (const event of [...events].sort((a, b) => a.at - b.at)) {
+    if (event.name !== RENDERER_FAULT) continue;
+    const key = `${String(attr(event, 'boundary') ?? '?')}\t${event.code ?? '—'}`;
+    const entry = faults.get(key);
+    if (entry) {
+      entry.n++;
+      entry.last = event.at;
+    } else faults.set(key, { n: 1, first: event.at, last: event.at });
+  }
   for (const event of recent) {
-    if (event.ms === undefined) continue;
+    if (event.name === RENDERER_FAULT || event.ms === undefined) continue;
     if (event.name.startsWith('job.'))
       add(jobs, `${event.name.slice(4)}\t${event.scope ?? '—'}`, event);
     else if (event.name === 'invoke') {
@@ -246,6 +264,23 @@ export function formatTimings(
     else add(steps, `${event.name}\t${event.scope ?? '—'}`, event);
   }
   const summaries: string[] = [
+    ...table(
+      'renderer faults',
+      ['boundary', 'code', 'n', 'first', 'last'],
+      [...faults]
+        .sort((a, b) => a[1].first - b[1].first)
+        .slice(0, MAX_ROWS)
+        .map(([key, entry]) => {
+          const [boundary, code] = key.split('\t');
+          return [
+            boundary,
+            code,
+            String(entry.n),
+            clock(entry.first),
+            clock(entry.last),
+          ];
+        }),
+    ),
     ...table(
       'jobs',
       ['kind', 'scope', 'runs', 'ok', 'fail', 'p50', 'p95', 'max', 'last'],

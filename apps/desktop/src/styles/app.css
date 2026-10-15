@@ -607,6 +607,45 @@
   margin: 4px 0 10px;
 }
 
+/* The items an exposure review lists: in a removal sheet before the write,
+   and in the review sheet with each entry's state and marks. */
+.exposure-rows {
+  max-height: min(320px, 46vh);
+  margin: 4px 0 8px;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  font-size: 13px;
+}
+.exposure-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.exposure-row .t {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.exposure-row small {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.exposure-row.more {
+  color: var(--muted);
+}
+.exposure-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .kico.group {
   background: var(--c-team);
   border: 0;
@@ -868,25 +907,236 @@
   line-height: 1.5;
 }
 
-.local-confirm {
-  display: flex;
-  gap: 9px;
-  align-items: flex-start;
-  margin-top: 14px;
-  color: var(--ink-2);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.local-confirm input {
-  margin-top: 3px;
-}
-
 .local-quiet-link {
   display: block;
   color: var(--muted);
   font-size: 12.5px;
   font-weight: 500;
+}
+
+/* Recovery phrase checks: the recall step when a phrase is created, and the
+   17-field test sheet on Devices. */
+.recall-check {
+  margin: 10px 0 8px;
+}
+
+.recall-check .fr {
+  display: grid;
+  grid-template-columns: minmax(96px, 140px) minmax(0, 1fr);
+  gap: 4px 12px;
+  align-items: center;
+}
+
+.recall-check .fr .k small {
+  display: block;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.recall-check .fr .v {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.recall-check .fr input {
+  min-width: 0;
+  max-width: 180px;
+  font-family: var(--mono);
+}
+
+.recall-check .fr.bad input {
+  border-color: var(--danger-border);
+}
+
+.recall-ok {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--ok-ink);
+  font-size: 12.5px;
+}
+
+.recall-error,
+.phrase-test-error {
+  color: var(--danger-ink);
+  font-size: 12px;
+}
+
+.recall-error {
+  grid-column: 2;
+}
+
+.recall-error:empty,
+.phrase-test-error:empty {
+  display: none;
+}
+
+.recall-status,
+.recall-hint,
+.phrase-test-hint,
+.phrase-test-count {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.phrase-test-count {
+  margin-right: auto;
+}
+
+.phrase-test-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.phrase-test-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.phrase-test-box {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.phrase-test-cell.bad .phrase-test-box {
+  border-color: var(--danger-border);
+}
+
+.phrase-test-cell.good .phrase-test-box {
+  border-color: var(--ok-border);
+}
+
+.phrase-test-cell:focus-within .phrase-test-box {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.phrase-test-position {
+  width: 18px;
+  color: var(--faint);
+  font-size: 12px;
+  text-align: right;
+}
+
+.phrase-test-box input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 0;
+  border: 0;
+  background: transparent;
+  font: 13.5px var(--mono);
+}
+
+.phrase-test-box input:focus {
+  outline: none;
+}
+
+.phrase-test-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 2;
+  min-width: 100%;
+  margin: 2px 0 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  list-style: none;
+  font: 13px var(--mono);
+}
+
+.phrase-test-suggestions li {
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.phrase-test-suggestions li.on {
+  background: var(--accent-wash-2);
+  color: var(--accent-ink);
+}
+
+.phrase-test-result {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--amber-border);
+  border-radius: 10px;
+  background: var(--amber-wash);
+  color: var(--amber-ink);
+}
+
+.phrase-test-result.ok {
+  border-color: var(--ok-border);
+  background: var(--ok-wash);
+  color: var(--ok-ink);
+}
+
+.phrase-test-result.stop {
+  border-color: var(--danger-border);
+  background: var(--danger-wash);
+  color: var(--danger-text);
+}
+
+.phrase-test-result h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.phrase-test-result p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.phrase-test-facts {
+  margin-bottom: 10px;
+}
+
+.phrase-test-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.phrase-test-strip li {
+  display: grid;
+  width: 26px;
+  height: 22px;
+  place-items: center;
+  border-radius: 4px;
+  background: var(--amber-wash);
+  color: var(--amber-ink);
+  font-size: 12px;
+}
+
+.phrase-test-strip li.ok {
+  background: var(--ok-wash);
+  color: var(--ok-ink);
+}
+
+@media (max-width: 560px) {
+  .phrase-test-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .local-other-protection {
@@ -1308,6 +1558,7 @@
 
 .first-run-main .account-form .fr .v {
   display: flex;
+  flex-wrap: wrap;
   flex: 1;
   min-width: 0;
 }
@@ -1506,28 +1757,6 @@
   }
 }
 
-.check {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  font-size: 13.5px;
-}
-
-.check .bx {
-  display: grid;
-  place-items: center;
-  width: 17px;
-  height: 17px;
-  border: 1px solid var(--line-field);
-  border-radius: 4px;
-}
-
-.check.on .bx {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--main-surface);
-}
-
 .first-run-main .checklist .fr {
   align-items: center;
 }
@@ -1632,6 +1861,200 @@
   font-size: 12px;
   line-height: 1.4;
   margin-top: 1px;
+}
+
+/* Password row: Show and Generate, the strength under the value, and the
+   generator panel below the row. */
+.inset .fr.pw-row .v small {
+  display: block;
+  margin-top: 1px;
+}
+.inset .fr.pw-row .a {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+.inset .fr.pw-row .a button,
+.pw-gen-preview button {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--chip-bg);
+  color: var(--chip-ink);
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.inset .fr.pw-row .a button:hover:not(:disabled),
+.pw-gen-preview button:hover {
+  background: var(--hover);
+}
+.inset .fr.pw-row .a button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.inset .fr.pw-row .a button .ic,
+.pw-gen-preview button .ic {
+  font-size: 13px;
+}
+.pw-strength {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.pw-strength.weak {
+  color: var(--amber-ink);
+  font-weight: 600;
+}
+
+/* Security-key PIN row: the PIN rule and the attempts left after a refusal,
+   under the input. */
+.inset .fr .v small.pin-note {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.inset .fr .v small.pin-note.warn {
+  color: var(--amber-ink);
+  font-weight: 600;
+}
+.inset .fr .v small.pin-note.crit {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+/* The first-run form's value cell is a flex row: the note takes a line of
+   its own under the full-width input. */
+.first-run-main .account-form .fr .v small.pin-note {
+  flex-basis: 100%;
+  padding: 0 14px 6px;
+}
+.pw-meter {
+  display: inline-flex;
+  flex: none;
+  gap: 3px;
+}
+.pw-meter i {
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+}
+.pw-meter[data-level='1'] i:nth-child(-n + 1),
+.pw-meter[data-level='2'] i:nth-child(-n + 2) {
+  background: var(--amber-strong);
+}
+.pw-meter[data-level='3'] i:nth-child(-n + 3),
+.pw-meter[data-level='4'] i {
+  background: var(--ok-solid);
+}
+.pw-gen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface);
+  font-size: 13px;
+}
+.pw-gen .seg {
+  align-self: flex-start;
+}
+.pw-gen-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pw-gen-row label {
+  flex: none;
+  width: 76px;
+  color: var(--muted);
+}
+.pw-gen-row input[type='range'],
+.pw-gen-row select {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+.pw-gen-row select {
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--btn-bg);
+  color: var(--ink);
+  font: inherit;
+}
+.pw-gen-row output {
+  flex: none;
+  width: 24px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pw-gen-sets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pw-gen-sets button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font: 12px var(--mono);
+}
+.pw-gen-sets button.on {
+  border-color: transparent;
+  background: var(--chip-bg);
+  color: var(--ink);
+}
+.pw-gen-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pw-gen-check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.pw-gen-hint {
+  margin: 0;
+  color: var(--amber-ink);
+  font-size: 12px;
+}
+.pw-gen-hint:empty {
+  /* Out of the flex gap but still in the tree, so the status is announced. */
+  position: absolute;
+}
+.pw-gen-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--main-surface);
+}
+.pw-gen-preview code {
+  flex: 1;
+  min-width: 0;
+  font: 12.5px var(--mono);
+  overflow-wrap: anywhere;
+  /* Use password is the way to take it; a manual copy skips auto-clear. */
+  user-select: none;
+}
+.pw-gen-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 /* Root mount placeholder */
@@ -2150,4 +2573,50 @@
 
 .sheet .ft .lnk {
   padding: 0 4px;
+}
+
+/* Keyboard shortcut sheet (`shell/shortcut-sheet.tsx`) */
+.shortcut-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.shortcut-table:first-child {
+  margin-top: 4px;
+}
+
+.shortcut-table caption {
+  text-align: left;
+  font-weight: 650;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding-bottom: 4px;
+}
+
+.shortcut-table th,
+.shortcut-table td {
+  padding: 5px 0;
+  border-top: 1px solid var(--line-soft);
+  vertical-align: baseline;
+}
+
+.shortcut-table th {
+  font-weight: 400;
+  text-align: left;
+  padding-right: 12px;
+}
+
+.shortcut-table td {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.shortcut-table kbd {
+  font: 12px var(--sans);
+  background: var(--btn-bg);
+  border: 1px solid var(--line-mid);
+  border-radius: 4px;
+  padding: 0 5px;
 }

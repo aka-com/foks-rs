@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { isAgentReadinessError, normalizeCommandError } from '../../bridge';
-import type { Bridge, CommandError } from '../../bridge';
+import type { CommandError } from '../../bridge';
 import {
   resolveProvisionedIdentity,
   provisionedIdentityProblem,
@@ -9,8 +9,7 @@ import {
 } from '../../first-run-identity';
 import { sharedSetupRead } from '../../first-run-loading';
 import type { FirstRunCheckpoint } from '../../first-run-state';
-import type { AgentSnapshot } from '../../model';
-import type { useFirstRunController } from '../../use-first-run-controller';
+import type { SetupCore } from './setup-core';
 
 /**
  * Delay before the first automatic retry of a transient identity refresh
@@ -73,22 +72,20 @@ function transientIdentityFailure(code: string): string | null {
 }
 
 export function useAccountIdentity({
-  bridge,
-  agentReady,
-  onRefreshSnapshot,
+  core,
   onAgentReadinessFailure,
-  checkpointRef,
-  mounted,
-  commit,
-}: Pick<
-  ReturnType<typeof useFirstRunController>,
-  'checkpointRef' | 'mounted' | 'commit'
-> & {
-  bridge: Bridge;
-  agentReady: boolean;
-  onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
+}: {
+  core: SetupCore;
   onAgentReadinessFailure?: (error: CommandError) => void;
 }) {
+  const {
+    bridge,
+    agentReady,
+    onRefreshSnapshot,
+    checkpointRef,
+    mounted,
+    commit,
+  } = core;
   const [identityLoading, setIdentityLoading] = useState(false);
   const [identityError, setIdentityError] = useState<string | null>(null);
   // Shown while a transient identity refresh failure is retried on its own.

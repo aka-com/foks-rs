@@ -4,6 +4,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::diagnostics::operational::{checked, report as report_failure, Phase};
+use crate::fatal::{CoreThread, FatalSignal};
 use crate::{Error, Result, ServerMetrics, WriterHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -26,22 +27,27 @@ impl Maintenance {
         clock: Arc<dyn foks_server_db::Clock>,
         metrics: Arc<ServerMetrics>,
         admin: Option<Arc<crate::web_admin::WebAdminService>>,
+        fatal: FatalSignal,
     ) -> Self {
         let (stop, receiver) = mpsc::sync_channel(1);
-        let thread = thread::spawn(move || loop {
-            match receiver.recv_timeout(INTERVAL) {
-                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => {
-                    // Failures and committed reclamation counts are recorded by
-                    // the shared entry point; the next tick retries durable work.
-                    let _ = run(
-                        &writer,
-                        Arc::clone(&clock),
-                        Arc::clone(&metrics),
-                        admin.clone(),
-                    );
+        let thread = thread::spawn(move || {
+            let exit = fatal.exit_guard(CoreThread::Maintenance);
+            loop {
+                match receiver.recv_timeout(INTERVAL) {
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => {
+                        // Failures and committed reclamation counts are recorded by
+                        // the shared entry point; the next tick retries durable work.
+                        let _ = run(
+                            &writer,
+                            Arc::clone(&clock),
+                            Arc::clone(&metrics),
+                            admin.clone(),
+                        );
+                    }
                 }
             }
+            exit.end(true);
         });
         Self {
             stop,
@@ -268,9 +274,9 @@ mod tests {
         assert_eq!(first.maintenance_successes, 0);
         assert_eq!(
             first.expiry.deleted_parent_rows,
-            [1, 0, 0, 0, 0, 0, 0, 0, 0]
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         );
-        assert_eq!(first.expiry.empty_passes, [0, 1, 1, 1, 1, 1, 1, 1, 1]);
+        assert_eq!(first.expiry.empty_passes, [0, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
         assert_eq!(first.reclaimed_uploads, 1);
         assert_eq!(first.reclaimed_upload_chunks, 1);
         assert_eq!(first.reclaimed_upload_bytes, 13);
@@ -288,11 +294,11 @@ mod tests {
         assert_eq!(metrics.snapshot().reclaimed_uploads, 1);
         assert_eq!(
             metrics.snapshot().expiry.deleted_parent_rows,
-            [1, 0, 0, 0, 0, 0, 0, 0, 0]
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         );
         assert_eq!(
             metrics.snapshot().expiry.empty_passes,
-            [1, 2, 2, 2, 2, 2, 2, 2, 2]
+            [1, 2, 2, 2, 2, 2, 2, 2, 2, 2]
         );
         let remaining: i64 = rusqlite::Connection::open(&path)
             .unwrap()
@@ -355,9 +361,12 @@ mod tests {
         let succeeded = metrics.snapshot();
         assert_eq!(
             succeeded.expiry.deleted_parent_rows,
-            [1, 0, 0, 0, 0, 0, 0, 1, 0]
+            [1, 0, 0, 0, 0, 0, 0, 1, 0, 0]
         );
-        assert_eq!(succeeded.expiry.empty_passes, [0, 1, 1, 1, 1, 1, 1, 0, 1]);
+        assert_eq!(
+            succeeded.expiry.empty_passes,
+            [0, 1, 1, 1, 1, 1, 1, 0, 1, 1]
+        );
         assert_eq!(succeeded.maintenance_successes, 1);
         assert_eq!(succeeded.checkpoint.attempts, 1);
         writer.shutdown().unwrap();

@@ -51,6 +51,17 @@ builds only the application, signs it, and publishes the final DMG under
 validation succeed. Files under `target/release/bundle/dmg/` are ordinary
 unsigned development bundles.
 
+Release executables embed their dependency list for `cargo audit bin`.
+`tauri.conf.json` names `scripts/foks-cargo.sh` as the Tauri build runner, and
+`scripts/stage-foks-agent.sh` uses it for the agent; with
+`FOKS_AUDITABLE_BUILD=1` it runs `cargo auditable` in place of `cargo`.
+`npm run build:release` sets the variable itself and, after the build, runs
+`scripts/verify-auditable-binaries.sh` on both executables, so it also requires
+`python3`, `cargo-auditable` and `rust-audit-info`
+(`cargo install --locked cargo-auditable@0.7.7 rust-audit-info@0.5.4`, the
+versions CI installs). Without the
+variable, the bundle and development commands use plain `cargo`.
+
 Linux packaging requires `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
 `libpcsclite-dev`, and `librsvg2-bin`. See `linux/README.md` for the installed
 layout.
@@ -80,7 +91,22 @@ its executable: `npm run test:foks-desktop:packaged -- /path/to/usr/bin/foks-des
 
 `src/commands/mod.rs` declares the command domains; `src/lib.rs` registers their
 handlers with Tauri. Command names and wire DTO shapes stay aligned with
-`wire-contract.json` and the frontend bridge.
+`wire-contract.json` and the frontend bridge. A new command also goes into
+`COMMANDS` in `build.rs` and, as `allow-<command>`, into
+`capabilities/default.json`; without both the app ACL refuses it (see
+[FOKS commands](PERMISSIONS.md#foks-commands)).
+
+`command-signatures.json` lists every registered command with the camelCase
+argument keys Tauri reads from its payload, each marked `required` or
+`optional` (an `Option` parameter). The test in `src/command_signatures.rs`
+derives it from the `#[tauri::command]` functions, fails when they differ from
+the `generate_handler!` list or from the file, and rewrites the file when
+`FOKS_WRITE_COMMAND_SIGNATURES=1` is set. `tests/command-contract.test.ts` in
+the desktop app checks every bridge call site, and the commands of the
+`YubiCommand` union, against it. Parameters of the types Tauri injects
+(`AppHandle`, `Webview`, `State` and the others listed in that module), named
+bare or under `tauri::`, are left out of the file; a crate item or import that
+binds one of those names to another type fails the test.
 
 | Module | Responsibility |
 | --- | --- |
@@ -91,7 +117,8 @@ handlers with Tauri. Command names and wire DTO shapes stay aligned with
 | `groups` | Group discovery, membership, admission, and federation |
 | `servers` | Profiles, trust verification, status, and local reset |
 | `application` | Agent connectivity and application information |
-| `context` | Shared state, cached authorization facts, and mutation coordination |
+| `context` | Shared state, cached authorization facts, and mutation coordination, split into mutation scopes, catalog publication, store and target lookup, chat access, cached facts, and upload path grants |
+| `store_key` | The store identity string the renderer echoes back, and its parsed form for lookups |
 | `validation` | Shared input bounds, typed identities, secrets, and window checks |
 | `execution` | Transport preflight, mutation execution, and ambiguous outcomes |
 | `types` | Small wire types shared across domains |

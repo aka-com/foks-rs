@@ -36,6 +36,7 @@ import { useTabSheetState } from '../navigation-guard';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AdminPanel } from '../components/admin-panel';
+import { AssistantClockBand } from '../components/assistant-clock-band';
 import { BotPanel } from '../components/bot-panel';
 import { RenamePanel } from '../components/rename-panel';
 import { RenameBanner, RenameUnlockSheet } from '../components/rename-banner';
@@ -62,6 +63,7 @@ import {
   serverDisplayLabelForStore,
   storeDescription,
   storeNavigationOrder,
+  storeOperationAvailability,
   usernameOf,
 } from '../model';
 import type {
@@ -74,6 +76,7 @@ import type { Server } from '../model';
 import type { Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
+import { storeUsageText, useStoreUsage } from '../store-usage';
 import { AccountMark } from './account-switcher';
 import { deviceEntries } from './device-model';
 import type { DeviceLists } from './device-model';
@@ -563,7 +566,16 @@ export function AccountSection({
           ) : selected ? (
             <>
               <AccountPanel
-                notices={noticesAndUnpairedServers}
+                notices={
+                  <>
+                    {noticesAndUnpairedServers}
+                    <AssistantClockBand
+                      bridge={bridge}
+                      profile={selected.server}
+                      account={selected.account}
+                    />
+                  </>
+                }
                 freshness={freshness}
                 onRetry={retryMetadata}
                 snapshot={snapshot}
@@ -578,6 +590,7 @@ export function AccountSection({
                   setSheet('rename-unlock');
                 }}
                 onRenameComplete={() => renameComplete(selected.server)}
+                bridge={bridge}
                 onNavigate={onNavigate}
                 onSheet={(next) => {
                   // The import sheet opened from the account's own line adds an
@@ -765,6 +778,7 @@ export function AccountSection({
 /** The chosen account: who it is, and the facts and workflows that act on it. */
 function AccountPanel({
   snapshot,
+  bridge,
   store,
   lists,
   loading,
@@ -780,6 +794,7 @@ function AccountPanel({
   onRetry,
 }: {
   snapshot: AgentSnapshot;
+  bridge: Bridge;
   store: AccountStore;
   /** Pending rename state. */
   rename: RenameStatus;
@@ -974,6 +989,12 @@ function AccountPanel({
             />
           )}
         </InsetRow>
+        <StorageRow
+          bridge={bridge}
+          snapshot={snapshot}
+          store={store}
+          stopped={stopped.stopped}
+        />
       </Inset>
       <FreshnessCaption
         label="device metadata"
@@ -981,6 +1002,38 @@ function AccountPanel({
         onRetry={onRetry}
       />
     </>
+  );
+}
+
+/**
+ * What the account's own vault stores on its server. It is read when this page
+ * opens, not on the metadata cadence; the figure has no denominator because
+ * the server reports none.
+ */
+function StorageRow({
+  bridge,
+  snapshot,
+  store,
+  stopped,
+}: {
+  bridge: Bridge;
+  snapshot: AgentSnapshot;
+  store: AccountStore;
+  stopped: boolean;
+}): ReactNode {
+  const access = storeOperationAvailability(snapshot, store, 'vault');
+  const readable = !stopped && access.available;
+  const usage = useStoreUsage(bridge, snapshot, store, readable);
+  return (
+    <InsetRow label="Storage">
+      {stopped
+        ? 'Not read while access is stopped'
+        : readable
+          ? storeUsageText(usage)
+          : !access.available && access.reason === 'loading'
+            ? 'Reading storage used…'
+            : 'Storage used unavailable.'}
+    </InsetRow>
   );
 }
 

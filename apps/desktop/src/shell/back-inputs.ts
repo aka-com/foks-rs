@@ -1,3 +1,5 @@
+import { matchesShortcut, typingTarget } from '../shortcuts';
+
 /** History inputs share app navigation; editable fields keep their own shortcuts. */
 export function mountBackInputs(options: {
   enabled: () => boolean;
@@ -10,29 +12,11 @@ export function mountBackInputs(options: {
     if (event.defaultPrevented) return;
     const browserKey =
       event.key === 'BrowserBack' || event.key === 'BrowserForward';
-    const forward =
-      event.key === 'BrowserForward' ||
-      event.key === 'ArrowRight' ||
-      event.key === ']';
-    const shortcut =
-      !event.shiftKey &&
-      ((event.altKey &&
-        !event.ctrlKey &&
-        !event.metaKey &&
-        (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) ||
-        (event.metaKey &&
-          !event.altKey &&
-          !event.ctrlKey &&
-          (event.key === '[' || event.key === ']')));
+    const forwardKey = matchesShortcut(event, 'forward');
+    const shortcut = forwardKey || matchesShortcut(event, 'back');
     if (!browserKey && !shortcut) return;
-    const target = event.target;
-    if (
-      !browserKey &&
-      target instanceof Element &&
-      (target.closest('input, textarea, [role="textbox"]') ||
-        (target instanceof HTMLElement && target.isContentEditable))
-    )
-      return;
+    if (!browserKey && typingTarget(event.target)) return;
+    const forward = event.key === 'BrowserForward' || forwardKey;
     // Suppress webview history even when the app has no destination or is blocked.
     event.preventDefault();
     if (!event.repeat && options.enabled())

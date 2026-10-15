@@ -1,10 +1,10 @@
 use crate::commands::execution::{execute_kv_mutation, MutationKind};
 use crate::commands::validation::{DOWNLOAD_CHUNK_BYTES, MAXIMUM_TEXT_ITEM_BYTES};
 use crate::commands::vault::{
-    create_item_roles, download_to_path, file_create_header, file_edit_header, parse_item_role,
-    read_text, remove_item_operation, require_file_item, require_text_item,
+    create_item_roles, download_to_path, file_create_header, file_edit_header, item_field,
+    parse_item_role, read_store_usage, read_text, require_file_item, require_text_item,
     set_create_mutation_roles, set_create_operation_roles, take_text_value, upload_file,
-    CatalogDto,
+    website_url, CatalogDto, ItemField,
 };
 use foks_agent_proto::{
     KvChunkResult, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
@@ -336,6 +336,7 @@ pub(super) fn download_item(_total: u64) -> CatalogItem {
             size: None,
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
+            shape: None,
         },
     }
 }
@@ -355,6 +356,7 @@ fn read_text_issues_exactly_one_version_bound_read() {
             size: None,
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
+            shape: None,
         },
     };
     let transport = ReadTransport {
@@ -425,6 +427,7 @@ fn catalog_dto_rejects_unknown_kinds_and_preserves_unknown_sizes() {
                 size: Some(1),
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
+                shape: None,
             },
         }],
         ..CatalogSnapshot::default()
@@ -464,6 +467,116 @@ fn catalog_dto_rejects_unknown_kinds_and_preserves_unknown_sizes() {
         CatalogDto::from_snapshot(&snapshot).unwrap_err().code,
         "invalid-response"
     );
+}
+
+#[test]
+fn catalog_dto_carries_the_listed_shape_and_omits_it_otherwise() {
+    let mut item = download_item(0);
+    item.metadata.node_type = "small-file".to_owned();
+    item.metadata.shape = Some(foks_agent_proto::KvEntryShape::Login);
+    let mut snapshot = CatalogSnapshot {
+        profiles: vec!["foks.example".to_owned()],
+        stores: vec![CatalogStoreSummary::Account {
+            store: foks_agent_proto::AccountStoreRef {
+                profile: "foks.example".to_owned(),
+                account_alias: "personal".to_owned(),
+            },
+        }],
+        items: vec![item],
+        ..CatalogSnapshot::default()
+    };
+    let encoded = |snapshot: &CatalogSnapshot| {
+        serde_json::to_value(CatalogDto::from_snapshot(snapshot).unwrap()).unwrap()["items"][0]
+            .clone()
+    };
+    assert_eq!(encoded(&snapshot)["shape"], "login");
+    snapshot.items[0].metadata.shape = Some(foks_agent_proto::KvEntryShape::Other);
+    assert_eq!(encoded(&snapshot)["shape"], "other");
+    snapshot.items[0].metadata.shape = None;
+    assert!(encoded(&snapshot).get("shape").is_none());
+}
+
+#[test]
+fn item_field_selects_one_login_field_or_reports_it_missing() {
+    let stored =
+        || zeroize::Zeroizing::new("user: satoshi\npassword: hx7-Qm2!vTe9\nurl: ".to_owned());
+    assert_eq!(
+        item_field(stored(), ItemField::Password).unwrap().as_str(),
+        "hx7-Qm2!vTe9"
+    );
+    assert_eq!(
+        item_field(stored(), ItemField::Username).unwrap().as_str(),
+        "satoshi"
+    );
+    assert_eq!(item_field(stored(), ItemField::Value).unwrap(), stored());
+    // A login written without a website still has its empty url line.
+    let missing = item_field(stored(), ItemField::Url).unwrap_err();
+    assert_eq!(missing.code, "field-missing");
+    assert_eq!(missing.message, "This item has no website.");
+    assert!(!missing.retryable);
+    // Only the separator space is removed, so a padded password is copied whole.
+    let padded = zeroize::Zeroizing::new("user: a\npassword:  pad-me \r\nurl: ".to_owned());
+    assert_eq!(
+        item_field(padded, ItemField::Password).unwrap().as_str(),
+        " pad-me "
+    );
+    let note = zeroize::Zeroizing::new("postgres://service:o4Kq@db/prod".to_owned());
+    assert_eq!(
+        item_field(note, ItemField::Password).unwrap_err().code,
+        "field-missing"
+    );
+    for (name, field) in [
+        ("password", ItemField::Password),
+        ("username", ItemField::Username),
+        ("url", ItemField::Url),
+        ("value", ItemField::Value),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<ItemField>(serde_json::json!(name)).unwrap(),
+            field
+        );
+    }
+    assert!(serde_json::from_value::<ItemField>(serde_json::json!("user")).is_err());
+}
+
+#[test]
+fn website_url_opens_only_http_and_https_addresses() {
+    for (field, expected) in [
+        ("https://github.com/login", "https://github.com/login"),
+        ("http://router.local:8080/", "http://router.local:8080/"),
+        // A bare host is taken as https, and the padding a field may keep is
+        // not part of the address.
+        ("github.com/login", "https://github.com/login"),
+        (" example.com:8443 ", "https://example.com:8443/"),
+        ("HTTPS://Example.com", "https://example.com/"),
+        // A `://` after the host, here in a sign-in redirect, is not a scheme.
+        (
+            "accounts.example.com/signin?continue=https://mail.example.com/",
+            "https://accounts.example.com/signin?continue=https://mail.example.com/",
+        ),
+        (
+            "https://example.com/a?next=https://b",
+            "https://example.com/a?next=https://b",
+        ),
+    ] {
+        assert_eq!(
+            website_url(field).map(|url| url.to_string()).as_deref(),
+            Some(expected),
+            "{field}"
+        );
+    }
+    for field in [
+        "",
+        "javascript:alert(1)",
+        "file:///etc/passwd",
+        "ftp://files.example.com",
+        "mailto:a@example.com",
+        "https://user:secret@example.com",
+        "github.com/a b",
+        "data:text/html,a",
+    ] {
+        assert!(website_url(field).is_none(), "{field}");
+    }
 }
 
 pub(super) struct MutationTransport {
@@ -527,7 +640,7 @@ fn item_role_strings_are_strict_and_account_defaults_cannot_be_overridden() {
 }
 
 #[test]
-fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
+fn team_create_edit_folder_and_remove_transcripts_bind_roles_and_guards() {
     let team = foks_agent_proto::TeamStoreRef {
         profile: "foks.example".to_owned(),
         account_alias: "personal".to_owned(),
@@ -547,6 +660,7 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
             size: Some(3),
             read_role: KvRole::Member { visibility: -2 },
             write_role: KvRole::Admin,
+            shape: None,
         },
     };
     let transport = MutationTransport {
@@ -566,16 +680,6 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
     foks_desktop::AgentTransport::call(
         &transport,
         set_create_operation_roles(
-            foks_desktop::create_kv_symlink_operation(&store, "/docs", "/shared/docs").unwrap(),
-            read_role,
-            write_role,
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    foks_desktop::AgentTransport::call(
-        &transport,
-        set_create_operation_roles(
             foks_desktop::create_kv_directory_operation(&store, "/folder").unwrap(),
             read_role,
             write_role,
@@ -583,13 +687,28 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
         .unwrap(),
     )
     .unwrap();
+    // The app creates no symlinks, so the create-role setter refuses one.
+    assert_eq!(
+        set_create_operation_roles(
+            foks_desktop::create_kv_symlink_operation(&store, "/docs", "/shared/docs").unwrap(),
+            read_role,
+            write_role,
+        )
+        .unwrap_err()
+        .code,
+        "invalid-builder"
+    );
     execute_kv_mutation(
         &transport,
         foks_desktop::edit_kv_file_mutation(&item, b"changed".to_vec()).unwrap(),
         MutationKind::Guarded,
     )
     .unwrap();
-    foks_desktop::AgentTransport::call(&transport, remove_item_operation(&item).unwrap()).unwrap();
+    foks_desktop::AgentTransport::call(
+        &transport,
+        foks_desktop::remove_kv_operation(&item, false).unwrap(),
+    )
+    .unwrap();
     let calls = transport.calls.lock().unwrap();
     assert_eq!(
         calls.as_slice(),
@@ -598,15 +717,6 @@ fn team_create_edit_link_folder_and_remove_transcripts_bind_roles_and_guards() {
                 store: KvStoreRef::Team(team.clone()),
                 path: "/new".to_owned(),
                 content: b"new".to_vec(),
-                read_role: KvRole::Member { visibility: 0 },
-                write_role: KvRole::Admin,
-                precondition: KvPrecondition::Create,
-                mkdir_p: true,
-            },
-            Operation::PutKvSymlink {
-                store: KvStoreRef::Team(team.clone()),
-                path: "/docs".to_owned(),
-                target: "/shared/docs".to_owned(),
                 read_role: KvRole::Member { visibility: 0 },
                 write_role: KvRole::Admin,
                 precondition: KvPrecondition::Create,
@@ -691,6 +801,7 @@ fn team_create_and_edit_conflicts_are_returned_after_one_attempt_without_retry()
             size: Some(3),
             read_role: KvRole::Owner,
             write_role: KvRole::Owner,
+            shape: None,
         },
     };
     let create_transport = ConflictTransport {
@@ -760,26 +871,6 @@ fn native_file_replacement_accepts_both_file_encodings() {
     item.metadata.node_type = "symlink".to_owned();
     assert_eq!(
         require_file_item(&item).unwrap_err().code,
-        "invalid-request"
-    );
-}
-
-#[test]
-fn renderer_remove_boundary_rejects_folders_and_is_never_recursive() {
-    let file = download_item(1);
-    assert!(matches!(
-        remove_item_operation(&file).unwrap(),
-        Operation::RemoveKv {
-            expected_dirent_id: Some(dirent_id),
-            recursive: false,
-            precondition: KvPrecondition::ExactVersion { version: 9 },
-            ..
-        } if dirent_id == [7; 16]
-    ));
-    let mut folder = file;
-    folder.metadata.node_type = "directory".to_owned();
-    assert_eq!(
-        remove_item_operation(&folder).unwrap_err().code,
         "invalid-request"
     );
 }
@@ -996,4 +1087,93 @@ fn move_preserves_exact_source_and_invalidates_its_store() {
     );
     assert!(foks_desktop::move_kv_operation(&item, &item.metadata.path).is_err());
     assert!(foks_desktop::move_kv_operation(&item, "relative").is_err());
+}
+
+/// Answers the account binding and the usage read, recording each call. The
+/// binding names `bound_alias`, so a test can make it disagree with the vault.
+struct UsageTransport {
+    calls: Mutex<Vec<Operation>>,
+    bound_alias: &'static str,
+}
+
+impl UsageTransport {
+    fn new(bound_alias: &'static str) -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            bound_alias,
+        }
+    }
+}
+
+impl foks_desktop::AgentTransport for UsageTransport {
+    fn call(&self, operation: Operation) -> Result<serde_json::Value, foks_desktop::AgentError> {
+        self.calls.lock().unwrap().push(operation.clone());
+        match operation {
+            Operation::BindDataAccount { profile, .. } => Ok(serde_json::json!({
+                "profile": profile, "account_alias": self.bound_alias,
+                "host_id": "0b", "user_id": "01", "team_id": null,
+            })),
+            Operation::ReadData { .. } => Ok(serde_json::json!({"files": 3, "bytes": 2_469_396})),
+            other => panic!("unexpected operation {other:?}"),
+        }
+    }
+}
+
+fn bound_scope(team_id: Option<&str>) -> foks_agent_proto::data::DataScope {
+    foks_agent_proto::data::DataScope {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+        host_id: "0b".to_owned(),
+        user_id: "01".to_owned(),
+        team_id: team_id.map(str::to_owned),
+    }
+}
+
+#[test]
+fn store_usage_reads_the_bound_account_or_its_team() {
+    let account = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+    });
+    let team = CatalogStoreRef::Team(foks_agent_proto::TeamStoreRef {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+        team_alias: "group".to_owned(),
+        team_id: "0d".repeat(33),
+    });
+    for (store, team_id) in [(account, None), (team, Some("0d".repeat(33)))] {
+        let transport = UsageTransport::new("personal");
+        let usage = read_store_usage(&transport, &store).unwrap();
+        assert_eq!(
+            serde_json::to_value(usage).unwrap(),
+            serde_json::json!({"files": 3, "bytes": 2_469_396})
+        );
+        assert_eq!(
+            transport.calls.lock().unwrap().as_slice(),
+            &[
+                Operation::BindDataAccount {
+                    profile: "foks.example".to_owned(),
+                    account_alias: "personal".to_owned(),
+                },
+                Operation::ReadData {
+                    scope: bound_scope(team_id.as_deref()),
+                    query: foks_agent_proto::data::DataRead::Usage,
+                },
+            ]
+        );
+    }
+}
+
+#[test]
+fn store_usage_refuses_a_binding_for_another_account() {
+    let store = CatalogStoreRef::Account(foks_agent_proto::AccountStoreRef {
+        profile: "foks.example".to_owned(),
+        account_alias: "personal".to_owned(),
+    });
+    let transport = UsageTransport::new("other");
+    assert_eq!(
+        read_store_usage(&transport, &store).unwrap_err().code,
+        "invalid-response"
+    );
+    assert_eq!(transport.calls.lock().unwrap().len(), 1);
 }

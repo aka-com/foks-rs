@@ -6,6 +6,7 @@ import {
   KIND_LIST,
   catalog,
   displayPathComponent,
+  isTrashPath,
   kindOf,
   nameOf,
   readersOf,
@@ -63,7 +64,12 @@ interface MutableFolderNode extends Omit<FolderNode, 'folders'> {
   children: Map<string, MutableFolderNode>;
 }
 
-/** Build a folders-only tree from item paths. Folder nodes are derived catalog views. */
+/**
+ * Build a folders-only tree from item paths. Folder nodes are derived catalog
+ * views. A `Folder` entry adds its own node, so an empty folder is drawn,
+ * and is not listed among its parent's items; `catalog()` leaves folder
+ * entries out, so only a caller that passes them in sees empty folders.
+ */
 export function folderTree(items: readonly Item[]): FolderNode {
   const root: MutableFolderNode = {
     name: '',
@@ -74,8 +80,9 @@ export function folderTree(items: readonly Item[]): FolderNode {
   };
   for (const item of items) {
     const parts = item.path.split('/').filter(Boolean);
+    const folder = item.kind === 'Folder';
     let node = root;
-    for (const part of parts.slice(0, -1)) {
+    for (const part of folder ? parts : parts.slice(0, -1)) {
       let child = node.children.get(part);
       if (!child) {
         child = {
@@ -89,7 +96,7 @@ export function folderTree(items: readonly Item[]): FolderNode {
       }
       node = child;
     }
-    node.items.push(item);
+    if (!folder) node.items.push(item);
   }
   const finish = (node: MutableFolderNode): FolderNode => {
     const folders = [...node.children.values()]
@@ -199,6 +206,11 @@ export function filesFolderCrumb(
   const store = storeOf(snapshot, selected.store);
   if (!store) return { labels: [], back: null };
   const storePage = location.kind === 'store';
+  if (isTrashPath(selected.path))
+    return {
+      labels: [store.name, 'Trash'],
+      back: folderKey(storePage, store.id, '/'),
+    };
   const root = folderTree(
     catalog(snapshot).filter((item) => item.store === store.id),
   );

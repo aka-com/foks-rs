@@ -3,7 +3,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 48;
+pub const SCHEMA_VERSION: i64 = 49;
 
 const SCHEMA: &str = concat!(
     include_str!("schema/core.sql"),
@@ -25,6 +25,8 @@ const SCHEMA: &str = concat!(
     include_str!("schema/realtime.sql"),
     include_str!("schema/realtime_invalidation.sql"),
     include_str!("schema/waitlist.sql"),
+    include_str!("schema/waitlist_indexes.sql"),
+    include_str!("schema/waitlist_count.sql"),
     include_str!("schema/log_upload.sql"),
     include_str!("schema/expiry_indexes.sql"),
 );
@@ -41,13 +43,13 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         return Ok(());
     }
-    if application_id == APPLICATION_ID && matches!(version, 43..=47) {
+    if application_id == APPLICATION_ID && matches!(version, 43..=48) {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Recheck under the write lock: another opener may already have upgraded.
         let application_id =
             transaction.pragma_query_value(None, "application_id", |r| r.get(0))?;
         let version = transaction.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if application_id == APPLICATION_ID && matches!(version, 43..=47) {
+        if application_id == APPLICATION_ID && matches!(version, 43..=48) {
             if version == 43 {
                 transaction.execute_batch(
                     "ALTER TABLE rt_user_inboxes ADD COLUMN reconcile_dirty INTEGER NOT NULL
@@ -96,16 +98,36 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
                      RENAME COLUMN admission_hash TO source_hash;",
                 )?;
             }
-            // Version 48 changes the SSO provider fingerprint and the
-            // authenticated-encryption domains. Old browser flows cannot be
-            // resumed and old account links must be established again under
-            // the new provider identity.
+            if version <= 47 {
+                // Version 48 changes the SSO provider fingerprint and the
+                // authenticated-encryption domains. Old browser flows cannot be
+                // resumed and old account links must be established again under
+                // the new provider identity.
+                transaction.execute_batch(
+                    "DELETE FROM sso_binding_receipts;
+                     DELETE FROM sso_identity_challenges;
+                     DELETE FROM sso_access;
+                     DELETE FROM sso_sessions;",
+                )?;
+            }
+            // Version 49 makes waitlist addresses unique under ASCII case
+            // folding. The earliest entry for each address is kept and later
+            // duplicates are removed before the unique index is built and the
+            // entry count is initialised.
             transaction.execute_batch(
-                "DELETE FROM sso_binding_receipts;
-                 DELETE FROM sso_identity_challenges;
-                 DELETE FROM sso_access;
-                 DELETE FROM sso_sessions;",
+                "DELETE FROM waitlist_entries WHERE rowid IN (
+                     SELECT entry FROM (
+                         SELECT rowid AS entry, row_number() OVER (
+                             PARTITION BY email COLLATE NOCASE
+                             ORDER BY created_at, rowid
+                         ) AS position
+                         FROM waitlist_entries
+                     ) WHERE position > 1
+                 );
+                 DROP INDEX waitlist_entries_email_created;",
             )?;
+            transaction.execute_batch(include_str!("schema/waitlist_indexes.sql"))?;
+            transaction.execute_batch(include_str!("schema/waitlist_count.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else {
             validate(application_id, version)?;

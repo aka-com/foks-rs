@@ -21,6 +21,10 @@ import {
   unfinishedOperation,
 } from '../invitation-writes';
 import type { TeamStore } from '../model';
+import {
+  securityKeyPinRefusal,
+  validSecurityKeyPin,
+} from '../security-key-pin';
 import { useMetadataRepository } from '../query-hooks';
 import { useSheetGuard, useTabSheetState } from '../navigation-guard';
 import {
@@ -36,6 +40,7 @@ import {
   RadioCard,
   RadioGroup,
   SectionLabel,
+  SecurityKeyPinField,
 } from './index';
 
 type ApprovalRole = Extract<InvitationGrantRole, 'member' | 'admin'>;
@@ -152,6 +157,9 @@ export function InviteNewUserSheet({
       await work();
     } catch (failure) {
       if (!live.current) return;
+      // A refused PIN is not offered again unchanged: one more refusal can
+      // block the PIN.
+      if (securityKeyPinRefusal(failure)) setPin('');
       if (hardwareUnlockRequested(failure)) {
         setNeedPin(true);
         setError('Enter the PIN for your security key to sign the invitation.');
@@ -261,16 +269,12 @@ export function InviteNewUserSheet({
     </p>
   ) : null;
   const pinRow = needPin ? (
-    <InsetRow label="Security key PIN">
-      <input
-        type="password"
-        autoComplete="off"
-        maxLength={32}
-        value={pin}
-        disabled={busy}
-        onChange={(e) => setPin(e.target.value)}
-      />
-    </InsetRow>
+    <SecurityKeyPinField
+      value={pin}
+      disabled={busy}
+      onChange={setPin}
+      refusal={error}
+    />
   ) : null;
 
   if (shared && operation) {
@@ -362,7 +366,7 @@ export function InviteNewUserSheet({
           <Button
             variant="primary"
             busy={busy}
-            disabled={busy || (needPin && !pin)}
+            disabled={busy || (needPin && !validSecurityKeyPin(pin))}
             onClick={() => void create()}
           >
             {busy

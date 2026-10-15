@@ -1,52 +1,41 @@
 /**
  * The persisted display preferences of the rail and the Chat column.
  *
- * Each is one `localStorage` key. `sideCollapsed` and `chatPreviews` are
- * booleans encoded as `'1'` / `'0'`; `chatChannelSort` names the column's
- * channel order; `chatFoldedTeams` is a JSON array of hashed team ids. Reads
- * and writes are guarded because storage is unavailable in restricted
- * contexts, and a display preference is never worth failing the shell for: an
- * unreadable value reads as its default and an unwritable one lasts for this
- * session only.
+ * Each is one registered `localStorage` record. `sideCollapsed` and
+ * `chatPreviews` are booleans encoded as `'1'` / `'0'`; `chatChannelSort`
+ * names the column's channel order; `chatFoldedTeams` is a JSON array of
+ * hashed team ids. Storage is unavailable in restricted contexts, and a
+ * display preference is never worth failing the shell for: an unreadable
+ * value reads as its default and an unwritable one lasts for this session
+ * only.
  */
 
 import { hashId } from './diagnostics/log';
+import {
+  readStorage,
+  STORAGE_KEYS,
+  type StorageKey,
+  writeStorage,
+} from './platform/device-storage';
 
-function readText(key: string): string | null {
-  try {
-    return typeof window !== 'undefined'
-      ? window.localStorage.getItem(key)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeText(key: string, value: string): void {
-  try {
-    if (typeof window !== 'undefined') window.localStorage.setItem(key, value);
-  } catch {
-    // Storage is unavailable; the preference lasts for this session only.
-  }
-}
-
-function read(key: string, fallback = false): boolean {
-  const value = readText(key);
+function read(key: StorageKey, fallback = false): boolean {
+  const value = readStorage(key);
   return value === null ? fallback : value === '1';
 }
 
-function write(key: string, value: boolean): void {
-  writeText(key, value ? '1' : '0');
+function write(key: StorageKey, value: boolean): void {
+  writeStorage(key, value ? '1' : '0');
 }
 
 /** The stored collapse preference. False (expanded) when unset or unreadable. */
 export function storedSideCollapsedPref(): boolean {
-  return read('sideCollapsed');
+  return readStorage(STORAGE_KEYS.sideCollapsed) === '1';
 }
 
 /** Persists the collapse preference. */
 export function rememberSideCollapsed(collapsed: boolean): void {
-  write('sideCollapsed', collapsed);
+  // Storage may be unavailable; the preference then lasts for this session only.
+  writeStorage(STORAGE_KEYS.sideCollapsed, collapsed ? '1' : '0');
 }
 
 /**
@@ -57,11 +46,13 @@ export type ChannelSort = 'alphabetical' | 'recent';
 
 /** The stored channel order. Alphabetical when unset or unreadable. */
 export function storedChannelSort(): ChannelSort {
-  return readText('chatChannelSort') === 'recent' ? 'recent' : 'alphabetical';
+  return readStorage(STORAGE_KEYS.chatChannelSort) === 'recent'
+    ? 'recent'
+    : 'alphabetical';
 }
 
 export function rememberChannelSort(sort: ChannelSort): void {
-  writeText('chatChannelSort', sort);
+  writeStorage(STORAGE_KEYS.chatChannelSort, sort);
 }
 
 /**
@@ -69,11 +60,11 @@ export function rememberChannelSort(sort: ChannelSort): void {
  * under its name. On when unset or unreadable.
  */
 export function storedChannelPreviews(): boolean {
-  return read('chatPreviews', true);
+  return read(STORAGE_KEYS.chatPreviews, true);
 }
 
 export function rememberChannelPreviews(shown: boolean): void {
-  write('chatPreviews', shown);
+  write(STORAGE_KEYS.chatPreviews, shown);
 }
 
 /**
@@ -94,7 +85,7 @@ function foldKey(team: string): string {
 }
 
 function storedFoldKeys(): string[] {
-  const raw = readText('chatFoldedTeams');
+  const raw = readStorage(STORAGE_KEYS.chatFoldedTeams);
   if (raw === null) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -122,5 +113,8 @@ export function rememberTeamFolded(team: string, folded: boolean): void {
   const key = foldKey(team);
   const keys = storedFoldKeys().filter((entry) => entry !== key);
   if (folded) keys.push(key);
-  writeText('chatFoldedTeams', JSON.stringify(keys.slice(-FOLDED_TEAMS_MAX)));
+  writeStorage(
+    STORAGE_KEYS.chatFoldedTeams,
+    JSON.stringify(keys.slice(-FOLDED_TEAMS_MAX)),
+  );
 }

@@ -1,11 +1,14 @@
-use std::net::{SocketAddr, TcpListener};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::future::Future;
+use std::net::{IpAddr, SocketAddr, TcpListener};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use tokio::sync::{mpsc, watch, Semaphore};
 use tokio::task::JoinSet;
 
+use crate::fatal::{CoreThread, FatalSignal};
+use crate::net::retry_accept;
 use crate::net::session::{serve, ServerData};
 use crate::rpc::Listener;
 use crate::{Config, Error, Result};
@@ -40,6 +43,56 @@ struct ListenerContext {
     limits: crate::SessionLimits,
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
+    failure: ListenerFailure,
+}
+
+/// Reports the loss of an accept loop or session loop. Readiness and the
+/// fatal signal change as soon as an accept loop ends rather than after its
+/// listener's sessions drain, which can take as long as the longest open
+/// session.
+#[derive(Clone)]
+struct ListenerFailure {
+    live: Arc<AtomicBool>,
+    fatal: FatalSignal,
+}
+
+impl ListenerFailure {
+    fn report(&self) {
+        self.live.store(false, Ordering::Release);
+        self.fatal.notify(CoreThread::Listener);
+    }
+
+    /// A panicked session task ends the listener. Unless a stop was
+    /// requested, it is reported when the task is reaped, not when the next
+    /// connection arrives.
+    fn session_finished(
+        &self,
+        joined: std::result::Result<(), tokio::task::JoinError>,
+        stop: &watch::Receiver<bool>,
+    ) -> Result<()> {
+        if joined.is_err() {
+            if !*stop.borrow() {
+                self.report();
+            }
+            return Err(Error::Thread);
+        }
+        Ok(())
+    }
+}
+
+/// Reports every end of an accept loop except a requested stop: an error
+/// return, a panic, or the task being dropped.
+struct AcceptorExit {
+    failure: ListenerFailure,
+    stop: watch::Receiver<bool>,
+}
+
+impl Drop for AcceptorExit {
+    fn drop(&mut self) {
+        if !*self.stop.borrow() {
+            self.failure.report();
+        }
+    }
 }
 
 impl BoundListeners {
@@ -55,10 +108,14 @@ impl RunningServer {
             config.public_address,
             config.authenticated_address,
         )?;
-        Self::start_bound(config, listeners)
+        Self::start_bound(config, listeners, FatalSignal::default())
     }
 
-    pub(crate) fn start_bound(config: Config, listeners: BoundListeners) -> Result<Self> {
+    pub(crate) fn start_bound(
+        config: Config,
+        listeners: BoundListeners,
+        fatal: FatalSignal,
+    ) -> Result<Self> {
         config.limits.validate()?;
         let BoundListeners {
             probe,
@@ -79,8 +136,10 @@ impl RunningServer {
         let live = Arc::new(AtomicBool::new(false));
         let thread_live = Arc::clone(&live);
         let (startup, started) = std::sync::mpsc::sync_channel(1);
+        let exit_stop = stop_receiver.clone();
         let thread = thread::spawn(move || {
-            let _liveness = LivenessGuard(Arc::clone(&thread_live));
+            let liveness = LivenessGuard(Arc::clone(&thread_live));
+            let exit = fatal.exit_guard(CoreThread::Listener);
             let result = runtime.block_on(run_server(
                 probe,
                 public,
@@ -96,9 +155,15 @@ impl RunningServer {
                 rate_limiter,
                 limits,
                 stop_receiver,
-                thread_live,
+                ListenerFailure {
+                    live: thread_live,
+                    fatal: fatal.clone(),
+                },
                 startup,
             ));
+            // Report an unrequested exit before the bounded runtime shutdown.
+            exit.end(*exit_stop.borrow());
+            drop(liveness);
             runtime.shutdown_timeout(limits.request_timeout);
             result
         });
@@ -200,7 +265,7 @@ async fn run_server(
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     limits: crate::SessionLimits,
     stop: watch::Receiver<bool>,
-    live: Arc<AtomicBool>,
+    failure: ListenerFailure,
     startup: std::sync::mpsc::SyncSender<std::io::Result<()>>,
 ) -> Result<()> {
     let probe = listener_from_std(probe, &startup)?;
@@ -215,6 +280,7 @@ async fn run_server(
             metrics: Arc::clone(&metrics),
             rate_limiter: Arc::clone(&rate_limiter),
             limits,
+            failure: failure.clone(),
         },
         ListenerContext {
             class: Listener::PublicServices,
@@ -224,6 +290,7 @@ async fn run_server(
             metrics: Arc::clone(&metrics),
             rate_limiter: Arc::clone(&rate_limiter),
             limits,
+            failure: failure.clone(),
         },
         ListenerContext {
             class: Listener::Authenticated,
@@ -233,9 +300,10 @@ async fn run_server(
             metrics,
             rate_limiter,
             limits,
+            failure: failure.clone(),
         },
     ];
-    live.store(true, Ordering::Release);
+    failure.live.store(true, Ordering::Release);
     let _ = startup.send(Ok(()));
     tokio::try_join!(
         run_listener(probe, contexts[0].clone(), stop.clone()),
@@ -261,53 +329,34 @@ async fn run_listener(
     context: ListenerContext,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
-    let (sender, mut receiver) = mpsc::channel::<(tokio::net::TcpStream, u64, std::net::IpAddr)>(
+    let (sender, mut receiver) = mpsc::channel::<(tokio::net::TcpStream, u64, IpAddr)>(
         context.limits.maximum_pending_connections,
     );
-    let next_connection_id = Arc::new(AtomicU64::new(1));
-    let accept_ids = Arc::clone(&next_connection_id);
-    let mut accept_stop = stop.clone();
-    let accept_metrics = Arc::clone(&context.metrics);
-    let accept_limiter = Arc::clone(&context.rate_limiter);
-    let acceptor = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                result = accept_stop.changed() => {
-                    if result.is_err() || *accept_stop.borrow() {
-                        return Ok::<(), Error>(());
-                    }
-                }
-                accepted = listener.accept() => {
-                    let (stream, peer) = accepted?;
-                    if !accept_limiter.allow_connection(peer.ip()) {
-                        accept_metrics.connection_rate_limited();
-                        continue;
-                    }
-                    let id = accept_ids.fetch_add(1, Ordering::Relaxed);
-                    // A full admission queue deliberately rejects new work. This keeps
-                    // memory bounded and lets TCP/TLS clients retry with backoff.
-                    match sender.try_send((stream, id, peer.ip())) {
-                        Ok(()) => accept_metrics.connection_accepted(),
-                        Err(_) => accept_metrics.connection_rejected(),
-                    }
-                }
-            }
-        }
-    });
+    let listener = Arc::new(listener);
+    let acceptor = tokio::spawn(accept_connections(
+        move || {
+            let listener = Arc::clone(&listener);
+            async move { listener.accept().await }
+        },
+        sender,
+        Arc::clone(&context.metrics),
+        Arc::clone(&context.rate_limiter),
+        context.failure.clone(),
+        stop.clone(),
+    ));
 
     let active = Arc::new(Semaphore::new(context.limits.maximum_active_connections));
     let mut sessions = JoinSet::new();
     loop {
-        while let Some(joined) = sessions.try_join_next() {
-            if joined.is_err() {
-                return Err(Error::Thread);
-            }
-        }
         let permit = tokio::select! {
             result = stop.changed() => {
                 if result.is_err() || *stop.borrow() {
                     break;
                 }
+                continue;
+            }
+            Some(joined) = sessions.join_next(), if !sessions.is_empty() => {
+                context.failure.session_finished(joined, &stop)?;
                 continue;
             }
             permit = Arc::clone(&active).acquire_owned() => permit.map_err(|_| Error::Thread)?,
@@ -319,6 +368,10 @@ async fn run_listener(
                 } else {
                     continue;
                 }
+            }
+            Some(joined) = sessions.join_next(), if !sessions.is_empty() => {
+                context.failure.session_finished(joined, &stop)?;
+                continue;
             }
             connection = receiver.recv() => connection,
         }) else {
@@ -363,6 +416,61 @@ async fn run_listener(
     accept_result
 }
 
+/// Accepts connections until `stop` carries `true` or accept() reports an
+/// error that invalidates the listening socket. Transient failures, such as
+/// EMFILE while the process is at its descriptor limit, are counted and
+/// retried by `retry_accept`. Any other end is reported through `failure`
+/// as it happens, independently of the session loop, which can be blocked on
+/// an active-connection permit while long-lived sessions hold every permit.
+async fn accept_connections<S, F, Fut>(
+    mut accept: F,
+    admission: mpsc::Sender<(S, u64, IpAddr)>,
+    metrics: Arc<crate::ServerMetrics>,
+    rate_limiter: Arc<crate::rate_limit::RateLimiter>,
+    failure: ListenerFailure,
+    mut stop: watch::Receiver<bool>,
+) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = std::io::Result<(S, SocketAddr)>>,
+{
+    let _exit = AcceptorExit {
+        failure,
+        stop: stop.clone(),
+    };
+    let mut next_connection_id = 1_u64;
+    loop {
+        tokio::select! {
+            result = stop.changed() => {
+                if result.is_err() || *stop.borrow() {
+                    return Ok(());
+                }
+            }
+            accepted = accept() => {
+                let (stream, peer) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        retry_accept(error, &metrics).await?;
+                        continue;
+                    }
+                };
+                if !rate_limiter.allow_connection(peer.ip()) {
+                    metrics.connection_rate_limited();
+                    continue;
+                }
+                let id = next_connection_id;
+                next_connection_id = next_connection_id.wrapping_add(1);
+                // A full admission queue deliberately rejects new work. This keeps
+                // memory bounded and lets TCP/TLS clients retry with backoff.
+                match admission.try_send((stream, id, peer.ip())) {
+                    Ok(()) => metrics.connection_accepted(),
+                    Err(_) => metrics.connection_rejected(),
+                }
+            }
+        }
+    }
+}
+
 struct ActiveConnectionMetric(Arc<crate::ServerMetrics>);
 
 impl ActiveConnectionMetric {
@@ -375,5 +483,170 @@ impl ActiveConnectionMetric {
 impl Drop for ActiveConnectionMetric {
     fn drop(&mut self) {
         self.0.connection_closed();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use super::*;
+    use crate::net::AcceptErrorKind;
+
+    type Accepted = std::io::Result<(u32, SocketAddr)>;
+
+    /// An accept() replacement that returns `script` in order and then
+    /// waits indefinitely, as a listener without pending connections does.
+    fn scripted(
+        script: Vec<Accepted>,
+    ) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Accepted> + Send>> {
+        let script = Arc::new(Mutex::new(VecDeque::from(script)));
+        move || {
+            let next = script.lock().unwrap().pop_front();
+            Box::pin(async move {
+                match next {
+                    Some(accepted) => accepted,
+                    None => std::future::pending().await,
+                }
+            })
+        }
+    }
+
+    fn os_error(code: i32) -> Accepted {
+        Err(std::io::Error::from_raw_os_error(code))
+    }
+
+    struct Harness {
+        metrics: Arc<crate::ServerMetrics>,
+        rate_limiter: Arc<crate::rate_limit::RateLimiter>,
+        failure: ListenerFailure,
+        runtime: tokio::runtime::Runtime,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            Self {
+                metrics: Arc::new(crate::ServerMetrics::default()),
+                rate_limiter: Arc::new(
+                    crate::rate_limit::RateLimiter::new(crate::RateLimitConfig::default()).unwrap(),
+                ),
+                failure: ListenerFailure {
+                    live: Arc::new(AtomicBool::new(true)),
+                    fatal: FatalSignal::default(),
+                },
+                runtime: tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap(),
+            }
+        }
+    }
+
+    #[test]
+    fn transient_accept_errors_are_counted_and_retried() {
+        let harness = Harness::new();
+        let peer: SocketAddr = "192.0.2.7:4000".parse().unwrap();
+        let (admission, mut admitted) = mpsc::channel(4);
+        let (_stop, stop) = watch::channel(false);
+        let result = harness.runtime.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                accept_connections(
+                    scripted(vec![
+                        os_error(libc::EMFILE),
+                        os_error(libc::ECONNABORTED),
+                        os_error(libc::EMFILE),
+                        Ok((7, peer)),
+                        os_error(libc::ENOBUFS),
+                        Ok((8, peer)),
+                        os_error(libc::EBADF),
+                    ]),
+                    admission,
+                    Arc::clone(&harness.metrics),
+                    Arc::clone(&harness.rate_limiter),
+                    harness.failure.clone(),
+                    stop,
+                ),
+            )
+            .await
+        });
+        let Ok(Err(Error::Io(error))) = result else {
+            panic!("accept loop did not end with the listener error");
+        };
+        assert_eq!(error.raw_os_error(), Some(libc::EBADF));
+        assert_eq!(admitted.try_recv().unwrap(), (7, 1, peer.ip()));
+        assert_eq!(admitted.try_recv().unwrap(), (8, 2, peer.ip()));
+        let snapshot = harness.metrics.snapshot();
+        assert_eq!(snapshot.connections_accepted, 2);
+        let mut expected = [0; AcceptErrorKind::ALL.len()];
+        expected[AcceptErrorKind::ProcessDescriptors as usize] = 2;
+        expected[AcceptErrorKind::ConnectionAborted as usize] = 1;
+        expected[AcceptErrorKind::Buffers as usize] = 1;
+        assert_eq!(snapshot.accept_errors, expected);
+        // The accept loop reports its own end; the session loop and its
+        // drain are not involved.
+        assert!(!harness.failure.live.load(Ordering::Acquire));
+        assert_eq!(harness.failure.fatal.exited(), Some(CoreThread::Listener));
+    }
+
+    #[test]
+    fn requested_stop_ends_the_accept_loop_without_a_failure() {
+        let harness = Harness::new();
+        let (admission, _admitted) = mpsc::channel(4);
+        let (stop, stop_receiver) = watch::channel(false);
+        let acceptor = harness.runtime.spawn(accept_connections(
+            scripted(vec![os_error(libc::EMFILE)]),
+            admission,
+            Arc::clone(&harness.metrics),
+            Arc::clone(&harness.rate_limiter),
+            harness.failure.clone(),
+            stop_receiver,
+        ));
+        stop.send(true).unwrap();
+        harness
+            .runtime
+            .block_on(async { tokio::time::timeout(Duration::from_secs(10), acceptor).await })
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(harness.failure.live.load(Ordering::Acquire));
+        assert_eq!(harness.failure.fatal.exited(), None);
+    }
+
+    #[test]
+    fn dropped_accept_loop_is_reported_unless_stop_was_requested() {
+        // Dropping the pending future stands in for an aborted acceptor task
+        // and for a panic, after which tokio drops the task's future.
+        let drop_pending = |harness: &Harness, stop: watch::Receiver<bool>| {
+            let (admission, _admitted) = mpsc::channel(4);
+            let acceptor = accept_connections(
+                scripted(Vec::new()),
+                admission,
+                Arc::clone(&harness.metrics),
+                Arc::clone(&harness.rate_limiter),
+                harness.failure.clone(),
+                stop,
+            );
+            harness.runtime.block_on(async {
+                let pending = tokio::time::timeout(Duration::from_millis(20), acceptor).await;
+                assert!(pending.is_err());
+            });
+        };
+
+        let harness = Harness::new();
+        let (stop, mut stop_receiver) = watch::channel(false);
+        stop.send(true).unwrap();
+        // Mark the stop as seen, so that the loop is dropped while pending
+        // rather than returning.
+        stop_receiver.borrow_and_update();
+        drop_pending(&harness, stop_receiver);
+        assert_eq!(harness.failure.fatal.exited(), None);
+
+        let (_stop, stop_receiver) = watch::channel(false);
+        drop_pending(&harness, stop_receiver);
+        assert!(!harness.failure.live.load(Ordering::Acquire));
+        assert_eq!(harness.failure.fatal.exited(), Some(CoreThread::Listener));
     }
 }

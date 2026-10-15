@@ -14,6 +14,8 @@ use foks_agent_proto::{
     KvUploadHeader, Operation, ProfileProtocol, ProfileTrust, ResponseResult, SecretString,
     TeamKind, TeamRole, TeamStoreRef, YubiRetryConfiguration,
 };
+use foks_desktop::ops::groups::{self, LocalTeam};
+use foks_desktop::ops::{self, accounts};
 use foks_desktop::{CatalogItem, CatalogStoreRef, KvAccountMutation};
 
 #[derive(clap::Parser)]
@@ -132,6 +134,8 @@ enum Command {
         team_alias: String,
         #[arg(long, value_enum)]
         kind: TeamKindArgument,
+        /// Display name of a named team. Ad-hoc teams have no server-side
+        /// name, so it is ignored for them, as in the desktop app.
         #[arg(long, default_value = "")]
         name: String,
     },
@@ -569,45 +573,47 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             invite_file,
             passphrase_file,
             passphrase_confirmation_file,
-        } => Operation::CreateAccount {
-            profile,
-            alias,
-            username,
-            device_name,
-            email,
-            invite: match invite_file {
+        } => {
+            let invite = match invite_file {
                 Some(path) => read_invite(&path)?,
                 None => SecretString::new(""),
-            },
-            passphrase: match (passphrase_file, passphrase_confirmation_file) {
+            };
+            let passphrase = match (passphrase_file, passphrase_confirmation_file) {
                 (Some(path), Some(confirmation)) => {
                     Some(read_confirmed_secret(&path, &confirmation)?)
                 }
                 (None, None) => None,
                 _ => return Err("both passphrase files are required".into()),
-            },
-        },
-        Command::ResumeAccount { profile, alias } => Operation::ResumeAccount { profile, alias },
+            };
+            accounts::create_account_operation(accounts::NewAccount {
+                profile: &profile,
+                alias: &alias,
+                username: &username,
+                device_name: &device_name,
+                email: &email,
+                invite: invite.expose(),
+                passphrase,
+            })?
+        }
+        Command::ResumeAccount { profile, alias } => {
+            accounts::resume_account_operation(&profile, &alias)?
+        }
         Command::BackupPrepare {
             profile,
             account_alias,
             backup_alias,
-        } => Operation::PrepareOwnerBackup {
-            profile,
-            account_alias,
-            backup_alias,
-        },
+        } => accounts::prepare_owner_backup_operation(&profile, &account_alias, &backup_alias)?,
         Command::BackupCommit {
             profile,
             account_alias,
             backup_alias,
             phrase_file,
-        } => Operation::CommitOwnerBackup {
-            profile,
-            account_alias,
-            backup_alias,
-            phrase: read_secret(&phrase_file)?,
-        },
+        } => accounts::commit_owner_backup_operation(
+            &profile,
+            &account_alias,
+            &backup_alias,
+            read_secret(&phrase_file)?.expose(),
+        )?,
         Command::BackupList {
             profile,
             account_alias,
@@ -620,24 +626,24 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             target_alias,
             phrase_file,
             device_name,
-        } => Operation::RecoverOwnerAccount {
-            profile,
-            target_alias,
-            phrase: read_secret(&phrase_file)?,
-            device_name,
-            serial: positive_device_serial()?,
-        },
+        } => accounts::recover_owner_account_operation(
+            &profile,
+            &target_alias,
+            read_secret(&phrase_file)?.expose(),
+            &device_name,
+            positive_device_serial()?,
+        )?,
         Command::ResumeRecovery {
             profile,
             target_alias,
             phrase_file,
             device_name,
-        } => Operation::ResumeOwnerRecovery {
-            profile,
-            target_alias,
-            phrase: read_secret(&phrase_file)?,
-            device_name,
-        },
+        } => accounts::resume_owner_recovery_operation(
+            &profile,
+            &target_alias,
+            read_secret(&phrase_file)?.expose(),
+            &device_name,
+        )?,
         Command::DiscoverTeams {
             profile,
             account_alias,
@@ -651,25 +657,18 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             team_alias,
             kind,
             name,
-        } => {
-            let (name, kind) = match kind {
-                TeamKindArgument::Named if name.trim().is_empty() => {
-                    return Err("a named group requires --name".into());
-                }
-                TeamKindArgument::Named => (name, TeamKind::Named),
-                TeamKindArgument::Adhoc if !name.is_empty() => {
-                    return Err("an ad-hoc group does not accept --name".into());
-                }
-                TeamKindArgument::Adhoc => (String::new(), TeamKind::AdHoc),
-            };
-            Operation::CreateTeam {
+        } => groups::create_team_operation(
+            AccountStoreRef {
                 profile,
                 account_alias,
-                team_alias,
-                name,
-                kind,
-            }
-        }
+            },
+            &team_alias,
+            &name,
+            match kind {
+                TeamKindArgument::Named => TeamKind::Named,
+                TeamKindArgument::Adhoc => TeamKind::AdHoc,
+            },
+        )?,
         Command::TeamResume {
             profile,
             team_alias,
@@ -1034,13 +1033,15 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             username,
             role,
             visibility,
-        } => Operation::AddTeamMember {
-            profile,
-            team_alias,
-            username,
-            role: desktop_team_role(role),
+        } => groups::add_team_member_operation(
+            LocalTeam {
+                profile,
+                team_alias,
+            },
+            &username,
+            desktop_team_role(role),
             visibility,
-        },
+        )?,
         Command::TeamResumeAddMember {
             profile,
             team_alias,
@@ -1056,35 +1057,41 @@ fn backend_call_for_command(command: Command) -> Result<BackendCall, Box<dyn std
             party_id_hex,
             role,
             visibility,
-        } => Operation::PromoteTeamMember {
-            profile,
-            team_alias,
-            party_id_hex: checked_user_party_id(party_id_hex)?,
-            role: desktop_team_role(role),
+        } => groups::promote_team_member_operation(
+            LocalTeam {
+                profile,
+                team_alias,
+            },
+            &party_id_hex,
+            desktop_team_role(role),
             visibility,
-        },
+        )?,
         Command::TeamDemoteMember {
             profile,
             team_alias,
             party_id_hex,
             role,
             visibility,
-        } => Operation::DemoteTeamMember {
-            profile,
-            team_alias,
-            party_id_hex: checked_user_party_id(party_id_hex)?,
-            role: desktop_team_role(role),
+        } => groups::demote_team_member_operation(
+            LocalTeam {
+                profile,
+                team_alias,
+            },
+            &party_id_hex,
+            desktop_team_role(role),
             visibility,
-        },
+        )?,
         Command::TeamRemoveMember {
             profile,
             team_alias,
             party_id_hex,
-        } => Operation::RemoveTeamMember {
-            profile,
-            team_alias,
-            party_id_hex: checked_user_party_id(party_id_hex)?,
-        },
+        } => groups::remove_team_member_operation(
+            LocalTeam {
+                profile,
+                team_alias,
+            },
+            &party_id_hex,
+        )?,
         Command::TeamResumeMemberEdit {
             profile,
             team_alias,
@@ -1197,11 +1204,7 @@ impl KvRoleArguments {
 }
 
 fn checked_local_name(value: String, label: &str) -> Result<String, Box<dyn std::error::Error>> {
-    if (1..=64).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
+    if ops::valid_local_name(&value) {
         Ok(value)
     } else {
         Err(format!(
@@ -1212,11 +1215,8 @@ fn checked_local_name(value: String, label: &str) -> Result<String, Box<dyn std:
 }
 
 fn valid_team_id_hex(value: &str) -> bool {
-    value.len() == 66
-        && (value.starts_with("03") || value.starts_with("14"))
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    ops::valid_typed_entity_id_hex(value, ops::NAMED_TEAM_ID_PREFIX)
+        || ops::valid_typed_entity_id_hex(value, ops::AD_HOC_TEAM_ID_PREFIX)
 }
 
 fn checked_kv_path(path: String) -> Result<String, Box<dyn std::error::Error>> {
@@ -1260,6 +1260,7 @@ fn catalog_item(
             size: None,
             read_role: roles.read_role,
             write_role: roles.write_role,
+            shape: None,
         },
     }
 }
@@ -1314,19 +1315,6 @@ fn open_private_file(
     Ok((file, metadata.len()))
 }
 
-fn checked_user_party_id(party_id_hex: String) -> Result<String, &'static str> {
-    if party_id_hex.len() == 66
-        && party_id_hex.starts_with("01")
-        && party_id_hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        Ok(party_id_hex)
-    } else {
-        Err("party ID must be a 66-character lowercase hex string starting with 01")
-    }
-}
-
 fn positive_device_serial() -> Result<u64, Box<dyn std::error::Error>> {
     for _ in 0..4 {
         let mut bytes = [0u8; 8];
@@ -1373,10 +1361,10 @@ fn read_confirmed_secret(
 ) -> Result<SecretString, Box<dyn std::error::Error>> {
     let passphrase = read_secret(path)?;
     let confirmation = read_secret(confirmation_path)?;
-    if passphrase.expose() != confirmation.expose() {
-        return Err("passphrase confirmation does not match".into());
-    }
-    Ok(passphrase)
+    Ok(accounts::confirmed_passphrase(
+        passphrase.expose(),
+        confirmation.expose(),
+    )?)
 }
 
 fn read_secret(path: &std::path::Path) -> Result<SecretString, Box<dyn std::error::Error>> {
@@ -2001,5 +1989,55 @@ mod tests {
             Operation::RemoveTeamMember { party_id_hex, .. }
                 if party_id_hex == "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ));
+    }
+
+    #[test]
+    fn backend_team_commands_apply_the_shared_desktop_rules() {
+        // The desktop app ignores a name for an ad-hoc team; the backend uses
+        // the same builder, so the transcript cannot drift from it.
+        let team_create = |kind, name: &str| {
+            operation_for_command(Command::TeamCreate {
+                profile: "work".to_owned(),
+                account_alias: "personal".to_owned(),
+                team_alias: "weekend".to_owned(),
+                kind,
+                name: name.to_owned(),
+            })
+        };
+        assert_eq!(
+            team_create(TeamKindArgument::Adhoc, "Weekend project").unwrap(),
+            groups::create_team_operation(
+                AccountStoreRef {
+                    profile: "work".to_owned(),
+                    account_alias: "personal".to_owned(),
+                },
+                "weekend",
+                "",
+                TeamKind::AdHoc,
+            )
+            .unwrap()
+        );
+        assert!(matches!(
+            team_create(TeamKindArgument::Named, " Weekend project ").unwrap(),
+            Operation::CreateTeam { name, kind: TeamKind::Named, .. } if name == "Weekend project"
+        ));
+        assert_eq!(
+            team_create(TeamKindArgument::Named, " ")
+                .unwrap_err()
+                .to_string(),
+            "Group name is required."
+        );
+        assert_eq!(
+            operation_for_command(Command::TeamAddMember {
+                profile: "work".to_owned(),
+                team_alias: "engineering".to_owned(),
+                username: "jules".to_owned(),
+                role: FederationRoleArgument::Admin,
+                visibility: 2,
+            })
+            .unwrap_err()
+            .to_string(),
+            "Visibility applies only to the member role."
+        );
     }
 }

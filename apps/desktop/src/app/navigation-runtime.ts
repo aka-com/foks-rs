@@ -10,6 +10,7 @@ import {
 import type { NavigationPromptVerdict } from '../navigation-guard';
 import { mountSwipeBack } from '../shell/swipe-back';
 import { mountBackInputs } from '../shell/back-inputs';
+import { matchesShortcut } from '../shortcuts';
 
 /** A `prompt` verdict on screen, with the promise the store is waiting on. */
 interface PendingPrompt {
@@ -84,7 +85,7 @@ export function useShellNavigation({
   // Escape clears search first, then closes the active item and its pane.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return;
+      if (!matchesShortcut(event, 'dismiss')) return;
       // Ignore Escape events already handled by open modal dialogs.
       if (event.defaultPrevented) return;
       const current = locations.getSnapshot();

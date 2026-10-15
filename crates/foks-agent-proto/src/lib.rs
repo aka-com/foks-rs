@@ -11,24 +11,31 @@ pub mod bot;
 pub mod chat;
 pub mod data;
 mod frame;
+pub mod hello;
 pub mod invitations;
 mod message;
 pub mod sso;
 
 pub use frame::{
-    decode_request, decode_response, decode_upload_frame, encode, request_id, Error, Result,
-    FRAME_ENVELOPE_RESERVE_BYTES, MAXIMUM_KV_PAYLOAD_BYTES, MAXIMUM_MESSAGE_BYTES,
+    decode_hello, decode_hello_response, decode_request, decode_response, decode_upload_frame,
+    encode, request_id, Error, HelloResponse, Result, FRAME_ENVELOPE_RESERVE_BYTES,
+    MAXIMUM_KV_PAYLOAD_BYTES, MAXIMUM_MESSAGE_BYTES,
+};
+pub use hello::{
+    HelloReply, HelloRequest, Peer, ProtocolRange, MAXIMUM_HELLO_CAPABILITIES,
+    MAXIMUM_HELLO_FIELD_BYTES, SUPPORTED_PROTOCOL_VERSIONS,
 };
 pub use message::{
     AccountStoreRef, AccountSummary, AgentStatus, BackupEnrollmentSummary, CompatibilityFailure,
     CompatibilityStatus, CredentialBackend, DeviceSummary, ErrorCode, ErrorFields, FederationRole,
     GoProfileCandidate, GoProfileDiscovery, KnownStoreSummary, KvChunkResult, KvEntryMetadata,
-    KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadFrame, KvUploadHeader,
-    KvUploadPayload, Operation, PendingOperationKind, PendingOperationSummary, ProfileOverview,
-    ProfileProtocol, ProfileTrust, Request, ResetArtifactKind, ResetArtifactSummary,
-    ResetStatePreview, Response, ResponseResult, ResponseTiming, SecretString,
-    ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef,
-    TeamSummary, TimerStatus, YubiFederationUnlockInput, YubiRetryConfiguration, PROTOCOL_VERSION,
+    KvEntryShape, KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadFrame,
+    KvUploadHeader, KvUploadPayload, Operation, PendingOperationKind, PendingOperationSummary,
+    ProfileOverview, ProfileProtocol, ProfileTrust, RecoveryPhraseCheck, Request,
+    ResetArtifactKind, ResetArtifactSummary, ResetStatePreview, Response, ResponseResult,
+    ResponseTiming, SecretString, ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary,
+    TeamKind, TeamRole, TeamStoreRef, TeamSummary, TimerStatus, YubiFederationUnlockInput,
+    YubiRetryConfiguration, PROTOCOL_VERSION,
 };
 
 #[cfg(test)]
@@ -587,11 +594,34 @@ mod tests {
                 size: None,
                 read_role: KvRole::Member { visibility: 0 },
                 write_role: KvRole::Admin,
+                shape: Some(KvEntryShape::Login),
             }],
             next_cursor: None,
         };
         let encoded = serde_json::to_value(&page).unwrap();
+        assert_eq!(encoded["entries"][0]["shape"], "login");
         assert_eq!(serde_json::from_value::<KvPage>(encoded).unwrap(), page);
+    }
+
+    #[test]
+    fn catalog_entry_shape_is_optional_and_omitted_when_unknown() {
+        let entry = serde_json::json!({
+            "dirent_id": vec![7u8; 16],
+            "path": "/scan.pdf",
+            "node_type": "file",
+            "version": 1,
+            "size": 3,
+            "read_role": "owner",
+            "write_role": "owner",
+        });
+        let decoded: KvEntryMetadata = serde_json::from_value(entry.clone()).unwrap();
+        assert_eq!(decoded.shape, None);
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), entry);
+        let other = KvEntryMetadata {
+            shape: Some(KvEntryShape::Other),
+            ..decoded
+        };
+        assert_eq!(serde_json::to_value(&other).unwrap()["shape"], "other");
     }
 
     #[test]
@@ -659,7 +689,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 34);
+        const { assert!(PROTOCOL_VERSION >= 29) };
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -676,7 +706,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 34);
+        const { assert!(PROTOCOL_VERSION >= 29) };
         let request = Request::new(
             20,
             Operation::Chat {
@@ -1266,5 +1296,59 @@ mod tests {
                 assert!(!debug.contains(secret));
             }
         }
+    }
+
+    #[test]
+    fn adapter_clock_repair_is_a_v34_mutation_and_status_is_not() {
+        const { assert!(PROTOCOL_VERSION >= 34) };
+        let status = Operation::AdapterClockStatus {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+        };
+        assert!(!status.is_mutation());
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            serde_json::json!({
+                "operation": "adapter-clock-status",
+                "profile": "local",
+                "account_alias": "owner",
+            })
+        );
+        let repair = Operation::RepairAdapterClock {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            action: data::AdapterClockRepairAction::Confirm {
+                unix_seconds: 1_700_000_000,
+                confirmation_digest: "ab".repeat(32),
+            },
+        };
+        assert!(repair.is_mutation());
+        assert!(!Operation::RepairAdapterClock {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            action: data::AdapterClockRepairAction::Preview {
+                unix_seconds: 1_700_000_000,
+            },
+        }
+        .is_mutation());
+        let encoded = serde_json::to_value(&repair).unwrap();
+        assert_eq!(encoded["operation"], "repair-adapter-clock");
+        assert_eq!(encoded["action"]["step"], "confirm");
+        let request = Request::new(21, repair);
+        assert_eq!(decode_request(&encode(&request).unwrap()).unwrap(), request);
+        assert!(serde_json::from_value::<data::AdapterClockRepairAction>(
+            serde_json::json!({"step": "preview", "unix_seconds": 1, "extra": 1})
+        )
+        .is_err());
+        let status: data::AdapterClockStatus = serde_json::from_value(serde_json::json!({
+            "host_id": "01",
+            "user_id": "02",
+            "admission": "behind",
+            "local_time": 1_700_000_000u64,
+            "validated_time_floor": 1_699_990_000u64,
+            "reject_issued_before": 1_700_003_600u64,
+        }))
+        .unwrap();
+        assert_eq!(status.admission, data::AdapterClockAdmission::Behind);
     }
 }

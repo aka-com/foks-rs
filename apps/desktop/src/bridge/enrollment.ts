@@ -5,6 +5,8 @@ import {
   deviceMemberId,
   entityId,
   integer,
+  nullable,
+  nullableString,
   optionalString,
   record,
   string,
@@ -111,6 +113,21 @@ export interface BackupEnrollment {
   backupAlias: string;
   accountAlias: string;
   backupId: string;
+}
+
+/**
+ * What a typed recovery phrase corresponds to, compared on this device with
+ * the account's backup keys. `matchedBackupId` is the key the phrase derives
+ * when the account holds it. Without one, `matchedName` may still name a key
+ * whose public name (the first word and number) the phrase shares: the copy
+ * belongs to that key and differs from it in positions 3 to 17. `revoked` and
+ * `backupAlias` describe whichever key is named.
+ */
+export interface RecoveryPhraseCheck {
+  matchedBackupId: string | null;
+  matchedName: string | null;
+  revoked: boolean;
+  backupAlias: string | null;
 }
 
 export interface BackupRevocation extends BackupEnrollment {
@@ -330,6 +347,26 @@ function decodeBackupEnrollment(value: unknown, at: string): BackupEnrollment {
 }
 export const decodeBackupEnrollments = (value: unknown): BackupEnrollment[] =>
   array(value, 'list_backup_enrollments response', decodeBackupEnrollment);
+
+export function decodeRecoveryPhraseCheck(value: unknown): RecoveryPhraseCheck {
+  const at = 'verify_recovery_phrase';
+  const item = record(value, `${at} response`);
+  const matchedBackupId = nullable(
+    item.matchedBackupId,
+    `${at}.matchedBackupId`,
+    (id, path) => entityId(id, '10', path),
+  );
+  const matchedName = nullableString(item.matchedName, `${at}.matchedName`);
+  const revoked = bool(item.revoked, `${at}.revoked`);
+  const backupAlias = nullableString(item.backupAlias, `${at}.backupAlias`);
+  if (
+    matchedBackupId === null &&
+    matchedName === null &&
+    (revoked || backupAlias !== null)
+  )
+    throw new Error(`${at} describes a key it does not name`);
+  return { matchedBackupId, matchedName, revoked, backupAlias };
+}
 
 export function decodeBackupRevocation(value: unknown): BackupRevocation {
   const item = record(value, 'revoke_owner_backup response');

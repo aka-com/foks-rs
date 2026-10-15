@@ -11,6 +11,12 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+/* A test may build the fixture with another mode to bind a socket that the
+ * desktop client refuses as unsafe. */
+#ifndef SOCKET_MODE
+#define SOCKET_MODE 0600
+#endif
+
 static int read_all(int fd, void *buffer, unsigned size) {
     unsigned offset = 0;
     while (offset < size) {
@@ -39,7 +45,7 @@ int main(int argc, char **argv) {
     unlink(path);
     int server = socket(AF_UNIX, SOCK_STREAM, 0);
     if (bind(server, (struct sockaddr *)&address, sizeof address) != 0 ||
-        chmod(path, 0600) != 0 || listen(server, 32) != 0) return 5;
+        chmod(path, SOCKET_MODE) != 0 || listen(server, 32) != 0) return 5;
     if (!launched) {
         int marker = open(argv[2], O_CREAT | O_WRONLY, 0600);
         if (marker < 0) return 6;
@@ -54,10 +60,22 @@ int main(int argc, char **argv) {
             !read_all(client, request, ntohl(length))) { close(client); continue; }
         request[ntohl(length)] = '\0';
         char *id = strstr(request, "\"id\":");
-        char response[256];
-        int count = snprintf(response, sizeof response,
-            "{\"version\":%d,\"id\":%llu,\"status\":\"success\",\"value\":{\"state\":\"ready\"}}",
-            version, id ? strtoull(id + 5, NULL, 10) : 0);
+        unsigned long long request_id = id ? strtoull(id + 5, NULL, 10) : 0;
+        char response[512];
+        int count;
+        /* A Hello is answered whatever its version, naming this agent's. */
+        if (strstr(request, "\"operation\":\"hello\"")) {
+            count = snprintf(response, sizeof response,
+                "{\"version\":%d,\"id\":%llu,\"status\":\"success\",\"value\":"
+                "{\"protocol\":%d,\"supported\":{\"minimum\":%d,\"maximum\":%d},"
+                "\"agent\":{\"kind\":\"foks-agent\",\"version\":\"0\"},"
+                "\"capabilities\":[]}}",
+                version, request_id, version, version, version);
+        } else {
+            count = snprintf(response, sizeof response,
+                "{\"version\":%d,\"id\":%llu,\"status\":\"success\",\"value\":{\"state\":\"ready\"}}",
+                version, request_id);
+        }
         length = htonl(count);
         write(client, &length, 4);
         write(client, response, count);

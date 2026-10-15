@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use zeroize::Zeroizing;
 
+use crate::fatal::{CoreThread, FatalSignal};
 use crate::host::{load_or_bootstrap, BootstrapEndpoints, BootstrapInput, BootstrapState};
 use crate::keys::{DirectoryKeyProvider, HostKeyProvider as _};
 use crate::maintenance::Maintenance;
@@ -39,6 +40,8 @@ pub struct StandaloneConfig {
     pub ttl_seconds: i64,
     pub now_microseconds: u64,
     pub maximum_pending_writes: usize,
+    /// Serves Reg.joinWaitList. Entry cap and retention are database limits.
+    pub waitlist_enabled: bool,
 }
 
 pub struct RunningStandaloneServer {
@@ -59,6 +62,7 @@ pub struct RunningStandaloneServer {
     clock: Arc<dyn foks_server_db::Clock>,
     metrics: Arc<crate::ServerMetrics>,
     management: crate::operations::ManagementServer,
+    fatal: FatalSignal,
 }
 
 #[derive(Clone, Debug)]
@@ -618,6 +622,22 @@ impl RunningStandaloneServer {
         self.management.address()
     }
 
+    /// The first core thread that exited without a requested shutdown, if
+    /// any. The server then lacks a service it cannot restart in place, and
+    /// `/healthz` and `/readyz` return 503; shut it down and start a new
+    /// process.
+    pub fn fatal_thread(&self) -> Option<CoreThread> {
+        self.fatal.exited()
+    }
+
+    /// Runs `observer` once, on the first unexpected core-thread exit. It
+    /// runs on the exiting thread, possibly while that thread unwinds from a
+    /// panic, so it must not block or panic. When an exit has already
+    /// happened, it runs immediately on the calling thread.
+    pub fn on_fatal_exit(&self, observer: impl FnOnce(CoreThread) + Send + 'static) {
+        self.fatal.observe(Box::new(observer));
+    }
+
     pub fn storage_report(&self) -> Result<foks_server_db::StorageReport> {
         self.writer
             .handle()
@@ -820,10 +840,12 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         now_microseconds: config.now_microseconds,
     };
     let database_config = config.database;
-    let writer = Writer::start(
+    let fatal = FatalSignal::default();
+    let writer = Writer::start_monitored(
         config.database_path.clone(),
         database_config.clone(),
         config.maximum_pending_writes,
+        fatal.clone(),
     )?;
     let bootstrap_keys = Arc::clone(&keys);
     let bootstrap_input = input.clone();
@@ -902,17 +924,30 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     };
     let oidc_http = sso
         .as_ref()
-        .map(|service| crate::sso::OidcHttpServer::start(service.clone()))
+        .map(|service| {
+            crate::sso::OidcHttpServer::start_monitored(
+                service.clone(),
+                Arc::clone(&metrics),
+                fatal.clone(),
+            )
+        })
         .transpose()?;
     let web_admin_http = web_admin
         .as_ref()
-        .map(|service| crate::web_admin::WebAdminHttpServer::start(service.clone()))
+        .map(|service| {
+            crate::web_admin::WebAdminHttpServer::start_monitored(
+                service.clone(),
+                Arc::clone(&metrics),
+                fatal.clone(),
+            )
+        })
         .transpose()?;
     let maintenance = Maintenance::start(
         writer_handle.clone(),
         config.clock.clone(),
         metrics.clone(),
         web_admin.clone(),
+        fatal.clone(),
     );
     let server = RunningServer::start_bound(
         Config {
@@ -939,8 +974,10 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
             metrics: Arc::clone(&metrics),
             rate_limits: config.rate_limits,
             limits: rpc_limits,
+            waitlist_enabled: config.waitlist_enabled,
         },
         listeners,
+        fatal.clone(),
     )?;
     let management = crate::operations::ManagementServer::start(
         config.management_address,
@@ -948,6 +985,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         config.database_path.clone(),
         Arc::clone(&metrics),
         server.liveness(),
+        fatal.clone(),
     )?;
     let backup = backup_schedule
         .map(|schedule| {
@@ -959,6 +997,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
                 database_config.clone(),
                 Arc::clone(&config.clock),
                 Arc::clone(&metrics),
+                fatal.clone(),
             )
         })
         .transpose()?;
@@ -979,5 +1018,6 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
         clock: config.clock,
         metrics,
         management,
+        fatal,
     })
 }

@@ -87,7 +87,22 @@ impl AccountFixture {
         op: impl FnOnce(&CheckedProfileSession<'_>, &mut AccountVault<'_>, &[u8; 32]) -> Result<T>,
     ) -> T {
         // Reopen the profile, vault and protected store for every foreground action.
+        self.run_in(ProfileSession::open(&self.registry, "local").unwrap(), op)
+    }
+    /// As [`Self::run`], with `clock` in place of the system adapter clock.
+    pub(crate) fn run_with_clock<T>(
+        &self,
+        clock: std::sync::Arc<dyn AdapterClock>,
+        op: impl FnOnce(&CheckedProfileSession<'_>, &mut AccountVault<'_>, &[u8; 32]) -> Result<T>,
+    ) -> T {
         let session = ProfileSession::open(&self.registry, "local").unwrap();
+        self.run_in(session.with_adapter_clock(clock), op)
+    }
+    fn run_in<T>(
+        &self,
+        session: ProfileSession,
+        op: impl FnOnce(&CheckedProfileSession<'_>, &mut AccountVault<'_>, &[u8; 32]) -> Result<T>,
+    ) -> T {
         self.credentials
             .with_checked_session(&session, |s| {
                 let master = self.credentials.master_key()?;

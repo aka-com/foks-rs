@@ -19,7 +19,7 @@ use crate::commands::validation::{
 use foks_agent_proto::{
     FederationRole, KvRole, Operation, ResponseResult, TeamDetailsSummary, TeamKind, TeamRole,
 };
-use foks_desktop::{AgentError as DesktopAgentError, CatalogStoreRef};
+use foks_desktop::{ops, AgentError as DesktopAgentError, CatalogStoreRef};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use tauri::State;
@@ -548,23 +548,13 @@ pub(super) fn create_group_operation(
     name: &str,
     kind: GroupKindInput,
 ) -> Result<Operation, AgentError> {
-    let team_alias = required_field(team_alias, "Group alias is required.")?;
-    let (name, kind) = match kind {
-        GroupKindInput::Named => (
-            required_field(name, "Group name is required.")?,
-            TeamKind::Named,
-        ),
-        // An ad-hoc group's user-facing local name is represented by the
-        // caller-derived local alias. The protocol requires no server name.
-        GroupKindInput::Adhoc => (String::new(), TeamKind::AdHoc),
+    let kind = match kind {
+        GroupKindInput::Named => TeamKind::Named,
+        GroupKindInput::Adhoc => TeamKind::AdHoc,
     };
-    Ok(Operation::CreateTeam {
-        profile: account.profile,
-        account_alias: account.account_alias,
-        team_alias,
-        name,
-        kind,
-    })
+    Ok(ops::groups::create_team_operation(
+        account, team_alias, name, kind,
+    )?)
 }
 
 pub(super) fn add_group_member_operation(
@@ -572,15 +562,13 @@ pub(super) fn add_group_member_operation(
     username: &str,
     destination: RoleInput,
 ) -> Result<Operation, AgentError> {
-    let username = required_field(username, "Username is required.")?;
     let (role, visibility) = destination.parts();
-    Ok(Operation::AddTeamMember {
-        profile: team.profile,
-        team_alias: team.team_alias,
+    Ok(ops::groups::add_team_member_operation(
+        team.into(),
         username,
         role,
         visibility,
-    })
+    )?)
 }
 
 pub(super) fn promote_group_member_operation(
@@ -589,26 +577,20 @@ pub(super) fn promote_group_member_operation(
     current: MemberRole,
     destination: RoleInput,
 ) -> Result<Operation, AgentError> {
-    let destination_role = MemberRole::from(destination);
-    if !current.is_strictly_lower_than(destination_role) {
+    if !current.is_strictly_lower_than(MemberRole::from(destination)) {
         return Err(AgentError::new(
             "not-a-promotion",
             "Select a role higher than the member's current role.",
             false,
         ));
     }
-    if !valid_typed_entity_id_hex(party_id_hex, USER_ID_PREFIX) {
-        return Err(invalid_request("Select a valid user."));
-    }
-    let party_id_hex = party_id_hex.to_owned();
     let (role, visibility) = destination.parts();
-    Ok(Operation::PromoteTeamMember {
-        profile: team.profile,
-        team_alias: team.team_alias,
+    Ok(ops::groups::promote_team_member_operation(
+        team.into(),
         party_id_hex,
         role,
         visibility,
-    })
+    )?)
 }
 
 pub(super) fn demote_group_member_operation(
@@ -617,40 +599,30 @@ pub(super) fn demote_group_member_operation(
     current: MemberRole,
     destination: RoleInput,
 ) -> Result<Operation, AgentError> {
-    let destination_role = MemberRole::from(destination);
-    if !destination_role.is_strictly_lower_than(current) {
+    if !MemberRole::from(destination).is_strictly_lower_than(current) {
         return Err(AgentError::new(
             "not-a-demotion",
             "Select a role lower than the member's current role.",
             false,
         ));
     }
-    if !valid_typed_entity_id_hex(party_id_hex, USER_ID_PREFIX) {
-        return Err(invalid_request("Select a valid user."));
-    }
-    let party_id_hex = party_id_hex.to_owned();
     let (role, visibility) = destination.parts();
-    Ok(Operation::DemoteTeamMember {
-        profile: team.profile,
-        team_alias: team.team_alias,
+    Ok(ops::groups::demote_team_member_operation(
+        team.into(),
         party_id_hex,
         role,
         visibility,
-    })
+    )?)
 }
 
 pub(super) fn remove_group_member_operation(
     team: foks_agent_proto::TeamStoreRef,
     party_id_hex: &str,
 ) -> Result<Operation, AgentError> {
-    if !valid_typed_entity_id_hex(party_id_hex, USER_ID_PREFIX) {
-        return Err(invalid_request("Select a valid user."));
-    }
-    Ok(Operation::RemoveTeamMember {
-        profile: team.profile,
-        team_alias: team.team_alias,
-        party_id_hex: party_id_hex.to_owned(),
-    })
+    Ok(ops::groups::remove_team_member_operation(
+        team.into(),
+        party_id_hex,
+    )?)
 }
 
 pub(super) fn add_federated_team_member_operation(
@@ -755,7 +727,7 @@ pub(super) async fn load_group_details(
     transport: std::sync::Arc<dyn foks_desktop::AgentTransport>,
     retain: bool,
 ) -> Result<GroupDetailsDto, AgentError> {
-    let generation = state.catalog_generation.load(Ordering::Acquire);
+    let generation = state.catalog_generation().load(Ordering::Acquire);
     let (profile, team_alias) = state.selected_team(&store_id)?;
     let expected_profile = profile.clone();
     let expected_team_alias = team_alias.clone();
@@ -814,7 +786,7 @@ pub async fn list_parties(
     store_id: String,
 ) -> Result<Vec<PartyDto>, AgentError> {
     require_main_window(&webview)?;
-    let generation = state.catalog_generation.load(Ordering::Acquire);
+    let generation = state.catalog_generation().load(Ordering::Acquire);
     let (profile, team_alias) = state.selected_team(&store_id)?;
     let transport = state.agent.transport();
     let cache_key = store_id.clone();
@@ -843,7 +815,7 @@ pub async fn list_federation(
     store_id: String,
 ) -> Result<Vec<FederationEntryDto>, AgentError> {
     require_main_window(&webview)?;
-    let generation = state.catalog_generation.load(Ordering::Acquire);
+    let generation = state.catalog_generation().load(Ordering::Acquire);
     let (profile, team_alias) = state.selected_team(&store_id)?;
     let transport = state.agent.transport();
     let cache_key = store_id.clone();

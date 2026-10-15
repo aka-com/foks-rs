@@ -4,6 +4,7 @@ import type { InvitationRole, InvitationRow } from './invitation-contract';
 import type { InvitationGrantRole } from './invitation-labels';
 import type { MetadataRepository } from './metadata-repository';
 import { pendingOperationKey } from './operation-queries';
+import { securityKeyPinRefusal } from './security-key-pin';
 
 export function settleInvitationWrite(
   queries: MetadataRepository,
@@ -39,8 +40,18 @@ export function grantRoleName(role: InvitationGrantRole): string {
   return role === 'member' ? 'Member' : role === 'admin' ? 'Admin' : 'Owner';
 }
 
+/**
+ * Whether `error` asks for the security key PIN. A PIN the card refused or
+ * one the agent's PIN rule rejected is not such a request: its message says
+ * how many attempts remain, or that the PIN is blocked, and is shown as is.
+ */
 export function hardwareUnlockRequested(error: unknown): boolean {
   const typed = normalizeCommandError(error);
+  if (
+    securityKeyPinRefusal(typed.message) !== null ||
+    /hardware key management policy/i.test(typed.message)
+  )
+    return false;
   return (
     typed.code === 'hardware-required' ||
     /unlock the account key|security key|hardware key/i.test(typed.message)

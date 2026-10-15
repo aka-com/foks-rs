@@ -141,7 +141,11 @@ for (const action of ['add', 'demote', 'promote'] as const) {
     // Close the failed action sheet before opening the activity sheet from
     // the updated summary band.
     ui.fireEvent.click(rendered.getByRole('button', { name: 'Cancel' }));
-    const band = rendered.getByRole('status');
+    // The toast host's polite region is a status too.
+    const band = rendered
+      .getAllByRole('status')
+      .find((status) => !status.closest('#toasts'));
+    assert.ok(band);
     assert.equal(
       band.textContent,
       'Unfinished activity 1 incomplete membership change. It blocks other actions.Review',

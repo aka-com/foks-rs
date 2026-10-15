@@ -54,6 +54,7 @@ pub(crate) struct ServerData {
     request_memory: Arc<Semaphore>,
     kex_relay: Arc<kex::Relay>,
     realtime: crate::services::realtime::RealtimeService,
+    waitlist_enabled: bool,
 }
 
 pub(crate) struct OwnedPassphraseMutation {
@@ -166,6 +167,7 @@ impl ServerData {
             request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
             kex_relay: Arc::new(kex::Relay::default()),
             realtime: crate::services::realtime::RealtimeService::new(Arc::clone(&config.metrics)),
+            waitlist_enabled: config.waitlist_enabled,
         })
     }
 

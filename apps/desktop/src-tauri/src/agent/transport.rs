@@ -5,7 +5,9 @@ use super::{
     ObservedTransport, StartupGate, TransportDisposition,
 };
 use crate::diagnostics::{agent_operation, outcome_of, Label, TimingLog};
-use foks_agent_proto::{ErrorCode, ErrorFields, Operation, Response, ResponseResult};
+use foks_agent_proto::{
+    ErrorCode, ErrorFields, HelloReply, Operation, Peer, Response, ResponseResult,
+};
 use foks_desktop::{AgentError as DesktopAgentError, AgentTransport, IpcErrorCode};
 use serde_json::Value;
 use std::sync::atomic::Ordering;
@@ -587,6 +589,71 @@ impl AgentHandle {
         result.map_err(AgentError::from_desktop)
     }
 
+    /// Exchanges the version-independent Hello once the startup gate opens,
+    /// unless an earlier Hello's capabilities are still held: every probe of
+    /// a started or replaced agent refreshes them, and a Hello that fails
+    /// other than by cancellation or deadline clears them. An agent of
+    /// another version fails with `version-mismatch`.
+    pub async fn ensure_hello(self: &Arc<Self>) -> Result<(), AgentError> {
+        if self.last_hello_reply().is_some() {
+            return Ok(());
+        }
+        let handle = Arc::clone(self);
+        tauri::async_runtime::spawn_blocking(move || {
+            handle.wait_for_startup();
+            let _use = handle
+                .transport
+                .reserve_use()
+                .map_err(AgentError::from_desktop)?;
+            let result = handle.exchange_hello(&|| handle.transport.preempted(true));
+            handle.transport.record(&result);
+            result.map(drop).map_err(AgentError::from_desktop)
+        })
+        .await
+        .map_err(|error| AgentError::unknown(format!("Agent hello failed to complete: {error}")))?
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn exchange_hello(
+        &self,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<HelloReply, DesktopAgentError> {
+        let result = self
+            .transport
+            .client
+            .hello_cancellable(
+                Peer::new("foks-desktop", env!("CARGO_PKG_VERSION")),
+                cancelled,
+            )
+            .map_err(client_to_desktop);
+        // A cancelled or timed-out Hello says nothing about which agent is
+        // at the socket; any other outcome replaces what was held.
+        if !matches!(
+            result,
+            Err(DesktopAgentError::Cancelled | DesktopAgentError::DeadlineExceeded)
+        ) {
+            *self
+                .last_hello
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = result.as_ref().ok().cloned();
+        }
+        result
+    }
+
+    fn last_hello_reply(&self) -> Option<HelloReply> {
+        self.last_hello
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Whether the agent's most recent Hello advertised `capability`. False
+    /// before any Hello has succeeded.
+    pub fn advertises(&self, capability: &str) -> bool {
+        self.last_hello_reply()
+            .is_some_and(|reply| reply.has_capability(capability))
+    }
+
     pub(super) fn call_unreserved(&self, operation: Operation) -> Result<Response, AgentError> {
         self.transport
             .client
@@ -594,7 +661,12 @@ impl AgentHandle {
             .map_err(|error| AgentError::from_client(&error))
     }
 
+    /// Checks that the agent accepts this build's version, then reads its
+    /// status. Startup and recovery key their takeover of an incompatible
+    /// agent on the `version-mismatch` code either step returns.
     pub(super) fn probe_status(&self) -> Result<Response, AgentError> {
+        self.exchange_hello(&|| false)
+            .map_err(AgentError::from_desktop)?;
         let response = self.call_unreserved(Operation::AgentStatus)?;
         match &response.result {
             ResponseResult::Success { value } => {

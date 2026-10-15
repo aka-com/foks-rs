@@ -1,4 +1,5 @@
 import { MoveSheet } from './move-item-sheet';
+import { BulkProgressSheet } from './bulk-progress-sheet';
 import { useTabSheetState } from '../navigation-guard';
 import { useCallback, useId, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
@@ -14,13 +15,12 @@ import {
   Inset,
   InsetRow,
   KindIcon,
-  RadioCard,
-  RadioGroup,
+  PasswordInput,
   SectionLabel,
   Sheet,
   SheetDialog,
 } from '../components';
-import type { CardOption, DocumentSourceKind, FilterKind } from '../components';
+import type { DocumentSourceKind, FilterKind } from '../components';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
 import {
   displayPath,
@@ -30,24 +30,22 @@ import {
   kindOf,
   canCreateInStore,
   defaultCreateStore,
-  leaseLapsed,
+  loginField,
+  loginFieldOf,
+  loginLines,
   nameOf,
-  partiesOf,
-  partyName,
-  readersOf,
-  serverBlocked,
-  serverLeaseUnavailable,
-  serverDisplayLabelForStore,
-  storeDescription,
+  parseTrashName,
+  restoredCopyPath,
   storeNavigationOrder,
   storeAvailability,
   storeOf,
+  trashEntries,
+  trashEntryLabel,
 } from '../model';
 import type {
   Item,
   ItemKind,
-  RoleWire,
-  Store,
+  LoginFieldName,
   StoreRef,
   AgentSnapshot,
 } from '../model';
@@ -58,8 +56,20 @@ import { NavigationPrompt, useSheetGuard } from '../navigation-guard';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { useToast } from '/kit/toasts';
-import { editableValue } from './edit-value';
+import type { ToastOptions } from '/kit/toasts';
 import { itemActionProblem } from './store-access';
+import { useTrashOrigins } from './trash-origins';
+import {
+  DEFAULT_READ_ROLE,
+  DEFAULT_WRITE_ROLE,
+  newFolderRoles,
+} from './item-roles';
+import { AccessBlock, storeOption, writeBlockReason } from './store-choice';
+import { CopyItemSheet } from './copy-item-sheet';
+import { ImportPasswordsSheet } from './import-passwords-sheet';
+import { ExportPasswordsSheet } from './export-passwords-sheet';
+
+export { writeBlockReason };
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
 
@@ -86,9 +96,7 @@ function discardNewItem(
   };
 }
 
-/** Group items default to team-readable content that only admins can change. */
-export const DEFAULT_READ_ROLE: KvRoleInput = 'Member:0';
-export const DEFAULT_WRITE_ROLE: KvRoleInput = 'Admin';
+export { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE };
 
 /** A partially filled new-item form, carried across conflict recovery. */
 export interface NewDraft {
@@ -126,7 +134,39 @@ export type WriteWorkflow =
       draft?: NewDraft;
     }
   | { kind: 'move'; item: Item }
-  | { kind: 'delete'; item: Item }
+  /** Copies an item into another vault, optionally moving the original to Trash. */
+  | { kind: 'copy'; item: Item }
+  /**
+   * Imports logins from another password manager's CSV export, into
+   * `storeId` unless another vault is chosen.
+   */
+  | { kind: 'import'; storeId: StoreRef; initialFolder?: string }
+  /** Writes the passwords of `storeId` to a plain-text CSV file. */
+  | { kind: 'export'; storeId: StoreRef }
+  /** Several items of one store, moved together to a folder chosen next. */
+  | { kind: 'move-many'; items: readonly Item[] }
+  /** Moves `items` into `folder` of their store one at a time, with progress. */
+  | { kind: 'bulk-move'; items: readonly Item[]; folder: string }
+  /** Moves `items` to their stores' Trash one at a time, with progress. */
+  | { kind: 'bulk-trash'; items: readonly Item[] }
+  /**
+   * Moves Trash entries back to where `items` were, one at a time, with
+   * progress: the Undo of a bulk-trash run. `trash[i]` is the path in Trash
+   * of `items[i]`.
+   */
+  | {
+      kind: 'bulk-restore';
+      items: readonly Item[];
+      trash: readonly string[];
+    }
+  /**
+   * Permanently removes an entry in Trash, or with `outsideTrash` an item in
+   * a team whose Trash this account cannot set up.
+   */
+  | { kind: 'delete'; item: Item; outsideTrash?: boolean }
+  /** Restoring a Trash entry found another item at `destination`. */
+  | { kind: 'restore-conflict'; item: Item; destination: string }
+  | { kind: 'empty-trash'; store: StoreRef }
   | {
       kind: 'conflict';
       item: Item;
@@ -177,23 +217,38 @@ export function droppedFileDraft(path: string, sourcePath: string): NewDraft {
 }
 
 /**
+ * Whether the New password sheet holds all of this text: every line that is
+ * not empty names a different one of its three fields.
+ */
+function fitsPasswordSheet(text: string): boolean {
+  const named = new Set<LoginFieldName>();
+  return loginLines(text).every(({ key, raw }) => {
+    if (key === null && (raw === '' || raw === '\r')) return true;
+    const field = loginFieldOf(key);
+    if (field === null || named.has(field)) return false;
+    named.add(field);
+    return true;
+  });
+}
+
+/**
  * The new-item sheet an edit resumes in when the item it was editing has been
  * deleted elsewhere: there is no newer version to review, so the edit is
  * offered as a new item at the same path, for the user to save or discard.
+ * A login resumes in the Password sheet only when that sheet's fields hold
+ * the whole draft; otherwise it resumes as a Document with the draft as its
+ * value, so no line is dropped.
  */
 export function conflictDraftWorkflow(
   item: Item,
   draft: string,
 ): WriteWorkflow {
   const itemKind: NewKind =
-    kindOf(item) === 'Password' ? 'Password' : 'Document';
-  const fields = new Map<string, string>();
-  if (itemKind === 'Password')
-    for (const line of draft.split('\n')) {
-      const at = line.indexOf(':');
-      if (at > 0)
-        fields.set(line.slice(0, at).trim(), line.slice(at + 1).trim());
-    }
+    kindOf(item) === 'Password' && fitsPasswordSheet(draft)
+      ? 'Password'
+      : 'Document';
+  const field = (name: LoginFieldName): string =>
+    itemKind === 'Password' ? (loginField(draft, name) ?? '') : '';
   return {
     kind: 'new',
     itemKind,
@@ -201,9 +256,9 @@ export function conflictDraftWorkflow(
     draft: {
       path: item.path,
       site: itemKind === 'Password' ? nameOf(item.path) : '',
-      username: fields.get('username') ?? fields.get('user') ?? '',
-      password: fields.get('password') ?? '',
-      website: fields.get('url') ?? fields.get('website') ?? '',
+      username: field('username'),
+      password: field('password'),
+      website: field('url'),
       value: itemKind === 'Password' ? '' : draft,
       resourceName: '',
       sourcePath: null,
@@ -241,10 +296,7 @@ export function initialWriteWorkflow(
       return {
         kind: 'conflict',
         item,
-        draft: editableValue(
-          item,
-          snapshot.plaintext[itemKey(item)] ?? item.value ?? '',
-        ),
+        draft: snapshot.plaintext[itemKey(item)] ?? '',
       };
   }
   return null;
@@ -270,200 +322,6 @@ interface NewSheetProps {
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
   accessNow: () => number;
-}
-
-/**
- * Formats a store option for the "Save in vault" selector.
- */
-function storeOption(snapshot: AgentSnapshot, store: Store): CardOption {
-  const description = storeDescription(snapshot, store);
-  return {
-    id: store.id,
-    title: store.name,
-    detail:
-      store.kind === 'account'
-        ? `Personal vault · ${description}`
-        : `Team vault · ${description} · ${serverDisplayLabelForStore(snapshot, store)}`,
-    off: !canCreateInStore(snapshot, store.id),
-  };
-}
-
-/**
- * Returns a user-facing explanation if the selected store is read-only or blocked.
- */
-export function writeBlockReason(
-  snapshot: AgentSnapshot,
-  store: Store,
-): string | null {
-  if (canCreateInStore(snapshot, store.id)) return null;
-  if (leaseLapsed(snapshot, store.id))
-    return 'Your server session has expired. Check in again to save changes.';
-  if (serverBlocked(snapshot, store.id))
-    return 'Server access is blocked. Cannot create items in this vault.';
-  if (serverLeaseUnavailable(snapshot, store.id))
-    return 'The server connection is unavailable. New items cannot be saved to this vault right now.';
-  if (store.kind === 'team' && !store.active)
-    return 'Team setup is incomplete. Complete setup before adding items.';
-  if (store.kind === 'team')
-    return 'You do not have write permissions for this team.';
-  return 'You do not have permission to create items in this vault.';
-}
-
-function AccessBlock({
-  snapshot,
-  store,
-  readRole,
-  writeRole,
-  onReadRole,
-  onWriteRole,
-}: {
-  snapshot: AgentSnapshot;
-  store: Store;
-  readRole: KvRoleInput;
-  writeRole: KvRoleInput;
-  onReadRole: (role: KvRoleInput) => void;
-  onWriteRole: (role: KvRoleInput) => void;
-}): ReactNode {
-  if (store.kind !== 'team') {
-    return null;
-  }
-  const roleWire = (role: KvRoleInput): RoleWire =>
-    role === 'Owner' || role === 'Admin'
-      ? { role }
-      : { role: 'Member', visibility: Number(role.slice('Member:'.length)) };
-  const candidate: Item = {
-    store: store.id,
-    path: '/preview',
-    direntId: '0'.repeat(32),
-    kind: 'Secret',
-    size: 0,
-    version: 0,
-    read: roleWire(readRole),
-    write: roleWire(writeRole),
-  };
-  const roster = partiesOf(snapshot, store.id);
-  const admitted = readersOf(snapshot, candidate) ?? [];
-  const excluded = roster.filter((party) => !admitted.includes(party));
-  const changers =
-    readersOf(snapshot, { ...candidate, read: candidate.write }) ?? [];
-  const readVisibility = readRole.startsWith('Member:')
-    ? Number(readRole.slice('Member:'.length))
-    : 0;
-  const choices: readonly [string, KvRoleInput, string][] = [
-    ['Owner', 'Owner', 'Only owners can read.'],
-    ['Admin', 'Admin', 'Admins and owners can read.'],
-    [
-      'Member',
-      `Member:${readVisibility}`,
-      'Members at this visibility level and above can read.',
-    ],
-  ];
-  const roleChoices = (
-    selected: KvRoleInput,
-    choose: (role: KvRoleInput) => void,
-    forWrite: boolean,
-  ) =>
-    choices.map(([label, role, detail]) => {
-      const next =
-        label === 'Member'
-          ? (`Member:${selected.startsWith('Member:') ? Number(selected.slice('Member:'.length)) : 0}` as KvRoleInput)
-          : role;
-      const on =
-        selected === next ||
-        (label === 'Member' && selected.startsWith('Member:'));
-      return (
-        <RadioCard
-          key={label}
-          selected={on}
-          onSelect={() => choose(next)}
-          title={label}
-          detail={
-            forWrite
-              ? 'Members with Admin or Owner roles can modify or delete this item.'
-              : detail
-          }
-        />
-      );
-    });
-  return (
-    <>
-      <SectionLabel
-        action={
-          <span className="pv">
-            accessible to {admitted.length} of {roster.length}
-          </span>
-        }
-      >
-        Who can read
-      </SectionLabel>
-      <Inset>
-        <RadioGroup label="Who can read">
-          {roleChoices(readRole, onReadRole, false)}
-        </RadioGroup>
-        {readRole.startsWith('Member:') ? (
-          <Field
-            label="Member visibility"
-            type="number"
-            mono
-            min={-32768}
-            max={32767}
-            value={String(readVisibility)}
-            onChange={(val) => {
-              const next = Number(val);
-              if (Number.isInteger(next) && next >= -32768 && next <= 32767)
-                onReadRole(`Member:${next}`);
-            }}
-          />
-        ) : null}
-      </Inset>
-      <p className="hint">
-        At{' '}
-        <b>
-          {readRole === 'Owner' || readRole === 'Admin'
-            ? readRole
-            : `Member · visibility ${readVisibility}`}
-        </b>{' '}
-        this item will be readable by{' '}
-        <b>
-          {admitted.length} of {roster.length}
-        </b>{' '}
-        members in {store.name}: {admitted.map(partyName).join(', ') || 'none'}.
-        {excluded.length
-          ? ` ${excluded.map(partyName).join(', ')} cannot read this item under the selected role.`
-          : ''}
-      </p>
-      <SectionLabel>
-        Who can change{' '}
-        <span className="pv">
-          changeable by {changers.length} of {roster.length}
-        </span>
-      </SectionLabel>
-      <Inset>
-        <RadioGroup label="Who can change">
-          {roleChoices(writeRole, onWriteRole, true)}
-        </RadioGroup>
-        {writeRole.startsWith('Member:') ? (
-          <Field
-            label="Member visibility"
-            type="number"
-            mono
-            min={-32768}
-            max={32767}
-            value={writeRole.slice('Member:'.length)}
-            onChange={(val) => {
-              const next = Number(val);
-              if (Number.isInteger(next) && next >= -32768 && next <= 32767)
-                onWriteRole(`Member:${next}`);
-            }}
-          />
-        ) : null}
-      </Inset>
-      <p className="hint">
-        Read and write permissions are set separately. A member with write
-        permission can update this item even if they cannot view its contents.
-      </p>
-    </>
-  );
 }
 
 function NewSheet({
@@ -506,6 +364,7 @@ function NewSheet({
     'item.password',
     workflow.draft?.password ?? '',
   );
+  const [passwordShown, setPasswordShown] = useState(false);
   const [website, setWebsite] = useTabSheetState(
     'item.website',
     workflow.draft?.website ?? '',
@@ -547,6 +406,10 @@ function NewSheet({
   useConcealOnInactive(
     () => setValueConcealed(true),
     itemKind === 'Document' && source === 'text' && Boolean(value),
+  );
+  useConcealOnInactive(
+    () => setPasswordShown(false),
+    itemKind === 'Password' && passwordShown,
   );
   const roleArgs = group ? { readRole, writeRole } : {};
 
@@ -722,13 +585,11 @@ function NewSheet({
     set: (next: string) => void,
     placeholder: string,
     mono = false,
-    type: 'text' | 'password' = 'text',
   ) => (
     <Field
       label={label}
       value={current}
       onChange={set}
-      type={type}
       placeholder={placeholder}
       mono={mono}
     />
@@ -826,14 +687,13 @@ function NewSheet({
                 'e.g. github.com',
               )}
               {field('User name', username, setUsername, 'username')}
-              {field(
-                'Password',
-                password,
-                setPassword,
-                'password',
-                false,
-                'password',
-              )}
+              <PasswordInput
+                value={password}
+                onChange={setPassword}
+                shown={passwordShown}
+                onShownChange={setPasswordShown}
+                context={[site, username]}
+              />
               {field(
                 'Website',
                 website,
@@ -973,9 +833,7 @@ function NewFolderSheet({
       await bridge.createFolder({
         storeId: store.id,
         path: namedPath(name.trim(), '/', workflow.initialFolder),
-        ...(store.kind === 'team'
-          ? { readRole: DEFAULT_READ_ROLE, writeRole: DEFAULT_WRITE_ROLE }
-          : {}),
+        ...newFolderRoles(store),
       });
       await onApplied(`Folder created in ${store.name}`, store.server);
       close();
@@ -1162,13 +1020,19 @@ export function WriteOverlay({
   onDiscardConflict,
   onDeleteConflict,
   onOpenExisting,
+  onRestoreTrash,
+  onReload,
   accessNow = () => Date.now() / 1000,
 }: {
   snapshot: AgentSnapshot;
   bridge: Bridge;
   workflow: WriteWorkflow;
   setWorkflow: (workflow: WriteWorkflow) => void;
-  onApplied: (message: string, profile?: string) => Promise<void>;
+  onApplied: (
+    message: string,
+    profile?: string,
+    options?: ToastOptions,
+  ) => Promise<void>;
   onError: (error: unknown, item?: Item) => void;
   onMutationError: MutationFailureHandler;
   /**
@@ -1187,6 +1051,13 @@ export function WriteOverlay({
   onOpenExisting: (
     workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'exists' }>,
   ) => Promise<void>;
+  /** Moves a Trash entry to `destination`, outside Trash. */
+  onRestoreTrash: (item: Item, destination: string) => Promise<void>;
+  /**
+   * Reads the catalog of `profile` again, or of every profile without one,
+   * and resolves with it, for moves in steps.
+   */
+  onReload: (profile?: string) => Promise<AgentSnapshot>;
   accessNow?: () => number;
 }): ReactNode {
   if (!workflow) return null;
@@ -1230,9 +1101,22 @@ export function WriteOverlay({
         onError={(error) => onError(error)}
       />
     );
-  if (workflow.kind === 'move')
+  if (workflow.kind === 'move' || workflow.kind === 'move-many')
     return (
       <MoveSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        items={workflow.kind === 'move' ? [workflow.item] : workflow.items}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onMutationError={onMutationError}
+        onReload={onReload}
+        accessNow={accessNow}
+      />
+    );
+  if (workflow.kind === 'copy')
+    return (
+      <CopyItemSheet
         snapshot={snapshot}
         bridge={bridge}
         item={workflow.item}
@@ -1240,6 +1124,69 @@ export function WriteOverlay({
         onApplied={onApplied}
         onMutationError={onMutationError}
         accessNow={accessNow}
+      />
+    );
+  if (workflow.kind === 'export')
+    return (
+      <ExportPasswordsSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        storeId={workflow.storeId}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+      />
+    );
+  if (workflow.kind === 'import')
+    return (
+      <ImportPasswordsSheet
+        snapshot={snapshot}
+        bridge={bridge}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onMutationError={onMutationError}
+        onReload={onReload}
+        accessNow={accessNow}
+      />
+    );
+  if (
+    workflow.kind === 'bulk-move' ||
+    workflow.kind === 'bulk-trash' ||
+    workflow.kind === 'bulk-restore'
+  )
+    return (
+      // The Undo of a bulk-trash run replaces it with a run of its own.
+      <BulkProgressSheet
+        key={workflow.kind}
+        snapshot={snapshot}
+        bridge={bridge}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onMutationError={onMutationError}
+        onReload={onReload}
+        accessNow={accessNow}
+      />
+    );
+  if (workflow.kind === 'restore-conflict')
+    return (
+      <RestoreConflictSheet
+        snapshot={snapshot}
+        workflow={workflow}
+        setWorkflow={setWorkflow}
+        onRestoreTrash={onRestoreTrash}
+      />
+    );
+  if (workflow.kind === 'empty-trash')
+    return (
+      <EmptyTrashSheet
+        snapshot={snapshot}
+        accessNow={accessNow}
+        workflow={workflow}
+        bridge={bridge}
+        setWorkflow={setWorkflow}
+        onApplied={onApplied}
+        onMutationError={onMutationError}
       />
     );
   if (workflow.kind === 'conflict')
@@ -1373,8 +1320,23 @@ function ConflictSheet({
   );
 }
 
+/** What permanent deletion says it does, in every sheet that offers it. */
+export const PERMANENT_DELETE_COPY =
+  'Removes it for everyone. Earlier encrypted versions may remain on the server.';
+
+/** What an entry in Trash is called: its original name where recorded. */
+function trashLabel(item: Item): string {
+  const parsed = parseTrashName(nameOf(item.path));
+  return parsed?.kind === 'path' ? nameOf(parsed.original) : nameOf(item.path);
+}
+
+/** Why a team member is offered permanent deletion instead of Trash. */
+export const TRASH_UNAVAILABLE_COPY =
+  'Trash is not set up in this team yet, and only an owner can set it up by moving any item to Trash.';
+
 /**
- * Confirmation dialog for deleting an item.
+ * Confirmation dialog for permanently deleting an entry in Trash, or an item
+ * in a team whose Trash this account cannot set up.
  */
 function DeleteSheet({
   snapshot,
@@ -1417,7 +1379,7 @@ function DeleteSheet({
         </span>
       }
       dismissible={!deleting}
-      title={`Delete ${nameOf(workflow.item.path)}?`}
+      title={`Delete ${trashLabel(workflow.item)} permanently?`}
       footer={
         <>
           <Button disabled={deleting} onClick={() => setWorkflow(null)}>
@@ -1446,12 +1408,13 @@ function DeleteSheet({
                     storeId: workflow.item.store,
                     path: workflow.item.path,
                     version: workflow.item.version,
+                    ...(workflow.outsideTrash ? { outsideTrash: true } : {}),
                   });
                   setWorkflow(null);
                   // Keep refresh failure separate from the acknowledged deletion.
                   try {
                     await onApplied(
-                      `Deleted ${nameOf(workflow.item.path)}`,
+                      `Deleted ${trashLabel(workflow.item)} permanently`,
                       storeOf(snapshot, workflow.item.store)?.server,
                     );
                   } catch (failure) {
@@ -1475,7 +1438,7 @@ function DeleteSheet({
               })();
             }}
           >
-            {deleting ? 'Deleting…' : 'Delete'}
+            {deleting ? 'Deleting…' : 'Delete permanently'}
           </Button>
         </>
       }
@@ -1486,7 +1449,227 @@ function DeleteSheet({
           {problem}
         </p>
       ) : null}
-      <p>This cannot be undone.</p>
+      {workflow.outsideTrash ? <p>{TRASH_UNAVAILABLE_COPY}</p> : null}
+      <p>
+        {workflow.item.kind === 'Folder'
+          ? `This folder and everything in it will be deleted. ${PERMANENT_DELETE_COPY}`
+          : PERMANENT_DELETE_COPY}
+      </p>
+    </SheetDialog>
+  );
+}
+
+/**
+ * Restoring an entry from Trash found another item at its original path.
+ * The entry can be restored under a new name beside it; nothing is replaced.
+ */
+function RestoreConflictSheet({
+  snapshot,
+  workflow,
+  setWorkflow,
+  onRestoreTrash,
+}: {
+  snapshot: AgentSnapshot;
+  workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'restore-conflict' }>;
+  setWorkflow: (workflow: WriteWorkflow) => void;
+  onRestoreTrash: (item: Item, destination: string) => Promise<void>;
+}): ReactNode {
+  const [restoring, setRestoring] = useState(false);
+  const { item, destination } = workflow;
+  const copy = restoredCopyPath(destination, (path) =>
+    snapshot.items.some(
+      (candidate) => candidate.store === item.store && candidate.path === path,
+    ),
+  );
+  const occupant = snapshot.items.find(
+    (candidate) =>
+      candidate.store === item.store && candidate.path === destination,
+  );
+  useSheetGuard(
+    restoring
+      ? { verdict: 'refuse', reason: 'Wait for the restore to finish.' }
+      : null,
+    !restoring,
+  );
+  return (
+    <SheetDialog
+      onClose={() => setWorkflow(null)}
+      dismissible={!restoring}
+      title={`${nameOf(destination)} is already in use`}
+      footer={
+        <>
+          <Button
+            disabled={restoring}
+            data-dialog-autofocus="true"
+            onClick={() => setWorkflow(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            disabled={restoring}
+            onClick={() => {
+              if (restoring) return;
+              setRestoring(true);
+              void onRestoreTrash(item, copy).finally(() => {
+                setRestoring(false);
+                setWorkflow(null);
+              });
+            }}
+          >
+            {restoring ? 'Restoring…' : `Restore as ${nameOf(copy)}`}
+          </Button>
+        </>
+      }
+    >
+      <p>
+        Another {occupant?.kind === 'Folder' ? 'folder' : 'item'} is at{' '}
+        <code>{destination}</code>. The entry from Trash can be restored beside
+        it under a new name; neither is replaced.
+      </p>
+      <Inset>
+        <InsetRow label="In use">
+          <code>{destination}</code>
+        </InsetRow>
+        <InsetRow label="Restores to">
+          <code>{copy}</code>
+        </InsetRow>
+      </Inset>
+    </SheetDialog>
+  );
+}
+
+/**
+ * Permanently deletes every entry in one store's Trash that this account can
+ * change, folders with everything in them, in one host mutation. Entries
+ * whose write role this account lacks stay in Trash.
+ */
+function EmptyTrashSheet({
+  snapshot,
+  accessNow,
+  workflow,
+  bridge,
+  setWorkflow,
+  onApplied,
+  onMutationError,
+}: {
+  snapshot: AgentSnapshot;
+  accessNow: () => number;
+  workflow: Extract<NonNullable<WriteWorkflow>, { kind: 'empty-trash' }>;
+  bridge: Bridge;
+  setWorkflow: (workflow: WriteWorkflow) => void;
+  onApplied: (message: string, profile?: string) => Promise<void>;
+  onMutationError: MutationFailureHandler;
+}): ReactNode {
+  const [listed] = useState(() => trashEntries(snapshot, workflow.store));
+  const entries = useTrashOrigins(bridge, listed);
+  const [emptying, setEmptying] = useState(false);
+  const store = storeOf(snapshot, workflow.store);
+  const problems = entries.map((entry) =>
+    itemActionProblem(snapshot, entry.item, true, accessNow()),
+  );
+  const removable = entries.filter((_, index) => !problems[index]);
+  const kept = entries.length - removable.length;
+  const problem = removable.length ? undefined : problems[0];
+  useSheetGuard(
+    emptying
+      ? { verdict: 'refuse', reason: 'Wait for Trash to finish emptying.' }
+      : null,
+    !emptying,
+  );
+  const count = (amount: number): string =>
+    `${amount} ${amount === 1 ? 'item' : 'items'}`;
+  return (
+    <SheetDialog
+      danger
+      onClose={() => setWorkflow(null)}
+      glyph={
+        <span className="kico md danger">
+          <Icon name="trash" />
+        </span>
+      }
+      dismissible={!emptying}
+      title={`Permanently delete ${count(removable.length)}?`}
+      footer={
+        <>
+          <Button
+            disabled={emptying}
+            data-dialog-autofocus="true"
+            onClick={() => setWorkflow(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            danger
+            disabled={emptying || !removable.length}
+            title={problem}
+            onClick={() => {
+              if (emptying || !removable.length) return;
+              setEmptying(true);
+              void (async () => {
+                try {
+                  await bridge.emptyTrash({
+                    storeId: workflow.store,
+                    entries: removable.map(({ item }) => ({
+                      path: item.path,
+                      version: item.version,
+                      direntId: item.direntId,
+                    })),
+                  });
+                } catch (error) {
+                  setWorkflow(null);
+                  await onMutationError(error);
+                  return;
+                } finally {
+                  setEmptying(false);
+                }
+                setWorkflow(null);
+                try {
+                  await onApplied(
+                    `Emptied Trash in ${store?.name ?? 'this vault'}`,
+                    store?.server,
+                  );
+                } catch (failure) {
+                  await onMutationError(failure, { report: false });
+                }
+              })();
+            }}
+          >
+            {emptying ? 'Deleting…' : 'Empty Trash'}
+          </Button>
+        </>
+      }
+    >
+      {problem ? (
+        <p className="action-error" role="status">
+          {problem}
+        </p>
+      ) : null}
+      <p>{PERMANENT_DELETE_COPY}</p>
+      {kept && removable.length ? (
+        <p>
+          {count(kept)} {kept === 1 ? 'stays' : 'stay'} in Trash because this
+          account cannot change {kept === 1 ? 'it' : 'them'}.
+        </p>
+      ) : null}
+      <ul className="trash-empty-list">
+        {entries.map((entry, index) => (
+          <li
+            key={entry.item.path}
+            className={problems[index] ? 'kept' : undefined}
+          >
+            <Icon name={entry.item.kind === 'Folder' ? 'folder' : 'file'} />
+            <span>{trashEntryLabel(entry)}</span>
+            {entry.item.kind === 'Folder' ? (
+              <small>
+                folder · {entry.count} {entry.count === 1 ? 'item' : 'items'}
+              </small>
+            ) : null}
+            {problems[index] ? <small>stays in Trash</small> : null}
+          </li>
+        ))}
+      </ul>
     </SheetDialog>
   );
 }

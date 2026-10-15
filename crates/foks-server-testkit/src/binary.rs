@@ -133,6 +133,17 @@ impl BinaryServer {
         self.finish(Duration::from_secs(5), true)
     }
 
+    /// The operating-system process ID of the running server.
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
+    }
+
+    /// Waits for the server to exit without signalling it, and kills it if it
+    /// still runs after `timeout`.
+    pub fn wait_for_exit(mut self, timeout: Duration) -> foks_server::Result<BinaryExit> {
+        self.finish(timeout, false)
+    }
+
     fn await_readiness(&mut self) -> foks_server::Result<()> {
         let deadline = Instant::now() + Duration::from_secs(10);
         let client = TestClient::new(&self.environment, "binary-readiness")?;
@@ -283,9 +294,20 @@ fn serve_command(
         .arg("32")
         .arg("--maximum-pending-writes")
         .arg("16")
+        .arg("--maximum-waitlist-entries")
+        .arg(
+            environment
+                .inner
+                .database_config
+                .maximum_waitlist_entries
+                .to_string(),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if environment.inner.waitlist_enabled {
+        command.arg("--enable-waitlist");
+    }
     command
 }
 

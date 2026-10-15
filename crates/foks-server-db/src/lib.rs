@@ -110,6 +110,7 @@ pub use user_mutation::{
     AddedCredential, ParcelMutation, SeedChainMutation, SharedKeyMutation, UserMutation,
     UserMutationFailurePoint, UsernameMutation,
 };
+pub use waitlist::{WaitlistEntry, WaitlistPurge};
 pub use yubi::{SubkeyChallengeResult, YubiManagementKeySnapshot};
 
 mod web_admin;

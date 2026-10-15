@@ -4,6 +4,7 @@ import type { AgentSnapshot, ProtocolCapability, ServerFailure } from './types';
 
 export const WORKFLOW_REQUIREMENTS = {
   'local-alias': [],
+  'assistant-clock': [],
   'account-sync': ['user-sync', 'kv'],
   'account-rename': ['device-administration'],
   'devices-list': ['device-administration'],
@@ -75,6 +76,7 @@ export interface WorkflowTarget {
 
 const localOperations = new Set<WorkflowOperation>([
   'local-alias',
+  'assistant-clock',
   'bot-list',
   'bot-unload',
   'web-admin-configure',

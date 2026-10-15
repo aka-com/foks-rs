@@ -4,10 +4,10 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react';
-import type { ToastController } from '/kit/toasts';
+import type { ToastController, ToastOptions } from '/kit/toasts';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import type { LocationStore } from '../location';
-import { nameOf, storeOf, type AgentSnapshot } from '../model';
+import { nameOf, storeOf, type AgentSnapshot, type Item } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { NavigationPrompt } from '../navigation-guard';
 import type { DropUpload } from '../screens/items-screen';
@@ -26,6 +26,7 @@ import {
   type ShellBlock,
 } from './blocking-shell';
 import type { CommandErrorHandler } from './catalog-runtime';
+import { PanelErrorBoundary } from './fault-boundaries';
 import type { useShellNavigation } from './navigation-runtime';
 
 export interface ResumeDraft {
@@ -98,6 +99,8 @@ export function ShellOverlays({
   commandError,
   mutationError,
   refreshSnapshot,
+  reloadCatalog,
+  restoreTrash,
   setResumeDraft,
   setConcealSignal,
   setLatest,
@@ -113,10 +116,17 @@ export function ShellOverlays({
   accessNow: () => number;
   workflow: WriteWorkflow;
   setWorkflow: Dispatch<SetStateAction<WriteWorkflow>>;
-  refresh: (message: string, profile?: string) => Promise<void>;
+  refresh: (
+    message: string,
+    profile?: string,
+    options?: ToastOptions,
+  ) => Promise<void>;
   commandError: CommandErrorHandler;
   mutationError: MutationFailureHandler;
   refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
+  /** Reads one profile's catalog again, or every profile's without one. */
+  reloadCatalog: (profile?: string) => Promise<AgentSnapshot>;
+  restoreTrash: (item: Item, destination: string) => Promise<void>;
   setResumeDraft: Dispatch<SetStateAction<ResumeDraft | null>>;
   setConcealSignal: Dispatch<SetStateAction<number>>;
   setLatest: Dispatch<SetStateAction<AgentSnapshot>>;
@@ -129,89 +139,104 @@ export function ShellOverlays({
 }): ReactNode {
   return (
     <>
-      <WriteOverlay
-        snapshot={shown}
-        accessNow={accessNow}
-        bridge={bridge}
-        workflow={workflow}
-        setWorkflow={setWorkflow}
-        onApplied={refresh}
-        onError={commandError}
-        onMutationError={mutationError}
-        onRefreshConflict={async (item, draft, operation) => {
-          const next = await refreshSnapshot();
-          const current = next.items.find(
-            (candidate) =>
-              candidate.store === item.store && candidate.path === item.path,
-          );
-          // The agent reports one conflict whether the item changed or was
-          // removed; the refresh tells them apart. A removed item has no newer
-          // version to review, and the details panel would have nothing to
-          // resume the draft into, so the edit becomes a new-item draft at the
-          // same path instead of being lost.
-          if (!current) {
+      {/* A workflow sheet that fails to render is closed; the navigation
+          prompt and the blocking takeover below stay outside its boundary. */}
+      <PanelErrorBoundary
+        label="write-workflow"
+        identity={workflow?.kind ?? ''}
+        onFault={() => {
+          setWorkflow(null);
+          toasts.show('The dialog could not be shown and was closed.', {
+            tone: 'warning',
+          });
+        }}
+      >
+        <WriteOverlay
+          snapshot={shown}
+          accessNow={accessNow}
+          bridge={bridge}
+          workflow={workflow}
+          setWorkflow={setWorkflow}
+          onApplied={refresh}
+          onError={commandError}
+          onMutationError={mutationError}
+          onRefreshConflict={async (item, draft, operation) => {
+            const next = await refreshSnapshot();
+            const current = next.items.find(
+              (candidate) =>
+                candidate.store === item.store && candidate.path === item.path,
+            );
+            // The agent reports one conflict whether the item changed or was
+            // removed; the refresh tells them apart. A removed item has no
+            // newer version to review, and the details panel would have
+            // nothing to resume the draft into, so the edit becomes a
+            // new-item draft at the same path instead of being lost.
+            if (!current) {
+              if (operation === 'replace') {
+                toasts.show('This file was deleted elsewhere.');
+                return null;
+              }
+              toasts.show(
+                'This item was deleted elsewhere. Your edit is kept as a new item at the same path.',
+              );
+              return conflictDraftWorkflow(item, draft);
+            }
             if (operation === 'replace') {
-              toasts.show('This file was deleted elsewhere.');
+              toasts.show(
+                'Catalog refreshed. Review the current file, then choose its replacement again.',
+              );
               return null;
             }
-            toasts.show(
-              'This item was deleted elsewhere. Your edit is kept as a new item at the same path.',
-            );
-            return conflictDraftWorkflow(item, draft);
-          }
-          if (operation === 'replace') {
-            toasts.show(
-              'Catalog refreshed. Review the current file, then choose its replacement again.',
-            );
+            setResumeDraft({
+              store: item.store,
+              path: item.path,
+              value: draft,
+              epoch: Date.now(),
+            });
+            toasts.show('Catalog refreshed. Review your draft.');
             return null;
-          }
-          setResumeDraft({
-            store: item.store,
-            path: item.path,
-            value: draft,
-            epoch: Date.now(),
-          });
-          toasts.show('Catalog refreshed. Review your draft.');
-          return null;
-        }}
-        onDeleteConflict={async (item) => {
-          const next = await refreshSnapshot(true);
-          const current = next.items.find(
-            (candidate) =>
-              candidate.store === item.store && candidate.path === item.path,
-          );
-          if (current)
-            toasts.show(
-              'This item was modified by another user or session. Review the updated item before deleting.',
-              { tone: 'warning' },
+          }}
+          onDeleteConflict={async (item) => {
+            const next = await refreshSnapshot(true);
+            const current = next.items.find(
+              (candidate) =>
+                candidate.store === item.store && candidate.path === item.path,
             );
-          else toasts.show('This item was already deleted elsewhere.');
-        }}
-        onDiscardConflict={() => {
-          setWorkflow(null);
-          setResumeDraft(null);
-          setConcealSignal((value) => value + 1);
-        }}
-        onOpenExisting={async (existing) => {
-          const next = await refreshSnapshot();
-          const current = next.items.find(
-            (item) =>
-              item.store === existing.storeId && item.path === existing.path,
-          );
-          if (!current) {
-            throw new Error(
-              'That path is now available. Your draft has been saved. Choose a different path or retry creating the item.',
+            if (current)
+              toasts.show(
+                'This item was modified by another user or session. Review the updated item before deleting.',
+                { tone: 'warning' },
+              );
+            else toasts.show('This item was already deleted elsewhere.');
+          }}
+          onRestoreTrash={restoreTrash}
+          onReload={reloadCatalog}
+          onDiscardConflict={() => {
+            setWorkflow(null);
+            setResumeDraft(null);
+            setConcealSignal((value) => value + 1);
+          }}
+          onOpenExisting={async (existing) => {
+            const next = await refreshSnapshot();
+            const current = next.items.find(
+              (item) =>
+                item.store === existing.storeId && item.path === existing.path,
             );
-          }
-          setLatest(next);
-          // The write workflow resolved this destination and is closing, so
-          // underlying screens must not block this navigation.
-          locations.select(
-            { store: current.store, path: current.path },
-            { force: true },
-          );
-        }}
-      />
+            if (!current) {
+              throw new Error(
+                'That path is now available. Your draft has been saved. Choose a different path or retry creating the item.',
+              );
+            }
+            setLatest(next);
+            // The write workflow resolved this destination and is closing, so
+            // underlying screens must not block this navigation.
+            locations.select(
+              { store: current.store, path: current.path },
+              { force: true },
+            );
+          }}
+        />
+      </PanelErrorBoundary>
       {prompt ? (
         <NavigationPrompt
           verdict={prompt.verdict}

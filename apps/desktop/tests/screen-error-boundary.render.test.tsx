@@ -21,6 +21,7 @@ installDom({
 let ui: typeof import('@testing-library/react');
 let vite: ViteDevServer;
 let boundary: typeof import('../src/app/screen-error-boundary');
+let logs: typeof import('../src/diagnostics/log');
 test.before(async () => {
   ui = await import('@testing-library/react');
   vite = await createServer({
@@ -31,6 +32,9 @@ test.before(async () => {
   boundary = (await vite.ssrLoadModule(
     '/src/app/screen-error-boundary.tsx',
   )) as typeof import('../src/app/screen-error-boundary');
+  logs = (await vite.ssrLoadModule(
+    '/src/diagnostics/log.ts',
+  )) as typeof import('../src/diagnostics/log');
 });
 test.afterEach(() => ui.cleanup());
 test.after(async () => vite.close());
@@ -55,6 +59,7 @@ test('a screen render error preserves shell navigation and Reload page retries t
     if (throwing) throw new Error('The item list could not be sorted.');
     return createElement('p', null, 'The page');
   }
+  const since = logs.diagnosticLog.length;
   const { value: rendered, reported } = quietly(() =>
     ui.render(
       createElement(
@@ -79,6 +84,17 @@ test('a screen render error preserves shell navigation and Reload page retries t
       ),
     ),
   );
+  // Copy diagnostics reports the fault under the boundary's label, without
+  // the message.
+  const recorded = logs.diagnosticLog
+    .events()
+    .slice(since)
+    .filter((event) => event.name === 'renderer.fault');
+  assert.deepEqual(
+    recorded.map((event) => [event.attrs?.boundary, event.code]),
+    [['screen', 'Error']],
+  );
+  assert.doesNotMatch(JSON.stringify(recorded), /could not be sorted/);
 
   throwing = false;
   ui.fireEvent.click(rendered.getByRole('button', { name: 'Reload page' }));

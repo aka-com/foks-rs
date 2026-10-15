@@ -6,25 +6,10 @@ import type {
   ServerStatusSnapshot,
 } from '../../bridge';
 import { enqueueProfileWork, normalizeCommandError } from '../../bridge';
-import type {
-  FirstRunFailure,
-  FirstRunOperation,
-} from '../../first-run-failure';
+import type { FirstRunFailure } from '../../first-run-failure';
 import type { AgentSnapshot } from '../../model';
-import type { useFirstRunController } from '../../use-first-run-controller';
-import {
-  setupWorkflowScope,
-  useSetupWorkflow,
-  type WorkflowCheckpoint,
-} from './workflow-ownership';
-
-export type WorkflowFailureReporter = (
-  operation: FirstRunOperation,
-  error: unknown,
-  report: (message: string) => void,
-  isCurrent: () => boolean,
-  onFailure?: (failure: FirstRunFailure) => void,
-) => void;
+import type { SetupCore } from './setup-core';
+import { setupWorkflowScope, useSetupWorkflow } from './workflow-ownership';
 
 /**
  * The profile identifier a server address suggests: the host as letters,
@@ -91,31 +76,29 @@ export async function runServerCheck({
 }
 
 export function useServerWorkflow({
-  bridge,
-  agentReady,
-  checkpoint,
-  checkpointRef,
-  mounted,
-  send,
+  core,
   snapshot,
   managedProfile,
-  onRefreshSnapshot,
   goCandidate,
   onAddressEdited,
-  setMessage,
-  fail,
-}: WorkflowCheckpoint &
-  Pick<ReturnType<typeof useFirstRunController>, 'send'> & {
-    bridge: Bridge;
-    agentReady: boolean;
-    snapshot: AgentSnapshot;
-    managedProfile?: string;
-    onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
-    goCandidate: GoProfileCandidate | null;
-    onAddressEdited: () => void;
-    setMessage: (message: string | null) => void;
-    fail: WorkflowFailureReporter;
-  }) {
+}: {
+  core: SetupCore;
+  snapshot: AgentSnapshot;
+  managedProfile?: string;
+  goCandidate: GoProfileCandidate | null;
+  onAddressEdited: () => void;
+}) {
+  const {
+    bridge,
+    agentReady,
+    checkpoint,
+    checkpointRef,
+    mounted,
+    send,
+    onRefreshSnapshot,
+    setMessage,
+    fail,
+  } = core;
   const facts = bridge.firstRunFixture?.[checkpoint.path];
   const state = checkpoint.state;
   const inFlight = useRef<(() => boolean) | null>(null);

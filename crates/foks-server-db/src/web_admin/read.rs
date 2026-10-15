@@ -10,7 +10,7 @@ impl ReadSnapshot<'_> {
         let counts = if ctx.operator {
             Some(self.connection().query_row("SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM host_admin_grants WHERE active=1),(SELECT
              count(*) FROM signup_invites),(SELECT count(*) FROM web_admin_sessions WHERE instance_epoch=?1 AND
-             revoked_at_us IS NULL AND expires_at_us>?2 AND deadline_elapsed_us>?3)",params![now.epoch,sql_integer(now.utc_us)?,sql_integer(now.elapsed_us)?],|r|Ok(WebOverview{accounts:r.get::<_,i64>(0)? as u64,operators:r.get::<_,i64>(1)? as u64,invites:r.get::<_,i64>(2)? as u64,sessions:r.get::<_,i64>(3)? as u64}))?)
+             revoked_at_us IS NULL AND expires_at_us>?2 AND deadline_elapsed_us>?3),(SELECT entries FROM waitlist_count WHERE singleton=0)",params![now.epoch,sql_integer(now.utc_us)?,sql_integer(now.elapsed_us)?],|r|Ok(WebOverview{accounts:r.get::<_,i64>(0)? as u64,operators:r.get::<_,i64>(1)? as u64,invites:r.get::<_,i64>(2)? as u64,sessions:r.get::<_,i64>(3)? as u64,waitlist_entries:r.get::<_,i64>(4)? as u64}))?)
         } else {
             None
         };

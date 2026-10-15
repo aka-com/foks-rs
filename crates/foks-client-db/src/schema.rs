@@ -1,5 +1,5 @@
 pub(crate) const APPLICATION_ID: i64 = 0x464f_4b53; // `FOKS`
-pub(crate) const VERSION: u32 = 40;
+pub(crate) const VERSION: u32 = 41;
 
 pub(crate) const REVISION_TABLES: &[&str] = &[
     "import_readiness",
@@ -397,6 +397,10 @@ CREATE TABLE mutation_operations (
     updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
 ) STRICT, WITHOUT ROWID;
 
+-- boot_id identifies the boot whose suspend-inclusive clock produced
+-- anchor_monotonic; NULL when the platform provides none. Version 41 added it
+-- with ALTER TABLE ADD COLUMN, so the column sits where SQLite inserts it and
+-- migrated and new databases store the same schema text.
 CREATE TABLE kv_adapter_clocks (
     host_id BLOB NOT NULL REFERENCES hosts(host_id),
     user_id BLOB NOT NULL CHECK(length(user_id)=33),
@@ -404,7 +408,7 @@ CREATE TABLE kv_adapter_clocks (
     anchor_wall INTEGER NOT NULL CHECK(anchor_wall>=0),
     anchor_monotonic INTEGER NOT NULL CHECK(anchor_monotonic>=0),
     validated_time_floor INTEGER NOT NULL CHECK(validated_time_floor>=0),
-    reject_issued_before INTEGER NOT NULL CHECK(reject_issued_before>=0),
+    reject_issued_before INTEGER NOT NULL CHECK(reject_issued_before>=0), boot_id BLOB CHECK(boot_id IS NULL OR length(boot_id)=16),
     PRIMARY KEY(host_id,user_id)
 ) STRICT, WITHOUT ROWID;
 CREATE TRIGGER kv_adapter_clock_irreversible BEFORE UPDATE ON kv_adapter_clocks

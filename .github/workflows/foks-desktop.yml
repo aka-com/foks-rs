@@ -46,7 +46,11 @@ jobs:
           npm run test:rust:full -- --release
           cargo clippy --locked --release -p foks-desktop -p foks-desktop-app --all-targets -- -D warnings
           cargo fmt -p foks-desktop -p foks-desktop-app -- --check
+      - name: Install release dependency-manifest tools
+        run: cargo install --locked cargo-auditable@0.7.7 rust-audit-info@0.5.4
       - name: Assemble unsigned DMG
+        env:
+          FOKS_AUDITABLE_BUILD: '1'
         run: npm run bundle:macos
       - name: Smoke test packaged production startup
         run: npm run test:foks-desktop:packaged
@@ -58,6 +62,9 @@ jobs:
           test -x "$app/Contents/MacOS/foks-agent"
           test "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = com.aka.foks.desktop
           test -f "$app/Contents/Resources/icon.icns"
+          scripts/verify-auditable-binaries.sh \
+            "$app/Contents/MacOS/foks-desktop" foks-desktop-app \
+            "$app/Contents/MacOS/foks-agent" foks-agent
           dmgs=(target/release/bundle/dmg/*.dmg)
           test "${#dmgs[@]}" -eq 1
           hdiutil imageinfo "${dmgs[0]}" >/dev/null
@@ -93,7 +100,11 @@ jobs:
           cargo clippy --locked -p foks-desktop -p foks-desktop-app --all-targets -- -D warnings
       - name: Run the real managed-agent desktop transcript
         run: npm run test:foks-desktop:real-agent
+      - name: Install release dependency-manifest tools
+        run: cargo install --locked cargo-auditable@0.7.7 rust-audit-info@0.5.4
       - name: Exercise the packaged production WebView
+        env:
+          FOKS_AUDITABLE_BUILD: '1'
         run: |
           cargo install tauri-driver --locked --version 2.0.6
           CARGO_INCREMENTAL=0 cargo build --locked -j 2 -p foks-client-app --example webview_fixture
@@ -102,6 +113,9 @@ jobs:
           deb=$(find target/release/bundle/deb -maxdepth 1 -name 'foks-desktop_*.deb' -print -quit)
           test -n "$deb"
           dpkg-deb -x "$deb" "$RUNNER_TEMP/foks-webview-package"
+          scripts/verify-auditable-binaries.sh \
+            "$RUNNER_TEMP/foks-webview-package/usr/bin/foks-desktop" foks-desktop-app \
+            "$RUNNER_TEMP/foks-webview-package/usr/bin/foks-agent" foks-agent
           xvfb-run -a python3 scripts/test-packaged-webview.py \
             "$RUNNER_TEMP/foks-webview-package/usr/bin/foks-desktop" \
             --agent "$RUNNER_TEMP/foks-webview-package/usr/bin/foks-agent" \
@@ -112,10 +126,15 @@ jobs:
           name: linux-webview-test
           path: target/webview-test/
 
+  dependencies:
+    name: Dependency audit
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/foks-dependencies.yml
+
   macos:
     name: macOS arm64 signed and notarized DMG
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [validate-macos, validate-linux]
+    needs: [validate-macos, validate-linux, dependencies]
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,6 +151,8 @@ jobs:
         run: |
           workspace_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
           test "${GITHUB_REF_NAME#foks-desktop-v}" = "$workspace_version"
+      - name: Install release dependency-manifest tools
+        run: cargo install --locked cargo-auditable@0.7.7 rust-audit-info@0.5.4
       - name: Import signing identity
         env:
           CERTIFICATE_P12_B64: ${{ secrets.FOKS_APPLE_CERTIFICATE_P12_B64 }}
@@ -166,7 +187,7 @@ jobs:
   linux:
     name: Linux x86_64 .deb
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [validate-macos, validate-linux]
+    needs: [validate-macos, validate-linux, dependencies]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -181,7 +202,11 @@ jobs:
         run: |
           npm install --global "$(node -p "require('./package.json').packageManager")"
           npm ci
+      - name: Install release dependency-manifest tools
+        run: cargo install --locked cargo-auditable@0.7.7 rust-audit-info@0.5.4
       - name: Build Debian package
+        env:
+          FOKS_AUDITABLE_BUILD: '1'
         run: npm run bundle:deb
       - name: Verify Debian contents and dependencies
         run: |
@@ -202,6 +227,9 @@ jobs:
           deb_root="$RUNNER_TEMP/foks-deb-root"
           mkdir -p "$deb_root"
           dpkg-deb -x "$deb" "$deb_root"
+          scripts/verify-auditable-binaries.sh \
+            "$deb_root/usr/bin/foks-desktop" foks-desktop-app \
+            "$deb_root/usr/bin/foks-agent" foks-agent
           npm run test:foks-desktop:packaged -- "$deb_root/usr/bin/foks-desktop"
           desktop-file-validate "$deb_root/usr/share/applications/foks-desktop.desktop"
           appstreamcli validate --no-net "$deb_root/usr/share/metainfo/com.aka.foks.desktop.metainfo.xml"

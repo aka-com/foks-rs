@@ -12,15 +12,34 @@ import { CollectionStatus } from '../components/collection-status';
  * (shown when viewing multiple stores), and Size.
  */
 
-import { Fragment, useLayoutEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type {
+  FocusEvent as ReactFocusEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  RefObject,
+} from 'react';
 import { useToast } from '/kit/toasts';
 import { anyDialogOpen, ContextMenu, Menu } from '/kit/overlay-primitives';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
 import { virtualListWindow } from '/kit/virtual-list';
 import { rememberFilesView, storedFilesView } from '../files-view-pref';
 import type { FilesView } from '../files-view-pref';
-import { filesGridWindow } from './files-grid';
+import {
+  FILES_CARD_GAP,
+  FILES_CARD_HEIGHT,
+  FILES_CARD_HEIGHT_WITH_LOCATION,
+  filesGridWindow,
+} from './files-grid';
+import {
+  gridFocusTarget,
+  revealOffset,
+  rovingKey,
+  treeEntries,
+  treeKeyAction,
+} from './files-keyboard';
+import type { TreeEntry } from './files-keyboard';
 import { useFilesSidebarResize } from './use-files-sidebar-resize';
 import {
   Band,
@@ -41,6 +60,7 @@ import {
   displayPathComponent,
   fmtSize,
   initials,
+  isTrashPath,
   kindLabel,
   kindOf,
   nameOf,
@@ -54,9 +74,12 @@ import {
   storeNavigationOrder,
   storeOf,
   storeReadable,
+  TRASH_ROOT,
+  trashEntries,
   usernameOf,
 } from '../model';
-import type { Item, Store, AgentSnapshot } from '../model';
+import type { Item, Store, AgentSnapshot, TrashEntry } from '../model';
+import { TrashView } from './trash-view';
 import type {
   KindFilter,
   LocationStore,
@@ -65,10 +88,12 @@ import type {
   SortDirection,
 } from '../location';
 import { normalizeCommandError } from '../bridge';
-import type { Bridge } from '../bridge';
+import type { Bridge, ItemField } from '../bridge';
 import { useFileDrop } from '../file-drop';
 import { fileDropPath, writeBlockReason } from './write-workflows';
+import { exportedPasswords } from './export-passwords-sheet';
 import type { NewKind } from './write-workflows';
+import { copyActions, copyAndAnnounce } from './item-copy';
 import {
   ALL_ITEMS,
   folderAt,
@@ -79,7 +104,21 @@ import {
   whereOf,
 } from './scope';
 import type { FolderNode } from './scope';
+import {
+  NO_ROWS,
+  allRows,
+  copyProblem,
+  dropVerdict,
+  extendRows,
+  itemCount,
+  rowKey,
+  selectedRows,
+  toggleRow,
+} from './item-moves';
+import type { DropVerdict, MultiSelection } from './item-moves';
 import { AccountMark } from './account-switcher';
+import { matchesShortcut, shortcutLabel } from '../shortcuts';
+import type { KeyPress } from '../shortcuts';
 import { manageReason } from './group-model';
 import {
   itemActionProblem,
@@ -93,10 +132,6 @@ function emptyStoreCopy(store: Store): string {
   return store.kind === 'team'
     ? 'Items stored in this team vault are accessible to team members according to their assigned roles.'
     : 'Passwords and documents you add are private to this vault.';
-}
-
-function itemCount(count: number): string {
-  return `${count} ${count === 1 ? 'item' : 'items'}`;
 }
 
 /**
@@ -146,33 +181,99 @@ function ListHeader({
   // Within one store, ordering by store is ordering by name; the Name header
   // says so while the Location header is not drawn.
   const shown = !columns.location && sort === 'group' ? 'name' : sort;
-  const head = (key: SortKey, label: string, num = false): ReactNode => (
-    <button
-      type="button"
-      className={[shown === key ? 'on' : '', num ? 'num' : '']
-        .filter(Boolean)
-        .join(' ')}
-      aria-pressed={shown === key}
-      title={`Sort by ${label.toLowerCase()} ${shown === key && direction === 'asc' ? 'descending' : 'ascending'}`}
-      onClick={() =>
-        onSort(key, shown === key && direction === 'asc' ? 'desc' : 'asc')
+  const head = (key: SortKey, label: string): ReactNode => (
+    <span
+      role="columnheader"
+      aria-sort={
+        shown === key
+          ? direction === 'asc'
+            ? 'ascending'
+            : 'descending'
+          : undefined
       }
     >
-      {label}
-      {shown === key ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
-    </button>
+      <button
+        type="button"
+        className={shown === key ? 'on' : undefined}
+        aria-pressed={shown === key}
+        title={`Sort by ${label.toLowerCase()} ${shown === key && direction === 'asc' ? 'descending' : 'ascending'}`}
+        onClick={() =>
+          onSort(key, shown === key && direction === 'asc' ? 'desc' : 'asc')
+        }
+      >
+        {label}
+        {shown === key ? (direction === 'asc' ? ' ↑' : ' ↓') : ''}
+      </button>
+    </span>
   );
   return (
-    <div className={`hdr ${columnClass(columns)}`}>
+    <div className={`hdr ${columnClass(columns)}`} role="row" aria-rowindex={1}>
       {head('name', 'Name')}
       {head('kind', 'Kind')}
       {columns.location ? head('group', 'Location') : null}
-      <span className="num">Size</span>
+      <span role="columnheader" className="num">
+        Size
+      </span>
+      {/* Names the cell that holds a row's own actions; it takes no space. */}
+      <span role="columnheader" className="acts-head">
+        Actions
+      </span>
     </div>
   );
 }
 
+/**
+ * Where a list row or card sits in the Files grid. The list view is a grid
+ * of rows under the column headers; the card view is a grid of lines whose
+ * cells are the cards. Only the entry carrying `tabIndex` 0 is a tab stop.
+ */
+interface RowNav {
+  layout: 'list' | 'card';
+  /** `data-nav-key`: the key the arrow keys move focus by. */
+  key: string;
+  tabIndex: 0 | -1;
+  /** aria-rowindex of a list row; a card's line carries its own. */
+  rowIndex?: number;
+  /** aria-colindex of a card within its line. */
+  colIndex?: number;
+}
+
+/**
+ * The outer element's grid role and position for `nav`. A row cannot carry
+ * aria-haspopup, so a list row names the key that opens its menu instead.
+ */
+function navAttributes(nav: RowNav, selected?: boolean) {
+  return nav.layout === 'list'
+    ? {
+        role: 'row',
+        'aria-rowindex': nav.rowIndex,
+        'aria-selected': selected,
+        'aria-keyshortcuts': 'Shift+F10',
+        tabIndex: nav.tabIndex,
+        'data-nav-key': nav.key,
+      }
+    : {
+        role: 'gridcell',
+        'aria-colindex': nav.colIndex,
+        'aria-selected': selected,
+        'aria-haspopup': 'menu' as const,
+        tabIndex: nav.tabIndex,
+        'data-nav-key': nav.key,
+      };
+}
+
+/** The role of a row's columns: cells in the list, plain content in a card. */
+function cellRole(nav: RowNav): 'gridcell' | undefined {
+  return nav.layout === 'list' ? 'gridcell' : undefined;
+}
+
+/** The roving key of a subfolder listed above the selected folder's items. */
+function folderNavKey(storeId: string, path: string): string {
+  return `folder:${storeId}|${path}`;
+}
+
 interface RowProps {
+  nav: RowNav;
   snapshot: AgentSnapshot;
   hues: ReadonlyMap<string, string>;
   item: Item;
@@ -180,28 +281,43 @@ interface RowProps {
   selected: boolean;
   /** A store that can be read but not written: rows are drawn back. */
   readOnly: boolean;
+  /**
+   * How many rows the menu's Move and Trash act on: the size of the
+   * multi-selection this row belongs to, or 0 when it acts on this row.
+   */
+  group: number;
   onSelect: () => void;
-  onCopy: (item: Item) => void;
+  /** ⌘-click toggles the row in the multi-selection; Shift-click extends it. */
+  onPick: (mode: 'toggle' | 'extend') => void;
+  /** Starts a drag of the row, or of the multi-selection it belongs to. */
+  onPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onCopy: (item: Item, field: ItemField) => void;
   onReveal: (item: Item) => void;
   onDownload: (item: Item) => void;
-  onDelete: (item: Item) => void;
+  onTrash: (item: Item) => void;
   onMove?: (item: Item) => void;
+  onCopyToVault?: (item: Item) => void;
   accessNow: () => number;
 }
 
 function Row({
+  nav,
   snapshot,
   hues,
   item,
   columns,
   selected,
   readOnly,
+  group,
   onSelect,
+  onPick,
+  onPointerDown,
   onCopy,
   onReveal,
   onDownload,
-  onDelete,
+  onTrash,
   onMove,
+  onCopyToVault,
   accessNow,
 }: RowProps): ReactNode {
   const rowRef = useRef<HTMLDivElement>(null);
@@ -224,6 +340,28 @@ function Row({
   const writeProblem = menuPoint
     ? itemActionProblem(snapshot, item, true, accessNow())
     : undefined;
+  const copies = copyActions(item);
+  /** What a key pressed on the row itself runs, if anything. */
+  const rowShortcut = (event: KeyPress): (() => void) | undefined => {
+    // Moving to Trash can be undone, for several chosen rows as for one, so
+    // the key asks for nothing more.
+    if (matchesShortcut(event, 'rowTrash')) return () => onTrash(item);
+    if (matchesShortcut(event, 'rowOpen')) return onSelect;
+    if (matchesShortcut(event, 'rowToggle')) return () => onPick('toggle');
+    if (matchesShortcut(event, 'rowExtend')) return () => onPick('extend');
+    if (onMove && matchesShortcut(event, 'rowRename'))
+      return () => onMove(item);
+    // A file has nothing to copy, and selected text is copied as text; the
+    // key is left to the window for both.
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return undefined;
+    const copy = matchesShortcut(event, 'rowCopyUsername')
+      ? copies.find(({ field }) => field === 'username')
+      : matchesShortcut(event, 'rowCopy')
+        ? copies[0]
+        : undefined;
+    return copy && (() => onCopy(item, copy.field));
+  };
   const choose =
     (run: () => void): (() => void) =>
     () => {
@@ -236,7 +374,10 @@ function Row({
     run: (item: Item) => void,
   ): ReactNode => (
     <button
+      key={label}
       type="button"
+      // Reached with the arrow keys from the row, which is the tab stop.
+      tabIndex={-1}
       title={label}
       aria-label={`${label} ${name}`}
       onClick={(event) => {
@@ -258,33 +399,34 @@ function Row({
           selected ? 'sel' : '',
           readOnly ? 'ro' : '',
         )}
-        role="button"
-        tabIndex={0}
-        aria-pressed={selected}
-        aria-haspopup="menu"
-        onClick={onSelect}
+        {...navAttributes(nav, selected)}
+        data-row-key={rowKey(item)}
+        onClick={(event) => {
+          if (event.metaKey || event.ctrlKey) onPick('toggle');
+          else if (event.shiftKey) onPick('extend');
+          else onSelect();
+        }}
+        onPointerDown={onPointerDown}
         onContextMenu={(event) => {
           event.preventDefault();
           rowRef.current?.focus();
           setMenuPoint({ x: event.clientX, y: event.clientY });
         }}
         onKeyDown={(event) => {
-          if (
-            event.key === 'ContextMenu' ||
-            (event.key === 'F10' && event.shiftKey)
-          ) {
+          if (matchesShortcut(event, 'rowMenu')) {
             event.preventDefault();
             const bounds = event.currentTarget.getBoundingClientRect();
             setMenuPoint({ x: bounds.left, y: bounds.bottom });
             return;
           }
           if (event.target !== event.currentTarget) return;
-          if (event.key !== 'Enter' && event.key !== ' ') return;
+          const run = rowShortcut(event);
+          if (!run) return;
           event.preventDefault();
-          onSelect();
+          run();
         }}
       >
-        <span className="name">
+        <span className="name" role={cellRole(nav)}>
           <Icon
             name={password ? 'key' : 'file'}
             className={password ? 'k' : 'f'}
@@ -298,9 +440,11 @@ function Row({
             <span className="fpath">/{prefix}</span>
           ) : null}
         </span>
-        <span className="cell kind">{kindLabel(kind)}</span>
+        <span className="cell kind" role={cellRole(nav)}>
+          {kindLabel(kind)}
+        </span>
         {columns.location ? (
-          <span className="cell mark">
+          <span className="cell mark" role={cellRole(nav)}>
             {store ? (
               <StoreMark
                 snapshot={snapshot}
@@ -311,11 +455,17 @@ function Row({
             <span>{whereOf(snapshot, item)}</span>
           </span>
         ) : null}
-        <span className="cell num">{fmtSize(item.size)}</span>
-        <span className="acts">
+        <span className="cell num" role={cellRole(nav)}>
+          {fmtSize(item.size)}
+        </span>
+        <span className="acts" role={cellRole(nav)}>
           {item.kind !== 'File' ? (
             <>
-              {action('Copy', 'copy', onCopy)}
+              {copies.map(({ field, label }) =>
+                action(label, field === 'username' ? 'user' : 'copy', () =>
+                  onCopy(item, field),
+                ),
+              )}
               {action('Reveal', 'eye', onReveal)}
             </>
           ) : (
@@ -349,13 +499,16 @@ function Row({
               </MenuItem>
             ) : (
               <>
-                <MenuItem
-                  icon="copy"
-                  reason={readProblem}
-                  onClick={choose(() => onCopy(item))}
-                >
-                  Copy
-                </MenuItem>
+                {copies.map(({ field, label }) => (
+                  <MenuItem
+                    key={field}
+                    icon={field === 'username' ? 'user' : 'copy'}
+                    reason={readProblem}
+                    onClick={choose(() => onCopy(item, field))}
+                  >
+                    {label}
+                  </MenuItem>
+                ))}
                 <MenuItem
                   icon="eye"
                   reason={readProblem}
@@ -370,16 +523,24 @@ function Row({
                 reason={writeProblem}
                 onClick={choose(() => onMove(item))}
               >
-                Rename or move…
+                {group > 1 ? `Move ${group} items to…` : 'Rename or move…'}
+              </MenuItem>
+            ) : null}
+            {onCopyToVault && group <= 1 ? (
+              <MenuItem
+                reason={copyProblem(item) ?? readProblem}
+                onClick={choose(() => onCopyToVault(item))}
+              >
+                Copy to vault…
               </MenuItem>
             ) : null}
             <MenuItem
               icon="trash"
               danger
               reason={writeProblem}
-              onClick={choose(() => onDelete(item))}
+              onClick={choose(() => onTrash(item))}
             >
-              Delete
+              {group > 1 ? `Move ${group} items to Trash` : 'Move to Trash'}
             </MenuItem>
           </Menu>
         </ContextMenu>
@@ -395,44 +556,61 @@ interface StoreTree {
 
 /** A subfolder of the selected folder, listed above its items. */
 function FolderRow({
+  nav,
   name,
   count,
   columns,
   onSelect,
   storeId,
   path,
+  drop,
 }: {
+  nav: RowNav;
   storeId: string;
   path: string;
   name: string;
   count: number;
   columns: Columns;
   onSelect: () => void;
+  /** Rows dragged over this folder: whether they can be dropped here. */
+  drop?: 'ok' | 'no';
 }): ReactNode {
   return (
     <div
-      className={columnClass(columns, 'row', 'one', 'folder')}
+      className={columnClass(
+        columns,
+        'row',
+        'one',
+        'folder',
+        drop ? `drop-${drop}` : '',
+      )}
       data-folder-store={storeId}
       data-folder-path={path}
-      aria-haspopup="menu"
-      role="button"
-      tabIndex={0}
+      {...navAttributes(nav)}
       onClick={onSelect}
       onKeyDown={(event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
+        if (event.target !== event.currentTarget) return;
+        if (!matchesShortcut(event, 'rowOpen')) return;
         event.preventDefault();
         onSelect();
       }}
     >
-      <span className="name">
+      <span className="name" role={cellRole(nav)}>
         <Icon name="folder" className="f" />
         <span className="nm" title={name}>
           {name}
         </span>
       </span>
-      <span className="cell kind">Folder</span>
-      {columns.location ? <span className="cell" /> : null}
-      <span className="cell num">{itemCount(count)}</span>
+      <span className="cell kind" role={cellRole(nav)}>
+        Folder
+      </span>
+      {columns.location ? <span className="cell" role={cellRole(nav)} /> : null}
+      <span className="cell num" role={cellRole(nav)}>
+        {itemCount(count)}
+      </span>
+      {nav.layout === 'list' ? (
+        <span className="acts-none" role="gridcell" />
+      ) : null}
     </div>
   );
 }
@@ -454,15 +632,26 @@ function TreeRow({
   onToggle,
   storeId,
   path,
+  drop,
+  tree,
 }: {
   storeId?: string;
   path?: string;
+  /** Rows dragged over this folder: whether they can be dropped here. */
+  drop?: 'ok' | 'no';
+  /**
+   * The row's place in a folder tree, where it is a treeitem: the whole row
+   * is the focus target, and the twist and its own action are pointer
+   * shortcuts for the arrow keys and the context menu. A row without one is
+   * a single button outside any tree.
+   */
+  tree?: { key: string; level: number; tabIndex: 0 | -1 };
   depth: number;
   active: boolean;
   root?: boolean;
   /** The muted invitation row a section draws in place of no rows at all. */
   quiet?: boolean;
-  icon: 'folder' | 'vault' | 'grid' | 'plus';
+  icon: 'folder' | 'vault' | 'grid' | 'plus' | 'trash';
   /** Drawn in place of `icon` when the row names a store. */
   mark?: ReactNode;
   name: string;
@@ -477,50 +666,76 @@ function TreeRow({
   onSelect: () => void;
   onToggle: () => void;
 }): ReactNode {
+  const className = [
+    'fn',
+    active ? 'on' : '',
+    root ? 'root' : '',
+    quiet ? 'quiet' : '',
+    drop ? `drop-${drop}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const style = { '--d': depth } as React.CSSProperties;
+  const label = (
+    <>
+      {mark ?? <Icon name={icon} />}
+      <span className="nm">{name}</span>
+    </>
+  );
+  const trailing = (
+    <>
+      {action}
+      {tag ?? (count === undefined ? null : <span className="c">{count}</span>)}
+    </>
+  );
+  if (!tree)
+    return (
+      <div className={className} style={style}>
+        <span className="twist none" aria-hidden="true" />
+        <button
+          type="button"
+          className="fselect"
+          aria-current={active ? 'location' : undefined}
+          onClick={onSelect}
+        >
+          {label}
+        </button>
+        {trailing}
+      </div>
+    );
   return (
     <div
-      className={[
-        'fn',
-        active ? 'on' : '',
-        root ? 'root' : '',
-        quiet ? 'quiet' : '',
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      className={className}
       data-folder-store={storeId}
       data-folder-path={path}
-      style={{ '--d': depth } as React.CSSProperties}
+      data-tree-key={tree.key}
+      style={style}
+      role="treeitem"
+      aria-level={tree.level}
+      aria-expanded={expandable ? open : undefined}
+      aria-selected={active}
+      aria-haspopup={storeId ? 'menu' : undefined}
+      tabIndex={tree.tabIndex}
+      onClick={onSelect}
     >
       {/* Every row keeps the twist cell so names align down the column; a row
           with nothing to disclose leaves it empty. */}
-      {expandable ? (
-        <button
-          type="button"
-          className={open ? 'twist open' : 'twist'}
-          aria-expanded={open}
-          aria-label={open ? `Collapse ${name}` : `Expand ${name}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggle();
-          }}
-        >
-          <Icon name="chevronDown" />
-        </button>
-      ) : (
-        <span className="twist none" aria-hidden="true" />
-      )}
-      <button
-        type="button"
-        className="fselect"
-        aria-haspopup={storeId ? 'menu' : undefined}
-        aria-current={active ? 'location' : undefined}
-        onClick={onSelect}
+      <span
+        className={expandable ? (open ? 'twist open' : 'twist') : 'twist none'}
+        aria-hidden="true"
+        onClick={
+          expandable
+            ? (event) => {
+                event.stopPropagation();
+                onToggle();
+              }
+            : undefined
+        }
       >
-        {mark ?? <Icon name={icon} />}
-        <span className="nm">{name}</span>
-      </button>
-      {action}
-      {tag ?? (count === undefined ? null : <span className="c">{count}</span>)}
+        {expandable ? <Icon name="chevronDown" /> : null}
+      </span>
+      <span className="fselect">{label}</span>
+      {trailing}
     </div>
   );
 }
@@ -646,8 +861,28 @@ export interface ItemsScreenProps {
   onReveal: (item: Item) => void;
   onNew: (kind: NewKind, storeId: string, folder?: string) => void;
   onResume: (storeId: string) => Promise<void>;
-  onDelete: (item: Item) => void;
+  /** Moves an item, or a folder with its contents, to Trash. */
+  onTrash: (item: Item) => void;
+  /** Moves a Trash entry back to where it was. */
+  onRestore?: (entry: TrashEntry) => void;
+  /** Asks to remove a Trash entry permanently. */
+  onDeletePermanently?: (item: Item) => void;
+  /** Asks to remove every entry in a store's Trash permanently. */
+  onEmptyTrash?: (storeId: string) => void;
   onMove?: (item: Item) => void;
+  /** Copies an item into another vault, the same server's or another's. */
+  onCopyToVault?: (item: Item) => void;
+  /** Imports logins from a CSV export into a store, at `folder` when given. */
+  onImport?: (storeId: string, folder?: string) => void;
+  /** Exports the passwords of a store to a plain-text CSV file. */
+  onExport?: (storeId: string) => void;
+  /**
+   * Moves several items of one store: to `folder` when a drag names it, or
+   * to a folder chosen in the move sheet.
+   */
+  onMoveMany?: (items: readonly Item[], folder?: string) => void;
+  /** Moves several items to Trash. */
+  onTrashMany?: (items: readonly Item[]) => void;
   onSettings: (storeId: string) => void;
   onTeamInfo?: (storeId: string, trigger?: HTMLElement) => void;
   onNewFolder?: (storeId: string, path: string) => void;
@@ -667,6 +902,74 @@ function underFolder(path: string, folder: string): boolean {
   return folder === '/' || path === folder || path.startsWith(`${folder}/`);
 }
 
+/** The mounted list row or card whose `data-nav-key` is `key`. */
+function navElement(
+  container: HTMLElement | null,
+  key: string,
+): HTMLElement | undefined {
+  return [
+    ...(container?.querySelectorAll<HTMLElement>('[data-nav-key]') ?? []),
+  ].find((element) => element.dataset.navKey === key);
+}
+
+/** The drawn folder tree row whose `data-tree-key` is `key`. */
+function treeElement(
+  container: HTMLElement,
+  key: string,
+): HTMLElement | undefined {
+  return [...container.querySelectorAll<HTMLElement>('[data-tree-key]')].find(
+    (element) => element.dataset.treeKey === key,
+  );
+}
+
+/**
+ * Returns focus to the list once the chosen rows are gone together with the
+ * control that had it: Clear, or a move of every chosen row, unmounts the
+ * selection bar and its focused button. Focus goes to the anchor row, else
+ * to the row now at the first chosen row's place. A sheet that is still open
+ * keeps focus until it closes.
+ */
+function ChosenRowsFocus({
+  count,
+  anchor,
+  first,
+  listed,
+  body,
+}: {
+  count: number;
+  anchor: string | null;
+  /** The list index of the first chosen row. */
+  first: number;
+  listed: readonly string[];
+  body: RefObject<HTMLDivElement | null>;
+}): null {
+  const pending = useRef<{ anchor: string | null; index: number } | null>(null);
+  useEffect(() => {
+    if (count) {
+      pending.current = { anchor, index: first };
+      return;
+    }
+    const last = pending.current;
+    if (!last || anyDialogOpen()) return;
+    pending.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const key =
+      last.anchor && listed.includes(last.anchor)
+        ? last.anchor
+        : listed[Math.min(Math.max(last.index, 0), listed.length - 1)];
+    const element = body.current;
+    const rows = [
+      ...(element?.querySelectorAll<HTMLElement>('[data-row-key]') ?? []),
+    ];
+    const target =
+      rows.find((row) => row.dataset.rowKey === key) ??
+      element?.querySelector<HTMLElement>('[tabindex="0"], button');
+    target?.focus();
+  });
+  return null;
+}
+
 export function ItemsScreen({
   snapshot,
   bridge,
@@ -675,8 +978,16 @@ export function ItemsScreen({
   onReveal,
   onNew,
   onResume,
-  onDelete,
+  onTrash,
+  onRestore,
+  onDeletePermanently,
+  onEmptyTrash,
   onMove,
+  onCopyToVault,
+  onImport,
+  onExport,
+  onMoveMany,
+  onTrashMany,
   onSettings,
   onTeamInfo,
   onNewFolder,
@@ -686,6 +997,24 @@ export function ItemsScreen({
   accessNow = () => Date.now() / 1000,
 }: ItemsScreenProps): ReactNode {
   const sidebar = useFilesSidebarResize();
+  // Rows chosen together, valid only for the view they were chosen in.
+  const [multi, setMulti] = useState<{ scope: string; rows: MultiSelection }>({
+    scope: '',
+    rows: NO_ROWS,
+  });
+  const [drag, setDrag] = useState<{
+    x: number;
+    y: number;
+    what: string;
+    verdict: DropVerdict | null;
+    target: string | null;
+  } | null>(null);
+  // Set when a drag ends, so the click that follows the release is not read
+  // as a selection.
+  const suppressClick = useRef(false);
+  // Ends the drag in progress, if any; an unmount ends it unapplied.
+  const endDrag = useRef<((drop: boolean) => void) | null>(null);
+  useEffect(() => () => endDrag.current?.(false), []);
   const toasts = useToast();
   const [view, setView] = useState<FilesView>(storedFilesView);
   const [folderMenu, setFolderMenu] = useState<{
@@ -698,6 +1027,19 @@ export function ItemsScreen({
   const folderMenuAnchor = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // The list's and the tree's roving tab stops: the entry focus last moved
+  // to, kept while it is still drawn.
+  const [rowFocus, setRowFocus] = useState<string | null>(null);
+  const [treeFocus, setTreeFocus] = useState<string | null>(null);
+  // A row the arrow keys moved to before the virtual window had mounted it;
+  // it takes focus once the scroll that brings it in has rendered.
+  const pendingRowFocus = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const key = pendingRowFocus.current;
+    if (!key) return;
+    pendingRowFocus.current = null;
+    navElement(bodyRef.current, key)?.focus({ preventScroll: true });
+  });
   const [scrollTop, setScrollTop] = useState(0);
   const [listMetrics, setListMetrics] = useState({
     top: 0,
@@ -851,10 +1193,73 @@ export function ItemsScreen({
     locations.setFolder(folderKey(samePage, target.id, path));
   };
 
+  const trashCounts = new Map<string, number>();
+  const trashCount = (storeId: string): number => {
+    let count = trashCounts.get(storeId);
+    if (count === undefined) {
+      count = trashEntries(snapshot, storeId).length;
+      trashCounts.set(storeId, count);
+    }
+    return count;
+  };
+  // The vaults and the teams are each one tree: one tab stop whose focused
+  // row the arrow keys move, falling back to the selected folder.
+  const treeRoots = (list: readonly StoreTree[]) =>
+    list.map((tree) => ({
+      storeId: tree.store.id,
+      root: tree.root,
+      trash: storeReadable(snapshot, tree.store.id),
+    }));
+  const vaultEntries = treeEntries(treeRoots(vaultTrees), closed, TRASH_ROOT);
+  const teamEntries = treeEntries(treeRoots(teamTrees), closed, TRASH_ROOT);
+  const selectedTreeKey =
+    selected.store === ALL_ITEMS ? null : `${selected.store}|${selected.path}`;
+  const treeStop = (entries: readonly TreeEntry[]): string | undefined =>
+    rovingKey(
+      entries.map((entry) => entry.key),
+      treeFocus,
+      selectedTreeKey,
+    );
+  const vaultStop = treeStop(vaultEntries);
+  const teamStop = treeStop(teamEntries);
+  const treePlace = (
+    key: string,
+    level: number,
+    stop: string | undefined,
+  ): { key: string; level: number; tabIndex: 0 | -1 } => ({
+    key,
+    level,
+    tabIndex: key === stop ? 0 : -1,
+  });
+  const treeKeys =
+    (entries: readonly TreeEntry[]) =>
+    (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+      if (event.altKey || event.metaKey || event.ctrlKey) return;
+      const row = event.target;
+      if (!(row instanceof HTMLElement) || !row.dataset.treeKey) return;
+      const index = entries.findIndex(
+        (entry) => entry.key === row.dataset.treeKey,
+      );
+      const action = treeKeyAction(event.key, entries, index);
+      if (!action) return;
+      event.preventDefault();
+      const entry = entries[action.index];
+      if (action.kind === 'toggle') locations.toggleFolder(entry.key);
+      else if (action.kind === 'select') row.click();
+      else {
+        setTreeFocus(entry.key);
+        treeElement(event.currentTarget, entry.key)?.focus();
+      }
+    };
+  const treeFocused = (event: ReactFocusEvent<HTMLDivElement>): void => {
+    if (event.target instanceof HTMLElement && event.target.dataset.treeKey)
+      setTreeFocus(event.target.dataset.treeKey);
+  };
   const drawFolders = (
     folders: readonly FolderNode[],
     treeStore: Store,
     depth: number,
+    stop: string | undefined,
   ): ReactNode =>
     folders.map((folder) => {
       const foldKey = `${treeStore.id}|${folder.path}`;
@@ -862,6 +1267,7 @@ export function ItemsScreen({
       return (
         <Fragment key={foldKey}>
           <TreeRow
+            tree={treePlace(foldKey, depth + 1, stop)}
             storeId={treeStore.id}
             path={folder.path}
             depth={depth}
@@ -871,29 +1277,36 @@ export function ItemsScreen({
             icon="folder"
             name={displayPathComponent(folder.name)}
             count={folder.count}
+            drop={dropOn(treeStore.id, folder.path)}
             open={open}
             expandable={folder.folders.length > 0}
             onSelect={() => selectFolder(treeStore, folder.path)}
             onToggle={() => locations.toggleFolder(foldKey)}
           />
-          {open ? drawFolders(folder.folders, treeStore, depth + 1) : null}
+          {open
+            ? drawFolders(folder.folders, treeStore, depth + 1, stop)
+            : null}
         </Fragment>
       );
     });
 
   // Render store root row and its expandable folder sub-tree.
-  const storeRoot = (tree: StoreTree): ReactNode => {
+  const storeRoot = (tree: StoreTree, stop: string | undefined): ReactNode => {
     const active = selected.store === tree.store.id && selected.path === '/';
     const foldKey = `${tree.store.id}|/`;
+    const trashKey = `${tree.store.id}|${TRASH_ROOT}`;
     const open = !closed.has(foldKey);
     const expired = leaseExpired(tree.store);
+    const hasTrash = storeReadable(snapshot, tree.store.id);
     return (
       <Fragment key={tree.store.id}>
         <TreeRow
+          tree={treePlace(foldKey, 1, stop)}
           storeId={tree.store.id}
           path="/"
           depth={0}
           root
+          drop={dropOn(tree.store.id, '/')}
           active={active}
           icon="vault"
           mark={
@@ -914,27 +1327,47 @@ export function ItemsScreen({
             ) : undefined
           }
           open={open}
-          expandable={tree.root.folders.length > 0}
+          // Trash is drawn under the store, so a store without folders is
+          // still a parent that opens and closes.
+          expandable={tree.root.folders.length > 0 || hasTrash}
           action={
             tree.store.kind === 'team' ? (
-              <button
-                type="button"
+              // A pointer shortcut: the row's menu offers Team settings to
+              // the keyboard and to assistive technology.
+              <span
                 className="fact"
                 title="Team settings"
-                aria-label={`${tree.store.name} settings`}
+                aria-hidden="true"
                 onClick={(event) => {
                   event.stopPropagation();
                   onSettings(tree.store.id);
                 }}
               >
                 <Icon name="settings" />
-              </button>
+              </span>
             ) : undefined
           }
           onSelect={() => selectFolder(tree.store, '/')}
           onToggle={() => locations.toggleFolder(foldKey)}
         />
-        {open ? drawFolders(tree.root.folders, tree.store, 1) : null}
+        {open ? drawFolders(tree.root.folders, tree.store, 1, stop) : null}
+        {open && hasTrash ? (
+          <TreeRow
+            tree={treePlace(trashKey, 2, stop)}
+            depth={1}
+            active={
+              selected.store === tree.store.id && selected.path === TRASH_ROOT
+            }
+            quiet={!trashCount(tree.store.id)}
+            icon="trash"
+            name="Trash"
+            count={trashCount(tree.store.id) || undefined}
+            open={false}
+            expandable={false}
+            onSelect={() => selectFolder(tree.store, TRASH_ROOT)}
+            onToggle={() => {}}
+          />
+        ) : null}
       </Fragment>
     );
   };
@@ -945,8 +1378,10 @@ export function ItemsScreen({
       : store && storeReadable(snapshot, store.id)
         ? store.id
         : (defaultCreateStore(snapshot) ?? '');
+  // Trash is not a place to create items in: New saves at the store's root.
+  const trashSelected = Boolean(selectedTree) && isTrashPath(selected.path);
   const createFolder =
-    selectedTree && selectedNode && selected.path !== '/'
+    selectedTree && selectedNode && selected.path !== '/' && !trashSelected
       ? selected.path
       : undefined;
   const currentStoreAvailable = (storeId: string): boolean => {
@@ -959,8 +1394,9 @@ export function ItemsScreen({
   };
   // Dropped files are uploaded to the active store or selected folder.
   // Multi-store views disable drops because no target store is selected.
-  const dropStore =
-    location.kind === 'store'
+  const dropStore = trashSelected
+    ? undefined
+    : location.kind === 'store'
       ? store
       : !state.query
         ? selectedTree?.store
@@ -1031,15 +1467,15 @@ export function ItemsScreen({
     toasts.show(problem, { tone: 'warning' });
     return false;
   };
-  const copyItem = (item: Item): void => {
-    if (!allowAction(item)) return;
-    void bridge.copyItemValue(request(item)).then(
-      () =>
-        toasts.show(
-          `${kindOf(item) === 'Password' ? 'Password' : 'Value'} copied`,
-        ),
-      (error: unknown) => onCommandError(error, item),
-    );
+  const copyItemField = (item: Item, field: ItemField): void => {
+    void copyAndAnnounce({
+      bridge,
+      item,
+      field,
+      toasts,
+      problem: itemActionProblem(snapshot, item, false, accessNow()),
+      onError: onCommandError,
+    });
   };
   const revealItem = (item: Item): void => {
     if (!allowAction(item)) return;
@@ -1070,50 +1506,410 @@ export function ItemsScreen({
   const readOnly = Boolean(readOnlyReason);
   const expiredHere = Boolean(selectedStore && leaseExpired(selectedStore));
 
-  const row = (item: Item, chipColumns: Columns): ReactNode => (
+  /* ------------------------------------------------- multi-selection -- */
+
+  // The rows the list draws, in order: what ⌘A selects and Shift-click
+  // ranges over. Trash draws its own view.
+  const listed = trashSelected ? [] : flatMode ? items : folderScopedItems;
+  const listedKeys = listed.map(rowKey);
+  const multiScope = [
+    location.kind,
+    location.kind === 'store' ? location.ref : '',
+    state.folder,
+    state.query,
+    state.kind,
+  ].join('\n');
+  const chosenRows = multi.scope === multiScope ? multi.rows : NO_ROWS;
+  const chosen = selectedRows(chosenRows, listed);
+  const chosenKeys = new Set(chosen.map(rowKey));
+  const setChosen = (rows: MultiSelection): void =>
+    setMulti({ scope: multiScope, rows });
+  // The row the details panel shows joins a multi-selection started beside it.
+  const seed =
+    state.selection && listedKeys.includes(rowKey(state.selection))
+      ? rowKey(state.selection)
+      : null;
+  const pickRow = (item: Item, mode: 'toggle' | 'extend'): void => {
+    if (suppressClick.current) return;
+    const current = { keys: chosen.map(rowKey), anchor: chosenRows.anchor };
+    setChosen(
+      mode === 'toggle'
+        ? toggleRow(current, rowKey(item), seed)
+        : extendRows(current, listedKeys, rowKey(item), seed),
+    );
+  };
+  /** The multi-selection `item` belongs to, when it has more than one row. */
+  const groupOf = (item: Item): readonly Item[] | null =>
+    chosen.length > 1 && chosenKeys.has(rowKey(item)) ? chosen : null;
+  const writeProblems = (group: readonly Item[]): (string | undefined)[] =>
+    group.map((item) => itemActionProblem(snapshot, item, true, accessNow()));
+  const storeBlocked = (target: Store): string | null =>
+    !availability(target).available
+      ? storeDescription(snapshot, target)
+      : writeBlockReason(snapshot, target);
+  const moveGroupReason = (group: readonly Item[]): string | undefined => {
+    if (new Set(group.map((item) => item.store)).size > 1)
+      return 'Select items from one vault to move them together.';
+    const problems = writeProblems(group);
+    return problems.every(Boolean) ? problems[0] : undefined;
+  };
+  const trashGroupReason = (group: readonly Item[]): string | undefined => {
+    const problems = writeProblems(group);
+    return problems.every(Boolean) ? problems[0] : undefined;
+  };
+  const moveRow = (item: Item): void => {
+    const group = groupOf(item);
+    if (group && onMoveMany) {
+      const reason = moveGroupReason(group);
+      if (reason) toasts.show(reason, { tone: 'warning' });
+      else onMoveMany(group);
+      return;
+    }
+    if (onMove && allowAction(item, true)) onMove(item);
+  };
+  const copyRow = (item: Item): void => {
+    if (onCopyToVault && allowAction(item, false)) onCopyToVault(item);
+  };
+  const trashRow = (item: Item): void => {
+    const group = groupOf(item);
+    if (group && onTrashMany) {
+      const reason = trashGroupReason(group);
+      if (reason) toasts.show(reason, { tone: 'warning' });
+      else onTrashMany(group);
+      return;
+    }
+    if (allowAction(item, true)) onTrash(item);
+  };
+
+  /**
+   * Dragging rows onto a folder of the tree or the list moves them there.
+   * The drag follows pointer events and finds the folder under the pointer
+   * with `elementFromPoint`, because the window's native drag-and-drop
+   * handler is reserved for files dropped from the operating system and
+   * keeps HTML drag events from reaching the page on some platforms.
+   */
+  const startDrag = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    item: Item,
+  ): void => {
+    if (
+      !onMoveMany ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      (event.target instanceof Element && event.target.closest('button'))
+    )
+      return;
+    const dragged = groupOf(item) ?? [item];
+    const own = storeOf(snapshot, item.store);
+    const ownName = own?.name ?? 'this vault';
+    const blocked = own
+      ? storeBlocked(own)
+      : 'This vault is no longer available.';
+    const what =
+      dragged.length === 1 ? nameOf(item.path) : itemCount(dragged.length);
+    const origin = { x: event.clientX, y: event.clientY };
+    let active = false;
+    let target: { store: string; path: string } | null = null;
+    let verdict: DropVerdict | null = null;
+    const judge = (x: number, y: number): void => {
+      const element =
+        typeof document.elementFromPoint === 'function'
+          ? document.elementFromPoint(x, y)
+          : null;
+      const folder = element?.closest<HTMLElement>('[data-folder-store]');
+      const store = folder?.dataset.folderStore;
+      const path = folder?.dataset.folderPath;
+      target = store && path ? { store, path } : null;
+      verdict = target
+        ? dropVerdict(dragged, target.store, target.path, ownName, blocked)
+        : null;
+    };
+    const onMove = (next: PointerEvent): void => {
+      if (!active) {
+        if (Math.hypot(next.clientX - origin.x, next.clientY - origin.y) < 6)
+          return;
+        active = true;
+        document.body.classList.add('dragging-rows');
+        window.getSelection()?.removeAllRanges();
+      }
+      judge(next.clientX, next.clientY);
+      setDrag({
+        x: next.clientX,
+        y: next.clientY,
+        what,
+        verdict,
+        target: target ? `${target.store}|${target.path}` : null,
+      });
+    };
+    const finish = (drop: boolean): void => {
+      endDrag.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('keydown', onKey, true);
+      if (!active) return;
+      document.body.classList.remove('dragging-rows');
+      suppressClick.current = true;
+      window.setTimeout(() => {
+        suppressClick.current = false;
+      }, 0);
+      setDrag(null);
+      if (drop && verdict?.ok && target) onMoveMany(dragged, target.path);
+    };
+    const onUp = (next: PointerEvent): void => {
+      if (active) judge(next.clientX, next.clientY);
+      finish(true);
+    };
+    const onCancel = (): void => finish(false);
+    const onKey = (next: KeyboardEvent): void => {
+      if (next.key !== 'Escape' || !active) return;
+      next.preventDefault();
+      next.stopPropagation();
+      finish(false);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('keydown', onKey, true);
+    endDrag.current = finish;
+  };
+  const dropOn = (storeId: string, path: string): 'ok' | 'no' | undefined =>
+    drag?.target === `${storeId}|${path}`
+      ? drag.verdict?.ok
+        ? 'ok'
+        : 'no'
+      : undefined;
+
+  const selectionBar =
+    chosen.length && (onMoveMany || onTrashMany) ? (
+      <div className="selbar" role="toolbar" aria-label="Selected items">
+        <span className="n" aria-live="polite">
+          {chosen.length} selected
+        </span>
+        {onMoveMany ? (
+          <Button
+            size="sm"
+            icon="folder"
+            disabled={Boolean(moveGroupReason(chosen))}
+            title={moveGroupReason(chosen)}
+            onClick={() => onMoveMany(chosen)}
+          >
+            Move to…
+          </Button>
+        ) : null}
+        {onTrashMany ? (
+          <Button
+            size="sm"
+            icon="trash"
+            danger
+            disabled={Boolean(trashGroupReason(chosen))}
+            title={trashGroupReason(chosen)}
+            onClick={() => onTrashMany(chosen)}
+          >
+            Move to Trash
+          </Button>
+        ) : null}
+        <span className="sp" />
+        <Button size="sm" onClick={() => setChosen(NO_ROWS)}>
+          Clear
+        </Button>
+      </div>
+    ) : null;
+
+  /* ------------------------------------------------- keyboard movement -- */
+
+  // The list or card grid is one tab stop. Its entries in order: the
+  // selected folder's subfolders, then the listed items.
+  const navKeys = trashSelected
+    ? []
+    : [
+        ...(!flatMode && selectedTree
+          ? folders.map((folder) =>
+              folderNavKey(selectedTree.store.id, folder.path),
+            )
+          : []),
+        ...listedKeys,
+      ];
+  const navStop = rovingKey(navKeys, rowFocus, seed);
+  const navIndex = navStop === undefined ? -1 : navKeys.indexOf(navStop);
+  const cardLayout = view === 'grid';
+  const lineSize = cardLayout ? gridWindow.columns : 1;
+  const cardHeight = columns.location
+    ? FILES_CARD_HEIGHT_WITH_LOCATION
+    : FILES_CARD_HEIGHT;
+  const linePitch = cardLayout ? cardHeight + FILES_CARD_GAP : ROW_HEIGHT;
+  // The column headers are the list grid's first row while they are drawn.
+  const headerRows = !cardLayout && !selectionBar ? 1 : 0;
+  const navFor = (key: string, index: number): RowNav => ({
+    layout: cardLayout ? 'card' : 'list',
+    key,
+    tabIndex: key === navStop ? 0 : -1,
+    rowIndex: cardLayout ? undefined : index + 1 + headerRows,
+    colIndex: cardLayout ? (index % lineSize) + 1 : undefined,
+  });
+  /** Scrolls a windowed list so that the entry at `index` is in view. */
+  const revealRow = (index: number): void => {
+    const body = bodyRef.current;
+    if (!flatMode || !body) return;
+    const sticky =
+      body.querySelector<HTMLElement>(
+        '.list-window > .selbar, .files-items > .hdr',
+      )?.offsetHeight ?? 0;
+    const next = revealOffset({
+      top: listMetrics.top + Math.floor(index / lineSize) * linePitch,
+      height: cardLayout ? cardHeight : ROW_HEIGHT,
+      scrollTop,
+      viewport: listMetrics.viewport,
+      stickyTop: sticky,
+    });
+    if (next !== scrollTop) {
+      body.scrollTop = next;
+      setScrollTop(next);
+    }
+  };
+  /**
+   * Moves focus to the entry at `index`, first scrolling a windowed list so
+   * that the entry is mounted and in view.
+   */
+  const focusRow = (index: number): void => {
+    const key = navKeys[index];
+    if (key === undefined) return;
+    const body = bodyRef.current;
+    revealRow(index);
+    setRowFocus(key);
+    const element = navElement(body, key);
+    if (element) element.focus({ preventScroll: flatMode });
+    else pendingRowFocus.current = key;
+  };
+  const gridKeys = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey)
+      return;
+    // Keys typed in a menu opened from a row reach this handler through
+    // React's tree; only the grid's own entries count.
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const entry = target.closest<HTMLElement>('[data-nav-key]');
+    if (!entry || !event.currentTarget.contains(entry)) return;
+    const index = navKeys.indexOf(entry.dataset.navKey ?? '');
+    if (index < 0) return;
+    if (!cardLayout && matchesShortcut(event, 'rowActions')) {
+      // In the list, Left and Right move between a row and its own actions.
+      const stops = [
+        entry,
+        ...entry.querySelectorAll<HTMLElement>('.acts button'),
+      ];
+      const at = stops.indexOf(target);
+      const next = stops[at + (event.key === 'ArrowRight' ? 1 : -1)];
+      if (at < 0 || !next) return;
+      event.preventDefault();
+      next.focus();
+      return;
+    }
+    const next = gridFocusTarget(event.key, {
+      index,
+      count: navKeys.length,
+      columns: lineSize,
+      page: Math.max(1, Math.floor(listMetrics.viewport / linePitch)),
+    });
+    if (next === null) return;
+    event.preventDefault();
+    focusRow(next);
+  };
+  const rowFocused = (event: ReactFocusEvent<HTMLDivElement>): void => {
+    const entry =
+      event.target instanceof HTMLElement
+        ? event.target.closest<HTMLElement>('[data-nav-key]')
+        : null;
+    if (!entry?.dataset.navKey || !event.currentTarget.contains(entry)) return;
+    setRowFocus(entry.dataset.navKey);
+    // The tab stop outside the virtual window is drawn one line beyond its
+    // edge, not where it belongs; focus returning to it (Tab after scrolling
+    // the list away) scrolls the list to its real place.
+    const index = navKeys.indexOf(entry.dataset.navKey);
+    if (index >= 0 && (index < rowWindow.start || index >= rowWindow.end))
+      revealRow(index);
+  };
+  /** The card grid's lines, from the line holding entry `first`. */
+  const cardLines = (
+    entries: readonly ReactNode[],
+    first: number,
+  ): ReactNode[] => {
+    const lines: ReactNode[] = [];
+    for (let at = 0; at < entries.length; at += lineSize) {
+      const line = Math.floor((first + at) / lineSize);
+      lines.push(
+        <div
+          key={line}
+          className="files-grid-line"
+          role="row"
+          aria-rowindex={line + 1}
+        >
+          {entries.slice(at, at + lineSize)}
+        </div>,
+      );
+    }
+    return lines;
+  };
+  const cardGridStyle = {
+    '--files-columns': lineSize,
+  } as React.CSSProperties;
+
+  const row = (item: Item, index: number): ReactNode => (
     <Row
       key={`${item.store}|${item.path}`}
+      nav={navFor(rowKey(item), index)}
       snapshot={snapshot}
       hues={hues}
       item={item}
-      columns={chipColumns}
+      columns={columns}
       selected={
-        state.selection?.store === item.store &&
-        state.selection.path === item.path
+        chosen.length
+          ? chosenKeys.has(rowKey(item))
+          : state.selection?.store === item.store &&
+            state.selection.path === item.path
       }
       readOnly={readOnly}
-      onSelect={() => locations.select({ store: item.store, path: item.path })}
-      onCopy={copyItem}
+      group={groupOf(item)?.length ?? 0}
+      onSelect={() => {
+        if (suppressClick.current) return;
+        setChosen(NO_ROWS);
+        locations.select({ store: item.store, path: item.path });
+      }}
+      onPick={(mode) => pickRow(item, mode)}
+      onPointerDown={(event) => startDrag(event, item)}
+      onCopy={copyItemField}
       onReveal={revealItem}
       onDownload={downloadItem}
-      onMove={
-        onMove
-          ? (item) => {
-              if (allowAction(item, true)) onMove(item);
-            }
-          : undefined
-      }
-      onDelete={(item) => {
-        if (allowAction(item, true)) onDelete(item);
-      }}
+      onMove={onMove || onMoveMany ? moveRow : undefined}
+      onCopyToVault={onCopyToVault ? copyRow : undefined}
+      onTrash={trashRow}
       accessNow={accessNow}
     />
   );
 
   const paneRows = selectedTree
     ? [
-        ...folders.map((folder) => (
+        ...folders.map((folder, index) => (
           <FolderRow
+            nav={navFor(
+              folderNavKey(selectedTree.store.id, folder.path),
+              index,
+            )}
             storeId={selectedTree.store.id}
             path={folder.path}
             key={folder.path}
             name={displayPathComponent(folder.name)}
             count={folder.count}
             columns={columns}
+            drop={dropOn(selectedTree.store.id, folder.path)}
             onSelect={() => selectFolder(selectedTree.store, folder.path)}
           />
         )),
-        ...folderScopedItems.map((item) => row(item, columns)),
+        ...folderScopedItems.map((item, index) =>
+          row(item, folders.length + index),
+        ),
       ]
     : [];
 
@@ -1145,17 +1941,16 @@ export function ItemsScreen({
       return false;
     const row = target.closest<HTMLElement>('[data-folder-store]');
     if (!row?.dataset.folderStore || !row.dataset.folderPath) return false;
-    const trigger = row.matches('[role="button"]')
-      ? row
-      : (row.querySelector<HTMLElement>('.fselect') ?? row);
-    trigger.focus({ preventScroll: true });
-    folderMenuAnchor.current = trigger;
+    // Every row that opens this menu is its own focus target: a tree row, a
+    // folder row or card, or the single vault's heading.
+    row.focus({ preventScroll: true });
+    folderMenuAnchor.current = row;
     setFolderMenu({
       x,
       y,
       storeId: row.dataset.folderStore,
       path: row.dataset.folderPath,
-      trigger,
+      trigger: row,
     });
     return true;
   };
@@ -1165,11 +1960,28 @@ export function ItemsScreen({
   const scopeLabel =
     selected.store === ALL_ITEMS
       ? 'All items'
-      : selected.path !== '/'
-        ? nameOf(selected.path)
-        : (selectedStore?.name ?? 'All items');
+      : trashSelected
+        ? `Trash · ${selectedStore?.name ?? ''}`
+        : selected.path !== '/'
+          ? nameOf(selected.path)
+          : (selectedStore?.name ?? 'All items');
+  const trashShown =
+    trashSelected && selectedTree
+      ? trashEntries(snapshot, selectedTree.store.id).filter(
+          (entry) =>
+            !state.query ||
+            [entry.name, entry.original ?? '']
+              .join('\n')
+              .toLowerCase()
+              .includes(state.query.toLowerCase()),
+        )
+      : [];
   const shownCount =
-    selected.store === ALL_ITEMS ? items.length : (selectedNode?.count ?? 0);
+    selected.store === ALL_ITEMS
+      ? items.length
+      : trashSelected
+        ? trashShown.length
+        : (selectedNode?.count ?? 0);
   const people =
     selectedStore?.kind === 'team'
       ? partiesOf(snapshot, selectedStore.id).length
@@ -1195,7 +2007,7 @@ export function ItemsScreen({
           </span>
           <b>New password</b>
           <small>A login, API key or any secret value.</small>
-          <kbd>⌘N</kbd>
+          <kbd>{shortcutLabel('newPassword')}</kbd>
         </button>
         <button
           type="button"
@@ -1207,19 +2019,46 @@ export function ItemsScreen({
           </span>
           <b>Add a document</b>
           <small>Drop a file anywhere in this window, or pick one.</small>
-          <kbd>⇧⌘N</kbd>
+          <kbd>{shortcutLabel('newDocument')}</kbd>
         </button>
-        {/* The app has no CLI import command, so this card states the one the
-            CLI already has rather than offering an action it cannot run. */}
-        <div className="card static">
-          <span className="ci">
-            <Icon name="terminal" />
-          </span>
-          <b>Import from the CLI</b>
-          <small>Bring items from an existing FOKS install.</small>
-          <span className="cli">foks kv export …</span>
-        </div>
+        {onImport ? (
+          <button
+            type="button"
+            className="card"
+            onClick={() => {
+              if (createStore && currentStoreAvailable(createStore))
+                onImport(createStore, createFolder);
+            }}
+          >
+            <span className="ci">
+              <Icon name="download" />
+            </span>
+            <b>Import passwords</b>
+            <small>
+              From a CSV export of 1Password, Bitwarden, KeePass or a browser.
+            </small>
+          </button>
+        ) : null}
       </div>
+      {/* Items live on the server, so an account already used with the FOKS
+          CLI brings its items once it is connected; there is no CLI export. */}
+      <p>
+        Already use FOKS on the command line?{' '}
+        <button
+          type="button"
+          className="lnk"
+          onClick={() =>
+            locations.navigate({
+              kind: 'settings',
+              section: 'account',
+              ...(selectedStore ? { profile: selectedStore.server } : {}),
+            })
+          }
+        >
+          Connect that account
+        </button>{' '}
+        in Settings › Account › Import from FOKS CLI, and its items appear here.
+      </p>
     </div>
   );
 
@@ -1229,7 +2068,10 @@ export function ItemsScreen({
         <Icon name="search" />
       </div>
       <h2>Nothing matches “{state.query}”</h2>
-      <p>Try a shorter word, or press ⌘K to search every vault and team.</p>
+      <p>
+        Try a shorter word, or press {shortcutLabel('search')} to search every
+        vault and team.
+      </p>
     </div>
   );
 
@@ -1328,8 +2170,77 @@ export function ItemsScreen({
     snapshot,
     selected.store === ALL_ITEMS ? undefined : selected.store,
   );
+  // The windowed list keeps its tab stop mounted after it scrolls out of the
+  // window: the entry is drawn one line beyond the window's edge, in place of
+  // that much spacer, so focus and the way back into the list survive.
+  const pinnedItem =
+    flatMode && (navIndex < rowWindow.start || navIndex >= rowWindow.end)
+      ? items[navIndex]
+      : undefined;
+  const pinnedBefore = pinnedItem !== undefined && navIndex < rowWindow.start;
+  const pinnedAfter = pinnedItem !== undefined && navIndex >= rowWindow.end;
+  const pinnedEntry = pinnedItem ? row(pinnedItem, navIndex) : null;
+  // Keyed as the line it belongs to, so the card keeps its element, and
+  // with it focus, when that line leaves the window.
+  const pinnedLine = pinnedItem ? (
+    <div
+      key={Math.floor(navIndex / lineSize)}
+      className="files-grid-line"
+      role="row"
+      aria-rowindex={Math.floor(navIndex / lineSize) + 1}
+    >
+      {pinnedEntry}
+    </div>
+  ) : null;
+  const padTop = rowWindow.padTop - (pinnedBefore ? linePitch : 0);
+  const padBottom = Math.max(
+    0,
+    rowWindow.padBottom - (pinnedAfter ? linePitch : 0),
+  );
+  const windowEntries = visibleRows.map((item, index) =>
+    row(item, rowWindow.start + index),
+  );
+  // One keyed list, so a row that leaves the window for the pinned place is
+  // moved rather than mounted again.
+  const listEntries = [
+    ...(pinnedBefore ? [pinnedEntry] : []),
+    ...windowEntries,
+    ...(pinnedAfter ? [pinnedEntry] : []),
+  ];
+  const windowLines = [
+    ...(pinnedBefore ? [pinnedLine] : []),
+    ...cardLines(windowEntries, rowWindow.start),
+    ...(pinnedAfter ? [pinnedLine] : []),
+  ];
+  const gridAttributes = {
+    className: 'files-items',
+    role: 'grid',
+    'aria-label': state.query ? `Results for “${state.query}”` : scopeLabel,
+    'aria-rowcount': cardLayout
+      ? Math.ceil(navKeys.length / lineSize)
+      : navKeys.length + headerRows,
+    'aria-colcount': cardLayout ? lineSize : undefined,
+    'aria-multiselectable': onMoveMany || onTrashMany ? true : undefined,
+    onKeyDown: gridKeys,
+    onFocus: rowFocused,
+  };
   const listBody =
-    !items.length && itemReadiness !== 'ready' ? (
+    trashSelected && selectedTree ? (
+      <TrashView
+        snapshot={snapshot}
+        bridge={bridge}
+        store={selectedTree.store}
+        entries={trashShown}
+        accessNow={accessNow}
+        onRestore={(entry) => {
+          if (allowAction(entry.item, true)) onRestore?.(entry);
+        }}
+        onDeletePermanently={(entry) => {
+          if (allowAction(entry.item, true)) onDeletePermanently?.(entry.item);
+        }}
+        onEmptyTrash={() => onEmptyTrash?.(selectedTree.store.id)}
+      />
+    ) : !items.length && itemReadiness !== 'ready' ? (
       <CollectionStatus state={itemReadiness} label="items" />
     ) : flatMode ? (
       !items.length ? (
@@ -1342,33 +2253,30 @@ export function ItemsScreen({
         )
       ) : (
         <div className="list-window">
-          {contentsHeader}
-          <div className="virtual-rows" ref={listRef}>
-            {rowWindow.padTop ? (
-              <div
-                className="virtual-spacer"
-                style={{ height: rowWindow.padTop }}
-              />
-            ) : null}
-            {view === 'grid' ? (
-              <div
-                className="files-grid"
-                style={{
-                  gridTemplateColumns: `repeat(${gridWindow.columns}, minmax(0, 1fr))`,
-                  paddingBottom: gridWindow.trailingGap,
-                }}
-              >
-                {visibleRows.map((item) => row(item, columns))}
-              </div>
-            ) : (
-              visibleRows.map((item) => row(item, columns))
-            )}
-            {rowWindow.padBottom ? (
-              <div
-                className="virtual-spacer"
-                style={{ height: rowWindow.padBottom }}
-              />
-            ) : null}
+          {selectionBar}
+          <div {...gridAttributes}>
+            {selectionBar ? null : contentsHeader}
+            <div className="virtual-rows" ref={listRef}>
+              {padTop ? (
+                <div className="virtual-spacer" style={{ height: padTop }} />
+              ) : null}
+              {cardLayout ? (
+                <div
+                  className="files-grid"
+                  style={{
+                    ...cardGridStyle,
+                    paddingBottom: gridWindow.trailingGap,
+                  }}
+                >
+                  {windowLines}
+                </div>
+              ) : (
+                listEntries
+              )}
+              {padBottom ? (
+                <div className="virtual-spacer" style={{ height: padBottom }} />
+              ) : null}
+            </div>
           </div>
           {nextUp}
         </div>
@@ -1381,17 +2289,34 @@ export function ItemsScreen({
       )
     ) : (
       <div className="list-window">
-        {contentsHeader}
-        <div className={view === 'grid' ? 'files-grid' : 'virtual-rows'}>
-          {paneRows}
+        {selectionBar}
+        <div {...gridAttributes}>
+          {selectionBar ? null : contentsHeader}
+          {cardLayout ? (
+            <div className="files-grid" ref={listRef} style={cardGridStyle}>
+              {cardLines(paneRows, 0)}
+            </div>
+          ) : (
+            <div className="virtual-rows" ref={listRef}>
+              {paneRows}
+            </div>
+          )}
         </div>
         {nextUp}
       </div>
     );
-  const listShown = flatMode ? items.length > 0 : !showEmptyFolder;
+  const listShown =
+    !trashSelected && (flatMode ? items.length > 0 : !showEmptyFolder);
 
   return (
     <div className="drop-area">
+      <ChosenRowsFocus
+        count={chosen.length}
+        anchor={chosenRows.anchor}
+        first={chosen[0] ? listedKeys.indexOf(rowKey(chosen[0])) : -1}
+        listed={listedKeys}
+        body={bodyRef}
+      />
       {dropZone}
       <div
         ref={sidebar.ref}
@@ -1402,11 +2327,7 @@ export function ItemsScreen({
             event.preventDefault();
         }}
         onKeyDown={(event) => {
-          if (
-            event.key !== 'ContextMenu' &&
-            !(event.key === 'F10' && event.shiftKey)
-          )
-            return;
+          if (!matchesShortcut(event, 'treeMenu')) return;
           const bounds = (event.target as HTMLElement).getBoundingClientRect();
           if (showFolderMenu(event.target, bounds.left, bounds.bottom)) {
             event.preventDefault();
@@ -1466,9 +2387,57 @@ export function ItemsScreen({
                 <MenuItem
                   icon="trash"
                   danger
-                  reason="Deleting folders is not supported by the desktop agent."
+                  reason={
+                    contextFolder
+                      ? itemActionProblem(
+                          snapshot,
+                          contextFolder,
+                          true,
+                          accessNow(),
+                        )
+                      : 'Refresh this vault to load the folder before moving it to Trash.'
+                  }
+                  onClick={() => {
+                    setFolderMenu(null);
+                    if (contextFolder && allowAction(contextFolder, true))
+                      onTrash(contextFolder);
+                  }}
                 >
-                  Delete folder
+                  Move folder to Trash
+                </MenuItem>
+              ) : null}
+              {folderMenu.path === '/' && contextStore && onImport ? (
+                <MenuItem
+                  icon="download"
+                  reason={
+                    !availability(contextStore).available
+                      ? storeDescription(snapshot, contextStore)
+                      : (writeBlockReason(snapshot, contextStore) ?? undefined)
+                  }
+                  onClick={() => {
+                    setFolderMenu(null);
+                    onImport(contextStore.id);
+                  }}
+                >
+                  Import passwords…
+                </MenuItem>
+              ) : null}
+              {folderMenu.path === '/' && contextStore && onExport ? (
+                <MenuItem
+                  icon="upload"
+                  reason={
+                    !availability(contextStore).available
+                      ? storeDescription(snapshot, contextStore)
+                      : exportedPasswords(snapshot, contextStore.id)
+                        ? undefined
+                        : 'This vault has no passwords to export.'
+                  }
+                  onClick={() => {
+                    setFolderMenu(null);
+                    onExport(contextStore.id);
+                  }}
+                >
+                  Export passwords…
                 </MenuItem>
               ) : null}
               {contextStore?.kind === 'team' ? (
@@ -1487,6 +2456,15 @@ export function ItemsScreen({
                     }}
                   >
                     Team info
+                  </MenuItem>
+                  <MenuItem
+                    icon="settings"
+                    onClick={() => {
+                      setFolderMenu(null);
+                      onSettings(contextStore.id);
+                    }}
+                  >
+                    Team settings
                   </MenuItem>
                   <div role="separator" className="menu-separator" />
                   {(
@@ -1563,7 +2541,16 @@ export function ItemsScreen({
               >
                 {vaultHeading}
               </h6>
-              {vaultTrees.map(storeRoot)}
+              {vaultTrees.length ? (
+                <div
+                  role="tree"
+                  aria-label={vaultHeading}
+                  onKeyDown={treeKeys(vaultEntries)}
+                  onFocus={treeFocused}
+                >
+                  {vaultTrees.map((tree) => storeRoot(tree, vaultStop))}
+                </div>
+              ) : null}
               {
                 <h6>
                   Teams
@@ -1580,8 +2567,16 @@ export function ItemsScreen({
                   </button>
                 </h6>
               }
-              {teamTrees.map(storeRoot)}
-              {!teamTrees.length ? (
+              {teamTrees.length ? (
+                <div
+                  role="tree"
+                  aria-label="Teams"
+                  onKeyDown={treeKeys(teamEntries)}
+                  onFocus={treeFocused}
+                >
+                  {teamTrees.map((tree) => storeRoot(tree, teamStop))}
+                </div>
+              ) : (
                 <TreeRow
                   depth={0}
                   quiet
@@ -1593,7 +2588,7 @@ export function ItemsScreen({
                   onSelect={() => locations.navigate({ kind: 'teams' })}
                   onToggle={() => {}}
                 />
-              ) : null}
+              )}
             </div>
           </aside>
           <section className="lpane" aria-label="Folder contents">
@@ -1654,6 +2649,28 @@ export function ItemsScreen({
               className="body folder-body"
               ref={bodyRef}
               onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+              onKeyDown={(event) => {
+                // Keys typed in a menu or sheet opened from a row reach this
+                // handler through React's tree; only the list's own count.
+                if (
+                  !(event.target instanceof Node) ||
+                  !event.currentTarget.contains(event.target)
+                )
+                  return;
+                if (matchesShortcut(event, 'rowsClear') && chosen.length) {
+                  event.preventDefault();
+                  setChosen(NO_ROWS);
+                  return;
+                }
+                if (
+                  matchesShortcut(event, 'rowsAll') &&
+                  listed.length &&
+                  (onMoveMany || onTrashMany)
+                ) {
+                  event.preventDefault();
+                  setChosen(allRows(listedKeys));
+                }
+              }}
             >
               {location.kind === 'all' && accessBands.length ? (
                 <div className="bandstrip">
@@ -1692,6 +2709,21 @@ export function ItemsScreen({
           </section>
         </div>
       </div>
+      {drag ? (
+        <div
+          className="drag-ghost"
+          style={{ left: drag.x + 14, top: drag.y + 14 }}
+          aria-hidden="true"
+        >
+          <span className="what">
+            <Icon name="file" />
+            {drag.what}
+          </span>
+          <span className={drag.verdict?.ok ? 'lab' : 'lab no'}>
+            {drag.verdict?.label ?? 'Drop on a folder to move'}
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

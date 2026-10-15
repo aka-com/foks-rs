@@ -4,8 +4,8 @@ use crate::commands::accounts::{
 };
 use crate::commands::context::AppState;
 use crate::commands::execution::execute_read_profile_operation;
+use crate::commands::store_key::store_id;
 use crate::commands::tests::support::{account_ref, phase_four_state, test_profile_value};
-use crate::commands::vault::store_id;
 use foks_agent_proto::{Operation, ProfileOverview, ResponseResult};
 use foks_desktop::{CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
 use std::sync::{Arc, Mutex};

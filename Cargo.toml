@@ -83,10 +83,12 @@ ed25519-dalek = "2"
 fs2 = "0.4"
 getrandom = "0.4"
 libc = "0.2"
-lru = "=0.18.2"
+lru = "0.18.2"
 ml-kem = { version = "0.3.2", features = ["zeroize"] }
 rcgen = "0.14"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "form"] }
+# Exact: the `bundled` feature compiles the SQLite release that this rusqlite
+# version ships, so an update replaces the client and server database engine.
 rusqlite = { version = "=0.40.2", default-features = false, features = ["backup", "bundled", "uuid"] }
 rustix = { version = "1", features = ["process"] }
 rustls = "0.23"

@@ -970,7 +970,7 @@ pub async fn check_and_add_profile(
         Err(error) => {
             if error.ambiguous {
                 state
-                    .mutation_requires_refresh
+                    .mutation_requires_refresh()
                     .store(true, Ordering::Release);
             }
             Err(error)

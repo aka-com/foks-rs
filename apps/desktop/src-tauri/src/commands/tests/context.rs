@@ -1,9 +1,9 @@
 use crate::agent::AgentHandle;
 use crate::commands::accounts::{AccountDto, DeviceDto};
 use crate::commands::context::AppState;
+use crate::commands::store_key::store_id;
 use crate::commands::tests::servers::ProfileListTransport;
 use crate::commands::tests::support::{account_ref, phase_four_state, team_ref};
-use crate::commands::vault::store_id;
 use foks_desktop::{CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -36,6 +36,7 @@ fn chat_catalog() -> CatalogSnapshot {
             size: Some(1),
             read_role: foks_agent_proto::KvRole::Owner,
             write_role: foks_agent_proto::KvRole::Owner,
+            shape: None,
         },
     });
     let success = |value| foks_agent_proto::ResponseResult::Success { value };
@@ -121,7 +122,7 @@ fn kv_refresh_and_content_invalidation_preserve_chat_access_revision() {
     chat.invalidate_catalog_items(&written);
     assert_eq!(chat.selected_chat(&id).unwrap().0, revision);
     chat.invalidate_catalog();
-    assert_ne!(chat.chat_generation.load(Ordering::Acquire), revision);
+    assert_ne!(chat.chat_generation().load(Ordering::Acquire), revision);
     assert!(chat.selected_chat(&id).is_err());
 }
 
@@ -136,7 +137,7 @@ fn lease_renewal_and_kv_capability_changes_do_not_retire_chat() {
     }
     let (load, _) = state.begin_catalog_load_checked().unwrap();
     assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
-    let revision = state.chat_generation.load(Ordering::Acquire);
+    let revision = state.chat_generation().load(Ordering::Acquire);
     if let foks_agent_proto::ResponseResult::Success { value } =
         &mut catalog.profile_overviews[0].server_status
     {
@@ -144,7 +145,7 @@ fn lease_renewal_and_kv_capability_changes_do_not_retire_chat() {
     }
     let (load, _) = state.begin_catalog_load_checked().unwrap();
     assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
-    assert_eq!(state.chat_generation.load(Ordering::Acquire), revision);
+    assert_eq!(state.chat_generation().load(Ordering::Acquire), revision);
     if let foks_agent_proto::ResponseResult::Success { value } =
         &mut catalog.profile_overviews[0].server_status
     {
@@ -152,7 +153,7 @@ fn lease_renewal_and_kv_capability_changes_do_not_retire_chat() {
     }
     let (load, _) = state.begin_catalog_load_checked().unwrap();
     assert!(state.publish_catalog(load, catalog, |_| {}));
-    assert_ne!(state.chat_generation.load(Ordering::Acquire), revision);
+    assert_ne!(state.chat_generation().load(Ordering::Acquire), revision);
 }
 
 #[test]
@@ -162,8 +163,8 @@ fn partial_publication_keeps_accepted_facts_and_does_not_clear_mutation_gate() {
     let catalog = chat_catalog();
     let (load, _) = state.begin_catalog_load_checked().unwrap();
     assert!(state.publish_catalog(load, catalog.clone(), |_| {}));
-    let revision = chat.chat_generation.load(Ordering::Acquire);
-    chat.mutation_requires_refresh
+    let revision = chat.chat_generation().load(Ordering::Acquire);
+    chat.mutation_requires_refresh()
         .store(true, Ordering::Release);
     let (load, _) = state.begin_catalog_load_checked().unwrap();
     let partial = CatalogSnapshot {
@@ -195,8 +196,8 @@ fn partial_publication_keeps_accepted_facts_and_does_not_clear_mutation_gate() {
             );
         })
     );
-    assert!(chat.mutation_requires_refresh.load(Ordering::Acquire));
-    assert_eq!(chat.chat_generation.load(Ordering::Acquire), revision);
+    assert!(chat.mutation_requires_refresh().load(Ordering::Acquire));
+    assert_eq!(chat.chat_generation().load(Ordering::Acquire), revision);
     pending_items.store_reads[0].state = foks_desktop::CatalogStoreReadState::Failed;
     pending_items.failures.push(foks_desktop::CatalogFailure {
         scope: foks_desktop::CatalogFailureScope::Store(catalog.stores[0].store_ref()),
@@ -211,8 +212,8 @@ fn partial_publication_keeps_accepted_facts_and_does_not_clear_mutation_gate() {
             );
         })
     );
-    assert_eq!(chat.chat_generation.load(Ordering::Acquire), revision);
-    assert!(chat.mutation_requires_refresh.load(Ordering::Acquire));
+    assert_eq!(chat.chat_generation().load(Ordering::Acquire), revision);
+    assert!(chat.mutation_requires_refresh().load(Ordering::Acquire));
 }
 
 #[test]
@@ -239,7 +240,7 @@ fn catalog_access_and_verified_actor_changes_retire_reused_aliases() {
         "chat-restart"
     );
     assert!(chat.accept_chat_scope(&id, revision, &scope).is_err());
-    let revision = chat.chat_generation.load(Ordering::Acquire);
+    let revision = chat.chat_generation().load(Ordering::Acquire);
     chat.accept_chat_scope(&id, revision, &replacement).unwrap();
     let mut changed = catalog.clone();
     changed.profile_overviews[0].accounts = foks_agent_proto::ResponseResult::Success {
@@ -247,13 +248,13 @@ fn catalog_access_and_verified_actor_changes_retire_reused_aliases() {
     };
     let (load, _) = chat.begin_catalog_load_checked().unwrap();
     assert!(chat.publish_catalog(load, changed, |_| {}));
-    assert_ne!(chat.chat_generation.load(Ordering::Acquire), revision);
-    let revision = chat.chat_generation.load(Ordering::Acquire);
+    assert_ne!(chat.chat_generation().load(Ordering::Acquire), revision);
+    let revision = chat.chat_generation().load(Ordering::Acquire);
     let mut blocked = catalog;
     blocked.blocked_profiles.push("chat".into());
     let (load, _) = chat.begin_catalog_load_checked().unwrap();
     assert!(chat.publish_catalog(load, blocked, |_| {}));
-    assert_ne!(chat.chat_generation.load(Ordering::Acquire), revision);
+    assert_ne!(chat.chat_generation().load(Ordering::Acquire), revision);
     assert!(chat.selected_chat(&id).is_err());
 }
 
@@ -322,6 +323,27 @@ fn a_local_alias_reservation_leaves_the_catalog_load_running() {
             "retired root"
         ))
     );
+}
+
+#[test]
+fn mutation_in_progress_reports_a_reservation_in_any_scope() {
+    let state = phase_four_state(vec![]);
+    assert!(!state.mutation_in_progress());
+    let root = state.begin_mutation().unwrap();
+    assert!(state.mutation_in_progress());
+    drop(root);
+    assert!(!state.mutation_in_progress());
+    // The close guard reads the root view, so a narrower scope's reservation
+    // must count as well.
+    let profile = state.for_profile("a").unwrap();
+    let reservation = profile.begin_mutation().unwrap();
+    assert!(state.mutation_in_progress());
+    drop(reservation);
+    let aliases = state.for_local_aliases().unwrap();
+    let reservation = aliases.begin_mutation().unwrap();
+    assert!(state.mutation_in_progress());
+    drop(reservation);
+    assert!(!state.mutation_in_progress());
 }
 
 #[test]
@@ -407,6 +429,7 @@ fn a_write_discards_only_the_items_of_the_store_it_landed_in() {
             size: Some(2),
             read_role: foks_agent_proto::KvRole::Owner,
             write_role: foks_agent_proto::KvRole::Owner,
+            shape: None,
         },
     });
     catalog.store_reads.push(foks_desktop::CatalogStoreRead {
@@ -535,7 +558,7 @@ fn a_catalog_listing_after_a_local_write_is_read_fresh() {
     state.note_fresh_catalog_read(2);
     assert_eq!(state.catalog_read_freshness(false), (false, 2));
     state
-        .mutation_requires_refresh
+        .mutation_requires_refresh()
         .store(true, Ordering::Release);
     assert_eq!(state.catalog_read_freshness(false), (true, 2));
 }
@@ -621,7 +644,7 @@ fn ambiguous_mutations_require_a_fresh_catalog_before_another_write() {
         "/tmp/unused-foks-agent.sock".into(),
     )));
     state
-        .mutation_requires_refresh
+        .mutation_requires_refresh()
         .store(true, Ordering::Release);
     let error = state.begin_mutation().unwrap_err();
     assert_eq!(error.code, "ambiguous");
@@ -632,7 +655,7 @@ fn ambiguous_mutations_require_a_fresh_catalog_before_another_write() {
         "mutation-in-flight"
     );
     drop(initialization);
-    assert!(state.mutation_requires_refresh.load(Ordering::Acquire));
+    assert!(state.mutation_requires_refresh().load(Ordering::Acquire));
     let (generation, _) = state.begin_catalog_load_checked().unwrap();
     assert!(state.accept_catalog(generation, CatalogSnapshot::default()));
     assert_eq!(state.begin_mutation().unwrap_err().code, "ambiguous");
@@ -763,9 +786,9 @@ fn partial_progress_only_reconciles_profiles_with_authoritative_item_reads() {
     let healthy = state.for_profile("healthy").unwrap();
     let slow = state.for_profile("slow").unwrap();
     healthy
-        .mutation_requires_refresh
+        .mutation_requires_refresh()
         .store(true, Ordering::Release);
-    slow.mutation_requires_refresh
+    slow.mutation_requires_refresh()
         .store(true, Ordering::Release);
     let (load, _) = state.begin_catalog_load_checked().unwrap();
     let mut partial = CatalogSnapshot {
@@ -779,18 +802,18 @@ fn partial_progress_only_reconciles_profiles_with_authoritative_item_reads() {
         ..CatalogSnapshot::default()
     };
     assert!(state.publish_catalog(load, partial.clone(), |_| {}));
-    assert!(healthy.mutation_requires_refresh.load(Ordering::Acquire));
+    assert!(healthy.mutation_requires_refresh().load(Ordering::Acquire));
     partial.full_item_reads = Some(vec!["healthy".into()]);
     assert!(state.publish_catalog(load, partial, |_| {}));
-    assert!(!healthy.mutation_requires_refresh.load(Ordering::Acquire));
-    assert!(slow.mutation_requires_refresh.load(Ordering::Acquire));
+    assert!(!healthy.mutation_requires_refresh().load(Ordering::Acquire));
+    assert!(slow.mutation_requires_refresh().load(Ordering::Acquire));
 }
 
 #[test]
 fn incomplete_catalog_does_not_release_an_ambiguous_mutation() {
     let state = phase_four_state(vec![]);
     state
-        .mutation_requires_refresh
+        .mutation_requires_refresh()
         .store(true, Ordering::Release);
     let (generation, _) = state.begin_catalog_load_checked().unwrap();
     assert!(state.accept_catalog(
@@ -844,7 +867,7 @@ fn profile_mutations_and_local_aliases_are_independent_but_root_is_exclusive() {
     assert_eq!(state.begin_initialization().unwrap_err().code, "ambiguous");
     assert!(b.begin_mutation().is_ok());
     assert!(aliases.begin_mutation().is_ok());
-    assert!(a.mutation_requires_refresh.load(Ordering::Acquire));
+    assert!(a.mutation_requires_refresh().load(Ordering::Acquire));
 }
 
 #[test]

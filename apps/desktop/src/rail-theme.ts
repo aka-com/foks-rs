@@ -6,6 +6,12 @@
  * components. Unrecognized values use the default `--rail` value.
  */
 
+import {
+  readStorage,
+  STORAGE_KEYS,
+  writeStorage,
+} from './platform/device-storage';
+
 export interface RailColor {
   id: string;
   label: string;
@@ -23,7 +29,7 @@ export const RAIL_COLORS: readonly RailColor[] = [
 
 export const DEFAULT_RAIL_COLOR = RAIL_COLORS[0].id;
 
-const KEY = 'railColor';
+const KEY = STORAGE_KEYS.railColor;
 
 function known(id: string | null | undefined): string {
   if (id === 'lavender') return 'iris';
@@ -34,22 +40,13 @@ function known(id: string | null | undefined): string {
 
 /** The stored color id; the default when unset or unreadable. */
 export function storedRailColor(): string {
-  try {
-    return known(
-      typeof window !== 'undefined' ? window.localStorage.getItem(KEY) : null,
-    );
-  } catch {
-    return DEFAULT_RAIL_COLOR;
-  }
+  return known(readStorage(KEY));
 }
 
 /** Persists the color id. */
 export function rememberRailColor(id: string): void {
-  try {
-    if (typeof window !== 'undefined') window.localStorage.setItem(KEY, id);
-  } catch {
-    // Storage is unavailable; the preference lasts for this session only.
-  }
+  // Storage may be unavailable; the preference then lasts for this session only.
+  writeStorage(KEY, id);
 }
 
 /** Draws the color: `data-rail` on the document, which the tokens read. */

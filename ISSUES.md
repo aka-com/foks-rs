@@ -1,9 +1,9 @@
 # Outstanding issues
 
 This inventory records gaps found while reviewing the team-chat and team-invitation
-plans against the current implementation. It separates current implementation
-risks from limitations that the plans already disclose and from documentation-only
-maintenance. Extended chat remains deferred; its prerequisites are recorded here
+plans against the current implementation, and one desktop maintainability gap.
+It separates current implementation risks from limitations that the plans
+already disclose and from documentation-only maintenance. Extended chat remains deferred; its prerequisites are recorded here
 without making them current implementation work.
 
 ## Stage 1 — Basic chat server retention and storage isolation
@@ -163,6 +163,29 @@ The remaining extended-chat work stays deferred. In particular, reaction
 equality, exact event-body wire forms, method/status allocation, attachment
 authorization and committed-object retention are designs rather than enabled
 features.
+
+## Desktop operation builders still built twice
+
+**Priority: low.** `foks_desktop::ops` holds the agent `Operation` builders and
+field checks shared by the Tauri command layer and `foks-desktop-backend`. The
+backend therefore applies the shipping input rules for account creation, owner
+backup, owner recovery, team creation and membership, and KV mutations, and the
+real-agent transcript (`scripts/test-foks-desktop-real-agent.sh`) exercises them.
+The server profile, passphrase, security key and device pairing operations are
+still built separately in both callers, so their rules can drift. Some inputs
+differ today: the backend's `passphrase-change` sends no current passphrase,
+while the Tauri command can. The server status response validators in
+`apps/desktop/src-tauri/src/commands/servers.rs` exist only in the Tauri layer.
+These were left out of the first changes to keep each one reviewable, and
+each needs its own decision on which caller's rule to keep.
+
+Required resolution:
+
+- Move the remaining builders and response validators into `foks_desktop::ops`
+  modules and have both callers use them, as `ops::accounts` and `ops::groups`
+  do.
+- The promotion and demotion ordering checks stay in the Tauri layer, because
+  only it holds the member's current role from the authenticated roster.
 
 ## Existing disclosed limitations
 

@@ -17,6 +17,7 @@ pub(crate) struct EnvironmentInner {
     pub(crate) maximum_pending_writes: usize,
     pub(crate) rate_limits: foks_server::RateLimitConfig,
     pub(crate) backup: Option<foks_server::BackupSchedule>,
+    pub(crate) waitlist_enabled: bool,
     pub(crate) addresses: Mutex<Option<foks_server::ServerAddresses>>,
     pub(crate) running: Mutex<bool>,
     pub(crate) writer: Mutex<Option<foks_server::WriterHandle>>,
@@ -79,6 +80,7 @@ impl TestEnvironment {
                 maximum_pending_writes,
                 rate_limits,
                 backup,
+                waitlist_enabled: matches!(profile, TestProfile::Waitlist),
                 addresses: Mutex::new(addresses),
                 running: Mutex::new(false),
                 writer: Mutex::new(None),
@@ -553,7 +555,11 @@ pub enum TestProfile {
     RealtimeSingleReader,
     RateLimited,
     BackupAutomation,
+    /// Serves Reg.joinWaitList with a cap of `WAITLIST_TEST_ENTRIES` entries.
+    Waitlist,
 }
+
+pub const WAITLIST_TEST_ENTRIES: u64 = 4;
 
 impl TestProfile {
     fn configuration(self) -> (foks_server_db::Config, foks_server::SessionLimits, usize) {
@@ -585,6 +591,10 @@ impl TestProfile {
                 maximum_active_remote_user_view_permissions: 3,
                 maximum_remote_team_view_permissions_per_team: 2,
                 maximum_active_remote_team_view_permissions: 3,
+                ..foks_server_db::Config::default()
+            },
+            Self::Waitlist => foks_server_db::Config {
+                maximum_waitlist_entries: WAITLIST_TEST_ENTRIES,
                 ..foks_server_db::Config::default()
             },
             Self::Default

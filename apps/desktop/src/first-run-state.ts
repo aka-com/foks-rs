@@ -1,4 +1,5 @@
 import { boundedDeviceName } from './device-name';
+import { STORAGE_KEYS } from './platform/device-storage';
 import type { CheckedProfileResponse } from './bridge';
 
 export const FIRST_RUN_STATES = [
@@ -752,7 +753,8 @@ export function decodeFirstRunCheckpoint(
   }
 }
 
-export const FIRST_RUN_CHECKPOINT_KEY = 'foks.first-run.v2';
+/** The `localStorage` key of the current checkpoint. */
+export const FIRST_RUN_CHECKPOINT_KEY = STORAGE_KEYS.firstRun.name;
 
 export type SetupFact = 'present' | 'missing' | 'unknown';
 

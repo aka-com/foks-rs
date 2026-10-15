@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { enqueueProfileWork } from '../../bridge';
-import type { Bridge, PendingOperation } from '../../bridge';
+import type { PendingOperation } from '../../bridge';
 import {
   classifyFirstRunFailure,
   presentFirstRunFailure,
@@ -8,25 +8,25 @@ import {
   type FirstRunFailure,
   type FirstRunOperation,
 } from '../../first-run-failure';
-import type { AgentSnapshot } from '../../model';
-import type { useFirstRunController } from '../../use-first-run-controller';
+import type { SetupCore } from './setup-core';
 
 /** Owns pending-operation inventory and reconciliation after ambiguous writes. */
 export function useSetupReconciliation({
-  bridge,
-  agentReady,
-  checkpoint,
-  mounted,
-  onRefreshSnapshot,
-  setMessage,
+  core,
   setUsername,
-}: Pick<ReturnType<typeof useFirstRunController>, 'checkpoint' | 'mounted'> & {
-  bridge: Bridge;
-  agentReady: boolean;
-  onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
-  setMessage: (message: string | null) => void;
+}: {
+  /** The setup core this hook completes with its failure report. */
+  core: Omit<SetupCore, 'fail'>;
   setUsername: React.Dispatch<React.SetStateAction<string>>;
 }) {
+  const {
+    bridge,
+    agentReady,
+    checkpoint,
+    mounted,
+    onRefreshSnapshot,
+    setMessage,
+  } = core;
   const profile = checkpoint.profile;
   const [pending, setPending] = useState<PendingOperation[]>([]);
   const pendingRef = useRef<PendingOperation[]>([]);

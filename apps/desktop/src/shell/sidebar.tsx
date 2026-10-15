@@ -33,6 +33,7 @@ import { chatUnreadTotal } from '../chat/unread';
 import { accountAtLocation, chatTabLocation, railTabOf } from '../location';
 import type { Location, RailTab } from '../location';
 import { AccountMark } from '../screens/account-switcher';
+import { matchesShortcut } from '../shortcuts';
 
 interface RailTabSpec {
   id: RailTab;
@@ -664,18 +665,13 @@ export function Sidebar({
   useEffect(() => {
     if (blocked) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (
-        event.key !== 'Tab' ||
-        !event.ctrlKey ||
-        event.metaKey ||
-        event.altKey
-      )
-        return;
+      const previous = matchesShortcut(event, 'previousSection');
+      if (!previous && !matchesShortcut(event, 'nextSection')) return;
       // This listener runs on document, beyond a dialog's event boundary.
       // Disable sidebar tab cycling while a dialog is open so the underlying
       // view does not change.
       if (anyDialogOpen()) return;
-      const next = nextSidebarCycleLocation(location, event.shiftKey ? -1 : 1);
+      const next = nextSidebarCycleLocation(location, previous ? -1 : 1);
       if (!next) return;
       event.preventDefault();
       const tab = railTabOf(next);

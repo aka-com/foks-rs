@@ -92,7 +92,7 @@ pub(super) async fn prepare_group_facts(
 ) -> Result<PreparedGroupFacts, AgentError> {
     let team = state.selected_active_team_for_mutation(store_id)?;
     let generation = state
-        .catalog_generation
+        .catalog_generation()
         .load(std::sync::atomic::Ordering::Acquire);
     // Keep these results owned by this preparation until synchronous target
     // validation. Ordinary metadata reads cannot replace them while accounts load.

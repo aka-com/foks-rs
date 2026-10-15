@@ -7,11 +7,13 @@
 export * from './types';
 export * from './roles';
 export * from './kinds';
+export * from './login';
 export * from './readers';
 export * from './format';
 export * from './lease';
 export * from './accounts';
 export * from './order';
 export * from './store-hues';
+export * from './trash';
 
 export * from './readiness';

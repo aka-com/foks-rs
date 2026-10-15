@@ -57,6 +57,7 @@ import type {
   AgentSnapshot,
   StoreRef,
   DeviceLabel,
+  Item,
 } from '../model';
 import {
   accountStores,
@@ -65,7 +66,11 @@ import {
   serverDisplayLabelForStore,
   usernameOf,
 } from '../model';
-import type { Location, NavigateOptions } from '../location';
+import type {
+  DevicesSheetIntent,
+  Location,
+  NavigateOptions,
+} from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
 import {
@@ -91,6 +96,19 @@ import type { DeviceEntry } from './device-model';
 import { UnavailableAccount } from './account-section';
 
 import { deviceAlertRegistry } from './device-alert';
+import { RecoveryPhraseTestSheet } from './recovery-phrase-test-sheet';
+import { useExposureReviews } from '../exposure-review';
+import { ExposureReviewBands, ExposureReviewSheet } from './exposure-review';
+import {
+  RECOVERY_TEST_INTERVAL_DAYS,
+  recoveryPhraseTestDue,
+  recoveryPhraseTestStatus,
+  recoveryPhraseTests,
+  snoozeRecoveryPhraseReminder,
+  subscribeRecoveryPhraseTests,
+  testedDate,
+} from '../recovery-phrase-tests';
+import type { RecoveryPhraseTestStatus } from '../recovery-phrase-tests';
 
 type Sheet =
   | 'add'
@@ -102,7 +120,31 @@ type Sheet =
   | 'revoke'
   | 'remove-device'
   | 'revoke-backup'
+  | 'test-backup'
   | null;
+
+/** The chip a recovery phrase's row and page carry: when it last matched here. */
+function TestedChip({
+  status,
+}: {
+  status: RecoveryPhraseTestStatus;
+}): ReactNode {
+  if (status.state === 'never')
+    return (
+      <Chip
+        tone="warn"
+        title="No written copy of this phrase has been tested on this device."
+      >
+        Last tested: never
+      </Chip>
+    );
+  return (
+    <Chip tone={status.state === 'current' ? 'ok' : 'warn'}>
+      {status.state === 'current' ? 'Tested' : 'Last tested'}{' '}
+      {testedDate(status.testedAt)}
+    </Chip>
+  );
+}
 
 /**
  * The nine card operations that are recovery paths for a key already in
@@ -203,6 +245,11 @@ export interface DevicesScreenProps {
   onDeviceLabel?: (label: DeviceLabel | null) => void;
   /** Re-probe connected cards independently of cached enrollment metadata. */
   hardwareRefresh?: number;
+  /**
+   * Opens an item in Files, from the review of what a removed device could
+   * read. Without it, the review lists items without an Open action.
+   */
+  onOpenItem?: (item: Item) => void;
 }
 
 export function DevicesScreen({
@@ -217,6 +264,7 @@ export function DevicesScreen({
   onMutationError,
   onDeviceLabel,
   hardwareRefresh = 0,
+  onOpenItem,
 }: DevicesScreenProps): ReactNode {
   // The shell canonicalizes the route on mount; the scene it was entered at
   // is what decides whether a sheet opens with the page.
@@ -264,6 +312,13 @@ export function DevicesScreen({
   // Which enrollment a per-row key action acts on. The row is the only thing
   // that says which one; there may be more than one.
   const [actingKey, setActingKey] = useState<YubiEnrollment | null>(null);
+  // Reviews of what removed devices could read, kept on this device after
+  // the removal; one is open in its sheet at a time.
+  const exposureReviews = useExposureReviews();
+  const [exposureOpen, setExposureOpen] = useState<string | null>(null);
+  const exposureReview = exposureReviews.find(
+    (review) => review.id === exposureOpen && review.scope === selected?.id,
+  );
 
   const sheetOpen = useRef(sheet);
   sheetOpen.current = sheet;
@@ -289,6 +344,14 @@ export function DevicesScreen({
     deviceAlertRegistry(bridge).subscribe,
     deviceAlertRegistry(bridge).getSnapshot,
   );
+  const phraseTests = useSyncExternalStore(
+    subscribeRecoveryPhraseTests,
+    recoveryPhraseTests,
+  );
+  const testStatus = (backup: BackupEnrollment): RecoveryPhraseTestStatus =>
+    recoveryPhraseTestStatus(phraseTests, backup.backupId);
+  const testAccess = access.props('backup-list', target);
+  const openTest = (): void => setSheet('test-backup');
   const pairingOfferOpen = selected
     ? devicesAlert.offers.has(selected.id)
     : false;
@@ -299,6 +362,7 @@ export function DevicesScreen({
     setRemoving(null);
     setRevoking(null);
     setActingKey(null);
+    setExposureOpen(null);
   }, [setSheet]);
 
   // Normalize the route to the active account's StoreRef. Because the
@@ -321,6 +385,59 @@ export function DevicesScreen({
     shown.current = selectedId;
     closeSheets();
   }, [closeSheets, selectedId]);
+
+  // The address can arrive asking for Add a device (`open: 'add'`), which the
+  // ⌘K palette's Actions send from any page, or for Create a recovery phrase
+  // (`open: 'phrase'`), which the attention centre's setup step sends. As on
+  // the Teams page, the intent is spent in two commits: the address is
+  // replaced with the plain list first, and the sheet opens on the commit
+  // after that, so the sheet's tab-persisted state belongs to the list's
+  // address and Back, a re-render or a return to the tab lands on the list.
+  const intent = location.open;
+  const navigateRef = useRef(onNavigate);
+  navigateRef.current = onNavigate;
+  const requestedSheet = useRef<{
+    store: StoreRef;
+    intent: DevicesSheetIntent;
+  } | null>(null);
+  const canCreatePhrase = access.availability(
+    'backup-create',
+    target,
+  ).available;
+  const phraseReason = canCreatePhrase
+    ? undefined
+    : access.props('backup-create', target).title;
+  useEffect(() => {
+    // With no account yet the page cannot say whose device would be added,
+    // so the intent waits for the catalog rather than being spent on nothing.
+    if (!intent || !selectedId) return;
+    requestedSheet.current = { store: selectedId, intent };
+    navigateRef.current(
+      { kind: 'devices', store: selectedId },
+      { replace: true, force: true },
+    );
+  }, [intent, selectedId]);
+  useEffect(() => {
+    const request = requestedSheet.current;
+    if (intent || !request) return;
+    requestedSheet.current = null;
+    if (request.store !== selectedId) return;
+    const [allowed, reason] =
+      request.intent === 'phrase'
+        ? [canCreatePhrase, phraseReason]
+        : [canAdd, addReason];
+    if (allowed) setSheet(request.intent);
+    else if (reason) toasts.show(reason, { tone: 'warning' });
+  }, [
+    intent,
+    selectedId,
+    canAdd,
+    addReason,
+    canCreatePhrase,
+    phraseReason,
+    setSheet,
+    toasts,
+  ]);
 
   // Card presence is live hardware state, never part of the metadata cache.
   useEffect(() => {
@@ -445,17 +562,23 @@ export function DevicesScreen({
     if (source.kind === 'backup') {
       const backup = source.backup;
       return (
-        <Button
-          size="sm"
-          variant="danger"
-          {...access.props('backup-revoke', target)}
-          onClick={() => {
-            setRevoking(backup);
-            setSheet('revoke-backup');
-          }}
-        >
-          Revoke…
-        </Button>
+        <>
+          <TestedChip status={testStatus(backup)} />
+          <Button size="sm" {...testAccess} onClick={openTest}>
+            Test…
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            {...access.props('backup-revoke', target)}
+            onClick={() => {
+              setRevoking(backup);
+              setSheet('revoke-backup');
+            }}
+          >
+            Revoke…
+          </Button>
+        </>
       );
     }
     const enrollment = source.entry;
@@ -636,6 +759,8 @@ export function DevicesScreen({
             setRevoking(backup);
             setSheet('revoke-backup');
           }}
+          testStatus={testStatus}
+          onTestBackup={openTest}
           onRevokeKey={(entry) => {
             setActingKey(entry);
             setSheet('revoke');
@@ -685,6 +810,12 @@ export function DevicesScreen({
                   Devices and keys are not listed while access is stopped.
                 </Band>
               ) : null}
+              <ExposureReviewBands
+                reviews={exposureReviews.filter(
+                  (review) => review.scope === selected?.id,
+                )}
+                onReview={setExposureOpen}
+              />
               {!stopped.stopped && pairingOfferOpen ? (
                 <Band
                   label="A pairing is waiting on this device"
@@ -724,6 +855,57 @@ export function DevicesScreen({
                   This account cannot be recovered on a new device.
                 </Band>
               ) : null}
+              {stopped.stopped || loading
+                ? null
+                : backups.map((backup) => {
+                    const status = testStatus(backup);
+                    if (!recoveryPhraseTestDue(status)) return null;
+                    return (
+                      <Band
+                        key={backup.backupId}
+                        label={
+                          status.state === 'never'
+                            ? 'Recovery phrase not tested'
+                            : 'Recovery phrase due for a test'
+                        }
+                        action={
+                          <>
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                snoozeRecoveryPhraseReminder(backup.backupId)
+                              }
+                            >
+                              Remind me later
+                            </Button>
+                            <Button
+                              size="sm"
+                              {...testAccess}
+                              onClick={openTest}
+                            >
+                              Test now
+                            </Button>
+                          </>
+                        }
+                      >
+                        {status.state === 'never' ? (
+                          <>
+                            No written copy of {backup.backupAlias} has been
+                            tested on this device. Test it against your copy so
+                            a mistake in it is found before the copy is needed.
+                          </>
+                        ) : (
+                          <>
+                            {backup.backupAlias} was last tested on{' '}
+                            {testedDate(status.testedAt)}, more than{' '}
+                            {RECOVERY_TEST_INTERVAL_DAYS} days ago. Test it
+                            against your written copy to make sure it can still
+                            recover this account.
+                          </>
+                        )}
+                      </Band>
+                    );
+                  })}
 
               <div
                 className="settings-section"
@@ -901,6 +1083,7 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'remove-device' && selected && removing ? (
         <RemoveDeviceSheet
+          snapshot={snapshot}
           bridge={bridge}
           store={selected}
           device={removing}
@@ -915,6 +1098,31 @@ export function DevicesScreen({
             await applied(`Device "${name}" removed`);
           }}
           onError={(error) => void onMutationError(error)}
+        />
+      ) : null}
+      {exposureReview ? (
+        <ExposureReviewSheet
+          snapshot={snapshot}
+          review={exposureReview}
+          onOpenItem={
+            onOpenItem
+              ? (item) => {
+                  setExposureOpen(null);
+                  onOpenItem(item);
+                }
+              : undefined
+          }
+          onClose={() => setExposureOpen(null)}
+        />
+      ) : null}
+      {sheet === 'test-backup' && selected ? (
+        <RecoveryPhraseTestSheet
+          bridge={bridge}
+          store={selected}
+          username={usernameOf(snapshot, selected) ?? selected.account}
+          backups={backups}
+          onClose={() => setSheet(null)}
+          onError={onError}
         />
       ) : null}
       {sheet === 'revoke-backup' && selected && revoking ? (
@@ -975,6 +1183,8 @@ function DeviceDetail({
   onCopy,
   onRemove,
   onRevokeBackup,
+  testStatus,
+  onTestBackup,
   onRevokeKey,
   onProvision,
   onYubiAction,
@@ -999,6 +1209,8 @@ function DeviceDetail({
   onCopy: (text: string) => void;
   onRemove: (device: AccountDevice) => void;
   onRevokeBackup: (backup: BackupEnrollment) => void;
+  testStatus: (backup: BackupEnrollment) => RecoveryPhraseTestStatus;
+  onTestBackup: () => void;
   onRevokeKey: (entry: YubiEnrollment) => void;
   onProvision: () => void;
   onYubiAction: (action: SimpleYubiAction, entry: YubiEnrollment) => void;
@@ -1139,6 +1351,26 @@ function DeviceDetail({
               {entry.current ? (
                 <InsetRow label="Status">
                   Authenticated on this device now
+                </InsetRow>
+              ) : null}
+              {source.kind === 'backup' ? (
+                <InsetRow
+                  label="Last tested"
+                  action={
+                    <Button
+                      size="sm"
+                      {...access.props('backup-list', target)}
+                      onClick={onTestBackup}
+                    >
+                      Test…
+                    </Button>
+                  }
+                >
+                  <TestedChip status={testStatus(source.backup)} />
+                  <small>
+                    Type the written copy back in to check that it can recover
+                    this account. The check runs on this device.
+                  </small>
                 </InsetRow>
               ) : null}
             </Inset>

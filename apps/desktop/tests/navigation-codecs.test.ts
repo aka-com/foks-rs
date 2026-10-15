@@ -272,6 +272,7 @@ test('canonical production routes round-trip opaque store references and explici
       section: 'keys',
       device: 'yubi:primary key',
     },
+    { kind: 'devices', store: ACCOUNT, open: 'add' },
     { kind: 'settings', store: ACCOUNT, section: 'account', profile: 'remote' },
     { kind: 'settings', store: ACCOUNT, profile: 'remote' },
     { kind: 'settings', store: ACCOUNT, section: 'preferences' },
@@ -291,6 +292,11 @@ test('canonical production routes round-trip opaque store references and explici
     {
       kind: 'teams',
     },
+  );
+  // A Teams sheet is not a Devices sheet.
+  assert.deepEqual(
+    decodeProductionLocation(search('devices', { open: 'create' })),
+    { kind: 'devices' },
   );
   // And the parameter does not leak onto the next page.
   assert.equal(

@@ -14,6 +14,7 @@ import {
   storeOf,
 } from './readers';
 import { admits } from './roles';
+import { TRASH_ROOT, isTrashPath } from './trash';
 import { serverDisplayLabelForStore } from './server-name';
 import { serverDisplayLabel, PROTOCOL_CAPABILITIES } from './types';
 import type {
@@ -24,6 +25,7 @@ import type {
   Item,
   Notification,
   ProtocolCapability,
+  RoleWire,
   Server,
   Store,
   StoreRef,
@@ -581,6 +583,21 @@ export function chatAvailable(
   return storeOperationAvailability(snapshot, store, 'chat', options).available;
 }
 
+/**
+ * The local user's role in a team, or `null` when the roster does not list
+ * exactly one active membership for it.
+ */
+function ownTeamRole(snapshot: AgentSnapshot, ref: StoreRef): RoleWire | null {
+  const own = partiesOf(snapshot, ref).filter(
+    (party) =>
+      party.label === 'you' &&
+      party.party_kind === 'user' &&
+      party.locally_manageable &&
+      federatedMembershipActive(snapshot, party, ref),
+  );
+  return own.length === 1 ? own[0].destination_role : null;
+}
+
 /** Returns whether the current user has permission to create items in this store. */
 export function canCreateInStore(
   snapshot: AgentSnapshot,
@@ -590,14 +607,7 @@ export function canCreateInStore(
   const store = storeOf(snapshot, ref);
   if (!store || !storeReadable(snapshot, store.id, options)) return false;
   if (store.kind === 'account') return true;
-  const own = partiesOf(snapshot, store.id).filter(
-    (party) =>
-      party.label === 'you' &&
-      party.party_kind === 'user' &&
-      party.locally_manageable &&
-      federatedMembershipActive(snapshot, party, store.id),
-  );
-  return own.length === 1;
+  return ownTeamRole(snapshot, store.id) !== null;
 }
 
 /** Returns whether the local authenticated user has permission to edit the specified item. */
@@ -609,14 +619,36 @@ export function canChangeItem(
   const store = storeOf(snapshot, item.store);
   if (!store || !canCreateInStore(snapshot, store.id, options)) return false;
   if (store.kind === 'account') return true;
-  const own = partiesOf(snapshot, store.id).filter(
-    (party) =>
-      party.label === 'you' &&
-      party.party_kind === 'user' &&
-      party.locally_manageable &&
-      federatedMembershipActive(snapshot, party, store.id),
-  );
-  return own.length === 1 && admits(own[0].destination_role, item.write);
+  const own = ownTeamRole(snapshot, store.id);
+  return own !== null && admits(own, item.write);
+}
+
+/**
+ * Whether this account cannot move items to Trash in a store: a team with
+ * no `/.trash`, which only an owner can create because team roots are
+ * owner-writable, and a roster that shows this account is not an owner.
+ * Such a member is offered permanent deletion instead.
+ */
+export function trashUnavailable(
+  snapshot: AgentSnapshot,
+  ref: StoreRef,
+): boolean {
+  const store = storeOf(snapshot, ref);
+  if (store?.kind !== 'team') return false;
+  if (
+    snapshot.items.some(
+      (item) => item.store === store.id && item.path === TRASH_ROOT,
+    )
+  )
+    return false;
+  const own = ownTeamRole(snapshot, store.id);
+  return own !== null && !admits(own, 'Owner');
+}
+
+/** Whether the roster shows this account as an owner of a team. */
+export function ownsTeam(snapshot: AgentSnapshot, ref: StoreRef): boolean {
+  const own = ownTeamRole(snapshot, ref);
+  return own !== null && admits(own, 'Owner');
 }
 
 /**
@@ -640,7 +672,7 @@ const catalogCache = new WeakMap<AgentSnapshot, readonly Item[]>();
 
 /**
  * Returns all accessible items from readable stores, excluding directory
- * entries.
+ * entries and everything in Trash.
  *
  * The result is shared between callers and must not be sorted or otherwise
  * mutated in place; copy it first.
@@ -663,7 +695,10 @@ export function catalog(snapshot: AgentSnapshot): readonly Item[] {
     if (storeAvailability(snapshot, store).available) readable.add(store.id);
   }
   const items = snapshot.items.filter(
-    (item) => item.kind !== 'Folder' && readable.has(item.store),
+    (item) =>
+      item.kind !== 'Folder' &&
+      !isTrashPath(item.path) &&
+      readable.has(item.store),
   );
   catalogCache.set(snapshot, items);
   return items;
@@ -704,13 +739,20 @@ export function notesNow(snapshot: AgentSnapshot): Notification[] {
   });
 }
 
-/** A server whose check-in has lapsed or whose trust has never been verified: the two reasons the Settings tab's orange dot answers for. */
-function serverFlaggedForSettings(availability: Availability): boolean {
-  return (
-    !availability.available &&
-    (availability.reason === 'check-in-expired' ||
-      availability.reason === 'verification-required')
-  );
+/**
+ * Why the Settings tab's orange dot answers for a server: its check-in has
+ * lapsed, or its trust has never been verified. Null for any other state.
+ */
+export function settingsServerFlag(
+  snapshot: AgentSnapshot,
+  server: Server,
+): 'check-in-expired' | 'verification-required' | null {
+  const availability = serverAvailability(snapshot, server);
+  if (availability.available) return null;
+  return availability.reason === 'check-in-expired' ||
+    availability.reason === 'verification-required'
+    ? availability.reason
+    : null;
 }
 
 /**
@@ -723,16 +765,15 @@ function serverFlaggedForSettings(availability: Availability): boolean {
 export function settingsAlertSummary(
   snapshot: AgentSnapshot,
 ): { description: string } | null {
-  const flagged = snapshot.servers.filter((server) =>
-    serverFlaggedForSettings(serverAvailability(snapshot, server)),
+  const flagged = snapshot.servers.filter(
+    (server) => settingsServerFlag(snapshot, server) !== null,
   );
   if (!flagged.length) return null;
   if (flagged.length > 1)
     return { description: `${flagged.length} servers need attention` };
   const server = flagged[0];
-  const availability = serverAvailability(snapshot, server);
   const reason =
-    !availability.available && availability.reason === 'check-in-expired'
+    settingsServerFlag(snapshot, server) === 'check-in-expired'
       ? 'check-in expired'
       : 'not verified';
   return { description: `${serverDisplayLabel(server)}: ${reason}` };

@@ -244,6 +244,47 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 .sync-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px}
 .sync-empty{margin:0;padding:8px 14px 14px;color:var(--muted)}
 .sync-foot{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:6px;padding:8px 14px;border-top:1px solid var(--line-soft);background:var(--hover)}
+/* Attention: the header's bell, with a count of the items that need the reader, and the popover
+   listing them with the setup steps still open and the session's recent messages. */
+.attention-trigger{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:28px;border-radius:var(--radius-sm);color:var(--muted)}
+.attention-trigger:hover:not([disabled]){background:var(--hover);color:var(--ink)}
+.attention-trigger[disabled]{cursor:default;opacity:.6}
+.attention-trigger .ic{font-size:16px}
+.attention-trigger .attention-count{position:absolute;top:0;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:var(--radius-pill);background:var(--unread);color:var(--unread-ink);font-size:12px;font-weight:700;line-height:16px;text-align:center;font-variant-numeric:tabular-nums}
+.attention-popover{min-width:min(340px,calc(100vw - 16px));max-width:min(420px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;padding:6px 0;font-size:12.5px;background:var(--main-surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-menu)}
+.attention-popover [role="dialog"]:focus{outline:0}
+.attention-popover section{padding:4px 8px}
+.attention-popover section+section{margin-top:4px;padding-top:8px;border-top:1px solid var(--line-soft)}
+.attention-cap-row{display:flex;align-items:center;gap:8px}
+.attention-cap{flex:1;margin:0;padding:4px 6px;font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
+.attention-cap-row .attention-cap{flex:none}
+.attention-progress{flex:1;color:var(--faint);font-variant-numeric:tabular-nums}
+.attention-cap-row .lnk{margin-left:auto;padding:0 6px;font-size:12px;font-weight:600}
+.attention-list{list-style:none;margin:0;padding:0}
+.attention-row{display:flex;align-items:flex-start;gap:8px;width:100%;padding:6px;border:0;border-radius:var(--radius-sm);background:none;color:inherit;font:inherit;text-align:left}
+button.attention-row{cursor:pointer}
+button.attention-row:hover{background:var(--hover)}
+button.attention-row:focus-visible{outline:2px solid var(--accent-border);outline-offset:-2px}
+.attention-row>.ic{flex:none;margin-top:1px;font-size:15px;color:var(--muted)}
+.attention-row.warning>.ic:first-child{color:var(--amber-ink)}
+.attention-row .t{flex:1;min-width:0;line-height:1.35}
+.attention-row .t b{display:block;font-weight:600;color:var(--ink);overflow-wrap:anywhere}
+.attention-row .t small{display:block;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.attention-row .go{flex:none;align-self:center;font-size:12px;color:var(--faint)}
+.attention-row .step-mark{flex:none;width:15px;height:15px;margin-top:1px;font-size:15px;color:var(--ok-solid)}
+.attention-row .step-mark.todo{box-sizing:border-box;border:1.5px solid var(--faint);border-radius:50%}
+.attention-row .step-mark.unavailable{color:var(--faint)}
+.attention-row.done .t b{color:var(--muted);font-weight:500}
+.attention-state{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.attention-recent{list-style:none;margin:0;padding:0 6px}
+.attention-recent li{display:flex;align-items:baseline;gap:10px;padding:4px 0;color:var(--ink-3)}
+.attention-recent li+li{border-top:1px solid var(--line-soft)}
+.attention-recent li.warning{color:var(--amber-ink)}
+.attention-recent .tone{flex:none;align-self:center;font-size:13px}
+.attention-recent .t{flex:1;min-width:0;overflow-wrap:anywhere}
+.attention-recent time{flex:none;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+.attention-empty{margin:0;padding:4px 6px 6px;color:var(--muted)}
+.attention-note{margin:4px 0 0;padding:0 6px;font-size:12px;color:var(--faint)}
 /* Header row containing top-level navigation and shell controls. */
 .topbar{height:var(--topbar-h);flex:none;display:flex;align-items:center;gap:8px;padding:0 14px 0 10px;border-bottom:1px solid var(--line-soft);user-select:none}
 /* Topbar navigation breadcrumbs. */
@@ -475,6 +516,8 @@ button.sync-head:focus-visible{outline:2px solid var(--accent-border);outline-of
 /* Takeover frame */
 .takeover{position:absolute;inset:var(--topbar-h) 0 0 var(--side-w);z-index:18;display:grid;place-items:center;padding:20px;overflow:auto}
 .stopwrap{background:var(--main-surface)}
+/* The renderer fault screen has no rail or topbar to leave visible. */
+.fault-takeover{inset:0}
 
 /* Blocking states */
 .booting{flex:1;min-height:0;display:grid;place-items:center;align-content:center;gap:12px;padding:20px;text-align:center;color:var(--muted)}
@@ -600,6 +643,7 @@ details.dd li b{color:var(--ink-2)}
 .details .dh .kic{width:30px;height:30px;font-size:18px}
 .details .x{width:26px;height:26px;border-radius:var(--radius-sm);display:grid;place-items:center;color:var(--muted);flex:none}
 .details .x:hover{background:var(--hover)}
+.details .dh .fav.on{color:var(--amber-strong)}.details .dh .fav.on .ic{fill:currentColor}
 .details .scroll{flex:1;min-height:0;overflow:auto;padding:12px 16px 16px}
 .prev{padding:0;margin-bottom:4px}
 .prev .irow{display:flex;align-items:center;gap:8px;min-height:38px;padding:6px 12px;border-top:1px solid var(--line-soft);font-size:13px}
@@ -850,7 +894,10 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .pair-steps .copybox .mono{font-size:15px;letter-spacing:.02em}
 
 /* Toasts */
-.toasts{position:fixed;left:0;right:0;bottom:18px;z-index:20;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
+.toasts{position:fixed;left:0;right:0;bottom:18px;z-index:20;display:flex;flex-direction:column;align-items:center;pointer-events:none}
+/* The two live regions stay mounted while empty; only regions that hold a toast are spaced apart. */
+.toast-region{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%}
+.toast-region:not(:empty)~.toast-region:not(:empty){margin-top:8px}
 .toast{display:flex;align-items:center;gap:10px;max-width:min(90%,520px);padding:7px 10px 7px 14px;border-radius:var(--radius-pill);background:var(--ink);color:var(--main-surface);font-size:13px;line-height:1.4;box-shadow:var(--shadow-menu);opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;pointer-events:auto}
 .toast.show{opacity:1;transform:none}
 .toast[data-toast-tone="warning"]{background:var(--danger-solid);color:var(--ink-inverse)}
@@ -883,7 +930,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .exit-card-icon .ic{font-size:24px}.exit-card-icon.danger{background:var(--danger-wash);color:var(--danger-ink)}
 .exit-card h2{margin:2px 0 8px;font-size:22px;font-weight:680;letter-spacing:-.02em}
 .exit-card p{max-width:66ch;color:var(--ink-3);line-height:1.5}
-.exit-card p.exit-unsent{margin-bottom:8px;color:var(--ink-2);font-weight:600}
+.exit-card p.exit-warning{margin-bottom:8px;color:var(--ink-2);font-weight:600}
 .exit-card p.exit-error{margin-top:10px;color:var(--danger-ink);font-size:12.5px}
 .exit-card p.exit-calm{margin-top:10px;color:var(--muted);font-size:12.5px}
 .exit-card>.action-error{margin:0 28px 12px}

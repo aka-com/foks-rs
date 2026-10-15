@@ -15,17 +15,16 @@ use crate::commands::servers::{
 use crate::commands::types::MutationDto;
 use crate::commands::validation::{
     bounded_field, bounded_local_name, confirmed_passphrase, deserialize_secret, invalid_request,
-    invalid_response, optional_bounded_field, optional_confirmed_passphrase, pairing_phrase,
-    positive_recovery_serial, require_main_window, require_response_row_cap, serialize_secret,
-    valid_device_member_id_hex, valid_go_candidate_id, valid_local_name, valid_response_text,
+    invalid_response, optional_confirmed_passphrase, pairing_phrase, positive_recovery_serial,
+    require_main_window, require_response_row_cap, serialize_secret, valid_device_member_id_hex,
+    valid_device_name, valid_go_candidate_id, valid_local_name, valid_response_text,
     valid_typed_entity_id_hex, BACKUP_ID_PREFIX, DEVICE_ID_PREFIX, HOST_ID_PREFIX,
-    MAXIMUM_FIRST_RUN_ROWS, MAXIMUM_INVITE_BYTES, MAXIMUM_RECOVERY_PHRASE_BYTES, USER_ID_PREFIX,
+    MAXIMUM_FIRST_RUN_ROWS, MAXIMUM_RECOVERY_PHRASE_BYTES, USER_ID_PREFIX,
 };
-use crate::commands::validation::{recovery_phrase, valid_device_name, valid_username};
 use foks_agent_proto::{
-    CredentialBackend, Operation, PendingOperationKind, PendingOperationSummary, SecretString,
+    CredentialBackend, Operation, PendingOperationKind, PendingOperationSummary,
 };
-use foks_desktop::AgentTransport;
+use foks_desktop::{ops, AgentTransport};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -385,7 +384,7 @@ pub async fn initialize_client_state(
     let _mutation = state.begin_initialization()?;
     state.invalidate_catalog();
     let transport = state.agent.transport();
-    let uncertainty = Arc::clone(&state.mutation_requires_refresh);
+    let uncertainty = Arc::clone(state.mutation_requires_refresh());
     let status = tauri::async_runtime::spawn_blocking(move || {
         execute_initialization_recovery(uncertainty.as_ref(), transport.as_ref())
     })
@@ -396,7 +395,7 @@ pub async fn initialize_client_state(
             format!("The initialization worker stopped before reporting its outcome: {error}"),
         )
     })??;
-    Ok(status.into())
+    Ok(AgentStatusDto::from_agent(status, &state.agent))
 }
 
 fn read_agent_status(
@@ -558,7 +557,7 @@ pub async fn check_and_add_go_profile(
         Err(error) => {
             if error.ambiguous {
                 state
-                    .mutation_requires_refresh
+                    .mutation_requires_refresh()
                     .store(true, Ordering::Release);
             }
             Err(error)
@@ -602,27 +601,16 @@ pub async fn create_first_run_account(
     crate::applock::require_unlocked(&app)?;
     let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    let alias = bounded_local_name(&alias, "Enter a valid local account alias.")?;
-    let username = valid_username(&username)?;
-    let device_name = valid_device_name(&device_name)?;
-    let email = optional_bounded_field(&email, 320, "Enter a valid email address.")?;
     let invite = Zeroizing::new(invite);
-    let invite = Zeroizing::new(optional_bounded_field(
-        invite.as_str(),
-        MAXIMUM_INVITE_BYTES,
-        "Invitation code must be a single line of at most 4,096 bytes.",
-    )?);
-    let passphrase = optional_confirmed_passphrase(passphrase, passphrase_confirmation)?;
-    let operation = Operation::CreateAccount {
-        profile: profile.clone(),
-        alias,
-        username,
-        device_name,
-        email,
-        invite: SecretString::new(invite.as_str()),
-        passphrase,
-    };
+    let operation = ops::accounts::create_account_operation(ops::accounts::NewAccount {
+        profile: &profile,
+        alias: &alias,
+        username: &username,
+        device_name: &device_name,
+        email: &email,
+        invite: &invite,
+        passphrase: optional_confirmed_passphrase(passphrase, passphrase_confirmation)?,
+    })?;
     let value =
         apply_profile_operation_value(&state, profile, operation, MutationKind::Create).await?;
     account_sync_response(value).map_err(|error| ambiguous_mutation_response(&state, error.message))
@@ -640,12 +628,9 @@ pub async fn resume_first_run_account(
     crate::applock::require_unlocked(&app)?;
     let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    let alias = bounded_local_name(&alias, "Choose a valid pending account alias.")?;
-    let operation = Operation::ResumeAccount {
-        profile: profile.clone(),
-        alias: alias.clone(),
-    };
+    // Local names are accepted verbatim, so the request strings are the
+    // validated values once the operation is built.
+    let operation = ops::accounts::resume_account_operation(&profile, &alias)?;
     let value = apply_pending_operation_value(
         &state,
         profile,
@@ -699,22 +684,17 @@ pub async fn recover_owner_account(
     crate::applock::require_unlocked(&app)?;
     let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    let target_alias = bounded_local_name(&target_alias, "Enter a valid local account alias.")?;
-    let expected_alias = target_alias.clone();
-    let device_name = valid_device_name(&device_name)?;
-    let phrase = recovery_phrase(phrase)?;
-    let serial = positive_recovery_serial()?;
-    let operation = Operation::RecoverOwnerAccount {
-        profile: profile.clone(),
-        target_alias,
-        phrase,
-        device_name,
-        serial,
-    };
+    let phrase = Zeroizing::new(phrase);
+    let operation = ops::accounts::recover_owner_account_operation(
+        &profile,
+        &target_alias,
+        &phrase,
+        &device_name,
+        positive_recovery_serial()?,
+    )?;
     let value =
         apply_profile_operation_value(&state, profile, operation, MutationKind::Create).await?;
-    recovery_response(value, &expected_alias)
+    recovery_response(value, &target_alias)
         .map_err(|error| ambiguous_mutation_response(&state, error.message))
 }
 
@@ -732,27 +712,23 @@ pub async fn resume_owner_recovery(
     crate::applock::require_unlocked(&app)?;
     let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    let target_alias = bounded_local_name(&target_alias, "Choose a valid pending recovery alias.")?;
-    let expected_alias = target_alias.clone();
-    let device_name = valid_device_name(&device_name)?;
-    let phrase = recovery_phrase(phrase)?;
-    let operation = Operation::ResumeOwnerRecovery {
-        profile: profile.clone(),
-        target_alias: target_alias.clone(),
-        phrase,
-        device_name,
-    };
+    let phrase = Zeroizing::new(phrase);
+    let operation = ops::accounts::resume_owner_recovery_operation(
+        &profile,
+        &target_alias,
+        &phrase,
+        &device_name,
+    )?;
     let value = apply_pending_operation_value(
         &state,
         profile,
         PendingOperationKind::AccountRecovery,
-        target_alias,
+        target_alias.clone(),
         None,
         operation,
     )
     .await?;
-    recovery_response(value, &expected_alias)
+    recovery_response(value, &target_alias)
         .map_err(|error| ambiguous_mutation_response(&state, error.message))
 }
 

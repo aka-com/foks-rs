@@ -1,0 +1,116 @@
+# cargo-deny policy for the root workspace (Cargo.lock) and the fuzz workspace
+# (fuzz/Cargo.lock). .github/workflows/foks-dependencies.yml checks both on
+# dependency changes, weekly, and before desktop release builds:
+#
+#   cargo deny --locked check
+#   cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check \
+#       --allow advisory-not-detected --allow unmatched-skip
+#
+# The ignore and skip entries for root-only crates are unused in the fuzz
+# graph, so the fuzz check allows those two lints; the root check still reports
+# stale entries.
+
+[graph]
+# Linux and macOS, the platforms FOKS supports. Dependencies used only on other
+# targets (Windows, Android, iOS) are left out of every check.
+targets = [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+]
+# Optional features (test-support, hardware) select dependencies that ship in
+# some binaries, so the graph includes them.
+all-features = true
+
+[advisories]
+# Vulnerabilities always fail. Unsound and unmaintained advisories fail for
+# any crate in the graph unless they are listed below with a reason. For
+# unmaintained crates this is stricter than a warning: a new advisory against a
+# transitive crate that cannot be updated (for example in the Tauri or GTK 3
+# stack) blocks desktop release jobs until it is added to `ignore`. cargo-deny
+# 0.20 has no warning level for this check; `unmaintained = "workspace"` stops
+# reporting transitive crates, and `--warn unmaintained` also reports every
+# ignored advisory.
+unsound = "all"
+unmaintained = "all"
+yanked = "deny"
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa 0.9 has no fixed release. openidconnect 4.0.1 uses it only to verify RS256 ID-token signatures, a public-key operation; the Marvin timing leak concerns private-key operations, which only foks-server-testkit performs, with a committed test key." },
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18 is fixed only in 0.20; the GTK 3 bindings that tauri, tao, wry and muda use on Linux require 0.18. FOKS does not call VariantStrIter." },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is a compile-time dependency of glib-macros and gtk3-macros 0.18 (Linux GTK 3 stack); no maintained release of those bindings drops it." },
+    { id = "RUSTSEC-2025-0075", reason = "unic-char-range: tauri-utils (urlpattern 0.3) depends on the unmaintained unic crates; no tauri 2 release drops them." },
+    { id = "RUSTSEC-2025-0080", reason = "unic-common: see RUSTSEC-2025-0075." },
+    { id = "RUSTSEC-2025-0081", reason = "unic-char-property: see RUSTSEC-2025-0075." },
+    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: see RUSTSEC-2025-0075." },
+    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: see RUSTSEC-2025-0075." },
+]
+
+[licenses]
+# Permissive licenses only. A crate under any other license fails the check
+# until it is reviewed and its license is added here or as an exception.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+exceptions = [
+    # Fuzz workspace only: the bundled LLVM libFuzzer source is NCSA-licensed.
+    # No release artifact links it.
+    { crate = "libfuzzer-sys", allow = ["NCSA"] },
+]
+# One policy serves both workspaces, and each graph uses only part of it.
+unused-allowed-license = "allow"
+unused-license-exception = "allow"
+
+[licenses.private]
+# Workspace crates with `publish = false` (foks-agent, foks-desktop-app,
+# foks-fuzz and others) are not checked; the workspace crates are MIT-licensed
+# through `[workspace.package]`, and foks-fuzz declares no license.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+# Known duplicates, kept out of the warning output so that a new duplicate
+# stands out. Remaining duplicates (syn, toml, hashbrown, getrandom, base64,
+# thiserror and others) are reported as warnings.
+#
+# foks-crypto implements the FOKS v0.1.9 primitives with the previous RustCrypto
+# generation (digest 0.10, cipher 0.4, rand_core 0.6): ed25519-dalek 2, hmac
+# 0.12, p256 0.13, sha2 0.10, crypto_secretbox 0.1 and salsa20 0.10. argon2
+# 0.5, ml-kem 0.3.2, yubikey 0.8, openidconnect 4.0.1, secret-service 5 and the
+# tauri/wry build also depend on that generation, while the workspace uses
+# sha2 0.11, sha3 0.12 and x25519-dalek 3 elsewhere.
+skip = [
+    { crate = "aead@0.5", reason = "crypto_secretbox 0.1 (XSalsa20-Poly1305)" },
+    { crate = "block-buffer@0.10", reason = "digest 0.10" },
+    { crate = "cipher@0.4", reason = "crypto_secretbox 0.1, salsa20 0.10, yubikey 0.8 (aes, des), secret-service 5 (aes, cbc)" },
+    { crate = "const-oid@0.9", reason = "digest 0.10, rsa 0.9, yubikey 0.8 (x509-cert)" },
+    { crate = "cpufeatures@0.2", reason = "argon2 0.5, curve25519-dalek 4, poly1305 0.8, sha2 0.10" },
+    { crate = "crypto-common@0.1", reason = "digest 0.10, cipher 0.4" },
+    { crate = "curve25519-dalek@4", reason = "ed25519-dalek 2; x25519-dalek 3 uses curve25519-dalek 5" },
+    { crate = "digest@0.10", reason = "ed25519-dalek 2, hmac 0.12, sha2 0.10, argon2 0.5 (blake2), openidconnect 4.0.1 (rsa 0.9)" },
+    { crate = "inout@0.1", reason = "cipher 0.4" },
+    { crate = "poly1305@0.8", reason = "crypto_secretbox 0.1" },
+    { crate = "rand_core@0.6", reason = "elliptic-curve 0.13, rsa 0.9, argon2 0.5 (password-hash), yubikey 0.8" },
+    { crate = "sha2@0.10", reason = "foks-crypto, ed25519-dalek 2, p256 0.13, foks-oidc, foks-snowpack, foks-yubi, openidconnect 4.0.1, yubikey 0.8, secret-service 5, tauri-codegen, wry" },
+    { crate = "sha3@0.11", reason = "ml-kem 0.3.2" },
+    { crate = "universal-hash@0.5", reason = "poly1305 0.8" },
+]
+
+[sources]
+# Every dependency comes from crates.io; git and other registries fail.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

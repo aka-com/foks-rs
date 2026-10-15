@@ -218,6 +218,10 @@ test('sameLocation compares full location properties', () => {
     ),
     false,
   );
+  assert.equal(
+    sameLocation({ kind: 'devices' }, { kind: 'devices', open: 'add' }),
+    false,
+  );
 });
 
 test('railTabOf names the tab a location belongs to', () => {
@@ -255,6 +259,8 @@ const ROUND_TRIP: Location[] = [
   { kind: 'devices', section: 'keys', store: 'acct:work' },
   { kind: 'devices', store: 'acct:personal', device: '04a779c40674' },
   { kind: 'devices', store: 'acct:personal', device: 'yubi:primary key' },
+  { kind: 'devices', open: 'add' },
+  { kind: 'devices', store: 'acct:work', open: 'add' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'people' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'channels' },
   { kind: 'group-settings', ref: 'team:eng', tab: 'files' },
@@ -1316,6 +1322,25 @@ test('an item opens its page and selects on it, or neither', async () => {
     store: 'team:eng',
     path: '/deploy/token',
   });
+});
+
+test('a folder opens its page and its tree folder together, or neither', async () => {
+  const store = new LocationStore();
+  store.registerGuard(prompting());
+  const { answer, prompter } = prompts();
+  store.setPrompter(prompter);
+  store.navigateToFolder({ kind: 'store', ref: 'team:eng' }, '/deploy');
+  // The folder is not opened on the page the reader is still on.
+  assert.deepEqual(store.getSnapshot().location, { kind: 'all' });
+  assert.equal(store.getSnapshot().folder, '');
+  answer(0, true);
+  await settled();
+  assert.deepEqual(store.getSnapshot().location, {
+    kind: 'store',
+    ref: 'team:eng',
+  });
+  // The navigation resets the folder; the folder arrives after it.
+  assert.equal(store.getSnapshot().folder, '/deploy');
 });
 
 test('a chat channel returns to its team inbox, whose back target is disabled', () => {

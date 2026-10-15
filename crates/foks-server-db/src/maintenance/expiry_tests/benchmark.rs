@@ -15,6 +15,7 @@ DROP INDEX team_view_tokens_expiry;
 DROP INDEX team_view_challenges_expiry;
 DROP INDEX team_admin_tokens_expiry;
 DROP INDEX log_sends_created_at;
+DROP INDEX waitlist_entries_created;
 VACUUM;";
 
 fn baseline_select(statement: expiry::ExpiryStatement) -> &'static str {
@@ -34,6 +35,7 @@ fn size(table: &str, synthetic: bool) -> usize {
     match table {
         "sso_sessions" => 1000,
         "log_sends" => 128,
+        "waitlist_entries" => 10_000,
         "team_view_tokens" | "team_view_challenges" | "team_admin_tokens" => 16_384,
         // Names and idempotency records have no matching global admission cap; 4096 is a
         // representative comparison size, not a claim about their limits.

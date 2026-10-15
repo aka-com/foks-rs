@@ -56,16 +56,23 @@ const actions = {
   copyText: async () => ({ ok: true as const }),
   openChatLink: async () => ({ ok: true as const }),
 };
+/**
+ * The message's own markup. The toast provider draws its persistent live
+ * regions after its children, and those are not the message's.
+ */
 const messageMarkup = (
   text: string,
   mentions?: ReturnType<typeof chatMentions>,
-): string =>
-  renderToStaticMarkup(
+): string => {
+  const html = renderToStaticMarkup(
     createElement(ToastProvider, {
       controller: new ToastController(),
       children: createElement(MessageText, { text, actions, mentions }),
     }),
   );
+  const toasts = html.indexOf('<div id="toasts"');
+  return toasts < 0 ? html : html.slice(0, toasts);
+};
 test('Basic source renders safe bounded Markdown without HTML or image fetching', () => {
   const text =
     '**bold** *em* `code`\n- first\n- second\n> quote\n```\n<x>\n```\n<img src="https://evil"> ![image](https://example.com/a) [bad](javascript:alert)';

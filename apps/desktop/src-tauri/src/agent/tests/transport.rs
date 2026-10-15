@@ -263,3 +263,61 @@ fn classifications_preserve_ambiguity_and_fatality() {
     assert_eq!(protocol_version.code, "version-mismatch");
     assert!(protocol_version.fatal && !protocol_version.retryable);
 }
+
+/// `agent_status` reports incremental history from the Hello capabilities
+/// that `ensure_hello` holds. A timed-out Hello keeps them; a refused one
+/// clears them, and the next `ensure_hello` fetches them again.
+#[test]
+fn ensure_hello_fills_the_capabilities_and_a_timed_out_hello_keeps_them() {
+    use std::io::{Read as _, Write as _};
+    use std::os::unix::net::UnixListener;
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("agent.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let server = std::thread::spawn(move || {
+        answer_socket_hello(&listener);
+        // A Hello left unanswered until the client gives up.
+        let (mut stream, _) = listener.accept().unwrap();
+        foks_agent_proto::decode_hello(&read_socket_frame(&mut stream))
+            .unwrap()
+            .expect("a hello");
+        assert_eq!(stream.read(&mut [0; 1]).unwrap(), 0);
+        // An agent that predates the Hello refuses it.
+        let (mut stream, _) = listener.accept().unwrap();
+        let frame = read_socket_frame(&mut stream);
+        let refusal = serde_json::json!({
+            "version": 34,
+            "id": foks_agent_proto::request_id(&frame),
+            "status": "error",
+            "code": "version-mismatch",
+            "message": "unsupported protocol version",
+        });
+        stream
+            .write_all(&foks_agent_proto::encode(&refusal).unwrap())
+            .unwrap();
+        answer_socket_hello(&listener);
+    });
+    let mut handle = AgentHandle::new(socket);
+    Arc::get_mut(&mut handle.transport)
+        .unwrap()
+        .client
+        .set_timeout(Duration::from_millis(300))
+        .unwrap();
+    let handle = Arc::new(handle);
+    let history_after = foks_agent_proto::hello::capability::HISTORY_AFTER;
+    assert!(!handle.advertises(history_after));
+    tauri::async_runtime::block_on(handle.ensure_hello()).unwrap();
+    assert!(handle.advertises(history_after));
+    // Held capabilities answer without another Hello.
+    tauri::async_runtime::block_on(handle.ensure_hello()).unwrap();
+    let timed_out = handle.probe_status().unwrap_err();
+    assert_eq!(timed_out.code, "deadline-exceeded");
+    assert!(handle.advertises(history_after));
+    let refused = handle.probe_status().unwrap_err();
+    assert_eq!(refused.code, "version-mismatch");
+    assert!(!handle.advertises(history_after));
+    tauri::async_runtime::block_on(handle.ensure_hello()).unwrap();
+    assert!(handle.advertises(history_after));
+    server.join().unwrap();
+}

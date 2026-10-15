@@ -55,7 +55,6 @@ import {
   partiesOf,
   partyName,
   plural,
-  readersOf,
   roleRank,
   serverDisplayLabel,
   serverDisplayLabelForStore as displayServerName,
@@ -96,6 +95,20 @@ import { GroupMark } from './group-mark';
 import { manageReason } from './group-model';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '/kit/toasts';
+import {
+  entriesOf,
+  exposureOrder,
+  memberExposureReadiness,
+  memberReads,
+  useExposureReviews,
+  withExposureReview,
+} from '../exposure-review';
+import {
+  ExposureReviewBands,
+  ExposureReviewSheet,
+  ExposureSummary,
+  unstoredReview,
+} from './exposure-review';
 
 type Tab = GroupSettingsTab;
 export type GroupSheetKind =
@@ -113,14 +126,6 @@ const stateName = (): string =>
 
 function itemsOf(snapshot: AgentSnapshot, store: string): Item[] {
   return catalog(snapshot).filter((item) => item.store === store);
-}
-
-function readsOf(snapshot: AgentSnapshot, party: Party): Item[] {
-  return itemsOf(snapshot, party.store).filter((item) =>
-    readersOf(snapshot, item)?.some(
-      (candidate) => candidate.party_id_hex === party.party_id_hex,
-    ),
-  );
 }
 
 function sortRoster(parties: readonly Party[]): Party[] {
@@ -698,6 +703,7 @@ function MembersTab({
 }
 
 function FederationRemovalSheet({
+  snapshot,
   bridge,
   store,
   entry,
@@ -705,6 +711,7 @@ function FederationRemovalSheet({
   onApplied,
   onMutationError,
 }: {
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   store: Extract<Store, { kind: 'team' }>;
   entry: FederationEntry;
@@ -720,8 +727,25 @@ function FederationRemovalSheet({
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const toasts = useToast();
+  const name = entry.remote_team_alias;
+  // The remote team is a party of this team's roster. What its members could
+  // read through it is listed before the write and kept for review after it,
+  // as for a removed member.
+  const party = partiesOf(snapshot, store.id).find(
+    (candidate) =>
+      candidate.party_kind !== 'user' &&
+      candidate.party_id_hex === entry.remote_team_id_hex &&
+      (!candidate.scoped_host_id_hex ||
+        candidate.scoped_host_id_hex === entry.remote_host_id_hex),
+  );
+  const readiness = memberExposureReadiness(snapshot, store.id);
+  const exposed =
+    party && readiness === 'ready'
+      ? exposureOrder(memberReads(snapshot, party))
+      : [];
   const apply = async (): Promise<void> => {
-    if (!confirmed || busy || !entry.active) return;
+    if (!confirmed || busy || !entry.active || readiness === 'loading') return;
+    const entries = entriesOf(exposed);
     setBusy(true);
     try {
       const result = await attemptMutation(
@@ -731,11 +755,22 @@ function FederationRemovalSheet({
           // read back must not reuse the roster it holds even if the agent's
           // catalog has not yet caught up with that sequence.
           markProfileRostersStale(store.server);
-          return bridge.removeFederatedGroup({
-            storeId: store.id,
-            remoteHostIdHex: entry.remote_host_id_hex,
-            remoteTeamIdHex: entry.remote_team_id_hex,
-          });
+          return withExposureReview(
+            {
+              scope: store.id,
+              party: party?.party_id_hex ?? entry.remote_team_id_hex,
+              name,
+              cause: 'removed',
+              entries,
+            },
+            () =>
+              bridge.removeFederatedGroup({
+                storeId: store.id,
+                remoteHostIdHex: entry.remote_host_id_hex,
+                remoteTeamIdHex: entry.remote_team_id_hex,
+              }),
+            () => toasts.show(unstoredReview(name)),
+          );
         },
         () =>
           onApplied(
@@ -768,7 +803,9 @@ function FederationRemovalSheet({
           <Button
             variant="primary"
             danger
-            disabled={busy || !confirmed || !entry.active}
+            disabled={
+              busy || !confirmed || !entry.active || readiness === 'loading'
+            }
             onClick={() => void apply()}
           >
             Remove and rekey
@@ -799,6 +836,16 @@ function FederationRemovalSheet({
         />
         Remove every member of {entry.remote_team_alias} and rotate keys
       </label>
+      {entry.active ? (
+        <ExposureSummary
+          snapshot={snapshot}
+          name={name}
+          heading={`Items ${name} could read`}
+          empty={`${name} cannot read any item this account can list.`}
+          items={exposed}
+          readiness={readiness}
+        />
+      ) : null}
     </SheetDialog>
   );
 }
@@ -974,7 +1021,7 @@ function SettingsTab({
                       <b>{partyName(party)}</b>
                       <small>
                         {fmtRole(party.destination_role)} · reads{' '}
-                        {readsOf(snapshot, party).length} of {total}
+                        {memberReads(snapshot, party).length} of {total}
                       </small>
                     </span>
                   </button>
@@ -1167,6 +1214,7 @@ export function GroupSettingsScreen({
   onApplied: onSnapshotApplied,
   onError,
   onMutationError: onSnapshotMutationError,
+  onOpenItem,
 }: {
   snapshot: AgentSnapshot;
   bridge: Bridge;
@@ -1183,8 +1231,17 @@ export function GroupSettingsScreen({
   onApplied: (message: string, profile?: string) => Promise<void>;
   onError: (error: unknown) => void;
   onMutationError: MutationFailureHandler;
+  /**
+   * Opens an item in Files, from an exposure review. Without it, the review
+   * lists items without an Open action.
+   */
+  onOpenItem?: (item: Item) => void;
 }): ReactNode {
   const copy = useCopyText(bridge, onError);
+  // Reviews of what removed or lowered members could read, kept on this
+  // device after the change; one is open in its sheet at a time.
+  const exposureReviews = useExposureReviews();
+  const [exposureOpen, setExposureOpen] = useState<string | null>(null);
   const toasts = useToast();
   // The Channels tab reads the same per-group inbox entry the rail and the
   // Chat column read, so the tab's count and its rows cannot disagree.
@@ -1362,6 +1419,7 @@ export function GroupSettingsScreen({
       setRekeyArmed(false);
       setInviting(false);
       setReviewing(false);
+      setExposureOpen(null);
       // A channel preparation the agent may already hold is the exception:
       // it is settled where it was made, so the sheet stays until it is.
       if (!channelUnresolved.current) setAddingChannel(false);
@@ -1451,6 +1509,24 @@ export function GroupSettingsScreen({
       membership={{ operations: membershipPending, onResume: resumeMembership }}
       onClose={() => setReviewing(false)}
       onComplete={() => onApplied('Team requests updated', store.server)}
+    />
+  ) : null;
+  const exposureReview = exposureReviews.find(
+    (review) => review.id === exposureOpen && review.scope === store.id,
+  );
+  const exposureSheet = exposureReview ? (
+    <ExposureReviewSheet
+      snapshot={snapshot}
+      review={exposureReview}
+      onOpenItem={
+        onOpenItem
+          ? (item) => {
+              setExposureOpen(null);
+              onOpenItem(item);
+            }
+          : undefined
+      }
+      onClose={() => setExposureOpen(null)}
     />
   ) : null;
   const changeRange = (raise: boolean): void => {
@@ -1647,6 +1723,12 @@ export function GroupSettingsScreen({
               onReview={() => setReviewing(true)}
             />
           )}
+          <ExposureReviewBands
+            reviews={exposureReviews.filter(
+              (review) => review.scope === store.id,
+            )}
+            onReview={setExposureOpen}
+          />
           <Tabs
             label="Team sections"
             idBase={GROUP_TABS}
@@ -1808,6 +1890,7 @@ export function GroupSettingsScreen({
           </div>
           {removalEntry ? (
             <FederationRemovalSheet
+              snapshot={snapshot}
               bridge={bridge}
               store={store}
               entry={removalEntry}
@@ -1890,6 +1973,7 @@ export function GroupSettingsScreen({
       ) : null}
       {inviteSheet}
       {activitySheet}
+      {exposureSheet}
     </>
   );
 }

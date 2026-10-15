@@ -45,4 +45,9 @@ export type FoksIconName =
   | 'panelLeftOpen'
   | 'pawPrint'
   | 'plug'
-  | 'quote';
+  | 'quote'
+  | 'restore'
+  | 'lock'
+  | 'dices'
+  | 'star'
+  | 'keyboard';

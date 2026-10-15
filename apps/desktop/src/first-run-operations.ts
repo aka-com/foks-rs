@@ -3,10 +3,14 @@ import { normalizeMutationError, type Bridge } from './bridge';
 import {
   decodeFirstRunCheckpoint,
   encodeFirstRunCheckpoint,
-  FIRST_RUN_CHECKPOINT_KEY,
   transitionFirstRun,
   type FirstRunCheckpoint,
 } from './first-run-state';
+import {
+  readStorage,
+  STORAGE_KEYS,
+  writeStorageOrThrow,
+} from './platform/device-storage';
 
 export const FIRST_RUN_PROGRESS_EVENT = 'foks:first-run-progress';
 const running = new WeakMap<Bridge, Set<string>>();
@@ -15,9 +19,14 @@ export function provisioningInFlight(bridge: Bridge, id: string): boolean {
   return running.get(bridge)?.has(id) ?? false;
 }
 
+/** The stored checkpoint; `null` when unset, unreadable or unavailable. */
+export function storedFirstRunCheckpoint(): FirstRunCheckpoint | null {
+  return decodeFirstRunCheckpoint(readStorage(STORAGE_KEYS.firstRun));
+}
+
 export function persistFirstRun(checkpoint: FirstRunCheckpoint): void {
-  window.localStorage.setItem(
-    FIRST_RUN_CHECKPOINT_KEY,
+  writeStorageOrThrow(
+    STORAGE_KEYS.firstRun,
     encodeFirstRunCheckpoint(checkpoint),
   );
   window.dispatchEvent(new Event(FIRST_RUN_PROGRESS_EVENT));
@@ -75,9 +84,7 @@ export async function executeProvisioning(
   } finally {
     active.delete(intent.id);
   }
-  const current = decodeFirstRunCheckpoint(
-    window.localStorage.getItem(FIRST_RUN_CHECKPOINT_KEY),
-  );
+  const current = storedFirstRunCheckpoint();
   if (current?.provisioning?.id === intent.id) persistFirstRun(next);
   updateRetainedSetup(saved, next);
   return { checkpoint: next, ...(failure ? { error: failure } : {}) };

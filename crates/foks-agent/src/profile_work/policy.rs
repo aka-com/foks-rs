@@ -100,6 +100,8 @@ pub(crate) fn operation_scope(operation: &Operation) -> Scope {
         | RenameAccount { profile, .. }
         | Sso { profile, .. }
         | BindDataAccount { profile, .. }
+        | AdapterClockStatus { profile, .. }
+        | RepairAdapterClock { profile, .. }
         | DescribeResetHardState { profile }
         | Probe { profile }
         | ListKnownStores { profile }
@@ -117,6 +119,7 @@ pub(crate) fn operation_scope(operation: &Operation) -> Scope {
         | PrepareOwnerBackup { profile, .. }
         | CommitOwnerBackup { profile, .. }
         | RevokeOwnerBackup { profile, .. }
+        | VerifyRecoveryPhrase { profile, .. }
         | RecoverOwnerAccount { profile, .. }
         | ResumeOwnerRecovery { profile, .. }
         | PassphraseStatus { profile, .. }

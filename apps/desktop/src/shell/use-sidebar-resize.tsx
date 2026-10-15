@@ -1,20 +1,21 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import {
+  readStorage,
+  STORAGE_KEYS,
+  writeStorage,
+} from '../platform/device-storage';
+
 const MIN_WIDTH = 150;
 const DEFAULT_WIDTH = MIN_WIDTH;
 const MAX_WIDTH = 240;
-const KEY = 'sidebarWidth';
 const clamp = (width: number, max = MAX_WIDTH) =>
   Math.max(MIN_WIDTH, Math.min(max, width));
 
 function storedWidth() {
-  try {
-    const value = Number(window.localStorage.getItem(KEY));
-    return value > 0 && Number.isFinite(value) ? clamp(value) : DEFAULT_WIDTH;
-  } catch {
-    return DEFAULT_WIDTH;
-  }
+  const value = Number(readStorage(STORAGE_KEYS.sidebarWidth));
+  return value > 0 && Number.isFinite(value) ? clamp(value) : DEFAULT_WIDTH;
 }
 
 export function useSidebarResize(enabled: boolean) {
@@ -36,13 +37,9 @@ export function useSidebarResize(enabled: boolean) {
       ? Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, available - 420))
       : MAX_WIDTH;
   };
-  const save = (value: number) => {
-    try {
-      window.localStorage.setItem(KEY, String(value));
-    } catch {
-      /* Session only. */
-    }
-  };
+  // A refused write keeps the width for this session only.
+  const save = (value: number) =>
+    writeStorage(STORAGE_KEYS.sidebarWidth, String(value));
 
   useLayoutEffect(() => {
     const frame = ref.current?.closest<HTMLElement>('.window');

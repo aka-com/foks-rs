@@ -356,7 +356,7 @@
 }</div>
 <p>Setting <code>withGlobalTauri: false</code> guarantees that <code>window.__TAURI__</code> is <strong>never defined</strong> in the DOM global scope. The only way to send messages over the Tauri IPC bridge is through bundled JavaScript modules that statically import <code>@tauri-apps/api/core</code> during compilation with Vite.</p>
 
-<h3>The Minimal Capability Allowlist (3 Commands Only)</h3>
+<h3>The Minimal Capability Allowlist (3 Core Commands Only)</h3>
 <p>Tauri v2 uses an Access Control List (ACL) system defined in JSON capabilities. Standard Tauri ships with <code>core:default</code>, which activates 9 capability sets containing <strong>92 individual commands</strong>. FOKS completely purges <code>core:default</code> and grants exactly 3 core commands in <code>capabilities/default.json</code>:</p>
 
 <table class="keytable">
@@ -395,7 +395,7 @@
 <p>While <code>foks-desktop-app</code> links against <code>tauri-plugin-dialog</code> and <code>tauri-plugin-clipboard-manager</code>, <strong>zero permissions are granted to the webview</strong> for either plugin. Webview attempts to call <code>invoke('plugin:dialog|open')</code> fail instantly at the Tauri ACL gate. File pickers and clipboard operations can only be initiated by trusted Rust code.</p>
 
 <h3>Defending Custom Commands</h3>
-<p>Custom commands registered via <code>tauri::generate_handler!</code> bypass the plugin ACL. FOKS defends them programmatically using two universal gatekeepers:</p>
+<p>Tauri checks custom commands registered via <code>tauri::generate_handler!</code> against capabilities only when the app declares an ACL manifest. <code>build.rs</code> declares one listing every registered command, and <code>capabilities/default.json</code> grants the generated <code>allow-&lt;command&gt;</code> permissions to the <code>main</code> window only, so a <code>host-admin-*</code> window or a remote origin is refused before any command body runs. Behind that ACL, each command applies two checks of its own:</p>
 <ol>
   <li><strong><code>require_main_window(&amp;webview)</code>:</strong> Inspects <code>webview.label()</code> and aborts if it is not <code>"main"</code>. This prevents auxiliary webviews (such as isolated administration frames) from invoking vault commands.</li>
   <li><strong><code>require_unlocked(&amp;app)</code>:</strong> Asserts that the desktop application lock is disengaged before executing any value-bearing operation.</li>
@@ -526,7 +526,7 @@ crate::applock::require_unlocked_generation(&app, access)?;</div>
 <p>Clipboard security is a major vulnerability in password management. Background clipboard logging tools and clipboard history extensions regularly archive plaintext credentials.</p>
 
 <h3>Digest-Only Fingerprinting</h3>
-<p>When a user copies a password or secret via <code>copy_item_value</code>, the secret is encapsulated in a <code>Zeroizing&lt;String&gt;</code> container. The string is written to the system pasteboard and dropped immediately:</p>
+<p>When a user copies one field of a login via <code>copy_item_field</code>, or a whole text item via <code>copy_item_value</code>, the secret is encapsulated in a <code>Zeroizing&lt;String&gt;</code> container. The string is written to the system pasteboard and dropped immediately:</p>
 <div class="pre">pub fn copy_with_hygiene(app: &AppHandle, value: Zeroizing<String>) -> Result<(), String> {
     let expected = PendingClipboard {
         digest: Sha256::digest(value.as_bytes()).into(),
@@ -544,6 +544,7 @@ crate::applock::require_unlocked_generation(&app, access)?;</div>
 <ul>
   <li><strong>Linux Timeout:</strong> 15 seconds.</li>
   <li><strong>macOS Timeout:</strong> 30 seconds. Linux enforces a shorter window because Linux desktop environments lack a standardized clipboard concealment protocol.</li>
+  <li><strong>Stated Timeout:</strong> <code>copy_item_field</code> and <code>copy_item_value</code> return the timeout as <code>clearAfterSeconds</code>, and the copy toast states it, for example "Password copied &middot; clears in 30 s". The toast closes by that time even while it is hovered.</li>
   <li><strong>macOS Concealed Marker:</strong> On macOS, FOKS tags the pasteboard item with <code>org.nspasteboard.ConcealedType</code>, instructing utilities like Raycast, Alfred, and 1Password not to log the entry.</li>
 </ul>
 

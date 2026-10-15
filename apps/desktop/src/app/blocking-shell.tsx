@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Dialog, useHasOverlayProvider } from '/kit/overlay-primitives';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import {
@@ -377,12 +377,26 @@ export function BlockedShell({
 }
 
 /**
+ * How long the starting screen waits, without catalog progress, before it
+ * names the credential prompt an initialized agent can be waiting on: the
+ * agent reads its vault key from the Keychain or Secret Service before it
+ * accepts connections.
+ */
+export const STARTING_PROMPT_HINT_MS = 5_000;
+
+/**
  * The content area while the agent starts and, once the catalog read reports,
  * while it runs. The live region keeps its identity across partials so the
  * progress line is re-read rather than announced as a new region.
  */
-export function startingProgressDetail(progress?: BootProgress): string {
-  if (!progress) return 'Startup usually takes a few seconds.';
+export function startingProgressDetail(
+  progress?: BootProgress,
+  waitedLong = false,
+): string {
+  if (!progress)
+    return waitedLong
+      ? 'Still starting. If a Keychain or Secret Service prompt is open, respond to it to continue.'
+      : 'Startup usually takes a few seconds.';
   if (progress.devices) {
     return progress.devices.total <= 3
       ? 'This may take a few seconds...'
@@ -395,7 +409,15 @@ export function startingProgressDetail(progress?: BootProgress): string {
 }
 
 function StartingScreen({ progress }: { progress?: BootProgress }): ReactNode {
-  const detail = startingProgressDetail(progress);
+  const [waitedLong, setWaitedLong] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(
+      () => setWaitedLong(true),
+      STARTING_PROMPT_HINT_MS,
+    );
+    return () => clearTimeout(timer);
+  }, []);
+  const detail = startingProgressDetail(progress, waitedLong);
   return (
     <div className="booting" role="status">
       <span className="spin" aria-hidden="true" />

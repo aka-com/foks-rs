@@ -79,6 +79,7 @@ export function installDom(options: InstallDomOptions = {}): JSDOM {
     },
     MouseEvent: { configurable: true, value: dom.window.MouseEvent },
     Event: { configurable: true, value: dom.window.Event },
+    CustomEvent: { configurable: true, value: dom.window.CustomEvent },
     MutationObserver: {
       configurable: true,
       value: dom.window.MutationObserver,

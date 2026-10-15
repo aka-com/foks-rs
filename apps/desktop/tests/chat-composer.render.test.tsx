@@ -90,7 +90,7 @@ async function setup(
   const calls: ChatAction[] = [];
   const bridge = {
     ...base,
-    chat: async (store: string, action: ChatAction, view?: string) => {
+    chat: async (store: string, action: ChatAction, view: string) => {
       calls.push(action);
       const run = (input = action) => base.chat(store, input, view);
       return intercept ? intercept(action, run) : run();

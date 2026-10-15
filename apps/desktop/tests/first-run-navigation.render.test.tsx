@@ -205,6 +205,24 @@ test('resumed sign-in and create share a deterministic server Back destination',
   ui.fireEvent.click(r.view.getByRole('button', { name: 'Back' }));
   assert.equal(h.saved()?.state, 'checked');
 });
+test('switching between sign-in and create keeps the account page mounted', async () => {
+  const h = await harness();
+  const r = h.render({
+    ...h.checkpoint,
+    managedLocal: false,
+    account: undefined,
+    state: 'existing',
+  });
+  const heading = r.view.getByRole('heading', { name: 'Set up your account' });
+  ui.fireEvent.click(
+    r.view.getByRole('radio', { name: /Create a new account/ }),
+  );
+  assert.equal(h.saved()?.state, 'account');
+  assert.equal(
+    r.view.getByRole('heading', { name: 'Set up your account' }),
+    heading,
+  );
+});
 test('the account pages are numbered sections and a lone sign-in method is preselected', async () => {
   const h = await harness();
   const steps = (view: ReturnType<typeof ui.render>) =>

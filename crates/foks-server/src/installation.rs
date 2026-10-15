@@ -34,11 +34,14 @@ pub struct InstallationConfig {
     pub backup_directory: PathBuf,
     pub backup_interval_seconds: u64,
     pub backup_retain: usize,
+    #[serde(default)]
+    pub waitlist: crate::waitlist::WaitlistConfig,
 }
 
 impl InstallationConfig {
     pub fn validate(&self) -> crate::Result<()> {
         validate_hostname(&self.canonical_name)?;
+        self.waitlist.validate()?;
         crate::config::validate_vhost_management_host(&self.vhost_management_host)?;
         if let Some(admin) = &self.web_admin {
             admin.validate()?;
@@ -183,6 +186,7 @@ pub fn initialize(
         backup_directory: backups,
         backup_interval_seconds: 86_400,
         backup_retain: 7,
+        waitlist: crate::waitlist::WaitlistConfig::default(),
     };
     config.validate()?;
     let path = directory.join("server.toml");
@@ -318,7 +322,7 @@ fn create_private_directory(path: &Path) -> crate::Result<()> {
     Ok(())
 }
 
-fn write_new_file(path: &Path, bytes: &[u8], unix_mode: u32) -> crate::Result<()> {
+pub(crate) fn write_new_file(path: &Path, bytes: &[u8], unix_mode: u32) -> crate::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -440,7 +444,7 @@ fn validate_hostname(name: &str) -> crate::Result<()> {
     Ok(())
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut output, byte| {
         use std::fmt::Write as _;
         write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
@@ -465,8 +469,11 @@ mod tests {
             "127.0.0.1:9090".parse().unwrap(),
         )
         .unwrap();
+        let text = std::fs::read_to_string(&config_path).unwrap();
+        assert!(text.contains("[waitlist]\nenabled = false\n"), "{text}");
         let config = load_config(config_path).unwrap();
         validate_artifacts(&config).unwrap();
+        assert_eq!(config.waitlist, crate::waitlist::WaitlistConfig::default());
         let mut colliding = config.clone();
         colliding.public_address = colliding.probe_address;
         assert!(colliding.validate().is_err());
@@ -498,5 +505,39 @@ mod tests {
         )
         .unwrap();
         assert!(validate_artifacts(&config).is_err());
+    }
+
+    #[test]
+    fn waitlist_table_is_optional_validated_and_strict() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config_path = initialize(
+            temporary.path().join("server"),
+            "localhost",
+            "127.0.0.1:4430".parse().unwrap(),
+            "127.0.0.1:4431".parse().unwrap(),
+            "127.0.0.1:4432".parse().unwrap(),
+            "127.0.0.1:9090".parse().unwrap(),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&config_path).unwrap();
+        let (base, _) = text.split_once("[waitlist]").unwrap();
+        let parse = |suffix: &str| -> crate::Result<InstallationConfig> {
+            let config: InstallationConfig = toml::from_str(&format!("{base}{suffix}"))?;
+            config.validate()?;
+            Ok(config)
+        };
+        assert_eq!(
+            parse("").unwrap().waitlist,
+            crate::waitlist::WaitlistConfig::default()
+        );
+        let enabled = parse("[waitlist]\nenabled = true\nmaximum_entries = 50\n").unwrap();
+        assert!(enabled.waitlist.enabled);
+        assert_eq!(enabled.waitlist.maximum_entries, 50);
+        assert_eq!(
+            enabled.waitlist.retention_days,
+            crate::waitlist::WaitlistConfig::default().retention_days
+        );
+        assert!(parse("[waitlist]\nmaximum_entries = 0\n").is_err());
+        assert!(parse("[waitlist]\nenable = true\n").is_err());
     }
 }

@@ -42,6 +42,7 @@ fn independent_imports_rekey_accounts_preserve_database_identity_and_deny_use() 
         let mut db = foks_client_db::HardStateStore::open(&s.paths.hard_database)?;
         let sample = foks_client_db::AdapterTimeSample {
             process_id: [9; 16],
+            boot_id: None,
             wall_seconds: crate::now_microseconds()? / 1_000_000,
             monotonic_seconds: 0,
         };

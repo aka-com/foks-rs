@@ -14,6 +14,9 @@ sha2 = "0.10"
 zeroize = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 tokio = { workspace = true }
+# Exact: ID-token signature and claim verification is delegated to this
+# release; an update is checked against tests/fixtures and
+# tools/foks-v019-oracle/run-sso-compat.sh.
 openidconnect = { version = "=4.0.1", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde_json = { workspace = true }

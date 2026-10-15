@@ -84,7 +84,7 @@ export class DeviceMetadata {
     for (const [query, entry] of this.entries) {
       if (desired.has(query)) continue;
       entry.release();
-      if (entry.store) this.alerts.forgetRecoveryPhrase(entry.store);
+      if (entry.store) this.forgetAlerts(entry.store);
       this.entries.delete(query);
     }
     for (const [query, scope] of desired) {
@@ -192,11 +192,16 @@ export class DeviceMetadata {
     this.active = false;
     for (const entry of this.entries.values()) {
       entry.release();
-      if (entry.store) this.alerts.forgetRecoveryPhrase(entry.store);
+      if (entry.store) this.forgetAlerts(entry.store);
     }
     this.entries.clear();
     this.snapshot = undefined;
     this.publish();
+  }
+
+  private forgetAlerts(store: string): void {
+    this.alerts.forgetRecoveryPhrase(store);
+    this.alerts.forgetAccountKeys(store);
   }
 
   private publish(): void {
@@ -227,11 +232,11 @@ export class DeviceMetadata {
             )
               ready++;
             if (state?.data && !state.error && !state.data.backupsUnavailable)
-              this.alerts.reportRecoveryPhrase(
-                store.id,
-                state.data.backups.length > 0,
-              );
+              this.alerts.reportRecoveryPhrase(store.id, state.data.backups);
             else this.alerts.forgetRecoveryPhrase(store.id);
+            if (state?.data && !state.error)
+              this.alerts.reportAccountKeys(store.id, state.data.devices);
+            else this.alerts.forgetAccountKeys(store.id);
           }
           const states = entries.map((entry) => entry.query.getSnapshot());
           const error = states.find(

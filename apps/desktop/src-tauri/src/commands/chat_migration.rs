@@ -1,6 +1,6 @@
 //! The only reader of the retired desktop credential namespace. No source
 //! lock is held across agent IPC, and only acknowledged records are removed.
-use super::{chat_local, context::AppState, vault::store_id};
+use super::{chat_local, context::AppState, store_key::store_id};
 use crate::agent::AgentError;
 use foks_agent_proto::{
     chat::{ChatAction, ChatScope},
@@ -92,7 +92,7 @@ pub(super) fn recover(
                 .transport_for("chat_migration", Some(&candidate.profile));
             let cancelled = || {
                 crate::applock::require_unlocked_generation(app, unlocked).is_err()
-                    || scoped.chat_generation.load(Ordering::Acquire) != generation
+                    || scoped.chat_generation().load(Ordering::Acquire) != generation
             };
             if cancelled() {
                 return Err(unavailable());
@@ -122,7 +122,7 @@ pub(super) fn recover(
             .transport_for("chat_migration", Some(&selected.profile));
         let cancelled = || {
             crate::applock::require_unlocked_generation(app, unlocked).is_err()
-                || scoped.chat_generation.load(Ordering::Acquire) != generation
+                || scoped.chat_generation().load(Ordering::Acquire) != generation
         };
         if cancelled() {
             return Err(unavailable());

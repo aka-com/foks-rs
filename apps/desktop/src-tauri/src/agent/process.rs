@@ -4,8 +4,9 @@ use super::maintenance::{inspect_takeover_target, stop_incompatible_agent};
 use super::transport::success_value;
 use super::{
     AgentEndpoint, AgentError, AgentHandle, AgentProcessInfo, AgentTakeover, StaleAgentProcess,
-    AGENT_BINARY_ENV, DEFAULT_SOCKET_NAME, MAINTENANCE_RESERVATION_WAIT, MANAGED_AGENT_PID,
-    MAX_AGENT_STARTUP_DIAGNOSTIC_BYTES, MAX_STARTUP_TAKEOVERS, SOCKET_ARG, SOCKET_ENV,
+    AGENT_BINARY_ENV, AGENT_STARTUP_PROBE_FAILURE_GRACE, DEFAULT_SOCKET_NAME,
+    MAINTENANCE_RESERVATION_WAIT, MANAGED_AGENT_PID, MAX_AGENT_STARTUP_DIAGNOSTIC_BYTES,
+    MAX_STARTUP_TAKEOVERS, SOCKET_ARG, SOCKET_ENV,
 };
 use foks_agent_proto::{Operation, Response};
 use fs2::FileExt as _;
@@ -237,12 +238,32 @@ pub(super) struct ManagedAgentLaunch {
     exit: mpsc::Receiver<std::io::Result<ExitStatus>>,
     log: File,
     log_offset: u64,
+    /// The error for an exit or a loss of supervision already received, so
+    /// that later checks report the same cause.
+    ended: Option<AgentError>,
+    /// The process was observed to exit, as opposed to supervision of it
+    /// being lost.
+    exited: bool,
 }
 
 impl ManagedAgentLaunch {
     pub(super) fn early_exit_error(&mut self) -> Option<AgentError> {
+        if self.ended.is_none() {
+            self.ended = Some(self.receive_exit()?);
+        }
+        self.ended.clone()
+    }
+
+    /// Reports whether the process was observed to exit on its own. It is
+    /// false while the process runs and when supervision of it was lost.
+    pub(super) fn exited(&self) -> bool {
+        self.exited
+    }
+
+    fn receive_exit(&mut self) -> Option<AgentError> {
         match self.exit.try_recv() {
             Ok(Ok(status)) => {
+                self.exited = true;
                 let mut message = format!(
                     "The local background service process {} exited before FOKS could connect to its socket ({status}).",
                     self.pid
@@ -271,6 +292,23 @@ impl ManagedAgentLaunch {
                 true,
             )),
         }
+    }
+
+    /// Describes a launched agent that is still running but has not accepted
+    /// a connection on its socket after `waited`, with any output it has
+    /// written so far.
+    pub(super) fn startup_timeout_error(&mut self, waited: Duration) -> AgentError {
+        let mut message = format!(
+            "The local background service process {} is still running but has not accepted a connection on its socket after {} seconds. \
+             It may be waiting for access to the system credential store; check for a Keychain or Secret Service prompt.",
+            self.pid,
+            waited.as_secs()
+        );
+        if let Some(diagnostic) = self.diagnostic() {
+            message.push_str("\n\nAgent output:\n");
+            message.push_str(&diagnostic);
+        }
+        AgentError::new("agent-start-timeout", message, true)
     }
 
     fn diagnostic(&mut self) -> Option<String> {
@@ -369,6 +407,8 @@ pub(super) fn launch_agent(
         exit,
         log: diagnostic_log,
         log_offset: log_metadata.len(),
+        ended: None,
+        exited: false,
     })
 }
 
@@ -1022,8 +1062,10 @@ impl AgentHandle {
         self.transport
             .require_not_exiting()
             .map_err(AgentError::from_desktop)?;
+        self.startup_agent_exited.store(false, Ordering::Release);
         if let Ok(response) = self.probe_status() {
             self.clear_connection_failure();
+            self.discard_startup_launch();
             self.adopt_orphaned_agent();
             return Ok(response);
         }
@@ -1047,6 +1089,7 @@ impl AgentHandle {
             .map_err(|error| AgentError::new("agent-state", error.to_string(), false))?;
         prepare_state_directory(state_dir)?;
         let _spawn_lock = acquire_spawn_lock(&self.socket)?;
+        self.startup_agent_exited.store(false, Ordering::Release);
         let mut last_error = None;
         // The socket may be rebound after the previous process exits. Require new
         // approval for each replacement process and limit retries for respawning services.
@@ -1055,6 +1098,7 @@ impl AgentHandle {
             match self.probe_status() {
                 Ok(response) => {
                     self.clear_connection_failure();
+                    self.discard_startup_launch();
                     self.adopt_orphaned_agent();
                     return Ok(response);
                 }
@@ -1074,6 +1118,7 @@ impl AgentHandle {
                     match self.probe_status() {
                         Ok(response) => {
                             self.clear_connection_failure();
+                            self.discard_startup_launch();
                             return Ok(response);
                         }
                         Err(error) if error.code == "version-mismatch" => {
@@ -1085,9 +1130,23 @@ impl AgentHandle {
                 }
                 Err(_) => {}
             }
-            let mut launch = self.launch_unless_exiting(binary, state_dir)?;
-            let mut replaced = false;
-            for _ in 0..50 {
+            let mut launch = match self.take_startup_launch() {
+                // An agent kept by an earlier wait that has exited since is
+                // reported with its cause rather than replaced silently.
+                Some(mut launch) => match launch.early_exit_error() {
+                    Some(error) => return Err(self.startup_exit(&launch, error)),
+                    None => launch,
+                },
+                None => self.launch_unless_exiting(binary, state_dir)?,
+            };
+            // Wait as long as the launched process is alive, up to the
+            // deadline: an initialized agent may be held at a credential-store
+            // prompt before it binds. A missing or refusing socket is the
+            // expected state until then; any other probe failure is recorded
+            // with the time it was first seen.
+            let started = Instant::now();
+            let mut probe_failure: Option<(AgentError, Instant)> = None;
+            loop {
                 std::thread::sleep(Duration::from_millis(100));
                 match self.probe_status() {
                     Ok(response) => {
@@ -1096,17 +1155,33 @@ impl AgentHandle {
                     }
                     Err(error) if error.code == "version-mismatch" => {
                         last_error = Some(error);
-                        replaced = true;
                         break;
                     }
-                    Err(error) => last_error = Some(error),
+                    Err(error) if error.code == "agent-lost" => probe_failure = None,
+                    Err(error) => {
+                        let since = probe_failure
+                            .take()
+                            .map_or_else(Instant::now, |(_, since)| since);
+                        probe_failure = Some((error, since));
+                    }
                 }
                 if let Some(error) = launch.early_exit_error() {
+                    return Err(self.startup_exit(&launch, error));
+                }
+                // A process that accepts connections but keeps failing the
+                // probe is reported with that failure, not as still starting.
+                if let Some((error, _)) = probe_failure.take_if(|(_, since)| {
+                    since.elapsed() >= AGENT_STARTUP_PROBE_FAILURE_GRACE
+                        || started.elapsed() >= self.startup_deadline
+                }) {
+                    self.keep_startup_launch(launch);
                     return Err(error);
                 }
-            }
-            if !replaced {
-                break;
+                if started.elapsed() >= self.startup_deadline {
+                    let error = launch.startup_timeout_error(started.elapsed());
+                    self.keep_startup_launch(launch);
+                    return Err(error);
+                }
             }
         }
         Err(last_error.unwrap_or_else(|| {
@@ -1116,6 +1191,52 @@ impl AgentHandle {
                 true,
             )
         }))
+    }
+
+    /// Records that `launch` exited before the agent answered and returns its
+    /// exit error.
+    fn startup_exit(&self, launch: &ManagedAgentLaunch, error: AgentError) -> AgentError {
+        self.startup_agent_exited
+            .store(launch.exited(), Ordering::Release);
+        error
+    }
+
+    /// Keeps a launched agent that is still running when its startup wait
+    /// ends, so that the next start waits on it instead of launching another.
+    fn keep_startup_launch(&self, launch: ManagedAgentLaunch) {
+        *self
+            .startup_launch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(launch);
+    }
+
+    fn take_startup_launch(&self) -> Option<ManagedAgentLaunch> {
+        self.startup_launch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    /// Drops a kept launch once an agent answers on the socket.
+    fn discard_startup_launch(&self) {
+        drop(self.take_startup_launch());
+    }
+
+    /// Reports whether an agent kept by an ended startup wait is still alive.
+    /// A kept agent that has exited stays kept, so that the next start reports
+    /// its exit.
+    pub(super) fn startup_launch_running(&self) -> bool {
+        self.startup_launch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+            .is_some_and(|launch| launch.early_exit_error().is_none())
+    }
+
+    /// Reports whether the most recent start failed because the launched
+    /// agent was observed to exit before it answered on its socket.
+    pub fn startup_agent_exited(&self) -> bool {
+        self.startup_agent_exited.load(Ordering::Acquire)
     }
 
     pub(super) fn require_managed_endpoint(&self) -> Result<(), AgentError> {
@@ -1379,16 +1500,25 @@ impl AgentHandle {
     }
 
     pub fn stale_agent_processes(&self) -> Vec<StaleAgentProcess> {
+        self.state_dir_agent_processes().unwrap_or_default()
+    }
+
+    /// The agent processes configured with this app's state directory. Unlike
+    /// [`Self::stale_agent_processes`], a failed process scan is an error.
+    pub fn state_dir_agent_processes(&self) -> std::io::Result<Vec<StaleAgentProcess>> {
         #[cfg(unix)]
         {
-            self.socket
-                .parent()
-                .and_then(|state_dir| matching_agent_processes(state_dir).ok())
-                .unwrap_or_default()
+            let state_dir = self.socket.parent().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "the agent socket has no state directory",
+                )
+            })?;
+            matching_agent_processes(state_dir)
         }
         #[cfg(not(unix))]
         {
-            Vec::new()
+            Err(std::io::ErrorKind::Unsupported.into())
         }
     }
 

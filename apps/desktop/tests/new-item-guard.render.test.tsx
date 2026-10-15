@@ -465,6 +465,7 @@ test('item rename keeps the selected source version and blocks dismissal during 
   const dialog = await rendered.findByRole('dialog', {
     name: 'Rename or move',
   });
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Path' }));
   ui.fireEvent.change(ui.within(dialog).getByLabelText('Destination path'), {
     target: { value: '/renamed-item' },
   });
@@ -518,6 +519,7 @@ test('ambiguous move keeps the draft visible and cannot be submitted twice', asy
   const dialog = await rendered.findByRole('dialog', {
     name: 'Rename or move',
   });
+  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Path' }));
   ui.fireEvent.change(ui.within(dialog).getByLabelText('Destination path'), {
     target: { value: '/uncertain' },
   });
@@ -535,16 +537,16 @@ test('ambiguous move keeps the draft visible and cannot be submitted twice', asy
   assert.equal(calls, 1);
 });
 
-test('file deletion uses its selected version and blocks Escape while pending', async () => {
-  let request: unknown;
+test('Move to Trash uses the selected version and sends one request while pending', async () => {
+  const requests: unknown[] = [];
   let finish!: () => void;
   const { rendered, store } = await mount({
-    removeItem: async (next) => {
-      request = next;
+    trashItem: async (next) => {
+      requests.push(next);
       await new Promise<void>((resolve) => {
         finish = resolve;
       });
-      return { applied: true };
+      return { applied: true, path: '/.trash/owner/x' };
     },
   });
   const { FIXTURE } = (await vite.ssrLoadModule(
@@ -557,22 +559,21 @@ test('file deletion uses its selected version and blocks Escape while pending', 
   await ui.act(async () => {
     store.select({ store: item.store, path: item.path });
   });
-  ui.fireEvent.click(await rendered.findByRole('button', { name: 'Delete' }));
-  const dialog = await rendered.findByRole('alertdialog');
-  assert.match(dialog.textContent ?? '', /This cannot be undone/);
-  ui.fireEvent.click(ui.within(dialog).getByRole('button', { name: 'Delete' }));
+  const trash = await rendered.findByRole('button', { name: 'Move to Trash' });
+  ui.fireEvent.click(trash);
+  // The move can be undone, so no confirmation is asked for.
+  assert.equal(rendered.queryByRole('alertdialog'), null);
   await ui.waitFor(() =>
-    assert.deepEqual(request, {
-      storeId: item.store,
-      path: item.path,
-      version: item.version,
-      direntId: item.direntId,
-    }),
+    assert.deepEqual(requests, [
+      {
+        storeId: item.store,
+        path: item.path,
+        version: item.version,
+        direntId: item.direntId,
+      },
+    ]),
   );
-  ui.fireEvent.keyDown(dialog, { key: 'Escape' });
-  assert.ok(rendered.getByRole('alertdialog'));
+  ui.fireEvent.click(trash);
+  assert.equal(requests.length, 1);
   await ui.act(async () => finish());
-  await ui.waitFor(() =>
-    assert.equal(rendered.queryByRole('alertdialog'), null),
-  );
 });

@@ -228,6 +228,9 @@ test('credential requests preserve explicit resume and account-bound recovery ta
   );
   assert.equal(enrollmentSlot('0x82'), 0x82);
   assert.equal(enrollmentSlot('82'), null);
-  assert.equal(validEnrollmentAttempts(3, 255), true);
-  assert.equal(validEnrollmentAttempts(0, 256), false);
+  // foks_yubi::PinRetryConfiguration accepts one to fifteen attempts.
+  assert.equal(validEnrollmentAttempts(1, 15), true);
+  assert.equal(validEnrollmentAttempts(3, 16), false);
+  assert.equal(validEnrollmentAttempts(16, 3), false);
+  assert.equal(validEnrollmentAttempts(0, 3), false);
 });

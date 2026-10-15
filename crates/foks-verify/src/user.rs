@@ -310,6 +310,16 @@ impl VerifiedUserState {
             .map(String::as_str)
     }
 
+    /// Every authenticated device-name disclosure, keyed by the raw entity ID
+    /// of the device it names. Names of devices revoked since they were
+    /// provisioned remain listed; compare with [`Self::devices`] for the
+    /// current members.
+    pub fn device_display_names(&self) -> impl Iterator<Item = (&[u8], &str)> {
+        self.device_display_names
+            .iter()
+            .map(|(device, name)| (device.as_slice(), name.as_str()))
+    }
+
     /// Returns every authenticated provisioning incarnation for `device`.
     ///
     /// PUK parcels can remain encrypted by a sender after that sender

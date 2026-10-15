@@ -27,6 +27,7 @@ export const coreCommands: Pick<
   | 'windowState'
   | 'setTrafficLightsVisible'
   | 'setUnsentMessages'
+  | 'setQuitConfirmation'
   | 'lockApp'
   | 'unlockApp'
   | 'restartApp'
@@ -58,6 +59,7 @@ export const coreCommands: Pick<
   | 'onChatNotification'
   | 'onOpenSettings'
   | 'onNewItem'
+  | 'onLockMenu'
   | 'onMaintenanceStatus'
   | 'onExitState'
 > = {
@@ -74,6 +76,8 @@ export const coreCommands: Pick<
     checked('set_traffic_lights_visible', { visible }, () => undefined),
   setUnsentMessages: (count) =>
     checked('set_unsent_messages', { count }, () => undefined),
+  setQuitConfirmation: (confirmation) =>
+    checked('set_quit_confirmation', { confirmation }, () => undefined),
   lockApp: () => checked('lock_app', undefined, decodeAppLockState),
   unlockApp: () => checked('unlock_app', undefined, decodeAppLockState),
   restartApp: () => invoke<void>('restart_app'),
@@ -164,6 +168,7 @@ export const coreCommands: Pick<
       throw cause;
     }
   },
+  onLockMenu: async (listener) => listen('foks://lock', listener),
   onMaintenanceStatus: async (listener) =>
     listen<unknown>('foks://maintenance-status', (event) => {
       listener(decodeMaintenanceSnapshot(event.payload));

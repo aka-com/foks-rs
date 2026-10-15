@@ -22,6 +22,8 @@ installDom({
   act: true,
 });
 
+/** The chat view a test names when it calls the bridge directly. */
+const VIEW = 'cd'.repeat(16);
 let ui: typeof import('@testing-library/react');
 let vite: ViteDevServer;
 let OverlayProvider: typeof import('../kit/overlay-primitives').OverlayProvider;
@@ -368,10 +370,14 @@ for (const drop of ['the badge button', 'Backspace'] as const) {
       })),
     };
     const bridge = mockBridge(snapshot);
-    const reply = await bridge.chat('team:eng', {
-      action: 'sync-inbox',
-      blocked_channels: [],
-    });
+    const reply = await bridge.chat(
+      'team:eng',
+      {
+        action: 'sync-inbox',
+        blocked_channels: [],
+      },
+      VIEW,
+    );
     assert.equal(reply.result.kind, 'inbox');
     if (reply.result.kind !== 'inbox') return;
     const channel = reply.result.conversations[0].channel;
@@ -464,10 +470,14 @@ for (const location of [
     const bridge = mockBridge(snapshot);
     let target: import('../src/location').Location = location;
     if (location.kind === 'chat') {
-      const reply = await bridge.chat(location.ref, {
-        action: 'sync-inbox',
-        blocked_channels: [],
-      });
+      const reply = await bridge.chat(
+        location.ref,
+        {
+          action: 'sync-inbox',
+          blocked_channels: [],
+        },
+        VIEW,
+      );
       assert.equal(reply.result.kind, 'inbox');
       if (reply.result.kind !== 'inbox') return;
       target = {

@@ -1333,7 +1333,7 @@ test('an account with no recovery phrase gets its own band without publishing sh
   assert.equal(
     deviceAlertRegistry(bridgeRef.current)
       .getSnapshot()
-      .recoveryPhrases.get('acct:work'),
+      .phraseLists.get('acct:work'),
     undefined,
   );
   await ui.act(async () => {
@@ -1363,7 +1363,7 @@ test('an account with a recovery phrase draws no band without publishing shell a
   assert.equal(
     deviceAlertRegistry(bridgeRef.current)
       .getSnapshot()
-      .recoveryPhrases.get('acct:personal'),
+      .phraseLists.get('acct:personal'),
     undefined,
   );
   assert.equal(page.queryByText('No recovery key'), null);

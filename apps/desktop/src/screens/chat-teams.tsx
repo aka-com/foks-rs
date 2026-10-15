@@ -97,6 +97,7 @@ import {
   storedFoldedTeams,
 } from '../sidebar-prefs';
 import type { ChannelSort } from '../sidebar-prefs';
+import { matchesShortcut } from '../shortcuts';
 import { GroupMark } from './group-mark';
 import { manageReason } from './group-model';
 
@@ -749,11 +750,9 @@ export function ChatTeamColumn({
   // event boundary, so it does nothing while a dialog is open, as the rail's
   // Ctrl+Tab does.
   const step = useEffectEvent((event: KeyboardEvent): void => {
+    const unread = matchesShortcut(event, 'chatUnreadStep');
     if (
-      (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') ||
-      !event.altKey ||
-      event.ctrlKey ||
-      event.metaKey ||
+      (!unread && !matchesShortcut(event, 'chatChannelStep')) ||
       event.defaultPrevented ||
       anyDialogOpen()
     )
@@ -767,7 +766,7 @@ export function ChatTeamColumn({
       selected,
       activeChannel,
       direction,
-      event.shiftKey,
+      unread,
     );
     if (next) {
       // The unfold lasts while the column is mounted; the stored fold is left
@@ -775,8 +774,7 @@ export function ChatTeamColumn({
       if (!next.drawn)
         setFolds((prior) => new Map(prior).set(next.team, false));
       onOpen(next.team, next.channel);
-    } else if (event.shiftKey)
-      toasts?.show('No other channel has unread messages.');
+    } else if (unread) toasts?.show('No other channel has unread messages.');
   });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => step(event);

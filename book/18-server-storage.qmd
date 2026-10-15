@@ -225,15 +225,15 @@ status 1012 and the connection is closed.
 SQLite reserves two integers in the database header for applications: the
 *application ID* and the *user version*. The server writes
 `0x464f4b53` (the ASCII bytes "FOKS") as the application ID and its schema
-version, currently 48, as the user version. Both are checked by every
+version, currently 49, as the user version. Both are checked by every
 connection before use: a file with the wrong application ID is not a FOKS
 database. Readers require the current schema; the writer accepts explicitly
 supported prior schemas and migrates them before use.
 
-The schema itself is one concatenated string of 21 `.sql` files. A fresh
+The schema itself is one concatenated string of 23 `.sql` files. A fresh
 file (both pragmas zero) receives the whole schema inside one `BEGIN
 IMMEDIATE` transaction, with the version stamped last. A file at version
-43 through 47 is upgraded in one transaction as well. Two properties make
+43 through 48 is upgraded in one transaction as well. Two properties make
 that upgrade safe:
 
 - The version is *re-read under the write lock* before acting. Another
@@ -257,8 +257,8 @@ binary unless retention deliberately deletes it. Unsupported versions and
 failed migrations stop restore or retention before destination publication or
 snapshot deletion. Temporary space is required for the copy and migration;
 each input database or WAL file is bounded by the configured database size
-limit. As on normal startup, the migration to 48 discards old SSO browser
-challenges, sessions, access state, and binding receipts.
+limit. As on normal startup, the migration from 47 or older discards old SSO
+browser challenges, sessions, access state, and binding receipts.
 
 ## Invariants written in SQL
 
@@ -328,6 +328,15 @@ branches. Partial indexes in a dedicated
 that file records a planner trick: leading a composite index with a column
 that is constant `NULL` in the partial predicate gives the query planner an
 equality plus a range, which it can use even without statistics.
+
+Two families are selected by age rather than by an expiry column: log
+uploads older than one day, and waitlist entries older than the configured
+retention (180 days by default). Both use an index on `created_at`. The
+waitlist also has a row cap (10,000 by default) and one entry per address,
+so the unauthenticated `Reg.joinWaitList` route cannot grow the table
+without bound. Insert and delete triggers keep the entry count in the
+one-row `waitlist_count` table, so the cap check on each join reads one row
+in the writer transaction instead of counting the table.
 
 Some things are deliberately not swept. Key-value locks expire when the
 *next acquirer* finds them stale, matching the Go implementation, so there

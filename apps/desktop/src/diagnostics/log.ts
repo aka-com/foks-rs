@@ -4,7 +4,8 @@
  * Every layer records the same record: the renderer directly, the desktop
  * backend through a source the shell registers, the agent through the timing
  * each of its responses carries. Nothing here persists or leaves the process;
- * the Refresh status popover's Copy diagnostics is the only reader.
+ * Copy diagnostics, in the Refresh status popover or on the window fault
+ * screen, is the only reader.
  *
  * What may be recorded is what the popover already prints: server ids, job
  * kinds, command and operation names, opaque store ids, and short hashes of
@@ -30,7 +31,10 @@ export interface TimingEvent {
   /** Duration of this step, when it is a step. */
   readonly ms?: number;
   readonly outcome?: TimingOutcome;
-  /** A command error code. Never the message. */
+  /**
+   * A command error code, or a built-in error constructor name for
+   * `renderer.fault`. Never the message.
+   */
   readonly code?: string;
   readonly attrs?: Readonly<Record<string, TimingValue>>;
 }

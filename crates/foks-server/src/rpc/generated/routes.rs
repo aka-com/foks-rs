@@ -532,7 +532,7 @@ pub const ROUTES: &[RouteSpec] = &[
         upstream_result: "lib.WaitListID",
         argument_header: true,
         result_header: true,
-        statuses: &["ok", "bad_args", "rate_limited", "tx_retry"],
+        statuses: &["ok", "bad_args", "rate_limited", "tx_retry", "unsupported"],
         max_request_bytes: 1024,
         supported: true,
         coverage: &["go_client_waitlist"],

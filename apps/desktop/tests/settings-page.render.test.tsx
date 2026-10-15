@@ -34,7 +34,36 @@ test.before(async () => {
   });
 });
 
-test.afterEach(() => ui.cleanup());
+test.afterEach(() => {
+  ui.cleanup();
+  window.localStorage.clear();
+});
+
+const INVITATION_LABELS = 'foks.invitationLabels';
+
+/** Stores one invitee label for each profile, as invitation-labels.ts does. */
+function seedInvitationLabels(profiles: readonly string[]): void {
+  window.localStorage.setItem(
+    INVITATION_LABELS,
+    JSON.stringify(
+      Object.fromEntries(
+        profiles.map((profile) => [
+          `${profile}/main/op`,
+          { label: `${profile} invitee`, role: 'member', created: 1 },
+        ]),
+      ),
+    ),
+  );
+}
+
+/** The profiles whose invitee labels remain stored. */
+function labelledProfiles(): string[] {
+  return Object.keys(
+    JSON.parse(
+      window.localStorage.getItem(INVITATION_LABELS) ?? '{}',
+    ) as object,
+  ).map((key) => key.split('/')[0]);
+}
 test.after(async () => vite.close());
 
 async function fixture(): Promise<AgentSnapshot> {
@@ -565,7 +594,7 @@ test('a section address opens that page, each with the sub-navigation beside it'
   }
 });
 
-test('Preferences holds desktop alert preferences and the rail color', async () => {
+test('Preferences holds desktop alert preferences, the rail color, Trash emptying and quitting', async () => {
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'preferences' },
   });
@@ -579,7 +608,7 @@ test('Preferences holds desktop alert preferences and the rail color', async () 
     [...main.querySelectorAll(':scope > .sec')].map(
       (label) => label.textContent,
     ),
-    ['Appearance', 'Desktop alerts', 'Onboarding tips'],
+    ['Appearance', 'Desktop alerts', 'Trash', 'Quitting', 'Onboarding tips'],
   );
   assert.equal(rendered.queryByRole('button', { name: 'Passphrase…' }), null);
   assert.ok(
@@ -587,6 +616,50 @@ test('Preferences holds desktop alert preferences and the rail color', async () 
       name: 'Enable desktop alerts on this device',
     }),
   );
+  // Automatic emptying is off until chosen, and the choice is kept.
+  const autoEmpty = rendered.getByRole('group', {
+    name: 'Empty Trash automatically',
+  });
+  assert.equal(
+    ui
+      .within(autoEmpty)
+      .getByRole('button', { name: 'Never' })
+      .getAttribute('aria-pressed'),
+    'true',
+  );
+  try {
+    ui.fireEvent.click(
+      ui.within(autoEmpty).getByRole('button', { name: 'After 30 days' }),
+    );
+    assert.equal(window.localStorage.getItem('trashAutoEmptyDays'), '30');
+  } finally {
+    window.localStorage.removeItem('trashAutoEmptyDays');
+  }
+  // Quitting asks every time until chosen otherwise, and the choice is kept.
+  const quitting = rendered.getByRole('group', { name: 'Ask before quitting' });
+  const pressed = (name: string) =>
+    ui
+      .within(quitting)
+      .getByRole('button', { name })
+      .getAttribute('aria-pressed');
+  assert.equal(pressed('Always'), 'true');
+  try {
+    ui.fireEvent.click(
+      ui.within(quitting).getByRole('button', { name: 'When work is pending' }),
+    );
+    assert.equal(
+      window.localStorage.getItem('quitConfirmation'),
+      'when-pending',
+    );
+    assert.equal(pressed('When work is pending'), 'true');
+    ui.fireEvent.click(
+      ui.within(quitting).getByRole('button', { name: 'Always' }),
+    );
+    assert.equal(window.localStorage.getItem('quitConfirmation'), null);
+    assert.equal(pressed('Always'), 'true');
+  } finally {
+    window.localStorage.removeItem('quitConfirmation');
+  }
 });
 
 test('Preferences remains available without an account', async () => {
@@ -803,6 +876,7 @@ test('a profile address opens that server instead of the page', async () => {
 test('server removal deletes its local credentials after exact-name confirmation', async () => {
   const calls: Array<[string, string]> = [];
   const messages: string[] = [];
+  seedInvitationLabels(['personal', 'acme']);
   const rendered = await renderSettings(await fixture(), {
     where: { profile: 'personal' },
     decorate: (bridge) => ({
@@ -824,6 +898,13 @@ test('server removal deletes its local credentials after exact-name confirmation
   assert.ok(
     ui.within(dialog).getByText('Remove Personal server and its credentials?'),
   );
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByText(
+        /^This app also removes its setup progress, invitation labels/,
+      ),
+  );
   const remove = ui
     .within(dialog)
     .getByRole('button', { name: 'Remove server and credentials' });
@@ -842,6 +923,8 @@ test('server removal deletes its local credentials after exact-name confirmation
   });
   await ui.waitFor(() => assert.deepEqual(calls, [['personal', 'personal']]));
   assert.deepEqual(messages, ['Removed Personal server and its credentials']);
+  // The webview's records of the removed profile go with it.
+  assert.deepEqual(labelledProfiles(), ['acme']);
 });
 
 test('server removal remains available after an identity mismatch', async () => {
@@ -1133,6 +1216,13 @@ test('Reset this device asks for one typed profile name per server', async () =>
   await ui.waitFor(() => {
     assert.ok(ui.within(dialog).getAllByText('Discarded operations').length);
   });
+  assert.ok(
+    ui
+      .within(dialog)
+      .getByText(
+        /^For each server reset, this app also erases its setup progress/,
+      ),
+  );
   const confirms = ui.within(dialog).getAllByPlaceholderText(/to confirm$/);
   assert.equal(confirms.length, 3);
   const run = ui
@@ -1328,6 +1418,7 @@ test('a reset that fails part way reloads every preview', async () => {
   let attempts = 0;
   let previews = 0;
   const reported: unknown[] = [];
+  seedInvitationLabels(['personal', 'acme', 'partner']);
   const rendered = await renderSettings(await fixture(), {
     where: { section: 'mac' },
     decorate: (bridge) => ({
@@ -1372,6 +1463,8 @@ test('a reset that fails part way reloads every preview', async () => {
   // The run stopped where it failed and said so; it did not report success.
   assert.equal(reported.length, 1);
   assert.equal(attempts, 2);
+  // Only the profile whose reset succeeded lost its webview records.
+  assert.deepEqual(labelledProfiles(), ['acme', 'partner']);
 });
 
 test('device notification preferences are reachable without a channel and recover denied permission', async () => {

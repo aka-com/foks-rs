@@ -3,7 +3,7 @@ import type { AgentLifecycle } from '../agent-lifecycle';
 import type { Bridge } from '../bridge';
 import type { Location, LocationStore, NavigateOptions } from '../location';
 import { storeOf } from '../model';
-import type { AgentSnapshot, DeviceLabel } from '../model';
+import type { AgentSnapshot, DeviceLabel, Item } from '../model';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { markProfileRostersStale } from '../roster-staleness';
 import { ChatTab } from '../screens/chat-tab';
@@ -16,6 +16,7 @@ import { SettingsScreen } from '../screens/settings-screen';
 import { TeamsScreen } from '../screens/teams-screen';
 import type { WriteWorkflow } from '../screens/write-workflows';
 import type { CommandErrorHandler } from './catalog-runtime';
+import type { TrashActions } from './trash-actions';
 
 export function ScreenRouter({
   shown,
@@ -41,8 +42,10 @@ export function ScreenRouter({
   accessNow,
   accessGenerations,
   onTeamInfo,
+  trash,
 }: {
   onTeamInfo: (storeId: string, trigger?: HTMLElement) => void;
+  trash: TrashActions;
   shown: AgentSnapshot;
   bridge: Bridge;
   state: ReturnType<LocationStore['getSnapshot']>;
@@ -67,6 +70,13 @@ export function ScreenRouter({
   accessGenerations: ReadonlyMap<string, number>;
 }): ReactNode {
   const here = state.location;
+  // An exposure review's Open: the item's store, with the item selected so
+  // the details panel shows it and its Edit.
+  const openItem = (item: Item): void =>
+    locations.navigateAndSelect(
+      { kind: 'store', ref: item.store },
+      { store: item.store, path: item.path },
+    );
   // People, Teams, Devices and Settings are the same body under four titles.
   const settingsProps = {
     snapshot: shown,
@@ -110,7 +120,23 @@ export function ScreenRouter({
         setWorkflow({ kind: 'new-folder', storeId, initialFolder })
       }
       onMove={(item) => setWorkflow({ kind: 'move', item })}
-      onDelete={(item) => setWorkflow({ kind: 'delete', item })}
+      onCopyToVault={(item) => setWorkflow({ kind: 'copy', item })}
+      onImport={(storeId, initialFolder) =>
+        setWorkflow({ kind: 'import', storeId, initialFolder })
+      }
+      onExport={(storeId) => setWorkflow({ kind: 'export', storeId })}
+      onMoveMany={(items, folder) =>
+        setWorkflow(
+          folder === undefined
+            ? { kind: 'move-many', items }
+            : { kind: 'bulk-move', items, folder },
+        )
+      }
+      onTrash={trash.moveToTrash}
+      onTrashMany={(items) => setWorkflow({ kind: 'bulk-trash', items })}
+      onRestore={trash.restore}
+      onDeletePermanently={(item) => setWorkflow({ kind: 'delete', item })}
+      onEmptyTrash={(store) => setWorkflow({ kind: 'empty-trash', store })}
       onSettings={(storeId) =>
         locations.navigate({
           kind: 'group-settings',
@@ -156,6 +182,7 @@ export function ScreenRouter({
       onApplied={refresh}
       onError={commandError}
       onMutationError={mutationError}
+      onOpenItem={openItem}
     />
   ) : here.kind === 'teams' ? (
     // Teams shares no state with Settings, so it is given exactly the props it
@@ -186,6 +213,7 @@ export function ScreenRouter({
       onRefreshSnapshot={refreshSnapshot}
       onError={commandError}
       onMutationError={mutationError}
+      onOpenItem={openItem}
     />
   ) : here.kind === 'settings' ? (
     <SettingsScreen

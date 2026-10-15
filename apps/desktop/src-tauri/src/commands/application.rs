@@ -1,8 +1,9 @@
 //! Agent connectivity and desktop application information.
 
-use crate::agent::{success_value, AgentError};
+use crate::agent::{success_value, AgentError, AgentHandle};
 use crate::commands::context::AppState;
 use crate::commands::validation::require_main_window;
+use foks_agent_proto::hello::capability::HISTORY_AFTER;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Emitter as _, Manager as _, State};
@@ -17,13 +18,15 @@ pub struct AgentStatusDto {
     pub history_after: Option<bool>,
 }
 
-impl From<foks_agent_proto::AgentStatus> for AgentStatusDto {
-    fn from(status: foks_agent_proto::AgentStatus) -> Self {
+impl AgentStatusDto {
+    /// `history_after` is whether the agent's Hello advertised
+    /// [`HISTORY_AFTER`]; it is reported only for a ready agent.
+    pub fn new(status: foks_agent_proto::AgentStatus, history_after: bool) -> Self {
         match status {
-            foks_agent_proto::AgentStatus::Ready { history_after, .. } => Self {
+            foks_agent_proto::AgentStatus::Ready { .. } => Self {
                 state: "ready".to_owned(),
                 step: None,
-                history_after,
+                history_after: history_after.then_some(true),
             },
             foks_agent_proto::AgentStatus::Bootstrap { step } => Self {
                 state: "bootstrap".to_owned(),
@@ -31,6 +34,11 @@ impl From<foks_agent_proto::AgentStatus> for AgentStatusDto {
                 history_after: None,
             },
         }
+    }
+
+    /// The status, with the capabilities the agent's last Hello advertised.
+    pub fn from_agent(status: foks_agent_proto::AgentStatus, agent: &AgentHandle) -> Self {
+        Self::new(status, agent.advertises(HISTORY_AFTER))
     }
 }
 
@@ -53,6 +61,7 @@ pub async fn agent_status(
     state: State<'_, AppState>,
 ) -> Result<AgentStatusDto, AgentError> {
     require_main_window(&webview)?;
+    state.agent.ensure_hello().await?;
     let value = success_value(
         state
             .agent
@@ -68,7 +77,7 @@ pub async fn agent_status(
     // The reply carries the agent's background loops. Recording them here is
     // what puts them in a readout beside the requests they competed with.
     state.agent.note_agent_timers(&status);
-    Ok(AgentStatusDto::from(status))
+    Ok(AgentStatusDto::from_agent(status, &state.agent))
 }
 
 #[tauri::command]
@@ -89,7 +98,7 @@ pub async fn auto_recover_agent(
     crate::applock::require_unlocked_generation(webview.app_handle(), access)?;
     let value = success_value(response)?;
     let status = serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
-        .map(AgentStatusDto::from)
+        .map(|status| AgentStatusDto::from_agent(status, &state.agent))
         .map_err(|error| {
             AgentError::new("protocol", format!("Invalid agent status: {error}"), false)
         })?;
@@ -121,7 +130,7 @@ pub async fn retry_agent_connection(
     })??;
     let value = success_value(response)?;
     serde_json::from_value::<foks_agent_proto::AgentStatus>(value)
-        .map(AgentStatusDto::from)
+        .map(|status| AgentStatusDto::from_agent(status, &state.agent))
         .map_err(|error| {
             AgentError::unknown(format!(
                 "Failed to parse background service status: {error}"
@@ -129,7 +138,22 @@ pub async fn retry_agent_connection(
         })
 }
 
-fn macos_computer_name() -> Option<String> {
+/// Upper bound on the account name offered as a username suggestion.
+const MAXIMUM_USER_NAME_BYTES: usize = 256;
+
+/// `raw` without surrounding whitespace, or `None` when that is empty or longer
+/// than `maximum` bytes.
+fn bounded_name(raw: &str, maximum: usize) -> Option<String> {
+    let name = raw.trim();
+    (!name.is_empty() && name.len() <= maximum).then(|| name.to_owned())
+}
+
+/// The name this computer goes by, which seeds the first-run device name.
+///
+/// macOS reports the Sharing pane's computer name. Elsewhere on Unix this is
+/// systemd-hostnamed's pretty hostname when one is set, and otherwise the
+/// kernel hostname.
+fn computer_name() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         let output = std::process::Command::new("/usr/sbin/scutil")
@@ -140,44 +164,133 @@ fn macos_computer_name() -> Option<String> {
             return None;
         }
         let name = String::from_utf8(output.stdout).ok()?;
-        let name = name.trim();
-        if name.is_empty() || name.len() > foks_agent_proto::MAXIMUM_DEVICE_NAME_BYTES {
-            return None;
-        }
-        Some(name.to_string())
+        bounded_name(&name, foks_agent_proto::MAXIMUM_DEVICE_NAME_BYTES)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        unix_names::pretty_hostname()
+            .and_then(|name| bounded_name(&name, foks_agent_proto::MAXIMUM_DEVICE_NAME_BYTES))
+            .or_else(|| {
+                unix_names::kernel_hostname().and_then(|name| {
+                    bounded_name(&name, foks_agent_proto::MAXIMUM_DEVICE_NAME_BYTES)
+                })
+            })
+    }
+    #[cfg(not(unix))]
     None
 }
 
 /// The short account name, which seeds the first-run username field.
 ///
-/// `NSUserName` is the login name; `NSFullUserName` is the display name, which
-/// is usually the person's real name. A FOKS username is published to the
-/// server and shared with the people they talk to, so the short name is the
-/// only one offered here: a full name reaches that field only if the person
-/// types it.
-fn macos_user_name() -> Option<String> {
+/// On macOS, `NSUserName` is the login name; `NSFullUserName` is the display
+/// name, which is usually the person's real name. Elsewhere on Unix the login
+/// name is the password database entry's `pw_name`, not its GECOS full name. A
+/// FOKS username is published to the server and shared with the people they
+/// talk to, so the short name is the only one offered here: a full name reaches
+/// that field only if the person types it.
+fn user_name() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         let name = objc2_foundation::NSUserName().to_string();
-        let name = name.trim();
-        if name.is_empty() || name.len() > 256 {
-            return None;
-        }
-        Some(name.to_owned())
+        bounded_name(&name, MAXIMUM_USER_NAME_BYTES)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        unix_names::login_name().and_then(|name| bounded_name(&name, MAXIMUM_USER_NAME_BYTES))
+    }
+    #[cfg(not(unix))]
     None
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
+mod unix_names {
+    use std::ffi::CStr;
+    use std::time::Duration;
+
+    const HOSTNAMED: &str = "org.freedesktop.hostname1";
+    const HOSTNAMED_PATH: &str = "/org/freedesktop/hostname1";
+    /// hostnamed is started on demand by the system bus; a reply slower than
+    /// this falls back to the kernel hostname.
+    const HOSTNAMED_TIMEOUT: Duration = Duration::from_secs(2);
+    /// Upper bound on the buffer `getpwuid_r` may ask for.
+    const MAXIMUM_PASSWD_BUFFER: usize = 1 << 20;
+
+    /// `PrettyHostname` from systemd-hostnamed, or `None` when the system bus
+    /// or the service is unavailable or the name is unset.
+    pub(super) fn pretty_hostname() -> Option<String> {
+        let connection = zbus::blocking::connection::Builder::system()
+            .and_then(|builder| builder.method_timeout(HOSTNAMED_TIMEOUT).build())
+            .ok()?;
+        let reply = connection
+            .call_method(
+                Some(HOSTNAMED),
+                HOSTNAMED_PATH,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(HOSTNAMED, "PrettyHostname"),
+            )
+            .ok()?;
+        let value: zbus::zvariant::OwnedValue = reply.body().deserialize().ok()?;
+        String::try_from(value).ok()
+    }
+
+    /// The kernel hostname from `gethostname`.
+    pub(super) fn kernel_hostname() -> Option<String> {
+        let mut buffer = [0u8; 256];
+        // SAFETY: the pointer and length describe `buffer`, which outlives the call.
+        if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
+            return None;
+        }
+        // A name that fills the buffer may be truncated without a terminator.
+        let name = CStr::from_bytes_until_nul(&buffer).ok()?;
+        name.to_str().ok().map(str::to_owned)
+    }
+
+    /// The login name of the effective user, from the password database.
+    pub(super) fn login_name() -> Option<String> {
+        let mut buffer = vec![0u8; 1024];
+        loop {
+            // SAFETY: `passwd` is plain data that `getpwuid_r` fills in.
+            let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+            let mut entry: *mut libc::passwd = std::ptr::null_mut();
+            // SAFETY: every pointer refers to a live local, and the length
+            // describes `buffer`, which the strings in `passwd` point into.
+            let status = unsafe {
+                libc::getpwuid_r(
+                    libc::geteuid(),
+                    &mut passwd,
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                    &mut entry,
+                )
+            };
+            if status == libc::ERANGE && buffer.len() < MAXIMUM_PASSWD_BUFFER {
+                buffer.resize(buffer.len() * 2, 0);
+                continue;
+            }
+            if status != 0 || entry.is_null() || passwd.pw_name.is_null() {
+                return None;
+            }
+            // SAFETY: a successful lookup sets `pw_name` to a NUL-terminated
+            // string inside `buffer`, which is still borrowed here.
+            let name = unsafe { CStr::from_ptr(passwd.pw_name) };
+            return name.to_str().ok().map(str::to_owned);
+        }
+    }
+}
+
 #[tauri::command]
-pub fn app_info(
+pub async fn app_info(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     state: State<'_, AppState>,
 ) -> Result<AppInfo, AgentError> {
     require_main_window(&webview)?;
+    // The name lookups can start a system service or a subprocess, so they run
+    // off the main thread.
+    let (computer, user) = tauri::async_runtime::spawn_blocking(|| (computer_name(), user_name()))
+        .await
+        .unwrap_or((None, None));
     Ok(AppInfo {
         version: app.package_info().version.to_string(),
         agent_socket: state.agent.socket().display().to_string(),
@@ -190,8 +303,8 @@ pub fn app_info(
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
             }),
-        computer_name: macos_computer_name(),
-        user_name: macos_user_name(),
+        computer_name: computer,
+        user_name: user,
     })
 }
 
@@ -280,18 +393,65 @@ mod tests {
 
     #[test]
     fn forwards_incremental_history_only_when_advertised_by_the_agent() {
-        let legacy = AgentStatusDto::from(foks_agent_proto::AgentStatus::ready());
+        let legacy = AgentStatusDto::new(foks_agent_proto::AgentStatus::ready(), false);
         assert_eq!(
             serde_json::to_value(legacy).unwrap(),
             serde_json::json!({"state":"ready"})
         );
-        let capable = AgentStatusDto::from(foks_agent_proto::AgentStatus::Ready {
-            timers: vec![],
-            history_after: Some(true),
-        });
+        let capable = AgentStatusDto::new(foks_agent_proto::AgentStatus::ready(), true);
         assert_eq!(
             serde_json::to_value(capable).unwrap(),
             serde_json::json!({"state":"ready", "historyAfter":true})
         );
+        let bootstrap = AgentStatusDto::new(
+            foks_agent_proto::AgentStatus::Bootstrap {
+                step: "initialize-state".to_owned(),
+            },
+            true,
+        );
+        assert_eq!(
+            serde_json::to_value(bootstrap).unwrap(),
+            serde_json::json!({"state":"bootstrap", "step":"initialize-state"})
+        );
+    }
+
+    #[test]
+    fn suggested_names_are_trimmed_and_bounded() {
+        assert_eq!(bounded_name("  host \n", 8).as_deref(), Some("host"));
+        assert_eq!(bounded_name(" \t\n", 8), None);
+        assert_eq!(bounded_name("12345678", 8).as_deref(), Some("12345678"));
+        assert_eq!(bounded_name("123456789", 8), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_kernel_hostname_matches_procfs() {
+        let expected = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap();
+        assert_eq!(
+            unix_names::kernel_hostname().as_deref(),
+            Some(expected.trim_end_matches('\n'))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_suggests_a_computer_and_user_name() {
+        assert!(computer_name().is_some());
+        // `id -un` fails when the effective UID has no password database
+        // entry, as in a container started with an arbitrary UID.
+        let output = std::process::Command::new("id")
+            .arg("-un")
+            .output()
+            .unwrap();
+        let expected = String::from_utf8(output.stdout).unwrap();
+        let expected = expected.trim();
+        if !output.status.success() || expected.is_empty() {
+            assert_eq!(user_name(), None);
+            return;
+        }
+        let user = user_name().expect("the effective user has a password database entry");
+        // The login name is a single token; the GECOS full name often is not.
+        assert!(!user.contains(char::is_whitespace), "{user:?}");
+        assert_eq!(expected, user);
     }
 }

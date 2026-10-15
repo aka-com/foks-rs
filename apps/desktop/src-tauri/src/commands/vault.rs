@@ -6,19 +6,20 @@ use crate::commands::execution::{
     ambiguous_worker_failure, apply_kv_mutation, map_mutation_error, MutationKind,
 };
 use crate::commands::preparation::{check_mutation_access, prepare_catalog_mutation};
+use crate::commands::store_key::store_id;
 use crate::commands::types::{CommandAck, MutationDto, RoleDto};
 use crate::commands::validation::{
-    invalid_request, require_main_window, serialize_secret, DOWNLOAD_CHUNK_BYTES,
+    invalid_request, invalid_response, require_main_window, serialize_secret, DOWNLOAD_CHUNK_BYTES,
     MAXIMUM_CLIPBOARD_TEXT_BYTES, MAXIMUM_DOWNLOAD_BYTES, MAXIMUM_TEXT_ITEM_BYTES,
 };
 use foks_agent_proto::{
-    KvChunkResult, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
+    KvChunkResult, KvEntryShape, KvReadResult, KvRole, KvStoreRef, KvUploadHeader, Operation,
 };
 use foks_desktop::{
     CatalogFailureScope, CatalogInventoryState, CatalogItem, CatalogSnapshot, CatalogStoreRef,
     CatalogStoreSummary, KvAccountMutation, KvItemRead, KvItemValue,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -61,6 +62,10 @@ pub struct ItemDto {
     pub version: u64,
     pub read: RoleDto,
     pub write: RoleDto,
+    /// `login` or `other` for a small file the agent's listing classified;
+    /// absent for other node types. It carries no field value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -206,24 +211,6 @@ impl CatalogDto {
     }
 }
 
-pub(super) fn store_id(store: &CatalogStoreRef) -> String {
-    match store {
-        CatalogStoreRef::Account(store) => serde_json::json!({
-            "kind": "account",
-            "profile": store.profile,
-            "accountAlias": store.account_alias,
-        }),
-        CatalogStoreRef::Team(store) => serde_json::json!({
-            "kind": "team",
-            "profile": store.profile,
-            "accountAlias": store.account_alias,
-            "teamAlias": store.team_alias,
-            "teamId": store.team_id,
-        }),
-    }
-    .to_string()
-}
-
 fn store_dto(store: &CatalogStoreSummary) -> Result<StoreDto, AgentError> {
     Ok(match store {
         CatalogStoreSummary::Account { store } => StoreDto {
@@ -303,6 +290,10 @@ fn item_dto(item: &CatalogItem) -> Result<ItemDto, AgentError> {
         version: item.metadata.version,
         read: item.metadata.read_role.into(),
         write: item.metadata.write_role.into(),
+        shape: item.metadata.shape.map(|shape| match shape {
+            KvEntryShape::Login => "login",
+            KvEntryShape::Other => "other",
+        }),
     })
 }
 
@@ -318,6 +309,25 @@ pub struct ReadItemDto {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct DownloadResult {
     pub saved: bool,
+}
+
+/// The acknowledgement of an item copy. The host clears the clipboard
+/// `clear_after_seconds` after the write unless it no longer holds the copied
+/// value, so the renderer can state when that happens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardAck {
+    pub ok: bool,
+    pub clear_after_seconds: u64,
+}
+
+impl ClipboardAck {
+    fn written() -> Self {
+        Self {
+            ok: true,
+            clear_after_seconds: crate::clipboard::AUTO_CLEAR_SECONDS,
+        }
+    }
 }
 
 pub(super) fn read_text(
@@ -357,17 +367,129 @@ pub(super) fn read_text(
     })
 }
 
-fn protocol_store(store: &CatalogStoreRef) -> KvStoreRef {
+pub(super) fn protocol_store(store: &CatalogStoreRef) -> KvStoreRef {
     match store {
         CatalogStoreRef::Account(store) => KvStoreRef::Account(store.clone()),
         CatalogStoreRef::Team(store) => KvStoreRef::Team(store.clone()),
     }
 }
 
+/// How much one vault stores on its server, as the server's KV usage read
+/// reports it: the number of files and their total ciphertext bytes. It
+/// carries no limit. The server enforces its quota on a larger measure
+/// (directories, metadata and envelopes as well as file ciphertext), so the
+/// renderer shows these figures without a fraction of a quota.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct StoreUsageDto {
+    pub files: u64,
+    pub bytes: u64,
+}
+
+/// Reads one vault's usage through the agent's data-read path: binds the
+/// vault's account, narrows the binding to the team for a team vault, and
+/// asks for usage. The agent checks the binding's host and user against the
+/// account again before and after the read; this side checks that the binding
+/// names the account it asked for.
+pub(super) fn read_store_usage(
+    transport: &dyn foks_desktop::AgentTransport,
+    store: &CatalogStoreRef,
+) -> Result<StoreUsageDto, AgentError> {
+    use foks_agent_proto::data::{DataRead, DataScope, DataUsage};
+    let (profile, account_alias, team_id) = match store {
+        CatalogStoreRef::Account(store) => (&store.profile, &store.account_alias, None),
+        CatalogStoreRef::Team(store) => (
+            &store.profile,
+            &store.account_alias,
+            Some(store.team_id.clone()),
+        ),
+    };
+    let mut scope: DataScope = serde_json::from_value(
+        transport
+            .call(Operation::BindDataAccount {
+                profile: profile.clone(),
+                account_alias: account_alias.clone(),
+            })
+            .map_err(AgentError::from_desktop)?,
+    )
+    .map_err(|_| invalid_response("Invalid account binding."))?;
+    if &scope.profile != profile || &scope.account_alias != account_alias || scope.team_id.is_some()
+    {
+        return Err(invalid_response(
+            "The agent bound a different account than the vault's.",
+        ));
+    }
+    scope.team_id = team_id;
+    let usage: DataUsage = serde_json::from_value(
+        transport
+            .call(Operation::ReadData {
+                scope,
+                query: DataRead::Usage,
+            })
+            .map_err(AgentError::from_desktop)?,
+    )
+    .map_err(|_| invalid_response("Invalid storage usage."))?;
+    Ok(StoreUsageDto {
+        files: usage.files,
+        bytes: usage.bytes,
+    })
+}
+
 pub(super) fn download_to_path(
     transport: &dyn foks_desktop::AgentTransport,
     item: &CatalogItem,
     destination: &Path,
+) -> Result<(), AgentError> {
+    let parent = destination.parent().ok_or_else(|| {
+        AgentError::new(
+            "download-path",
+            "The chosen destination path has no parent folder.",
+            false,
+        )
+    })?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+        AgentError::new(
+            "download-write",
+            format!("Could not create temporary download file: {error}"),
+            true,
+        )
+    })?;
+    read_file_content(transport, item, &mut |content| {
+        temporary.write_all(content).map_err(|error| {
+            AgentError::new(
+                "download-write",
+                format!("Could not save the file: {error}"),
+                true,
+            )
+        })
+    })?;
+    temporary.as_file().sync_all().map_err(|error| {
+        AgentError::new(
+            "download-write",
+            format!("Could not finish saving the file: {error}"),
+            true,
+        )
+    })?;
+    temporary.persist(destination).map_err(|error| {
+        AgentError::new(
+            "download-write",
+            format!(
+                "Could not save the downloaded file to destination: {}",
+                error.error
+            ),
+            true,
+        )
+    })?;
+    Ok(())
+}
+
+/// Reads a File item at the catalog's version and hands its content to
+/// `sink` in order: a small file in one piece, a large file one bound chunk
+/// at a time. Each piece is zeroized after `sink` returns. Other node types
+/// are refused with `not-file`.
+pub(super) fn read_file_content(
+    transport: &dyn foks_desktop::AgentTransport,
+    item: &CatalogItem,
+    sink: &mut dyn FnMut(&[u8]) -> Result<(), AgentError>,
 ) -> Result<(), AgentError> {
     let store = protocol_store(&item.store);
     let value = transport
@@ -405,20 +527,6 @@ pub(super) fn download_to_path(
             true,
         ));
     }
-    let parent = destination.parent().ok_or_else(|| {
-        AgentError::new(
-            "download-path",
-            "The chosen destination path has no parent folder.",
-            false,
-        )
-    })?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
-        AgentError::new(
-            "download-write",
-            format!("Could not create temporary download file: {error}"),
-            true,
-        )
-    })?;
     match read.node_type.as_str() {
         "small-file" => {
             if read.symlink_target.is_some() {
@@ -444,14 +552,9 @@ pub(super) fn download_to_path(
                     false,
                 ));
             }
-            temporary.write_all(&content).map_err(|error| {
-                AgentError::new(
-                    "download-write",
-                    format!("Could not save the file: {error}"),
-                    true,
-                )
-            })?;
+            let write = sink(&content);
             zeroize::Zeroize::zeroize(&mut content);
+            write?;
         }
         "file" => {
             if read.content.is_some() || read.symlink_target.is_some() {
@@ -505,15 +608,9 @@ pub(super) fn download_to_path(
                     ));
                 }
                 let eof = chunk.eof;
-                let write = temporary.write_all(&chunk.content);
+                let write = sink(&chunk.content);
                 zeroize::Zeroize::zeroize(&mut chunk.content);
-                write.map_err(|error| {
-                    AgentError::new(
-                        "download-write",
-                        format!("Could not save the file: {error}"),
-                        true,
-                    )
-                })?;
+                write?;
                 offset = next;
                 if eof {
                     if item
@@ -541,23 +638,6 @@ pub(super) fn download_to_path(
             ));
         }
     }
-    temporary.as_file().sync_all().map_err(|error| {
-        AgentError::new(
-            "download-write",
-            format!("Could not finish saving the file: {error}"),
-            true,
-        )
-    })?;
-    temporary.persist(destination).map_err(|error| {
-        AgentError::new(
-            "download-write",
-            format!(
-                "Could not save the downloaded file to destination: {}",
-                error.error
-            ),
-            true,
-        )
-    })?;
     Ok(())
 }
 
@@ -638,11 +718,6 @@ fn set_create_operation_roles_in_place(
             write_role: operation_write,
             ..
         }
-        | Operation::PutKvSymlink {
-            read_role: operation_read,
-            write_role: operation_write,
-            ..
-        }
         | Operation::MkdirKv {
             read_role: operation_read,
             write_role: operation_write,
@@ -703,16 +778,6 @@ pub(super) fn require_text_item(item: &CatalogItem) -> Result<(), AgentError> {
     } else {
         Err(invalid_request("Only secrets can be edited as text."))
     }
-}
-
-pub(super) fn remove_item_operation(item: &CatalogItem) -> Result<Operation, AgentError> {
-    // Folder deletion is not supported.
-    if item.metadata.node_type == "directory" {
-        return Err(invalid_request(
-            "Folder removal is not currently supported.",
-        ));
-    }
-    foks_desktop::remove_kv_operation(item, false).map_err(invalid_request)
 }
 
 pub(super) fn file_create_header(
@@ -846,7 +911,7 @@ async fn apply_file_upload(
     })?;
     if result.as_ref().is_err_and(|error| error.ambiguous) {
         state
-            .mutation_requires_refresh
+            .mutation_requires_refresh()
             .store(true, Ordering::Release);
     }
     result.map(|()| MutationDto { applied: true })
@@ -1179,6 +1244,31 @@ pub async fn read_item(
         .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))?
 }
 
+/// Reads how much a vault in the current catalog stores. The server computes
+/// usage by decoding the vault's nodes on each request, so the renderer asks
+/// only when a view that shows it opens, never on a refresh cadence.
+#[tauri::command]
+pub async fn store_usage(
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+) -> Result<StoreUsageDto, AgentError> {
+    require_main_window(&webview)?;
+    let generation = crate::applock::unlocked_generation(webview.app_handle())?;
+    let (store, _) = state.selected_store(&store_id)?;
+    let transport = state.agent.transport();
+    let usage =
+        tauri::async_runtime::spawn_blocking(move || read_store_usage(transport.as_ref(), &store))
+            .await
+            .map_err(|error| {
+                AgentError::unknown(format!("failed to read storage usage: {error}"))
+            })?;
+    crate::applock::require_unlocked_generation(webview.app_handle(), generation)?;
+    usage
+}
+
+/// Copies an item's whole stored text; the same command as
+/// [`copy_item_field`] with [`ItemField::Value`].
 #[tauri::command]
 pub async fn copy_item_value(
     app: tauri::AppHandle,
@@ -1187,23 +1277,107 @@ pub async fn copy_item_value(
     store_id: String,
     path: String,
     version: u64,
-) -> Result<CommandAck, AgentError> {
+) -> Result<ClipboardAck, AgentError> {
+    copy_item_field(
+        app,
+        webview,
+        state,
+        store_id,
+        path,
+        version,
+        ItemField::Value,
+    )
+    .await
+}
+
+/// The part of a stored item [`copy_item_field`] puts on the clipboard.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ItemField {
+    Password,
+    Username,
+    Url,
+    /// The whole stored text, which [`copy_item_value`] copies.
+    Value,
+}
+
+/// Selects one field of a read item's text. Login fields are found by the
+/// same parser the agent's listing uses to classify a login, so an item
+/// listed as one has a password line this finds; that line may be empty, and
+/// an empty or absent field is reported as `field-missing`. The returned
+/// value is a fresh zeroizing copy; the full text is dropped, and zeroized,
+/// with `value`.
+pub(super) fn item_field(
+    value: Zeroizing<String>,
+    field: ItemField,
+) -> Result<Zeroizing<String>, AgentError> {
+    let (login_field, name) = match field {
+        ItemField::Value => return Ok(value),
+        ItemField::Password => (foks_client_app::LoginField::Password, "password"),
+        ItemField::Username => (foks_client_app::LoginField::Username, "user name"),
+        ItemField::Url => (foks_client_app::LoginField::Url, "website"),
+    };
+    foks_client_app::login_field(&value, login_field)
+        .map(|found| Zeroizing::new(found.to_owned()))
+        .ok_or_else(|| AgentError::new("field-missing", format!("This item has no {name}."), false))
+}
+
+/// Copies one field of an item, for example only the password of a login
+/// rather than its whole stored text, after an exact-version read and with
+/// clipboard hygiene. No content crosses IPC; the response says when the
+/// clipboard is cleared.
+#[tauri::command]
+pub async fn copy_item_field(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    store_id: String,
+    path: String,
+    version: u64,
+    field: ItemField,
+) -> Result<ClipboardAck, AgentError> {
     crate::applock::require_unlocked(&app)?;
     require_main_window(&webview)?;
     let item = state.selected_item(&store_id, &path, version)?;
     let transport = state.agent.transport();
     let value = tauri::async_runtime::spawn_blocking(move || {
-        read_text(transport.as_ref(), &item).map(|read| read.value)
+        read_text(transport.as_ref(), &item).and_then(|read| item_field(read.value, field))
     })
     .await
     .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))??;
     crate::clipboard::copy_with_hygiene(&app, value)
         .map_err(|error| AgentError::new("clipboard", error, true))?;
-    Ok(CommandAck { ok: true })
+    Ok(ClipboardAck::written())
 }
 
+/// The address a login's website field names, as the browser is given it.
+/// A value with no scheme, such as `example.com/login`, is taken as https; a
+/// value has a scheme only when the text before its first `://` is one
+/// (`[A-Za-z][A-Za-z0-9+.-]*`), so a `://` in a path or query, as in
+/// `example.com/signin?next=https://app.example.com/`, does not count. Only an
+/// address [`super::chat::safe_external_url`] accepts is returned: an http or
+/// https URL with a host and no user name or password.
+pub(super) fn website_url(field: &str) -> Option<url::Url> {
+    let field = field.trim();
+    let has_scheme = field.split_once("://").is_some_and(|(scheme, _)| {
+        let mut chars = scheme.chars();
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    if has_scheme {
+        super::chat::safe_external_url(field)
+    } else {
+        super::chat::safe_external_url(&format!("https://{field}"))
+    }
+}
+
+/// Opens a login's website in the default browser. The `url` field is read
+/// at the exact version and selected in Rust as for [`copy_item_field`], an
+/// item without one fails with `field-missing`, and a value that is not an
+/// http or https address ([`website_url`]) fails with `website-unsupported`.
+/// Neither the address nor any other content crosses IPC.
 #[tauri::command]
-pub fn copy_item_path(
+pub async fn open_item_url(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     state: State<'_, AppState>,
@@ -1211,11 +1385,25 @@ pub fn copy_item_path(
     path: String,
     version: u64,
 ) -> Result<CommandAck, AgentError> {
-    crate::applock::require_unlocked(&app)?;
+    let generation = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
     let item = state.selected_item(&store_id, &path, version)?;
-    crate::clipboard::copy_with_hygiene(&app, Zeroizing::new(item.metadata.path))
-        .map_err(|error| AgentError::new("clipboard", error, true))?;
+    let transport = state.agent.transport();
+    let field = tauri::async_runtime::spawn_blocking(move || {
+        read_text(transport.as_ref(), &item).and_then(|read| item_field(read.value, ItemField::Url))
+    })
+    .await
+    .map_err(|error| AgentError::unknown(format!("failed to read item: {error}")))??;
+    let url = website_url(&field).ok_or_else(|| {
+        AgentError::new(
+            "website-unsupported",
+            "This item's website is not an http or https address.",
+            false,
+        )
+    })?;
+    // A lock that engaged during the read stops the browser from opening.
+    crate::applock::require_unlocked_generation(&app, generation)?;
+    super::chat::open_external_url(url).await?;
     Ok(CommandAck { ok: true })
 }
 
@@ -1307,38 +1495,6 @@ pub async fn create_text_item(
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn create_link(
-    app: tauri::AppHandle,
-    webview: tauri::Webview,
-    state: State<'_, AppState>,
-    store_id: String,
-    path: String,
-    target: String,
-    read_role: Option<String>,
-    write_role: Option<String>,
-) -> Result<MutationDto, AgentError> {
-    let unlocked = crate::applock::unlocked_generation(&app)?;
-    require_main_window(&webview)?;
-    let state = state.for_store(&store_id)?;
-    let _permit = prepare_catalog_mutation(&state).await?;
-    let store = state.selected_create_store(&store_id)?;
-    let (read_role, write_role) =
-        create_item_roles(&store, read_role.as_deref(), write_role.as_deref())?;
-    let target = Zeroizing::new(target);
-    let operation = foks_desktop::create_kv_symlink_operation(&store, &path, target.as_str())
-        .map_err(invalid_request)?;
-    let operation = set_create_operation_roles(operation, read_role, write_role)?;
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_kv_mutation(
-        &state,
-        KvAccountMutation::Inline(operation),
-        MutationKind::Create,
-    )
-    .await
-}
-
-#[tauri::command]
 pub async fn create_folder(
     app: tauri::AppHandle,
     webview: tauri::Webview,
@@ -1410,31 +1566,6 @@ pub async fn move_item(
     let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
     let operation =
         foks_desktop::move_kv_operation(&item, &destination).map_err(invalid_request)?;
-    check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
-    apply_kv_mutation(
-        &state,
-        KvAccountMutation::Inline(operation),
-        MutationKind::Guarded,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn remove_item(
-    app: tauri::AppHandle,
-    webview: tauri::Webview,
-    state: State<'_, AppState>,
-    store_id: String,
-    path: String,
-    version: u64,
-    dirent_id: String,
-) -> Result<MutationDto, AgentError> {
-    let unlocked = crate::applock::unlocked_generation(&app)?;
-    require_main_window(&webview)?;
-    let state = state.for_store(&store_id)?;
-    let _permit = prepare_catalog_mutation(&state).await?;
-    let item = state.selected_bound_mutation_item(&store_id, &path, version, &dirent_id)?;
-    let operation = remove_item_operation(&item)?;
     check_mutation_access(unlocked, crate::applock::unlocked_generation(&app))?;
     apply_kv_mutation(
         &state,

@@ -14,6 +14,8 @@ import { failureOutcome, synchronizeApplied } from '../src/operation-outcome';
 import { FIXTURE } from '../src/fixture';
 import { mockBridge } from '../src/mock-bridge';
 
+/** The chat view a test names when it calls the bridge directly. */
+const VIEW = 'cd'.repeat(16);
 const error = (code: string, fatal = false): CommandError => ({
   code,
   message: code,
@@ -112,17 +114,24 @@ test('malformed invocation errors do not imply agent loss and mutation wrappers 
     }),
     { ambiguous: true },
   );
-  await assert.rejects(tauriBridge.chat('team', { action: 'sync-inbox' }), {
-    ambiguous: false,
-  });
   await assert.rejects(
-    tauriBridge.chat('team', {
-      action: 'prepare-channel',
-      submission: 'submission',
-      name: 'name',
-      description: '',
-      admin: false,
-    }),
+    tauriBridge.chat('team', { action: 'sync-inbox' }, VIEW),
+    {
+      ambiguous: false,
+    },
+  );
+  await assert.rejects(
+    tauriBridge.chat(
+      'team',
+      {
+        action: 'prepare-channel',
+        submission: 'submission',
+        name: 'name',
+        description: '',
+        admin: false,
+      },
+      VIEW,
+    ),
     { ambiguous: true },
   );
   assert.deepEqual(events, []);

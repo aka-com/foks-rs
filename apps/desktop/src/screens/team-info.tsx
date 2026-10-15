@@ -29,6 +29,7 @@ import { federatedTeamMembers, memberCountOf } from './team-members';
 import { itemCountOf } from './group-tabs';
 import { manageReason } from './group-model';
 import { GroupMark } from './group-mark';
+import { storeUsageText, useStoreUsage } from '../store-usage';
 import './team-info.css';
 
 /** A read-only summary; membership changes keep their existing guarded pages. */
@@ -85,6 +86,13 @@ export function TeamInfoPanel({
     'federation',
   );
   const fileReadiness = itemsReadiness(snapshot, store.id);
+  const filesReadable = storeOperationAvailability(
+    snapshot,
+    store,
+    'vault',
+    options,
+  ).available;
+  const usage = useStoreUsage(bridge, snapshot, store, filesReadable);
   const rosterReadiness = groupDetailReadiness(snapshot, store.id, 'roster');
   const memberReadiness = combineReadiness([
     rosterReadiness,
@@ -322,11 +330,13 @@ export function TeamInfoPanel({
             <p>
               {fileReadiness === 'loading'
                 ? 'Loading files…'
-                : storeOperationAvailability(snapshot, store, 'vault', options)
-                      .available
+                : filesReadable
                   ? plural(itemCountOf(snapshot, store), 'item')
                   : 'Files unavailable.'}
             </p>
+            {filesReadable ? (
+              <p className="team-info-quiet">{storeUsageText(usage)}</p>
+            ) : null}
             <Button
               icon="folder"
               onClick={() => navigate({ kind: 'store', ref: store.id })}

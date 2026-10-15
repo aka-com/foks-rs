@@ -134,13 +134,20 @@ export class LocationStore {
     let location = saved?.location ?? defaults[tab];
     if (location.kind === 'teams')
       location = normalizeTeamsLocation(this.stores, location);
-    // A Teams sheet intent is spent where it was handed over. The tab resumes
-    // the list, never the sheet another screen once asked for.
+    // A Teams or Devices sheet intent is spent where it was handed over. The
+    // tab resumes the list, never the sheet another screen once asked for.
     if (location.kind === 'teams' && location.open)
       location = {
         kind: 'teams',
         ...(location.store ? { store: location.store } : {}),
         ...(location.ref ? { ref: location.ref } : {}),
+      };
+    if (location.kind === 'devices' && location.open)
+      location = {
+        kind: 'devices',
+        ...(location.section ? { section: location.section } : {}),
+        ...(location.store ? { store: location.store } : {}),
+        ...(location.device ? { device: location.device } : {}),
       };
     const target = 'ref' in location ? location.ref : undefined;
     if (
@@ -412,6 +419,32 @@ export class LocationStore {
         ...(options.replace ? { replace: true } : {}),
       });
       this.dispatch({ type: 'select', selection });
+    };
+    this.guarded(
+      { kind: 'navigate', location: this.resolvedLocation(location) },
+      apply,
+      options,
+    );
+  }
+
+  /**
+   * Opens `location` with `folder` open in its tree, as one guarded move, for
+   * the ⌘K palette's folder results. Navigating resets the open folder, so a
+   * separate `setFolder` after a navigation that a guard holds back would
+   * open the folder on the page the reader is still on.
+   */
+  navigateToFolder(
+    location: Location,
+    folder: string,
+    options: NavigateOptions = {},
+  ): void {
+    const apply = (): void => {
+      this.dispatch({
+        type: 'navigate',
+        location: this.accountLocation(location),
+        ...(options.replace ? { replace: true } : {}),
+      });
+      this.dispatch({ type: 'folder', folder });
     };
     this.guarded(
       { kind: 'navigate', location: this.resolvedLocation(location) },

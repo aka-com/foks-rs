@@ -1,7 +1,7 @@
 import { refreshActivitiesFor } from '../refresh-activity';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import type { ToastController } from '/kit/toasts';
+import type { ToastController, ToastOptions } from '/kit/toasts';
 import {
   isAgentReadinessError,
   loadSnapshot,
@@ -184,6 +184,21 @@ export function useCatalogRuntime({
   );
 
   /**
+   * Reads one profile's catalog again and resolves with the snapshot that
+   * includes it, for changes made in steps that each need a current catalog.
+   * Without a profile, or when a scoped read is unavailable, it reads every
+   * profile's catalog.
+   */
+  const reloadCatalog = useCallback(
+    async (profile?: string): Promise<AgentSnapshot> => {
+      if (await reloadProfile(profileRefresh, profile))
+        return latestRef.current;
+      return refreshSnapshot();
+    },
+    [refreshSnapshot],
+  );
+
+  /**
    * Refreshes the affected profile after a mutation when possible; otherwise
    * reloads the full catalog. Both paths report catalog freshness failures.
    */
@@ -200,7 +215,11 @@ export function useCatalogRuntime({
   );
 
   const refresh = useCallback(
-    async (message: string, profile?: string): Promise<void> => {
+    async (
+      message: string,
+      profile?: string,
+      options?: ToastOptions,
+    ): Promise<void> => {
       const result = await synchronizeApplied(() => reloadApplied(profile));
       if (result.synchronization === 'pending') {
         if (result.error.code === 'catalog-read-retired') return;
@@ -213,7 +232,7 @@ export function useCatalogRuntime({
           );
         return;
       }
-      toasts.show(message);
+      toasts.show(message, options);
     },
     [reloadApplied, toasts],
   );
@@ -272,6 +291,7 @@ export function useCatalogRuntime({
     catalogCoordinator,
     publishSnapshot,
     refreshSnapshot,
+    reloadCatalog,
     refresh,
     refreshAll,
   };

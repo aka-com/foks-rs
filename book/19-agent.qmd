@@ -154,10 +154,10 @@ two SQLite databases with different application IDs, schemas, and rules.
 | | Hard state | Soft state |
 |---|---|---|
 | Application ID | `0x464f4b53` ("FOKS") | `0x464b5653` ("FKVS") |
-| Schema version | 40 | 6 |
+| Schema version | 41 | 6 |
 | Holds | verified public bytes, monotonic pins, crash-recovery journals, the submission ledger | decrypted KV projections, chat inbox rows, known stores, discovery hints |
 | Contains secrets | no | yes (plaintext cache) |
-| On schema mismatch | migrate supported versions 38/39 to 40; refuse other versions | refuse and name the recovery path: delete and rebuild |
+| On schema mismatch | migrate supported versions 38 through 40 to 41; refuse other versions | refuse and name the recovery path: delete and rebuild |
 | Losing it | a security event | a re-download |
 
 **Hard state** is evidence: signed chain links, Merkle roots, the exact
@@ -289,7 +289,13 @@ same JSON-over-length-prefixed-frames protocol from
 reads or mutations by an explicit allow-list of reads, so a new operation
 defaults to "mutation." The client library wraps any transport error on a
 mutation as `Ambiguous`, since a request that reached the agent may have
-executed; callers then query status by submission ID rather than retry.
+executed; callers then query status by submission ID rather than retry. The
+one exception is the agent's `version-mismatch` refusal: an agent of another
+protocol version refuses a request before decoding its operation, so the
+refused mutation did not run. Each front end opens with a version-independent
+Hello, which reports the agent's version, the versions it accepts and its
+capabilities, so an agent left running by an older build is diagnosed as such
+instead of as an absent agent.
 Secret-bearing operation variants are redacted from debug output, and
 serialized frames and decoded secret strings are held in zeroizing
 buffers. The desktop launches the agent if none is running and hands it a
@@ -304,7 +310,8 @@ closing any front end leaves the agent running for the others.
   handling), `profile_work.rs`, `read_cache.rs`, `retention.rs`,
   `chat_poll.rs`, `README.md`.
 - `foks-agent-client`: `lib.rs` (`connect_platform`, `Ambiguous`).
-- `foks-agent-proto`: `message.rs` (`Operation::is_mutation`), `frame.rs`.
+- `foks-agent-proto`: `message.rs` (`Operation::is_mutation`), `frame.rs`,
+  `hello.rs`.
 - `foks-client-db`: `lib.rs` (rollback errors, `MutationState`, revision
   triggers), `schema.rs`, `soft.rs`, `soft_schema.rs`,
   `repositories/journals.rs`, `repositories/adapter/`.

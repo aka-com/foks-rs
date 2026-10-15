@@ -10,6 +10,9 @@ Group=foks
 ExecStart=/usr/local/bin/foks-server serve-config --config /etc/foks/server.toml
 Restart=on-failure
 RestartSec=5s
+# The default session limits can hold more descriptors than systemd's default
+# soft limit of 1,024; foks-server also raises its soft limit to this value.
+LimitNOFILE=65536
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true

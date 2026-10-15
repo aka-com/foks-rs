@@ -2,7 +2,8 @@
 mod lease;
 pub(crate) use lease::manifest_lock_file;
 pub use lease::{
-    reset_unreadable_state, ClientStateLease, ClientStateMaintenanceGuard, ClientStatePathLease,
+    quarantine_unreadable_state, ClientStateLease, ClientStateMaintenanceGuard,
+    ClientStatePathLease,
 };
 pub(crate) mod files;
 mod inventory;

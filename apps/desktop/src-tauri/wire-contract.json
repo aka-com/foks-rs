@@ -918,6 +918,10 @@
   "cancelledDownload": {
     "saved": false
   },
+  "clipboardCopy": {
+    "ok": true,
+    "clearAfterSeconds": 30
+  },
   "catalog": {
     "profiles": [
       "foks.example",
@@ -1001,7 +1005,8 @@
         },
         "write": {
           "role": "Admin"
-        }
+        },
+        "shape": "other"
       }
     ],
     "failures": [
@@ -1200,6 +1205,18 @@
     "userChainSequence": 16,
     "alreadyAbsent": false,
     "removedLocalEnrollment": true
+  },
+  "recoveryPhraseCheck": {
+    "matchedBackupId": "101010101010101010101010101010101010101010101010101010101010101010",
+    "matchedName": "cage 32",
+    "revoked": false,
+    "backupAlias": "paper"
+  },
+  "recoveryPhraseNearMiss": {
+    "matchedBackupId": null,
+    "matchedName": "cage 32",
+    "revoked": false,
+    "backupAlias": "paper"
   },
   "passphraseReport": {
     "generation": 2,

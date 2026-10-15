@@ -16,6 +16,7 @@ import ChevronUp from 'lucide/dist/esm/icons/chevron-up.mjs';
 import CircleAlert from 'lucide/dist/esm/icons/circle-alert.mjs';
 import CircleCheck from 'lucide/dist/esm/icons/circle-check.mjs';
 import Copy from 'lucide/dist/esm/icons/copy.mjs';
+import Dices from 'lucide/dist/esm/icons/dices.mjs';
 import DoorOpen from 'lucide/dist/esm/icons/door-open.mjs';
 import Download from 'lucide/dist/esm/icons/download.mjs';
 import Ellipsis from 'lucide/dist/esm/icons/ellipsis.mjs';
@@ -29,6 +30,7 @@ import Globe from 'lucide/dist/esm/icons/globe.mjs';
 import Hash from 'lucide/dist/esm/icons/hash.mjs';
 import Info from 'lucide/dist/esm/icons/info.mjs';
 import KeyRound from 'lucide/dist/esm/icons/key-round.mjs';
+import Keyboard from 'lucide/dist/esm/icons/keyboard.mjs';
 import Laptop from 'lucide/dist/esm/icons/laptop.mjs';
 import LayoutGrid from 'lucide/dist/esm/icons/layout-grid.mjs';
 import List from 'lucide/dist/esm/icons/list.mjs';
@@ -45,9 +47,12 @@ import Search from 'lucide/dist/esm/icons/search.mjs';
 import Send from 'lucide/dist/esm/icons/send.mjs';
 import Server from 'lucide/dist/esm/icons/server.mjs';
 import Settings from 'lucide/dist/esm/icons/settings.mjs';
+import Star from 'lucide/dist/esm/icons/star.mjs';
 import ShieldCheck from 'lucide/dist/esm/icons/shield-check.mjs';
 import Terminal from 'lucide/dist/esm/icons/terminal.mjs';
 import Trash from 'lucide/dist/esm/icons/trash.mjs';
+import Undo2 from 'lucide/dist/esm/icons/undo-2.mjs';
+import Lock from 'lucide/dist/esm/icons/lock.mjs';
 import Upload from 'lucide/dist/esm/icons/upload.mjs';
 import User from 'lucide/dist/esm/icons/user.mjs';
 import Users from 'lucide/dist/esm/icons/users.mjs';
@@ -102,6 +107,11 @@ export const FOKS_ICONS = {
   pawPrint: PawPrint,
   plug: Plug,
   quote: Quote,
+  restore: Undo2,
+  lock: Lock,
+  dices: Dices,
+  star: Star,
+  keyboard: Keyboard,
 } as const satisfies Record<FoksIconName, IconNode>;
 
 export type { FoksIconName } from './icon-name';

@@ -20,8 +20,10 @@ pub use auth_cache::{
 };
 mod adapter_clock;
 pub use adapter_clock::{
-    AdapterClock, AdapterClockPreview, AdapterClockRepair, SystemAdapterClock,
+    AdapterClock, AdapterClockAdmission, AdapterClockPreview, AdapterClockRepair,
+    AdapterClockStatus, SystemAdapterClock, ADAPTER_CLOCK_CONFIRM_SKEW_SECONDS,
 };
+pub use foks_client_db::AdapterTimeSample;
 pub use foks_proto::SubmissionHandle;
 mod federation;
 pub mod portability;
@@ -37,7 +39,9 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub use foks_client::{fix_device_name, CancellationToken, DEVICE_NAME_RULES};
+pub use foks_client::{
+    fix_device_name, login_field, CancellationToken, LoginField, DEVICE_NAME_RULES,
+};
 use foks_client::{
     AdHocTeamSecrets, AuthenticatedTeamOutcome, AuthenticatedUserOutcome, DeviceCredential,
     EncryptedFileMutationStore, FoksClient, KvWriteOptions, MutationCoordinator, NamedTeamSecrets,
@@ -115,6 +119,10 @@ pub enum Error {
     InvalidKvPath(&'static str),
     #[error("FOKS KV item changed since it was read")]
     KvConflict,
+    /// A confirmed adapter clock repair time was too far from the clock
+    /// sampled when the repair would be written; nothing was changed.
+    #[error("the confirmed time must be within one minute of this computer's clock; preview the current time again, then confirm it")]
+    AdapterClockConfirmationStale,
     /// The passphrase offered as the account's current one did not match, so
     /// the rotation it was guarding was never submitted.
     #[error("FOKS current passphrase is not correct")]
@@ -255,7 +263,7 @@ pub use account::{
     derive_mutation_key, derive_vault_key, AccountVault, BackupEnrollmentReport,
     BackupEnrollmentSummary, BackupRevocationReport, DeviceProvisionReport, DeviceRevocationReport,
     DeviceSummary, KexAcceptanceInput, KexOfferReport, LoadedAccount, PassphraseReport,
-    PassphraseStatus, SyncReport,
+    PassphraseStatus, RecoveryPhraseCheck, SyncReport,
 };
 use checkpoint::RollbackHostCheckpoint;
 #[cfg(test)]

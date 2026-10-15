@@ -14,6 +14,8 @@ import { operationOf, phaseOf } from '../src/chat/send/outgoing';
 import { submissionId } from '../src/chat/actions';
 import { CHAT_HISTORY_BYTES } from '../src/chat-limits';
 
+/** The chat view a test names when it calls the bridge directly. */
+const VIEW = 'cd'.repeat(16);
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /**
@@ -90,7 +92,7 @@ async function setup(
     ),
   };
   const base = mockBridge(snapshot);
-  const reply = await base.chat('team:eng', { action: 'inbox' });
+  const reply = await base.chat('team:eng', { action: 'inbox' }, VIEW);
   if (reply.result.kind !== 'inbox') throw new Error('inbox expected');
   const entry: TeamInbox = {
     state: 'ready',
@@ -127,7 +129,7 @@ async function setup(
   const calls: ChatAction[] = [];
   const bridge = {
     ...base,
-    chat: async (store: string, action: ChatAction, view?: string) => {
+    chat: async (store: string, action: ChatAction, view: string) => {
       calls.push(action);
       const run = () => base.chat(store, action, view);
       return intercept ? intercept(action, run) : run();

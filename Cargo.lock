@@ -740,9 +740,9 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chacha20"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cipher 0.5.2",
@@ -1858,6 +1858,7 @@ dependencies = [
  "fs2",
  "getrandom 0.4.3",
  "libc",
+ "nix",
  "rusqlite",
  "rustix",
  "rustls",
@@ -1934,6 +1935,9 @@ dependencies = [
  "clap",
  "foks-agent-client",
  "foks-agent-proto",
+ "foks-client",
+ "foks-crypto",
+ "foks-verify",
  "getrandom 0.4.3",
  "libc",
  "serde",
@@ -1946,7 +1950,9 @@ dependencies = [
 name = "foks-desktop-app"
 version = "0.4.0"
 dependencies = [
+ "arboard",
  "block2",
+ "chacha20poly1305",
  "foks-agent-client",
  "foks-agent-proto",
  "foks-client-app",
@@ -1968,6 +1974,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "syn 2.0.119",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -2178,6 +2185,7 @@ dependencies = [
  "reqwest",
  "rsa",
  "rusqlite",
+ "rustix",
  "rustls",
  "rustls-pki-types",
  "serde",
@@ -5073,9 +5081,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "aws-lc-rs",
  "log",

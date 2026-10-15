@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useSyncExternalStore } from 'react';
 import { createServer, type ViteDevServer } from 'vite';
-import type { AgentSnapshot, Item } from '../src/model';
-import type { ItemRequest } from '../src/bridge';
+import type { AgentSnapshot, Item, TrashEntry } from '../src/model';
+import type { CopyFieldRequest, ItemRequest } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -52,18 +52,29 @@ async function mount(accessNow?: () => number) {
     ...INITIAL_STATE,
     location: { kind: 'all' },
   });
-  const copies: ItemRequest[] = [];
+  // Every copy requested, with the field it asked for; `value` is the whole
+  // text through copyItemValue.
+  const copies: CopyFieldRequest[] = [];
   const downloads: ItemRequest[] = [];
   const reveals: Item[] = [];
   const deletions: Item[] = [];
+  const moves: Item[] = [];
+  const restores: TrashEntry[] = [];
+  const permanent: Item[] = [];
   const failures: unknown[] = [];
   const folders: { storeId: string; path: string }[] = [];
   const teamInfo: string[] = [];
+  const imports: { storeId: string; folder?: string }[] = [];
+  const base = mockBridge(FIXTURE);
   const bridge = {
-    ...mockBridge(FIXTURE),
+    ...base,
     copyItemValue: async (request: ItemRequest) => {
+      copies.push({ ...request, field: 'value' });
+      return { ok: true as const, clearAfterSeconds: 30 };
+    },
+    copyItemField: async (request: CopyFieldRequest) => {
       copies.push(request);
-      return { ok: true as const };
+      return base.copyItemField(request);
     },
     downloadFile: async (request: ItemRequest) => {
       downloads.push(request);
@@ -83,13 +94,18 @@ async function mount(accessNow?: () => number) {
       locations,
       accessNow,
       onReveal: (item: Item) => reveals.push(item),
-      onDelete: (item: Item) => deletions.push(item),
+      onTrash: (item: Item) => deletions.push(item),
+      onMove: (item: Item) => moves.push(item),
+      onRestore: (entry: TrashEntry) => restores.push(entry),
+      onDeletePermanently: (item: Item) => permanent.push(item),
       onNew: () => {},
       onResume: async () => {},
       onSettings: () => {},
       onNewFolder: (storeId: string, path: string) =>
         folders.push({ storeId, path }),
       onTeamInfo: (storeId: string) => teamInfo.push(storeId),
+      onImport: (storeId: string, folder?: string) =>
+        imports.push({ storeId, ...(folder ? { folder } : {}) }),
       onCommandError: (error: unknown) => failures.push(error),
     });
   }
@@ -110,9 +126,13 @@ async function mount(accessNow?: () => number) {
     downloads,
     reveals,
     deletions,
+    moves,
+    restores,
+    permanent,
     failures,
     folders,
     teamInfo,
+    imports,
     snapshot: FIXTURE,
     update: (snapshot: AgentSnapshot, blocking = false) =>
       rendered.rerender(view(snapshot, blocking)),
@@ -134,9 +154,18 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
   assert.equal(mounted.locations.getSnapshot().selection, null);
   assert.equal(mounted.copies.length, 0);
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Download' }), null);
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Copy' }));
+  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Copy value' }), null);
+  assert.ok(ui.screen.getByRole('menuitem', { name: 'Copy user name' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Copy password' }),
+  );
   assert.deepEqual(mounted.copies, [
-    { storeId: 'acct:personal', path: '/logins/github.com', version: 9 },
+    {
+      storeId: 'acct:personal',
+      path: '/logins/github.com',
+      version: 9,
+      field: 'password',
+    },
   ]);
   assert.equal(ui.screen.queryByRole('menu'), null);
   await ui.waitFor(() => assert.ok(document.activeElement === password));
@@ -149,18 +178,119 @@ test('item menus use the existing read actions and restore keyboard focus', asyn
     path: '/logins/github.com',
   });
 
+  ui.fireEvent.contextMenu(row('DATABASE_URL'));
+  assert.equal(
+    ui.screen.queryByRole('menuitem', { name: 'Copy password' }),
+    null,
+  );
+  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Copy value' }));
+  assert.equal(mounted.copies[1]?.field, 'value');
+  assert.equal(mounted.copies[1]?.path, '/env/prod/DATABASE_URL');
+
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  assert.equal(ui.screen.queryByRole('menuitem', { name: 'Copy' }), null);
+  assert.equal(
+    ui.screen.queryAllByRole('menuitem', { name: /^Copy/ }).length,
+    0,
+  );
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Download' }));
   assert.equal(mounted.downloads[0]?.path, '/documents/passport-scan.pdf');
   assert.equal(mounted.failures.length, 0);
 });
 
-test('details and deletion target the context item, not the current selection', async () => {
+test('row copies name the field, and a login without it gets a warning', async () => {
+  const mounted = await mount();
+  const github = row('github.com');
+  ui.fireEvent.click(
+    ui.within(github).getByRole('button', {
+      name: 'Copy user name github.com',
+    }),
+  );
+  await ui.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /User name copied/),
+  );
+  // The guest network stores a network name and a password, no user name.
+  ui.fireEvent.click(
+    ui.within(row('guest-password')).getByRole('button', {
+      name: 'Copy user name guest-password',
+    }),
+  );
+  await ui.waitFor(() =>
+    assert.match(
+      document.body.textContent ?? '',
+      /This item has no user name\./,
+    ),
+  );
+  assert.deepEqual(
+    mounted.copies.map(({ path, field }) => [path, field]),
+    [
+      ['/logins/github.com', 'username'],
+      ['/wifi/guest-password', 'username'],
+    ],
+  );
+  assert.equal(mounted.failures.length, 0);
+  // A text Document offers its whole value instead.
+  assert.ok(
+    ui.within(row('DATABASE_URL')).getByRole('button', {
+      name: 'Copy value DATABASE_URL',
+    }),
+  );
+  assert.equal(
+    ui.within(row('DATABASE_URL')).queryByRole('button', {
+      name: 'Copy password DATABASE_URL',
+    }),
+    null,
+  );
+});
+
+test('row keys copy a field, open Rename or move and move to Trash', async () => {
+  const mounted = await mount();
+  const github = row('github.com');
+  github.focus();
+  ui.fireEvent.keyDown(github, { key: 'c', ctrlKey: true });
+  ui.fireEvent.keyDown(github, { key: 'C', metaKey: true, shiftKey: true });
+  await ui.waitFor(() =>
+    assert.deepEqual(
+      mounted.copies.map(({ path, field }) => [path, field]),
+      [
+        ['/logins/github.com', 'password'],
+        ['/logins/github.com', 'username'],
+      ],
+    ),
+  );
+  // A text Document copies its value and has no user name to copy.
+  const value = row('DATABASE_URL');
+  ui.fireEvent.keyDown(value, { key: 'C', ctrlKey: true, shiftKey: true });
+  ui.fireEvent.keyDown(value, { key: 'c', metaKey: true });
+  await ui.waitFor(() => assert.equal(mounted.copies.length, 3));
+  assert.equal(mounted.copies[2].path, '/env/prod/DATABASE_URL');
+  assert.equal(mounted.copies[2].field, 'value');
+  // A file has nothing to copy, so the key is left to the window.
+  assert.equal(
+    ui.fireEvent.keyDown(row('passport-scan.pdf'), { key: 'c', ctrlKey: true }),
+    true,
+  );
+
+  ui.fireEvent.keyDown(github, { key: 'F2' });
+  assert.deepEqual(
+    mounted.moves.map((item) => item.path),
+    ['/logins/github.com'],
+  );
+  ui.fireEvent.keyDown(github, { key: 'Backspace', metaKey: true });
+  assert.deepEqual(
+    mounted.deletions.map((item) => item.path),
+    ['/logins/github.com'],
+  );
+  assert.equal(mounted.copies.length, 3);
+  assert.equal(mounted.failures.length, 0);
+});
+
+test('details and Move to Trash target the context item, not the current selection', async () => {
   const mounted = await mount();
   ui.fireEvent.click(row('github.com'));
   ui.fireEvent.contextMenu(row('passport-scan.pdf'));
-  ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Delete' }));
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Move to Trash' }),
+  );
   assert.equal(mounted.deletions[0]?.path, '/documents/passport-scan.pdf');
   assert.equal(
     mounted.locations.getSnapshot().selection?.path,
@@ -188,7 +318,7 @@ test('an open menu rechecks changed write permission and modal blocking dismisse
     ),
   };
   mounted.update(snapshot);
-  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete' });
+  const deletion = ui.screen.getByRole('menuitem', { name: 'Move to Trash' });
   assert.equal(deletion.getAttribute('aria-disabled'), 'true');
   assert.ok(deletion.getAttribute('aria-describedby'));
   ui.fireEvent.click(deletion);
@@ -226,12 +356,18 @@ test('read actions recheck a lease that expires while the menu is open', async (
   assert.equal(lease.status, 'required');
   if (lease.status !== 'required') return;
   ui.fireEvent.contextMenu(row('production-token'));
-  const copy = ui.screen.getByRole('menuitem', { name: 'Copy' });
+  const copy = ui.screen.getByRole('menuitem', { name: 'Copy value' });
   assert.equal(copy.getAttribute('aria-disabled'), null);
   now = lease.expiresAt + 1;
   ui.fireEvent.click(copy);
   assert.equal(mounted.copies.length, 0);
-  assert.ok(ui.screen.getByRole('alert'));
+  // The refusal is a warning toast in the assertive region.
+  assert.equal(
+    ui.within(ui.screen.getByRole('alert')).queryAllByText(/./, {
+      selector: '.toast-message',
+    }).length,
+    1,
+  );
 });
 
 test('vault and team roots expose scoped folder creation and team info without selection changes', async () => {
@@ -241,7 +377,7 @@ test('vault and team roots expose scoped folder creation and team info without s
   )!;
   ui.fireEvent.contextMenu(vault);
   assert.equal(
-    ui.screen.queryByRole('menuitem', { name: 'Delete folder' }),
+    ui.screen.queryByRole('menuitem', { name: 'Move folder to Trash' }),
     null,
   );
   assert.equal(ui.screen.queryByRole('menuitem', { name: 'Team info' }), null);
@@ -277,19 +413,34 @@ test('vault and team roots expose scoped folder creation and team info without s
   }
 });
 
-test('tree and content folders target their own path and explain unsupported deletion', async () => {
+test('tree and content folders target their own path and move a loaded folder to Trash', async () => {
   const mounted = await mount();
+  const loaded = document.querySelector<HTMLElement>(
+    '.tpane [data-folder-store="acct:personal"][data-folder-path="/ssh"] .fselect',
+  )!;
+  ui.fireEvent.contextMenu(loaded);
+  ui.fireEvent.click(
+    ui.screen.getByRole('menuitem', { name: 'Move folder to Trash' }),
+  );
+  assert.equal(mounted.deletions[0]?.path, '/ssh');
+  assert.equal(mounted.deletions[0]?.kind, 'Folder');
   const folder = document.querySelector<HTMLElement>(
     '.tpane [data-folder-store="acct:personal"][data-folder-path="/logins"] .fselect',
   )!;
   ui.fireEvent.contextMenu(folder);
-  const deletion = ui.screen.getByRole('menuitem', { name: 'Delete folder' });
+  // `/logins` is derived from item paths; the catalog lists no folder entry
+  // for it, so there is no dirent to move until the vault is refreshed.
+  const deletion = ui.screen.getByRole('menuitem', {
+    name: 'Move folder to Trash',
+  });
   assert.equal(deletion.getAttribute('aria-disabled'), 'true');
   assert.match(
     document.getElementById(deletion.getAttribute('aria-describedby')!)!
       .textContent,
-    /not supported by the desktop agent/,
+    /Refresh this vault to load the folder/,
   );
+  ui.fireEvent.click(deletion);
+  assert.equal(mounted.deletions.length, 1);
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'New folder' }));
   assert.deepEqual(mounted.folders, [
     { storeId: 'acct:personal', path: '/logins' },
@@ -314,11 +465,14 @@ test('grid cards keep item selection, quick actions, and keyboard context menus'
   const password = row('github.com');
   assert.ok(password.closest('.files-grid'));
   ui.fireEvent.keyDown(password, { key: ' ' });
-  assert.equal(password.getAttribute('aria-pressed'), 'true');
+  assert.equal(password.getAttribute('aria-selected'), 'true');
   ui.fireEvent.click(
-    ui.within(password).getByRole('button', { name: 'Copy github.com' }),
+    ui.within(password).getByRole('button', {
+      name: 'Copy password github.com',
+    }),
   );
   assert.equal(mounted.copies[0]?.path, '/logins/github.com');
+  assert.equal(mounted.copies[0]?.field, 'password');
   ui.fireEvent.keyDown(password, { key: 'F10', shiftKey: true });
   ui.fireEvent.click(ui.screen.getByRole('menuitem', { name: 'Reveal' }));
   assert.equal(mounted.reveals[0]?.path, '/logins/github.com');
@@ -351,7 +505,7 @@ test('grid folder menus preserve their scope for right click and Shift+F10', asy
     open();
     assert.equal(
       ui.screen
-        .getByRole('menuitem', { name: 'Delete folder' })
+        .getByRole('menuitem', { name: 'Move folder to Trash' })
         .getAttribute('aria-disabled'),
       'true',
     );
@@ -394,4 +548,97 @@ test('All items waits for pending inventories and never presents failed reads as
     })),
   });
   assert.ok(ui.screen.getByText('Your vault is empty'));
+});
+
+test('a team Trash lists entries by read role and states who can see them', async () => {
+  const mounted = await mount();
+  const stamp = '20240102T030405';
+  const entry = (path: string, read: Item['read'], id: string): Item => ({
+    store: 'team:eng',
+    path,
+    direntId: id.padStart(32, '0'),
+    kind: 'Secret',
+    size: 12,
+    version: 1,
+    read,
+    write: 'Admin',
+  });
+  mounted.update({
+    ...mounted.snapshot,
+    items: [
+      ...mounted.snapshot.items,
+      entry(`/.trash/owner/${stamp}~%2Flease-2024.pdf`, 'Owner', 'a1'),
+      entry(
+        `/.trash/member-0/${stamp}~%2Fwifi%2Fguest-password-2025`,
+        { role: 'Member', visibility: 0 },
+        'a2',
+      ),
+    ],
+  });
+  // The entries are not ordinary items or folders.
+  assert.equal(
+    document.querySelector('.tpane [data-folder-path="/.trash"]'),
+    null,
+  );
+  ui.act(() => mounted.locations.setFolder('team:eng|/.trash'));
+  const view = document.querySelector<HTMLElement>('.trash-view');
+  assert.ok(view);
+  assert.match(view.textContent ?? '', /keep their read access in Trash/);
+  const rows = [...view.querySelectorAll<HTMLElement>('.row')];
+  assert.deepEqual(
+    rows.map((row) => row.querySelector('.nm')?.textContent),
+    ['lease-2024.pdf', 'guest-password-2025'],
+  );
+  assert.match(rows[0].textContent ?? '', /Owners only/);
+  assert.doesNotMatch(rows[1].textContent ?? '', /Owners only/);
+  assert.match(rows[1].textContent ?? '', /\/wifi/);
+  ui.fireEvent.click(rows[0]);
+  assert.match(
+    view.querySelector('.trash-detail')?.textContent ?? '',
+    /Stored at \/\.trash\/owner\/.*Readable by Owner/,
+  );
+  ui.fireEvent.click(
+    ui.within(rows[1]).getByRole('button', {
+      name: 'Restore guest-password-2025',
+    }),
+  );
+  assert.equal(mounted.restores[0]?.original, '/wifi/guest-password-2025');
+  ui.fireEvent.keyDown(rows[0], { key: 'Delete' });
+  assert.equal(
+    mounted.permanent[0]?.path,
+    `/.trash/owner/${stamp}~%2Flease-2024.pdf`,
+  );
+});
+
+test('the empty vault’s cards show the New shortcuts this platform uses', async () => {
+  const mounted = await mount();
+  mounted.update({ ...mounted.snapshot, items: [] });
+  assert.ok(ui.screen.getByText('Your vault is empty'));
+  // The test window is not a Mac, so the hints name Ctrl.
+  assert.deepEqual(
+    [...document.querySelectorAll('.starter .card kbd')].map(
+      (key) => key.textContent,
+    ),
+    ['Ctrl N', 'Ctrl Shift N'],
+  );
+});
+
+test('the empty vault offers Import passwords and points an existing FOKS account to Settings', async () => {
+  const mounted = await mount();
+  mounted.update({ ...mounted.snapshot, items: [] });
+  const starter = document.querySelector<HTMLElement>('.starter');
+  assert.ok(starter);
+  // No card names a CLI command: FOKS has no `kv export`.
+  assert.doesNotMatch(starter.textContent ?? '', /foks kv|export …/);
+  ui.fireEvent.click(
+    ui.within(starter).getByRole('button', { name: /^Import passwords/ }),
+  );
+  assert.equal(mounted.imports.length, 1);
+  assert.ok(mounted.imports[0]?.storeId);
+  ui.fireEvent.click(
+    ui.within(starter).getByRole('button', { name: 'Connect that account' }),
+  );
+  const location = mounted.locations.getSnapshot().location;
+  assert.equal(location.kind, 'settings');
+  assert.equal(location.kind === 'settings' && location.section, 'account');
 });

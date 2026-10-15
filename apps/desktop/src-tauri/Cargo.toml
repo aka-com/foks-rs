@@ -37,6 +37,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
+chacha20poly1305 = { workspace = true }
 fs2 = { workspace = true }
 getrandom = { workspace = true }
 libc = { workspace = true }
@@ -48,8 +49,17 @@ url = { workspace = true }
 zeroize = { workspace = true }
 tempfile = { workspace = true }
 
+[dev-dependencies]
+# Reads the command signatures from source; see src/command_signatures.rs.
+syn = { version = "2", features = ["full", "visit"] }
+
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 zbus = "5"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The clipboard plugin's arboard, used directly to set the history hint its
+# write_text omits; see src/clipboard.rs.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"

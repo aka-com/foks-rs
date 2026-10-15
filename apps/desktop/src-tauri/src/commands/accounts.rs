@@ -7,6 +7,7 @@ use crate::commands::execution::{
     MutationKind,
 };
 use crate::commands::servers::require_transport_profile;
+use crate::commands::store_key::store_id;
 use crate::commands::types::MutationDto;
 use crate::commands::validation::{
     bounded_local_name, bounded_secret, confirmed_passphrase, deserialize_secret, invalid_request,
@@ -15,9 +16,8 @@ use crate::commands::validation::{
     BACKUP_ID_PREFIX, MAXIMUM_FIRST_RUN_ROWS, MAXIMUM_PASSPHRASE_BYTES,
     MAXIMUM_RECOVERY_PHRASE_BYTES, MAXIMUM_SYNC_FACTS,
 };
-use crate::commands::vault::store_id;
 use foks_agent_proto::{Operation, SecretString};
-use foks_desktop::{CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
+use foks_desktop::{ops, CatalogSnapshot, CatalogStoreRef, CatalogStoreSummary};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -90,6 +90,17 @@ struct BackupCommitResponse {
     backup_alias: String,
     account_alias: String,
     backup_id_hex: String,
+    user_chain_sequence: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoveryPhraseCheckResponse {
+    account_alias: String,
+    matched_backup_id_hex: Option<String>,
+    matched_name: Option<String>,
+    revoked: bool,
+    backup_alias: Option<String>,
     user_chain_sequence: u64,
 }
 
@@ -305,6 +316,45 @@ pub(super) fn backup_commit_response(
     Ok(MutationDto { applied: true })
 }
 
+/// Checks the agent's comparison of a typed recovery phrase. A named key is
+/// either the derived key (`matched_backup_id`) or, for a near miss, the key
+/// whose public name the phrase shares; only a named key can be revoked or
+/// carry a local enrollment alias.
+pub(super) fn recovery_phrase_check_response(
+    value: serde_json::Value,
+    expected_account: &str,
+) -> Result<RecoveryPhraseCheckDto, AgentError> {
+    let report: RecoveryPhraseCheckResponse =
+        serde_json::from_value(value).map_err(|error| invalid_response(error.to_string()))?;
+    let named = report.matched_backup_id_hex.is_some() || report.matched_name.is_some();
+    if report.account_alias != expected_account
+        || report
+            .matched_backup_id_hex
+            .as_ref()
+            .is_some_and(|id| !valid_typed_entity_id_hex(id, BACKUP_ID_PREFIX))
+        || report
+            .matched_name
+            .as_ref()
+            .is_some_and(|name| !valid_response_text(name, 256))
+        || report
+            .backup_alias
+            .as_ref()
+            .is_some_and(|alias| !valid_local_name(alias))
+        || (!named && (report.revoked || report.backup_alias.is_some()))
+    {
+        return Err(invalid_response(
+            "The agent returned an invalid recovery phrase check.",
+        ));
+    }
+    let _sequence = report.user_chain_sequence;
+    Ok(RecoveryPhraseCheckDto {
+        matched_backup_id: report.matched_backup_id_hex,
+        matched_name: report.matched_name,
+        revoked: report.revoked,
+        backup_alias: report.backup_alias,
+    })
+}
+
 pub(super) fn backup_revocation_response(
     value: serde_json::Value,
     expected_account: &str,
@@ -357,6 +407,17 @@ pub struct BackupEnrollmentDto {
     pub backup_alias: String,
     pub account_alias: String,
     pub backup_id: String,
+}
+
+/// What a typed recovery phrase corresponds to; see
+/// [`recovery_phrase_check_response`]. Absent keys serialize as `null`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryPhraseCheckDto {
+    pub matched_backup_id: Option<String>,
+    pub matched_name: Option<String>,
+    pub revoked: bool,
+    pub backup_alias: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -560,7 +621,7 @@ pub async fn list_account_devices(
     account_store_id: String,
 ) -> Result<Vec<DeviceDto>, AgentError> {
     require_main_window(&webview)?;
-    let generation = state.catalog_generation.load(Ordering::Acquire);
+    let generation = state.catalog_generation().load(Ordering::Acquire);
     let account = state.selected_account(&account_store_id)?;
     let transport = state
         .agent
@@ -676,17 +737,10 @@ pub async fn prepare_owner_backup(
     crate::applock::require_unlocked(&app)?;
     let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    let account_alias = bounded_local_name(&account_alias, "Choose a valid account alias.")?;
-    let backup_alias = bounded_local_name(&backup_alias, "Enter a valid backup alias.")?;
-    let expected = backup_alias.clone();
-    let operation = Operation::PrepareOwnerBackup {
-        profile: profile.clone(),
-        account_alias,
-        backup_alias,
-    };
+    let operation =
+        ops::accounts::prepare_owner_backup_operation(&profile, &account_alias, &backup_alias)?;
     let value = read_profile_operation_value(&state, profile, operation).await?;
-    recovery_phrase_response(value, &expected)
+    recovery_phrase_response(value, &backup_alias)
 }
 
 #[tauri::command]
@@ -703,26 +757,46 @@ pub async fn commit_owner_backup(
     crate::applock::require_unlocked(&app)?;
     let state = state.for_profile(&profile)?;
     let _mutation = state.begin_mutation()?;
-    let profile = bounded_local_name(&profile, "Provide a valid server profile name.")?;
-    let account_alias = bounded_local_name(&account_alias, "Choose a valid account alias.")?;
-    let backup_alias = bounded_local_name(&backup_alias, "Provide a valid backup alias.")?;
-    let expected_account = account_alias.clone();
-    let expected_backup = backup_alias.clone();
+    let phrase = Zeroizing::new(phrase);
+    let operation = ops::accounts::commit_owner_backup_operation(
+        &profile,
+        &account_alias,
+        &backup_alias,
+        &phrase,
+    )?;
+    let value =
+        apply_profile_operation_value(&state, profile, operation, MutationKind::Guarded).await?;
+    backup_commit_response(value, &account_alias, &backup_alias)
+        .map_err(|error| ambiguous_mutation_response(&state, error.message))
+}
+
+/// Compares a written-down recovery phrase with the account's backup keys.
+/// The agent answers from local hard state without contacting the server, so
+/// this is a read: it takes no mutation slot and is never ambiguous.
+#[tauri::command]
+pub async fn verify_recovery_phrase(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    state: State<'_, AppState>,
+    account_store_id: String,
+    phrase: String,
+) -> Result<RecoveryPhraseCheckDto, AgentError> {
+    require_main_window(&webview)?;
+    crate::applock::require_unlocked(&app)?;
+    let account = state.selected_account(&account_store_id)?;
     let phrase = bounded_secret(
         phrase,
         MAXIMUM_RECOVERY_PHRASE_BYTES,
         "Recovery phrase must be a single line of at most 4,096 bytes.",
     )?;
-    let operation = Operation::CommitOwnerBackup {
-        profile: profile.clone(),
-        account_alias,
-        backup_alias,
+    let expected = account.account_alias.clone();
+    let operation = Operation::VerifyRecoveryPhrase {
+        profile: account.profile.clone(),
+        account_alias: account.account_alias,
         phrase,
     };
-    let value =
-        apply_profile_operation_value(&state, profile, operation, MutationKind::Guarded).await?;
-    backup_commit_response(value, &expected_account, &expected_backup)
-        .map_err(|error| ambiguous_mutation_response(&state, error.message))
+    let value = read_profile_operation_value(&state, account.profile, operation).await?;
+    recovery_phrase_check_response(value, &expected)
 }
 
 async fn account_passphrase_mutation(

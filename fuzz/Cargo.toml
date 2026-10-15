@@ -11,6 +11,8 @@ cargo-fuzz = true
 members = ["."]
 
 [dependencies]
+# Exact: updated together with the cargo-fuzz version in
+# .github/workflows/foks-fuzz.yml.
 libfuzzer-sys = "=0.4.10"
 foks-snowpack = { path = "../crates/foks-snowpack" }
 foks-rpc = { path = "../crates/foks-rpc" }

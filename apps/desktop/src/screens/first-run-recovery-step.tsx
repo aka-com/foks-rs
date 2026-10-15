@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import type { ReactNode, Dispatch, SetStateAction } from 'react';
 import {
   Icon,
@@ -8,7 +9,9 @@ import {
   SheetDialog,
 } from '../components';
 import type { FirstRunCheckpoint, FirstRunStateName } from '../first-run-state';
+import { recallPositions } from '../recovery-phrase';
 import { Pane, Foot } from './first-run-view';
+import { RecallCheck } from './recovery-phrase-recall';
 interface Props {
   state: 'protect' | 'phrase';
   checkpoint: FirstRunCheckpoint;
@@ -17,6 +20,7 @@ interface Props {
   recoveryPhrase: string | null;
   phraseConcealed: boolean;
   revealPhrase: () => void;
+  /** Whether the recall check matched the written copy; it gates commit. */
   phraseWritten: boolean;
   setPhraseWritten: Dispatch<SetStateAction<boolean>>;
   go: (state: FirstRunStateName) => void;
@@ -51,6 +55,35 @@ export function RecoveryStep({
   mutationBusy,
   commitBackup,
 }: Props): ReactNode {
+  // The phrase is shown, then hidden while three of its tokens are typed back
+  // from the written copy. The positions stay the same for one phrase.
+  const [checking, setChecking] = useState(false);
+  const positions = useMemo(
+    () => (recoveryPhrase ? recallPositions() : []),
+    [recoveryPhrase],
+  );
+  // A new phrase, or leaving the sheet (Not now, Esc), starts again at the
+  // phrase itself rather than at a check of tokens not yet seen.
+  const [shownPhrase, setShownPhrase] = useState(recoveryPhrase);
+  if (shownPhrase !== recoveryPhrase) {
+    setShownPhrase(recoveryPhrase);
+    setChecking(false);
+  }
+  if (checking && state !== 'phrase') setChecking(false);
+  const showPhraseAgain = (): void => {
+    setChecking(false);
+    setPhraseWritten(false);
+  };
+  const recall =
+    recoveryPhrase && checking ? (
+      <RecallCheck
+        phrase={recoveryPhrase}
+        positions={positions}
+        unlocks={checkpoint.managedLocal ? 'Start using FOKS' : 'Done'}
+        reveal={checkpoint.managedLocal ? 'Show the phrase again' : 'Back'}
+        onMatched={setPhraseWritten}
+      />
+    ) : null;
   let content: ReactNode;
   if ((state === 'protect' || state === 'phrase') && checkpoint.managedLocal)
     content = (
@@ -93,24 +126,32 @@ export function RecoveryStep({
             <Chip>Recommended</Chip>
           </div>
           <p>
-            Write down these 17 words and keep them somewhere other than this
-            device. Anyone with them can recover your account.
+            Write down these 17 words and numbers and keep them somewhere other
+            than this device. Anyone with them can recover your account.
           </p>
-          {state === 'phrase' ? (
+          {state === 'phrase' && checking ? (
+            <>
+              {recall}
+              <button
+                className="lnk local-quiet-link"
+                onClick={showPhraseAgain}
+              >
+                Show the phrase again
+              </button>
+            </>
+          ) : state === 'phrase' ? (
             <>
               <RecoveryPhrase
                 phrase={recoveryPhrase}
                 concealed={phraseConcealed}
                 onReveal={revealPhrase}
               />
-              <label className="local-confirm">
-                <input
-                  type="checkbox"
-                  checked={phraseWritten}
-                  onChange={(event) => setPhraseWritten(event.target.checked)}
-                />
-                <span>I have written down all 17 words.</span>
-              </label>
+              <Button
+                disabled={!recoveryPhrase}
+                onClick={() => setChecking(true)}
+              >
+                Check your copy
+              </Button>
               <button
                 className="lnk local-quiet-link"
                 onClick={collapseLocalBackup}
@@ -167,8 +208,8 @@ export function RecoveryStep({
           <div className="pcard">
             <h3>Recovery phrase</h3>
             <p>
-              Write down these 17 words to recover your account if every device
-              is lost.
+              Write down these 17 words and numbers to recover your account if
+              every device is lost.
             </p>
             <Button
               disabled={busy || (checkpoint.backupCommitted && !recoveryPhrase)}
@@ -211,43 +252,57 @@ export function RecoveryStep({
             dismissible={!mutationBusy}
             onClose={() => go('protect')}
             glyph={<Icon name="key" />}
-            title="Save your recovery phrase"
+            title={checking ? 'Check your copy' : 'Save your recovery phrase'}
+            step={checking ? 'Step 2 of 2' : 'Step 1 of 2'}
             footer={
-              <>
-                <Button disabled={mutationBusy} onClick={() => go('protect')}>
-                  Not now
-                </Button>
-                <Button
-                  variant="primary"
-                  disabled={!recoveryPhrase || !phraseWritten || busy}
-                  onClick={() => void commitBackup()}
-                >
-                  {busy ? 'Saving...' : 'Done'}
-                </Button>
-              </>
+              checking ? (
+                <>
+                  <Button disabled={mutationBusy} onClick={showPhraseAgain}>
+                    Back
+                  </Button>
+                  <Button
+                    variant="primary"
+                    disabled={!recoveryPhrase || !phraseWritten || busy}
+                    onClick={() => void commitBackup()}
+                  >
+                    {busy ? 'Saving...' : 'Done'}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button disabled={mutationBusy} onClick={() => go('protect')}>
+                    Not now
+                  </Button>
+                  <Button
+                    variant="primary"
+                    disabled={!recoveryPhrase || busy}
+                    onClick={() => setChecking(true)}
+                  >
+                    Next
+                  </Button>
+                </>
+              )
             }
           >
-            <>
-              <p>
-                Anyone with these words can access your account. Store them
-                somewhere safe, like an offline vault, or another password
-                manager.
-              </p>
-              <RecoveryPhrase
-                phrase={recoveryPhrase}
-                concealed={phraseConcealed}
-                onReveal={revealPhrase}
-              />
-              <button
-                type="button"
-                aria-label="I have written this down"
-                className={`check${phraseWritten ? ' on' : ''}`}
-                onClick={() => setPhraseWritten((value) => !value)}
-              >
-                <span className="bx">{phraseWritten ? '✓' : ''}</span>I have
-                written this down
-              </button>
-            </>
+            {checking ? (
+              recall
+            ) : (
+              <>
+                <p>
+                  Write down all 17 words and numbers, in order. Anyone with
+                  them can access your account, so store the copy somewhere
+                  safe, like an offline vault or another password manager.
+                </p>
+                <RecoveryPhrase
+                  phrase={recoveryPhrase}
+                  concealed={phraseConcealed}
+                  onReveal={revealPhrase}
+                />
+                <p className="recall-hint">
+                  Next, you will type three of these from your written copy.
+                </p>
+              </>
+            )}
           </SheetDialog>
         ) : null}
       </Pane>

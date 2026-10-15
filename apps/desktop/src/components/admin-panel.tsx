@@ -3,7 +3,14 @@ import { useWorkflowAccess } from '../workflow-context';
 import type { ReactNode } from 'react';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';
-import { Button, Inset, InsetRow, PanelSheet } from './index';
+import { securityKeyPinProblem } from '../security-key-pin';
+import {
+  Button,
+  Inset,
+  InsetRow,
+  PanelSheet,
+  SecurityKeyPinField,
+} from './index';
 import type { PanelPresentation } from './index';
 
 export function AdminPanel({
@@ -84,7 +91,9 @@ export function AdminPanel({
           <Button
             variant="primary"
             title={openAccess.title}
-            disabled={busy || openAccess.disabled}
+            disabled={
+              busy || openAccess.disabled || securityKeyPinProblem(pin) !== null
+            }
             onClick={() => void run(false)}
           >
             Open admin panel
@@ -107,16 +116,13 @@ export function AdminPanel({
             onChange={(e) => setDestination(e.target.value)}
           />
         </InsetRow>
-        <InsetRow label="Security key PIN (enrolled keys only)">
-          <input
-            type="password"
-            autoComplete="off"
-            value={pin}
-            maxLength={32}
-            disabled={busy}
-            onChange={(e) => setPin(e.target.value)}
-          />
-        </InsetRow>
+        <SecurityKeyPinField
+          label="Security key PIN (enrolled keys only)"
+          value={pin}
+          disabled={busy}
+          onChange={setPin}
+          refusal={error}
+        />
       </Inset>
       {message && <p role="status">{message}</p>}
       {error && (

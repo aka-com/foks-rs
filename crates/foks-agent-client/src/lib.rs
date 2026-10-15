@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use foks_agent_proto::{
-    KvUploadFrame, KvUploadHeader, KvUploadPayload, Operation, Request, Response,
-    MAXIMUM_MESSAGE_BYTES, PROTOCOL_VERSION,
+    HelloReply, HelloRequest, KvUploadFrame, KvUploadHeader, KvUploadPayload, Operation, Peer,
+    Request, Response, MAXIMUM_MESSAGE_BYTES, PROTOCOL_VERSION,
 };
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
@@ -63,6 +63,39 @@ impl Error {
             _ => false,
         }
     }
+
+    /// The agent at the socket uses another protocol version. Restarting it
+    /// with a matching build is the remedy; starting a second agent is not,
+    /// because the running one holds the state directory's lock.
+    pub fn is_version_mismatch(&self) -> bool {
+        self.version_mismatch().is_some()
+    }
+
+    /// The protocol error that names the versions, for diagnostics.
+    pub fn version_mismatch(&self) -> Option<&foks_agent_proto::Error> {
+        match self {
+            Self::Protocol(
+                error @ (foks_agent_proto::Error::VersionMismatch { .. }
+                | foks_agent_proto::Error::Version),
+            ) => Some(error),
+            Self::Ambiguous(cause) => cause.version_mismatch(),
+            _ => None,
+        }
+    }
+}
+
+/// A mutation whose reply could not be read may have run, unless the reply
+/// is the agent's version-mismatch refusal: an agent refuses a request of
+/// another version before it decodes the operation.
+fn ambiguous_unless_refused(error: Error) -> Error {
+    if matches!(
+        error,
+        Error::Protocol(foks_agent_proto::Error::VersionMismatch { .. })
+    ) {
+        error
+    } else {
+        Error::Ambiguous(Box::new(error))
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -95,6 +128,39 @@ impl AgentClient {
 
     pub fn call(&self, operation: Operation) -> Result<Response> {
         self.call_cancellable(operation, &|| false)
+    }
+
+    /// Exchanges the version-independent Hello. Fails with
+    /// [`foks_agent_proto::Error::VersionMismatch`] when the agent does not
+    /// accept this build's [`PROTOCOL_VERSION`], including an agent that
+    /// predates the handshake.
+    pub fn hello(&self, client: Peer) -> Result<HelloReply> {
+        self.hello_cancellable(client, &|| false)
+    }
+
+    pub fn hello_cancellable(
+        &self,
+        client: Peer,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<HelloReply> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let frame = foks_agent_proto::encode(&HelloRequest::new(id, client))?;
+        let reply = exchange_platform(&self.socket, self.timeout, &frame, cancelled)?;
+        let response = match foks_agent_proto::decode_hello_response(&reply) {
+            // A refusal is only this Hello's when it names it.
+            Err(
+                foks_agent_proto::Error::VersionMismatch { .. }
+                | foks_agent_proto::Error::HelloRefused { .. },
+            ) if foks_agent_proto::request_id(&reply) != Some(id) => {
+                return Err(Error::ResponseBinding)
+            }
+            result => result?,
+        };
+        if response.id != Some(id) {
+            return Err(Error::ResponseBinding);
+        }
+        response.reply.require_compatible()?;
+        Ok(response.reply)
     }
 
     /// Cancellation closes the IPC socket; a started mutation remains ambiguous.
@@ -180,13 +246,29 @@ fn call_platform(
         });
     }
     drop(frame);
-    read_response_cancellable(&mut stream, cancelled, deadline).map_err(|error| {
+    read_response_cancellable(&mut stream, request.id, cancelled, deadline).map_err(|error| {
         if mutation {
-            Error::Ambiguous(Box::new(error))
+            ambiguous_unless_refused(error)
         } else {
             error
         }
     })
+}
+
+/// Writes one encoded frame and returns the reply frame undecoded, for the
+/// Hello, whose reply does not follow this build's version.
+#[cfg(unix)]
+fn exchange_platform(
+    socket: &Path,
+    timeout: Duration,
+    frame: &[u8],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let deadline = std::time::Instant::now() + timeout;
+    check_upload_cancelled(cancelled, deadline)?;
+    let mut stream = connect_platform(socket, cancelled, deadline)?;
+    transport::write_all(&mut stream, frame, cancelled, deadline)?;
+    read_frame_cancellable(&mut stream, cancelled, deadline)
 }
 
 #[cfg(unix)]
@@ -230,7 +312,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
         }
         let encoded = encoded?;
         if let Err(error) = transport::write_all(&mut stream, &encoded, cancelled, deadline) {
-            return match read_response_cancellable(&mut stream, cancelled, deadline) {
+            return match read_response_cancellable(&mut stream, id, cancelled, deadline) {
                 Ok(response) if response.id != Some(id) => Err(Error::ResponseBinding),
                 Ok(response)
                     if matches!(
@@ -264,15 +346,13 @@ fn upload_platform<R: std::io::Read + ?Sized>(
         payload: KvUploadPayload::Commit,
     })?;
     if let Err(error) = transport::write_all(&mut stream, &commit, cancelled, deadline) {
-        return match read_response_cancellable(&mut stream, cancelled, deadline) {
+        return match read_response_cancellable(&mut stream, id, cancelled, deadline) {
             Ok(response) => Ok(response),
-            Err(cause) => Err(Error::Ambiguous(Box::new(upload_write_failure(
-                error, cause,
-            )))),
+            Err(cause) => Err(ambiguous_unless_refused(upload_write_failure(error, cause))),
         };
     }
-    read_response_cancellable(&mut stream, cancelled, deadline)
-        .map_err(|error| Error::Ambiguous(Box::new(error)))
+    read_response_cancellable(&mut stream, id, cancelled, deadline)
+        .map_err(ambiguous_unless_refused)
 }
 
 fn check_upload_cancelled(
@@ -341,11 +421,33 @@ fn connect_platform(
 }
 
 #[cfg(unix)]
+/// Reads the response to request `id`. A version-mismatch refusal counts as
+/// one only when it names that request, since it is taken as proof that the
+/// request did not run; the ID of any other response is checked by the
+/// caller.
 fn read_response_cancellable(
     stream: &mut std::os::unix::net::UnixStream,
+    id: u64,
     cancelled: &dyn Fn() -> bool,
     deadline: std::time::Instant,
 ) -> Result<Response> {
+    let frame = read_frame_cancellable(stream, cancelled, deadline)?;
+    match foks_agent_proto::decode_response(&frame) {
+        Err(foks_agent_proto::Error::VersionMismatch { .. })
+            if foks_agent_proto::request_id(&frame) != Some(id) =>
+        {
+            Err(Error::ResponseBinding)
+        }
+        result => Ok(result?),
+    }
+}
+
+#[cfg(unix)]
+fn read_frame_cancellable(
+    stream: &mut std::os::unix::net::UnixStream,
+    cancelled: &dyn Fn() -> bool,
+    deadline: std::time::Instant,
+) -> Result<Zeroizing<Vec<u8>>> {
     use std::io::{ErrorKind, Read as _};
     stream.set_nonblocking(true)?;
     let mut read = |mut bytes: &mut [u8]| -> Result<()> {
@@ -387,7 +489,7 @@ fn read_response_cancellable(
     frame[..4].copy_from_slice(&prefix);
     read(&mut frame[4..])?;
     check_upload_cancelled(cancelled, deadline)?;
-    Ok(foks_agent_proto::decode_response(&frame)?)
+    Ok(frame)
 }
 
 #[cfg(not(unix))]
@@ -399,6 +501,16 @@ fn call_platform(
     _cancelled: &dyn Fn() -> bool,
 ) -> Result<Response> {
     request.operation.zeroize_plaintext();
+    Err(Error::Unsupported)
+}
+
+#[cfg(not(unix))]
+fn exchange_platform(
+    _socket: &Path,
+    _timeout: Duration,
+    _frame: &[u8],
+    _cancelled: &dyn Fn() -> bool,
+) -> Result<Zeroizing<Vec<u8>>> {
     Err(Error::Unsupported)
 }
 
@@ -478,13 +590,14 @@ mod tests {
     #[test]
     fn local_deadlines_are_typed_and_distinct_from_eof() {
         let (mut client, server) = std::os::unix::net::UnixStream::pair().unwrap();
-        let error = read_response_cancellable(&mut client, &|| false, std::time::Instant::now())
+        let error = read_response_cancellable(&mut client, 1, &|| false, std::time::Instant::now())
             .unwrap_err();
         assert!(matches!(error, Error::DeadlineExceeded));
         assert!(!error.is_connection_loss());
         drop(server);
         let error = read_response_cancellable(
             &mut client,
+            1,
             &|| false,
             std::time::Instant::now() + Duration::from_secs(1),
         )
@@ -506,6 +619,7 @@ mod tests {
             let checks = std::cell::Cell::new(0);
             let error = read_response_cancellable(
                 &mut client,
+                1,
                 &|| {
                     checks.set(checks.get() + 1);
                     checks.get() == cancel_at
@@ -630,6 +744,194 @@ mod tests {
         assert_eq!(response.version, PROTOCOL_VERSION);
         assert!(matches!(response.result, ResponseResult::Success { .. }));
         server.join().unwrap();
+    }
+
+    /// Serves one connection: reads one frame and answers with `reply`,
+    /// given the request's ID.
+    fn answer_once(
+        socket: &Path,
+        reply: impl FnOnce(u64) -> serde_json::Value + Send + 'static,
+    ) -> std::thread::JoinHandle<Vec<u8>> {
+        let listener = UnixListener::bind(socket).unwrap();
+        std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_frame(&mut stream);
+            let id = foks_agent_proto::request_id(&request).unwrap();
+            stream
+                .write_all(&foks_agent_proto::encode(&reply(id)).unwrap())
+                .unwrap();
+            request
+        })
+    }
+
+    /// An agent of another version refuses a request before it decodes the
+    /// operation, so its refusal of a mutation is definite, not ambiguous.
+    #[test]
+    fn a_version_refusal_of_a_mutation_is_not_ambiguous() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("agent.sock");
+        let server = answer_once(&socket, |id| {
+            serde_json::json!({
+                "version": 34,
+                "id": id,
+                "status": "error",
+                "code": "version-mismatch",
+                "message": "unsupported protocol version",
+            })
+        });
+        let error = AgentClient::new(&socket)
+            .call(Operation::RemoveProfile {
+                name: "local".to_owned(),
+            })
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(
+            matches!(
+                error,
+                Error::Protocol(foks_agent_proto::Error::VersionMismatch {
+                    agent: 34,
+                    supported: None
+                })
+            ),
+            "{error:?}"
+        );
+        assert!(error.is_version_mismatch());
+        assert!(!error.is_connection_loss());
+
+        // A frame of another version that is not the refusal says nothing
+        // about whether the mutation ran.
+        let socket = directory.path().join("other.sock");
+        let server = answer_once(&socket, |id| {
+            serde_json::json!({
+                "version": PROTOCOL_VERSION + 1,
+                "id": id,
+                "status": "success",
+                "value": null,
+            })
+        });
+        let error = AgentClient::new(&socket)
+            .call(Operation::RemoveProfile {
+                name: "local".to_owned(),
+            })
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(matches!(error, Error::Ambiguous(_)), "{error:?}");
+        assert!(error.is_version_mismatch());
+
+        // A refusal is proof that nothing ran only for the request it names.
+        let socket = directory.path().join("unbound.sock");
+        let server = answer_once(&socket, |id| {
+            serde_json::json!({
+                "version": 34,
+                "id": id + 1,
+                "status": "error",
+                "code": "version-mismatch",
+                "message": "unsupported protocol version",
+            })
+        });
+        let error = AgentClient::new(&socket)
+            .call(Operation::RemoveProfile {
+                name: "local".to_owned(),
+            })
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(
+            matches!(&error, Error::Ambiguous(cause) if matches!(**cause, Error::ResponseBinding)),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn hello_reports_capabilities_and_refuses_an_agent_of_another_version() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("agent.sock");
+        let server = answer_once(&socket, |id| {
+            let reply = foks_agent_proto::HelloReply::new(
+                Peer::new("foks-agent", "1.0.0"),
+                &[foks_agent_proto::hello::capability::HISTORY_AFTER],
+            );
+            serde_json::to_value(Response::success(id, serde_json::to_value(reply).unwrap()))
+                .unwrap()
+        });
+        let reply = AgentClient::new(&socket)
+            .hello(Peer::new("foks-cli", "1.0.0"))
+            .unwrap();
+        let request = server.join().unwrap();
+        assert!(reply.has_capability(foks_agent_proto::hello::capability::HISTORY_AFTER));
+        let hello = foks_agent_proto::decode_hello(&request).unwrap().unwrap();
+        assert_eq!(hello.operation.client.kind, "foks-cli");
+        assert_eq!(
+            hello.operation.accept,
+            foks_agent_proto::SUPPORTED_PROTOCOL_VERSIONS
+        );
+
+        // An agent that predates the handshake refuses the Hello's version.
+        let socket = directory.path().join("older.sock");
+        let server = answer_once(&socket, |id| {
+            serde_json::json!({
+                "version": 34,
+                "id": id,
+                "status": "error",
+                "code": "version-mismatch",
+                "message": "unsupported protocol version",
+            })
+        });
+        let error = AgentClient::new(&socket)
+            .hello(Peer::new("foks-cli", "1.0.0"))
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(error.is_version_mismatch());
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "local agent protocol failed: agent protocol version 34 does not match client protocol version {PROTOCOL_VERSION}"
+            )
+        );
+
+        // A refusal that names another request is not this Hello's.
+        let socket = directory.path().join("unbound.sock");
+        let server = answer_once(&socket, |id| {
+            serde_json::json!({
+                "version": 34,
+                "id": id + 1,
+                "status": "error",
+                "code": "version-mismatch",
+                "message": "unsupported protocol version",
+            })
+        });
+        let error = AgentClient::new(&socket)
+            .hello(Peer::new("foks-cli", "1.0.0"))
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(matches!(error, Error::ResponseBinding), "{error:?}");
+
+        // A newer agent that answers but does not accept this version.
+        let socket = directory.path().join("newer.sock");
+        let server = answer_once(&socket, |id| {
+            serde_json::json!({
+                "version": PROTOCOL_VERSION + 1,
+                "id": id,
+                "status": "success",
+                "value": {
+                    "protocol": PROTOCOL_VERSION + 1,
+                    "supported": { "minimum": PROTOCOL_VERSION + 1, "maximum": PROTOCOL_VERSION + 1 },
+                    "agent": { "kind": "foks-agent", "version": "2.0.0" },
+                },
+            })
+        });
+        let error = AgentClient::new(&socket)
+            .hello(Peer::new("foks-cli", "1.0.0"))
+            .unwrap_err();
+        server.join().unwrap();
+        assert!(
+            matches!(
+                error,
+                Error::Protocol(foks_agent_proto::Error::VersionMismatch { agent, .. })
+                    if agent == PROTOCOL_VERSION + 1
+            ),
+            "{error:?}"
+        );
     }
 
     #[test]

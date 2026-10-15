@@ -21,18 +21,23 @@ pub(crate) fn join_waitlist(
     let mut id = [0_u8; WAITLIST_ID_BYTES];
     entropy.fill(&mut id).map_err(map_write_error)?;
     id[0] = WAITLIST_ID_TYPE;
-    writer
+    // A repeated address yields its stored identifier, so the call stays
+    // idempotent. The identifier grants nothing: no route accepts it.
+    let stored = writer
         .call_with_current_time(clock, move |database, now| {
-            database.join_waitlist(&id, &email, now)?;
-            Ok(())
+            Ok(database.join_waitlist(&id, &email, now)?)
         })
         .map_err(map_identifier_write_error)?;
-    foks_snowpack::encode(&Value::Binary(id.to_vec())).map_err(map_write_error)
+    foks_snowpack::encode(&Value::Binary(stored.to_vec())).map_err(map_write_error)
 }
 
 fn map_write_error(error: impl Into<crate::Error>) -> RpcStatus {
     match error.into() {
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
+        // rate_limited is the route's declared status for a full waitlist.
+        crate::Error::WriterQueue
+        | crate::Error::Database(foks_server_db::Error::Capacity("waitlist")) => {
+            RpcStatus::RateLimited
+        }
         crate::Error::Database(foks_server_db::Error::Invalid(message)) => {
             RpcStatus::BadArguments(message.to_owned())
         }

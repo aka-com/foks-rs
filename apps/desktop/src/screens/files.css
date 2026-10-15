@@ -114,13 +114,22 @@
   outline: 2px solid var(--accent-border);
   outline-offset: -2px;
 }
-/* The selection button omits the twist and count; frame the whole tree row. */
-.folder-split .tpane .fn:has(> .fselect:focus-visible) {
+/* Frame the whole row when a tree row has focus, or the selection button of
+   a row outside a tree, which omits the twist and count. */
+.folder-split .tpane .fn:has(> .fselect:focus-visible),
+.folder-split .tpane .fn[role='treeitem']:focus-visible {
   outline: 2px solid var(--accent-border);
   outline-offset: -2px;
 }
 .folder-split .tpane .fn .fselect:focus-visible {
   outline: none;
+}
+/* A tree row is selected by a click anywhere on it; its twist and team
+   settings mark are pointer shortcuts for the arrow keys and the menu. */
+.folder-split .tpane .fn[role='treeitem'],
+.folder-split .tpane .fn > .twist,
+.folder-split .tpane .fn > .fact {
+  cursor: pointer;
 }
 .folder-split .tpane .fn > .c,
 .folder-split .tpane .fn > .warn {
@@ -347,6 +356,10 @@
 .folder-body .hdr.cols button.on {
   color: var(--ink);
 }
+/* A sort button fills its column header cell. */
+.folder-body .hdr.cols > [role='columnheader'] > button {
+  width: 100%;
+}
 .folder-body .row.one {
   position: relative;
   height: 38px;
@@ -407,13 +420,16 @@
   flex: none;
 }
 
-/* The row's own actions, floating over the Size cell they replace. */
+/* The row's own actions, floating over the Size cell they replace. They are
+   hidden by opacity rather than display: none, so the actions gridcell stays
+   in the accessibility tree under its column header. */
 .folder-body .row .acts {
   position: absolute;
   opacity: 0;
+  pointer-events: none;
   right: 8px;
   top: 4px;
-  display: none;
+  display: flex;
   gap: 2px;
   padding: 1px;
   border: 1px solid var(--line-mid);
@@ -424,8 +440,13 @@
 .folder-body .row:hover .acts,
 .folder-body .row:focus-within .acts,
 .folder-body .row.sel .acts {
-  display: flex;
   opacity: 1;
+  pointer-events: auto;
+}
+/* A folder row has no actions; its empty actions cell keeps the row's cells
+   in line with the column headers and takes no space. */
+.folder-body .row > .acts-none {
+  position: absolute;
 }
 .folder-body .row .acts button {
   width: 26px;
@@ -447,11 +468,36 @@
   visibility: hidden;
 }
 
+/* The list's grid: the column headers and the rows, or the card lines. */
+.files-items {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* Names the cell holding a row's own actions, which float over Size, or in
+   Trash sit in a column without a visible heading. */
+.folder-body .hdr.cols > .acts-head,
+.folder-body .hdr.trash-cols > .acts-head {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* Cards reuse the list's interactive rows and their actions. Fixed heights
-   match files-grid.ts, so a resized inspector can reflow virtual grid rows. */
+   match files-grid.ts, so a resized inspector can reflow virtual grid rows.
+   Each line of cards is a grid row of its own, with the column count
+   files-grid.ts computes from the same widths. */
 .files-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.files-grid-line {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr));
+  grid-template-columns: repeat(var(--files-columns, 1), minmax(0, 1fr));
   gap: 10px;
 }
 .folder-body .files-grid .row.cols {
@@ -734,11 +780,8 @@
   font-size: 12px;
   line-height: 1.35;
 }
-.folder-body .card kbd,
-.folder-body .card .cli {
-  margin-top: auto;
-}
 .folder-body .card kbd {
+  margin-top: auto;
   padding: 0 5px;
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -746,17 +789,6 @@
   font: 12px var(--sans);
   line-height: 1.5;
   color: var(--faint);
-}
-.folder-body .card .cli {
-  max-width: 100%;
-  padding: 3px 7px;
-  border-radius: 5px;
-  background: var(--chip-bg);
-  font: 12px var(--sans);
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ------------------------------------------------------- details panel */
@@ -932,5 +964,280 @@
   .tpane,
   .files-sidebar-resizer {
     display: none;
+  }
+}
+
+/* Trash: Name, Original location, Deleted, Size and the row's own actions,
+   which stay drawn because each row exists to be restored or removed. */
+.trash-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.trash-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--faint);
+}
+.folder-body .hdr.trash-cols,
+.folder-body .row.trash-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 140px) 150px 66px auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+}
+.folder-body .hdr.trash-cols {
+  height: 28px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--faint);
+}
+.folder-body .row.trash-cols .cell {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+.folder-body .trash-cols .trash-size {
+  text-align: right;
+}
+.trash-acts {
+  display: flex;
+  gap: 4px;
+}
+.trash-lock {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--faint);
+}
+.trash-detail {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.trash-detail code {
+  font-family: var(--mono);
+}
+@container (max-width: 600px) {
+  .folder-body .hdr.trash-cols,
+  .folder-body .row.trash-cols {
+    grid-template-columns: minmax(0, 1fr) 66px auto;
+  }
+  .folder-body .trash-cols > :nth-child(2),
+  .folder-body .trash-cols > :nth-child(3) {
+    display: none;
+  }
+}
+.trash-empty-list {
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  font-size: 13px;
+}
+.trash-empty-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.trash-empty-list small {
+  color: var(--faint);
+}
+.trash-empty-list li.kept > span {
+  color: var(--faint);
+}
+
+/* Several rows chosen with ⌘-click, Shift-click or ⌘A: the bar takes the
+   column header's place while it is shown. */
+.folder-body .selbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-md);
+  background: var(--accent-wash);
+  font-size: 12px;
+}
+.folder-body .selbar .n {
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+.folder-body .selbar .sp {
+  flex: 1;
+}
+
+/* Rows dragged over a folder of the tree or the list. */
+.tpane .fn.drop-ok,
+.folder-body .row.folder.drop-ok {
+  background: var(--accent-wash-2);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.tpane .fn.drop-no,
+.folder-body .row.folder.drop-no {
+  box-shadow: inset 0 0 0 1px var(--danger-border);
+}
+body.dragging-rows,
+body.dragging-rows * {
+  cursor: grabbing;
+  user-select: none;
+}
+.drag-ghost {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 280px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  font-size: 12px;
+  pointer-events: none;
+}
+.drag-ghost .what {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.drag-ghost .lab {
+  color: var(--accent-ink);
+}
+.drag-ghost .lab.no {
+  color: var(--danger-ink);
+}
+
+/* The move sheet's folder tree. */
+.folder-picker {
+  max-height: min(236px, 38vh);
+  padding: 4px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--main-surface);
+}
+.folder-picker .fp-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px 0 calc(8px + var(--d, 0) * 14px);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.folder-picker .fp-node:hover {
+  background: var(--hover);
+}
+.folder-picker .fp-node.on {
+  background: var(--accent-wash-2);
+  color: var(--accent-ink);
+}
+.folder-picker .fp-node.off {
+  color: var(--faint);
+  cursor: default;
+}
+.folder-picker .fp-node:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: -2px;
+}
+.folder-picker .fp-node .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.folder-picker .fp-node .tag {
+  font-size: 12px;
+  color: var(--faint);
+}
+.picker-actions {
+  display: flex;
+  margin: 8px 0;
+}
+.ft .move-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ft .move-preview.bad {
+  color: var(--faint);
+}
+
+/* Per-item outcomes of a bulk move. */
+.bulk-rows {
+  max-height: min(300px, 46vh);
+  margin: 8px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  font-size: 13px;
+}
+.bulk-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.bulk-row .t {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.bulk-row small {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.bulk-row.done > .ic,
+.bulk-row.skipped > .ic {
+  color: var(--ok-ink);
+}
+.bulk-row.refused > .ic,
+.bulk-row.uncertain > .ic {
+  color: var(--amber-ink);
+}
+.bulk-row.failed > .ic {
+  color: var(--danger-ink);
+}
+.bulk-row.pending > .ic {
+  color: var(--faint);
+}
+.bulk-row > .spin {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin: 2px;
+  border: 2px solid var(--muted);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bulk-row > .spin {
+    animation: none;
   }
 }

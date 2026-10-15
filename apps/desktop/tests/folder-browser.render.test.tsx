@@ -96,9 +96,9 @@ function currentSubtitle(): string | undefined {
   return document.querySelector('.lpane .lt .where .sub')?.textContent?.trim();
 }
 
-/** The table header's column labels, sort arrow stripped. */
+/** The table header's visible column labels, sort arrow stripped. */
 function columns(): string[] {
-  return [...document.querySelectorAll('.lpane .hdr > *')]
+  return [...document.querySelectorAll('.lpane .hdr > :not(.acts-head)')]
     .map((cell) => cell.textContent?.replace(/ [↑↓]/, '').trim() ?? '')
     .filter(Boolean);
 }
@@ -232,7 +232,7 @@ test('an empty team displays shared-item details and inline settings', async () 
   // "Homelab" is a team with nothing in it.
   assert.ok(
     treeRow('Homelab').parentElement?.querySelector(
-      '.fact[aria-label="Homelab settings"]',
+      '.fact[title="Team settings"]',
     ),
     'team settings is mounted before selection so row hover can reveal it',
   );
@@ -244,7 +244,7 @@ test('an empty team displays shared-item details and inline settings', async () 
   );
   assert.ok(
     treeRow('Homelab').parentElement?.querySelector(
-      '.fact[aria-label="Homelab settings"]',
+      '.fact[title="Team settings"]',
     ),
   );
 });
@@ -306,8 +306,12 @@ test('a row names its item, its folder, and the actions its kind allows', async 
   // A value the panel reads as text copies and reveals; a file node
   // downloads. The row decides the same way the details panel does, so a
   // text Secret filed as a "Document" is not offered Download here and Copy
-  // there.
-  assert.deepEqual(actionsOf(login), ['Copy', 'Reveal']);
+  // there. A login copies one field at a time, never its whole text.
+  assert.deepEqual(actionsOf(login), [
+    'Copy password',
+    'Copy user name',
+    'Reveal',
+  ]);
   const named = (name: string): Element => {
     const node = rows.find(
       (candidate) => candidate.querySelector('.name .nm')?.textContent === name,
@@ -322,7 +326,7 @@ test('a row names its item, its folder, and the actions its kind allows', async 
     secretDocument.querySelector('.cell.kind')?.textContent,
     'Document',
   );
-  assert.deepEqual(actionsOf(secretDocument), ['Copy', 'Reveal']);
+  assert.deepEqual(actionsOf(secretDocument), ['Copy value', 'Reveal']);
   const fileDocument = named('passport-scan.pdf');
   assert.equal(
     fileDocument.querySelector('.cell.kind')?.textContent,
@@ -359,7 +363,7 @@ test('grid view preserves browsing state, sorting, and selected details and pers
   );
   assert.equal(document.querySelectorAll('.files-grid .row').length, 1);
   assert.equal(
-    document.querySelector('.files-grid .row')?.getAttribute('aria-pressed'),
+    document.querySelector('.files-grid .row')?.getAttribute('aria-selected'),
     'true',
   );
   const sort = ui.screen.getByRole<HTMLSelectElement>('combobox', {
@@ -431,13 +435,13 @@ test('search scopes to the selected tree row', async () => {
 
 /** Returns a summary of each tree row containing its name, count, and selected state. */
 function treeShape(): string[] {
-  return [
-    ...document.querySelectorAll<HTMLButtonElement>('.tpane .fselect'),
-  ].map((button) =>
+  return [...document.querySelectorAll<HTMLElement>('.tpane .fn')].map((row) =>
     [
-      button.querySelector('.nm')?.textContent ?? '',
-      button.querySelector('.c')?.textContent ?? '',
-      button.getAttribute('aria-current') ?? '',
+      row.querySelector('.nm')?.textContent ?? '',
+      row.querySelector(':scope > .c')?.textContent ?? '',
+      row.getAttribute('aria-selected') ??
+        row.querySelector('.fselect')?.getAttribute('aria-current') ??
+        '',
     ].join('|'),
   );
 }

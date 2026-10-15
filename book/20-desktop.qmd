@@ -41,8 +41,9 @@ tracking, and bounded background work.
 ```
 
 The renderer is treated as untrusted. It renders a catalog of names,
-types, and sizes; it asks for one value at a time; and it receives that
-value only through the single content-returning command. The host is
+types, sizes, and whether each small file holds a login; it asks for one
+value at a time; and it receives that value only through the single
+content-returning command. The host is
 privileged but holds no long-lived secrets: it forwards requests to the
 agent and moves bytes between the agent and the disk or clipboard. The
 agent, described in [Chapter 19](19-agent.qmd), is a separate process that
@@ -55,7 +56,9 @@ Tauri's capability model is an allowlist: a JSON file names which of the
 framework's built-in commands a window's scripts may invoke. The default
 set, `core:default`, expands to 92 commands, including
 `core:image|from_path` (read any file the renderer names) and
-`internal_toggle_devtools`. The FOKS capability file grants three:
+`internal_toggle_devtools`. The FOKS capability file grants three of the
+framework's commands (it also grants the app's own commands, described
+below):
 
 | Permission | What it allows |
 |---|---|
@@ -73,9 +76,9 @@ test rather than by inspection. At build time Tauri generates an ACL
 manifest describing every permission set and the commands each resolves to.
 A unit test parses that generated manifest and the generated capability,
 resolves each granted permission recursively to concrete
-`manifest|command` pairs, and asserts the resulting set equals exactly the
-three listed above. It then asserts a list of forbidden commands
-(`core:image|from_path`, `core:path|resolve`,
+`manifest|command` pairs, and asserts that the Tauri commands in the
+resulting set are exactly the three listed above. It then asserts a list
+of forbidden commands (`core:image|from_path`, `core:path|resolve`,
 `core:webview|internal_toggle_devtools`, `core:event|emit`, and others) is
 unreachable. The project's permission notes give the reason this matters:
 whether a command is *compiled in* is not the security boundary, because
@@ -83,9 +86,18 @@ Cargo feature unification across a workspace can pull in features a
 sibling build enabled; only the capability file is a control, and only a
 test that resolves it proves what it grants.
 
-Application-defined commands are not covered by the capability file, so
-every command that can return a value begins with two checks: that the
-call came from the main window, and that the app is unlocked.
+Application-defined commands are covered too, but only because the app
+declares an ACL manifest: without one, Tauri runs any registered command for
+any window on the app's own origin. The desktop build script lists every
+registered command, Tauri generates an allow permission for each, and the
+same capability file grants those permissions to the main window only. The
+hosted-admin windows, which load a server's admin page from a remote HTTPS
+origin, match no capability and are refused every command before it runs.
+Tests compare the build script's list, the capability and the handler
+registration, and ask Tauri's runtime authority which windows and origins
+may call each command. Every command still begins with its own check that
+the call came from the main window, and every command that can return a
+value also checks that the app is unlocked.
 
 ## The app lock: a generation counter
 
@@ -186,7 +198,10 @@ tool on the machine. The host's `copy_with_hygiene` does three things:
    ensures a repeated copy of the same value gets its own timer.
 3. On macOS it also sets the `org.nspasteboard.ConcealedType` pasteboard
    type, a convention that asks clipboard managers not to record the item.
-   Linux has no equivalent, which is why its timer is shorter.
+   On Linux it offers the `x-kde-passwordManagerHint` target with the value
+   `secret`, which Klipper and clipboard managers that follow that
+   convention honor. Fewer Linux clipboard managers follow it, which is why
+   the Linux timer is shorter.
 
 | Platform | Auto-clear |
 |---|---|
@@ -194,6 +209,113 @@ tool on the machine. The host's `copy_with_hygiene` does three things:
 | macOS and others | 30 s |
 
 The exit handler performs one best-effort clear before the process ends.
+
+## Logins
+
+FOKS v0.1.9 has no login type. The desktop stores a login as an ordinary
+small file of UTF-8 `key: value` lines, `user: …`, `password: …` and
+`url: …`, so Go clients read and write it as any other value.
+
+The catalog marks which small files are logins without carrying their
+contents. A metadata listing already fetches and opens every small-file
+node to authenticate it. Before it zeroizes that plaintext, `foks-client`
+records one bit, `shape: login` when the text has the layout the desktop
+writes and `shape: other` otherwise, and the bit travels through
+`KvCatalogReport`, the agent's `KvEntryMetadata` and its retained catalog
+pages, and the host's `ItemDto`. It is agent IPC only and never reaches the
+Go wire. The renderer lists a small file with `shape: login` as a Password
+wherever it is filed; a catalog entry without a shape, from an agent that
+predates the field, falls back to the `/logins/` folder. Such a Password
+may hold no `password:` line, so its rows, its palette entry and its
+details panel also offer Copy value.
+
+Copy on a login reaches the clipboard one field at a time.
+`copy_item_field` reads the exact listed version, selects the password,
+user name or website line in the host, and passes only that value to
+`copy_with_hygiene`; the other lines are dropped with the zeroizing read
+buffer. Lines are separated by `\n` with one trailing `\r` removed. A field
+line splits at its first `:`; its key is not trimmed and must be non-empty
+with no ASCII whitespace, so an indented `  password: x`, a spaced
+`password : x` and a sentence such as `Reset it at https://example.com` are
+not field lines. Neither is a line whose `:` is followed directly by `//`,
+such as a bare URL. The value loses exactly the one space the desktop
+writes after the `:`, so a password that begins or ends with a space is
+copied whole. `user` and `username` name the user name, `url` and `website`
+name the website, and the first line naming a field wins. A small file is a
+login when every line that is not blank is a field line and one has the key
+`password`; an indented YAML document, an INI section, or a note with a
+line of prose or a URL stays a Document with Copy value. A note line of the
+form `Note: text` is a field line, so a login may carry it and the details
+panel lists it as its own row. A field that is absent or empty
+fails with `field-missing` instead of copying something else. Both the
+listing's classification and the host's field selection use
+`foks_client::kv::login`, so an item listed as a login has a password line
+the host finds, though that line may be empty and then fails with
+`field-missing`. The renderer's `model/login.ts` applies the same rules to
+text it has read. `copy_item_value` copies a text document's whole value; it
+is `copy_item_field` with the field `value`.
+
+The ⌘K search palette copies through the same two commands: ⌘C on a
+highlighted Password copies its password, ⇧⌘C its user name, and ⌘C on a
+text document its value, so a value reaches the clipboard without being
+shown or opened. The same keys do the same on the focused row of the Files
+list. ⌘O on a highlighted Password calls `open_item_url`, which reads the
+exact listed version, selects the website line as `copy_item_field` does,
+and hands it to the platform's opener
+only when it is an http or https address with a host and no user name or
+password; a value with no scheme, such as `example.com/login`, is taken as
+https. The address is not returned to the renderer, and a lock that engages
+during the read stops the browser from opening. A missing website fails with
+`field-missing` and any other value with `website-unsupported`. The opener,
+which chat links and the SSO browser step also use, is `/usr/bin/open` on
+macOS. On Linux it is the XDG desktop portal's `OpenURI` method; a refusal
+from a running portal is reported as an error. When no portal is reachable
+the opener starts `/usr/bin/xdg-open`, reports an error if it exits non-zero
+within one second, and otherwise stops waiting so a browser that stays in the
+foreground does not hold the worker. The fallback requires that path, so on
+a system that installs xdg-open elsewhere, such as NixOS, links open only
+through the portal.
+The palette searches names and paths only, never values.
+Its Recent and Favorites lists are kept in the webview's local storage,
+which is not cleared by the app lock, so they hold an item's `StoreRef` and
+dirent id and nothing else. The `StoreRef` names the server profile, the
+account and, for a team, the team's alias and id; item names and paths are
+resolved from the snapshot while the app is unlocked. A dirent id names the
+entry at one path: a move or a rename writes the item under a new dirent id
+at its destination and leaves a tombstone with the old id, which an item
+later created at that path reuses. The app follows a move it made to the new
+id once the refreshed snapshot holds the item; after a move made elsewhere
+the entry is no longer listed, until an item created at the old path takes
+its place.
+
+The New password sheet and the login Edit form give the password Show and
+Generate. Generate draws a password in the renderer, which already holds
+the typed password in both forms, so the plaintext reaches no process it
+did not reach before. A random-character password is 8 to 64 characters
+from the selected sets (upper case, lower case, digits and 13 symbols), by
+default 24 characters from all four with `0 O 1 l I` left out. A passphrase
+is 4 to 8 words, by default 5, from the BIP-39 English list the recovery
+phrase input already embeds, joined by a hyphen, space, period or
+underscore. Each character or word is an index drawn with
+`crypto.getRandomValues` and rejection sampling, so it is uniform over its
+pool, and the strength shown for a value taken from the generator is its
+exact entropy, `length × log2(pool size)` bits: 147 bits for the default
+password, 11 bits per word. A typed or stored password is not measured. It
+is checked against a short list of common passwords (also with its
+separators removed, so a well-known passphrase matches), the site's
+registrable label (`slack` in `app.slack.com`, not the subdomain), the
+user name and each part of it (`john` and `smith` in
+`john.smith@example.org`), one unit of up to four characters repeated
+(`aaaaaaaa`, `asdfasdf`), a run of consecutive letters or digits or of a
+keyboard row (`abcdefgh`, `poiuytre`), also before a trailing run of
+digits and symbols (`abcd1234!`), and the 8-character minimum. A match shows a
+warning at the lowest level without disabling Create or Save; a value with
+no match reads "Not measured · no common weakness found". The strength
+text is a polite live region, so a warning is announced as it appears. The
+candidate in the generator cannot be selected; Use password is the way to
+take it. The generator's last settings, never a password, are kept on the
+device under the `passwordGenerator` `localStorage` key. A generated
+password is stored as any other `password:` line.
 
 ## Files: drag-and-drop, upload, and download
 
@@ -248,7 +370,44 @@ the child so its exit status is observed. Exit is a one-way state machine
 in the close guard, `Idle → Decision → Stopping → Finalizing`, with `Failed`
 and `ForceConfirmation` branches, and the desktop process ends only after
 the agent's termination has been verified; the state cannot move backward
-from `Finalizing`.
+from `Finalizing`. `Decision` records what the request found: unsent chat
+messages, a held mutation reservation, running state maintenance, and
+whether this app launched or adopted every agent process using its state
+directory (a failed process scan counts as no). With the device-local Ask
+before quitting preference set to When work is pending, a request that finds
+none of these goes from `Idle` directly to `Stopping`; otherwise the
+renderer, or the native dialog before the renderer subscribes and on a
+repeated quit, shows the decision with the reasons that apply. `Stopping`
+refuses new agent requests at once and waits up to 5 seconds for requests
+in progress and running maintenance to release the transport; work still
+running after that leaves the app in `Failed`.
+
+**Startup failures.** The host waits for a launched agent to bind its socket
+for as long as the process is alive, up to 60 seconds: an initialized agent
+reads its vault key from the system credential store before it binds, and
+that read can wait on a prompt. A socket that is missing or refuses
+connections is the expected state until then. Any other probe failure, such
+as an unsafe socket or a failed Hello or status request, is reported as it is
+once it has persisted for 5 seconds. An agent still running when the wait
+ends is kept: the next attempt waits on it again rather than launching a
+second agent against the same state, reports its exit if it has exited since,
+and drops it once an agent answers. Restoration after an export, import or
+relocation, and Restart service on the restoration-failed screen, start the
+agent through the same path, so they also wait up to 60 seconds, report a
+timeout as `agent-start-timeout`, and reuse a kept agent; they hold the
+exclusive maintenance reservation while they wait.
+
+The startup dialog always offers Try Again and names `agent.log`. It offers a
+reset only when the launched agent was observed to exit before it answered,
+not when it is still starting, answers with an error, could not be launched,
+or lost supervision. Before offering the reset, the host inspects the state
+root with credential-store interaction disabled, as automatic recovery does;
+if the store is locked or denies access, the dialog offers Try Again only and
+says to unlock it or allow access. The reset deletes nothing:
+`quarantine_unreadable_state` moves every entry of the state root except its
+lock files into a new private sibling directory, `<root>.reset-<unix
+seconds>`, on the same file system, and leaves system credential-store
+entries in place, so moving the entries back restores the previous state.
 
 ## The notification consumer
 
@@ -459,20 +618,245 @@ would need an index the agent owns and a recorded change to that rule.
 ## Vault edits
 
 Items and folders offer Rename or move within their current vault. The target
-is an exact absolute path under an existing folder, and a live destination
-is never overwritten. The selected source dirent identity and version remain fixed across retries,
-so a newly created object at the same path cannot satisfy an older selection.
+is an exact absolute path, chosen as a folder of the vault's tree and a name or
+typed in full, and a live destination is never overwritten. A destination
+folder that does not exist yet is created first with `MkdirKv` and `mkdir_p`,
+the operation New folder uses. The selected source dirent identity and version
+remain fixed across retries, so a newly created object at the same path cannot
+satisfy an older selection.
+
+Several items chosen together, or dragged onto a folder, move as separate
+`MoveKv` mutations, one at a time; there is no batched form. The host retires
+a store's catalog after every write and selects the item of the next request
+in a catalog it has read, so the desktop reads the catalog of the store's
+profile again before each item and sends the current version of the same
+dirent; an item whose path now holds another dirent is not sent. Each item's
+outcome is reported on its own.
+A failure whose request certainly did not run, such as a refused admission
+while another write held the mutation permit, can be retried; an ambiguous
+one cannot, because the item may already have moved.
 
 Text edits and picked or dropped file replacements preserve the selected
 dirent identity and version too. The client validates them before uploading
 content and on every namespace retry, so recreation cannot redirect an open
 editor or file picker to a different entry.
 
-Folder deletion is not supported in the desktop.
+### Copy to another vault
+
+`MoveKv` relinks a dirent within one store, so an item cannot move to
+another vault: its content is sealed under that store's keys. Copy to vault
+writes a new item instead. `copy_item_to_store` names the source by store,
+path, version and dirent, which the host checks against its catalog as it
+does for an edit, and the target by store, path and roles. The host reads
+the source through the agent and creates the copy with a `Create`
+precondition and `mkdir_p`, so content never crosses into the renderer and
+an occupied path is refused rather than overwritten.
+
+A large file cannot be streamed from source to target. The agent admits a
+streaming upload exclusively for its profile, and a chunk read of the same
+profile waits for that admission, so reading the source while uploading
+the copy would wait on itself until the deadline. The host therefore reads
+every chunk first, with the same binding checks as a download, into an
+unlinked temporary file. Each chunk is sealed with ChaCha20-Poly1305 under a
+fresh key held only in memory, with the chunk's sequence number as its
+nonce, so the disk never holds plaintext and a chunk altered or reordered
+on disk fails the upload. The upload then reads the chunks back and opens
+them one at a time. The temporary directory therefore needs free space for
+the whole file, and where it is a tmpfs that space is memory; the host
+compares the file's listed size with the free space before the first read
+and refuses a copy that would not fit.
+
+When the stores are on different servers, the host takes its mutation
+reservation for the whole application rather than for one profile. An
+ambiguous outcome then blocks every later change until a complete listing
+of every profile, so the renderer refreshes all servers rather than the
+source's. Moving the original is a separate `trash_item` after the copy
+succeeds: two mutations on two stores have no common transaction, and a
+failure of the second leaves a copy and an original rather than neither.
+
+### Importing passwords
+
+Neither FOKS v0.1.9 nor this implementation has a `foks kv export`, and an
+account already used with the command line needs none: its items are on its
+server and appear once the account is connected through Import from FOKS
+CLI. Logins kept in another password manager arrive as a CSV export, which
+`begin_password_import` reads in the host. The renderer receives an opaque
+id, the file's name and the name and folder of each login; the file's path
+and every user name, password, website and note stay in host memory, in
+zeroizing buffers, until the import is committed or discarded, another file
+replaces it, or the app locks.
+
+Columns are found by their header, so the CSV exports of 1Password,
+Bitwarden, KeePass, KeePassXC, LastPass and the browsers' password managers
+need no format choice. A login's name is its title, else its website's host,
+else its user name; a `/` or `%` in it is percent-encoded as the Files list
+decodes it, and a second login with the same name in the same folder takes
+a ` (2)` suffix. A folder or group column becomes folders below the chosen
+destination, without the `Root` group KeePassXC writes in every row.
+
+`commit_password_import` writes each login as one small file of `user:`,
+`password:` and `url:` lines, followed by one `note:` line per line of its
+notes. Every line is then a field line, so the agent's listing classifies
+the item as a login and Copy finds its fields, while Go FOKS clients see an
+ordinary small file. A login longer than 2,040 bytes is stored as a file and
+listed as a Document. Each write carries a `Create` precondition, so an
+occupied path is reported and left unchanged, and a login that failed or
+whose outcome is unknown can be sent again without saving it twice. The
+writes run one at a time under one mutation reservation; the first failure
+other than an occupied path ends the run, and an unknown outcome requires a
+refresh before the next write, as for any other mutation.
+
+`export_logins` goes the other way, for one vault. It writes the column
+layout of a Bitwarden export: a password's folder (relative to `/logins`
+when it is below it, so an import into `/logins` restores it), its decoded
+name, the three fields Copy finds, and its other lines as notes, with the
+`note:` prefix the import adds removed. The host reads each password at the
+version the catalog listed and writes the records to a temporary file next
+to the destination, which replaces the destination only when every record
+is written; a lock during the export stops it and removes the temporary
+file. The file is plain text, like every password manager's CSV export, so
+the sheet asks for the vault's name before the save dialog opens.
+
+### Trash
+
+Delete in the desktop moves an item, or a folder with everything in it,
+into `/.trash` in the same vault, as one `MoveKv` namespace mutation: a
+tombstone at the source and a dirent at the destination. Nothing is
+destroyed, so Delete asks for no confirmation. The toast it shows offers
+Undo for eight seconds, and ⌘Z does the same while it shows. A child that
+another device adds to a folder while it is moved goes with the folder,
+which a recursive delete could not promise. Several items moved to Trash
+together are sent one at a time, as several items are moved. Their Undo
+restores the entries one at a time in the same way, each to the path its
+item had; an entry whose original path holds a new entry stays in Trash.
+
+Dirent names are sealed under the key of the directory that holds them, so
+one shared Trash folder would expose the names of owner-only items to
+members. Each read role has its own folder, `/.trash/owner`,
+`/.trash/admin` or `/.trash/member-<visibility>`, created with that read
+role, and an entry keeps its own read and write roles when it moves in. An
+entry, file or folder, is filed by the most restrictive read role on its
+path: its own and that of every folder above it, ordered Owner, Admin, then
+Member by visibility. A member-readable login inside an admin-only folder
+therefore goes to `/.trash/admin`. Its entry name records the folder names
+above it, which were sealed under the admin key, and members who could not
+list that folder could not reach the login before it moved either. A
+folder's children move with it and stay sealed under its key. When another
+item already holds a role folder's name with other roles, the next free
+`/.trash/<role-tag>.<n>` is used instead. In a team, `/.trash` itself is
+readable and writable through the low-visibility Member key every team root
+uses, so any member who can delete an item can add the role folder it
+needs.
+
+Only an owner can create `/.trash` at the top level, because team roots are
+owner-writable. Until an owner has moved any item to Trash, a member who is
+not an owner cannot move items there. When the roster shows that, or the
+host's attempt to create `/.trash` is refused by role (`trash-unavailable`)
+and the roster does not show this account as an owner, Delete opens the
+permanent-delete confirmation for the item instead and says why. Any other
+failure to create `/.trash`, such as an exhausted quota or expired
+credentials, keeps its own code and is reported as it is.
+`remove_item` removes an item outside Trash only on that explicit request,
+and only for a file in a team whose fully read catalog has no `/.trash`;
+folders can be deleted only through Trash. The team's Trash view states the
+same.
+
+An entry is named `<UTC yyyymmddThhmmss>~<original path>`, with `%`, `/`
+and control characters percent-encoded, for example
+`20261014T093012~%2Flogins%2Fgithub.com`. When that name would pass the
+255-byte component limit, it is `<stamp>~#<hash>`, where the hash is the
+first 16 bytes of the SHA-256 of the original path, and a small file named
+`<that name>.origin` beside it holds the original path.
+
+Each vault's tree ends with a Trash row. Its view lists the entries the
+account can read, newest first, with where each was and when it was
+deleted; for a hashed name it reads the `.origin` file once per version.
+Trash is not part of the ordinary folders, All items or search. Restore
+moves an entry back. A missing parent folder is created readable only under
+the more restrictive of the entry's read role and its Trash folder's, which
+was the most restrictive on the original path. When the original path is
+taken, Restore offers to restore the entry as `<name> (restored)` beside
+the item there and never replaces it. Delete permanently and Empty Trash
+use `RemoveKv`, recursive for a folder, and the host refuses them outside
+`/.trash` except as above. Their confirmation says what they cannot
+promise: the server keeps every dirent version, so earlier encrypted
+versions may remain on it.
+
+Entries keep their own write roles in a role folder, so a member can list
+an entry that only an admin can remove. Empty Trash removes the entries
+this account can change and lists the ones that stay. It sends them to
+`empty_trash` in one host mutation planned from one catalog read; removing
+them one command at a time would fail after the first, because each write
+discards the store's catalog items. `empty_trash` also removes `.origin`
+files whose entry is gone, which a move into Trash that failed after
+writing its `.origin` file leaves behind, but only when the store's catalog
+was read completely. Removing a hashed entry's `.origin` file is the last
+write of a restore or permanent removal, and its failure does not fail the
+command: the entry has already moved, and an `.origin` file without its
+entry is harmless.
+
+Trash is emptied by hand unless a device opts in. Settings › Preferences ›
+Trash can empty it automatically after 30 or 90 days, a choice kept in that
+device's local storage. While the app runs, it removes the entries older
+than that which this account can change, through `empty_trash`, one store
+at a time and at most hourly per store. It starts only after the catalog has
+been unchanged for three seconds, and not while a dialog is open, a Trash
+action or an Undo runs, or an Undo is offered. A move to Trash or a restore
+started while it runs waits for it instead of being refused for the host's
+single mutation permit.
+
+Go FOKS clients and the CLI list `.trash` as an ordinary folder. The layout
+needs no protocol or storage change, and a Go client can restore an entry
+with an ordinary move.
 
 The card grid windows whole rows at the current viewport width through
 `files-grid.ts`, so it can scroll through the full loaded catalog without
 mounting every card. It no longer imposes the former 200-card cap.
+
+## Reviewing exposure after a removal
+
+Removing a member rotates the team's keys and lowering a role rotates the
+keys of the roles the member loses, as [Chapter 15](15-teams.qmd) describes;
+removing a device ends its access to the account. Each change stops later
+reads only. A credential the party already read, such as an API token or a
+Wi-Fi password, stays valid where it is used until it is changed there.
+
+The Remove, Lower role, Remove federated team and Remove device sheets
+therefore list, before the write, the items the party could read: for a
+member or a federated team, the team's items whose read role its role
+admits; for a lowered member, those the new role no longer admits; for a
+device, every item in its account's own store and in the account's teams,
+since the device held the account's keys. A team whose setup has not
+completed is not included, since no device read its items. The list comes
+from this account's catalog, so it is a lower bound: an item this account
+cannot list, a Trash entry and a folder are not in it, and the sheet says so.
+The sheet waits until the store's items, and for a member the roster, have
+been read. If a member's team cannot be read, the change can still be made,
+but no list is kept. A device's list leaves out only the stores whose items
+could not be listed and names them.
+
+Once the write reports success, or fails in a way that does not show whether
+it was applied (the agent connection was lost, for example), the list is kept
+on this device as a review; after such a failure the party may already be
+gone from the roster or the device list, and the sheet could not be opened
+for it again. A later change for the same party and team adds to that review;
+an item listed again replaces its earlier entry and mark, since the party
+could read it again. The team page or Devices shows a band until each entry
+is marked Rotated or Not needed, and closing the review sheet with every
+entry marked removes the review. The review sheet opens an item in Files,
+where Edit can generate a new password. An entry whose item has a higher
+version than at the change reads "Changed since removal" ("Changed since role
+change" after a demotion): any write raises the version, so the user confirms
+rotation rather than the app assuming it. An entry whose dirent id is no
+longer listed, because the item was moved, renamed or removed, reads "Not
+listed". If storage refuses a review, a notice says so.
+
+Reviews are kept in the webview's local storage under
+`foks.exposureReviews`, which persists while the app is locked. A review holds
+`StoreRef`s, dirent ids, versions and marks, the removed party's id, and its
+username or device name, which the server also holds; it holds no item name
+or path, which the sheet resolves from the live snapshot. The review needs
+no agent operation and no protocol change.
 
 ## Where to look
 
@@ -480,14 +864,24 @@ mounting every card. It no longer imposes the former 200-card cap.
   ACL resolution test), `src/applock.rs` and `src/applock/polkit.rs`,
   `src/clipboard.rs`, `src/dragdrop.rs`, `src/commands/context.rs`
   (`record_drop_paths`, `upload_path`), `src/commands/vault.rs`
-  (`read_item`, `copy_item_value`, `download_file`),
+  (`read_item`, `copy_item_value`, `copy_item_field`, `open_item_url`,
+  `download_file`),
+  `src/commands/trash.rs` (`trash_item`, `restore_trash_item`, `remove_item`,
+  `empty_trash`), `src/commands/vault_copy.rs` (`copy_item_to_store`),
+  `src/commands/password_import.rs` (`begin_password_import`,
+  `commit_password_import`), `src/commands/password_export.rs`
+  (`export_logins`),
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.
+- `apps/desktop/src/exposure-review.ts` and
+  `apps/desktop/src/screens/exposure-review.tsx`: the exposure review.
 - `apps/desktop/src/chat`: `notification-consumer.ts`, `inbox-service.ts`,
   `deadline-timer.ts`, `backoff.ts`, `use-chat-history.ts`, `history-cache.ts`;
   `apps/desktop/src/chat-contract.ts`.
 - `foks-desktop`: `lib.rs` (size constants, streaming), `tests/backend_transcript.rs`.
+- `foks-client`: `src/kv/login.rs` (login layout and shape), `src/kv/sync.rs`
+  (where a metadata listing computes the shape).
 
 ## Further reading
 

@@ -448,7 +448,7 @@ impl Backend for AgentBackend {
                 cancelled,
             ),
             Invocation::Status(args) => {
-                let result: foks_agent_proto::data::DataWriteOutcome = call(
+                let result: Result<foks_agent_proto::data::DataWriteOutcome, String> = call(
                     &self.client,
                     Operation::DataWriteStatus {
                         submission: foks_agent_proto::data::DataSubmission {
@@ -457,11 +457,13 @@ impl Backend for AgentBackend {
                         },
                     },
                     cancelled,
-                )?;
+                );
+                let pause = self.clock_pause(cancelled);
+                let result = result.map_err(|error| with_clock_guidance(error, pause))?;
                 if result.submission_id != args.submission_id {
                     return Err("agent changed submission identity".into());
                 }
-                write_result(result)
+                write_result(result, pause)
             }
             Invocation::Pending(_) => {
                 let result: Vec<foks_agent_proto::data::DataWriteOutcome> = call(
@@ -479,6 +481,89 @@ impl Backend for AgentBackend {
                 ))
             }
         }
+    }
+}
+
+/// Reported while the agent's adapter clock refuses new writes. The repair is
+/// deliberately not an MCP tool: a person confirms the time outside the
+/// assistant session.
+pub(crate) const CLOCK_PAUSED: &str = "New writes are paused because this \
+computer's wall clock disagrees with the agent's monotonic clock by more than \
+five minutes, or the agent restarted more than 24 hours after the last trusted \
+time without a boot clock that measured the gap. A person must confirm the time \
+in the FOKS desktop app (Settings, Account) or with `foks-rs retention \
+reanchor`; status and recovery of existing submissions still work.";
+
+/// Why the agent's adapter clock refuses new writes for the bound account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ClockPause {
+    /// Writes resume after a person confirms the time.
+    Untrusted,
+    /// Writes resume without a repair once the clock reaches this Unix time.
+    Behind(u64),
+}
+
+impl ClockPause {
+    pub(crate) fn explanation(self) -> String {
+        match self {
+            Self::Untrusted => CLOCK_PAUSED.to_owned(),
+            Self::Behind(resumes) => format!(
+                "New writes are paused until Unix time {resumes}. While this \
+computer's clock ran ahead, the agent permanently expired submissions issued \
+before that time, and it accepts new ones only once its clock reaches it. \
+Confirming the time does not resume writes sooner; status and recovery of \
+existing submissions still work."
+            ),
+        }
+    }
+}
+
+/// Appends the pause explanation to an error.
+pub(crate) fn with_clock_guidance(error: String, pause: Option<ClockPause>) -> String {
+    match pause {
+        Some(pause) => format!("{error}; {}", pause.explanation()),
+        None => error,
+    }
+}
+
+impl AgentBackend {
+    /// Why the agent reports that the bound account's clock refuses new
+    /// writes. A failed status read, or a status for an account other than
+    /// the one bound at startup, reports no pause.
+    fn clock_pause(&self, cancelled: &CancellationToken) -> Option<ClockPause> {
+        use foks_agent_proto::data::AdapterClockAdmission;
+        let status = call::<foks_agent_proto::data::AdapterClockStatus>(
+            &self.client,
+            Operation::AdapterClockStatus {
+                profile: self.account.profile.clone(),
+                account_alias: self.account.account_alias.clone(),
+            },
+            cancelled,
+        )
+        .ok()?;
+        if status.host_id != self.account.host_id || status.user_id != self.account.user_id {
+            return None;
+        }
+        match status.admission {
+            AdapterClockAdmission::Paused => Some(ClockPause::Untrusted),
+            AdapterClockAdmission::Behind => status.reject_issued_before.map(ClockPause::Behind),
+            AdapterClockAdmission::Unanchored | AdapterClockAdmission::Trusted => None,
+        }
+    }
+
+    /// Explains a `clock-untrusted` refusal with the agent's current clock
+    /// status, or with the repair guidance when the status is unavailable.
+    /// Other errors are returned unchanged.
+    pub(super) fn explain_clock_refusal(
+        &self,
+        error: String,
+        cancelled: &CancellationToken,
+    ) -> String {
+        if !error.starts_with("clock-untrusted") {
+            return error;
+        }
+        let pause = self.clock_pause(cancelled).unwrap_or(ClockPause::Untrusted);
+        with_clock_guidance(error, Some(pause))
     }
 }
 
@@ -501,9 +586,7 @@ fn bind_account(socket: &Path, profile: &str, alias: &str) -> Result<DataScope, 
                 profile: profile.to_owned(),
                 account_alias: alias.to_owned(),
             })
-            .map_err(|_| {
-                "authenticated local agent unavailable; start or unlock the selected account"
-            })?;
+            .map_err(|error| agent_failure(&error))?;
         match response.result {
             ResponseResult::Success { value } => {
                 return serde_json::from_value(value)
@@ -532,6 +615,23 @@ fn error_code_name(code: foks_agent_proto::ErrorCode) -> String {
     }
 }
 
+/// The tool error for a request the agent did not answer. A version
+/// mismatch is reported as such: the agent of another version refused the
+/// request without running it, and only stopping that agent resolves it.
+fn agent_failure(error: &foks_agent_client::Error) -> String {
+    if let foks_agent_client::Error::Ambiguous(_) = error {
+        return "submission outcome unknown; inspect status; do not repeat with a new submission ID"
+            .to_owned();
+    }
+    match error.version_mismatch() {
+        Some(mismatch) => format!(
+            "incompatible local agent: {mismatch}; stop the running foks-agent and restart this MCP server"
+        ),
+        None => "authenticated local agent unavailable; start or unlock the selected account"
+            .to_owned(),
+    }
+}
+
 fn call<T: DeserializeOwned>(
     client: &AgentClient,
     operation: Operation,
@@ -539,14 +639,7 @@ fn call<T: DeserializeOwned>(
 ) -> Result<T, String> {
     let response = client
         .call_cancellable(operation, &|| cancelled.is_cancelled())
-        .map_err(|error| match error {
-            foks_agent_client::Error::Ambiguous(_) => {
-                "submission outcome unknown; inspect status; do not repeat with a new submission ID"
-                    .to_owned()
-            }
-            _ => "authenticated local agent unavailable; start or unlock the selected account"
-                .to_owned(),
-        })?;
+        .map_err(|error| agent_failure(&error))?;
     match response.result {
         ResponseResult::Success { value } => {
             serde_json::from_value(value).map_err(|_| "invalid typed agent response".to_owned())
@@ -622,5 +715,30 @@ mod tests {
         assert_eq!(encode_path("a/../ü %20").unwrap(), "/%C3%BC%20%2520");
         assert_eq!(decode_path("/%C3%BC%20%2520").unwrap(), "/ü %20");
         assert!(encode_path("bad\0path").is_err());
+    }
+
+    #[test]
+    fn a_version_mismatch_is_reported_as_such_and_not_as_an_unknown_outcome() {
+        use foks_agent_client::Error;
+        let refused = Error::Protocol(foks_agent_proto::Error::VersionMismatch {
+            agent: 34,
+            supported: None,
+        });
+        assert_eq!(
+            agent_failure(&refused),
+            format!(
+                "incompatible local agent: agent protocol version 34 does not match client \
+                 protocol version {}; stop the running foks-agent and restart this MCP server",
+                foks_agent_proto::PROTOCOL_VERSION
+            )
+        );
+        let lost = || std::io::Error::from(std::io::ErrorKind::UnexpectedEof);
+        assert!(
+            agent_failure(&Error::Ambiguous(Box::new(Error::Io(lost()))))
+                .starts_with("submission outcome unknown")
+        );
+        assert!(
+            agent_failure(&Error::Io(lost())).starts_with("authenticated local agent unavailable")
+        );
     }
 }

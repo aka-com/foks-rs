@@ -31,11 +31,12 @@ use foks_agent_proto::{
     KvChunkResult, KvEntryMetadata, KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef,
     KvUploadHeader, Operation, PendingOperationKind as WirePendingOperationKind,
     PendingOperationSummary as WirePendingOperationSummary, ProfileOverview, ProfileProtocol,
-    ProfileTrust, Request, ResetArtifactKind as WireResetArtifactKind,
-    ResetArtifactSummary as WireResetArtifactSummary, ResetStatePreview as WireResetStatePreview,
-    Response, ResponseResult, ResponseTiming, ServerStatusSnapshot as WireServerStatusSnapshot,
-    StoredHostStatus as WireStoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef,
-    TeamSummary as WireTeamSummary, MAXIMUM_MESSAGE_BYTES,
+    ProfileTrust, RecoveryPhraseCheck as WireRecoveryPhraseCheck, Request,
+    ResetArtifactKind as WireResetArtifactKind, ResetArtifactSummary as WireResetArtifactSummary,
+    ResetStatePreview as WireResetStatePreview, Response, ResponseResult, ResponseTiming,
+    ServerStatusSnapshot as WireServerStatusSnapshot, StoredHostStatus as WireStoredHostStatus,
+    TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef, TeamSummary as WireTeamSummary,
+    MAXIMUM_MESSAGE_BYTES,
 };
 use foks_client_app::{
     derive_vault_key, AccountVault, CancellationToken, Capability, CheckedProfileSession,
@@ -135,9 +136,9 @@ impl ConnectionCapacity {
             | Operation::Ping
             | Operation::AgentStatus
             | Operation::RetentionStatus => self.local.clone(),
-            Operation::DataWriteStatus { .. } | Operation::PendingDataWrites { .. } => {
-                self.recovery.clone()
-            }
+            Operation::DataWriteStatus { .. }
+            | Operation::PendingDataWrites { .. }
+            | Operation::AdapterClockStatus { .. } => self.recovery.clone(),
             _ => self.blocking.clone(),
         }
     }
@@ -1034,6 +1035,51 @@ fn apply_hosted_lease_if_idle(
     apply_hosted_lease(state_dir, profile, bytes).map(Some)
 }
 
+/// Capabilities this agent advertises in its Hello reply.
+#[cfg(unix)]
+const HELLO_CAPABILITIES: &[&str] = &[foks_agent_proto::hello::capability::HISTORY_AFTER];
+
+/// Answers a frame that is not a request of this version: a Hello, of any
+/// version, gets the agent's versions and capabilities; any other frame of
+/// another version gets the frozen version-mismatch refusal; the rest are
+/// invalid requests. None of these runs an operation.
+#[cfg(unix)]
+fn undecoded_frame_response(frame: &[u8], error: foks_agent_proto::Error) -> Response {
+    let id = foks_agent_proto::request_id(frame);
+    match foks_agent_proto::decode_hello(frame) {
+        Ok(Some(hello)) => {
+            let reply = foks_agent_proto::HelloReply::new(
+                foks_agent_proto::Peer::new("foks-agent", env!("CARGO_PKG_VERSION")),
+                HELLO_CAPABILITIES,
+            );
+            match serde_json::to_value(reply) {
+                Ok(value) => Response::success(hello.id, value),
+                Err(error) => Response::error_with_fields(
+                    Some(hello.id),
+                    ErrorCode::OperationFailed,
+                    error.to_string(),
+                    ErrorFields::default(),
+                ),
+            }
+        }
+        Ok(None) if matches!(error, foks_agent_proto::Error::Version) => {
+            Response::version_mismatch(id)
+        }
+        Ok(None) => Response::error_with_fields(
+            id,
+            ErrorCode::InvalidRequest,
+            error.to_string(),
+            ErrorFields::default(),
+        ),
+        Err(hello_error) => Response::error_with_fields(
+            id,
+            ErrorCode::InvalidRequest,
+            hello_error.to_string(),
+            ErrorFields::default(),
+        ),
+    }
+}
+
 #[cfg(unix)]
 async fn handle_connection(
     mut stream: tokio::net::UnixStream,
@@ -1052,31 +1098,10 @@ async fn handle_connection(
         };
         let request = match foks_agent_proto::decode_request(&frame) {
             Ok(request) => request,
-            Err(foks_agent_proto::Error::Version) => {
-                let id = foks_agent_proto::request_id(&frame);
-                write_response(
-                    &mut stream,
-                    &Response::error_with_fields(
-                        id,
-                        ErrorCode::VersionMismatch,
-                        "unsupported protocol version",
-                        ErrorFields::default(),
-                    ),
-                    timeout,
-                )
-                .await?;
-                continue;
-            }
             Err(error) => {
-                let id = foks_agent_proto::request_id(&frame);
                 write_response(
                     &mut stream,
-                    &Response::error_with_fields(
-                        id,
-                        ErrorCode::InvalidRequest,
-                        error.to_string(),
-                        ErrorFields::default(),
-                    ),
+                    &undecoded_frame_response(&frame, error),
                     timeout,
                 )
                 .await?;
@@ -1912,6 +1937,9 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
             foks_client_app::Error::BotToken => {
                 return Response::error(id, ErrorCode::BotToken, "Invalid bot token.")
             }
+            foks_client_app::Error::AdapterClockConfirmationStale => {
+                return Response::error(id, ErrorCode::InvalidRequest, error.to_string())
+            }
             foks_client_app::Error::CapabilityDenied(capability) => {
                 let capability = serde_json::to_value(capability)
                     .ok()
@@ -2221,6 +2249,14 @@ fn client_error_response(
             }
     } else if let Some(error) = candidate.downcast_ref::<foks_client_app::Error>() {
         match error {
+                // Only a phrase that does not parse is the caller's to fix;
+                // entropy and derivation failures fall through.
+                foks_client_app::Error::Backup(
+                    reason @ (foks_crypto::RecoveryPhraseError::TokenCount { .. }
+                    | foks_crypto::RecoveryPhraseError::Word { .. }
+                    | foks_crypto::RecoveryPhraseError::Number { .. }
+                    | foks_crypto::RecoveryPhraseError::NumberRange { .. }),
+                ) => (ErrorCode::InvalidRequest, recovery_phrase_sentence(reason)),
                 foks_client_app::Error::InvalidAccount("host does not require SSO") => (
                     ErrorCode::InvalidRequest,
                     SSO_UNAVAILABLE_MESSAGE.to_owned(),
@@ -2762,6 +2798,7 @@ fn paginate_catalog(
             size: entry.size,
             read_role: catalog_role(entry.read_role),
             write_role: catalog_role(entry.write_role),
+            shape: entry.shape,
         };
         let mut measured = CountingWriter(0);
         serde_json::to_writer(&mut measured, &entry)?;
@@ -3246,6 +3283,11 @@ fn operation_is_noninteractive(operation: &Operation) -> bool {
         | Operation::ReadKvChunk { .. }
         | Operation::ReadData { .. }
         | Operation::BindDataAccount { .. }
+        | Operation::AdapterClockStatus { .. }
+        | Operation::RepairAdapterClock {
+            action: foks_agent_proto::data::AdapterClockRepairAction::Preview { .. },
+            ..
+        }
         | Operation::ListTeams { .. }
         | Operation::ListTeamDetails { .. }
         | Operation::ListTeamMembers { .. }
@@ -3398,13 +3440,37 @@ fn dispatch_result_inner(
         Operation::ReadData { scope, query } => {
             data::read(state_dir, &registry, scope, query, timeout, cancellation)
         }
+        Operation::AdapterClockStatus {
+            profile,
+            account_alias,
+        } => data::adapter_clock(
+            state_dir,
+            &registry,
+            profile,
+            account_alias,
+            None,
+            timeout,
+            cancellation,
+        ),
+        Operation::RepairAdapterClock {
+            profile,
+            account_alias,
+            action,
+        } => data::adapter_clock(
+            state_dir,
+            &registry,
+            profile,
+            account_alias,
+            Some(action),
+            timeout,
+            cancellation,
+        ),
         Operation::RetentionStatus => Ok(retention::snapshot()),
         Operation::Ping => Ok(serde_json::json!({ "ready": true })),
         Operation::AgentStatus => Ok(serde_json::to_value(if ready {
             // Include background-loop timings in the existing agent-status response
             // for diagnostic correlation with requests.
             AgentStatus::Ready {
-                history_after: Some(true),
                 timers: timers::timers().snapshot(timers::now_milliseconds()),
             }
         } else {
@@ -4109,6 +4175,29 @@ fn dispatch_result_inner(
                     vault,
                     master,
                 )?)?)
+            })
+        }
+        Operation::VerifyRecoveryPhrase {
+            profile,
+            account_alias,
+            phrase,
+        } => {
+            let session =
+                read_cache::open_profile_session(&registry, &profile, timeout, cancellation)?;
+            with_vault(state_dir, &session, |session, vault| {
+                let check = session.verify_recovery_phrase(
+                    &account_alias,
+                    Zeroizing::new(phrase.expose().to_owned()),
+                    vault,
+                )?;
+                Ok(serde_json::to_value(WireRecoveryPhraseCheck {
+                    account_alias: check.account_alias,
+                    matched_backup_id_hex: check.matched_backup_id_hex,
+                    matched_name: check.matched_name,
+                    revoked: check.revoked,
+                    backup_alias: check.backup_alias,
+                    user_chain_sequence: check.user_chain_sequence,
+                })?)
             })
         }
         Operation::RecoverOwnerAccount {
@@ -7312,7 +7401,7 @@ mod tests {
                     profile: "local".to_owned(),
                     account_alias: "personal".to_owned(),
                     backup_alias: "paper".to_owned(),
-                    phrase: foks_agent_proto::SecretString::new(phrase),
+                    phrase: foks_agent_proto::SecretString::new(phrase.clone()),
                 },
             ),
         );
@@ -7322,6 +7411,42 @@ mod tests {
             }
             _ => panic!("unexpected backup commit response: {committed:?}"),
         };
+        let verify = |id, phrase: &str| {
+            dispatch(
+                &state,
+                Request::new(
+                    id,
+                    Operation::VerifyRecoveryPhrase {
+                        profile: "local".to_owned(),
+                        account_alias: "personal".to_owned(),
+                        phrase: foks_agent_proto::SecretString::new(phrase),
+                    },
+                ),
+            )
+        };
+        let public_name = phrase
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let tested = verify(200, &phrase);
+        assert!(!format!("{tested:?}").contains(&phrase));
+        let foks_agent_proto::ResponseResult::Success { value } = tested.result else {
+            panic!("unexpected recovery phrase check: {tested:?}");
+        };
+        let check: WireRecoveryPhraseCheck = serde_json::from_value(value).unwrap();
+        assert_eq!(check.matched_backup_id_hex.as_deref(), Some(&*backup_id));
+        assert_eq!(check.matched_name.as_deref(), Some(&*public_name));
+        assert_eq!(check.backup_alias.as_deref(), Some("paper"));
+        assert!(!check.revoked);
+        let mut misspelled = phrase.split_whitespace().collect::<Vec<_>>();
+        misspelled[2] = "notaword";
+        let refused = verify(201, &misspelled.join(" "));
+        assert!(matches!(
+            refused.result,
+            foks_agent_proto::ResponseResult::Error { code: ErrorCode::InvalidRequest, ref message, .. }
+                if message == "Word 2 of the recovery phrase is not a recognized word. Check its spelling."
+        ));
         let revoked = dispatch(
             &state,
             Request::new(
@@ -7341,6 +7466,14 @@ mod tests {
                     && value["backup_id_hex"] == backup_id
                     && value["removed_local_enrollment"] == true
         ));
+        let tested = verify(202, &phrase);
+        let foks_agent_proto::ResponseResult::Success { value } = tested.result else {
+            panic!("unexpected recovery phrase check: {tested:?}");
+        };
+        let check: WireRecoveryPhraseCheck = serde_json::from_value(value).unwrap();
+        assert_eq!(check.matched_backup_id_hex.as_deref(), Some(&*backup_id));
+        assert_eq!(check.backup_alias, None);
+        assert!(check.revoked);
         let listed = dispatch(
             &state,
             Request::new(
@@ -7574,6 +7707,17 @@ mod tests {
             Operation::BindDataAccount {
                 profile: profile.clone(),
                 account_alias: "owner".into(),
+            },
+            Operation::AdapterClockStatus {
+                profile: profile.clone(),
+                account_alias: "owner".into(),
+            },
+            Operation::RepairAdapterClock {
+                profile: profile.clone(),
+                account_alias: "owner".into(),
+                action: foks_agent_proto::data::AdapterClockRepairAction::Preview {
+                    unix_seconds: 1,
+                },
             },
             Operation::ReadData {
                 scope: data_scope.clone(),
@@ -8013,6 +8157,34 @@ mod tests {
             .worker_pool(&Operation::ListProfiles)
             .try_acquire_owned()
             .is_ok());
+    }
+
+    #[test]
+    fn adapter_clock_status_shares_the_recovery_lane_with_submission_status() {
+        let capacity = ConnectionCapacity {
+            recovery: Arc::new(Semaphore::new(1)),
+            blocking: Arc::new(Semaphore::new(1)),
+            local: Arc::new(Semaphore::new(1)),
+            chat_polling: Arc::new(Semaphore::new(1)),
+            active_chat_polls: Arc::new(Mutex::new(Default::default())),
+        };
+        let status = Operation::AdapterClockStatus {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+        };
+        let repair = Operation::RepairAdapterClock {
+            profile: "local".into(),
+            account_alias: "owner".into(),
+            action: foks_agent_proto::data::AdapterClockRepairAction::Preview { unix_seconds: 1 },
+        };
+        assert!(Arc::ptr_eq(
+            &capacity.worker_pool(&status),
+            &capacity.recovery
+        ));
+        assert!(Arc::ptr_eq(
+            &capacity.worker_pool(&repair),
+            &capacity.blocking
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -8941,6 +9113,90 @@ mod tests {
         );
     }
 
+    /// A Hello is answered whatever its version and before the agent is
+    /// initialized, and a request of another version gets the refusal that
+    /// names the versions the agent accepts.
+    #[tokio::test]
+    async fn hello_and_version_refusals_are_answered_before_version_checks() {
+        let temporary = tempfile::tempdir().unwrap();
+        let capacity = ConnectionCapacity {
+            recovery: Arc::new(Semaphore::new(1)),
+            blocking: Arc::new(Semaphore::new(1)),
+            local: Arc::new(Semaphore::new(1)),
+            chat_polling: Arc::new(Semaphore::new(1)),
+            active_chat_polls: Arc::new(Mutex::new(std::collections::HashSet::new())),
+        };
+        let active = Arc::new(Semaphore::new(1));
+        let permit = active.clone().acquire_owned().await.unwrap();
+        let (mut client, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let server = tokio::spawn(handle_connection(
+            server_stream,
+            temporary.path().to_path_buf(),
+            capacity,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+            permit,
+        ));
+        async fn exchange(
+            client: &mut tokio::net::UnixStream,
+            value: serde_json::Value,
+        ) -> Zeroizing<Vec<u8>> {
+            let frame = foks_agent_proto::encode(&value).unwrap();
+            client.write_all(&frame).await.unwrap();
+            read_frame(client).await.unwrap().unwrap()
+        }
+        let future_hello = serde_json::json!({
+            "version": foks_agent_proto::PROTOCOL_VERSION + 1,
+            "id": 11,
+            "operation": {
+                "operation": "hello",
+                "client": { "kind": "foks-cli", "version": "9.0.0" },
+                "accept": {
+                    "minimum": foks_agent_proto::PROTOCOL_VERSION + 1,
+                    "maximum": foks_agent_proto::PROTOCOL_VERSION + 1,
+                },
+                "future_field": true,
+            }
+        });
+        let reply = exchange(&mut client, future_hello).await;
+        let hello = foks_agent_proto::decode_hello_response(&reply).unwrap();
+        assert_eq!(hello.id, Some(11));
+        assert_eq!(hello.reply.protocol, foks_agent_proto::PROTOCOL_VERSION);
+        assert_eq!(
+            hello.reply.supported,
+            foks_agent_proto::SUPPORTED_PROTOCOL_VERSIONS
+        );
+        assert_eq!(hello.reply.agent.kind, "foks-agent");
+        assert!(hello
+            .reply
+            .has_capability(foks_agent_proto::hello::capability::HISTORY_AFTER));
+
+        let mut older = serde_json::to_value(Request::new(
+            12,
+            Operation::SetLocalAccountAlias {
+                profile: "p".to_owned(),
+                account_alias: "a".to_owned(),
+                label: "l".to_owned(),
+            },
+        ))
+        .unwrap();
+        older["version"] = serde_json::json!(foks_agent_proto::PROTOCOL_VERSION - 1);
+        let reply = exchange(&mut client, older).await;
+        server.abort();
+        let response = foks_agent_proto::decode_response(&reply).unwrap();
+        assert_eq!(response.id, Some(12));
+        assert!(
+            matches!(
+                response.result,
+                ResponseResult::Error { code: ErrorCode::VersionMismatch, ref fields, .. }
+                if fields.minimum_protocol == Some(foks_agent_proto::PROTOCOL_VERSION)
+                    && fields.maximum_protocol == Some(foks_agent_proto::PROTOCOL_VERSION)
+            ),
+            "the client saw {:?}",
+            response.result
+        );
+    }
+
     #[test]
     fn admission_errors_are_definite_non_execution_and_never_ambiguous_timeouts() {
         for error in [
@@ -8977,6 +9233,7 @@ mod tests {
                     size: None,
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
+                    shape: None,
                 })
                 .collect(),
         }
@@ -9117,6 +9374,35 @@ mod tests {
     }
 
     #[test]
+    fn fresh_and_retained_pages_carry_each_entry_shape() {
+        use foks_agent_proto::KvEntryShape;
+
+        let cache = Mutex::new(CatalogCache::default());
+        let store = catalog_store("personal");
+        let mut report = catalog_report(7, 3);
+        report.entries[0].shape = Some(KvEntryShape::Login);
+        report.entries[1].shape = Some(KvEntryShape::Other);
+        let shapes = |page: &KvPage| {
+            page.entries
+                .iter()
+                .map(|entry| entry.shape)
+                .collect::<Vec<_>>()
+        };
+        let first = paginate_fresh_catalog_in(&cache, report, store.clone(), None, 2).unwrap();
+        assert_eq!(
+            shapes(&first),
+            [Some(KvEntryShape::Login), Some(KvEntryShape::Other)]
+        );
+        let retained = paginate_cached_catalog_in(&cache, &store, None, 3)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            shapes(&retained),
+            [Some(KvEntryShape::Login), Some(KvEntryShape::Other), None]
+        );
+    }
+
+    #[test]
     fn a_write_through_this_agent_drops_every_retained_catalog() {
         let cache = Mutex::new(CatalogCache::default());
         let store = catalog_store("personal");
@@ -9168,6 +9454,7 @@ mod tests {
                     size: None,
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
+                    shape: None,
                 })
                 .collect(),
         };
@@ -9250,6 +9537,7 @@ mod tests {
                     size: None,
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
+                    shape: None,
                 })
                 .collect(),
         };
@@ -9372,6 +9660,7 @@ mod tests {
                     size: None,
                     read_role: foks_client_app::KvRoleSummary::Owner,
                     write_role: foks_client_app::KvRoleSummary::Owner,
+                    shape: None,
                 })
                 .collect(),
         };

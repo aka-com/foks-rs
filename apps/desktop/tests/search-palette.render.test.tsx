@@ -1,7 +1,8 @@
 /**
  * The ⌘K palette as a sheet: the shortcut that opens it, the keyboard walk
- * over the grouped rows, what Enter navigates to, the scope chips Tab cycles,
- * the note on what search does not cover, and Escape.
+ * over the grouped rows, what Enter navigates to, the copies ⌘C and ⇧⌘C make,
+ * Favorites on ⌘D and Recent, the Actions an empty query lists, the scope
+ * chips Tab cycles, the note on what search does not cover, and Escape.
  */
 
 import assert from 'node:assert/strict';
@@ -13,7 +14,8 @@ import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import type { Location } from '../src/location';
 import type { AgentSnapshot, StoreRef } from '../src/model';
-import type { SearchChannel } from '../src/shell/search-palette';
+import type { ItemField } from '../src/bridge';
+import type { SearchAction, SearchChannel } from '../src/shell/search-palette';
 
 installDom({
   url: 'http://localhost/',
@@ -32,7 +34,10 @@ test.before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false, watch: null },
   });
 });
-test.afterEach(() => ui.cleanup());
+test.afterEach(() => {
+  ui.cleanup();
+  window.localStorage.clear();
+});
 test.after(async () => vite.close());
 
 const CHANNELS: readonly SearchChannel[] = [
@@ -43,6 +48,9 @@ const CHANNELS: readonly SearchChannel[] = [
 interface Journal {
   navigations: Location[];
   items: { store: StoreRef; path: string }[];
+  folders: { store: StoreRef; path: string }[];
+  copies: { store: StoreRef; path: string; field: ItemField }[];
+  actions: string[];
   closes: number;
 }
 
@@ -67,7 +75,23 @@ async function palette(
     '/src/fixture.ts',
   )) as typeof import('../src/fixture');
 
-  const journal: Journal = { navigations: [], items: [], closes: 0 };
+  const journal: Journal = {
+    navigations: [],
+    items: [],
+    folders: [],
+    copies: [],
+    actions: [],
+    closes: 0,
+  };
+  const actions: SearchAction[] = [
+    {
+      id: 'lock',
+      label: 'Lock',
+      detail: 'Lock the app',
+      icon: 'lock',
+      run: () => journal.actions.push('lock'),
+    },
+  ];
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
 
@@ -88,6 +112,13 @@ async function palette(
       onOpenItem: (store: StoreRef, path: string) => {
         journal.items.push({ store, path });
       },
+      onOpenFolder: (store: StoreRef, path: string) => {
+        journal.folders.push({ store, path });
+      },
+      onCopyItem: (store: StoreRef, path: string, field: ItemField) => {
+        journal.copies.push({ store, path, field });
+      },
+      actions,
     });
   }
 
@@ -161,6 +192,14 @@ test('⌘K does not open the palette while another modal is active', async () =>
 
 test('results are grouped by kind and counted for a screen reader', async () => {
   await palette(true);
+  // Nothing used yet on this device: an empty query lists the actions.
+  assert.deepEqual(headings(), ['Actions']);
+  assert.match(
+    document.querySelector('.pal-foot')?.textContent ?? '',
+    /Names and paths are searched; values are not\./,
+  );
+
+  type('e');
   assert.deepEqual(headings(), [
     'Items',
     'Vaults, teams and shares',
@@ -321,7 +360,7 @@ test('an empty result describes searchable fields', async () => {
   assert.match(none.textContent ?? '', /No matches for “zzzznothing”/);
   assert.match(
     none.textContent ?? '',
-    /Search item names, paths, usernames, and channels\./,
+    /Search item names, paths, usernames, and channels\. Narrow with in:vault or kind:password\./,
   );
   assert.equal(document.querySelector('.pal-count')?.textContent, '0 results');
   // With nothing highlighted, Enter does nothing rather than opening a row.
@@ -343,12 +382,7 @@ test('Escape closes the palette, and it reopens empty', async () => {
   });
   // The palette is a sheet, not a place: nothing about the last one survives.
   assert.equal(field().value, '');
-  assert.deepEqual(headings(), [
-    'Items',
-    'Vaults, teams and shares',
-    'People',
-    'Channels',
-  ]);
+  assert.deepEqual(headings(), ['Actions']);
 });
 
 test('search suppresses no matches while the inventory is incomplete', async () => {
@@ -363,4 +397,127 @@ test('search suppresses no matches while the inventory is incomplete', async () 
   ui.fireEvent.change(field(), { target: { value: 'not-yet-loaded' } });
   assert.ok(rendered.getByText('Loading search results…'));
   assert.equal(rendered.queryByText(/No matches for/), null);
+});
+
+test('⌘C copies the highlighted item without opening it', async () => {
+  const { journal } = await palette(true);
+  type('github');
+  // A login answers ⌘C with its password and ⇧⌘C with its user name.
+  assert.match(activeRow().textContent ?? '', /Copy password/);
+  assert.equal(
+    ui.fireEvent.keyDown(field(), { key: 'c', metaKey: true }),
+    false,
+    'the field does not also copy the query',
+  );
+  assert.deepEqual(journal.copies, [
+    { store: 'acct:personal', path: '/logins/github.com', field: 'password' },
+  ]);
+  assert.deepEqual(journal.items, [], 'the item is not opened');
+  assert.equal(document.querySelector('.pal'), null);
+
+  ui.fireEvent.keyDown(document, { key: 'k', metaKey: true });
+  type('github');
+  ui.fireEvent.keyDown(field(), { key: 'C', metaKey: true, shiftKey: true });
+  assert.equal(journal.copies.at(-1)?.field, 'username');
+
+  // A text document copies its value, and has no user name.
+  ui.fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
+  type('DATABASE_URL');
+  assert.equal(
+    ui.fireEvent.keyDown(field(), { key: 'c', ctrlKey: true, shiftKey: true }),
+    true,
+  );
+  ui.fireEvent.keyDown(field(), { key: 'c', ctrlKey: true });
+  assert.deepEqual(journal.copies.at(-1), {
+    store: 'acct:personal',
+    path: '/env/prod/DATABASE_URL',
+    field: 'value',
+  });
+  assert.equal(journal.copies.length, 3);
+});
+
+test('⌘C leaves a file, a non-item and selected query text alone', async () => {
+  const { journal } = await palette(true);
+  type('passport');
+  assert.doesNotMatch(activeRow().textContent ?? '', /Copy/);
+  assert.equal(
+    ui.fireEvent.keyDown(field(), { key: 'c', metaKey: true }),
+    true,
+  );
+  type('Household');
+  assert.equal(
+    ui.fireEvent.keyDown(field(), { key: 'c', metaKey: true }),
+    true,
+  );
+  // With part of the query selected, ⌘C is the field's own copy.
+  type('netflix');
+  field().setSelectionRange(0, 3);
+  assert.equal(
+    ui.fireEvent.keyDown(field(), { key: 'c', metaKey: true }),
+    true,
+  );
+  assert.deepEqual(journal.copies, []);
+  assert.ok(document.querySelector('.pal'), 'the palette is still open');
+});
+
+test('⌘D marks a favorite, which an empty query then lists', async () => {
+  await palette(true);
+  type('netflix');
+  assert.match(activeRow().textContent ?? '', /Add favorite/);
+  assert.equal(
+    ui.fireEvent.keyDown(field(), { key: 'd', metaKey: true }),
+    false,
+  );
+  assert.match(activeRow().textContent ?? '', /netflix, favorite/);
+  assert.ok(activeRow().querySelector('.pal-star'));
+
+  type('');
+  assert.deepEqual(headings(), ['Favorites', 'Actions']);
+  assert.equal(
+    rows()[0].querySelector('.t b')?.textContent,
+    'netflix, favorite',
+  );
+
+  // Storage holds identifiers only: no name or path reaches it.
+  const stored = window.localStorage.getItem('foks.recentFavorites') ?? '';
+  assert.match(stored, /team:household/);
+  assert.doesNotMatch(stored, /netflix|streaming/);
+
+  // ⌘D again removes it.
+  ui.fireEvent.keyDown(field(), { key: 'd', metaKey: true });
+  assert.deepEqual(headings(), ['Actions']);
+});
+
+test('an opened item and a folder lead Recent the next time', async () => {
+  const { journal } = await palette(true);
+  type('production-token');
+  ui.fireEvent.keyDown(field(), { key: 'Enter' });
+
+  ui.fireEvent.keyDown(document, { key: 'k', metaKey: true });
+  type('ssh');
+  const folder = rows().find(
+    (row) => row.querySelector('.t b')?.textContent === 'ssh',
+  );
+  assert.ok(folder, 'a folder is a result');
+  ui.fireEvent.click(folder);
+  // A folder opens in the tree, through the host's guarded move.
+  assert.deepEqual(journal.folders, [{ store: 'acct:personal', path: '/ssh' }]);
+  assert.deepEqual(journal.navigations, []);
+
+  ui.fireEvent.keyDown(document, { key: 'k', metaKey: true });
+  assert.deepEqual(headings(), ['Recent', 'Actions']);
+  assert.deepEqual(
+    rows().map((row) => row.querySelector('.t b')?.textContent),
+    ['ssh', 'production-token', 'Lock'],
+  );
+});
+
+test('Enter on an action closes the palette and runs it', async () => {
+  const { journal } = await palette(true);
+  type('lock');
+  assert.deepEqual(headings(), ['Actions']);
+  ui.fireEvent.keyDown(field(), { key: 'Enter' });
+  assert.deepEqual(journal.actions, ['lock']);
+  assert.equal(journal.closes, 1);
+  assert.equal(document.querySelector('.pal'), null);
 });

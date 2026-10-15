@@ -664,7 +664,7 @@ mod tests {
                 team_id: "03".to_owned() + &"ab".repeat(32),
             },
         };
-        let id = super::super::vault::store_id(&foks_desktop::CatalogStoreRef::Team(
+        let id = super::super::store_key::store_id(&foks_desktop::CatalogStoreRef::Team(
             scope.store.clone(),
         ));
         *state.catalog.lock().unwrap() = Some(foks_desktop::CatalogSnapshot {
@@ -681,7 +681,7 @@ mod tests {
         });
         let chat = state.for_profile("chat").unwrap();
         let generation = chat
-            .chat_generation
+            .chat_generation()
             .load(std::sync::atomic::Ordering::Acquire);
         let mut inner = Inner::default();
         inner.scopes.insert(id.clone(), (scope.clone(), generation));

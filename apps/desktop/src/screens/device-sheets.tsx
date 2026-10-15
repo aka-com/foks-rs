@@ -29,9 +29,11 @@ import type { WorkflowOperation } from '../model/workflow-availability';
  * same commands behind it.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
+import { recallPositions } from '../recovery-phrase';
+import { RecallCheck } from './recovery-phrase-recall';
 import {
   removeDevice,
   revokeRecoveryPhrase,
@@ -56,10 +58,23 @@ import {
   InsetRow,
   RadioCard,
   RadioGroup,
+  SecurityKeyPinField,
   SheetDialog,
 } from '../components';
-import type { AccountStore } from '../model';
+import type { AccountStore, AgentSnapshot } from '../model';
+import {
+  SECURITY_KEY_RETRY_RANGE,
+  validSecurityKeyPin,
+} from '../security-key-pin';
+import {
+  accountExposure,
+  entriesOf,
+  exposureOrder,
+  withExposureReview,
+} from '../exposure-review';
 import { deviceAlertRegistry } from './device-alert';
+import { ExposureSummary, unstoredReview } from './exposure-review';
+import { useToast } from '/kit/toasts';
 
 /** A YubiKey command that is one sheet of typed values. */
 export type SimpleYubiAction =
@@ -269,9 +284,12 @@ export function PhraseSheet({
   );
   const [phrase, setPhrase] = useState<string | null>(() => seedPhrase ?? null);
   const [alias, setAlias] = useState('paper-backup');
+  // Whether the recall check matched the written copy; it gates the save.
   const [written, setWritten] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState(false);
   const words = phrase?.split(/\s+/) ?? [];
+  const positions = useMemo(() => (phrase ? recallPositions() : []), [phrase]);
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
@@ -282,27 +300,55 @@ export function PhraseSheet({
   const discard = (): void => {
     setPhrase(null);
     setWritten(false);
+    setChecking(false);
     onClose();
   };
   // Navigation requires saving or explicitly dismissing the displayed key.
   useSheetGuard(
     phrase
-      ? { verdict: 'refuse', reason: 'Save or dismiss the recovery phrase first.' }
+      ? {
+          verdict: 'refuse',
+          reason: 'Save or dismiss the recovery phrase first.',
+        }
       : busy
-        ? { verdict: 'refuse', reason: 'Wait for the recovery phrase to finish.' }
+        ? {
+            verdict: 'refuse',
+            reason: 'Wait for the recovery phrase to finish.',
+          }
         : null,
   );
   return (
     <DeviceSheetFrame
-      title={phrase ? 'Save recovery phrase' : 'Create recovery phrase'}
+      title={
+        phrase && checking
+          ? 'Check your copy'
+          : phrase
+            ? 'Save recovery phrase'
+            : 'Create recovery phrase'
+      }
       onClose={discard}
       dismissible={!busy}
       footer={
         <>
-          {phrase ? (
+          {phrase && !checking ? (
             <>
               <Button disabled={busy} onClick={discard}>
                 Cancel
+              </Button>
+              <Button variant="primary" onClick={() => setChecking(true)}>
+                Next
+              </Button>
+            </>
+          ) : phrase ? (
+            <>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setWritten(false);
+                  setChecking(false);
+                }}
+              >
+                Back
               </Button>
               <Button
                 variant="primary"
@@ -312,6 +358,8 @@ export function PhraseSheet({
                   setBusy(true);
                   const once = phrase;
                   setPhrase(null);
+                  setChecking(false);
+                  setWritten(false);
                   void controller
                     .run(
                       () =>
@@ -319,7 +367,8 @@ export function PhraseSheet({
                           bridge.commitOwnerBackup(
                             profile,
                             accountAlias,
-                            alias,
+                            // The name the phrase was prepared under.
+                            alias.trim(),
                             once,
                           ),
                         ),
@@ -363,11 +412,19 @@ export function PhraseSheet({
         </>
       }
     >
-      {phrase ? (
+      {phrase && checking ? (
+        <RecallCheck
+          phrase={phrase}
+          positions={positions}
+          unlocks="Save recovery phrase"
+          reveal="Back"
+          onMatched={setWritten}
+        />
+      ) : phrase ? (
         <>
           <p>
-            Write these {words.length} words down now. The phrase cannot be
-            shown again after you close this.
+            Write these {words.length} words and numbers down now, in order. The
+            phrase cannot be shown again after you close this.
           </p>
           <div className="words">
             {words.map((word, index) => (
@@ -377,18 +434,17 @@ export function PhraseSheet({
               </span>
             ))}
           </div>
-          <label className="checkline">
-            <input
-              type="checkbox"
-              checked={written}
-              onChange={(event) => setWritten(event.target.checked)}
-            />
-            I have written down these words
-          </label>
+          <p className="recall-hint">
+            Next, you will type three of these from your written copy.
+          </p>
         </>
       ) : (
         <Inset>
-          <Field label="Recovery phrase name" value={alias} onChange={setAlias} />
+          <Field
+            label="Recovery phrase name"
+            value={alias}
+            onChange={setAlias}
+          />
         </Inset>
       )}
     </DeviceSheetFrame>
@@ -875,8 +931,8 @@ export function EnrollSheet({
               !alias.trim() ||
               !username.trim() ||
               !shownName.trim() ||
-              !pin ||
-              !puk ||
+              !validSecurityKeyPin(pin) ||
+              !validSecurityKeyPin(puk) ||
               signing === null ||
               pq === null ||
               signing === pq ||
@@ -951,12 +1007,11 @@ export function EnrollSheet({
             setDeviceName(next);
           }}
         />
-        <Field label="Card PIN" value={pin} onChange={setPin} type="password" />
-        <Field
+        <SecurityKeyPinField label="Card PIN" value={pin} onChange={setPin} />
+        <SecurityKeyPinField
           label="Unlock code"
           value={puk}
           onChange={setPuk}
-          type="password"
         />
         <InsetRow label="Invite">
           <input
@@ -984,8 +1039,8 @@ export function EnrollSheet({
           <InsetRow label="PIN tries">
             <input
               type="number"
-              min={1}
-              max={255}
+              min={SECURITY_KEY_RETRY_RANGE.min}
+              max={SECURITY_KEY_RETRY_RANGE.max}
               value={pinAttempts}
               onChange={(event) => setPinAttempts(Number(event.target.value))}
             />
@@ -993,8 +1048,8 @@ export function EnrollSheet({
           <InsetRow label="PUK tries">
             <input
               type="number"
-              min={1}
-              max={255}
+              min={SECURITY_KEY_RETRY_RANGE.min}
+              max={SECURITY_KEY_RETRY_RANGE.max}
               value={pukAttempts}
               onChange={(event) => setPukAttempts(Number(event.target.value))}
             />
@@ -1060,8 +1115,8 @@ export function ProvisionSheet({
     cards.some((card) => card.serial === serial) &&
     targetAlias.trim() &&
     deviceName.trim() &&
-    pin &&
-    puk,
+    validSecurityKeyPin(pin) &&
+    validSecurityKeyPin(puk),
   );
   return (
     <DeviceSheetFrame
@@ -1135,12 +1190,11 @@ export function ProvisionSheet({
             </select>
           </InsetRow>
         ) : null}
-        <Field label="Card PIN" value={pin} onChange={setPin} type="password" />
-        <Field
+        <SecurityKeyPinField label="Card PIN" value={pin} onChange={setPin} />
+        <SecurityKeyPinField
           label="Unlock code"
           value={puk}
           onChange={setPuk}
-          type="password"
         />
       </Inset>
     </DeviceSheetFrame>
@@ -1191,10 +1245,16 @@ export function YubiActionSheet({
   ].includes(action);
   const needsConfirmation =
     action === 'set-passphrase' || action === 'change-passphrase';
+  // The second value is a PIN or PUK unless the action sets a passphrase.
+  const otherIsCredential = ['change-pin', 'unblock', 'change-puk'].includes(
+    action,
+  );
   const valid = Boolean(
     alias &&
-    (!needsPin || action === 'resume-rotation' || pin) &&
-    (!needsOther || other) &&
+    (!needsPin ||
+      (action === 'resume-rotation' && !pin) ||
+      validSecurityKeyPin(pin)) &&
+    (!needsOther || (otherIsCredential ? validSecurityKeyPin(other) : other)) &&
     (!needsConfirmation || other === confirmation),
   );
   const firstLabel =
@@ -1293,22 +1353,24 @@ export function YubiActionSheet({
           <b>{alias || 'No key enrolled'}</b>
         </InsetRow>
         {needsPin ? (
-          <InsetRow label={firstLabel}>
-            <input
-              type="password"
-              value={pin}
-              onChange={(event) => setPin(event.target.value)}
-            />
-          </InsetRow>
+          <SecurityKeyPinField
+            label={firstLabel}
+            value={pin}
+            onChange={setPin}
+          />
         ) : null}
-        {needsOther ? (
+        {needsOther && otherIsCredential ? (
+          <SecurityKeyPinField
+            label={otherLabel}
+            value={other}
+            onChange={setOther}
+          />
+        ) : needsOther ? (
           <InsetRow label={otherLabel}>
             <input
               type="password"
               value={other}
-              placeholder={
-                otherLabel === 'Passphrase' ? 'Enter a passphrase' : undefined
-              }
+              placeholder="Enter a passphrase"
               onChange={(event) => setOther(event.target.value)}
             />
           </InsetRow>
@@ -1467,7 +1529,13 @@ export function RevokeBackupSheet({
               void controller
                 .run(
                   () =>
-                    revokeRecoveryPhrase(bridge, access, store, backup, confirmation),
+                    revokeRecoveryPhrase(
+                      bridge,
+                      access,
+                      store,
+                      backup,
+                      confirmation,
+                    ),
                   onDone,
                   onError,
                 )
@@ -1480,8 +1548,8 @@ export function RevokeBackupSheet({
       }
     >
       <p>
-        This recovery phrase can no longer recover the account, and the account keys
-        are rotated. Type its name to confirm.
+        This recovery phrase can no longer recover the account, and the account
+        keys are rotated. Type its name to confirm.
       </p>
       <Inset>
         <InsetRow label="Confirm">
@@ -1497,6 +1565,7 @@ export function RevokeBackupSheet({
 }
 
 export function RemoveDeviceSheet({
+  snapshot,
   bridge,
   store,
   device,
@@ -1504,6 +1573,7 @@ export function RemoveDeviceSheet({
   onDone,
   onError,
 }: {
+  snapshot: AgentSnapshot;
   bridge: Bridge;
   store: AccountStore;
   device: AccountDevice;
@@ -1519,7 +1589,14 @@ export function RemoveDeviceSheet({
   );
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
+  const toasts = useToast();
   const expected = device.name ?? device.id;
+  // The device held the account's keys, so it could read every item in the
+  // account's own store and its teams. The list waits while any of them is
+  // being read, and names a store whose items could not be listed.
+  const exposure = accountExposure(snapshot, store);
+  const readiness = exposure.readiness;
+  const exposed = exposureOrder(exposure.items);
   // Removing a device is a write the agent has already been given.
   useSheetGuard(
     busy
@@ -1545,15 +1622,33 @@ export function RemoveDeviceSheet({
           </Button>
           <Button
             variant="danger"
-            disabled={confirmation !== expected || busy || eligibility.disabled}
+            disabled={
+              confirmation !== expected ||
+              busy ||
+              eligibility.disabled ||
+              readiness === 'loading'
+            }
             onClick={() => {
               setBusy(true);
+              const entries = entriesOf(exposed);
               // The display cache can outlive the native catalog's retained
               // device list. Re-read before a destructive action so native
               // target/current-device validation uses fresh records.
               void controller
                 .run(
-                  () => removeDevice(bridge, access, store, device.id),
+                  async () => {
+                    await withExposureReview(
+                      {
+                        scope: store.id,
+                        party: device.id,
+                        name: expected,
+                        cause: 'device-removed',
+                        entries,
+                      },
+                      () => removeDevice(bridge, access, store, device.id),
+                      () => toasts.show(unstoredReview(expected)),
+                    );
+                  },
                   onDone,
                   onError,
                 )
@@ -1578,6 +1673,16 @@ export function RemoveDeviceSheet({
           />
         </InsetRow>
       </Inset>
+      <ExposureSummary
+        snapshot={snapshot}
+        name={expected}
+        heading={`Items ${expected} could read`}
+        empty="This account has no items this device could read."
+        items={exposed}
+        readiness={readiness}
+        unlisted={exposure.unlisted}
+        teamsUnlisted={exposure.teamsUnlisted}
+      />
     </DeviceSheetFrame>
   );
 }

@@ -20,18 +20,24 @@ import {
   Inset,
   InsetRow,
   KindIcon,
+  PasswordInput,
   SectionLabel,
   SheetDialog,
 } from '../components';
 import type { FilterKind } from '../components';
 import {
   displayPath,
+  fieldLineText,
   fmtSize,
   formatRole,
   initials,
-  isLogin,
+  isBlankLine,
   kindLabel,
   kindOf,
+  LOGIN_FIELDS,
+  loginField,
+  loginFieldOf,
+  loginLines,
   nameOf,
   parseRole,
   partiesOf,
@@ -44,25 +50,54 @@ import {
   storeOf,
   usernameOf,
 } from '../model';
-import type { Item, Party, RoleWire, Store, AgentSnapshot } from '../model';
+import type {
+  Item,
+  LoginFieldName,
+  Party,
+  RoleWire,
+  Store,
+  AgentSnapshot,
+} from '../model';
 import { AccountMark } from './account-switcher';
 import type { NavigationGuard, Selection } from '../location';
 import { useNavigationGuard } from '../navigation-guard';
 import { normalizeCommandError } from '../bridge';
-import type { Bridge, ItemRequest, ReadItemResponse } from '../bridge';
+import type {
+  Bridge,
+  ItemField,
+  ItemRequest,
+  ReadItemResponse,
+} from '../bridge';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import { editableValue } from './edit-value';
+import { COPY_LABELS, copyAndAnnounce } from './item-copy';
+import {
+  isFavorite,
+  itemRefOf,
+  toggleFavorite,
+  useRecentFavorites,
+} from '../recent-favorites';
 import { itemActionProblem } from './store-access';
+import { copyProblem } from './item-moves';
 import { useConcealOnInactive } from '../use-conceal-on-inactive';
+import { editorBound, useItemSecrets } from './item-secrets';
 
-const FIELD_LABELS: Readonly<Record<string, string>> = {
-  user: 'User name',
-  username: 'User name',
-  password: 'Password',
-  url: 'Website',
-  ssid: 'Network',
-};
+const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
+  ['user', 'User name'],
+  ['username', 'User name'],
+  ['password', 'Password'],
+  ['url', 'Website'],
+  ['website', 'Website'],
+  ['ssid', 'Network'],
+]);
+
+/**
+ * The label of a login line's key: a known field's name, or the key itself.
+ * A map lookup, so a key such as `constructor` is not read from a prototype.
+ */
+function fieldLabel(key: string): string {
+  return FIELD_LABELS.get(key) ?? key;
+}
 
 const MASK = '••••••••••••';
 const systemAccessNow = (): number => Date.now() / 1000;
@@ -121,52 +156,56 @@ function roleText(wire: RoleWire): string {
   return typeof wire === 'string' ? wire : wire.role;
 }
 
-/** Parses lines formatted as "key: value". Lines without a colon delimiter are treated as raw values. */
-function parseFields(value: string): [string | null, string][] {
-  return value.split('\n').map((line) => {
-    const cut = line.indexOf(': ');
-    return cut > 0
-      ? ([line.slice(0, cut), line.slice(cut + 2)] as [string, string])
-      : ([null, line] as [null, string]);
-  });
+/**
+ * The lines the structured login editor lists, by index, or null when the
+ * text opens in the textarea. The editor opens for text with a line the host
+ * would copy as the password, which the editor masks, and lists every line
+ * but blank ones: typing into a blank line would add a line that is not a
+ * field line, and the agent would then list the item as a Document. Blank
+ * lines are still saved as they were read. Both choices are made once, when
+ * the edit opens, so typing never swaps editors or removes a row.
+ */
+function loginEditLines(text: string): readonly number[] | null {
+  const lines = loginLines(text);
+  if (!lines.some(({ key }) => loginFieldOf(key) === 'password')) return null;
+  return lines.flatMap((line, index) => (isBlankLine(line) ? [] : [index]));
 }
 
-interface PasswordField {
-  field: string | null;
-  value: string;
-  secret: boolean;
+/** One row of a login's Fields section. */
+interface LoginRow {
+  /** Identifies the row's Show state: a login field, or `line:<index>`. */
+  id: string;
+  label: string;
+  /** The field the host copies for this row; null for other lines. */
+  field: LoginFieldName | null;
+  /** Null before a read, and for a login field the text lacks. */
+  value: string | null;
 }
 
 /**
- * Maps raw or masked password values to displayable field rows.
+ * The rows a login lists: user name, password and website always, each
+ * masked until shown, then after a read any other line, such as a Wi-Fi
+ * network name, in stored order. Values come from `loginField`, the parser
+ * the host's field copy follows, so a row and its Copy agree.
  */
-function passwordFields(
-  masked: string | undefined,
-  shown: string | null,
-): PasswordField[] {
-  if (shown !== null) {
-    const learned = parseFields(shown);
-    if (learned.some(([field]) => field === 'password')) {
-      return learned.map(([field, value]) => ({
-        field,
-        value,
-        secret: field === 'password',
-      }));
-    }
-    if (!masked) return [{ field: null, value: shown, secret: true }];
-    return parseFields(masked).map(([field, value]) => ({
-      field,
-      value: field === 'password' ? shown : value,
-      secret: field === 'password',
-    }));
-  }
-  if (!masked)
-    return [{ field: 'password', value: '••••••••••', secret: true }];
-  return parseFields(masked).map(([field, value]) => ({
+function loginRows(shown: string | null): LoginRow[] {
+  const rows: LoginRow[] = LOGIN_FIELDS.map((field) => ({
+    id: field,
+    label: fieldLabel(field),
     field,
-    value: field === 'password' ? '••••••••••' : value,
-    secret: field === 'password',
+    value: shown === null ? null : loginField(shown, field),
   }));
+  if (shown === null) return rows;
+  loginLines(shown).forEach(({ key, value }, index) => {
+    if (loginFieldOf(key) !== null || !value) return;
+    rows.push({
+      id: `line:${index}`,
+      label: key === null ? 'Text' : fieldLabel(key),
+      field: null,
+      value,
+    });
+  });
+  return rows;
 }
 
 /** Renders the store icon or avatar, matching the style used in the browser tree and list rows. */
@@ -228,8 +267,11 @@ export interface DetailsPanelProps {
   revealRequest?: string | null;
   onRevealHandled?: () => void;
   onClose: () => void;
-  onDelete: (item: Item) => void;
+  /** Moves the item to Trash, from where it can be restored. */
+  onTrash: (item: Item) => void;
   onMove?: (item: Item) => void;
+  /** Copies the item into another vault. */
+  onCopyToVault?: (item: Item) => void;
   onConflict: (
     item: Item,
     draft: string,
@@ -263,8 +305,9 @@ export function DetailsPanel({
   revealRequest = null,
   onRevealHandled,
   onClose,
-  onDelete,
+  onTrash,
   onMove,
+  onCopyToVault,
   onConflict,
   onApplied,
   onCommandError,
@@ -301,34 +344,25 @@ export function DetailsPanel({
     : undefined;
 
   const key = item ? `${item.store}|${item.path}|${item.version}` : '';
-  const [read, setRead] = useState<
-    | { key: string; state: 'loading' }
-    | { key: string; state: 'shown'; value: string }
-    | { key: string; state: 'error'; message: string }
-    | null
-  >(null);
+  // Every revealed value and edit draft, and each transition that clears
+  // them; see item-secrets.ts.
+  const {
+    secrets: { read, revealed, editor, editError, binaryFile },
+    dispatch,
+    epoch: concealEpoch,
+  } = useItemSecrets();
+  const editing = editor !== null;
+  const editValue = editor?.value ?? '';
+  const editPasswordShown = editor?.passwordShown ?? false;
+  const replacementPath = editor?.replacementPath ?? null;
   const toasts = useToast();
+  const recentFavorites = useRecentFavorites();
   const accessDescriptionId = useId();
-  const [editing, setEditing] = useState(false);
-  const [editValue, setEditValue] = useState('');
-  const [editPasswordShown, setEditPasswordShown] = useState(false);
-  const [editContentConcealed, setEditContentConcealed] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [replacementPath, setReplacementPath] = useState<string | null>(null);
   const [dropHover, setDropHover] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
-  const [binaryFile, setBinaryFile] = useState(false);
   const focusEditorOnOpen = useRef(false);
   const focusActionsOnClose = useRef(false);
   const editorRef = useRef<HTMLDivElement>(null);
-  const concealEpoch = useRef(0);
-  // The value the editor opened from, against which `editValue` is unsaved
-  // work. `null` while no editor is open, and for a draft restored from a
-  // conflict, whose stored counterpart is by definition not what it holds.
-  const editBaseline = useRef<string | null>(null);
-  const editTarget = useRef<Item | null>(null);
-  const editScope = useRef('');
-  const editGeneration = useRef(accessGeneration);
   const selectedStore = item ? storeOf(snapshot, item.store) : undefined;
   const selectedServer = snapshot.servers.find(
     (server) => server.profileName === selectedStore?.server,
@@ -369,20 +403,21 @@ export function DetailsPanel({
   const accessProblemRef = useRef(accessProblem);
   accessProblemRef.current = accessProblem;
   const accessAvailable = useCallback(() => !accessProblemRef.current(), []);
-  const requireAccess = useCallback((write = false): boolean => {
-    const message = accessProblemRef.current(write);
-    if (!message) return true;
-    if (write) setEditError(message);
-    else setRead({ key: keyRef.current, state: 'error', message });
-    return false;
-  }, []);
+  const requireAccess = useCallback(
+    (write = false): boolean => {
+      const message = accessProblemRef.current(write);
+      if (!message) return true;
+      if (write) dispatch({ type: 'edit-error', message });
+      else dispatch({ type: 'reveal-fail', key: keyRef.current, message });
+      return false;
+    },
+    [dispatch],
+  );
   const readProblem = accessProblem();
   const writeProblem = accessProblem(true);
   useEffect(() => {
-    if (!readProblem) return;
-    setRead(null);
-    setEditPasswordShown(false);
-  }, [readProblem]);
+    if (readProblem) dispatch({ type: 'read-blocked' });
+  }, [dispatch, readProblem]);
 
   const request = useMemo<ItemRequest | null>(
     () =>
@@ -401,7 +436,7 @@ export function DetailsPanel({
     const epoch = concealEpoch.current;
     const generation = accessGeneration;
     if (!requireAccess()) return;
-    setRead({ key: requestKey, state: 'loading' });
+    dispatch({ type: 'reveal-start', key: requestKey });
     try {
       const response = await readOnce(
         bridge,
@@ -417,7 +452,7 @@ export function DetailsPanel({
       )
         return;
       if (!requireAccess()) return;
-      setRead({ key: requestKey, state: 'shown', value: response.value });
+      dispatch({ type: 'reveal-done', key: requestKey, value: response.value });
       return response.value;
     } catch (error) {
       if (
@@ -433,13 +468,12 @@ export function DetailsPanel({
         return;
       }
       if (typed.code === 'not-text' && item.kind === 'Secret') {
-        setBinaryFile(true);
-        setRead(null);
+        dispatch({ type: 'not-text' });
         return;
       }
-      setRead({
+      dispatch({
+        type: 'reveal-fail',
         key: requestKey,
-        state: 'error',
         message: typed.message,
       });
     }
@@ -448,38 +482,22 @@ export function DetailsPanel({
     accessGeneration,
     activeAccessSession,
     bridge,
+    concealEpoch,
+    dispatch,
     item,
     key,
     onCommandError,
     request,
   ]);
 
+  // A draft still bound to this scope and generation outlives a new version.
   useEffect(() => {
-    concealEpoch.current += 1;
-    setRead(null);
-    setEditPasswordShown(false);
-    if (
-      editTarget.current &&
-      editScope.current === scopeIdentity &&
-      editGeneration.current === accessGeneration
-    ) {
-      setEditError(
-        'This item changed on the server. Saving will check the original version.',
-      );
-    } else {
-      setEditing(false);
-      setEditValue('');
-      setEditContentConcealed(false);
-      editBaseline.current = null;
-      editTarget.current = null;
-      setReplacementPath(null);
-      setEditError(null);
-      setBinaryFile(false);
-    }
-    return () => {
-      concealEpoch.current += 1;
-    };
-  }, [key, scopeIdentity, accessGeneration]);
+    dispatch({
+      type: 'item-changed',
+      scope: scopeIdentity,
+      generation: accessGeneration,
+    });
+  }, [dispatch, key, scopeIdentity, accessGeneration]);
 
   // Reveal content only when explicitly requested.
   useEffect(() => {
@@ -487,46 +505,28 @@ export function DetailsPanel({
     const requested = revealRequest === `${item.store}|${item.path}`;
     if (!requested) return;
     onRevealHandled?.();
-    if (read?.key !== key) void show();
-  }, [item, key, onRevealHandled, read?.key, revealRequest, show]);
+    // Reveal on a login shows its password, the field the list offers.
+    const current = read?.key === key;
+    dispatch({ type: 'show-rows', ids: ['password'], keep: current });
+    if (!current) void show();
+  }, [dispatch, item, key, onRevealHandled, read?.key, revealRequest, show]);
 
   // Revealed values and plaintext edit drafts are covered without abandoning
   // the details panel or its unsaved work.
   useConcealOnInactive(
-    () => {
-      concealEpoch.current += 1;
-      setRead(null);
-      setEditPasswordShown(false);
-      if (
-        editing &&
-        item &&
-        !isLogin(item) &&
-        item.kind !== 'File' &&
-        !binaryFile
-      )
-        setEditContentConcealed(true);
-    },
+    () => dispatch({ type: 'conceal-inactive', file: item?.kind === 'File' }),
     Boolean(read) || editing || saving,
   );
 
   // A read in flight when access changes generation is dropped when it lands,
   // so the control it disabled is released now instead of reading forever.
   useEffect(() => {
-    setRead((current) => (current?.state === 'loading' ? null : current));
-  }, [accessGeneration]);
+    dispatch({ type: 'generation-changed' });
+  }, [dispatch, accessGeneration]);
 
   useEffect(() => {
-    if (!concealSignal) return;
-    concealEpoch.current += 1;
-    setRead(null);
-    setEditValue('');
-    editBaseline.current = null;
-    editTarget.current = null;
-    setEditing(false);
-    setEditPasswordShown(false);
-    setEditContentConcealed(false);
-    setReplacementPath(null);
-  }, [accessGeneration, concealSignal]);
+    if (concealSignal) dispatch({ type: 'conceal-signal' });
+  }, [dispatch, accessGeneration, concealSignal]);
 
   useEffect(() => {
     if (!item || !resumeDraft) return;
@@ -535,14 +535,14 @@ export function DetailsPanel({
     // Restore the draft only once per refresh epoch to avoid overwriting newer changes.
     if (appliedDraft.current === resumeDraft.epoch) return;
     appliedDraft.current = resumeDraft.epoch;
-    setEditValue(resumeDraft.value);
-    setEditContentConcealed(false);
-    editBaseline.current = null;
-    editTarget.current = item;
-    editScope.current = scopeIdentity;
-    editGeneration.current = accessGeneration;
-    setEditing(true);
-  }, [item, resumeDraft, scopeIdentity, accessGeneration]);
+    dispatch({
+      type: 'restore-draft',
+      value: resumeDraft.value,
+      loginLines:
+        kindOf(item) === 'Password' ? loginEditLines(resumeDraft.value) : null,
+      binding: { item, scope: scopeIdentity, generation: accessGeneration },
+    });
+  }, [dispatch, item, resumeDraft, scopeIdentity, accessGeneration]);
 
   useEffect(() => {
     if (!editing || !focusEditorOnOpen.current) return;
@@ -557,8 +557,9 @@ export function DetailsPanel({
   useEffect(() => {
     if (editing || !focusActionsOnClose.current) return;
     focusActionsOnClose.current = false;
+    // Back to Edit, the control that opened the editor.
     editorRef.current
-      ?.querySelector<HTMLElement>('.detail-actions button')
+      ?.querySelector<HTMLElement>('.detail-actions [data-edit-action]')
       ?.focus();
   }, [editing]);
 
@@ -569,38 +570,38 @@ export function DetailsPanel({
     onHover: setDropHover,
     onPaths: (paths) => {
       setDropHover(false);
-      if (paths.length !== 1) {
-        setReplacementPath(null);
-        setEditError('Drop exactly one file to replace the current contents.');
-        return;
-      }
-      setReplacementPath(paths[0] ?? null);
-      setEditError(null);
+      dispatch(
+        paths.length === 1
+          ? { type: 'replacement', path: paths[0] ?? null, error: null }
+          : {
+              type: 'replacement',
+              path: null,
+              error: 'Drop exactly one file to replace the current contents.',
+            },
+      );
     },
-    onError: (error) => setEditError(normalizeCommandError(error).message),
+    onError: (error) =>
+      dispatch({
+        type: 'edit-error',
+        message: normalizeCommandError(error).message,
+      }),
   });
 
   /* ------------------------------------------------------- unsaved edits -- */
 
   /** Takes the editor down, so a confirmed move lands on a clean panel. */
-  const clearEdit = useCallback(() => {
-    setEditing(false);
-    setEditValue('');
-    setEditContentConcealed(false);
-    editBaseline.current = null;
-    editTarget.current = null;
-    setEditPasswordShown(false);
-    setReplacementPath(null);
-    setEditError(null);
-  }, []);
+  const clearEdit = useCallback(
+    () => dispatch({ type: 'close-editor' }),
+    [dispatch],
+  );
 
   // An open editor holding the stored value is not unsaved work; a chosen
   // replacement file is, since the file editor carries no text of its own.
   const editDirty =
-    editing &&
-    (replacementPath !== null ||
-      editBaseline.current === null ||
-      editValue !== editBaseline.current);
+    editor !== null &&
+    (editor.replacementPath !== null ||
+      editor.baseline === null ||
+      editor.value !== editor.baseline);
   // Read by the guard when it is asked, so typing re-registers nothing.
   const editGuardState = useRef({
     dirty: false,
@@ -677,9 +678,7 @@ export function DetailsPanel({
   const team = store?.kind === 'team';
   const saveProblem =
     writeProblem ??
-    (editTarget.current &&
-    editScope.current === scopeIdentity &&
-    editGeneration.current === accessGeneration
+    (editorBound(editor, scopeIdentity, accessGeneration)
       ? undefined
       : fileMode
         ? 'Access changed. Reopen Replace before continuing.'
@@ -692,26 +691,41 @@ export function DetailsPanel({
     !readProblem && activeRead?.state === 'shown' ? activeRead.value : null;
   const readError = activeRead?.state === 'error' ? activeRead.message : null;
   const reading = activeRead?.state === 'loading';
-  const copyValue = async (): Promise<void> => {
-    if (!request || !requireAccess()) return;
-    try {
-      await bridge.copyItemValue(request);
-      toasts.show(`${kind === 'Password' ? 'Password' : 'Value'} copied`);
-    } catch (error) {
-      onCommandError(error, item);
-    }
+  const copyField = async (field: ItemField): Promise<void> => {
+    if (!requireAccess()) return;
+    await copyAndAnnounce({
+      bridge,
+      item,
+      field,
+      toasts,
+      onError: onCommandError,
+    });
   };
+  // Showing one login row reads the item once; the text then stays in
+  // `read` while any row is shown, and later rows reveal without a read.
+  const showRow = (id: string): void => {
+    const held = shownValue !== null || reading;
+    dispatch({ type: 'show-rows', ids: [id], keep: held });
+    if (!held) void show();
+  };
+  // Hiding the last shown row drops the text.
+  const hideRow = (id: string): void =>
+    dispatch(
+      revealed.some((field) => field !== id)
+        ? { type: 'hide-row', id }
+        : { type: 'hide-value' },
+    );
 
   const beginEdit = async (): Promise<void> => {
     if (!request || !requireAccess(true)) return;
-    setEditError(null);
+    dispatch({ type: 'edit-error', message: null });
+    const binding = {
+      item,
+      scope: scopeIdentity,
+      generation: accessGeneration,
+    };
     if (fileMode) {
-      setEditContentConcealed(false);
-      editBaseline.current = '';
-      editTarget.current = item;
-      editScope.current = scopeIdentity;
-      editGeneration.current = accessGeneration;
-      setEditing(true);
+      dispatch({ type: 'open-editor', value: '', loginLines: null, binding });
       return;
     }
     // Ensure the response corresponds to the currently selected item before opening the editor.
@@ -733,28 +747,19 @@ export function DetailsPanel({
       );
       assertExactRead(request, response);
       if (!current()) return;
-      const opened = editableValue(item, response.value);
-      setEditValue(opened);
-      setEditContentConcealed(false);
-      editBaseline.current = opened;
-      editTarget.current = item;
-      editScope.current = scopeIdentity;
-      editGeneration.current = accessGeneration;
-      setEditPasswordShown(false);
-      setEditing(true);
-      setRead(null);
+      const opened = response.value;
+      dispatch({
+        type: 'open-editor',
+        value: opened,
+        loginLines: kind === 'Password' ? loginEditLines(opened) : null,
+        binding,
+      });
     } catch (error) {
       if (!current()) return;
       const typed = normalizeCommandError(error);
       if (typed.code === 'not-text' && item.kind === 'Secret') {
-        setBinaryFile(true);
-        setRead(null);
-        setEditContentConcealed(false);
-        editBaseline.current = '';
-        editTarget.current = item;
-        editScope.current = scopeIdentity;
-        editGeneration.current = accessGeneration;
-        setEditing(true);
+        dispatch({ type: 'not-text' });
+        dispatch({ type: 'open-editor', value: '', loginLines: null, binding });
       } else {
         onCommandError(error, item);
       }
@@ -765,21 +770,21 @@ export function DetailsPanel({
 
   const saveEdit = async (): Promise<void> => {
     if (saving || !requireAccess(true)) return;
-    const target = editTarget.current;
     if (
       !request ||
-      !target ||
-      editScope.current !== scopeIdentity ||
-      editGeneration.current !== accessGeneration
+      !editor ||
+      !editorBound(editor, scopeIdentity, accessGeneration)
     ) {
-      setEditError(
-        fileMode
+      dispatch({
+        type: 'edit-error',
+        message: fileMode
           ? 'Access changed. Reopen Replace before continuing.'
           : 'Access changed. Reopen the editor before saving.',
-      );
+      });
       return;
     }
-    setEditError(null);
+    const target = editor.binding.item;
+    dispatch({ type: 'edit-error', message: null });
     const editRequest = {
       storeId: target.store,
       path: target.path,
@@ -799,10 +804,8 @@ export function DetailsPanel({
       } else {
         await bridge.editTextItem({ ...editRequest, value: editValue });
       }
-      editBaseline.current = null;
-      editTarget.current = null;
       if (!fileMode) focusActionsOnClose.current = true;
-      setEditing(false);
+      dispatch({ type: 'close-editor' });
       await onApplied(
         fileMode ? 'File replaced' : 'Changes saved',
         storeOf(snapshot, target.store)?.server,
@@ -821,61 +824,46 @@ export function DetailsPanel({
     }
   };
 
-  const editFields = editing && isLogin(item) ? parseFields(editValue) : [];
+  // One row per listed line, split by the rules Copy follows. Changing a row
+  // rewrites only its line, keeping its separator; every other line is saved
+  // as it was read.
+  const editLoginLines = editor?.loginLines ?? null;
+  const editLines = editLoginLines ? loginLines(editValue) : null;
+  const editRows =
+    editLines && editLoginLines
+      ? editLoginLines.flatMap((index) => {
+          const line = editLines[index];
+          return line ? [{ ...line, index }] : [];
+        })
+      : null;
+  // What a typed password should not contain: the item's name, which is the
+  // site for a login, and the user name being edited.
+  const editContext = editRows
+    ? [
+        item ? nameOf(item.path) : '',
+        ...editRows
+          .filter(({ key }) => loginFieldOf(key) === 'username')
+          .map(({ value }) => value),
+      ]
+    : [];
   const updateEditField = (index: number, value: string): void => {
-    setEditValue(
-      editFields
-        .map(([field, current], candidate) => {
-          const next = candidate === index ? value : current;
-          return field ? `${field}: ${next}` : next;
+    if (!editLines) return;
+    dispatch({
+      type: 'edit',
+      value: editLines
+        .map(({ key, separator, raw }, candidate) => {
+          if (candidate !== index) return raw;
+          const line =
+            key === null ? value : fieldLineText(key, separator, value);
+          return raw.endsWith('\r') ? `${line}\r` : line;
         })
         .join('\n'),
-    );
+    });
   };
 
+  // A concealed draft shows one masked Contents row in either editor.
   const preview =
-    inlineEditing && isLogin(item) ? (
-      <Inset className="edit">
-        {editFields.map(([field, value], index) => {
-          const secret = field?.toLowerCase() === 'password';
-          return (
-            <Field
-              key={`${field ?? 'value'}-${index}`}
-              label={FIELD_LABELS[field ?? ''] ?? field ?? 'Value'}
-              value={value}
-              type={secret && !editPasswordShown ? 'password' : 'text'}
-              placeholder={secret ? 'password' : undefined}
-              onChange={(next) => updateEditField(index, next)}
-              action={
-                secret ? (
-                  <button
-                    className="value-action"
-                    aria-label={editPasswordShown ? 'Hide' : 'Show'}
-                    type="button"
-                    disabled={!editPasswordShown && Boolean(readProblem)}
-                    title={
-                      (!editPasswordShown ? readProblem : undefined) ??
-                      (editPasswordShown ? 'Hide' : 'Show')
-                    }
-                    aria-describedby={
-                      !editPasswordShown && readProblem
-                        ? accessDescriptionId
-                        : undefined
-                    }
-                    onClick={() => {
-                      if (editPasswordShown || requireAccess())
-                        setEditPasswordShown((shown) => !shown);
-                    }}
-                  >
-                    <Icon name={editPasswordShown ? 'eyeOff' : 'eye'} />
-                  </button>
-                ) : undefined
-              }
-            />
-          );
-        })}
-      </Inset>
-    ) : inlineEditing && editContentConcealed ? (
+    inlineEditing && editor.concealed ? (
       <Inset variant="preview">
         <InsetRow
           label="Contents"
@@ -886,7 +874,7 @@ export function DetailsPanel({
               className="value-action"
               aria-label="Show"
               type="button"
-              onClick={() => setEditContentConcealed(false)}
+              onClick={() => dispatch({ type: 'unconceal-draft' })}
             >
               <Icon name="eye" />
             </button>
@@ -895,93 +883,123 @@ export function DetailsPanel({
           {MASK}
         </InsetRow>
       </Inset>
+    ) : inlineEditing && editRows ? (
+      <Inset className="edit">
+        {editRows.map(({ key: field, value, index }) => {
+          const loginKey = loginFieldOf(field);
+          const label =
+            loginKey !== null
+              ? fieldLabel(loginKey)
+              : field !== null
+                ? fieldLabel(field)
+                : 'Value';
+          // A row is a line, and editing a row never adds or removes one,
+          // so a line keeps its input when its parse changes.
+          return loginKey === 'password' ? (
+            <PasswordInput
+              key={index}
+              label={label}
+              value={value}
+              onChange={(next) => updateEditField(index, next)}
+              shown={editPasswordShown}
+              onShownChange={(shown) => {
+                if (!shown || requireAccess())
+                  dispatch({ type: 'show-password', shown });
+              }}
+              showProblem={readProblem ?? undefined}
+              showProblemId={accessDescriptionId}
+              context={editContext}
+            />
+          ) : (
+            <Field
+              key={index}
+              label={label}
+              value={value}
+              onChange={(next) => updateEditField(index, next)}
+            />
+          );
+        })}
+      </Inset>
     ) : inlineEditing ? (
       <Inset variant="preview">
         <textarea
           aria-label="Contents"
           value={editValue}
-          onChange={(event) => setEditValue(event.target.value)}
+          onChange={(event) =>
+            dispatch({ type: 'edit', value: event.target.value })
+          }
         />
       </Inset>
     ) : kind === 'Password' && !fileMode ? (
       <Inset variant="preview">
-        {passwordFields(item.value, shownValue).map(
-          ({ field, value, secret }, index) =>
-            secret ? (
-              <InsetRow
-                key={index}
-                label={FIELD_LABELS[field ?? ''] ?? field ?? 'Value'}
-                className="rev"
-                valueClass={shownValue === null ? 'mask' : 'value-text'}
-                action={
-                  shownValue === null ? (
-                    <>
-                      <button
-                        className="value-action"
-                        aria-label={reading ? 'Reading…' : 'Show'}
-                        type="button"
-                        disabled={reading || Boolean(readProblem)}
-                        title={readProblem ?? (reading ? 'Reading…' : 'Show')}
-                        aria-describedby={
-                          readProblem ? accessDescriptionId : undefined
-                        }
-                        onClick={() => void show()}
-                      >
-                        <Icon name="eye" />
-                      </button>
-                      <button
-                        className="value-action"
-                        aria-label="Copy"
-                        type="button"
-                        disabled={Boolean(readProblem)}
-                        title={readProblem ?? 'Copy'}
-                        aria-describedby={
-                          readProblem ? accessDescriptionId : undefined
-                        }
-                        onClick={() => void copyValue()}
-                      >
-                        <Icon name="copy" />
-                      </button>
-                    </>
+        {loginRows(shownValue).map(({ id, label, field, value }) => {
+          const visible = shownValue !== null && revealed.includes(id);
+          const name = label.toLowerCase();
+          const absent = shownValue !== null && field !== null && !value;
+          return (
+            <InsetRow
+              key={id}
+              label={label}
+              className="rev"
+              valueClass={visible ? 'value-text' : 'mask'}
+              action={
+                <>
+                  {visible ? (
+                    <button
+                      title="Hide"
+                      className="value-action"
+                      aria-label={`Hide ${name}`}
+                      type="button"
+                      onClick={() => hideRow(id)}
+                    >
+                      <Icon name="eyeOff" />
+                    </button>
                   ) : (
-                    <>
-                      <button
-                        title="Hide"
-                        className="value-action"
-                        aria-label="Hide"
-                        type="button"
-                        onClick={() => {
-                          concealEpoch.current += 1;
-                          setRead(null);
-                        }}
-                      >
-                        <Icon name="eyeOff" />
-                      </button>
-                      <button
-                        className="value-action"
-                        aria-label="Copy"
-                        type="button"
-                        disabled={Boolean(readProblem)}
-                        title={readProblem ?? 'Copy'}
-                        aria-describedby={
-                          readProblem ? accessDescriptionId : undefined
-                        }
-                        onClick={() => void copyValue()}
-                      >
-                        <Icon name="copy" />
-                      </button>
-                    </>
-                  )
-                }
-              >
-                {shownValue === null ? MASK : value}
-              </InsetRow>
-            ) : (
-              <InsetRow key={index} label={FIELD_LABELS[field ?? ''] ?? field}>
-                {value}
-              </InsetRow>
-            ),
-        )}
+                    <button
+                      className="value-action"
+                      aria-label={reading ? 'Reading…' : `Show ${name}`}
+                      type="button"
+                      disabled={reading || Boolean(readProblem)}
+                      title={readProblem ?? (reading ? 'Reading…' : 'Show')}
+                      aria-describedby={
+                        readProblem ? accessDescriptionId : undefined
+                      }
+                      onClick={() => showRow(id)}
+                    >
+                      <Icon name="eye" />
+                    </button>
+                  )}
+                  {field ? (
+                    <button
+                      className="value-action"
+                      aria-label={COPY_LABELS[field]}
+                      type="button"
+                      disabled={Boolean(readProblem) || absent}
+                      title={
+                        readProblem ??
+                        (absent ? `No ${name} saved` : COPY_LABELS[field])
+                      }
+                      aria-describedby={
+                        readProblem ? accessDescriptionId : undefined
+                      }
+                      onClick={() => void copyField(field)}
+                    >
+                      <Icon name="copy" />
+                    </button>
+                  ) : null}
+                </>
+              }
+            >
+              {!visible ? (
+                MASK
+              ) : value ? (
+                value
+              ) : (
+                <span className="dim">Not set</span>
+              )}
+            </InsetRow>
+          );
+        })}
       </Inset>
     ) : kind === 'Document' && !fileMode ? (
       <Inset variant="preview">
@@ -1014,7 +1032,7 @@ export function DetailsPanel({
                   aria-describedby={
                     readProblem ? accessDescriptionId : undefined
                   }
-                  onClick={() => void copyValue()}
+                  onClick={() => void copyField('value')}
                 >
                   <Icon name="copy" />
                 </button>
@@ -1026,10 +1044,7 @@ export function DetailsPanel({
                   className="value-action"
                   aria-label="Hide"
                   type="button"
-                  onClick={() => {
-                    concealEpoch.current += 1;
-                    setRead(null);
-                  }}
+                  onClick={() => dispatch({ type: 'hide-value' })}
                 >
                   <Icon name="eyeOff" />
                 </button>
@@ -1042,7 +1057,7 @@ export function DetailsPanel({
                   aria-describedby={
                     readProblem ? accessDescriptionId : undefined
                   }
-                  onClick={() => void copyValue()}
+                  onClick={() => void copyField('value')}
                 >
                   <Icon name="copy" />
                 </button>
@@ -1086,6 +1101,8 @@ export function DetailsPanel({
 
   const folderTrail = prefixOf(item.path).split('/').filter(Boolean);
   const where = [store?.name ?? item.store, ...folderTrail].join(' › ');
+  const itemRef = itemRefOf(item);
+  const favorite = isFavorite(recentFavorites, itemRef);
 
   return (
     <>
@@ -1100,6 +1117,18 @@ export function DetailsPanel({
             <h2>{nameOf(item.path)}</h2>
             <small title={displayPath(item.path)}>{where}</small>
           </span>
+          {itemRef ? (
+            <button
+              type="button"
+              className={favorite ? 'x fav on' : 'x fav'}
+              title={favorite ? 'Remove from favorites' : 'Add to favorites'}
+              aria-label="Favorite"
+              aria-pressed={favorite}
+              onClick={() => toggleFavorite(itemRef)}
+            >
+              <Icon name="star" />
+            </button>
+          ) : null}
           <button
             type="button"
             className="x"
@@ -1132,7 +1161,39 @@ export function DetailsPanel({
                   Download
                 </Button>
               ) : null}
+              {displayKind === 'Password' && !fileMode ? (
+                <Button
+                  variant="primary"
+                  icon="copy"
+                  disabled={Boolean(readProblem)}
+                  title={readProblem ?? 'Copy only the password'}
+                  aria-describedby={
+                    readProblem ? accessDescriptionId : undefined
+                  }
+                  onClick={() => void copyField('password')}
+                >
+                  {COPY_LABELS.password}
+                </Button>
+              ) : null}
+              {displayKind === 'Password' &&
+              !fileMode &&
+              item.shape === undefined ? (
+                // Known as a Password by its path alone, the text may hold
+                // no `password:` line; this copies it whole.
+                <Button
+                  icon="copy"
+                  disabled={Boolean(readProblem)}
+                  title={readProblem ?? 'Copy the whole text'}
+                  aria-describedby={
+                    readProblem ? accessDescriptionId : undefined
+                  }
+                  onClick={() => void copyField('value')}
+                >
+                  {COPY_LABELS.value}
+                </Button>
+              ) : null}
               <Button
+                data-edit-action
                 icon={fileMode ? 'refresh' : 'pencil'}
                 disabled={Boolean(writeProblem) || saving}
                 title={
@@ -1164,19 +1225,34 @@ export function DetailsPanel({
                   Rename or move…
                 </Button>
               ) : null}
+              {onCopyToVault ? (
+                <Button
+                  disabled={Boolean(readProblem ?? copyProblem(item))}
+                  title={
+                    readProblem ??
+                    copyProblem(item) ??
+                    'Copy this item into another vault'
+                  }
+                  onClick={() => {
+                    if (requireAccess()) onCopyToVault(item);
+                  }}
+                >
+                  Copy to vault…
+                </Button>
+              ) : null}
               <Button
                 variant="danger"
                 icon="trash"
                 disabled={Boolean(writeProblem)}
-                title={writeProblem ?? 'Delete this item'}
+                title={writeProblem ?? 'Move this item to Trash'}
                 aria-describedby={
                   writeProblem ? accessDescriptionId : undefined
                 }
                 onClick={() => {
-                  if (requireAccess(true)) onDelete(item);
+                  if (requireAccess(true)) onTrash(item);
                 }}
               >
-                Delete
+                Move to Trash
               </Button>
             </div>
           )}

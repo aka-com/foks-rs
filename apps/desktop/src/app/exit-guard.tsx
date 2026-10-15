@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { Bridge, ExitAction, ExitState } from '../bridge';
 import { normalizeCommandError } from '../bridge';
 import { Button, Icon } from '../components';
+import { useQuitConfirmation } from '../quit-confirmation';
 
 const IDLE: ExitState = { state: 'idle' };
 
@@ -10,6 +11,33 @@ function unsentCopy(count: number): string | null {
   return count === 1
     ? '1 message has not been sent and will be discarded if you quit.'
     : `${count} messages have not been sent and will be discarded if you quit.`;
+}
+
+type Decision = Extract<ExitState, { state: 'decision' }>;
+
+// The 5 seconds is the host's MAINTENANCE_RESERVATION_WAIT, which a
+// graceful shutdown waits before it reports the agent as busy.
+function busyCopy({ mutation, maintenance }: Decision): string | null {
+  if (!mutation && !maintenance) return null;
+  return [
+    mutation
+      ? 'A change is in progress. Shutdown starts none of its remaining agent requests.'
+      : null,
+    maintenance
+      ? 'Maintenance of this device’s FOKS data is in progress.'
+      : null,
+    'Shutdown waits up to 5 seconds for the current work to finish. If it has not finished by then, FOKS stays open and offers Try again or Force stop.',
+  ]
+    .filter((sentence) => sentence !== null)
+    .join(' ');
+}
+
+function agentCopy({ pid, owned }: Decision): string {
+  if (pid === null)
+    return 'FOKS could not identify the agent process. It will stop the agents using this app’s local state, and once shutdown starts, the app stays here until those processes have exited.';
+  if (owned)
+    return 'FOKS will stop its background agent. Once shutdown starts, the app stays here until the agent has exited.';
+  return 'FOKS will stop the agents using this app’s local state, including an agent this app did not start, which other FOKS clients on this device may be using. Once shutdown starts, the app stays here until those processes have exited.';
 }
 
 function ExitOverlay({
@@ -56,6 +84,7 @@ function ExitOverlay({
 
   if (state.state === 'decision') {
     const unsent = unsentCopy(state.unsent);
+    const busy = busyCopy(state);
     return (
       <div
         className="exit-takeover"
@@ -70,13 +99,9 @@ function ExitOverlay({
             </span>
             <div>
               <h2 id="exit-decision-title">Stop FOKS Agent and quit?</h2>
-              {unsent ? <p className="exit-unsent">{unsent}</p> : null}
-              <p>
-                FOKS will stop the agents using this app’s local state,
-                including an agent already running when the app opened. Once
-                shutdown starts, the app stays here until those processes have
-                exited.
-              </p>
+              {unsent ? <p className="exit-warning">{unsent}</p> : null}
+              {busy ? <p className="exit-warning">{busy}</p> : null}
+              <p>{agentCopy(state)}</p>
             </div>
           </div>
           {failure ? (
@@ -219,10 +244,17 @@ export function ExitGuard({
   const [state, setState] = useState<ExitState>(IDLE);
   const [lastBridge, setLastBridge] = useState(bridge);
   const exitBridge = bridge ?? lastBridge;
+  const confirmation = useQuitConfirmation();
 
   useEffect(() => {
     if (bridge?.native) setLastBridge(bridge);
   }, [bridge]);
+
+  useEffect(() => {
+    if (!exitBridge?.native) return;
+    // A refused report leaves the native default, which asks every time.
+    void exitBridge.setQuitConfirmation(confirmation).catch(() => undefined);
+  }, [exitBridge, confirmation]);
 
   useEffect(() => {
     if (!exitBridge?.native) return;

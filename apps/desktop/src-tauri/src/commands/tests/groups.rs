@@ -10,6 +10,7 @@ use crate::commands::groups::{
     FederationResponse, GroupDetailResultDto, GroupKindInput, MemberResponse, MemberRole, PartyDto,
     RoleInput,
 };
+use crate::commands::store_key::store_id;
 use crate::commands::tests::support::{
     account_ref, phase_four_catalog, phase_four_state, team_ref, test_profile_value,
 };
@@ -17,7 +18,6 @@ use crate::commands::types::RoleDto;
 use crate::commands::validation::{
     invalid_response, require_response_row_cap, MAXIMUM_FIRST_RUN_ROWS,
 };
-use crate::commands::vault::store_id;
 use foks_agent_proto::{FederationRole, KvRole, Operation, ResponseResult, TeamKind, TeamRole};
 use foks_desktop::{
     AgentError as DesktopAgentError, CatalogItem, CatalogSnapshot, CatalogStoreRef,
@@ -57,6 +57,7 @@ fn catalog_activity_and_profile_health_gate_group_writes() {
                 size: Some(1),
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
+                shape: None,
             },
         }],
         ..Default::default()
@@ -91,6 +92,7 @@ fn catalog_activity_and_profile_health_gate_group_writes() {
                 size: Some(1),
                 read_role: KvRole::Owner,
                 write_role: KvRole::Owner,
+                shape: None,
             },
         }],
         ..Default::default()
@@ -896,14 +898,14 @@ fn federation_expulsion_requires_exact_active_cached_federation_and_roster_rows(
 #[test]
 fn stale_group_reads_cannot_repopulate_authorization_caches() {
     let state = phase_four_state(Vec::new());
-    state.catalog_generation.store(2, Ordering::Release);
+    state.catalog_generation().store(2, Ordering::Release);
     let error = state
         .retain_roster(1, "old-store".to_owned(), &[])
         .unwrap_err();
     assert_eq!(error.code, "catalog-required");
     assert!(state.rosters.lock().unwrap().is_empty());
 
-    state.catalog_generation.store(2, Ordering::Release);
+    state.catalog_generation().store(2, Ordering::Release);
     state.accounts.lock().unwrap().insert(
         "old-account".to_owned(),
         AccountDto {
@@ -989,7 +991,7 @@ fn run_discovery(
     }
 
     let profile = state.for_profile("work_example").unwrap();
-    let before = profile.chat_generation.load(Ordering::Acquire);
+    let before = profile.chat_generation().load(Ordering::Acquire);
     let transport = Arc::new(DiscoveryTransport {
         profile: "work_example".to_owned(),
         reply,
@@ -1048,7 +1050,7 @@ fn group_discovery_that_bound_nothing_keeps_the_catalog_and_chat_generation() {
     let (state, value, before) = run_discovery(Ok(discovery_reply(Some(Vec::new()))));
     assert_eq!(value.unwrap()["bound"], serde_json::json!([]));
     // A retired catalog invalidates every chat store the renderer holds.
-    assert_eq!(state.chat_generation.load(Ordering::Acquire), before);
+    assert_eq!(state.chat_generation().load(Ordering::Acquire), before);
     assert_eq!(work_example_stores(&state), 2);
     assert!(state.begin_catalog_load_checked().is_ok());
 }
@@ -1057,7 +1059,7 @@ fn group_discovery_that_bound_nothing_keeps_the_catalog_and_chat_generation() {
 fn group_discovery_that_bound_an_alias_retires_the_catalog() {
     let (state, value, before) = run_discovery(Ok(discovery_reply(Some(vec!["engineering"]))));
     assert_eq!(value.unwrap()["bound"], serde_json::json!(["engineering"]));
-    assert_ne!(state.chat_generation.load(Ordering::Acquire), before);
+    assert_ne!(state.chat_generation().load(Ordering::Acquire), before);
     assert_eq!(work_example_stores(&state), 0);
 }
 
@@ -1065,7 +1067,7 @@ fn group_discovery_that_bound_an_alias_retires_the_catalog() {
 fn group_discovery_without_reported_bindings_retires_the_catalog() {
     let (state, value, before) = run_discovery(Ok(discovery_reply(None)));
     assert!(value.unwrap().get("bound").is_none());
-    assert_ne!(state.chat_generation.load(Ordering::Acquire), before);
+    assert_ne!(state.chat_generation().load(Ordering::Acquire), before);
     assert_eq!(work_example_stores(&state), 0);
 }
 
@@ -1076,9 +1078,9 @@ fn failed_group_discovery_retires_the_catalog_and_requires_refresh() {
     )));
     let error = value.unwrap_err();
     assert!(error.ambiguous);
-    assert_ne!(state.chat_generation.load(Ordering::Acquire), before);
+    assert_ne!(state.chat_generation().load(Ordering::Acquire), before);
     assert_eq!(work_example_stores(&state), 0);
-    assert!(state.mutation_requires_refresh.load(Ordering::Acquire));
+    assert!(state.mutation_requires_refresh().load(Ordering::Acquire));
 }
 
 #[test]

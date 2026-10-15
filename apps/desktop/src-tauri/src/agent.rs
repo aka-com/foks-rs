@@ -46,6 +46,19 @@ pub struct AgentTakeover {
 
 const MAX_STARTUP_TAKEOVERS: usize = 4;
 
+/// How long startup waits for a launched agent that is still running to bind
+/// its socket. An initialized agent reads the vault key from the system
+/// credential store before it binds, and that read can wait on a Keychain or
+/// Secret Service prompt, so the bound matches the 60-second request timeout
+/// the desktop passes to the agent.
+const AGENT_STARTUP_DEADLINE: Duration = Duration::from_secs(60);
+
+/// How long startup keeps probing a launched agent whose socket accepts
+/// connections but whose Hello or status request keeps failing. Such a
+/// failure is reported as it is, rather than as an agent that is still
+/// starting.
+const AGENT_STARTUP_PROBE_FAILURE_GRACE: Duration = Duration::from_secs(5);
+
 /// The socket selected for this process and any state that this desktop owns.
 ///
 /// An explicit argument or environment socket is an external trust boundary:
@@ -216,8 +229,9 @@ pub struct MaintenanceWorker<'a> {
 /// How long a maintenance command waits for the transport to fall idle before
 /// it reports that other requests hold it. Read-only calls are asked to cancel
 /// as soon as the wait starts, so this budget covers the mutations and uploads
-/// that have to run to completion rather than the parked reads.
-const MAINTENANCE_RESERVATION_WAIT: Duration = Duration::from_secs(5);
+/// that have to run to completion rather than the parked reads. A graceful
+/// shutdown waits the same budget, and the close guard's text states it.
+pub(crate) const MAINTENANCE_RESERVATION_WAIT: Duration = Duration::from_secs(5);
 
 /// Closed while the desktop's startup check runs on a background thread, so a
 /// command the webview issues meanwhile waits for a verified agent instead of
@@ -287,6 +301,20 @@ pub struct AgentHandle {
     /// taken over yet. Open by default so tests and the smoke test are
     /// unaffected.
     startup_gate: Arc<StartupGate>,
+    /// The agent's answer to the most recent successful Hello: its versions
+    /// and the capabilities the status DTO reports.
+    last_hello: Mutex<Option<foks_agent_proto::HelloReply>>,
+    /// A launched agent that was still running when its startup wait ended.
+    /// The next start waits on it again instead of launching a second agent
+    /// against the same state.
+    startup_launch: Mutex<Option<process::ManagedAgentLaunch>>,
+    /// Whether the most recent start failed because the launched agent was
+    /// observed to exit, as opposed to failing to launch, losing supervision
+    /// or still running.
+    startup_agent_exited: AtomicBool,
+    /// The wait bound for a launched agent; [`AGENT_STARTUP_DEADLINE`] except
+    /// in tests.
+    startup_deadline: Duration,
     #[cfg(test)]
     managed_endpoint_override: bool,
 }
@@ -338,6 +366,10 @@ impl AgentHandle {
             maintenance_process: Arc::new(NativeMaintenanceProcess),
             maintenance_readiness: Arc::new(safe_selected_root),
             startup_gate,
+            last_hello: Mutex::new(None),
+            startup_launch: Mutex::new(None),
+            startup_agent_exited: AtomicBool::new(false),
+            startup_deadline: AGENT_STARTUP_DEADLINE,
             #[cfg(test)]
             managed_endpoint_override: false,
         }

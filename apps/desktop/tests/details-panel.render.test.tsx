@@ -62,7 +62,7 @@ async function setup(
     bridge: readItem ? { ...bridge, readItem } : bridge,
     selection: { store: subject.store, path: subject.path },
     onClose: () => {},
-    onDelete: () => {},
+    onTrash: () => {},
     onConflict: () => {},
     onApplied: async () => {},
     onCommandError: () => {},
@@ -102,9 +102,13 @@ for (const kind of ['Secret', 'File'] as const) {
     };
     rendered.rerender(p.draw());
     const close = rendered.getByRole('button', { name: 'Close' });
+    // Favorite is a setting on this device and reads nothing from the vault.
+    const favorite = rendered.getByRole('button', { name: 'Favorite' });
     const actions = rendered
       .getAllByRole('button')
-      .filter((button) => button !== close) as HTMLButtonElement[];
+      .filter(
+        (button) => button !== close && button !== favorite,
+      ) as HTMLButtonElement[];
     assert.ok(actions.length > 0);
     for (const button of actions) {
       assert.equal(button.disabled, true);
@@ -115,8 +119,43 @@ for (const kind of ['Secret', 'File'] as const) {
       );
     }
     assert.equal((close as HTMLButtonElement).disabled, false);
+    assert.equal((favorite as HTMLButtonElement).disabled, false);
   });
 }
+
+test('the star adds the item to Favorites, and a copy to Recent', async () => {
+  window.localStorage.clear();
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  const r = ui.render(p.draw());
+  const star = r.getByRole('button', { name: 'Favorite' });
+  assert.equal(star.getAttribute('aria-pressed'), 'false');
+  assert.equal(star.title, 'Add to favorites');
+  ui.fireEvent.click(star);
+  assert.equal(star.getAttribute('aria-pressed'), 'true');
+  assert.equal(star.title, 'Remove from favorites');
+
+  ui.fireEvent.click(r.getAllByRole('button', { name: 'Copy password' })[0]);
+  // The toast gives the host's clear time from the copy's response.
+  await ui.waitFor(() =>
+    assert.match(
+      document.body.textContent ?? '',
+      /Password copied · clears in 30 s/,
+    ),
+  );
+  // Both lists name the item by its store and dirent id, not its path.
+  const ref = { store: 'acct:personal', dirent: p.subject.direntId };
+  assert.deepEqual(
+    JSON.parse(window.localStorage.getItem('foks.recentFavorites') ?? '{}'),
+    { recent: [ref], favorites: [ref] },
+  );
+
+  ui.fireEvent.click(star);
+  assert.equal(star.getAttribute('aria-pressed'), 'false');
+  window.localStorage.clear();
+});
 
 test('an open edit disables Save after access loss without discarding the draft or removing controls', async () => {
   const p = await setup(
@@ -238,7 +277,7 @@ test('access expiring between render and click disables Show and explains the re
   assert.equal(reads, 0);
 });
 
-test('an already-open Delete sheet disables its action when access is lost and re-enables after recovery', async () => {
+test('an already-open Delete permanently sheet disables its action when access is lost and re-enables after recovery', async () => {
   const p = await setup(
     undefined,
     (item) => item.path === '/logins/github.com',
@@ -279,6 +318,8 @@ test('an already-open Delete sheet disables its action when access is lost and r
           onDiscardConflict: () => {},
           onDeleteConflict: async () => {},
           onOpenExisting: async () => {},
+          onRestoreTrash: async () => {},
+          onReload: async () => snapshot,
         }),
       }),
     });
@@ -293,7 +334,7 @@ test('an already-open Delete sheet disables its action when access is lost and r
   };
   rendered.rerender(draw());
   const remove = rendered.getByRole('button', {
-    name: 'Delete',
+    name: 'Delete permanently',
   }) as HTMLButtonElement;
   assert.equal(remove.disabled, true);
   assert.match(remove.title, /unavailable|could not be loaded/i);
@@ -307,8 +348,11 @@ test('an already-open Delete sheet disables its action when access is lost and r
   snapshot = p.props.snapshot;
   rendered.rerender(draw());
   assert.equal(
-    (rendered.getByRole('button', { name: 'Delete' }) as HTMLButtonElement)
-      .disabled,
+    (
+      rendered.getByRole('button', {
+        name: 'Delete permanently',
+      }) as HTMLButtonElement
+    ).disabled,
     false,
   );
   snapshot = {
@@ -319,8 +363,11 @@ test('an already-open Delete sheet disables its action when access is lost and r
   };
   rendered.rerender(draw());
   assert.equal(
-    (rendered.getByRole('button', { name: 'Delete' }) as HTMLButtonElement)
-      .disabled,
+    (
+      rendered.getByRole('button', {
+        name: 'Delete permanently',
+      }) as HTMLButtonElement
+    ).disabled,
     true,
   );
   assert.match(
@@ -567,7 +614,11 @@ test('a mismatched version is rejected and Show retries the read', async () => {
   });
   const r = ui.render(p.draw());
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
-  await ui.waitFor(() => assert.ok(r.getByRole('alert')));
+  // The toast host's assertive region is always present; wait for an alert
+  // with text.
+  await ui.waitFor(() =>
+    assert.ok(r.getAllByRole('alert').some((alert) => alert.textContent)),
+  );
   assert.ok(r.queryByText('/wrong-target', { exact: false }) === null);
   const before = reads;
   ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
@@ -611,7 +662,8 @@ test('a login edits in structured fields and serializes through the existing dra
   };
   const r = ui.render(p.draw());
 
-  assert.ok(r.getByText('••••••••••••'));
+  // User name, Password and Website, each masked until shown.
+  assert.equal(r.getAllByText('••••••••••••').length, 3);
   ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
   const password = await r.findByLabelText('Password');
   const username = r.getByLabelText('User name');
@@ -619,7 +671,7 @@ test('a login edits in structured fields and serializes through the existing dra
   assert.equal(password.getAttribute('placeholder'), 'password');
   assert.equal(r.queryByRole('textbox', { name: 'Contents' }), null);
 
-  ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show password' }));
   assert.equal(password.getAttribute('type'), 'text');
   ui.fireEvent.change(username, { target: { value: 'satoshi-next' } });
   ui.fireEvent.change(password, { target: { value: 'correct horse' } });
@@ -628,6 +680,45 @@ test('a login edits in structured fields and serializes through the existing dra
   await ui.waitFor(() => assert.match(saved, /username: satoshi-next/));
   assert.match(saved, /password: correct horse/);
   assert.match(saved, /url: https:\/\/github\.com\/login/);
+});
+
+test('the login editor generates a password into its own line', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  let saved = '';
+  p.bridge.editTextItem = async (request) => {
+    saved = request.value;
+    return { applied: true };
+  };
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const password = (await r.findByLabelText('Password')) as HTMLInputElement;
+
+  // A typed password naming the site is warned about; Save stays enabled.
+  ui.fireEvent.change(password, { target: { value: 'github-2024' } });
+  assert.ok(r.getByText('Weak · contains the site or user name'));
+
+  ui.fireEvent.click(r.getByRole('button', { name: 'Generate' }));
+  const panel = r.getByRole('group', { name: 'Generate a password' });
+  const generated =
+    ui.within(panel).getByLabelText('Generated password').textContent ?? '';
+  assert.ok(generated.length >= 8);
+  ui.fireEvent.click(
+    ui.within(panel).getByRole('button', { name: 'Use password' }),
+  );
+  assert.equal(password.value, generated);
+  // The generated value is still masked until Show.
+  assert.equal(password.type, 'password');
+  assert.match(r.getByText(/ bits$/).textContent ?? '', /^(Good|Strong) · /);
+
+  ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
+  await ui.waitFor(() => assert.ok(saved));
+  const lines = saved.split('\n');
+  assert.equal(lines.filter((line) => line.startsWith('password: ')).length, 1);
+  assert.ok(lines.includes(`password: ${generated}`));
+  assert.ok(lines.includes('url: https://github.com/login'));
 });
 
 test('background version changes retain the draft and its original write precondition', async () => {
@@ -989,4 +1080,288 @@ test('outside clicks close details while clicks inside and dialog interactions d
   dialog.remove();
   pointer(document.body);
   assert.equal(closed, 1);
+});
+
+test('a login lists each field masked and shows only the field asked for', async () => {
+  let reads = 0;
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  p.props.bridge = {
+    ...p.props.bridge,
+    readItem: async (request) => {
+      reads++;
+      return p.bridge.readItem(request);
+    },
+  };
+  const r = ui.render(p.draw());
+  assert.equal(r.getAllByText('••••••••••••').length, 3);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show user name' }));
+  await r.findByText('satoshi');
+  // The password and website stay masked although the text was read.
+  assert.equal(r.getAllByText('••••••••••••').length, 2);
+  assert.equal(r.queryByText('hx7-Qm2!vTe9-pale-orbit'), null);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show password' }));
+  assert.ok(r.getByText('hx7-Qm2!vTe9-pale-orbit'));
+  assert.equal(reads, 1);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Hide user name' }));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Hide password' }));
+  assert.equal(r.getAllByText('••••••••••••').length, 3);
+  // Hiding the last shown field drops the text; a later Show reads again.
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show website' }));
+  await r.findByText('https://github.com/login');
+  assert.equal(reads, 2);
+});
+
+test('login copies put only the chosen field on the clipboard', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/github.com',
+  );
+  const { mockCopies } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const before = mockCopies.length;
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Copy user name' }));
+  await ui.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /User name copied/),
+  );
+  // The main action and the row button both copy the password alone.
+  ui.fireEvent.click(r.getAllByRole('button', { name: 'Copy password' })[0]);
+  ui.fireEvent.click(r.getAllByRole('button', { name: 'Copy password' })[1]);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Copy website' }));
+  await ui.waitFor(() => assert.equal(mockCopies.length - before, 4));
+  assert.deepEqual(
+    mockCopies.slice(before).map(({ field, text }) => [field, text]),
+    [
+      ['username', 'satoshi'],
+      ['password', 'hx7-Qm2!vTe9-pale-orbit'],
+      ['password', 'hx7-Qm2!vTe9-pale-orbit'],
+      ['url', 'https://github.com/login'],
+    ],
+  );
+  assert.match(document.body.textContent ?? '', /Password copied/);
+});
+
+test('a field the login lacks is reported, not copied, and reads as not set', async () => {
+  const p = await setup(
+    undefined,
+    (item) => item.path === '/logins/fastmail.com',
+  );
+  const { mockCopies } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const before = mockCopies.length;
+  const handled: unknown[] = [];
+  p.props.onCommandError = (error) => {
+    handled.push(error);
+  };
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Copy website' }));
+  await ui.waitFor(() =>
+    assert.match(document.body.textContent ?? '', /This item has no website\./),
+  );
+  assert.equal(mockCopies.length, before);
+  assert.equal(handled.length, 0);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show website' }));
+  await r.findByText('Not set');
+  const copy = r.getByRole('button', { name: 'Copy website' });
+  assert.equal((copy as HTMLButtonElement).disabled, true);
+  assert.equal(copy.getAttribute('title'), 'No website saved');
+});
+
+test('a login saved outside /logins/ is a Password by its listed shape', async () => {
+  const p = await setup();
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const login = {
+    ...p.subject,
+    path: '/env/prod/grafana',
+    direntId: '0000000000000000000000000000001f',
+    shape: 'login' as const,
+  };
+  const snapshot = {
+    ...p.props.snapshot,
+    items: [...p.props.snapshot.items, login],
+    plaintext: {
+      ...p.props.snapshot.plaintext,
+      [`${login.store}|${login.path}`]:
+        'user: admin\npassword: graf-77\nurl: https://grafana.internal',
+    },
+  };
+  let saved = '';
+  p.props.snapshot = snapshot;
+  p.props.bridge = {
+    ...mockBridge(snapshot),
+    editTextItem: async (request) => {
+      saved = request.value;
+      return { applied: true };
+    },
+  };
+  p.props.selection = { store: login.store, path: login.path };
+  const r = ui.render(p.draw());
+  assert.ok(r.getAllByRole('button', { name: 'Copy password' }).length);
+  assert.equal(r.queryByRole('button', { name: 'Copy' }), null);
+  // The structured editor covers it as it covers a login under /logins/.
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const username = await r.findByLabelText('User name');
+  assert.equal((username as HTMLInputElement).value, 'admin');
+  ui.fireEvent.change(username, { target: { value: 'grafana-admin' } });
+  ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
+  await ui.waitFor(() => assert.match(saved, /^user: grafana-admin$/m));
+  assert.match(saved, /^password: graf-77$/m);
+});
+
+/**
+ * Mounts the panel on one extra login with `text` as its stored value. An
+ * unshaped login is listed as an agent that predates the shape field lists
+ * it, so only its `/logins/` path makes it a Password.
+ */
+async function setupLogin(
+  text: string,
+  { path = '/wifi/cabin', shaped = true } = {},
+) {
+  const p = await setup();
+  const { mockBridge } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const login = {
+    ...p.subject,
+    path,
+    direntId: '0000000000000000000000000000002f',
+    shape: 'login' as const,
+  };
+  if (!shaped) delete (login as Partial<typeof login>).shape;
+  const snapshot = {
+    ...p.props.snapshot,
+    items: [...p.props.snapshot.items, login],
+    plaintext: {
+      ...p.props.snapshot.plaintext,
+      [`${login.store}|${login.path}`]: text,
+    },
+  };
+  const saved: string[] = [];
+  p.props.snapshot = snapshot;
+  p.props.bridge = {
+    ...mockBridge(snapshot),
+    editTextItem: async (request) => {
+      saved.push(request.value);
+      return { applied: true };
+    },
+  };
+  p.props.selection = { store: login.store, path: login.path };
+  return { ...p, saved };
+}
+
+test('the login editor masks the line Copy reads as the password and keeps other lines as stored', async () => {
+  const p = await setupLogin('ssid: Cabin\r\npassword:x \r\n');
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const password = await r.findByLabelText('Password');
+  assert.equal(password.getAttribute('type'), 'password');
+  assert.equal((password as HTMLInputElement).value, 'x ');
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show password' }));
+  assert.equal(password.getAttribute('type'), 'text');
+
+  // Losing focus covers every row, not only the password.
+  ui.fireEvent(window, new Event('blur'));
+  assert.equal(r.queryByLabelText('Network'), null);
+  assert.equal(r.queryByLabelText('Password'), null);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show' }));
+  assert.equal(r.getByLabelText('Password').getAttribute('type'), 'password');
+
+  // Each line keeps its own separator.
+  ui.fireEvent.change(r.getByLabelText('Network'), {
+    target: { value: 'Cabin-5G' },
+  });
+  ui.fireEvent.change(r.getByLabelText('Password'), {
+    target: { value: 'y ' },
+  });
+  ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
+  await ui.waitFor(() => assert.equal(p.saved.length, 1));
+  assert.equal(p.saved[0], 'ssid: Cabin-5G\r\npassword:y \r\n');
+});
+
+test('a Password whose text has no password line edits in the concealable textarea', async () => {
+  const p = await setupLogin('ssid: Cabin\nnote: no password yet');
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const contents = await r.findByRole('textbox', { name: 'Contents' });
+  assert.equal(
+    (contents as HTMLTextAreaElement).value,
+    'ssid: Cabin\nnote: no password yet',
+  );
+  // The editor is chosen when the edit opens; typing a password line keeps
+  // the textarea, and its focus, in place.
+  contents.focus();
+  ui.fireEvent.change(contents, {
+    target: { value: 'ssid: Cabin\npassword: x' },
+  });
+  assert.equal(r.getByRole('textbox', { name: 'Contents' }), contents);
+  assert.equal(document.activeElement, contents);
+  assert.equal(r.queryByLabelText('Password'), null);
+  ui.fireEvent(window, new Event('blur'));
+  assert.equal(r.queryByRole('textbox', { name: 'Contents' }), null);
+});
+
+test('a login line keyed by an Object.prototype name is listed and edited under its key', async () => {
+  const p = await setupLogin(
+    'user: a\npassword: b\nconstructor: x\ntoString: y',
+  );
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show user name' }));
+  await r.findByText('a');
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show constructor' }));
+  assert.ok(r.getByText('x'));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Show tostring' }));
+  assert.ok(r.getByText('y'));
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const constructorField = await r.findByLabelText('constructor');
+  assert.equal((constructorField as HTMLInputElement).value, 'x');
+  assert.equal((r.getByLabelText('toString') as HTMLInputElement).value, 'y');
+});
+
+test('the login editor lists no blank lines and saves them as stored', async () => {
+  const p = await setupLogin('user: a\n\npassword: b\nurl: c\n');
+  const r = ui.render(p.draw());
+  ui.fireEvent.click(r.getByRole('button', { name: 'Edit' }));
+  const username = await r.findByLabelText('User name');
+  assert.equal(r.queryByLabelText('Value'), null);
+  assert.equal(r.getAllByRole('textbox').length, 2);
+  ui.fireEvent.change(username, { target: { value: 'z' } });
+  ui.fireEvent.click(r.getByRole('button', { name: 'Save changes' }));
+  await ui.waitFor(() => assert.equal(p.saved.length, 1));
+  assert.equal(p.saved[0], 'user: z\n\npassword: b\nurl: c\n');
+});
+
+test('a Password known only by its /logins/ path also copies its whole value', async () => {
+  const p = await setupLogin('hunter2', {
+    path: '/logins/legacy.example',
+    shaped: false,
+  });
+  const { mockCopies } = (await vite.ssrLoadModule(
+    '/src/mock-bridge.ts',
+  )) as typeof import('../src/mock-bridge');
+  const before = mockCopies.length;
+  const r = ui.render(p.draw());
+  assert.ok(r.getAllByRole('button', { name: 'Copy password' }).length);
+  ui.fireEvent.click(r.getByRole('button', { name: 'Copy value' }));
+  await ui.waitFor(() => assert.equal(mockCopies.length - before, 1));
+  assert.deepEqual(
+    mockCopies.slice(before).map(({ field, text }) => [field, text]),
+    [['value', 'hunter2']],
+  );
+  assert.match(document.body.textContent ?? '', /Value copied/);
+});
+
+test('a Password with a listed shape offers no whole-value copy', async () => {
+  const p = await setupLogin('user: a\npassword: b', {
+    path: '/logins/current.example',
+  });
+  const r = ui.render(p.draw());
+  assert.ok(r.getAllByRole('button', { name: 'Copy password' }).length);
+  assert.equal(r.queryByRole('button', { name: 'Copy value' }), null);
 });

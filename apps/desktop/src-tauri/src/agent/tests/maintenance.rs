@@ -422,12 +422,30 @@ fn stale_maintenance_events_cannot_replace_a_newer_generation() {
 #[test]
 fn auto_recovery_validates_status_and_clears_only_successful_probe_failures() {
     use std::io::Write as _;
-    for response_kind in ["ready", "bootstrap", "error", "invalid", "version"] {
+    for response_kind in ["ready", "bootstrap", "error", "invalid", "version", "older"] {
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("agent.sock");
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
         let server = std::thread::spawn(move || {
+            if response_kind == "older" {
+                // An agent that predates the Hello refuses its version, and
+                // no status request follows.
+                let (mut stream, _) = listener.accept().unwrap();
+                let frame = read_socket_frame(&mut stream);
+                let refusal = serde_json::json!({
+                    "version": 34,
+                    "id": foks_agent_proto::request_id(&frame),
+                    "status": "error",
+                    "code": "version-mismatch",
+                    "message": "unsupported protocol version",
+                });
+                stream
+                    .write_all(&foks_agent_proto::encode(&refusal).unwrap())
+                    .unwrap();
+                return;
+            }
+            answer_socket_hello(&listener);
             let (mut stream, _) = listener.accept().unwrap();
             let request = read_socket_request(&mut stream);
             let response = match response_kind {
@@ -459,12 +477,16 @@ fn auto_recovery_validates_status_and_clears_only_successful_probe_failures() {
             result.is_ok(),
             matches!(response_kind, "ready" | "bootstrap")
         );
+        assert_eq!(
+            handle.advertises(foks_agent_proto::hello::capability::HISTORY_AFTER),
+            response_kind != "older"
+        );
         assert_eq!(handle.take_connection_failure().is_none(), result.is_ok());
         if let Err(error) = result {
             assert_eq!(
                 error.code,
                 match response_kind {
-                    "version" => "version-mismatch",
+                    "version" | "older" => "version-mismatch",
                     "invalid" => "protocol",
                     _ => "busy",
                 }
@@ -512,6 +534,35 @@ fn recovery_credentials_are_distinct_and_explicit_retry_rechecks_them() {
 }
 
 #[test]
+fn startup_credential_check_reports_only_a_credential_store_condition() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = root.join("client-state.toml");
+    std::fs::write(&config, b"fixture").unwrap();
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+    for (kind, required) in [
+        ("credentials", true),
+        ("recovery", false),
+        ("current", false),
+    ] {
+        let handle = AgentHandle::new_for_maintenance_test(
+            root.join("agent.sock"),
+            FakeMaintenanceProcess::healthy(),
+            move |root, _| match kind {
+                "credentials" => SafeRootDisposition::CredentialsRequired(root.to_owned()),
+                "recovery" => SafeRootDisposition::Recovery(root.to_owned()),
+                _ => SafeRootDisposition::Current,
+            },
+        );
+        assert_eq!(handle.startup_credentials_required(), required, "{kind}");
+        // The startup check leaves the explicit-retry state of automatic
+        // recovery alone.
+        assert!(!handle.recovery_credentials_required.load(Ordering::Acquire));
+    }
+}
+
+#[test]
 fn automatic_recovery_checks_live_listener_before_credentials() {
     let directory = tempfile::tempdir().unwrap();
     let socket = directory.path().join("agent.sock");
@@ -523,7 +574,7 @@ fn automatic_recovery_checks_live_listener_before_credentials() {
         });
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let _ = read_socket_request(&mut stream);
+        let _ = read_socket_frame(&mut stream);
         drop(stream);
         // Keep the listener live through the second, socket-only check.
         let _ = listener.accept().unwrap();

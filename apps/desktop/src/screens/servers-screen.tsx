@@ -26,6 +26,7 @@ import {
 } from '../components';
 import type { Location } from '../location';
 import { useSheetGuard } from '../navigation-guard';
+import { purgeProfiles } from '../platform/device-storage';
 import {
   plural,
   serverAvailability,
@@ -41,6 +42,7 @@ import { PageHeader } from '../shell/page-header';
 import { AccountMark } from './account-switcher';
 import { ProfileKeys } from './profile-keys';
 import { GroupMark } from './group-mark';
+import { matchesShortcut } from '../shortcuts';
 
 interface Props {
   snapshot: AgentSnapshot;
@@ -286,11 +288,7 @@ export function ServersSection({
         event.target instanceof HTMLTextAreaElement
       )
         return;
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.key.toLowerCase() === 'r' &&
-        selected
-      ) {
+      if (matchesShortcut(event, 'serverCheck') && selected) {
         event.preventDefault();
         void check(selected);
       }
@@ -1236,6 +1234,7 @@ function RemoveServerSheet({
                     throw new Error(
                       'remove_server_and_credentials returned a different profile.',
                     );
+                  purgeProfiles([server.profileName]);
                   return onRemoved();
                 })
                 .catch(onError)
@@ -1255,6 +1254,10 @@ function RemoveServerSheet({
         <InsetRow label="Removed">
           This server, all of its credentials, pinned host identity, connection
           history, cached data, and unfinished operations.
+        </InsetRow>
+        <InsetRow label="App records">
+          This app also removes its setup progress, invitation labels, Recent
+          and Favorites entries, and exposure reviews for this server.
         </InsetRow>
         <InsetRow label="Warning">
           Accounts without a recovery phrase or another paired device cannot be

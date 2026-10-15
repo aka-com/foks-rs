@@ -34,6 +34,7 @@ import {
   channelReadRole,
   type ChannelAudience,
 } from './audience';
+import { matchesShortcut } from '../shortcuts';
 import type { useChatHistory } from './use-chat-history';
 import type { useChatViewport } from './use-chat-viewport';
 
@@ -325,21 +326,17 @@ export function MessageList({
     const row = event.target;
     if (
       event.defaultPrevented ||
-      event.altKey ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
       !(row instanceof HTMLElement) ||
       !row.matches('article.chat-message')
     )
       return;
-    if (event.key === 'Escape') {
+    if (matchesShortcut(event, 'chatRowLeave')) {
       if (!onLeave) return;
       event.preventDefault();
       onLeave();
       return;
     }
-    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    if (!matchesShortcut(event, 'chatRowMove')) return;
     const rows = Array.from(
       event.currentTarget.querySelectorAll<HTMLElement>('article.chat-message'),
     );

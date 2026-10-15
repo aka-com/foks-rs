@@ -15,6 +15,7 @@ import { shellBlock } from './app/blocking-shell';
 import { BootstrapScreen } from './app/bootstrap-screen';
 import { VaultShell } from './app/vault-shell';
 import { ExitGuard } from './app/exit-guard';
+import { WindowFaultBoundary } from './app/fault-boundaries';
 
 export interface AppProps {
   /** Supplying a snapshot makes render tests synchronous. Production omits it. */
@@ -64,7 +65,14 @@ export function App({
         leaseClock={leaseClock}
       />
     );
+  const exitBridge = activeBridge ?? bridge ?? null;
+  // A render error anywhere below replaces the window with the fault screen;
+  // the exit guard stays mounted, so quitting still asks about the agent.
   return (
-    <ExitGuard bridge={activeBridge ?? bridge ?? null}>{content}</ExitGuard>
+    <ExitGuard bridge={exitBridge}>
+      <WindowFaultBoundary label="shell" bridge={exitBridge}>
+        {content}
+      </WindowFaultBoundary>
+    </ExitGuard>
   );
 }

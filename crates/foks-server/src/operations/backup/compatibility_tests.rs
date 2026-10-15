@@ -58,6 +58,16 @@ fn bootstrap_input() -> BootstrapInput {
 // tests, rather than changing only user_version on the current schema.
 fn predecessor(connection: &Connection, version: i64) {
     assert!((43..=48).contains(&version));
+    connection
+        .execute_batch(
+            "DROP TRIGGER waitlist_count_insert;
+             DROP TRIGGER waitlist_count_delete;
+             DROP TABLE waitlist_count;
+             DROP INDEX waitlist_entries_email;
+             DROP INDEX waitlist_entries_created;
+             CREATE INDEX waitlist_entries_email_created ON waitlist_entries(email,created_at);",
+        )
+        .unwrap();
     if version <= 44 {
         for index in [
             "names_reservation_expiry",
@@ -205,7 +215,8 @@ fn supported_backup_schemas_validate_and_restore_without_changing_originals() {
             &destination.join("server.sqlite"),
             &destination.join("keys"),
             &expected_probe,
-            if version == SCHEMA_VERSION { 1 } else { 0 },
+            // Only the upgrade from 47 or older discards SSO browser state.
+            if version >= 48 { 1 } else { 0 },
         );
     }
 }
@@ -260,7 +271,8 @@ fn backup_wal_is_recovered_only_in_private_copy_and_included_in_restore() {
             &destination.join("server.sqlite"),
             &destination.join("keys"),
             &expected_probe,
-            if version == SCHEMA_VERSION { 1 } else { 0 },
+            // Only the upgrade from 47 or older discards SSO browser state.
+            if version >= 48 { 1 } else { 0 },
         );
     }
 }
