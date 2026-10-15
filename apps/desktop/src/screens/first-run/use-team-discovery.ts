@@ -9,12 +9,8 @@ import {
   type FirstRunCheckpoint,
 } from '../../first-run-state';
 import { storeReadable, type AgentSnapshot } from '../../model';
-import type { useFirstRunController } from '../../use-first-run-controller';
-import type { WorkflowFailureReporter } from './use-server-workflow';
-import {
-  useSetupWorkflow,
-  type WorkflowCheckpoint,
-} from './workflow-ownership';
+import type { SetupCore } from './setup-core';
+import { useSetupWorkflow } from './workflow-ownership';
 
 type DiscoveryResult = Awaited<ReturnType<Bridge['discoverGroups']>>;
 
@@ -75,25 +71,24 @@ export async function runTeamDiscovery({
 }
 
 export function useTeamDiscovery({
-  bridge,
-  agentReady,
-  checkpoint,
-  checkpointRef,
-  mounted,
-  commit,
+  core,
   busy,
-  onRefreshSnapshot,
-  setMessage,
-  fail,
-}: WorkflowCheckpoint &
-  Pick<ReturnType<typeof useFirstRunController>, 'commit'> & {
-    bridge: Bridge;
-    agentReady: boolean;
-    busy: boolean;
-    onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
-    setMessage: (message: string | null) => void;
-    fail: WorkflowFailureReporter;
-  }) {
+}: {
+  core: SetupCore;
+  /** Whether another setup operation is out, which defers discovery. */
+  busy: boolean;
+}) {
+  const {
+    bridge,
+    agentReady,
+    checkpoint,
+    checkpointRef,
+    mounted,
+    commit,
+    onRefreshSnapshot,
+    setMessage,
+    fail,
+  } = core;
   const workflow = useSetupWorkflow({
     bridge,
     agentReady,

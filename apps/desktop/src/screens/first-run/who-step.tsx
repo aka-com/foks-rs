@@ -11,14 +11,8 @@ import { useSetupContext } from './setup-context';
  * how the user is joining.
  */
 export function WhoStep(): ReactNode {
-  const { checkpoint, agentReady, bridge, cli } = useSetupContext();
-  if (
-    checkpoint.state === 'who' &&
-    agentReady &&
-    bridge.native &&
-    cli.scanPending
-  )
-    return <CliScan />;
+  const { agentReady, cli } = useSetupContext();
+  if (agentReady && cli.scanPending) return <CliScan />;
   if (cli.chooserOpen) return <CliProfileChooser />;
   return <JoiningMethod />;
 }

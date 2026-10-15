@@ -1,34 +1,28 @@
-import type { Bridge } from '../../bridge';
 import { transitionFirstRun } from '../../first-run-state';
 import type { FirstRunCheckpoint } from '../../first-run-state';
-import type { useFirstRunController } from '../../use-first-run-controller';
-import type { useSetupReconciliation } from './use-setup-reconciliation';
+import type { SetupCore } from './setup-core';
 import type { SetupSecrets } from './use-setup-secrets';
 
 /** Account protection commands: UI drafts are ephemeral; only receipts enter the checkpoint. */
 export function useProtectionActions({
-  bridge,
-  agentReady,
-  checkpoint,
+  core,
   accountAlias,
   secrets,
-  setBusy,
-  setMessage,
-  send,
-  commit,
-  fail,
-}: Pick<
-  ReturnType<typeof useFirstRunController>,
-  'checkpoint' | 'send' | 'commit'
-> & {
-  bridge: Bridge;
-  agentReady: boolean;
+}: {
+  core: SetupCore;
   accountAlias: string;
   secrets: SetupSecrets;
-  setBusy: (busy: boolean) => void;
-  setMessage: (message: string | null) => void;
-  fail: ReturnType<typeof useSetupReconciliation>['fail'];
 }) {
+  const {
+    bridge,
+    agentReady,
+    checkpoint,
+    send,
+    commit,
+    setMessage,
+    fail,
+    setAccountBusy,
+  } = core;
   const { passphrase, confirmation, setPassphrase, setConfirmation } = secrets;
   const { generatedRecoveryPhrase, phraseWritten, setPhraseWritten } =
     secrets.backup;
@@ -37,7 +31,7 @@ export function useProtectionActions({
   const continueProtection = async (): Promise<void> => {
     if (!agentReady) return;
     if (!profile || !checkpoint.account) return;
-    setBusy(true);
+    setAccountBusy(true);
     setMessage(null);
     try {
       let next: FirstRunCheckpoint = checkpoint;
@@ -61,7 +55,7 @@ export function useProtectionActions({
     } catch (error) {
       fail('passphrase', error);
     } finally {
-      setBusy(false);
+      setAccountBusy(false);
     }
   };
 
@@ -73,7 +67,7 @@ export function useProtectionActions({
       send({ type: 'finish-local', skipped: true });
       return;
     }
-    setBusy(true);
+    setAccountBusy(true);
     setMessage(null);
     try {
       let next: FirstRunCheckpoint = checkpoint;
@@ -101,7 +95,7 @@ export function useProtectionActions({
     } catch (error) {
       fail('passphrase', error);
     } finally {
-      setBusy(false);
+      setAccountBusy(false);
     }
   };
 
@@ -118,7 +112,7 @@ export function useProtectionActions({
       send({ type: 'navigate', state: 'protect' });
       return;
     }
-    setBusy(true);
+    setAccountBusy(true);
     try {
       await bridge.commitOwnerBackup(
         profile.profile,
@@ -131,7 +125,7 @@ export function useProtectionActions({
     } catch (error) {
       fail('backup-commit', error);
     } finally {
-      setBusy(false);
+      setAccountBusy(false);
     }
   };
 

@@ -1,25 +1,8 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { isAgentReadinessError, normalizeCommandError } from '../../bridge';
-import { fixDeviceName } from '../../device-name';
 import { presentFirstRunFailure } from '../../first-run-failure';
 import { useSlowSetup } from '../../first-run-loading';
-import { retainSetup } from '../../first-run-recovery';
-import {
-  transitionFirstRun,
-  type FirstRunPath,
-  type FirstRunStateName,
-  type ProvisioningIntent,
-} from '../../first-run-state';
-import type { NavigationGuard } from '../../location';
-import { useNavigationGuard } from '../../navigation-guard';
-import type { SsoAction, SsoProgress } from '../../sso-contract';
-import { useConcealOnInactive } from '../../use-conceal-on-inactive';
+import type { FirstRunPath, FirstRunStateName } from '../../first-run-state';
 import {
   protectionNavigationPolicy,
   setupNavigationEvent,
@@ -27,28 +10,20 @@ import {
 } from './session-transitions';
 import { setupBusy, setupLeaveBlocked, setupMutating } from './setup-busy';
 import type { FirstRunSessionProps, SetupSession } from './setup-context';
+import type { SetupCore } from './setup-core';
 import { setupStores } from './setup-stores';
+import { useAccountActions } from './use-account-actions';
 import { useAccountOperations } from './use-account-operations';
 import { useCliDiscovery } from './use-cli-discovery';
 import { useProtectionActions } from './use-protection-actions';
 import { useServerWorkflow } from './use-server-workflow';
+import { useSetupCheckpoint } from './use-setup-checkpoint';
+import { useSetupGuards } from './use-setup-guards';
 import { useSetupIdentity } from './use-setup-identity';
 import { useSetupReconciliation } from './use-setup-reconciliation';
+import { useSetupRestart } from './use-setup-restart';
 import { useSetupSecrets } from './use-setup-secrets';
-import { useSetupCheckpoint, useSetupRestart } from './use-setup-session';
 import { useTeamDiscovery } from './use-team-discovery';
-
-/**
- * Terminal first-run states where account setup is complete, all user input is
- * committed, and navigation to the main application is active. These states do
- * not prompt for confirmation when navigating away.
- */
-const FIRST_RUN_SETTLED: readonly FirstRunStateName[] = [
-  'added',
-  'local-done',
-  'checklist-invited',
-  'checklist-own',
-];
 
 /**
  * Builds the setup session FirstRunSession provides to its steps: the
@@ -84,21 +59,11 @@ export function useFirstRunSession({
   const profile = checkpoint.profile;
   const facts = bridge.firstRunFixture?.[checkpoint.path];
   const identity = useSetupIdentity({ bridge, checkpoint });
-  const { username, setUsername, deviceName, email, accountAlias } = identity;
+  const { setUsername, accountAlias } = identity;
   const secrets = useSetupSecrets();
-  const {
-    invite,
-    setInvite,
-    recoveryPhrase,
-    setRecoveryPhrase,
-    pairingPhrase,
-    setPairingPhrase,
-    clear: clearSecrets,
-    navigate: navigateSecrets,
-  } = secrets;
+  const { clear: clearSecrets, navigate: navigateSecrets } = secrets;
   const {
     generatedRecoveryPhrase,
-    setRecoveryPhraseConcealed,
     phraseOperation,
     prepare: prepareBackup,
   } = secrets.backup;
@@ -108,26 +73,31 @@ export function useFirstRunSession({
   const [chosenSigninMethod, setChosenSigninMethod] =
     useState<SigninMethod | null>(null);
   const [pendingPath, setPendingPath] = useState<FirstRunPath | null>(null);
-  const [accountBusy, setBusy] = useState(false);
+  const [accountBusy, setAccountBusy] = useState(false);
   const [personalRefreshing, setPersonalRefreshing] = useState(false);
   const [personalRefreshError, setPersonalRefreshError] = useState<
     string | null
   >(null);
   const [agentRetrying, setAgentRetrying] = useState(false);
   const [agentRetryError, setAgentRetryError] = useState<string | null>(null);
-  const [connectionErrors, setConnectionErrors] = useState<
-    Record<'copy' | 'recover' | 'pair', string | null>
-  >({ copy: null, recover: null, pair: null });
   const [message, setMessage] = useState<string | null>(null);
-  const { pending, lastFailure, fail } = useSetupReconciliation({
+  const base = {
+    checkpoint,
+    checkpointRef,
+    mounted,
+    commit,
+    send,
     bridge,
     agentReady,
-    checkpoint,
-    mounted,
     onRefreshSnapshot,
     setMessage,
+    setAccountBusy,
+  };
+  const { pending, lastFailure, fail } = useSetupReconciliation({
+    core: base,
     setUsername,
   });
+  const core: SetupCore = { ...base, fail };
   const cli = useCliDiscovery({
     bridge,
     agentReady,
@@ -139,37 +109,16 @@ export function useFirstRunSession({
   });
   const goCandidate = cli.candidate;
   const server = useServerWorkflow({
-    bridge,
-    agentReady,
-    checkpoint,
-    checkpointRef,
-    mounted,
-    send,
+    core,
     snapshot,
     managedProfile,
-    onRefreshSnapshot,
     goCandidate,
     onAddressEdited: cli.addressEdited,
-    setMessage,
-    fail,
   });
+  // Discovery waits for the other operations; its own flag is not among them.
   const team = useTeamDiscovery({
-    bridge,
-    agentReady,
-    checkpoint,
-    checkpointRef,
-    mounted,
-    commit,
-    busy:
-      setupBusy({
-        account: accountBusy,
-        discovery: false,
-        serverCheck: server.busy,
-        phrase: phraseOperation !== null,
-      }) !== null,
-    onRefreshSnapshot,
-    setMessage,
-    fail,
+    core,
+    busy: accountBusy || server.busy || phraseOperation !== null,
   });
   const busy = setupBusy({
     account: accountBusy,
@@ -179,21 +128,13 @@ export function useFirstRunSession({
   });
   const mutationBusy = setupMutating(busy);
   const accountOperations = useAccountOperations({
-    bridge,
-    agentReady,
-    onRefreshSnapshot,
-    onAgentReadinessFailure,
-    checkpoint,
-    checkpointRef,
-    mounted,
-    commit,
+    core,
     busy: busy !== null,
-    setBusy,
-    setMessage,
-    setConnectionErrors,
+    onAgentReadinessFailure,
     onReplaceSession,
   });
-  const { identityLoading, setDuplicateAlias } = accountOperations;
+  const { identityLoading, setDuplicateAlias, clearConnectionErrors } =
+    accountOperations;
 
   // Navigating away from sign-in resets the selected sign-in method. Failed
   // operations transition through `operation-pending` back to this view,
@@ -229,174 +170,50 @@ export function useFirstRunSession({
       navigateSecrets(policy);
       setMessage(null);
       setDuplicateAlias(null);
-      setConnectionErrors({ copy: null, recover: null, pair: null });
+      clearConnectionErrors();
       send(setupNavigationEvent(checkpointRef.current, next));
     },
     [
       checkpoint.backupCommitted,
       checkpointRef,
+      clearConnectionErrors,
       send,
       setDuplicateAlias,
       state,
       navigateSecrets,
     ],
   );
-  const runAccountOperation = (
-    kind: ProvisioningIntent['kind'],
-    alias: string,
-    operation: () => Promise<unknown>,
-    extra: Partial<
-      Pick<ProvisioningIntent, 'candidateId' | 'ssoOperationId'>
-    > = {},
-    details: { resume?: boolean; phrase?: string } = {},
-  ): Promise<void> =>
-    accountOperations.runAccountOperation(
-      {
-        deviceName: fixDeviceName(deviceName),
-        username,
-        email,
-        invite,
-        phrase: recoveryPhrase,
-      },
-      kind,
-      alias,
-      operation,
-      extra,
-      details,
-    );
-
   const restart = useSetupRestart({
-    bridge,
-    checkpoint,
-    checkpointRef,
-    mounted,
+    core,
     mutationBusy,
     operationRunning: accountOperations.operationRunning,
     clearSecrets,
     invalidateIdentity: accountOperations.invalidateIdentity,
     onReplaceSession,
   });
-  const { setRestartError } = restart;
-
-  const discardProvisioning = (): void => {
-    try {
-      retainSetup(checkpointRef.current);
-    } catch (error) {
-      setRestartError(normalizeCommandError(error).message);
-      return;
-    }
-    commit(
-      transitionFirstRun(checkpointRef.current, {
-        type: 'discard-provisioning',
-      }),
-    );
-    accountOperations.clearOperationProblem();
-    setMessage(null);
-    setConnectionErrors({ copy: null, recover: null, pair: null });
-  };
-
-  const discardProvisionedAccount = (): void => {
-    try {
-      retainSetup(checkpointRef.current);
-    } catch (error) {
-      setRestartError(normalizeCommandError(error).message);
-      return;
-    }
-    commit(
-      transitionFirstRun(checkpointRef.current, {
-        type: 'discard-provisioned-account',
-      }),
-    );
-    accountOperations.clearIdentityProblem();
-  };
-
-  const resumeAccountOperation = async (): Promise<void> => {
-    const resumed = await accountOperations.resumeAccountOperation({
-      deviceName: fixDeviceName(deviceName),
-      username,
-      email,
-      invite,
-      phrase: recoveryPhrase,
-    });
-    if (resumed) setRecoveryPhrase('');
-  };
-
-  const executeSsoSignup = async (
-    action: SsoAction,
-    operation: () => Promise<SsoProgress>,
-  ): Promise<SsoProgress> => {
-    let progress: SsoProgress | undefined;
-    await runAccountOperation(
-      'sso',
-      accountAlias,
-      async () => {
-        progress = await operation();
-        if (
-          progress.accountAlias !== accountAlias ||
-          !('operation_id' in action) ||
-          progress.operationId !== action.operation_id ||
-          progress.purpose !== 'signup' ||
-          !['complete', 'service-unavailable'].includes(progress.state)
-        )
-          throw {
-            code: 'ambiguous',
-            message: 'Check sign-in status to continue.',
-            ambiguous: true,
-            retryable: false,
-            fatal: false,
-          };
-      },
-      {
-        ssoOperationId:
-          'operation_id' in action ? action.operation_id : undefined,
-      },
-    );
-    if (!progress) throw new Error('Check sign-in status to continue.');
-    return progress;
-  };
+  const accountActions = useAccountActions({
+    core,
+    operations: accountOperations,
+    identity,
+    secrets,
+    candidate: goCandidate,
+    pending,
+    setRestartError: restart.setRestartError,
+  });
 
   const leaveBlocked = setupLeaveBlocked(
     busy,
     Boolean(checkpoint.provisioning),
   );
 
-  /**
-   * Setup is left through the sidebar, which clears what was typed on the way
-   * out. The rail and Control-Tab are not on screen until the end steps, but
-   * ⌘K and the back swipe are, and neither of them clears anything: a step
-   * holding a secret or an unfinished write answers for them here. A move
-   * within setup is the step machine publishing its own address, and the end
-   * steps are past everything this protects.
-   */
-  const setupGuard = useCallback<NavigationGuard>(
-    (intent) =>
-      (intent.kind === 'navigate' && intent.location.kind === 'first-run') ||
-      FIRST_RUN_SETTLED.includes(state) ||
-      (!secrets.held.current && !leaveBlocked)
-        ? null
-        : { verdict: 'refuse', reason: 'Finish or leave setup first.' },
-    [leaveBlocked, secrets.held, state],
-  );
-  useNavigationGuard(setupGuard);
-
-  useLayoutEffect(() => {
-    if (agentReady) return;
-    clearSecrets();
-    if (state === 'phrase') go('protect');
-  }, [agentReady, clearSecrets, go, state]);
-
-  const lastConcealSignal = useRef(concealSignal);
-  useLayoutEffect(() => {
-    if (concealSignal === lastConcealSignal.current) return;
-    lastConcealSignal.current = concealSignal;
-    clearSecrets();
-    if (state === 'phrase') go('protect');
-  }, [clearSecrets, concealSignal, go, state]);
-
-  useConcealOnInactive(
-    () => setRecoveryPhraseConcealed(true),
-    state === 'phrase',
-  );
+  useSetupGuards({
+    state,
+    agentReady,
+    concealSignal,
+    secrets,
+    leaveBlocked,
+    go,
+  });
 
   useEffect(() => {
     if (
@@ -428,202 +245,7 @@ export function useFirstRunSession({
     setDuplicateAlias(null);
   };
 
-  const createAccount = async (): Promise<void> => {
-    if (!agentReady) return;
-    if (
-      !profile ||
-      !username.trim() ||
-      !fixDeviceName(deviceName) ||
-      !accountAlias
-    )
-      return;
-    setBusy(true);
-    setMessage(null);
-    try {
-      const resumable = pending.find(
-        (row) =>
-          row.kind === 'account-signup' &&
-          row.alias === accountAlias &&
-          !row.target,
-      );
-      await runAccountOperation(
-        'signup',
-        accountAlias,
-        async () => {
-          if (resumable)
-            await bridge.resumeFirstRunAccount(profile.profile, accountAlias);
-          else
-            await bridge.createFirstRunAccount({
-              profile: profile.profile,
-              alias: accountAlias,
-              username: username.trim(),
-              deviceName: fixDeviceName(deviceName),
-              email,
-              invite,
-            });
-        },
-        {},
-        { resume: Boolean(resumable) },
-      );
-      setInvite('');
-    } catch (error) {
-      fail('account-signup', error);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const copyGoCandidate = async (): Promise<void> => {
-    if (!agentReady) return;
-    if (!profile || !goCandidate?.copyable || !accountAlias) return;
-    setBusy(true);
-    setConnectionErrors((old) => ({ ...old, copy: null }));
-    try {
-      await runAccountOperation(
-        'copy',
-        accountAlias,
-        async () => {
-          const copied = await bridge.copyGoProfileDevice(
-            goCandidate.candidateId,
-            profile.profile,
-            accountAlias,
-          );
-          if (copied.alias !== accountAlias)
-            throw new Error(
-              'The imported profile belongs to a different account.',
-            );
-        },
-        { candidateId: goCandidate.candidateId },
-      );
-    } catch (error) {
-      fail('account-copy', error, (message) =>
-        setConnectionErrors((old) => ({ ...old, copy: message })),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const recover = async (): Promise<void> => {
-    if (!agentReady) return;
-    if (
-      !profile ||
-      !recoveryPhrase.trim() ||
-      !fixDeviceName(deviceName) ||
-      !accountAlias
-    )
-      return;
-    setBusy(true);
-    setConnectionErrors((old) => ({ ...old, recover: null }));
-    try {
-      await runAccountOperation(
-        'recovery',
-        accountAlias,
-        async () => {
-          const resumable = pending.find(
-            (row) =>
-              row.kind === 'account-recovery' &&
-              row.alias === accountAlias &&
-              !row.target,
-          );
-          if (resumable)
-            await bridge.resumeOwnerRecovery(
-              profile.profile,
-              accountAlias,
-              recoveryPhrase,
-              fixDeviceName(deviceName),
-            );
-          else
-            await bridge.recoverOwnerAccount(
-              profile.profile,
-              accountAlias,
-              recoveryPhrase,
-              fixDeviceName(deviceName),
-            );
-        },
-        {},
-        {
-          resume: pending.some(
-            (row) =>
-              row.kind === 'account-recovery' &&
-              row.alias === accountAlias &&
-              !row.target,
-          ),
-          phrase: recoveryPhrase,
-        },
-      );
-      setRecoveryPhrase('');
-    } catch (error) {
-      fail('account-recovery', error, (message) =>
-        setConnectionErrors((old) => ({ ...old, recover: message })),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const acceptPairing = async (resume: boolean): Promise<void> => {
-    if (!agentReady) return;
-    if (
-      !profile ||
-      !goCandidate?.pairable ||
-      !accountAlias ||
-      !fixDeviceName(deviceName)
-    )
-      return;
-    const phrase = pairingPhrase;
-    if (!resume && !phrase.trim()) return;
-    setPairingPhrase('');
-    setBusy(true);
-    setConnectionErrors((old) => ({ ...old, pair: null }));
-    try {
-      await runAccountOperation(
-        'pairing',
-        accountAlias,
-        async () => {
-          const provision = resume
-            ? await bridge.resumeGoProfilePairing(
-                goCandidate.candidateId,
-                profile.profile,
-                accountAlias,
-              )
-            : await bridge.acceptGoProfilePairing(
-                goCandidate.candidateId,
-                profile.profile,
-                accountAlias,
-                fixDeviceName(deviceName),
-                phrase,
-              );
-          if (provision.alias !== accountAlias) {
-            throw new Error(
-              'The paired device credentials belong to a different account.',
-            );
-          }
-        },
-        { candidateId: goCandidate.candidateId },
-        { resume, phrase },
-      );
-    } catch (error) {
-      fail('account-pairing', error, (message) =>
-        setConnectionErrors((old) => ({ ...old, pair: message })),
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const protection = useProtectionActions({
-    bridge,
-    agentReady,
-    checkpoint,
-    accountAlias,
-    secrets,
-    setBusy,
-    setMessage,
-    send,
-    commit,
-    fail,
-  });
+  const protection = useProtectionActions({ core, accountAlias, secrets });
 
   const retryPersonal = (): void => {
     setPersonalRefreshing(true);
@@ -660,7 +282,6 @@ export function useFirstRunSession({
     snapshot,
     agentReady,
     onNavigate,
-    onRefreshSnapshot,
     busy,
     slow,
     leaveBlocked,
@@ -674,18 +295,7 @@ export function useFirstRunSession({
     cli,
     server,
     team,
-    account: {
-      ...accountOperations,
-      connectionErrors,
-      create: createAccount,
-      copyCandidate: copyGoCandidate,
-      recover,
-      acceptPairing,
-      resume: resumeAccountOperation,
-      discardProvisioning,
-      discardProvisionedAccount,
-      executeSsoSignup,
-    },
+    account: { ...accountOperations, ...accountActions },
     protection,
     restart,
     stores: setupStores(snapshot, checkpoint, facts),

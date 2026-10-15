@@ -8,18 +8,18 @@ import type {
 import type { Location } from '../../location';
 import type { AgentSnapshot } from '../../model';
 import type { RailAgentState } from '../../shell/sidebar';
-import type { SsoAction, SsoProgress } from '../../sso-contract';
 import type { useFirstRunController } from '../../use-first-run-controller';
 import type { SigninMethod } from './session-transitions';
 import type { SetupBusy } from './setup-busy';
 import type { SetupStores } from './setup-stores';
+import type { AccountActions } from './use-account-actions';
 import type { useAccountOperations } from './use-account-operations';
 import type { CliDiscovery } from './use-cli-discovery';
 import type { useProtectionActions } from './use-protection-actions';
 import type { useServerWorkflow } from './use-server-workflow';
 import type { SetupIdentity } from './use-setup-identity';
 import type { SetupSecrets } from './use-setup-secrets';
-import type { SetupRestart } from './use-setup-session';
+import type { SetupRestart } from './use-setup-restart';
 import type { useTeamDiscovery } from './use-team-discovery';
 
 export interface FirstRunExperienceProps {
@@ -51,24 +51,10 @@ export type FirstRunSessionProps = FirstRunExperienceProps & {
 };
 
 type SetupController = ReturnType<typeof useFirstRunController>;
-type ConnectionErrors = Record<'copy' | 'recover' | 'pair', string | null>;
 
 /** Account provisioning: the operation record, and the commands that start or settle it. */
-export type SetupAccount = ReturnType<typeof useAccountOperations> & {
-  /** Per sign-in method failures, shown beside the method that failed. */
-  connectionErrors: ConnectionErrors;
-  create: () => Promise<void>;
-  copyCandidate: () => Promise<void>;
-  recover: () => Promise<void>;
-  acceptPairing: (resume: boolean) => Promise<void>;
-  resume: () => Promise<void>;
-  discardProvisioning: () => void;
-  discardProvisionedAccount: () => void;
-  executeSsoSignup: (
-    action: SsoAction,
-    operation: () => Promise<SsoProgress>,
-  ) => Promise<SsoProgress>;
-};
+export type SetupAccount = ReturnType<typeof useAccountOperations> &
+  AccountActions;
 
 /**
  * Everything a setup step reads or changes. useFirstRunSession builds it on
@@ -80,7 +66,6 @@ export interface SetupSession extends SetupController {
   readonly snapshot: AgentSnapshot;
   readonly agentReady: boolean;
   readonly onNavigate: (location: Location) => void;
-  readonly onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
   /** The one setup operation in progress, or null while setup is idle. */
   readonly busy: SetupBusy | null;
   /** Whether a wait has run long enough to say so. */

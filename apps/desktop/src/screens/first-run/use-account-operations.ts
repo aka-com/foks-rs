@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   enqueueProfileWork,
   isAgentReadinessError,
   normalizeCommandError,
 } from '../../bridge';
-import type { Bridge, CommandError } from '../../bridge';
+import type { CommandError } from '../../bridge';
 import {
   provisionedIdentityProblem,
   identityProblemText,
@@ -21,8 +21,7 @@ import {
   type FirstRunCheckpoint,
   type ProvisioningIntent,
 } from '../../first-run-state';
-import type { AgentSnapshot } from '../../model';
-import type { useFirstRunController } from '../../use-first-run-controller';
+import type { SetupCore } from './setup-core';
 import { useAccountIdentity } from './use-account-identity';
 
 export interface AccountOperationInput {
@@ -33,45 +32,45 @@ export interface AccountOperationInput {
   phrase: string;
 }
 
+/** Per sign-in method failures, shown beside the method that failed. */
+export type ConnectionErrors = Record<
+  'copy' | 'recover' | 'pair',
+  string | null
+>;
+
+const NO_CONNECTION_ERRORS: ConnectionErrors = {
+  copy: null,
+  recover: null,
+  pair: null,
+};
+
 export function useAccountOperations({
-  bridge,
-  agentReady,
-  onRefreshSnapshot,
-  onAgentReadinessFailure,
-  checkpoint,
-  checkpointRef,
-  mounted,
-  commit,
+  core,
   busy,
-  setBusy,
-  setMessage,
-  setConnectionErrors,
+  onAgentReadinessFailure,
   onReplaceSession,
-}: Pick<
-  ReturnType<typeof useFirstRunController>,
-  'checkpoint' | 'checkpointRef' | 'mounted' | 'commit'
-> & {
-  bridge: Bridge;
-  agentReady: boolean;
-  onRefreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
-  onAgentReadinessFailure?: (error: CommandError) => void;
+}: {
+  core: SetupCore;
+  /**
+   * Whether any setup operation is out. The automatic probe waits for it,
+   * and adopting or resuming an account is refused while it is.
+   */
   busy: boolean;
-  setBusy: (value: boolean) => void;
-  setMessage: (message: string | null) => void;
-  setConnectionErrors: (
-    errors: Record<'copy' | 'recover' | 'pair', string | null>,
-  ) => void;
+  onAgentReadinessFailure?: (error: CommandError) => void;
   onReplaceSession: (next: FirstRunCheckpoint) => void;
 }) {
-  const identity = useAccountIdentity({
+  const {
     bridge,
     agentReady,
     onRefreshSnapshot,
-    onAgentReadinessFailure,
+    checkpoint,
     checkpointRef,
     mounted,
     commit,
-  });
+    setMessage,
+    setAccountBusy,
+  } = core;
+  const identity = useAccountIdentity({ core, onAgentReadinessFailure });
   const {
     identityLoading,
     setIdentityLoading,
@@ -90,6 +89,17 @@ export function useAccountOperations({
     alias: string;
     deviceName: string;
   } | null>(null);
+  const [connectionErrors, setConnectionErrors] =
+    useState<ConnectionErrors>(NO_CONNECTION_ERRORS);
+  const reportConnectionError = useCallback(
+    (method: keyof ConnectionErrors, message: string | null): void =>
+      setConnectionErrors((old) => ({ ...old, [method]: message })),
+    [],
+  );
+  const clearConnectionErrors = useCallback(
+    (): void => setConnectionErrors(NO_CONNECTION_ERRORS),
+    [],
+  );
   const state = checkpoint.state;
 
   const accountProvisioned = (alias: string, deviceName: string): void => {
@@ -170,7 +180,7 @@ export function useAccountOperations({
             ...extra,
           },
         };
-    setBusy(true);
+    setAccountBusy(true);
     setOperationResumable(false);
     setOperationStatus(null);
     setDuplicateAlias(null);
@@ -244,7 +254,7 @@ export function useAccountOperations({
         setMessage(normalizeCommandError(error).message);
       }
     } finally {
-      if (mounted.current) setBusy(false);
+      if (mounted.current) setAccountBusy(false);
     }
   };
 
@@ -530,6 +540,9 @@ export function useAccountOperations({
     existingAccountAdoptable,
     duplicateAlias,
     setDuplicateAlias,
+    connectionErrors,
+    reportConnectionError,
+    clearConnectionErrors,
     accountProvisioned,
     runAccountOperation,
     resumeAccountOperation,
