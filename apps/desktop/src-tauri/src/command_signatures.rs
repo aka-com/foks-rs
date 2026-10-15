@@ -49,6 +49,9 @@ struct Command {
     module: String,
     /// camelCase key to [`REQUIRED`] or [`OPTIONAL`].
     arguments: BTreeMap<String, &'static str>,
+    /// The last path segment of every function the body calls, for
+    /// [`every_command_checks_the_main_window`].
+    calls: BTreeSet<String>,
 }
 
 fn source_root() -> PathBuf {
@@ -141,9 +144,50 @@ fn signature(function: &syn::ItemFn, module: &str) -> Command {
             "{module}::{name} has two parameters keyed {key}"
         );
     }
+    let mut calls = Calls::default();
+    calls.visit_block(&function.block);
     Command {
         module: module.to_owned(),
         arguments,
+        calls: calls.0,
+    }
+}
+
+/// The functions a body calls by path, by their last segment.
+#[derive(Default)]
+struct Calls(BTreeSet<String>);
+
+impl<'ast> Visit<'ast> for Calls {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = &*call.func {
+            if let Some(segment) = path.path.segments.last() {
+                self.0.insert(segment.ident.to_string());
+            }
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+}
+
+/// The commands that call `require_main_window`, directly or through
+/// another command they delegate to.
+fn commands_checking_the_main_window(commands: &BTreeMap<String, Command>) -> BTreeSet<String> {
+    let mut checked: BTreeSet<String> = commands
+        .iter()
+        .filter(|(_, command)| command.calls.contains("require_main_window"))
+        .map(|(name, _)| name.clone())
+        .collect();
+    loop {
+        let delegating: Vec<String> = commands
+            .iter()
+            .filter(|(name, command)| {
+                !checked.contains(*name) && command.calls.iter().any(|call| checked.contains(call))
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        if delegating.is_empty() {
+            return checked;
+        }
+        checked.extend(delegating);
     }
 }
 
@@ -316,17 +360,36 @@ fn read_commands() -> BTreeMap<String, Command> {
     commands
 }
 
+/// The handler paths of the single `generate_handler!` in `lib.rs`, in order.
+fn registered_paths() -> Vec<String> {
+    let mut handlers = Handlers::default();
+    handlers.visit_file(&parse(&source_root().join("lib.rs")));
+    let Ok([registered]) = <[Vec<String>; 1]>::try_from(handlers.0) else {
+        panic!("lib.rs has exactly one generate_handler! invocation");
+    };
+    registered
+}
+
+/// The names the renderer invokes: the last segment of each registered path.
+pub(crate) fn registered_command_names() -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for path in registered_paths() {
+        let name = path.rsplit("::").next().unwrap_or(&path).to_owned();
+        assert!(
+            names.insert(name),
+            "two registered commands are named like {path}"
+        );
+    }
+    names
+}
+
 #[test]
 fn generate_handler_registers_exactly_the_defined_commands() {
     let commands = read_commands();
-    let mut handlers = Handlers::default();
-    handlers.visit_file(&parse(&source_root().join("lib.rs")));
-    let [registered] = handlers.0.as_slice() else {
-        panic!("lib.rs has exactly one generate_handler! invocation");
-    };
+    let registered = registered_paths();
 
     let mut seen = BTreeSet::new();
-    for path in registered {
+    for path in &registered {
         assert!(seen.insert(path), "{path} is registered twice");
     }
     let defined: BTreeSet<String> = commands
@@ -346,6 +409,24 @@ fn generate_handler_registers_exactly_the_defined_commands() {
         registered.difference(&defined).collect::<Vec<_>>(),
         Vec::<&String>::new(),
         "generate_handler! entries with no #[tauri::command] function"
+    );
+}
+
+/// Tauri's app ACL already limits every command to the `main` window on the
+/// app's own origin; each command repeats the label check so that a capability
+/// granted too widely does not by itself open a command to another window.
+#[test]
+fn every_command_checks_the_main_window() {
+    let commands = read_commands();
+    let checked = commands_checking_the_main_window(&commands);
+    let unchecked: Vec<&String> = commands
+        .keys()
+        .filter(|name| !checked.contains(*name))
+        .collect();
+    assert_eq!(
+        unchecked,
+        Vec::<&String>::new(),
+        "commands that do not call require_main_window"
     );
 }
 
@@ -443,5 +524,38 @@ fn signatures_skip_injected_parameters_and_mark_options() {
             ("request".to_owned(), REQUIRED),
             ("storeId".to_owned(), REQUIRED),
         ])
+    );
+}
+
+#[test]
+fn a_command_checks_the_main_window_directly_or_through_a_checked_command() {
+    let direct: syn::ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub fn direct(webview: tauri::Webview) -> Result<(), AgentError> {
+            crate::commands::require_main_window(&webview)?;
+            Ok(())
+        }
+    };
+    let delegating: syn::ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub async fn delegating(webview: tauri::Webview) -> Result<(), AgentError> {
+            direct(webview)
+        }
+    };
+    let unchecked: syn::ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub fn unchecked(window: tauri::WebviewWindow) -> Result<(), AgentError> {
+            helper(window.label());
+            Ok(())
+        }
+    };
+    let commands = BTreeMap::from([
+        ("direct".to_owned(), signature(&direct, "applock")),
+        ("delegating".to_owned(), signature(&delegating, "applock")),
+        ("unchecked".to_owned(), signature(&unchecked, "applock")),
+    ]);
+    assert_eq!(
+        commands_checking_the_main_window(&commands),
+        BTreeSet::from(["delegating".to_owned(), "direct".to_owned()])
     );
 }

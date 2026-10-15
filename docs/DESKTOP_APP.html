@@ -356,7 +356,7 @@
 }</div>
 <p>Setting <code>withGlobalTauri: false</code> guarantees that <code>window.__TAURI__</code> is <strong>never defined</strong> in the DOM global scope. The only way to send messages over the Tauri IPC bridge is through bundled JavaScript modules that statically import <code>@tauri-apps/api/core</code> during compilation with Vite.</p>
 
-<h3>The Minimal Capability Allowlist (3 Commands Only)</h3>
+<h3>The Minimal Capability Allowlist (3 Core Commands Only)</h3>
 <p>Tauri v2 uses an Access Control List (ACL) system defined in JSON capabilities. Standard Tauri ships with <code>core:default</code>, which activates 9 capability sets containing <strong>92 individual commands</strong>. FOKS completely purges <code>core:default</code> and grants exactly 3 core commands in <code>capabilities/default.json</code>:</p>
 
 <table class="keytable">
@@ -395,7 +395,7 @@
 <p>While <code>foks-desktop-app</code> links against <code>tauri-plugin-dialog</code> and <code>tauri-plugin-clipboard-manager</code>, <strong>zero permissions are granted to the webview</strong> for either plugin. Webview attempts to call <code>invoke('plugin:dialog|open')</code> fail instantly at the Tauri ACL gate. File pickers and clipboard operations can only be initiated by trusted Rust code.</p>
 
 <h3>Defending Custom Commands</h3>
-<p>Custom commands registered via <code>tauri::generate_handler!</code> bypass the plugin ACL. FOKS defends them programmatically using two universal gatekeepers:</p>
+<p>Tauri checks custom commands registered via <code>tauri::generate_handler!</code> against capabilities only when the app declares an ACL manifest. <code>build.rs</code> declares one listing every registered command, and <code>capabilities/default.json</code> grants the generated <code>allow-&lt;command&gt;</code> permissions to the <code>main</code> window only, so a <code>host-admin-*</code> window or a remote origin is refused before any command body runs. Behind that ACL, each command applies two checks of its own:</p>
 <ol>
   <li><strong><code>require_main_window(&amp;webview)</code>:</strong> Inspects <code>webview.label()</code> and aborts if it is not <code>"main"</code>. This prevents auxiliary webviews (such as isolated administration frames) from invoking vault commands.</li>
   <li><strong><code>require_unlocked(&amp;app)</code>:</strong> Asserts that the desktop application lock is disengaged before executing any value-bearing operation.</li>

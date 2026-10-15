@@ -74,8 +74,8 @@ test rather than by inspection. At build time Tauri generates an ACL
 manifest describing every permission set and the commands each resolves to.
 A unit test parses that generated manifest and the generated capability,
 resolves each granted permission recursively to concrete
-`manifest|command` pairs, and asserts the resulting set equals exactly the
-three listed above. It then asserts a list of forbidden commands
+`manifest|command` pairs, and asserts that the Tauri commands in the
+resulting set are exactly the three listed above. It then asserts a list of forbidden commands
 (`core:image|from_path`, `core:path|resolve`,
 `core:webview|internal_toggle_devtools`, `core:event|emit`, and others) is
 unreachable. The project's permission notes give the reason this matters:
@@ -84,9 +84,18 @@ Cargo feature unification across a workspace can pull in features a
 sibling build enabled; only the capability file is a control, and only a
 test that resolves it proves what it grants.
 
-Application-defined commands are not covered by the capability file, so
-every command that can return a value begins with two checks: that the
-call came from the main window, and that the app is unlocked.
+Application-defined commands are covered too, but only because the app
+declares an ACL manifest: without one, Tauri runs any registered command for
+any window on the app's own origin. The desktop build script lists every
+registered command, Tauri generates an allow permission for each, and the
+same capability file grants those permissions to the main window only. The
+hosted-admin windows, which load a server's admin page from a remote HTTPS
+origin, match no capability and are refused every command before it runs.
+Tests compare the build script's list, the capability and the handler
+registration, and ask Tauri's runtime authority which windows and origins
+may call each command. Every command still begins with its own check that
+the call came from the main window, and every command that can return a
+value also checks that the app is unlocked.
 
 ## The app lock: a generation counter
 
