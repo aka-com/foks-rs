@@ -16,8 +16,8 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 
 async function setup(label: string | null) {
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const snapshot = {

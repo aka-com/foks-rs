@@ -48,8 +48,8 @@ async function rail(
   const { Sidebar } = await import('../src/shell/sidebar');
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { Dialog, OverlayProvider } = await import('../kit/overlay-primitives');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   // Chat on every fixture server, so the badge sums more than one team.
   const snapshot = {
     ...FIXTURE,
@@ -567,8 +567,8 @@ test('the rail names the account through which the selected group is accessed', 
 
 test('native titlebar controls follow rail collapse and expansion', async () => {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const calls: boolean[] = [];
   window.localStorage.clear();
   const bridge: Bridge = {
@@ -647,7 +647,7 @@ test('an unresolved account is distinguished from an empty device and can be rep
 
 test('an empty device still says No account', async () => {
   const { AccountHeader } = await import('../src/shell/sidebar');
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   ui.render(
     createElement(AccountHeader, {
       snapshot: { ...FIXTURE, stores: [], accounts: [] },

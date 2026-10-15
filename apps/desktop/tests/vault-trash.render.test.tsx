@@ -46,8 +46,8 @@ async function mount({
   path?: string;
 } = {}) {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const base = mockBridge(FIXTURE);
   await setup?.(base);

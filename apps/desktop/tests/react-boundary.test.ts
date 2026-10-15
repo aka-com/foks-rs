@@ -77,11 +77,7 @@ test('the model is pure: no DOM, no bridge, no fixture', async () => {
       /\b(document|window|globalThis)\s*[.[]/,
       file.pathname,
     );
-    assert.doesNotMatch(
-      source,
-      /from '\.\.\/(fixture|bridge|mock-bridge)'/,
-      file.pathname,
-    );
+    assert.doesNotMatch(source, /from '\.\.\/(bridge|mock)\b/, file.pathname);
     assert.doesNotMatch(source, /from 'react'/, file.pathname);
   }
 });
@@ -93,16 +89,16 @@ test('the mock bridge is reached only by dynamic import, so it can be dropped', 
     import.meta.url,
   );
   assert.doesNotMatch(bridge, /^import .*mock-bridge/m);
-  assert.match(bridge, /await import\('\.\.\/mock-bridge'\)/);
+  assert.match(bridge, /await import\('\.\.\/mock\/mock-bridge'\)/);
   const root = await readSource('../src/app-root.tsx', import.meta.url);
-  assert.doesNotMatch(root, /mock-bridge|\.\/fixture/);
+  assert.doesNotMatch(root, /mock-bridge|fixture|\.\/mock\//);
 });
 
 test('ordinary production modules never import the fixture graph', async () => {
   for (const file of await firstPartySources()) {
     if (
-      file.pathname.endsWith('/src/fixture.ts') ||
-      file.pathname.endsWith('/src/mock-bridge.ts')
+      file.pathname.endsWith('/src/mock/fixture.ts') ||
+      file.pathname.endsWith('/src/mock/mock-bridge.ts')
     )
       continue;
     const source = stripComments(await readSource(file.href, import.meta.url));

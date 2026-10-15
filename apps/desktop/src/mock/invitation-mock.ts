@@ -1,7 +1,7 @@
 /** Local-only invitation fixtures for browser journeys, not a protocol emulator. */
-import type { Bridge } from './bridge';
-import type { InvitationRow } from './invitation-contract';
-import type { Store } from './model';
+import type { Bridge } from '../bridge';
+import type { InvitationRow } from '../invitation-contract';
+import type { Store } from '../model';
 
 export function mockInvitations(
   stores: readonly Store[],

@@ -60,7 +60,7 @@ function kindChip(node: HTMLElement): string | null {
 }
 
 async function fixture(): Promise<AgentSnapshot> {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   return FIXTURE;
 }
 
@@ -98,7 +98,7 @@ async function teams(
 ) {
   const { TeamsScreen } = await import('../src/screens/teams-screen');
   const TestShell = await loadTestShell();
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const snapshot = options.snapshot ?? (await fixture());
@@ -770,7 +770,7 @@ test('a created group closes its sheet when only the post-write refresh fails', 
 
 test('group creation replaces a cancelled foreground catalog load without repeating the write', async () => {
   const snapshot = await fixture();
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const base = mockBridge(snapshot);
   const { loadSnapshot } = await import('../src/bridge');
   let writes = 0;

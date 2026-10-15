@@ -14,9 +14,9 @@ import type { ChatClock } from '../src/chat/clock';
 import type { TeamInbox } from '../src/chat/inbox-service';
 import { ChatSendService } from '../src/chat/send-service';
 import { chatIntentPersistence } from '../src/chat/intent';
-import { FIXTURE } from '../src/fixture';
-import { mockBridge } from '../src/mock-bridge';
-import { mockChatOf } from '../src/chat-mock';
+import { FIXTURE } from '../src/mock/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
+import { mockChatOf } from '../src/mock/chat-mock';
 import {
   cleanupErrorOf,
   intentHeld,

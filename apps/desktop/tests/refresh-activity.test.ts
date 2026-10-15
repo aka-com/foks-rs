@@ -5,8 +5,8 @@ import {
   refreshActivitiesFor,
 } from '../src/data/refresh-activity';
 import { loadSnapshot, type Bridge } from '../src/bridge';
-import { FIXTURE } from '../src/fixture';
-import { mockBridge } from '../src/mock-bridge';
+import { FIXTURE } from '../src/mock/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 function deferred<T>() {

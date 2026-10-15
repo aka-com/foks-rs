@@ -23,8 +23,8 @@ test.after(async () => {
 
 test('startup waits for catalog completion and hands off maintenance once', async () => {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const base = mockBridge(FIXTURE);
   const full = await base.listCatalog();
   const local = {
@@ -105,8 +105,8 @@ test('completed startup catalog yields to a later shell refresh', async () => {
     value: false,
   });
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const base = mockBridge(FIXTURE);
   const full = await base.listCatalog();
   const item = full.items[0];
@@ -186,8 +186,8 @@ test('completed startup catalog yields to a later shell refresh', async () => {
 
 test('startup paused by maintenance resumes from the terminal native event', async () => {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   let snapshot: MaintenanceSnapshot = {
     state: 'active',
     generation: 3,
@@ -248,8 +248,8 @@ test('startup paused by maintenance resumes from the terminal native event', asy
 
 test('mounted shell ignores duplicate maintenance completion side effects', async () => {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   let snapshot: MaintenanceSnapshot = {
     state: 'idle',
     generation: 0,
@@ -360,8 +360,8 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
 
 test('startup restoration retry continues through catalog load into the shell', async () => {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   let snapshot: MaintenanceSnapshot = {
     state: 'complete',
     generation: 4,
@@ -443,8 +443,8 @@ test('startup restoration retry continues through catalog load into the shell', 
 
 test('maintenance invalidates a pending startup catalog before shell handoff', async () => {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   let snapshot: MaintenanceSnapshot = {
     state: 'idle',
     generation: 0,

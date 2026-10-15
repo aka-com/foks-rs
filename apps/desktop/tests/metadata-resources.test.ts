@@ -3,7 +3,7 @@ import test, { mock } from 'node:test';
 import type { AppInfo, Bridge } from '../src/bridge';
 import { enqueueProfileWork } from '../src/bridge';
 import type { TeamStore } from '../src/model';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import {
   MetadataRepository,
   RetiredQueryError,

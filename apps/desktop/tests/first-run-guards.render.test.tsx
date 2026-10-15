@@ -40,8 +40,8 @@ async function harness() {
   const state = await import('../src/first-run-state');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
 

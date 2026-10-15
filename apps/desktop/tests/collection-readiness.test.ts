@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { FIXTURE } from '../src/fixture';
-import { mockBridge } from '../src/mock-bridge';
+import { FIXTURE } from '../src/mock/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
 import { projectCatalog } from '../src/bridge/snapshot-projection';
 import {
   mergeProfileSnapshot,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mockChat } from '../src/chat-mock';
+import { mockChat } from '../src/mock/chat-mock';
 import type { ChatAction, ChatOperation } from '../src/chat-contract';
 
 const channel = 'ab'.repeat(16);

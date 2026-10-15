@@ -54,8 +54,8 @@ async function setup(
 ) {
   const { ChatInboxProvider, useChatInbox } =
     await import('../src/chat/inbox-provider');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>

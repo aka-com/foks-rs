@@ -35,7 +35,7 @@ const source = join(app, 'src');
 const transport = join(source, 'bridge', 'transport.ts');
 const yubikey = join(source, 'bridge', 'yubikey.ts');
 const contract = join(source, 'bridge', 'contract.ts');
-const mock = join(source, 'mock-bridge.ts');
+const mock = join(source, 'mock', 'mock-bridge.ts');
 
 async function manifest(): Promise<Manifest> {
   return JSON.parse(

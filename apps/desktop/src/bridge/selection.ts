@@ -25,7 +25,7 @@ export async function selectBridge(): Promise<Bridge> {
     import.meta.env?.VITE_FOKS_MOCK === '1' ||
     import.meta.env?.DEV === true
   ) {
-    const { mockBridge } = await import('../mock-bridge');
+    const { mockBridge } = await import('../mock/mock-bridge');
     return mockBridge();
   }
   throw new Error('FOKS desktop host environment is required.');

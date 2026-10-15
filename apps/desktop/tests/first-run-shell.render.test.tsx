@@ -27,7 +27,7 @@ function resetLocation(): void {
 }
 
 async function unclaimedSnapshot(): Promise<AgentSnapshot> {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   return {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
@@ -44,7 +44,7 @@ async function unclaimedSnapshot(): Promise<AgentSnapshot> {
 
 test('first-run resume reports an unreachable managed local server', async () => {
   const { App } = await import('../src/app-root');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { encodeFirstRunCheckpoint, FIRST_RUN_CHECKPOINT_KEY } =
     await import('../src/first-run-state');
 
@@ -96,7 +96,7 @@ test('first-run resume reports an unreachable managed local server', async () =>
 
 test('first-run retry reconnects the agent transport after a connection loss', async () => {
   const { App } = await import('../src/app-root');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { FIRST_RUN_CHECKPOINT_KEY } = await import('../src/first-run-state');
   window.localStorage.removeItem(FIRST_RUN_CHECKPOINT_KEY);
   resetLocation();

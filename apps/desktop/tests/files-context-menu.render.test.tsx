@@ -22,8 +22,8 @@ test.afterEach(() => {
 
 async function mount(accessNow?: () => number) {
   const { ItemsScreen } = await import('../src/screens/items-screen');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { ToastProvider, ToastController } = await import('../kit/toasts');

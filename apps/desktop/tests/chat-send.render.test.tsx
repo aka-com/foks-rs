@@ -24,8 +24,8 @@ async function setup(override?: (base: Bridge) => Bridge) {
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { ChatTab } = await import('../src/screens/chat-tab');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((s) =>

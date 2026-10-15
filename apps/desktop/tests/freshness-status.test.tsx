@@ -9,7 +9,7 @@ import {
   profileConnectivityKey,
   profileRefreshKey,
 } from '../src/data/desktop-reconciliation';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import {
   failWholeCatalogRefresh,
   markCatalogRefresh,

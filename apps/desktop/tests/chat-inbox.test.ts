@@ -11,7 +11,7 @@ import type { ChatInboxTiming } from '../src/chat/inbox-service';
 import type { Bridge } from '../src/bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
 import type { TeamStore, AgentSnapshot } from '../src/model';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 
 function chatSnapshot(stores: TeamStore[]): AgentSnapshot {
   const template = FIXTURE.servers[0];

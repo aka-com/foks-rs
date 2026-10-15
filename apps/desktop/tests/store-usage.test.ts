@@ -4,9 +4,9 @@ import type { Bridge, StoreUsage } from '../src/bridge';
 import { decodeStoreUsage } from '../src/bridge';
 import { cadenceReconciles } from '../src/app/metadata-runtime';
 import type { AgentSnapshot, Store } from '../src/model';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import { MetadataRepository } from '../src/data/metadata-repository';
-import { mockBridge } from '../src/mock-bridge';
+import { mockBridge } from '../src/mock/mock-bridge';
 import {
   formatStoredBytes,
   isStoreUsageQuery,

@@ -28,7 +28,7 @@ async function overlay(children: ReactNode, snapshot: AgentSnapshot) {
 }
 
 async function fixture() {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   return structuredClone(FIXTURE);
 }
 
@@ -65,7 +65,7 @@ test('a queued workflow uses the latest snapshot instead of launch permission', 
 test('local aliases save while remote operations are unavailable', async () => {
   const { LocalAliasPanel } =
     await import('../src/components/local-alias-panel');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const current = await fixture();
   current.servers[0].compatibility = { status: 'required-unavailable' };
   let saved = '';
@@ -97,7 +97,7 @@ test('local aliases save while remote operations are unavailable', async () => {
 
 test('web admin needs user-sync, not device administration, and rechecks submit', async () => {
   const { AdminPanel } = await import('../src/components/admin-panel');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const current = await fixture();
   current.servers[0].compatibility = {
     status: 'required',
@@ -139,7 +139,7 @@ test('web admin needs user-sync, not device administration, and rechecks submit'
 
 test('metadata dispatch checks current account capability before either device or backup reads', async () => {
   const { DeviceCache } = await import('../src/data/device-cache');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const current = await fixture();
   let reads = 0;
   const cache = new DeviceCache({
@@ -167,7 +167,7 @@ test('metadata dispatch checks current account capability before either device o
 
 test('shared metadata preflight keeps its root snapshot source after a view leaves', async () => {
   const module = await import('../src/data/device-cache');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const initial = await fixture();
   let current = initial,
     calls = 0;
@@ -202,7 +202,7 @@ test('shared metadata preflight keeps its root snapshot source after a view leav
 
 test('device rendering never scans hardware or prompts for credentials', async () => {
   const { DevicesScreen } = await import('../src/screens/devices-screen');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const current = await fixture();
   let scans = 0;

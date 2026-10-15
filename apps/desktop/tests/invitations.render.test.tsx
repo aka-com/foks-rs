@@ -54,8 +54,8 @@ test('invitation boundary rejects secret fields, bad handles and oversized inbox
 test('the unfinished activity band stays quiet about a read the profile could not admit', async () => {
   const { UnfinishedActivity } =
     await import('../src/components/unfinished-activity');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -113,7 +113,7 @@ test('the unfinished activity band stays quiet about a read the profile could no
 test('the join sheet confirms the resolved team, then prepares and sends in one press', async () => {
   const { InvitationPanel } =
     await import('../src/components/invitation-panel');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const actions: string[] = [];
   const bridge = {
     ...mockBridge(),
@@ -197,7 +197,7 @@ test('the join sheet confirms the resolved team, then prepares and sends in one 
 test('a team the account administers is picked from a list and sent by its alias', async () => {
   const { InvitationPanel } =
     await import('../src/components/invitation-panel');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const seen: InvitationAction[] = [];
   const bridge = {
     ...mockBridge(),
@@ -260,8 +260,8 @@ test('a team the account administers is picked from a list and sent by its alias
 test('the join sheet names a configured profile rather than asking for one', async () => {
   const { InvitationPanel } =
     await import('../src/components/invitation-panel');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const seen: InvitationAction[] = [];
   const bridge = {
     ...mockBridge(FIXTURE),
@@ -313,8 +313,8 @@ test('the join sheet names a configured profile rather than asking for one', asy
 test('Invite new user prepares and submits in one press, then shares the token', async () => {
   const { InviteNewUserSheet } =
     await import('../src/components/invite-new-user-sheet');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -370,8 +370,8 @@ test('Invite new user prepares and submits in one press, then shares the token',
 test('Invite new user asks for the security key PIN only when the key requires it', async () => {
   const { InviteNewUserSheet } =
     await import('../src/components/invite-new-user-sheet');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -422,8 +422,8 @@ test('Invite new user asks for the security key PIN only when the key requires i
 test('Invite new user keeps a PIN refusal and states the attempts left', async () => {
   const { InviteNewUserSheet } =
     await import('../src/components/invite-new-user-sheet');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -518,8 +518,8 @@ test('Invite new user keeps a PIN refusal and states the attempts left', async (
 test('a resumed hardware-key request can receive its PIN on step one', async () => {
   const { InvitationPanel } =
     await import('../src/components/invitation-panel');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const received: Array<string | null> = [];
   const operation = { operation_id: 'a'.repeat(32), state: 'prepared' };
   const bridge = {
@@ -564,8 +564,8 @@ test('a resumed hardware-key request can receive its PIN on step one', async () 
 test('a refused PIN on a resumed request is cleared and not sent again', async () => {
   const { InvitationPanel } =
     await import('../src/components/invitation-panel');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const received: Array<string | null> = [];
   const operation = { operation_id: 'e'.repeat(32), state: 'prepared' };
   const bridge = {
@@ -627,7 +627,7 @@ test('a refused PIN on a resumed request is cleared and not sent again', async (
 test('an invitation action discards the profile’s journal of unfinished operations', async () => {
   const { InvitationPanel } =
     await import('../src/components/invitation-panel');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { MetadataRepository } =
     await import('../src/data/metadata-repository');
   const { MetadataRepositoryContext } = await import('../src/data/query-hooks');
@@ -696,8 +696,8 @@ test('an invitation action discards the profile’s journal of unfinished operat
 test('remote requests select a configured server before verification and approval', async () => {
   const { MembershipRequests } =
     await import('../src/components/membership-requests');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -784,8 +784,8 @@ test('remote requests select a configured server before verification and approva
 test('hardware inbox loads prompt for a PIN and use it only on explicit refresh', async () => {
   const { MembershipRequests } =
     await import('../src/components/membership-requests');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -839,8 +839,8 @@ test('hardware inbox loads prompt for a PIN and use it only on explicit refresh'
 test('a failed invitation submission retries the original operation', async () => {
   const { InviteNewUserSheet } =
     await import('../src/components/invite-new-user-sheet');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -899,8 +899,8 @@ for (const state of ['prepared', 'submission-unknown'] as const) {
     const actionName = state === 'prepared' ? 'attempt' : 'status';
     const { InviteNewUserSheet } =
       await import('../src/components/invite-new-user-sheet');
-    const { mockBridge } = await import('../src/mock-bridge');
-    const { FIXTURE } = await import('../src/fixture');
+    const { mockBridge } = await import('../src/mock/mock-bridge');
+    const { FIXTURE } = await import('../src/mock/fixture');
     const team = FIXTURE.stores.find(
       (store): store is TeamStore => store.kind === 'team',
     );
@@ -951,8 +951,8 @@ for (const state of ['prepared', 'submission-unknown'] as const) {
 test('an acknowledged invitation is finalized and refresh failure preserves successful creation', async () => {
   const { InviteNewUserSheet } =
     await import('../src/components/invite-new-user-sheet');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -1004,7 +1004,7 @@ test('an acknowledged invitation is finalized and refresh failure preserves succ
 test('delivered requests remain reachable pending membership approval', async () => {
   const { InvitationPanel } =
     await import('../src/components/invitation-panel');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const bridge = {
     ...mockBridge(),
     invitation: async () => [
@@ -1036,7 +1036,7 @@ for (const remoteRequest of [false, true]) {
     test(`${remoteRequest ? 'remote' : 'local'} saved ${state} request keeps its destination across retries and status replies`, async () => {
       const { InvitationPanel } =
         await import('../src/components/invitation-panel');
-      const { mockBridge } = await import('../src/mock-bridge');
+      const { mockBridge } = await import('../src/mock/mock-bridge');
       const actions: InvitationAction[] = [];
       const row = {
         operation_id: '1'.repeat(32),
@@ -1105,8 +1105,8 @@ for (const remoteRequest of [false, true]) {
 test('requests load independently, show truncation and use millisecond ages', async () => {
   const { MembershipRequests } =
     await import('../src/components/membership-requests');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -1170,8 +1170,8 @@ for (const first of ['inbox', 'list'] as const) {
   test(`Requests waits for each read independently when ${first} finishes first`, async () => {
     const { MembershipRequests } =
       await import('../src/components/membership-requests');
-    const { mockBridge } = await import('../src/mock-bridge');
-    const { FIXTURE } = await import('../src/fixture');
+    const { mockBridge } = await import('../src/mock/mock-bridge');
+    const { FIXTURE } = await import('../src/mock/fixture');
     const team = FIXTURE.stores.find(
       (store): store is TeamStore => store.kind === 'team',
     );
@@ -1262,8 +1262,8 @@ for (const first of ['inbox', 'list'] as const) {
 test('activity opens with loading, keeps known membership work, and recovers from a failed read', async () => {
   const { InvitationActivitySheet } =
     await import('../src/components/invitation-activity-sheet');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );

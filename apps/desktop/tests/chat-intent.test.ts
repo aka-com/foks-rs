@@ -7,7 +7,7 @@ import {
   type ChatScope,
   type ChatAction,
 } from '../src/chat-contract';
-import { mockBridge } from '../src/mock-bridge';
+import { mockBridge } from '../src/mock/mock-bridge';
 import type { Bridge } from '../src/bridge';
 
 const scope: ChatScope = {

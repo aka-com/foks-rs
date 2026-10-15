@@ -46,8 +46,8 @@ async function shell(
   folder?: string,
 ) {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   window.localStorage.clear();
   const locations = new LocationStore({

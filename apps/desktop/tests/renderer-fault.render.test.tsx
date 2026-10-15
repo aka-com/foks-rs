@@ -200,8 +200,8 @@ test('Copy diagnostics lists a fault older than the timeline window', async () =
 
 async function mountApp(decorate: (base: Bridge) => Partial<Bridge>) {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const base = mockBridge(FIXTURE);
   const bridge: Bridge = { ...base, ...decorate(base) };
@@ -279,7 +279,7 @@ test('a render error in the details panel closes it, discards the read value and
 
 test('a render error outside the panels shows the fault screen inside the exit guard', async () => {
   const { ExitGuard } = await import('../src/app/exit-guard');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const since = logs.diagnosticLog.length;
   let quits = 0;
   const bridge: Bridge = {

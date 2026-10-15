@@ -5,7 +5,7 @@ import {
   reconcileTeamDiscovery,
 } from '../src/team-discovery';
 import type { Bridge } from '../src/bridge';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import type { AgentSnapshot } from '../src/model';
 
 function fixture(): AgentSnapshot {

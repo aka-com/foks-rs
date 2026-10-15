@@ -303,8 +303,8 @@ test('opens on All items, in the folder browser', async () => {
  */
 test('Accounts, Devices and Settings draw no StoreRef', async () => {
   const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+    '/src/mock/fixture.ts',
+  )) as typeof import('../src/mock/fixture');
   const refs = FIXTURE.stores.map((store) => store.id);
   assert.ok(refs.includes('acct:personal'), 'the fixture names account stores');
   assert.ok(refs.includes('team:eng'), 'the fixture names team stores');

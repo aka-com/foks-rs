@@ -44,8 +44,8 @@ async function harness() {
   const { FirstRunExperience } =
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);

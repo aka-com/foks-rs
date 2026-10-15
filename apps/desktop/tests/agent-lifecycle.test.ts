@@ -5,8 +5,8 @@ import {
   AgentLifecycleController,
   maintenanceOutcomeMessage,
 } from '../src/agent-lifecycle';
-import { FIXTURE } from '../src/fixture';
-import { mockBridge } from '../src/mock-bridge';
+import { FIXTURE } from '../src/mock/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
 import type { AgentStatus } from '../src/model';
 
 function deferred<T>(): {

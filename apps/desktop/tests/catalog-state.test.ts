@@ -8,9 +8,9 @@ import {
   mergeProfileSnapshot,
   projectCatalogFreshness,
 } from '../src/data/catalog-state';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import type { AgentSnapshot } from '../src/model';
-import { mockBridge } from '../src/mock-bridge';
+import { mockBridge } from '../src/mock/mock-bridge';
 
 test('concurrent profile publication merges only its own scope into the newest base', () => {
   const [a, b] = FIXTURE.servers;

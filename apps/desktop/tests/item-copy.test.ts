@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import type { Item } from '../src/model';
 import type { Bridge } from '../src/bridge';
 import type { ToastOptions } from '../kit/toasts';

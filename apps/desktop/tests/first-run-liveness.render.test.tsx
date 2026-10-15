@@ -74,8 +74,8 @@ async function harness() {
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const state = await import('../src/first-run-state');
   const profile = {
     profile: 'personal',
@@ -1105,7 +1105,7 @@ test('late identity refresh cannot complete onboarding after readiness is lost',
 
 test('the development bridge supplies matching identity facts after pending setup is restored', async () => {
   const h = await harness();
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { loadSnapshot } = await import('../src/bridge');
   const { resolveProvisionedIdentity } =
     await import('../src/first-run-identity');

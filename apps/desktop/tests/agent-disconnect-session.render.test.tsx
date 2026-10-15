@@ -37,8 +37,8 @@ test.after(async () => {
 
 async function modules() {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   return { App, FIXTURE, mockBridge };
 }
 

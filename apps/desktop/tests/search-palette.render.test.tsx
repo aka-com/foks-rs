@@ -60,7 +60,7 @@ async function palette(
   const { SearchPalette, useSearchShortcut } =
     await import('../src/shell/search-palette');
   const { Dialog, OverlayProvider } = await import('../kit/overlay-primitives');
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
 
   const journal: Journal = {
     navigations: [],

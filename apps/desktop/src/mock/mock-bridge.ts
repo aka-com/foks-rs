@@ -1,7 +1,7 @@
 /** A deterministic command bridge for render and browser acceptance tests. */
 
-import { notificationKey, teamKey } from './chat/local-contract';
-import type { LocalAlertMode } from './chat/local-contract';
+import { notificationKey, teamKey } from '../chat/local-contract';
+import type { LocalAlertMode } from '../chat/local-contract';
 import { mockInvitations } from './invitation-mock';
 import { mockChat } from './chat-mock';
 import { chatMockScenario } from './chat-mock-scenarios';
@@ -24,20 +24,20 @@ import type {
   RemoveItemRequest,
   ReplaceDroppedFileRequest,
   RestoreTrashRequest,
-} from './bridge';
-import { roleDto, normalizeCommandError } from './bridge';
-import type { vaultCommands } from './bridge/commands-vault';
-import { createBridge } from './bridge/create';
-import { createTransport, type TransportChannel } from './bridge/transport';
-import { mockCommand, mockHost, type MockCommand } from './mock/host';
-import { accountWire, serverStatusWire } from './mock/wire';
+} from '../bridge';
+import { roleDto, normalizeCommandError } from '../bridge';
+import type { vaultCommands } from '../bridge/commands-vault';
+import { createBridge } from '../bridge/create';
+import { createTransport, type TransportChannel } from '../bridge/transport';
+import { mockCommand, mockHost, type MockCommand } from './host';
+import { accountWire, serverStatusWire } from './wire';
 import { FIXTURE } from './fixture';
-import type { RenameProgress } from './rename-contract';
-import { storeReadable } from './model/lease';
-import { parseRole, roleRank, visibilityOf } from './model/roles';
-import { loginField, shapeOf } from './model/login';
-import { itemKey } from './model/types';
-import type { Item, RoleWire, Store, AgentSnapshot } from './model/types';
+import type { RenameProgress } from '../rename-contract';
+import { storeReadable } from '../model/lease';
+import { parseRole, roleRank, visibilityOf } from '../model/roles';
+import { loginField, shapeOf } from '../model/login';
+import { itemKey } from '../model/types';
+import type { Item, RoleWire, Store, AgentSnapshot } from '../model/types';
 import {
   ORIGIN_SUFFIX,
   TRASH_ROOT,
@@ -45,9 +45,9 @@ import {
   isTrashPath,
   parseTrashName,
   trashStamp,
-} from './model/trash';
-import { decodeFirstRunCheckpoint } from './first-run-state';
-import { readStorage, STORAGE_KEYS } from './platform/device-storage';
+} from '../model/trash';
+import { decodeFirstRunCheckpoint } from '../first-run-state';
+import { readStorage, STORAGE_KEYS } from '../platform/device-storage';
 
 export type AppLifecycleRequest = 'restart' | 'quit';
 
@@ -161,7 +161,7 @@ export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
       'agent-lost'
       ? 'The agent socket closed while reading the catalog.'
       : null;
-  const ssoModes = new Map<string, import('./sso-contract').SsoPurpose>();
+  const ssoModes = new Map<string, import('../sso-contract').SsoPurpose>();
   const renames = new Map<string, RenameProgress[]>();
   const stores: Store[] = snapshot.stores.map((store) => ({ ...store }));
   const servers = snapshot.servers.map((server) => ({ ...server }));

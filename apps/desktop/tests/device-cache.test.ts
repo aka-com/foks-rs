@@ -3,7 +3,7 @@ import test from 'node:test';
 import { DeviceCache } from '../src/data/device-cache';
 import { RetiredQueryError } from '../src/data/metadata-repository';
 import type { Bridge, AccountDevice } from '../src/bridge';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import type { AgentSnapshot } from '../src/model';
 
 function fixture() {

@@ -28,7 +28,7 @@ import {
   DeviceAlertRegistry,
   devicesAlertSummary,
 } from '../src/data/device-alert';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 
 installDom({ url: 'http://localhost/' });
 test.afterEach(() => window.localStorage.clear());

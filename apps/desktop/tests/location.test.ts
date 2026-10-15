@@ -938,7 +938,7 @@ test('getSnapshot is stable across reads, as useSyncExternalStore requires', () 
 });
 
 test('account context follows objects and persists across cross-account tabs', async () => {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const navigation = new LocationStore();
   navigation.setAccountStores(FIXTURE.stores);
   navigation.navigate({
@@ -972,7 +972,7 @@ test('account context follows objects and persists across cross-account tabs', a
 });
 
 test('rail tabs resume folders and sections without reopening item details', async () => {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const navigation = new LocationStore();
   navigation.setAccountStores(FIXTURE.stores);
   navigation.navigate({ kind: 'store', ref: 'acct:work' });
@@ -1002,7 +1002,7 @@ test('rail tabs resume folders and sections without reopening item details', asy
 });
 
 test('remembered device pages follow a new acting account without reusing a key id', async () => {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const navigation = new LocationStore();
   navigation.setAccountStores(FIXTURE.stores);
   navigation.navigate({

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { initialScene, fixtureScenesAllowed } from '../src/app/scenes';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import { installDom } from './lib/dom-harness';
 
 installDom({ url: 'http://localhost/?state=show&lease=lapsed' });

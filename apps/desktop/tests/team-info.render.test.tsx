@@ -24,8 +24,8 @@ async function mount(
 ) {
   const { TeamInfoPanel } = await import('../src/screens/team-info');
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const snapshot = transform(FIXTURE);
   const store = snapshot.stores.find(
     (store) => store.id === 'team:eng',

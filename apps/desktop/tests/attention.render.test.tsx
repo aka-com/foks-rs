@@ -56,8 +56,8 @@ test('the bell lists each signal, links it to its page, and keeps the setup step
     value: false,
   });
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { deviceAlertRegistry } = await import('../src/data/device-alert');
   const base = mockBridge(FIXTURE);
   const bridge: Bridge = {
@@ -155,8 +155,8 @@ test('the recovery-phrase step opens Create recovery phrase on the account that 
     value: false,
   });
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   ui.render(createElement(App, { bridge: mockBridge(FIXTURE) }));
   const step = await ui.waitFor(async () => {
     const found = [
@@ -177,8 +177,8 @@ test('the recovery-phrase step opens Create recovery phrase on the account that 
 
 test('a lock that holds clears the recent messages', async () => {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ToastController } = await import('../kit/toasts');
   // The lock also unmounts the shell and its controller, so the controller
   // the shell connected is held here to read its history afterwards.
@@ -233,8 +233,8 @@ test('a lock that holds clears the recent messages', async () => {
 
 test('an interrupted membership change is read once per profile and links to its team', async () => {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const reads = new Map<string, number>();
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),

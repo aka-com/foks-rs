@@ -9,8 +9,8 @@ import {
   loadSnapshot,
   type Bridge,
 } from '../src/bridge';
-import { FIXTURE } from '../src/fixture';
-import { mockBridge } from '../src/mock-bridge';
+import { FIXTURE } from '../src/mock/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
 import {
   PROTOCOL_CAPABILITIES,
   serverAvailability,

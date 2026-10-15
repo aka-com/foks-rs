@@ -14,7 +14,7 @@ import {
   CHANNEL_CREATION_RECORD_LIMIT,
 } from '../src/chat/channel-creation';
 import type { TeamInbox } from '../src/chat/inbox-service';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import type { AgentSnapshot, TeamStore } from '../src/model';
 
 const scope: ChatScope = {

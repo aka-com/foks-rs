@@ -25,8 +25,8 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
     value: false,
   });
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const base = mockBridge(FIXTURE);
   let releaseCard!: (cards: { serial: number }[]) => void;
   let connected: { serial: number }[] = [];

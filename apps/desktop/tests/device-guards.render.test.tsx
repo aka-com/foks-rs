@@ -48,8 +48,8 @@ async function harness() {
   };
   const locations = await import('../src/location');
   const guards = await import('../src/navigation-guard');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const TestShell = await loadTestShell();
@@ -389,7 +389,7 @@ test('the two default routes are canonicalized without asking the guards', async
   const h = await harness();
   const { DevicesScreen } = await import('../src/screens/devices-screen');
   const { AccountSection } = await import('../src/screens/account-section');
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const snapshot: AgentSnapshot = FIXTURE;
 
   for (const [screen, kind] of [
@@ -435,7 +435,7 @@ test('Devices and Account wait for account inventory instead of showing a missin
   const h = await harness();
   const { DevicesScreen } = await import('../src/screens/devices-screen');
   const { AccountSection } = await import('../src/screens/account-section');
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const snapshot: AgentSnapshot = {
     ...FIXTURE,
     accounts: [],

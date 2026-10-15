@@ -23,8 +23,8 @@ test.afterEach(() => ui.cleanup());
 
 async function sheet(kind: GroupSheetKind, target: string | null = null) {
   const { GroupSheet } = await import('../src/screens/groups-screen');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { partiesOf } = await import('../src/model');
   const TestShell = await loadTestShell();
   const { ToastController, ToastProvider } = await import('../kit/toasts');

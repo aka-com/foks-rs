@@ -35,8 +35,8 @@ test.afterEach(() => ui.cleanup());
 async function servicesHarness() {
   const { useShellServicesRuntime } =
     await import('../src/app/services-runtime');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const bridge = mockBridge(FIXTURE);
   const accessNow = () => 1;
   const latestRef: RefObject<AgentSnapshot> = { current: FIXTURE };
@@ -95,7 +95,7 @@ test('the shell command-error service passes the item and draft to the current h
       handler: (error, item, draft) => calls.push([error, item, draft]),
     }),
   );
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const item = FIXTURE.items[0];
   seen[0].commandError('conflict', item, 'draft');
   assert.deepEqual(calls, [['conflict', item, 'draft']]);
@@ -152,7 +152,7 @@ test('a component outside the shell providers cannot read the services or the sn
 test('the shell snapshot is the one workflow availability reads without a snapshot of its own', async () => {
   const { useShellSnapshot } = await import('../src/shell-services');
   const { useWorkflowAccess } = await import('../src/workflow-context');
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const TestShell = await loadTestShell();
   const stopped: AgentSnapshot = {
     ...FIXTURE,

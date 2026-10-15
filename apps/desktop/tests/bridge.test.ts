@@ -65,8 +65,8 @@ import {
   type Server,
   type AgentSnapshot,
 } from '../src/model';
-import { FIXTURE } from '../src/fixture';
-import { mockBridge } from '../src/mock-bridge';
+import { FIXTURE } from '../src/mock/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
 
 test('mock mutations reject a recreated source with the same path and version', async () => {
   const bridge = mockBridge(FIXTURE);

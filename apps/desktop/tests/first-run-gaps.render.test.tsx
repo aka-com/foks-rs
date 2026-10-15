@@ -28,8 +28,8 @@ function never<T>(): Promise<T> {
 async function harness() {
   const screen = await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const model = await import('../src/model');
   const state = await import('../src/first-run-state');
   const profile = {

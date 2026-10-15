@@ -128,8 +128,8 @@ async function setup(
   const { NavigationGuardProvider, NavigationPrompt } =
     await import('../src/navigation-guard');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
 
   const snapshot = {
     ...FIXTURE,

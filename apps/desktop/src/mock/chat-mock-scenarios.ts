@@ -1,6 +1,6 @@
-import type { AgentSnapshot } from './model';
-import { parseRole } from './model/roles';
-import type { ChatChannel, ChatMessage, ChatOperation } from './chat-contract';
+import type { AgentSnapshot } from '../model';
+import { parseRole } from '../model/roles';
+import type { ChatChannel, ChatMessage, ChatOperation } from '../chat-contract';
 
 /**
  * The seeded states of the mock chat. `default` is one channel with one

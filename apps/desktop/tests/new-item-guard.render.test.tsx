@@ -30,8 +30,8 @@ test.afterEach(() => ui.cleanup());
 
 async function mount(overrides: Partial<Bridge> = {}) {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const store = new LocationStore({
     ...INITIAL_STATE,
@@ -434,7 +434,7 @@ test('item rename keeps the selected source version and blocks dismissal during 
       return { applied: true };
     },
   });
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const item = FIXTURE.items.find(
     (item) => item.store === 'acct:personal' && item.kind !== 'Folder',
   )!;
@@ -486,7 +486,7 @@ test('ambiguous move keeps the draft visible and cannot be submitted twice', asy
       };
     },
   });
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const item = FIXTURE.items.find(
     (item) => item.store === 'acct:personal' && item.kind !== 'Folder',
   )!;
@@ -529,7 +529,7 @@ test('Move to Trash uses the selected version and sends one request while pendin
       return { applied: true, path: '/.trash/owner/x' };
     },
   });
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const item = FIXTURE.items.find(
     (item) => item.store === 'acct:personal' && item.kind === 'File',
   )!;

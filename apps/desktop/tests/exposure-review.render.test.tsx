@@ -49,7 +49,7 @@ function stored(): StoredReview[] {
 }
 
 async function fixture(): Promise<AgentSnapshot> {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   return FIXTURE;
 }
 
@@ -85,7 +85,7 @@ async function teamPage(
 ) {
   const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
   const TestShell = await loadTestShell();
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const bridge = { ...mockBridge(snapshot), ...overrides };
   const rendered = ui.render(
     await providers(
@@ -325,7 +325,7 @@ test('the removal waits while the team’s items are still being read', async ()
 test('lowering a role lists only the items the new role no longer admits', async () => {
   const snapshot = await fixture();
   const { GroupSheet } = await import('../src/screens/groups-screen');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const TestShell = await loadTestShell();
   const store = snapshot.stores.find((entry) => entry.id === 'team:eng');
   assert.ok(store);
@@ -372,7 +372,7 @@ test('lowering a role lists only the items the new role no longer admits', async
 /** Devices for the personal account, with the Remove device sheet open. */
 async function removeDeviceSheet(snapshot: AgentSnapshot) {
   const { DevicesScreen } = await import('../src/screens/devices-screen');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const TestShell = await loadTestShell();
   const device = snapshot.devices[1]?.id_hex.replace(/^02/, '04');
   assert.ok(device);

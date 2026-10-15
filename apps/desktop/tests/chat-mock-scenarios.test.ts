@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mockChat } from '../src/chat-mock';
+import { mockChat } from '../src/mock/chat-mock';
 import {
   CHAT_MOCK_SCENARIOS,
   chatMockScenario,
@@ -17,14 +17,14 @@ import {
   MOCK_CHAT_REJECTION_CODE,
   MOCK_CHAT_UNCERTAIN,
   type ChatMockScenario,
-} from '../src/chat-mock-scenarios';
+} from '../src/mock/chat-mock-scenarios';
 import {
   decodeChatReply,
   type ChatAction,
   type ChatReply,
 } from '../src/chat-contract';
 import { CHAT_NOTIFICATION_TEXT_CHARS } from '../src/chat-limits';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 
 // The native decoder checks the scope against a JSON store id, so the
 // Engineering team is renamed to one; its roster follows it.

@@ -8,7 +8,7 @@ import test from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { PartyRow, RoleChip, StoreMark } from '../src/components';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import type { Party, Store } from '../src/model';
 
 function store(id: string): Store {

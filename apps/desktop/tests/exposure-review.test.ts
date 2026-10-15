@@ -13,7 +13,7 @@ import { installDom } from './lib/dom-harness';
 installDom({ url: 'http://localhost/' });
 
 const exposure = await import('../src/exposure-review');
-const { FIXTURE } = await import('../src/fixture');
+const { FIXTURE } = await import('../src/mock/fixture');
 type AgentSnapshot = import('../src/model').AgentSnapshot;
 type Party = import('../src/model').Party;
 

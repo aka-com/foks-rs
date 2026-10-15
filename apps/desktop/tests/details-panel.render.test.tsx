@@ -31,8 +31,8 @@ async function setup(
   const { NavigationGuardProvider } = await import('../src/navigation-guard');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const subject = FIXTURE.items.find(
     selectItem ?? ((item) => item.path === '/env/prod/DATABASE_URL'),
   )!;
@@ -1091,7 +1091,7 @@ test('login copies put only the chosen field on the clipboard', async () => {
     undefined,
     (item) => item.path === '/logins/github.com',
   );
-  const { mockCopies } = await import('../src/mock-bridge');
+  const { mockCopies } = await import('../src/mock/mock-bridge');
   const before = mockCopies.length;
   const r = ui.render(p.draw());
   ui.fireEvent.click(r.getByRole('button', { name: 'Copy user name' }));
@@ -1120,7 +1120,7 @@ test('a field the login lacks is reported, not copied, and reads as not set', as
     undefined,
     (item) => item.path === '/logins/fastmail.com',
   );
-  const { mockCopies } = await import('../src/mock-bridge');
+  const { mockCopies } = await import('../src/mock/mock-bridge');
   const before = mockCopies.length;
   const handled: unknown[] = [];
   p.props.onCommandError = (error) => {
@@ -1142,7 +1142,7 @@ test('a field the login lacks is reported, not copied, and reads as not set', as
 
 test('a login saved outside /logins/ is a Password by its listed shape', async () => {
   const p = await setup();
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const login = {
     ...p.subject,
     path: '/env/prod/grafana',
@@ -1191,7 +1191,7 @@ async function setupLogin(
   { path = '/wifi/cabin', shaped = true } = {},
 ) {
   const p = await setup();
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const login = {
     ...p.subject,
     path,
@@ -1306,7 +1306,7 @@ test('a Password known only by its /logins/ path also copies its whole value', a
     path: '/logins/legacy.example',
     shaped: false,
   });
-  const { mockCopies } = await import('../src/mock-bridge');
+  const { mockCopies } = await import('../src/mock/mock-bridge');
   const before = mockCopies.length;
   const r = ui.render(p.draw());
   assert.ok(r.getAllByRole('button', { name: 'Copy password' }).length);

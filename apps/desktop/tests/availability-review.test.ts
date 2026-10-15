@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import {
   profileInventoryComplete,
   storeAvailability,

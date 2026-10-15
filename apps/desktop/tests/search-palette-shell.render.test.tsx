@@ -49,8 +49,8 @@ async function mount({
   plaintext?: Record<string, string>;
 } = {}) {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const { applyLease } = await import('../src/model/lease');
   const stored: AgentSnapshot = {
@@ -141,7 +141,7 @@ test('⌘C on an item whose access has stopped warns and copies nothing', async 
 });
 
 test('⌘O on a Password opens its website through the host', async () => {
-  const { mockOpenedSites } = await import('../src/mock-bridge');
+  const { mockOpenedSites } = await import('../src/mock/mock-bridge');
   const before = mockOpenedSites.length;
   const { opens } = await mount();
   await openPalette('github');
@@ -165,7 +165,7 @@ test('⌘O on a Password opens its website through the host', async () => {
 });
 
 test('⌘O on a website with no scheme opens it as https', async () => {
-  const { mockOpenedSites } = await import('../src/mock-bridge');
+  const { mockOpenedSites } = await import('../src/mock/mock-bridge');
   const before = mockOpenedSites.length;
   // The `://` in the redirect parameter is not a scheme.
   await mount({

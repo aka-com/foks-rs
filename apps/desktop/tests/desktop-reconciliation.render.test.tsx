@@ -15,8 +15,8 @@ import {
 } from '../src/app/catalog-runtime';
 import { AccessLifetime } from '../src/data/access-lifetime';
 import { ToastController } from '../kit/toasts';
-import { mockBridge } from '../src/mock-bridge';
-import { FIXTURE } from '../src/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
+import { FIXTURE } from '../src/mock/fixture';
 import type { Bridge, CatalogDto } from '../src/bridge';
 import { serverAvailability, type AgentSnapshot } from '../src/model';
 import type { MutationFailureHandler } from '../src/data/mutation-recovery';

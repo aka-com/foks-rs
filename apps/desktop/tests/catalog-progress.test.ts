@@ -10,8 +10,8 @@ import {
   type Bridge,
   type CatalogDto,
 } from '../src/bridge';
-import { FIXTURE } from '../src/fixture';
-import { mockBridge } from '../src/mock-bridge';
+import { FIXTURE } from '../src/mock/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
 import {
   profileInventoryComplete,
   serverCapabilityAvailability,

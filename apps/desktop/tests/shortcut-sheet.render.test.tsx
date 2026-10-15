@@ -26,8 +26,8 @@ test.afterEach(() => ui.cleanup());
 
 async function mount(overrides: Partial<Bridge> = {}) {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const store = new LocationStore({
     ...INITIAL_STATE,
@@ -198,8 +198,8 @@ test('the macOS menu’s Lock, which the host arms, shows the lock screen', asyn
 
 async function bootWithoutSnapshot(overrides: Partial<Bridge>) {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   return ui.render(
     createElement(App, { bridge: { ...mockBridge(FIXTURE), ...overrides } }),
   );

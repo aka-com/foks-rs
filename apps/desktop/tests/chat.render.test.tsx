@@ -37,8 +37,8 @@ async function setup(
   // conversation of the team the location names.
   const { ChatTab } = await import('../src/screens/chat-tab');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const enabledSnapshot = adjust({
     ...FIXTURE,
     agent: { state: 'ready' as const, historyAfter: incrementalHistory },
@@ -1696,7 +1696,7 @@ test('own messages read as You and unread messages sit under a New divider', asy
     value: () => false,
   });
   const actor = '01' + 'ab'.repeat(32);
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const namedSender = FIXTURE.parties.find(
     (party) => party.store === 'team:eng' && party.username,
   );
@@ -1880,7 +1880,7 @@ const sleep = (ms: number) =>
  * gives each message its text. `arrive` adds messages and wakes the inbox.
  */
 async function busyChannel(count: number, read: number) {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const other = FIXTURE.parties.find(
     (party) => party.store === 'team:eng' && party.username,
   )?.party_id_hex;
@@ -4297,8 +4297,8 @@ class ManualClock {
 
 test('the provider stops periodic team synchronization while the window is hidden', async () => {
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const snapshot = {
     ...FIXTURE,
     stores: FIXTURE.stores.filter(
@@ -4408,8 +4408,8 @@ test('opening a channel keeps its retained history ahead of channels not reopene
     await import('../src/chat/inbox-provider');
   const { useChatConversation } =
     await import('../src/chat/use-chat-conversation');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   type Inbox = import('../src/chat/inbox-service').ChatInboxService;
   type Conversation = ReturnType<
     typeof import('../src/chat/use-chat-conversation').useChatConversation
@@ -4552,8 +4552,8 @@ test('a history read whose access lapses in flight is refused locally and leaves
     await import('../src/chat/inbox-provider');
   const { useChatConversation } =
     await import('../src/chat/use-chat-conversation');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   type Inbox = import('../src/chat/inbox-service').ChatInboxService;
   type Conversation = ReturnType<
     typeof import('../src/chat/use-chat-conversation').useChatConversation

@@ -34,8 +34,8 @@ test.afterEach(() => {
 
 async function discoveryRecoveryHarness() {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const {
     initialFirstRun,
@@ -281,8 +281,8 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
   const { FirstRunExperience } =
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   let scans = 0;
   const checks: unknown[][] = [];
   const bridge: Bridge = {
@@ -345,8 +345,8 @@ test('the start fork selects nested CLI accounts with row actions', async () => 
   const { FirstRunExperience } =
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const second: GoProfileCandidate = {
     ...candidate,
     candidateId: 'second',
@@ -439,7 +439,7 @@ test('the start fork selects nested CLI accounts with row actions', async () => 
 test('disables account selection and dialog dismissal while server verification is pending', async () => {
   const { GoProfileConnectSheet } =
     await import('../src/screens/go-profile-connect');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   let resolve!: (
     value: Awaited<ReturnType<Bridge['checkAndAddGoProfile']>>,
   ) => void;
@@ -532,8 +532,8 @@ test('first-run waits for shared readiness and never initializes itself', async 
   const { FirstRunExperience } =
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   let initializations = 0;
   let discoveries = 0;
   const bridge: Bridge = {
@@ -574,8 +574,8 @@ test('first-run exposes shared agent recovery without discarding its current ste
   const { FirstRunExperience } =
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   let retries = 0;
   const rendered = ui.render(
     createElement(ToastProvider, {
@@ -608,8 +608,8 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
   const { FirstRunExperience } =
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const base = mockBridge(FIXTURE);
   const profile = 'foks-app';
   const hostId = `02${'7'.repeat(64)}`;
@@ -722,8 +722,8 @@ test('first-run account navigation, server edits, and connection errors stay sco
   const { FirstRunExperience } =
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const failure = (message: string) => ({
     code: 'invalid-request',
     message,
@@ -904,8 +904,8 @@ test('personal recovery puts backup first and completes without creating a group
   const { FirstRunExperience } =
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   window.history.replaceState(null, '', '/?state=protect&path=own');
   let creations = 0;
   const bridge: Bridge = {
@@ -953,8 +953,8 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
   const { FirstRunExperience } =
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const {
     initialFirstRun,
     transitionFirstRun,
@@ -1054,8 +1054,8 @@ test('identity loading waits out a native mutation instead of failing setup', as
   const { FirstRunExperience } =
     await import('../src/screens/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const {
     initialFirstRun,
     transitionFirstRun,
@@ -1227,8 +1227,8 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
   const { AccountSection } = await import('../src/screens/account-section');
   const { GoProfileConnectSheet } =
     await import('../src/screens/go-profile-connect');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const snapshot = {
@@ -1360,7 +1360,7 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
 test('CLI pairing resumes without entering a new device name', async () => {
   const { GoProfileConnectSheet } =
     await import('../src/screens/go-profile-connect');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const calls: string[][] = [];
   const bridge: Bridge = {

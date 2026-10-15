@@ -66,7 +66,7 @@ test.afterEach(() => {
 
 /** The fixture with chat granted on the named servers and nowhere else. */
 async function snapshotWithChat(servers: string[]): Promise<AgentSnapshot> {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   return {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) => ({
@@ -117,7 +117,7 @@ async function mount(
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const base = mockBridge(snapshot);
   const bridge = override?.(base) ?? base;
   const portalRoot = document.getElementById('overlays');
@@ -3293,7 +3293,7 @@ test('the Create channel sheet selects the only team with chat when no team is o
   const { NewChatSheet } = await import('../src/screens/chat-new');
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const bridge = mockBridge(snapshot);
   ui.render(
     createElement(OverlayProvider, {

@@ -27,7 +27,7 @@ let ui: typeof import('@testing-library/react');
 let OverlayProvider: typeof import('../kit/overlay-primitives').OverlayProvider;
 let DesktopReconciliation: typeof import('../src/data/desktop-reconciliation').DesktopReconciliation;
 let Topbar: typeof import('../src/shell/topbar').Topbar;
-let FIXTURE: typeof import('../src/fixture').FIXTURE;
+let FIXTURE: typeof import('../src/mock/fixture').FIXTURE;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
@@ -35,7 +35,7 @@ test.before(async () => {
   ({ DesktopReconciliation } =
     await import('../src/data/desktop-reconciliation'));
   ({ Topbar } = await import('../src/shell/topbar'));
-  ({ FIXTURE } = await import('../src/fixture'));
+  ({ FIXTURE } = await import('../src/mock/fixture'));
 });
 
 test.afterEach(() => ui.cleanup());
@@ -342,7 +342,7 @@ test('Chat with teams keeps New channel and a live field', () => {
 for (const drop of ['the badge button', 'Backspace'] as const) {
   test(`in a channel the field finds text in it until ${drop} drops its badge`, async () => {
     const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
-    const { mockBridge } = await import('../src/mock-bridge');
+    const { mockBridge } = await import('../src/mock/mock-bridge');
     const snapshot = {
       ...FIXTURE,
       servers: FIXTURE.servers.map((server) => ({
@@ -436,7 +436,7 @@ for (const location of [
   test(`the intermediate ${location.kind} breadcrumb navigates to its parent`, async () => {
     const navigations: unknown[] = [];
     const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
-    const { mockBridge } = await import('../src/mock-bridge');
+    const { mockBridge } = await import('../src/mock/mock-bridge');
     const snapshot = {
       ...FIXTURE,
       servers: FIXTURE.servers.map((server) => ({

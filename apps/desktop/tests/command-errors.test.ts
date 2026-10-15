@@ -19,8 +19,8 @@ import {
   failureOutcome,
   synchronizeApplied,
 } from '../src/data/operation-outcome';
-import { FIXTURE } from '../src/fixture';
-import { mockBridge } from '../src/mock-bridge';
+import { FIXTURE } from '../src/mock/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
 
 const { checked, checkedMutation } = tauriTransport;
 

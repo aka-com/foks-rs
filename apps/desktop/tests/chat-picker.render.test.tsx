@@ -28,7 +28,7 @@ test('the creation form reserves vertical focus-ring clearance inside the scroll
 });
 
 async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const snapshot: AgentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map(
@@ -39,7 +39,7 @@ async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
       }),
     ),
   };
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { NewChatSheet } = await import('../src/screens/chat-new');
   const { OverlayProvider } = await import('../kit/overlay-primitives');

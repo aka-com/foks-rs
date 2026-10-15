@@ -31,7 +31,7 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 
 async function fixture(): Promise<AgentSnapshot> {
-  const { FIXTURE } = await import('../src/fixture');
+  const { FIXTURE } = await import('../src/mock/fixture');
   return FIXTURE;
 }
 
@@ -70,7 +70,7 @@ async function renderDevices(
 ) {
   const { DevicesScreen } = await import('../src/screens/devices-screen');
   const TestShell = await loadTestShell();
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');

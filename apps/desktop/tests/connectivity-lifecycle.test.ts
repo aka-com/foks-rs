@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DesktopReconciliation } from '../src/data/desktop-reconciliation';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import type { AgentSnapshot } from '../src/model';
 import type { ReconciliationClock } from '../src/scheduling/reconciliation';
 

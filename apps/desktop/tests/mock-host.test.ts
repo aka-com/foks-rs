@@ -7,8 +7,8 @@ import {
   type ServerStatusSnapshot,
 } from '../src/bridge/servers';
 import { createTransport } from '../src/bridge/transport';
-import { FIXTURE } from '../src/fixture';
-import { mockBridge } from '../src/mock-bridge';
+import { FIXTURE } from '../src/mock/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
 import { mockCommand, mockHost } from '../src/mock/host';
 import { accountWire, serverStatusWire } from '../src/mock/wire';
 import type { Account } from '../src/model/types';

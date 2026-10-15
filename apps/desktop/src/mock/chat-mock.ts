@@ -1,10 +1,10 @@
-import type { AgentSnapshot } from './model';
-import { cancelled } from './chat/client';
+import type { AgentSnapshot } from '../model';
+import { cancelled } from '../chat/client';
 import {
   CHAT_NOTIFICATION_TEXT_CHARS,
   CHAT_PAGE_ROWS,
   CHAT_SNIPPET_BYTES,
-} from './chat-limits';
+} from '../chat-limits';
 import {
   decodeChatOperation,
   decodeChatReplyFor,
@@ -15,7 +15,7 @@ import {
   type ChatReply,
   type ChatResult,
   type ChatTeamRef,
-} from './chat-contract';
+} from '../chat-contract';
 import {
   chatMockSeed,
   MOCK_CHAT_ACTOR,

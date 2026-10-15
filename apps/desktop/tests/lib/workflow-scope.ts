@@ -8,7 +8,7 @@ export async function workflowScope(
   snapshot?: AgentSnapshot,
 ) {
   const TestShell = await loadTestShell();
-  const { FIXTURE } = await import('../../src/fixture');
+  const { FIXTURE } = await import('../../src/mock/fixture');
   const ready: AgentSnapshot = snapshot ?? {
     ...FIXTURE,
     servers: ['personal', 'acme', 'local', 'host'].map((profileName) => ({

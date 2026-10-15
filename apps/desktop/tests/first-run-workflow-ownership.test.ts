@@ -6,7 +6,7 @@ import {
   type Bridge,
   type GoProfileCandidate,
 } from '../src/bridge';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import {
   initialFirstRun,
   type FirstRunCheckpoint,

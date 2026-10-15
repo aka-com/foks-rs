@@ -22,8 +22,8 @@ export interface TestShellProps extends Partial<ShellServices> {
 export async function loadTestShell(): Promise<ComponentType<TestShellProps>> {
   const { ShellServicesProvider, ShellSnapshotProvider } =
     await import('../../src/shell-services');
-  const { FIXTURE } = await import('../../src/fixture');
-  const { mockBridge } = await import('../../src/mock-bridge');
+  const { FIXTURE } = await import('../../src/mock/fixture');
+  const { mockBridge } = await import('../../src/mock/mock-bridge');
   const accessNow = () => Date.now() / 1000;
   const commandError = () => undefined;
   const mutationError = async () => undefined;

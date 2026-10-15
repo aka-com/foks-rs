@@ -220,7 +220,7 @@ A subtle point documented in `PERMISSIONS.md`: "Whether a command is compiled in
 
 ### B.16 Mock mode and the bridge boundary
 
-`VITE_FOKS_MOCK=1` selects `src/mock-bridge.ts` + `src/fixture.ts` (no network, no timers) via a dynamic `import()` only for an explicit mock build or a non-native Vite dev page; a Tauri dev window still uses real commands, and "an ordinary production build outside Tauri fails closed" with the mock tree-shaken out (`apps/desktop/README.md:182-215`). `app-root.tsx` calls `selectBridge`, checks the Rust app lock, and calls `loadSnapshot` only after an armed lock has been authenticated. The Rust side pins response serialization with `wire-contract.json` (assembled from per-domain JSON in `src-tauri/wire-contract/` by `assemble.mjs`, which rejects duplicate keys) and `src/commands/tests/contract.rs`; `tests/bridge.test.ts` pins the decoder side, so drift fails on one side or the other.
+`VITE_FOKS_MOCK=1` selects `src/mock/mock-bridge.ts` + `src/mock/fixture.ts` (no network, no timers) via a dynamic `import()` only for an explicit mock build or a non-native Vite dev page; a Tauri dev window still uses real commands, and "an ordinary production build outside Tauri fails closed" with the mock tree-shaken out (`apps/desktop/README.md:182-215`). `app-root.tsx` calls `selectBridge`, checks the Rust app lock, and calls `loadSnapshot` only after an armed lock has been authenticated. The Rust side pins response serialization with `wire-contract.json` (assembled from per-domain JSON in `src-tauri/wire-contract/` by `assemble.mjs`, which rejects duplicate keys) and `src/commands/tests/contract.rs`; `tests/bridge.test.ts` pins the decoder side, so drift fails on one side or the other.
 
 ### B.17 Bounded diagnostics with cursors
 

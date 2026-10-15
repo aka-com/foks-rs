@@ -38,8 +38,8 @@ async function modules() {
   const { FIRST_PAINT_DEADLINE_MS } = await import('../src/app/app-bootstrap');
   const { STARTING_PROMPT_HINT_MS, Takeover, startingProgressDetail } =
     await import('../src/app/blocking-shell');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   return {
     App,
     FIRST_PAINT_DEADLINE_MS,

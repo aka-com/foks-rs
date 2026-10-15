@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { attentionItems, setupChecklist } from '../src/attention';
-import { FIXTURE } from '../src/fixture';
+import { FIXTURE } from '../src/mock/fixture';
 import type { AgentSnapshot, Notification } from '../src/model';
 import type { TeamRequestCount } from '../src/data/operation-queries';
 import { DeviceAlertRegistry } from '../src/data/device-alert';

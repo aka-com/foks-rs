@@ -46,8 +46,8 @@ async function mount({
   decorate?: (base: Bridge) => Partial<Bridge>;
 } = {}) {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const base = mockBridge(FIXTURE);
   const copies: CopyItemToStoreRequest[] = [];
@@ -283,8 +283,8 @@ test('the row menu opens Copy to vault for that row', async () => {
  */
 async function ambiguousCopyScope(vault: string): Promise<string | undefined> {
   const { CopyItemSheet } = await import('../src/screens/copy-item-sheet');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const item = FIXTURE.items.find(
     (entry) => entry.store === VAULT && entry.path === ITEM,

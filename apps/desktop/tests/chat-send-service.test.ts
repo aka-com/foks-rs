@@ -5,8 +5,8 @@ import {
   ChatSendService,
   type ChatSendTiming,
 } from '../src/chat/send-service';
-import { FIXTURE } from '../src/fixture';
-import { mockBridge } from '../src/mock-bridge';
+import { FIXTURE } from '../src/mock/fixture';
+import { mockBridge } from '../src/mock/mock-bridge';
 import type { ChatAction, ChatReply } from '../src/chat-contract';
 import type { ChatClock } from '../src/chat/clock';
 import type { TeamInbox } from '../src/chat/inbox-service';

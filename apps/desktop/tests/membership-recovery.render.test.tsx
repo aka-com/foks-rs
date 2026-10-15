@@ -27,8 +27,8 @@ for (const action of ['add', 'demote', 'promote'] as const) {
     const TestShell = await loadTestShell();
     const { ToastProvider, ToastController } = await import('../kit/toasts');
     const { OverlayProvider } = await import('../kit/overlay-primitives');
-    const { FIXTURE } = await import('../src/fixture');
-    const { mockBridge } = await import('../src/mock-bridge');
+    const { FIXTURE } = await import('../src/mock/fixture');
+    const { mockBridge } = await import('../src/mock/mock-bridge');
     const addition = kind === 'team-member-addition';
     window.history.replaceState(null, '', `/?state=${action}`);
     const store = FIXTURE.stores.find((entry) => entry.id === 'team:eng');
@@ -164,8 +164,8 @@ test('a failed pending-operation query reports one error and renders no recovery
   const TestShell = await loadTestShell();
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const store = FIXTURE.stores.find((entry) => entry.id === 'team:eng');
   assert.ok(store?.kind === 'team');
   const portalRoot = document.getElementById('overlays');

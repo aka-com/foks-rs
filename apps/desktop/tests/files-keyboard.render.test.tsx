@@ -20,7 +20,7 @@ let ui: typeof import('@testing-library/react');
 let FIXTURE: AgentSnapshot;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  ({ FIXTURE } = await import('../src/fixture'));
+  ({ FIXTURE } = await import('../src/mock/fixture'));
 });
 test.afterEach(() => {
   ui.cleanup();
@@ -29,7 +29,7 @@ test.afterEach(() => {
 
 async function mount(snapshot: AgentSnapshot = FIXTURE) {
   const { ItemsScreen } = await import('../src/screens/items-screen');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { ToastProvider, ToastController } = await import('../kit/toasts');

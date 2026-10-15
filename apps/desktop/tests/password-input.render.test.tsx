@@ -32,8 +32,8 @@ test.afterEach(() => {
 
 async function openPasswordSheet(overrides: Partial<Bridge> = {}) {
   const { App } = await import('../src/app-root');
-  const { FIXTURE } = await import('../src/fixture');
-  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const store = new LocationStore({
     ...INITIAL_STATE,

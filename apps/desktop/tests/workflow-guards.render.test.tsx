@@ -52,8 +52,8 @@ const CLI_CANDIDATE: GoProfileCandidate = {
 async function harness() {
   const locations = await import('../src/location');
   const guards = await import('../src/navigation-guard');
-  const { mockBridge } = await import('../src/mock-bridge');
-  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock/mock-bridge');
+  const { FIXTURE } = await import('../src/mock/fixture');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const TestShell = await loadTestShell();
