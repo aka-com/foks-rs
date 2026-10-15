@@ -81,6 +81,15 @@ export default tseslint.config(
     },
   },
   {
+    // Makes a desktop view module's growth past 800 lines visible, so that it
+    // is split into model, sheet and view modules. The files already over the
+    // limit warn until they are split.
+    files: ['apps/desktop/src/**/*.tsx'],
+    rules: {
+      'max-lines': ['warn', { max: 800 }],
+    },
+  },
+  {
     // Chat hooks and screens neither read nor write refs while rendering.
     // The rest of the desktop source is not yet held to this rule.
     files: [
