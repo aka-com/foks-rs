@@ -16,8 +16,14 @@ export function normalizeSource(source: string): string {
     .replace(/,\s*([)\]}])/g, '$1');
 }
 
-/** Every `.ts`/`.tsx` file under `directory`, recursively. */
-export async function collectSourceFiles(directory: URL): Promise<URL[]> {
+/**
+ * Every file under `directory` whose name ends in one of `extensions`,
+ * recursively; `.ts` and `.tsx` files by default.
+ */
+export async function collectSourceFiles(
+  directory: URL,
+  extensions: readonly string[] = ['.ts', '.tsx'],
+): Promise<URL[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const nested = await Promise.all(
     entries.map(async (entry) => {
@@ -25,8 +31,8 @@ export async function collectSourceFiles(directory: URL): Promise<URL[]> {
         entry.name + (entry.isDirectory() ? '/' : ''),
         directory,
       );
-      if (entry.isDirectory()) return collectSourceFiles(url);
-      return entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')
+      if (entry.isDirectory()) return collectSourceFiles(url, extensions);
+      return extensions.some((extension) => entry.name.endsWith(extension))
         ? [url]
         : [];
     }),

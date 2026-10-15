@@ -4,23 +4,37 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { collectSourceFiles, readSource } from './lib/source';
+import { collectSourceFiles } from './lib/source';
 
-const TOKENS = '../kit/tokens.css';
-const STYLE_ENTRY = '../src/styles/index.css';
-const SHELL = '../src/styles/shell.css';
-const STYLES = [
-  SHELL,
-  '../src/styles/app.css',
-  '../src/styles/native-window.css',
-  '../src/screens/files.css',
-  '../src/screens/chat.css',
-  '../src/screens/chat-picker.css',
-  '../src/screens/team-info.css',
-  '../src/shell/search-palette.css',
-];
+const TOKENS = new URL('../kit/tokens.css', import.meta.url);
+const STYLE_ENTRY = new URL('../src/styles/index.css', import.meta.url);
+const SHELL = new URL('../src/styles/shell.css', import.meta.url);
+const CASCADE = ['tokens', 'base', 'components', 'features', 'overrides'];
+
+/**
+ * Every stylesheet under src/ and kit/ other than the token sheet and the
+ * entry, found on disk so that a new sheet is held to the checks below
+ * without being listed here.
+ */
+const STYLES = (
+  await Promise.all(
+    ['../src/', '../kit/'].map((directory) =>
+      collectSourceFiles(new URL(directory, import.meta.url), ['.css']),
+    ),
+  )
+)
+  .flat()
+  .filter(
+    (sheet) => sheet.href !== TOKENS.href && sheet.href !== STYLE_ENTRY.href,
+  )
+  .sort((left, right) => left.href.localeCompare(right.href));
 const TOKEN_ONLY_COLORS = STYLES;
 const TYPE_FLOOR_PX = 12;
+
+/** A stylesheet's path below apps/desktop/, for assertion messages. */
+function label(sheet: URL): string {
+  return sheet.pathname.split('/apps/desktop/')[1];
+}
 
 function blockAfter(source: string, marker: string): string {
   const markerIndex = source.indexOf(marker);
@@ -72,37 +86,47 @@ function typeSizes(css: string): { value: number; source: string }[] {
 }
 
 test('the token sheet owns global custom properties', async () => {
-  const kitTokens = rootTokens(await readSource(TOKENS, import.meta.url));
+  const kitTokens = rootTokens(await readFile(TOKENS, 'utf8'));
 
   assert.ok(kitTokens.size > 0, 'the shared token sheet is not empty');
   for (const sheet of STYLES) {
-    const css = await readSource(sheet, import.meta.url);
+    const css = await readFile(sheet, 'utf8');
     assert.equal(
       /^\s*:root\s*\{/m.test(css),
       false,
-      `${sheet} declares global custom properties outside the token sheet`,
+      `${label(sheet)} declares global custom properties outside the token sheet`,
     );
     assert.equal(
       css.includes(':root[data-theme'),
       false,
-      `${sheet} contains theme decisions outside the token sheet`,
+      `${label(sheet)} contains theme decisions outside the token sheet`,
     );
   }
 });
 
-test('the stylesheet entry declares the cascade and imports each style area', async () => {
-  const css = await readSource(STYLE_ENTRY, import.meta.url);
+test('the stylesheet entry imports every stylesheet into a declared layer', async () => {
+  const css = await readFile(STYLE_ENTRY, 'utf8');
 
-  assert.ok(
-    css.includes('@layer tokens, base, components, features, overrides'),
-  );
-  for (const sheet of [TOKENS, ...STYLES]) {
-    const filename = sheet.split('/').at(-1);
+  assert.ok(css.includes(`@layer ${CASCADE.join(', ')};`));
+  assert.ok(STYLES.some((sheet) => sheet.href === SHELL.href));
+  const imported: string[] = [];
+  for (const line of css.split('\n')) {
+    if (!line.startsWith('@import')) continue;
+    const match = /^@import '([^']+)' layer\(([\w.-]+)\);$/.exec(line);
+    assert.ok(match, `${line} does not import into a named layer`);
+    const [, path, layer] = match;
     assert.ok(
-      filename && css.includes(filename),
-      `${sheet} is outside the cascade`,
+      CASCADE.includes(layer.split('.')[0]),
+      `${path} is imported into ${layer}, outside the declared cascade`,
     );
+    imported.push(new URL(path, STYLE_ENTRY).href);
   }
+  // A sheet missing here is never loaded; a sheet imported twice is a second
+  // copy of its rules, possibly in a different layer.
+  assert.deepEqual(
+    [...imported].sort(),
+    [TOKENS, ...STYLES].map((sheet) => sheet.href).sort(),
+  );
 });
 
 test('only the entry point imports a stylesheet', async () => {
@@ -116,30 +140,30 @@ test('only the entry point imports a stylesheet', async () => {
     )) {
       const source = await readFile(file, 'utf8');
       if (/^\s*import\s+['"][^'"]+\.css['"]/m.test(source))
-        importers.push(file.pathname.split('/apps/desktop/')[1]);
+        importers.push(label(file));
     }
   assert.deepEqual(importers, ['src/main.tsx']);
 });
 
 test('authored text respects the 12px type floor', async () => {
   for (const sheet of STYLES) {
-    const css = await readSource(sheet, import.meta.url);
+    const css = await readFile(sheet, 'utf8');
     for (const { value, source } of typeSizes(css)) {
       assert.ok(
         value >= TYPE_FLOOR_PX,
-        `${sheet} declares ${source}, below the ${TYPE_FLOOR_PX}px floor`,
+        `${label(sheet)} declares ${source}, below the ${TYPE_FLOOR_PX}px floor`,
       );
     }
     assert.equal(
       /font-size\s*:\s*[\d.]+(?:em|rem|pt|%)/.test(css),
       false,
-      `${sheet} uses a relative font size that bypasses the pixel floor`,
+      `${label(sheet)} uses a relative font size that bypasses the pixel floor`,
     );
   }
 });
 
 test('light and dark themes declare their native color scheme', async () => {
-  const css = await readSource(TOKENS, import.meta.url);
+  const css = await readFile(TOKENS, 'utf8');
   const light = declarations(blockAfter(css, ':root'));
   const dark = declarations(blockAfter(css, ":root[data-theme='dark']"));
 
@@ -153,20 +177,20 @@ test('light and dark themes declare their native color scheme', async () => {
 
 test('feature styles use design tokens for colors', async () => {
   for (const sheet of TOKEN_ONLY_COLORS) {
-    const css = (await readSource(sheet, import.meta.url)).replace(
+    const css = (await readFile(sheet, 'utf8')).replace(
       /\/\*[\s\S]*?\*\//g,
       '',
     );
     assert.equal(
       /#[0-9a-f]{3,8}\b|\brgba?\(/i.test(css),
       false,
-      `${sheet} contains a literal color; add a semantic token instead`,
+      `${label(sheet)} contains a literal color; add a semantic token instead`,
     );
   }
 });
 
 test('reduced motion is enforced across every component stylesheet', async () => {
-  const css = await readSource(SHELL, import.meta.url);
+  const css = await readFile(SHELL, 'utf8');
   const policy = blockAfter(css, '@media (prefers-reduced-motion: reduce)');
   const values = declarations(blockAfter(policy, '*, *::before, *::after'));
 
