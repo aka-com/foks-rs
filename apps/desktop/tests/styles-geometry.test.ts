@@ -190,9 +190,21 @@ test('feature styles use design tokens for colors', async () => {
 });
 
 test('reduced motion is enforced across every component stylesheet', async () => {
-  const css = await readFile(SHELL, 'utf8');
-  const policy = blockAfter(css, '@media (prefers-reduced-motion: reduce)');
-  const values = declarations(blockAfter(policy, '*, *::before, *::after'));
+  // Whitespace is collapsed so that the selector list matches however the
+  // formatter wraps it; the sheet has several reduced-motion blocks.
+  const css = (await readFile(SHELL, 'utf8')).replace(/\s+/g, ' ');
+  const marker = '@media (prefers-reduced-motion: reduce)';
+  const universal = '*, *::before, *::after';
+  const policies: string[] = [];
+  for (
+    let at = css.indexOf(marker);
+    at !== -1;
+    at = css.indexOf(marker, at + 1)
+  )
+    policies.push(blockAfter(css.slice(at), marker));
+  const policy = policies.find((block) => block.includes(universal));
+  assert.ok(policy, 'no reduced-motion block resets every element');
+  const values = declarations(blockAfter(policy, universal));
 
   assert.equal(values.get('scroll-behavior'), 'auto !important');
   assert.equal(values.get('animation-duration'), '0.01ms !important');
