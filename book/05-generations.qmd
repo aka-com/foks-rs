@@ -124,7 +124,10 @@ would copy the 32 seed bytes into an ordinary heap vector inside its value
 tree, which is neither zeroized nor tracked. `foks-crypto` therefore checks
 that the plaintext ends in a 32-byte binary field, copies those bytes into
 zeroizing storage, overwrites them with zeros in the buffer, and only then
-runs the decoder on the redacted bytes.
+runs the decoder on the redacted bytes. A seed-chain plaintext (below) may
+also carry zero padding after the canonical value. Its canonical length is
+measured with `decode_prefix_sensitive`, which erases the value tree it
+builds, before the padding is checked and the redacting decode runs.
 
 ## The seed chain
 

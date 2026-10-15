@@ -28,13 +28,22 @@ pub fn decode_prefix(input: &[u8]) -> Result<(Value, usize), Error> {
 /// The caller retains responsibility for erasing the input buffer.
 /// Variant tags in diagnostic paths are redacted.
 pub fn decode_sensitive(input: &[u8]) -> Result<Zeroizing<Value>, Error> {
+    let (value, consumed) = decode_prefix_sensitive(input)?;
+    if consumed != input.len() {
+        return Err(Error::new(ErrorKind::TrailingBytes, consumed, &[]));
+    }
+    Ok(value)
+}
+
+/// Decodes one canonical value at the start of sensitive `input` and returns
+/// the number of bytes consumed, with the erasure and diagnostic redaction of
+/// [`decode_sensitive`]. FOKS uses this for secret plaintexts whose canonical
+/// Snowpack value is followed by zero padding.
+pub fn decode_prefix_sensitive(input: &[u8]) -> Result<(Zeroizing<Value>, usize), Error> {
     let mut decoder = Decoder::new(input, false);
     decoder.sensitive = true;
     let value = Zeroizing::new(decoder.value()?);
-    if decoder.offset != input.len() {
-        return Err(Error::new(ErrorKind::TrailingBytes, decoder.offset, &[]));
-    }
-    Ok(value)
+    Ok((value, decoder.offset))
 }
 
 pub fn validate(input: &[u8]) -> Result<(), Error> {
@@ -488,6 +497,33 @@ mod sensitive_tests {
             let error = decode_sensitive(&input).unwrap_err();
             assert!(!format!("{error:?}").contains("secret"));
             assert!(decode(&input).is_err());
+            assert!(error
+                .path
+                .iter()
+                .all(|part| !matches!(part, PathSegment::Variant(tag) if !tag.is_empty())));
+        }
+    }
+
+    #[test]
+    fn sensitive_prefix_decode_matches_regular_prefix_decode_and_redacts_error_paths() {
+        let value = Value::Array(vec![
+            Value::Variant(Some((b"secret".to_vec(), Box::new(Value::Unsigned(1))))),
+            Value::Binary(vec![7; 32]),
+        ]);
+        let bytes = crate::encode(&value).unwrap();
+        let padded = [bytes.as_slice(), &[0; 5]].concat();
+        let (sensitive, consumed) = decode_prefix_sensitive(&padded).unwrap();
+        assert_eq!(*sensitive, value);
+        assert_eq!(consumed, bytes.len());
+        assert_eq!(decode_prefix(&padded).unwrap(), (value, consumed));
+        for input in [
+            vec![0x92, 0xa3, b'o', b'n', b'e', 0xc1],
+            vec![0x92, 0xa3, b'o', b'n', b'e', 0xc4, 4, 1],
+            vec![0x81, 0xa6, b's', b'e', b'c', b'r', b'e', b't', 0xc1, 0],
+        ] {
+            let error = decode_prefix_sensitive(&input).unwrap_err();
+            assert!(!format!("{error:?}").contains("secret"));
+            assert!(decode_prefix(&input).is_err());
             assert!(error
                 .path
                 .iter()

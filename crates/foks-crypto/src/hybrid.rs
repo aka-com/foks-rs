@@ -14,7 +14,7 @@ use foks_proto::{
     HYBRID_SECRET_KEY_SHA3_PAYLOAD_TYPE_ID, SHARED_KEY_SEED_TYPE_ID, SUBKEY_SEED_TYPE_ID,
     TEMP_DH_KEY_SIG_TEMPLATE_TYPE_ID,
 };
-use foks_snowpack::{decode, decode_prefix, encode, encode_ref, Value, ValueRef};
+use foks_snowpack::{decode, decode_prefix_sensitive, encode, encode_ref, Value, ValueRef};
 use hmac::{Hmac, Mac};
 use ml_kem::{ml_kem_768, Decapsulate as _, KeyExport as _, TryKeyInit as _};
 use p256::ecdh::diffie_hellman as p256_diffie_hellman;
@@ -1201,37 +1201,7 @@ pub fn open_shared_key_seed_chain(
     expected_party: &EntityId,
     expected_host: &EntityId,
 ) -> Result<Vec<SharedKeySeed>> {
-    if current.generation != parcel.generation || current.role != parcel.role {
-        return Err(Error::PukBinding);
-    }
-    let mut descending = vec![current];
-    for boxed in parcel.seed_chain.iter().rev() {
-        let newer = descending.last().ok_or(Error::PukBinding)?;
-        let expected_generation = newer.generation.checked_sub(1).ok_or(Error::PukBinding)?;
-        if boxed.generation != expected_generation || boxed.role != newer.role {
-            return Err(Error::PukBinding);
-        }
-        let secretbox_key = derive_key(&newer.seed, 2, None)?;
-        let plaintext = open_typed_secretbox(
-            secretbox_key.as_bytes(),
-            SHARED_KEY_SEED_TYPE_ID,
-            &boxed.secret_box.nonce,
-            &boxed.secret_box.ciphertext,
-        )?;
-        let (_, consumed) = decode_prefix(&plaintext)?;
-        require_zero_padding(&plaintext, consumed)?;
-        let older = SharedKeySeed::decode(&plaintext[..consumed])?;
-        if &older.receiver != expected_party
-            || &older.host != expected_host
-            || older.generation != boxed.generation
-            || older.role != boxed.role
-        {
-            return Err(Error::PukBinding);
-        }
-        descending.push(older);
-    }
-    descending.reverse();
-    Ok(descending)
+    open_seed_chain(current, parcel, Some(expected_party), expected_host)
 }
 
 /// Opens a team PTK generation chain. FOKS v0.1.9 creates one global chain
@@ -1241,6 +1211,18 @@ pub fn open_shared_key_seed_chain(
 pub fn open_team_shared_key_seed_chain(
     current: SharedKeySeed,
     parcel: &PukParcel,
+    expected_host: &EntityId,
+) -> Result<Vec<SharedKeySeed>> {
+    open_seed_chain(current, parcel, None, expected_host)
+}
+
+/// Opens each seed-chain box under the key derived from the next newer seed.
+/// `expected_party` is `None` for team chains, whose receiver field names the
+/// rotating editor rather than the parcel recipient.
+fn open_seed_chain(
+    current: SharedKeySeed,
+    parcel: &PukParcel,
+    expected_party: Option<&EntityId>,
     expected_host: &EntityId,
 ) -> Result<Vec<SharedKeySeed>> {
     if current.generation != parcel.generation || current.role != parcel.role {
@@ -1260,10 +1242,9 @@ pub fn open_team_shared_key_seed_chain(
             &boxed.secret_box.nonce,
             &boxed.secret_box.ciphertext,
         )?;
-        let (_, consumed) = decode_prefix(&plaintext)?;
-        require_zero_padding(&plaintext, consumed)?;
-        let older = SharedKeySeed::decode(&plaintext[..consumed])?;
-        if &older.host != expected_host
+        let older = decode_padded_shared_key_seed(&plaintext)?;
+        if expected_party.is_some_and(|party| &older.receiver != party)
+            || &older.host != expected_host
             || older.generation != boxed.generation
             || older.role != boxed.role
         {
@@ -1273,6 +1254,16 @@ pub fn open_team_shared_key_seed_chain(
     }
     descending.reverse();
     Ok(descending)
+}
+
+/// Decodes a zero-padded seed-chain plaintext. The canonical length is
+/// measured with the zeroizing decoder, because the general decoder would
+/// copy the older seed into an ordinary heap vector that is never erased;
+/// `SharedKeySeed::decode` then extracts the seed before decoding the rest.
+fn decode_padded_shared_key_seed(plaintext: &[u8]) -> Result<SharedKeySeed> {
+    let (_, consumed) = decode_prefix_sensitive(plaintext)?;
+    require_zero_padding(plaintext, consumed)?;
+    Ok(SharedKeySeed::decode(&plaintext[..consumed])?)
 }
 
 /// Opens a PUK or PTK parcel and binds its cleartext to the authenticated

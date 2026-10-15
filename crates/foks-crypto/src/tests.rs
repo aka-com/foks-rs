@@ -2,12 +2,13 @@
 
 use crate::backup::{BackupKey, BACKUP_SEED_BYTES};
 use crate::hybrid::{
-    derive_device_public, derive_hybrid_key, derive_shared_public, derive_yubi_public_material,
-    open_hybrid_box, open_puk_parcel, open_puk_parcel_for_role, open_puk_parcel_with,
-    open_puk_parcel_with_for_role, open_puk_seed_chain, open_shared_key_parcel_with,
-    open_shared_key_seed_chain, seal_initial_puk_box, seal_puk_seed_chain_box,
-    seal_shared_key_boxes, seal_software_puk_boxes, seal_software_puk_boxes_mixed,
-    seal_yubi_puk_boxes, yubi_mlkem_decapsulate, DevicePublicMaterial, HybridSecretDecapsulator,
+    derive_device_public, derive_hybrid_key, derive_key, derive_shared_public,
+    derive_yubi_public_material, open_hybrid_box, open_puk_parcel, open_puk_parcel_for_role,
+    open_puk_parcel_with, open_puk_parcel_with_for_role, open_puk_seed_chain,
+    open_shared_key_parcel_with, open_shared_key_seed_chain, open_team_shared_key_seed_chain,
+    seal_initial_puk_box, seal_puk_seed_chain_box, seal_shared_key_boxes, seal_software_puk_boxes,
+    seal_software_puk_boxes_mixed, seal_yubi_puk_boxes, shared_key_seed_plaintext,
+    yubi_mlkem_decapsulate, DevicePublicMaterial, HybridSecretDecapsulator,
     InitialPukBoxRandomness, PukBoxRandomness, SharedKeyBoxInput, SharedKeyDecapsulator,
     SoftwarePukBoxInput, SoftwarePukBoxSetRandomness, YubiDevice, YubiPublicMaterial,
     YubiPukBoxInput, YubiPukBoxSetRandomness,
@@ -1839,6 +1840,96 @@ fn software_mutation_boxes_round_trip_and_preserve_history() {
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].seed, previous_seed);
     assert_eq!(history[1].seed, current_seed);
+}
+
+#[test]
+fn seed_chain_boxes_accept_zero_padding_and_bind_the_receiver() {
+    let expected = UserLink::decode(&signup_fixture("eldest-link.snowp")).unwrap();
+    let opened = expected.decode_eldest().unwrap();
+    let boxed = SharedKeyBoxSet::decode(&signup_fixture("puk-box-set.snowp")).unwrap();
+    let shared = boxed.boxes.into_iter().next().unwrap();
+    let current_seed = SecretSeed::new([31; 32]);
+    let previous_seed = SecretSeed::new([32; 32]);
+    let editor = opened.uid.clone();
+    let mut other = opened.uid.as_bytes().to_vec();
+    *other.last_mut().unwrap() ^= 1;
+    let other = EntityId::from_bytes(other).unwrap();
+    let chain_box = |padding: &[u8]| {
+        let plaintext =
+            shared_key_seed_plaintext(&editor, &opened.host, 1, Role::OWNER, &previous_seed)
+                .unwrap();
+        let padded = Zeroizing::new([plaintext.as_slice(), padding].concat());
+        let key = derive_key(&current_seed, 2, None).unwrap();
+        let nonce = [33; 16];
+        foks_proto::SeedChainBox {
+            generation: 1,
+            role: Role::OWNER,
+            secret_box: SecretBox {
+                nonce,
+                ciphertext: seal_typed_secretbox(
+                    key.as_bytes(),
+                    SHARED_KEY_SEED_TYPE_ID,
+                    &nonce,
+                    &padded,
+                    false,
+                )
+                .unwrap(),
+            },
+        }
+    };
+    let parcel = |padding: &[u8]| PukParcel {
+        generation: 2,
+        role: Role::OWNER,
+        hybrid: shared.hybrid.clone(),
+        target: shared.target.entity.clone(),
+        target_host: shared.target.host.clone(),
+        target_role: shared.target.role,
+        target_generation: shared.target.generation,
+        sender: opened.uid.clone(),
+        box_id: boxed.box_id,
+        temp_dh_key: boxed.temp_dh_key.clone(),
+        seed_chain: vec![chain_box(padding)],
+    };
+    let current = || SharedKeySeed {
+        receiver: opened.uid.clone(),
+        host: opened.host.clone(),
+        generation: 2,
+        role: Role::OWNER,
+        seed: SecretSeed::new(*current_seed.as_bytes()),
+    };
+
+    let padded = parcel(&[0; 7]);
+    let history = open_shared_key_seed_chain(current(), &padded, &editor, &opened.host).unwrap();
+    assert_eq!(history[0].seed, previous_seed);
+    assert_eq!(history[1].seed, current_seed);
+    assert!(matches!(
+        open_shared_key_seed_chain(current(), &padded, &other, &opened.host),
+        Err(Error::PukBinding)
+    ));
+    // A team chain names the rotating editor, not the parcel recipient.
+    let history = open_team_shared_key_seed_chain(current(), &padded, &opened.host).unwrap();
+    assert_eq!(history[0].seed, previous_seed);
+    assert_eq!(history[0].receiver, editor);
+    assert!(matches!(
+        open_team_shared_key_seed_chain(current(), &padded, &other),
+        Err(Error::PukBinding)
+    ));
+
+    let nonzero = parcel(&[0, 0, 1]);
+    for result in [
+        open_shared_key_seed_chain(current(), &nonzero, &editor, &opened.host),
+        open_team_shared_key_seed_chain(current(), &nonzero, &opened.host),
+    ] {
+        assert!(matches!(result, Err(Error::KvPadding)));
+    }
+}
+
+#[test]
+fn seed_chain_plaintexts_bypass_the_non_zeroizing_prefix_decoder() {
+    // The general prefix decoder copies the older seed into an ordinary
+    // `Value::Binary` that is dropped without erasure.
+    let general_prefix_decoder = ["decode_prefix", "("].concat();
+    assert!(!include_str!("hybrid.rs").contains(&general_prefix_decoder));
 }
 
 #[test]

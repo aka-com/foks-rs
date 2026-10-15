@@ -11,7 +11,9 @@ mod decode;
 mod encode;
 mod error;
 
-pub use decode::{decode, decode_prefix, decode_sensitive, validate, validate_signable};
+pub use decode::{
+    decode, decode_prefix, decode_prefix_sensitive, decode_sensitive, validate, validate_signable,
+};
 pub use encode::{encode, encode_ref};
 pub use error::{Error, ErrorKind, PathSegment};
 
