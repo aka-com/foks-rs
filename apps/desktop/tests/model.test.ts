@@ -37,7 +37,9 @@ import {
   prefixOf,
   profileInventoryComplete,
   readersOf,
+  roleChipText,
   roleRank,
+  roleText,
   serverDisplayLabel,
   serverDisplayLabelForStore,
   safestRemovalTarget,
@@ -166,6 +168,30 @@ test('parseRole accepts string and object role formats and rejects invalid roles
     assert.equal(parseRole(invented), null, invented);
     assert.equal(roleRank(invented), 0, invented);
   }
+});
+
+test('roleText and roleChipText write a wire role, or its own name when unparsed', () => {
+  assert.equal(roleText('Owner'), 'Owner');
+  assert.equal(roleText({ role: 'Admin' }), 'Admin');
+  assert.equal(
+    roleText('Member · visibility -16384'),
+    'Member · visibility -16384',
+  );
+  assert.equal(
+    roleText({ role: 'Member', visibility: 2 }),
+    'Member · visibility 2',
+  );
+  assert.equal(roleChipText('Owner'), 'Owner');
+  assert.equal(
+    roleChipText({ role: 'Member', visibility: 2 }),
+    'Member · sees level 2',
+  );
+  assert.equal(roleChipText('Member'), 'Member · sees level 0');
+  // A role this build cannot parse is shown as the wire names it.
+  assert.equal(roleText('Reader'), 'Reader');
+  assert.equal(roleText({ role: 'Reader' }), 'Reader');
+  assert.equal(roleChipText('Reader'), 'Reader');
+  assert.equal(roleChipText({ role: 'Reader' }), 'Reader');
 });
 
 test('formatRole formats role objects into canonical display strings', () => {

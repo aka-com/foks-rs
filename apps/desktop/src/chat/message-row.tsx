@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { AccountMark } from '../screens/account-switcher';
+import { AccountMark } from '../components/account-mark';
 import {
   quoteReply,
   useMessageActions,

@@ -95,3 +95,26 @@ export function roleChipLabel(role: Role): string {
     ? `Member · sees level ${visibilityOf(role)}`
     : formatRole(role);
 }
+
+/** The wire's own name for a role this build cannot parse. */
+function rawRole(wire: RoleWire): string {
+  return typeof wire === 'string' ? wire : wire.role;
+}
+
+/**
+ * A role off the wire as `formatRole` writes it — "Owner", "Member ·
+ * visibility 0" — or the wire's own name for a role this build cannot parse.
+ */
+export function roleText(wire: RoleWire): string {
+  const role = parseRole(wire);
+  return role ? formatRole(role) : rawRole(wire);
+}
+
+/**
+ * A role off the wire as `roleChipLabel` writes it for a member row — "Member
+ * · sees level 0" — or the wire's own name for a role this build cannot parse.
+ */
+export function roleChipText(wire: RoleWire): string {
+  const role = parseRole(wire);
+  return role ? roleChipLabel(role) : rawRole(wire);
+}

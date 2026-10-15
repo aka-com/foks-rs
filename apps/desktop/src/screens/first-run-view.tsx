@@ -8,8 +8,8 @@ import {
   Inset,
   InsetRow,
 } from '../components';
-import type { AgentSnapshot, RoleWire } from '../model';
-import { displayPath, fmtSize, kindOf, parseRole, formatRole } from '../model';
+import type { AgentSnapshot } from '../model';
+import { displayPath, fmtSize, kindOf, roleText } from '../model';
 import type { FilterKind } from '../components';
 import type { Location } from '../location';
 import { NavRow, Sidebar, TrafficStrip } from '../shell/sidebar';
@@ -419,12 +419,6 @@ export function AddedDetails({
       </div>
     </aside>
   );
-}
-
-function roleText(role: RoleWire): string {
-  const parsed = parseRole(role);
-  if (parsed) return formatRole(parsed);
-  return typeof role === 'string' ? role : role.role;
 }
 
 export function Foot({

@@ -14,23 +14,22 @@ import { useToast } from '../../kit/toasts';
 import type { ReactNode } from 'react';
 import {
   Button,
-  Chip,
   Field,
   Icon,
   Inset,
   InsetRow,
   KindIcon,
   PasswordInput,
+  PartyRow,
   SectionLabel,
   SheetDialog,
+  StoreMark,
 } from '../components';
 import type { FilterKind } from '../components';
 import {
   displayPath,
   fieldLineText,
   fmtSize,
-  formatRole,
-  initials,
   isBlankLine,
   kindLabel,
   kindOf,
@@ -39,26 +38,16 @@ import {
   loginFieldOf,
   loginLines,
   nameOf,
-  parseRole,
   partiesOf,
-  partyName,
   peopleLabel,
   prefixOf,
   readersOf,
+  roleText,
   storeHues,
   storeNavigationOrder,
   storeOf,
-  usernameOf,
 } from '../model';
-import type {
-  Item,
-  LoginFieldName,
-  Party,
-  RoleWire,
-  Store,
-  AgentSnapshot,
-} from '../model';
-import { AccountMark } from './account-switcher';
+import type { Item, LoginFieldName, AgentSnapshot } from '../model';
 import type { NavigationGuard, Selection } from '../location';
 import { useNavigationGuard } from '../navigation-guard';
 import { normalizeCommandError } from '../bridge';
@@ -149,13 +138,6 @@ function assertExactRead(
   }
 }
 
-/** "Owner" / "Member · visibility 0", from either shape of the wire. */
-function roleText(wire: RoleWire): string {
-  const role = parseRole(wire);
-  if (role) return formatRole(role);
-  return typeof wire === 'string' ? wire : wire.role;
-}
-
 /**
  * The lines the structured login editor lists, by index, or null when the
  * text opens in the textarea. The editor opens for text with a line the host
@@ -206,57 +188,6 @@ function loginRows(shown: string | null): LoginRow[] {
     });
   });
   return rows;
-}
-
-/** Renders the store icon or avatar, matching the style used in the browser tree and list rows. */
-function StoreMark({
-  snapshot,
-  store,
-}: {
-  snapshot: AgentSnapshot;
-  store: Store;
-}): ReactNode {
-  return store.kind === 'team' ? (
-    <span
-      className="av team"
-      style={{
-        background: storeHues(storeNavigationOrder(snapshot)).get(store.id),
-      }}
-      aria-hidden="true"
-    >
-      {initials(store.name)}
-    </span>
-  ) : (
-    <AccountMark name={usernameOf(snapshot, store) ?? store.account} />
-  );
-}
-
-function PartyRow({
-  party,
-  canRead,
-}: {
-  party: Party;
-  canRead: boolean;
-}): ReactNode {
-  const details = [
-    party.party_kind !== 'user' ? 'Member team' : '',
-    canRead ? '' : 'No read access',
-  ].filter(Boolean);
-  return (
-    <div className="party">
-      <span className="t">
-        {partyName(party)}
-        {party.label ? (
-          <>
-            {' '}
-            <Chip tone="you">you</Chip>
-          </>
-        ) : null}
-        {details.length ? <small>{details.join(' · ')}</small> : null}
-      </span>
-      <Chip>{roleText(party.destination_role)}</Chip>
-    </div>
-  );
 }
 
 export interface DetailsPanelProps {
@@ -1296,7 +1227,13 @@ export function DetailsPanel({
           <Inset>
             <InsetRow label="Kind">{kindLabel(displayKind)}</InsetRow>
             <InsetRow label="Location" valueClass="mark">
-              {store ? <StoreMark snapshot={snapshot} store={store} /> : null}
+              {store ? (
+                <StoreMark
+                  snapshot={snapshot}
+                  store={store}
+                  hue={storeHues(storeNavigationOrder(snapshot)).get(store.id)}
+                />
+              ) : null}
               <span title={displayPath(item.path)}>{where}</span>
             </InsetRow>
             <InsetRow label="Path">{displayPath(item.path)}</InsetRow>
@@ -1334,8 +1271,14 @@ export function DetailsPanel({
                 {parties.map((party) => (
                   <PartyRow
                     key={party.party_id_hex}
+                    variant="listing"
                     party={party}
-                    canRead={readers.includes(party)}
+                    caption={[
+                      party.party_kind !== 'user' ? 'Member team' : '',
+                      readers.includes(party) ? '' : 'No read access',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
                   />
                 ))}
               </>

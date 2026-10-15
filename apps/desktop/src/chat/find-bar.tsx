@@ -2,7 +2,7 @@ import { useId } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { Button, Icon } from '../components';
 import { plural } from '../model';
-import { AccountMark } from '../screens/account-switcher';
+import { AccountMark } from '../components/account-mark';
 import { chatErrorText } from './error-copy';
 import {
   FIND_SCAN_PAGES,

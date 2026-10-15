@@ -8,14 +8,7 @@ import { CreateTeamSheet } from './groups/create-team-sheet';
 import { RaiseRoleSheet } from './groups/raise-role-sheet';
 import { LowerRoleSheet } from './groups/lower-role-sheet';
 import { RemoveMemberSheet } from './groups/remove-member-sheet';
-import {
-  canTarget,
-  demotionFor,
-  fmtRole,
-  partySubtitle,
-  RoleChip,
-  roleText,
-} from './groups/sheet-support';
+import { canTarget, demotionFor, partySubtitle } from './groups/sheet-support';
 import type { GroupSheetBaseProps } from './groups/sheet-support';
 import {
   attemptMutation,
@@ -39,6 +32,8 @@ import {
   MenuButton,
   MenuItem,
   Notice,
+  PartyRow,
+  RoleChip,
   SectionLabel,
   SheetDialog,
   tabId,
@@ -55,6 +50,7 @@ import {
   partiesOf,
   partyName,
   plural,
+  roleChipText,
   roleRank,
   serverDisplayLabel,
   serverDisplayLabelForStore as displayServerName,
@@ -206,7 +202,7 @@ function PartyMark({ party }: { party: Party }): ReactNode {
  * One member: who they are, what kind of party, the role they hold, and a menu
  * of the actions that apply to them.
  */
-function PartyRow({
+function MemberRow({
   snapshot,
   store,
   party,
@@ -227,22 +223,15 @@ function PartyRow({
     : targetReason(snapshot, store, party, manageable);
   const name = partyName(party);
   const lowerable = Boolean(demotionFor(party));
+  // Only people and machines reach this row, and their access is their
+  // membership: there is no inactive state to dim.
   return (
-    // Only people and machines reach this row, and their access is their
-    // membership: there is no inactive state to dim.
-    <div className="prow">
-      <span className="who2">
-        <PartyMark party={party} />
-        <span className="t">
-          <b>
-            <span>{name}</span>
-            {party.label ? <Chip tone="you">you</Chip> : null}
-          </b>
-          <small>{partySubtitle(party)}</small>
-        </span>
-      </span>
-      <span className="rowtail">
-        <RoleChip role={party.destination_role} />
+    <PartyRow
+      variant="roster"
+      party={party}
+      mark={<PartyMark party={party} />}
+      caption={partySubtitle(party)}
+      actions={
         <MenuButton
           variant="quiet"
           icon="ellipsis"
@@ -298,8 +287,8 @@ function PartyRow({
             </>
           )}
         </MenuButton>
-      </span>
-    </div>
+      }
+    />
   );
 }
 
@@ -594,7 +583,7 @@ function MembersTab({
   );
   const machines = parties.filter((party) => isMachine(party));
   const row = (party: Party): ReactNode => (
-    <PartyRow
+    <MemberRow
       key={party.party_id_hex}
       snapshot={snapshot}
       store={store}
@@ -941,7 +930,8 @@ function SettingsTab({
           {server ? serverDisplayLabel(server) : store.server}
         </InsetRow>
         <InsetRow label="Your account">
-          {account?.username ?? store.account} · {mine ? roleText(mine) : '—'}
+          {account?.username ?? store.account} ·{' '}
+          {mine ? roleChipText(mine.destination_role) : '—'}
         </InsetRow>
         <InsetRow label="Owner">
           {owner ? partyName(owner) : 'No owner designated'}
@@ -1020,7 +1010,7 @@ function SettingsTab({
                     <span className="t">
                       <b>{partyName(party)}</b>
                       <small>
-                        {fmtRole(party.destination_role)} · reads{' '}
+                        {roleChipText(party.destination_role)} · reads{' '}
                         {memberReads(snapshot, party).length} of {total}
                       </small>
                     </span>

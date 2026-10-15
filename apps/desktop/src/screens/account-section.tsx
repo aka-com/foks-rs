@@ -77,7 +77,7 @@ import type { Location, NavigateOptions } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { PageHeader } from '../shell/page-header';
 import { storeUsageText, useStoreUsage } from '../store-usage';
-import { AccountMark } from './account-switcher';
+import { AccountMark } from '../components/account-mark';
 import { deviceEntries } from './device-model';
 import type { DeviceLists } from './device-model';
 import { GoProfileConnectSheet } from './go-profile-connect';

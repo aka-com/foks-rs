@@ -4,20 +4,18 @@ export { serverTeamName, teamAliasOf } from '../../name-normalization';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { RoleDto } from '../../bridge';
-import { Button, Chip, InsetRow, Notice } from '../../components';
+import { Button, InsetRow, Notice, RoleChip } from '../../components';
 import {
   actionableGroupMember,
   isMachine,
   parseRole,
   partiesOf,
   partyName,
-  roleChipLabel,
   roleRank,
 } from '../../model';
 import type {
   AgentSnapshot,
   GroupDetailFailure,
-  Item,
   Party,
   Store,
   StoreRef,
@@ -54,42 +52,6 @@ export function demotionFor(party: Party): RoleDto | null {
   return visibility > VIS_MIN
     ? { role: 'Member', visibility: visibility - 1 }
     : null;
-}
-
-/** Formats a role for display in team-management UI. */
-export function fmtRole(role: Item['read']): string {
-  const parsed = parseRole(role);
-  return parsed
-    ? roleChipLabel(parsed)
-    : typeof role === 'string'
-      ? role
-      : role.role;
-}
-
-export function roleText(party: Party): string {
-  return fmtRole(party.destination_role);
-}
-
-/** Displays a role and optional Member visibility level in one chip. */
-export function RoleChip({
-  role,
-}: {
-  role: Item['read'] | RoleDto | null | undefined;
-}): ReactNode {
-  const parsed = role ? parseRole(role) : null;
-  return (
-    <span className="rolecell">
-      <Chip>
-        {parsed
-          ? roleChipLabel(parsed)
-          : role
-            ? typeof role === 'string'
-              ? role
-              : role.role
-            : '—'}
-      </Chip>
-    </span>
-  );
 }
 
 /** Returns the secondary label for a person or machine member row. */

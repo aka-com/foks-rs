@@ -48,6 +48,7 @@ import {
   Notice,
   PANE_SIZES,
   SegmentedControl,
+  StoreMark,
   usePaneResize,
 } from '../components';
 import type { FilterKind } from '../components';
@@ -60,7 +61,6 @@ import {
   defaultCreateStore,
   displayPathComponent,
   fmtSize,
-  initials,
   isTrashPath,
   kindLabel,
   kindOf,
@@ -77,7 +77,6 @@ import {
   storeReadable,
   TRASH_ROOT,
   trashEntries,
-  usernameOf,
 } from '../model';
 import type { Item, Store, AgentSnapshot, TrashEntry } from '../model';
 import { TrashView } from './trash-view';
@@ -117,7 +116,6 @@ import {
   toggleRow,
 } from './item-moves';
 import type { DropVerdict, MultiSelection } from './item-moves';
-import { AccountMark } from './account-switcher';
 import { matchesShortcut, shortcutLabel } from '../shortcuts';
 import type { KeyPress } from '../shortcuts';
 import { manageReason } from './group-model';
@@ -133,28 +131,6 @@ function emptyStoreCopy(store: Store): string {
   return store.kind === 'team'
     ? 'Items stored in this team vault are accessible to team members according to their assigned roles.'
     : 'Passwords and documents you add are private to this vault.';
-}
-
-/**
- * Renders a store's badge (team initials with its theme hue, or account avatar
- * with its hashed color). Used consistently across the tree, title bar, and Location column.
- */
-function StoreMark({
-  snapshot,
-  store,
-  hue,
-}: {
-  snapshot: AgentSnapshot;
-  store: Store;
-  hue: string | undefined;
-}): ReactNode {
-  return store.kind === 'team' ? (
-    <span className="av team" style={{ background: hue }} aria-hidden="true">
-      {initials(store.name)}
-    </span>
-  ) : (
-    <AccountMark name={usernameOf(snapshot, store) ?? store.account} />
-  );
 }
 
 /** The table's column set: Location is drawn only while rows span stores. */

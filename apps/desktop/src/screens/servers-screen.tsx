@@ -39,7 +39,7 @@ import {
 import type { MutationFailureHandler } from '../mutation-recovery';
 import type { Server, StoreRef, TeamStore, AgentSnapshot } from '../model';
 import { PageHeader } from '../shell/page-header';
-import { AccountMark } from './account-switcher';
+import { AccountMark } from '../components/account-mark';
 import { ProfileKeys } from './profile-keys';
 import { GroupMark } from './group-mark';
 import { matchesShortcut } from '../shortcuts';

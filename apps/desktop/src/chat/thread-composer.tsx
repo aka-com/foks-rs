@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, RefObject } from 'react';
 import { Icon } from '../components';
 import { CHAT_TEXT_BYTES } from '../chat-limits';
-import { AccountMark } from '../screens/account-switcher';
+import { AccountMark } from '../components/account-mark';
 import { parseRole, roleName } from '../model';
 import {
   applePlatform,

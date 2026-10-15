@@ -31,7 +31,7 @@ import { useSidebarInbox } from '../chat/inbox-provider';
 import { chatUnreadTotal } from '../chat/unread';
 import { accountAtLocation, chatTabLocation, railTabOf } from '../location';
 import type { Location, RailTab } from '../location';
-import { AccountMark } from '../screens/account-switcher';
+import { AccountMark } from '../components/account-mark';
 import { matchesShortcut } from '../shortcuts';
 
 interface RailTabSpec {
