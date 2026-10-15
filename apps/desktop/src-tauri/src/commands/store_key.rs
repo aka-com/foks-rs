@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// A store identity parsed from the renderer's string. Lookups compare it
 /// with catalog entries field by field instead of serializing each candidate.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Debug)]
 pub(super) struct StoreKey(CatalogStoreRef);
 
 /// The wire object. Fields are declared in sorted key order, which is the

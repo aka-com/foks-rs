@@ -24,6 +24,17 @@ impl AppState {
         path: &str,
         version: u64,
     ) -> Result<CatalogItem, AgentError> {
+        self.item_for_key(StoreKey::parse(store).as_ref(), path, version)
+    }
+
+    /// [`Self::selected_item`] for an identity the caller has already
+    /// parsed; `None` is an identity that did not parse.
+    fn item_for_key(
+        &self,
+        key: Option<&StoreKey>,
+        path: &str,
+        version: u64,
+    ) -> Result<CatalogItem, AgentError> {
         let catalog = self.catalog.lock_unpoisoned();
         let Some(catalog) = catalog.as_ref() else {
             return Err(AgentError::new(
@@ -32,7 +43,7 @@ impl AppState {
                 true,
             ));
         };
-        let item = StoreKey::parse(store).and_then(|key| {
+        let item = key.and_then(|key| {
             catalog
                 .items
                 .iter()
@@ -485,6 +496,15 @@ impl AppState {
         &self,
         id: &str,
     ) -> Result<(CatalogStoreRef, Option<bool>), AgentError> {
+        self.store_for_key(StoreKey::parse(id).as_ref())
+    }
+
+    /// [`Self::selected_store`] for an identity the caller has already
+    /// parsed; `None` is an identity that did not parse.
+    fn store_for_key(
+        &self,
+        key: Option<&StoreKey>,
+    ) -> Result<(CatalogStoreRef, Option<bool>), AgentError> {
         let catalog = self.catalog.lock_unpoisoned();
         let Some(catalog) = catalog.as_ref() else {
             return Err(AgentError::new(
@@ -493,9 +513,7 @@ impl AppState {
                 true,
             ));
         };
-        let key = StoreKey::parse(id);
         let selected = key
-            .as_ref()
             .and_then(|key| {
                 catalog
                     .stores
@@ -514,7 +532,7 @@ impl AppState {
                     .map(|active| (key.store().clone(), active))
             })
             .ok_or_else(|| {
-                self.absent_store_error(catalog, key.as_ref(), "This vault is no longer available.")
+                self.absent_store_error(catalog, key, "This vault is no longer available.")
             })?;
         let profile = match &selected.0 {
             CatalogStoreRef::Account(store) => &store.profile,
@@ -557,8 +575,9 @@ impl AppState {
         path: &str,
         version: u64,
     ) -> Result<CatalogItem, AgentError> {
-        let item = self.selected_current_item(store, path, version, "modifying")?;
-        match self.selected_store(store)?.1 {
+        let key = StoreKey::parse(store);
+        let item = self.selected_current_item(key.as_ref(), path, version, "modifying")?;
+        match self.store_for_key(key.as_ref())?.1 {
             Some(false) => Err(AgentError::new(
                 "inactive-group",
                 "This group is inactive. Complete its setup before modifying it.",
@@ -579,7 +598,8 @@ impl AppState {
         dirent_id: &str,
         action: &str,
     ) -> Result<CatalogItem, AgentError> {
-        let item = self.selected_current_item(store, path, version, action)?;
+        let key = StoreKey::parse(store);
+        let item = self.selected_current_item(key.as_ref(), path, version, action)?;
         require_listed_dirent(&item, dirent_id, action)?;
         Ok(item)
     }
@@ -588,12 +608,12 @@ impl AppState {
     /// `conflict` that asks for a refresh before `action` it.
     fn selected_current_item(
         &self,
-        store: &str,
+        key: Option<&StoreKey>,
         path: &str,
         version: u64,
         action: &str,
     ) -> Result<CatalogItem, AgentError> {
-        self.selected_item(store, path, version)
+        self.item_for_key(key, path, version)
             .map_err(|error| match error.code.as_str() {
                 "item-version-mismatch" | "item-not-found" => AgentError::new(
                     "conflict",
