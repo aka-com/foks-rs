@@ -1018,8 +1018,6 @@ export function VaultShell({
                   identity={screenIdentity(here)}
                 >
                   <ScreenRouter
-                    shown={shown}
-                    bridge={bridge}
                     state={state}
                     locations={locations}
                     enteredScene={enteredScene}
@@ -1030,15 +1028,10 @@ export function VaultShell({
                     setRevealRequest={setRevealRequest}
                     workflow={workflow}
                     setWorkflow={setWorkflow}
-                    refresh={refresh}
-                    refreshSnapshot={refreshSnapshot}
-                    commandError={commandError}
-                    mutationError={mutationError}
                     onLock={onLock}
                     agentLifecycle={agentLifecycle}
                     recoverAgentReadiness={recoverAgentReadiness}
                     uploadDroppedFile={uploadDroppedFile}
-                    accessNow={accessNow}
                     accessGenerations={accessGenerations}
                     trash={trash}
                     onTeamInfo={(storeId, trigger) => {

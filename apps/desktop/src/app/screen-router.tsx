@@ -1,10 +1,8 @@
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import type { AgentLifecycle } from '../agent-lifecycle';
-import type { Bridge } from '../bridge';
 import type { Location, LocationStore, NavigateOptions } from '../location';
 import { storeOf } from '../model';
-import type { AgentSnapshot, DeviceLabel, Item } from '../model';
-import type { MutationFailureHandler } from '../mutation-recovery';
+import type { DeviceLabel, Item } from '../model';
 import { markProfileRostersStale } from '../roster-staleness';
 import { ChatTab } from '../screens/chat-tab';
 import { DevicesScreen } from '../screens/devices-screen';
@@ -14,13 +12,11 @@ import { PlaceholderScreen } from '../screens/placeholder-screen';
 import { listsItems } from '../screens/scope';
 import { SettingsScreen } from '../screens/settings-screen';
 import { TeamsScreen } from '../screens/teams-screen';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 import type { WriteWorkflow } from '../screens/write-workflows';
-import type { CommandErrorHandler } from './catalog-runtime';
 import type { TrashActions } from './trash-actions';
 
 export function ScreenRouter({
-  shown,
-  bridge,
   state,
   locations,
   enteredScene,
@@ -31,23 +27,16 @@ export function ScreenRouter({
   setRevealRequest,
   workflow,
   setWorkflow,
-  refresh,
-  refreshSnapshot,
-  commandError,
-  mutationError,
   onLock,
   agentLifecycle,
   recoverAgentReadiness,
   uploadDroppedFile,
-  accessNow,
   accessGenerations,
   onTeamInfo,
   trash,
 }: {
   onTeamInfo: (storeId: string, trigger?: HTMLElement) => void;
   trash: TrashActions;
-  shown: AgentSnapshot;
-  bridge: Bridge;
   state: ReturnType<LocationStore['getSnapshot']>;
   locations: LocationStore;
   enteredScene: string;
@@ -58,17 +47,21 @@ export function ScreenRouter({
   setRevealRequest: (request: string) => void;
   workflow: WriteWorkflow;
   setWorkflow: Dispatch<SetStateAction<WriteWorkflow>>;
-  refresh: (message: string, profile?: string) => Promise<void>;
-  refreshSnapshot: (force?: boolean) => Promise<AgentSnapshot>;
-  commandError: CommandErrorHandler;
-  mutationError: MutationFailureHandler;
   onLock: () => Promise<boolean>;
   agentLifecycle: AgentLifecycle;
   recoverAgentReadiness: (reconnect: boolean) => Promise<void>;
   uploadDroppedFile: (drop: DropUpload) => Promise<void>;
-  accessNow: () => number;
   accessGenerations: ReadonlyMap<string, number>;
 }): ReactNode {
+  const shown = useShellSnapshot();
+  const {
+    bridge,
+    accessNow,
+    commandError,
+    mutationError,
+    refresh,
+    refreshSnapshot,
+  } = useShellServices();
   const here = state.location;
   // An exposure review's Open: the item's store, with the item selected so
   // the details panel shows it and its Edit.
