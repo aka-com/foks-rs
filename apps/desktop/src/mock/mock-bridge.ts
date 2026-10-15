@@ -10,13 +10,21 @@ import type { Bridge } from '../bridge';
 import type { vaultCommands } from '../bridge/commands-vault';
 import { createBridge } from '../bridge/create';
 import { createTransport } from '../bridge/transport';
-import { mockAccountCommands } from './accounts';
+import {
+  ACCOUNT_HOST_MEMBERS,
+  mockAccountCommands,
+  mockAccountHost,
+} from './accounts';
 import { mockCoreCommands } from './core';
 import { mockEnrollmentCommands } from './enrollment';
 import { FIXTURE } from './fixture';
-import { mockHost } from './host';
-import { mockServerCommands } from './servers';
-import { mockState } from './state';
+import { mockHost, type MockCommand } from './host';
+import {
+  mockServerCommands,
+  mockServerHost,
+  SERVER_HOST_MEMBERS,
+} from './servers';
+import { mockState, type MockState } from './state';
 import { mockVaultCommands } from './vault';
 import { mockYubiCommands } from './yubikey';
 import type { AgentSnapshot } from '../model/types';
@@ -30,24 +38,48 @@ export {
 } from './vault';
 
 /**
+ * The members outside the vault factory whose commands the mock host answers
+ * at the wire level. Every member of the vault factory answers there too.
+ */
+export const MOCK_HOST_MEMBERS = [
+  ...ACCOUNT_HOST_MEMBERS,
+  ...SERVER_HOST_MEMBERS,
+] as const;
+
+/**
  * The bridge members the mock implements directly instead of through the mock
- * host: every member outside the command factories whose commands the host
- * answers. Each key is required, including the optional native-only methods,
- * which the mock sets to `undefined`. A member added to any other factory
- * therefore fails the build until the mock supplies it, rather than reaching
- * the mock host and rejecting at runtime.
+ * host: every member outside the vault factory and `MOCK_HOST_MEMBERS`. Each
+ * key is required, including the optional native-only methods, which the mock
+ * sets to `undefined`. A member added to a factory therefore fails the build
+ * until the mock supplies it, rather than reaching the mock host and
+ * rejecting at runtime.
  */
 type MockOverrides = {
   [
-    K in Exclude<keyof Bridge, keyof ReturnType<typeof vaultCommands>>
+    K in Exclude<
+      keyof Bridge,
+      | keyof ReturnType<typeof vaultCommands>
+      | (typeof MOCK_HOST_MEMBERS)[number]
+    >
   ]: Bridge[K];
 };
 
+/** The commands the mock host answers, by native command name. */
+export function mockHostCommands(
+  state: MockState,
+): Record<string, MockCommand> {
+  return {
+    ...mockVaultCommands(state),
+    ...mockAccountHost(state),
+    ...mockServerHost(state),
+  };
+}
+
 export function mockBridge(snapshot: AgentSnapshot = FIXTURE): Bridge {
   const state = mockState(snapshot);
-  // The vault commands answer at the wire level, through the bridge's own
-  // command factories, decoders and failure handling.
-  return createBridge(createTransport(mockHost(mockVaultCommands(state))), {
+  // The commands the host answers go through the bridge's own command
+  // factories, decoders and failure handling.
+  return createBridge(createTransport(mockHost(mockHostCommands(state))), {
     ...mockAccountCommands(state),
     ...mockCoreCommands(state),
     ...mockEnrollmentCommands(state),

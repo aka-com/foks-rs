@@ -365,12 +365,17 @@ are decisions, not details:
   `src/bridge/commands-*.ts` factory (`accounts.ts`, `core.ts`,
   `enrollment.ts`, `servers.ts`, `vault.ts` and `yubikey.ts` in `src/mock/`),
   which share the fixture's records through `src/mock/state.ts`. Its vault
-  commands answer at the wire level: `createBridge` runs the same command
-  factories over a
-  transport whose host is `mockHost` (`src/mock/host.ts`), so their JSON
-  responses pass the native decoders, and their CommandError rejections get
-  the same origin and mutation-ambiguity handling as the native host's. The
-  other commands still return decoded values directly. It is
+  commands, the account listing, the team roster and federation changes, and
+  every server command except `list_servers` answer at the wire level:
+  `createBridge` runs the same command factories over a transport whose host
+  is `mockHost` (`src/mock/host.ts`), so their JSON responses pass the native
+  decoders, and their CommandError rejections get the same origin and
+  mutation-ambiguity handling as the native host's. `MOCK_HOST_MEMBERS` in
+  `mock-bridge.ts` lists the members outside the vault factory that answer
+  there, and `tests/mock-host.test.ts` checks that the host answers exactly
+  the commands those members send. The other commands still return decoded
+  values directly, among them the server, roster and federation listings,
+  whose fixture records carry facts the native responses do not. It is
   reached only by dynamic `import()`. `app-root.tsx` calls
   `selectBridge`, checks the Rust app lock, and calls `loadSnapshot` only after
   an armed lock has been authenticated; only an explicitly mocked browser gets

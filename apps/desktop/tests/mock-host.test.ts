@@ -1,15 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { decodeAccounts } from '../src/bridge/accounts-groups';
+import { vaultCommands } from '../src/bridge/commands-vault';
 import { createBridge } from '../src/bridge/create';
 import {
   decodeServerStatus,
   type ServerStatusSnapshot,
 } from '../src/bridge/servers';
-import { createTransport } from '../src/bridge/transport';
+import { createTransport, type Transport } from '../src/bridge/transport';
 import { FIXTURE } from '../src/mock/fixture';
-import { mockBridge } from '../src/mock/mock-bridge';
+import {
+  MOCK_HOST_MEMBERS,
+  mockBridge,
+  mockHostCommands,
+} from '../src/mock/mock-bridge';
 import { mockCommand, mockHost } from '../src/mock/host';
+import { mockState } from '../src/mock/state';
 import { accountWire, serverStatusWire } from '../src/mock/wire';
 import type { Account } from '../src/model/types';
 
@@ -207,5 +213,98 @@ test('mock password import progress arrives through the transport channel', asyn
   assert.deepEqual(
     outcomes.map((outcome) => outcome.status),
     ['created', 'created'],
+  );
+});
+
+test('the mock host answers every command its members send, and no other', async () => {
+  // A transport that records the command each member sends, and no more.
+  const sent = new Set<string>();
+  const record = async (command: string): Promise<never> => {
+    sent.add(command);
+    return undefined as never;
+  };
+  const recording: Transport = {
+    invoke: async (command) => {
+      sent.add(command);
+    },
+    checked: record,
+    checkedMutation: record,
+    listen: async () => () => undefined,
+    channel: () => ({ onmessage: () => undefined }),
+  };
+  const recorder = createBridge(recording) as unknown as Record<
+    string,
+    (...args: unknown[]) => Promise<unknown>
+  >;
+  const members: string[] = [
+    ...Object.keys(vaultCommands(recording)),
+    ...MOCK_HOST_MEMBERS,
+  ];
+  // A request whose every field is an empty list, so a member that maps a
+  // list in its request still sends its command.
+  const request: unknown = new Proxy({}, { get: () => [] });
+  for (const member of members) {
+    const method = recorder[member];
+    // Called without arguments too, so a member whose command depends on an
+    // optional argument, such as listCatalog's progress listener, sends each
+    // of its commands.
+    for (const args of [[], [request, request, request, request]])
+      try {
+        await method(...args);
+      } catch {
+        // A member that reads a field of a missing request sends nothing.
+      }
+  }
+  assert.deepEqual(
+    [...sent].sort(),
+    Object.keys(mockHostCommands(mockState(FIXTURE))).sort(),
+  );
+});
+
+test('mock team and server failures carry the host codes and the transport normalization', async () => {
+  const bridge = mockBridge(FIXTURE);
+  await assert.rejects(
+    bridge.addGroupMember({
+      storeId: 'team:eng',
+      username: 'sam.ortiz',
+      destination: { role: 'Member', visibility: 0 },
+    }),
+    {
+      code: 'conflict',
+      origin: 'invoke',
+      retryable: false,
+      ambiguous: false,
+    },
+  );
+  await assert.rejects(
+    bridge.promoteGroupMember({
+      storeId: 'team:homelab',
+      username: 'satoshi',
+      destination: { role: 'Admin' },
+    }),
+    { code: 'inactive-group', origin: 'invoke', ambiguous: false },
+  );
+  await assert.rejects(bridge.setServerLabel('missing', 'Home'), {
+    code: 'profile-not-found',
+    origin: 'invoke',
+    ambiguous: false,
+  });
+  assert.deepEqual(await bridge.setServerLabel('personal', ' Home '), {
+    profile: 'personal',
+    label: 'Home',
+    changed: true,
+  });
+  assert.deepEqual(
+    await bridge.removeGroupMember({
+      storeId: 'team:eng',
+      username: 'sam.ortiz',
+    }),
+    { applied: true },
+  );
+  assert.equal(
+    (await bridge.listParties('team:eng')).some(
+      (party) => party.username === 'sam.ortiz',
+    ),
+    false,
   );
 });

@@ -1,25 +1,363 @@
 /**
  * The mock's account and team commands, the members of
- * `bridge/commands-accounts.ts`, which answer from the shared store and
- * roster records with decoded values.
+ * `bridge/commands-accounts.ts`, over the shared store and roster records.
+ * The account listing and the team changes answer at the wire level through
+ * the mock host; the other members answer with decoded values.
  */
 
+import type {
+  AddFederatedTeamMemberRequest,
+  CreateGroupRequest,
+  GroupMemberRequest,
+  GroupRoleRequest,
+  RemoveFederatedGroupRequest,
+} from '../bridge';
 import type { accountCommands } from '../bridge/commands-accounts';
 import { parseRole, roleRank, visibilityOf } from '../model/roles';
+import type { Store, StoreRef } from '../model/types';
 import type { RenameProgress } from '../rename-contract';
 import type { SsoPurpose } from '../sso-contract';
+import { mockCommand, type MockCommand } from './host';
 import { failure, type MockDomain, type MockState } from './state';
+import { accountWire } from './wire';
+
+/**
+ * The account and team members whose commands the mock host answers at the
+ * wire level, through `bridge/commands-accounts.ts`.
+ */
+export const ACCOUNT_HOST_MEMBERS = [
+  'listAccounts',
+  'resumeGroupCreation',
+  'abandonGroupCreation',
+  'createGroup',
+  'addGroupMember',
+  'resumeGroupMemberAddition',
+  'promoteGroupMember',
+  'demoteGroupMember',
+  'removeGroupMember',
+  'resumeGroupMemberEdit',
+  'addFederatedTeamMember',
+  'removeFederatedGroup',
+  'rerunFederatedTeamMemberAdd',
+] as const satisfies readonly (keyof ReturnType<typeof accountCommands>)[];
+
+/**
+ * Throws the failure the host reports when `storeId` is not an active named
+ * team.
+ */
+function assertNamedGroup(stores: readonly Store[], storeId: string): void {
+  const store = stores.find((candidate) => candidate.id === storeId);
+  if (!store || store.kind !== 'team')
+    throw failure('store-not-found', 'The team was not found.');
+  if (!store.active)
+    throw failure('inactive-group', 'The team setup is incomplete.');
+  if (store.team_kind !== 'named')
+    throw failure(
+      'group-management-unavailable',
+      'Managing members and shared access requires a named team.',
+    );
+}
+
+/**
+ * The commands of `ACCOUNT_HOST_MEMBERS`: the account listing and the team
+ * roster and federation changes, answered with wire JSON.
+ */
+export function mockAccountHost(state: MockState): Record<string, MockCommand> {
+  const { snapshot, stores, accounts, restoreFirstRunAccount } = state;
+  return {
+    list_accounts: () => {
+      restoreFirstRunAccount();
+      // Fixture and restored accounts already map directly to their store IDs.
+      return accounts.map(accountWire);
+    },
+    resume_group_creation: mockCommand(
+      async ({ storeId }: { storeId: StoreRef }) => {
+        const store = stores.find((candidate) => candidate.id === storeId);
+        if (!store || store.kind !== 'team' || store.active) {
+          throw failure(
+            'invalid-request',
+            'This team has already completed setup.',
+          );
+        }
+        store.active = true;
+        return { applied: true };
+      },
+    ),
+    abandon_group_creation: mockCommand(
+      async ({ storeId }: { storeId: StoreRef }) => {
+        const index = stores.findIndex((candidate) => candidate.id === storeId);
+        const store = index < 0 ? undefined : stores[index];
+        if (!store || store.kind !== 'team' || store.active !== false) {
+          throw failure(
+            'invalid-request',
+            'This team has no incomplete creation to remove.',
+          );
+        }
+        stores.splice(index, 1);
+        return { applied: true };
+      },
+    ),
+    create_group: mockCommand(
+      async ({ accountStoreId, teamAlias, name, kind }: CreateGroupRequest) => {
+        const account = stores.find(
+          (store) => store.id === accountStoreId && store.kind === 'account',
+        );
+        if (!account)
+          throw failure('store-not-found', 'The account was not found.');
+        const id = `team:${teamAlias}`;
+        if (stores.some((store) => store.id === id))
+          throw failure(
+            'conflict',
+            'A team with that identifier already exists.',
+          );
+        stores.push({
+          id,
+          kind: 'team',
+          name: name || teamAlias,
+          alias: teamAlias,
+          server: account.server,
+          account: account.account,
+          active: true,
+          team_kind: kind,
+          team_id_hex: `${kind === 'named' ? '03' : '14'}${'1'.repeat(64)}`,
+        });
+        state.parties.push({
+          store: id,
+          username:
+            snapshot.accounts.find(
+              (candidate) => candidate.store === account.id,
+            )?.username ?? account.account,
+          label: 'you',
+          party_kind: 'user',
+          generation: 1,
+          locally_manageable: true,
+          party_id_hex: `01${'2'.repeat(64)}`,
+          source_role: { role: 'Owner' },
+          destination_role: { role: 'Owner' },
+        });
+        return { applied: true };
+      },
+    ),
+    add_group_member: mockCommand(
+      async ({ storeId, username, destination }: GroupRoleRequest) => {
+        assertNamedGroup(stores, storeId);
+        if (
+          state.parties.some(
+            (party) => party.store === storeId && party.username === username,
+          )
+        )
+          throw failure('conflict', 'That user is already in the team.');
+        state.parties.push({
+          store: storeId,
+          username,
+          party_kind: 'user',
+          generation: 1,
+          locally_manageable: true,
+          party_id_hex: `01${String(state.parties.length + 1).padStart(64, '3')}`,
+          source_role: destination,
+          destination_role: destination,
+        });
+        return { applied: true };
+      },
+    ),
+    resume_group_member_addition: mockCommand(
+      async ({ storeId }: GroupMemberRequest) => {
+        assertNamedGroup(stores, storeId);
+        return { applied: true };
+      },
+    ),
+    promote_group_member: mockCommand(
+      async ({ storeId, username, destination }: GroupRoleRequest) => {
+        assertNamedGroup(stores, storeId);
+        const party = state.parties.find(
+          (candidate) =>
+            candidate.store === storeId && candidate.username === username,
+        );
+        if (!party || !party.locally_manageable)
+          throw failure(
+            'member-not-actionable',
+            'That roster party cannot be changed here.',
+          );
+        const current = parseRole(party.destination_role);
+        const next = parseRole(destination);
+        const higher =
+          roleRank(next) > roleRank(current) ||
+          (current?.kind === 'member' &&
+            next?.kind === 'member' &&
+            visibilityOf(next) > visibilityOf(current));
+        if (!higher) throw failure('not-a-promotion', 'Choose a higher role.');
+        party.destination_role = destination;
+        return { applied: true };
+      },
+    ),
+    demote_group_member: mockCommand(
+      async ({ storeId, username, destination }: GroupRoleRequest) => {
+        assertNamedGroup(stores, storeId);
+        const party = state.parties.find(
+          (candidate) =>
+            candidate.store === storeId && candidate.username === username,
+        );
+        if (!party || !party.locally_manageable)
+          throw failure(
+            'member-not-actionable',
+            'That roster party cannot be changed here.',
+          );
+        const current = parseRole(party.destination_role);
+        const next = parseRole(destination);
+        const lower =
+          roleRank(next) < roleRank(current) ||
+          (current?.kind === 'member' &&
+            next?.kind === 'member' &&
+            visibilityOf(next) < visibilityOf(current));
+        if (!lower) throw failure('not-a-demotion', 'Choose a lower role.');
+        party.destination_role = destination;
+        party.generation += 1;
+        return { applied: true };
+      },
+    ),
+    remove_group_member: mockCommand(
+      async ({ storeId, username }: GroupMemberRequest) => {
+        assertNamedGroup(stores, storeId);
+        const party = state.parties.find(
+          (candidate) =>
+            candidate.store === storeId && candidate.username === username,
+        );
+        if (!party || !party.locally_manageable)
+          throw failure(
+            'member-not-actionable',
+            'That roster party cannot be removed here.',
+          );
+        state.parties = state.parties.filter(
+          (candidate) => candidate !== party,
+        );
+        return { applied: true };
+      },
+    ),
+    resume_group_member_edit: mockCommand(
+      async ({ storeId }: { storeId: StoreRef }) => {
+        assertNamedGroup(stores, storeId);
+        return { applied: true };
+      },
+    ),
+    add_federated_team_member: mockCommand(
+      async ({
+        storeId,
+        remoteStoreId,
+        visibility,
+      }: AddFederatedTeamMemberRequest) => {
+        assertNamedGroup(stores, storeId);
+        const remote = stores.find(
+          (store) => store.id === remoteStoreId && store.kind === 'team',
+        );
+        const local = stores.find(
+          (store) => store.id === storeId && store.kind === 'team',
+        );
+        if (
+          !remote ||
+          remote.kind !== 'team' ||
+          !remote.active ||
+          remote.team_kind !== 'named' ||
+          remote.server === local?.server
+        )
+          throw failure(
+            'invalid-request',
+            'Choose an active named team on a different server.',
+          );
+        const operation = `federated-member-${state.federation.length + 1}`;
+        state.federation.push({
+          store: storeId,
+          // Use the profile name rather than the server address.
+          remote_profile: remote.server,
+          remote_team_alias: remote.alias,
+          remote_host_id_hex:
+            snapshot.servers.find(
+              (server) => server.profileName === remote.server,
+            )?.host_id ?? '',
+          remote_team_id_hex: remote.team_id_hex,
+          destination: { role: 'Member', visibility },
+          operation_id_hex: operation,
+          active: true,
+        });
+        state.parties.push({
+          store: storeId,
+          username: null,
+          party_kind: 'named-team',
+          generation: 1,
+          locally_manageable: false,
+          party_id_hex: remote.team_id_hex,
+          scoped_host_id_hex:
+            snapshot.servers.find(
+              (server) => server.profileName === remote.server,
+            )?.host_id ?? undefined,
+          source_role: { role: 'Owner' },
+          destination_role: { role: 'Member', visibility },
+        });
+        return { applied: true };
+      },
+    ),
+    expel_federated_group: mockCommand(
+      async ({
+        storeId,
+        remoteHostIdHex,
+        remoteTeamIdHex,
+      }: RemoveFederatedGroupRequest) => {
+        assertNamedGroup(stores, storeId);
+        const matches = state.federation.filter(
+          (candidate) =>
+            candidate.store === storeId &&
+            candidate.active &&
+            candidate.remote_host_id_hex === remoteHostIdHex &&
+            candidate.remote_team_id_hex === remoteTeamIdHex,
+        );
+        if (matches.length !== 1)
+          throw failure(
+            'invalid-request',
+            'Select a single active federated team.',
+          );
+        state.federation = state.federation.filter(
+          (candidate) => candidate !== matches[0],
+        );
+        state.parties = state.parties.filter(
+          (candidate) =>
+            !(
+              candidate.store === storeId &&
+              candidate.party_id_hex === remoteTeamIdHex &&
+              candidate.scoped_host_id_hex === remoteHostIdHex
+            ),
+        );
+        return { applied: true };
+      },
+    ),
+    rerun_federated_team_member_add: mockCommand(
+      async ({
+        storeId,
+        operationId,
+      }: {
+        storeId: StoreRef;
+        operationId: string;
+      }) => {
+        assertNamedGroup(stores, storeId);
+        const entry = state.federation.find(
+          (candidate) =>
+            candidate.store === storeId &&
+            candidate.operation_id_hex === operationId,
+        );
+        if (!entry || entry.active)
+          throw failure(
+            'federated-membership-not-resumable',
+            'This team invitation cannot be resumed.',
+          );
+        entry.active = true;
+        return { applied: true };
+      },
+    ),
+  };
+}
 
 export function mockAccountCommands(
   state: MockState,
-): MockDomain<typeof accountCommands> {
-  const {
-    snapshot,
-    stores,
-    accounts,
-    firstRunFixture,
-    restoreFirstRunAccount,
-  } = state;
+): MockDomain<typeof accountCommands, (typeof ACCOUNT_HOST_MEMBERS)[number]> {
+  const { snapshot, stores, accounts, firstRunFixture } = state;
   const ssoModes = new Map<string, SsoPurpose>();
   const renames = new Map<string, RenameProgress[]>();
   const fixtureEngineeringStore = snapshot.stores.find(
@@ -29,24 +367,7 @@ export function mockAccountCommands(
     fixtureEngineeringStore?.kind === 'team'
       ? fixtureEngineeringStore
       : undefined;
-  const assertNamedGroup = (storeId: string): void => {
-    const store = stores.find((candidate) => candidate.id === storeId);
-    if (!store || store.kind !== 'team')
-      throw failure('store-not-found', 'The team was not found.');
-    if (!store.active)
-      throw failure('inactive-group', 'The team setup is incomplete.');
-    if (store.team_kind !== 'named')
-      throw failure(
-        'group-management-unavailable',
-        'Managing members and shared access requires a named team.',
-      );
-  };
   return {
-    listAccounts: () => {
-      restoreFirstRunAccount();
-      // Fixture and restored accounts already map directly to their store IDs.
-      return Promise.resolve(accounts.map((account) => ({ ...account })));
-    },
     listGroupDetails: (storeId) =>
       Promise.resolve({
         parties: {
@@ -74,250 +395,6 @@ export function mockAccountCommands(
           .filter((entry) => entry.store === storeId)
           .map((entry) => ({ ...entry })),
       ),
-    resumeGroupCreation: async (storeId) => {
-      const store = stores.find((candidate) => candidate.id === storeId);
-      if (!store || store.kind !== 'team' || store.active) {
-        throw failure(
-          'invalid-request',
-          'This team has already completed setup.',
-        );
-      }
-      store.active = true;
-      return { applied: true };
-    },
-    abandonGroupCreation: async (storeId) => {
-      const index = stores.findIndex((candidate) => candidate.id === storeId);
-      const store = index < 0 ? undefined : stores[index];
-      if (!store || store.kind !== 'team' || store.active !== false) {
-        throw failure(
-          'invalid-request',
-          'This team has no incomplete creation to remove.',
-        );
-      }
-      stores.splice(index, 1);
-      return { applied: true };
-    },
-    createGroup: async ({ accountStoreId, teamAlias, name, kind }) => {
-      const account = stores.find(
-        (store) => store.id === accountStoreId && store.kind === 'account',
-      );
-      if (!account)
-        throw failure('store-not-found', 'The account was not found.');
-      const id = `team:${teamAlias}`;
-      if (stores.some((store) => store.id === id))
-        throw failure(
-          'conflict',
-          'A team with that identifier already exists.',
-        );
-      stores.push({
-        id,
-        kind: 'team',
-        name: name || teamAlias,
-        alias: teamAlias,
-        server: account.server,
-        account: account.account,
-        active: true,
-        team_kind: kind,
-        team_id_hex: `${kind === 'named' ? '03' : '14'}${'1'.repeat(64)}`,
-      });
-      state.parties.push({
-        store: id,
-        username:
-          snapshot.accounts.find((candidate) => candidate.store === account.id)
-            ?.username ?? account.account,
-        label: 'you',
-        party_kind: 'user',
-        generation: 1,
-        locally_manageable: true,
-        party_id_hex: `01${'2'.repeat(64)}`,
-        source_role: { role: 'Owner' },
-        destination_role: { role: 'Owner' },
-      });
-      return { applied: true };
-    },
-    addGroupMember: async ({ storeId, username, destination }) => {
-      assertNamedGroup(storeId);
-      if (
-        state.parties.some(
-          (party) => party.store === storeId && party.username === username,
-        )
-      )
-        throw failure('conflict', 'That user is already in the team.');
-      state.parties.push({
-        store: storeId,
-        username,
-        party_kind: 'user',
-        generation: 1,
-        locally_manageable: true,
-        party_id_hex: `01${String(state.parties.length + 1).padStart(64, '3')}`,
-        source_role: destination,
-        destination_role: destination,
-      });
-      return { applied: true };
-    },
-    resumeGroupMemberAddition: async ({ storeId }) => {
-      assertNamedGroup(storeId);
-      return { applied: true };
-    },
-    promoteGroupMember: async ({ storeId, username, destination }) => {
-      assertNamedGroup(storeId);
-      const party = state.parties.find(
-        (candidate) =>
-          candidate.store === storeId && candidate.username === username,
-      );
-      if (!party || !party.locally_manageable)
-        throw failure(
-          'member-not-actionable',
-          'That roster party cannot be changed here.',
-        );
-      const current = parseRole(party.destination_role);
-      const next = parseRole(destination);
-      const higher =
-        roleRank(next) > roleRank(current) ||
-        (current?.kind === 'member' &&
-          next?.kind === 'member' &&
-          visibilityOf(next) > visibilityOf(current));
-      if (!higher) throw failure('not-a-promotion', 'Choose a higher role.');
-      party.destination_role = destination;
-      return { applied: true };
-    },
-    demoteGroupMember: async ({ storeId, username, destination }) => {
-      assertNamedGroup(storeId);
-      const party = state.parties.find(
-        (candidate) =>
-          candidate.store === storeId && candidate.username === username,
-      );
-      if (!party || !party.locally_manageable)
-        throw failure(
-          'member-not-actionable',
-          'That roster party cannot be changed here.',
-        );
-      const current = parseRole(party.destination_role);
-      const next = parseRole(destination);
-      const lower =
-        roleRank(next) < roleRank(current) ||
-        (current?.kind === 'member' &&
-          next?.kind === 'member' &&
-          visibilityOf(next) < visibilityOf(current));
-      if (!lower) throw failure('not-a-demotion', 'Choose a lower role.');
-      party.destination_role = destination;
-      party.generation += 1;
-      return { applied: true };
-    },
-    removeGroupMember: async ({ storeId, username }) => {
-      assertNamedGroup(storeId);
-      const party = state.parties.find(
-        (candidate) =>
-          candidate.store === storeId && candidate.username === username,
-      );
-      if (!party || !party.locally_manageable)
-        throw failure(
-          'member-not-actionable',
-          'That roster party cannot be removed here.',
-        );
-      state.parties = state.parties.filter((candidate) => candidate !== party);
-      return { applied: true };
-    },
-    resumeGroupMemberEdit: async (storeId) => {
-      assertNamedGroup(storeId);
-      return { applied: true };
-    },
-    addFederatedTeamMember: async ({ storeId, remoteStoreId, visibility }) => {
-      assertNamedGroup(storeId);
-      const remote = stores.find(
-        (store) => store.id === remoteStoreId && store.kind === 'team',
-      );
-      const local = stores.find(
-        (store) => store.id === storeId && store.kind === 'team',
-      );
-      if (
-        !remote ||
-        remote.kind !== 'team' ||
-        !remote.active ||
-        remote.team_kind !== 'named' ||
-        remote.server === local?.server
-      )
-        throw failure(
-          'invalid-request',
-          'Choose an active named team on a different server.',
-        );
-      const operation = `federated-member-${state.federation.length + 1}`;
-      state.federation.push({
-        store: storeId,
-        // Use the profile name rather than the server address.
-        remote_profile: remote.server,
-        remote_team_alias: remote.alias,
-        remote_host_id_hex:
-          snapshot.servers.find(
-            (server) => server.profileName === remote.server,
-          )?.host_id ?? '',
-        remote_team_id_hex: remote.team_id_hex,
-        destination: { role: 'Member', visibility },
-        operation_id_hex: operation,
-        active: true,
-      });
-      state.parties.push({
-        store: storeId,
-        username: null,
-        party_kind: 'named-team',
-        generation: 1,
-        locally_manageable: false,
-        party_id_hex: remote.team_id_hex,
-        scoped_host_id_hex:
-          snapshot.servers.find(
-            (server) => server.profileName === remote.server,
-          )?.host_id ?? undefined,
-        source_role: { role: 'Owner' },
-        destination_role: { role: 'Member', visibility },
-      });
-      return { applied: true };
-    },
-    removeFederatedGroup: async ({
-      storeId,
-      remoteHostIdHex,
-      remoteTeamIdHex,
-    }) => {
-      assertNamedGroup(storeId);
-      const matches = state.federation.filter(
-        (candidate) =>
-          candidate.store === storeId &&
-          candidate.active &&
-          candidate.remote_host_id_hex === remoteHostIdHex &&
-          candidate.remote_team_id_hex === remoteTeamIdHex,
-      );
-      if (matches.length !== 1)
-        throw failure(
-          'invalid-request',
-          'Select a single active federated team.',
-        );
-      state.federation = state.federation.filter(
-        (candidate) => candidate !== matches[0],
-      );
-      state.parties = state.parties.filter(
-        (candidate) =>
-          !(
-            candidate.store === storeId &&
-            candidate.party_id_hex === remoteTeamIdHex &&
-            candidate.scoped_host_id_hex === remoteHostIdHex
-          ),
-      );
-      return { applied: true };
-    },
-    rerunFederatedTeamMemberAdd: async (storeId, operationId) => {
-      assertNamedGroup(storeId);
-      const entry = state.federation.find(
-        (candidate) =>
-          candidate.store === storeId &&
-          candidate.operation_id_hex === operationId,
-      );
-      if (!entry || entry.active)
-        throw failure(
-          'federated-membership-not-resumable',
-          'This team invitation cannot be resumed.',
-        );
-      entry.active = true;
-      return { applied: true };
-    },
     configureWebAdmin: async () => ({ ok: true }),
     openWebAdmin: async () => {
       throw new Error('Host administration requires a connected host.');

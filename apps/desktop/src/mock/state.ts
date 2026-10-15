@@ -32,13 +32,19 @@ export const failure = (code: string, message: string) => ({
 });
 
 /**
- * The members a `bridge/commands-*.ts` factory supplies, each one required, as
- * a mock domain module supplies them. A native-only optional method is set to
- * `undefined` rather than left out, so the mock bridge's override check sees
- * every member.
+ * The members of a `bridge/commands-*.ts` factory that a mock domain module
+ * supplies as decoded values: all of them except the `Host` members, whose
+ * commands the mock host answers. Each one is required; a native-only
+ * optional method is set to `undefined` rather than left out, so the mock
+ * bridge's override check sees every member.
  */
-export type MockDomain<Factory extends (...args: never[]) => object> = {
-  [K in Extract<keyof ReturnType<Factory>, keyof Bridge>]: Bridge[K];
+export type MockDomain<
+  Factory extends (...args: never[]) => object,
+  Host extends keyof ReturnType<Factory> = never,
+> = {
+  [
+    K in Extract<Exclude<keyof ReturnType<Factory>, Host>, keyof Bridge>
+  ]: Bridge[K];
 };
 
 /** The host ID the mock pins for each fixture profile it checks. */

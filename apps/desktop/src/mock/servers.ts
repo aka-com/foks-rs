@@ -1,11 +1,27 @@
 /**
  * The mock's server commands, the members of `bridge/commands-servers.ts`,
- * which answer from the shared server records with decoded values.
+ * over the shared server records. All but the server listing answer at the
+ * wire level through the mock host.
  */
 
 import type { Bridge } from '../bridge';
 import type { serverCommands } from '../bridge/commands-servers';
+import { mockCommand, type MockCommand } from './host';
 import { failure, HOST_IDS, type MockDomain, type MockState } from './state';
+import { serverStatusWire } from './wire';
+
+/**
+ * The server members whose commands the mock host answers at the wire level,
+ * through `bridge/commands-servers.ts`.
+ */
+export const SERVER_HOST_MEMBERS = [
+  'checkAndAddProfile',
+  'checkAndAddGoProfile',
+  'describeServerStatus',
+  'checkServer',
+  'setServerLabel',
+  'removeServerAndCredentials',
+] as const satisfies readonly (keyof ReturnType<typeof serverCommands>)[];
 
 /** `describe_server_status` as the mock answers it. */
 export function mockServerStatus(
@@ -35,39 +51,58 @@ export function mockServerStatus(
   };
 }
 
-export function mockServerCommands(
-  state: MockState,
-): MockDomain<typeof serverCommands> {
+/**
+ * The commands of `SERVER_HOST_MEMBERS`: adding, checking, labelling and
+ * removing a server profile, and its status, answered with wire JSON.
+ */
+export function mockServerHost(state: MockState): Record<string, MockCommand> {
   const { servers, serverProbes, serverHosts, firstRunFixture } = state;
+  const describeServerStatus = mockServerStatus(state);
   return {
-    // An optional method only the native host offers; callers fall back to
-    // other paths when a bridge lacks it.
-    reconcileServer: undefined,
-    listServers: () =>
-      Promise.resolve(servers.map((server) => ({ ...server }))),
-    checkAndAddProfile: async (profileName, probe) => {
-      const path =
-        probe === firstRunFixture.invited.server
-          ? firstRunFixture.invited
-          : probe === firstRunFixture.own.server
-            ? firstRunFixture.own
-            : undefined;
-      if (!path) throw failure('io', `No response from ${probe}`);
-      return { ...path.report, profile: profileName };
-    },
-    checkAndAddGoProfile: async (_candidateId, hostId, profileName, probe) => {
-      const path =
-        probe === firstRunFixture.invited.server
-          ? firstRunFixture.invited
-          : probe === firstRunFixture.own.server
-            ? firstRunFixture.own
-            : undefined;
-      if (!path || path.report.hostId !== hostId)
-        throw failure('io', `${probe} did not match, so nothing was saved.`);
-      return { ...path.report, profile: profileName };
-    },
-    describeServerStatus: mockServerStatus(state),
-    checkServer: async (profile) => {
+    check_and_add_profile: mockCommand(
+      async ({
+        profileName,
+        probe,
+      }: {
+        profileName: string;
+        probe: string;
+      }) => {
+        const path =
+          probe === firstRunFixture.invited.server
+            ? firstRunFixture.invited
+            : probe === firstRunFixture.own.server
+              ? firstRunFixture.own
+              : undefined;
+        if (!path) throw failure('io', `No response from ${probe}`);
+        return { ...path.report, profile: profileName };
+      },
+    ),
+    check_and_add_go_profile: mockCommand(
+      async ({
+        hostId,
+        profileName,
+        probe,
+      }: {
+        hostId: string;
+        profileName: string;
+        probe: string;
+      }) => {
+        const path =
+          probe === firstRunFixture.invited.server
+            ? firstRunFixture.invited
+            : probe === firstRunFixture.own.server
+              ? firstRunFixture.own
+              : undefined;
+        if (!path || path.report.hostId !== hostId)
+          throw failure('io', `${probe} did not match, so nothing was saved.`);
+        return { ...path.report, profile: profileName };
+      },
+    ),
+    describe_server_status: mockCommand(
+      async ({ profile }: { profile: string }) =>
+        serverStatusWire(await describeServerStatus(profile)),
+    ),
+    check_server: mockCommand(async ({ profile }: { profile: string }) => {
       const server = servers.find((entry) => entry.profileName === profile);
       if (!server)
         throw failure('store-not-found', 'That server is not configured.');
@@ -94,39 +129,64 @@ export function mockServerCommands(
         },
         ...host,
       };
-    },
-    setServerLabel: async (profile, label) => {
-      const server = servers.find((entry) => entry.profileName === profile);
-      if (!server)
-        throw failure('profile-not-found', 'That server is not configured.');
-      if (
-        label?.includes('\0') ||
-        label?.includes('\r') ||
-        label?.includes('\n')
-      )
-        throw failure('invalid-request', 'Enter a valid display name.');
-      const trimmed = label?.trim() ?? '';
-      if (new TextEncoder().encode(trimmed).length > 64)
-        throw failure('invalid-request', 'Enter a valid display name.');
-      const normalized =
-        trimmed === '' || trimmed === server.profileName ? null : trimmed;
-      const changed = server.displayLabel !== normalized;
-      server.displayLabel = normalized;
-      return { profile, label: normalized, changed };
-    },
-    removeServerAndCredentials: async (profileName, confirmedProfileName) => {
-      if (profileName !== confirmedProfileName)
-        throw failure(
-          'invalid-request',
-          'Type the exact server name to remove it.',
+    }),
+    set_server_label: mockCommand(
+      async ({ profile, label }: { profile: string; label: string | null }) => {
+        const server = servers.find((entry) => entry.profileName === profile);
+        if (!server)
+          throw failure('profile-not-found', 'That server is not configured.');
+        if (
+          label?.includes('\0') ||
+          label?.includes('\r') ||
+          label?.includes('\n')
+        )
+          throw failure('invalid-request', 'Enter a valid display name.');
+        const trimmed = label?.trim() ?? '';
+        if (new TextEncoder().encode(trimmed).length > 64)
+          throw failure('invalid-request', 'Enter a valid display name.');
+        const normalized =
+          trimmed === '' || trimmed === server.profileName ? null : trimmed;
+        const changed = server.displayLabel !== normalized;
+        server.displayLabel = normalized;
+        return { profile, label: normalized, changed };
+      },
+    ),
+    remove_server_and_credentials: mockCommand(
+      async ({
+        profileName,
+        confirmedProfileName,
+      }: {
+        profileName: string;
+        confirmedProfileName: string;
+      }) => {
+        if (profileName !== confirmedProfileName)
+          throw failure(
+            'invalid-request',
+            'Type the exact server name to remove it.',
+          );
+        const index = servers.findIndex(
+          (server) => server.profileName === profileName,
         );
-      const index = servers.findIndex(
-        (server) => server.profileName === profileName,
-      );
-      if (index >= 0) servers.splice(index, 1);
-      serverHosts.delete(profileName);
-      serverProbes.delete(profileName);
-      return { profile: profileName, removed: true as const };
-    },
+        if (index >= 0) servers.splice(index, 1);
+        serverHosts.delete(profileName);
+        serverProbes.delete(profileName);
+        return { profile: profileName, removed: true as const };
+      },
+    ),
+  };
+}
+
+export function mockServerCommands(
+  state: MockState,
+): MockDomain<typeof serverCommands, (typeof SERVER_HOST_MEMBERS)[number]> {
+  const { servers } = state;
+  return {
+    // An optional method only the native host offers; callers fall back to
+    // other paths when a bridge lacks it.
+    reconcileServer: undefined,
+    // The fixture's servers carry trust, lease and service facts that the
+    // native list_servers response does not, so this listing stays decoded.
+    listServers: () =>
+      Promise.resolve(servers.map((server) => ({ ...server }))),
   };
 }
