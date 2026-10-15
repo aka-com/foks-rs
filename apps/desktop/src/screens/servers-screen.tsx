@@ -1,7 +1,7 @@
-import { inventoryReadiness } from '../model';
-import { CollectionStatus } from '../components/collection-status';
 /** Device-wide server inventory and server details embedded in Settings › Account. */
 
+import { inventoryReadiness } from '../model';
+import { CollectionStatus } from '../components/collection-status';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useToast } from '../../kit/toasts';
@@ -24,16 +24,13 @@ import {
   Band,
   Button,
   Chip,
-  Field,
   Icon,
   Inset,
   InsetRow,
   SectionLabel,
-  SheetDialog,
 } from '../components';
 import type { Location } from '../location';
 import { useSheetGuard } from '../navigation-guard';
-import { purgeProfiles } from '../platform/device-storage';
 import {
   plural,
   serverDisplayLabelOrLoading,
@@ -49,6 +46,9 @@ import { AccountMark } from '../components/account-mark';
 import { ProfileKeys } from './profile-keys';
 import { GroupMark } from '../components/group-mark';
 import { matchesShortcut } from '../shortcuts';
+import { AddServerSheet } from './servers/add-server-sheet';
+import { RenameServerSheet } from './servers/rename-server-sheet';
+import { RemoveServerSheet } from './servers/remove-server-sheet';
 
 interface Props {
   snapshot: AgentSnapshot;
@@ -891,238 +891,5 @@ function ServerBody({
         </InsetRow>
       </Inset>
     </>
-  );
-}
-
-function AddServerSheet({
-  bridge,
-  onClose,
-  onAdded,
-  onError,
-}: {
-  bridge: Bridge;
-  onClose: () => void;
-  onAdded: (profile: string) => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  // Suggestions, never values: an address that was not typed must not be
-  // submittable, and a profile name is the reader's to choose.
-  const [profile, setProfile] = useState('');
-  const [probe, setProbe] = useState('');
-  const [busy, setBusy] = useState(false);
-  const cleanProbe = probe.trim();
-  const valid =
-    /^[A-Za-z0-9_-]{1,64}$/.test(profile) &&
-    cleanProbe.length > 0 &&
-    !cleanProbe.includes('\0') &&
-    !cleanProbe.includes('\n') &&
-    !cleanProbe.includes('\r') &&
-    new TextEncoder().encode(cleanProbe).length <= 2048;
-  return (
-    <SheetDialog
-      width="wide"
-      icon="server"
-      title="Add a server"
-      onClose={onClose}
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={!valid || busy}
-            onClick={() => {
-              setBusy(true);
-              void bridge
-                .checkAndAddProfile(profile, cleanProbe)
-                .then((added) => onAdded(added.profile))
-                .catch(onError)
-                .finally(() => setBusy(false));
-            }}
-          >
-            Add server
-          </Button>
-        </>
-      }
-    >
-      <p>
-        Add FOKS protocol v019 servers here. The server is saved only after
-        online verification succeeds.
-      </p>
-      <Inset>
-        <Field
-          label="Server name"
-          value={profile}
-          placeholder="new-foks"
-          onChange={setProfile}
-        />
-        <Field
-          label="Address"
-          value={probe}
-          placeholder="foks.example.com"
-          onChange={setProbe}
-        />
-      </Inset>
-    </SheetDialog>
-  );
-}
-
-function RenameServerSheet({
-  server,
-  bridge,
-  onClose,
-  onRenamed,
-  onError,
-}: {
-  server: Server;
-  bridge: Bridge;
-  onClose: () => void;
-  onRenamed: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [name, setName] = useState(server.displayLabel ?? server.profileName);
-  const [busy, setBusy] = useState(false);
-  const trimmed = name.trim();
-  const valid =
-    !trimmed.includes('\0') &&
-    !trimmed.includes('\n') &&
-    !trimmed.includes('\r') &&
-    new TextEncoder().encode(trimmed).length <= 64;
-  return (
-    <SheetDialog
-      width="wide"
-      icon="server"
-      title="Rename server"
-      onClose={onClose}
-      footer={
-        <>
-          <Button disabled={busy} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            disabled={!valid || busy}
-            onClick={() => {
-              const label =
-                trimmed === '' || trimmed === server.profileName
-                  ? null
-                  : trimmed;
-              setBusy(true);
-              void bridge
-                .setServerLabel(server.profileName, label)
-                .then((response) => {
-                  if (
-                    response.profile !== server.profileName ||
-                    response.label !== label
-                  )
-                    throw new Error(
-                      'set_server_label returned a different server label.',
-                    );
-                  return onRenamed();
-                })
-                .catch(onError)
-                .finally(() => setBusy(false));
-            }}
-          >
-            Save
-          </Button>
-        </>
-      }
-    >
-      <Inset>
-        <Field label="Display name" value={name} onChange={setName} />
-      </Inset>
-    </SheetDialog>
-  );
-}
-
-function RemoveServerSheet({
-  server,
-  bridge,
-  onClose,
-  onRemoved,
-  onError,
-}: {
-  server: Server;
-  bridge: Bridge;
-  onClose: () => void;
-  onRemoved: () => Promise<void>;
-  onError: (error: unknown) => void;
-}): ReactNode {
-  const [confirmedProfileName, setConfirmedProfileName] = useState('');
-  const [busy, setBusy] = useState(false);
-  // Removing a server deletes what this device holds for it.
-  useSheetGuard(
-    busy
-      ? { verdict: 'refuse', reason: 'Wait for the removal to finish.' }
-      : null,
-  );
-  return (
-    <SheetDialog
-      width="wide"
-      icon="trash"
-      title={`Remove ${serverDisplayLabelOrLoading(server)} and its credentials?`}
-      onClose={onClose}
-      danger
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="danger"
-            disabled={confirmedProfileName !== server.profileName || busy}
-            onClick={() => {
-              setBusy(true);
-              void bridge
-                .removeServerAndCredentials(
-                  server.profileName,
-                  confirmedProfileName,
-                )
-                .then((removed) => {
-                  if (removed.profile !== server.profileName)
-                    throw new Error(
-                      'remove_server_and_credentials returned a different profile.',
-                    );
-                  purgeProfiles([server.profileName]);
-                  return onRemoved();
-                })
-                .catch(onError)
-                .finally(() => setBusy(false));
-            }}
-          >
-            Remove server and credentials
-          </Button>
-        </>
-      }
-    >
-      <p>
-        Your data on the server is not deleted. Type the server profile name to
-        confirm.
-      </p>
-      <Inset>
-        <InsetRow label="Removed">
-          This server, all of its credentials, pinned host identity, connection
-          history, cached data, and unfinished operations.
-        </InsetRow>
-        <InsetRow label="App records">
-          This app also removes its setup progress, invitation labels, Recent
-          and Favorites entries, and exposure reviews for this server.
-        </InsetRow>
-        <InsetRow label="Warning">
-          Accounts without a recovery phrase or another paired device cannot be
-          accessed again.
-        </InsetRow>
-        <InsetRow label="Unaffected">
-          Other configured servers and their local data.
-        </InsetRow>
-      </Inset>
-      <Inset className="confirm-inset">
-        <InsetRow label="Confirm">
-          <input
-            value={confirmedProfileName}
-            onChange={(event) => setConfirmedProfileName(event.target.value)}
-            placeholder="Type server profile name to confirm"
-          />
-        </InsetRow>
-      </Inset>
-    </SheetDialog>
   );
 }
