@@ -876,7 +876,7 @@ impl FoksClient {
             target.generation,
             request.removal_key,
             removal_metadata,
-            [random_box_randomness()?, random_box_randomness()?],
+            [PukBoxRandomness::generate()?, PukBoxRandomness::generate()?],
         )?;
         if removal_box.commitment != link_output.removal_key_commitment {
             return Err(Error::KeyBinding(
@@ -1601,7 +1601,7 @@ impl FoksClient {
             target.generation,
             request.removal_key,
             removal_metadata,
-            [random_box_randomness()?, random_box_randomness()?],
+            [PukBoxRandomness::generate()?, PukBoxRandomness::generate()?],
         )?;
         if removal_box.commitment != link_output.removal_key_commitment {
             return Err(Error::KeyBinding(
@@ -2078,9 +2078,7 @@ fn box_visible_ptks(
             receiver_generation: target.generation,
         })
         .collect::<Vec<_>>();
-    let randomness = (0..inputs.len())
-        .map(|_| random_box_randomness())
-        .collect::<Result<Vec<_>>>()?;
+    let randomness = PukBoxRandomness::generate_many(inputs.len())?;
     let sender = derive_shared_public(&actor_puk.seed, ENTITY_PUK_VERIFY)?;
     Ok(seal_shared_key_boxes(
         host.host_id(),
@@ -2127,9 +2125,7 @@ fn box_visible_ptks_for_remote(
             receiver_generation: target.generation,
         })
         .collect::<Vec<_>>();
-    let randomness = (0..inputs.len())
-        .map(|_| random_box_randomness())
-        .collect::<Result<Vec<_>>>()?;
+    let randomness = PukBoxRandomness::generate_many(inputs.len())?;
     let sender = derive_shared_public(&actor_puk.seed, ENTITY_PUK_VERIFY)?;
     Ok(seal_shared_key_boxes(
         host.host_id(),
@@ -2139,13 +2135,6 @@ fn box_visible_ptks_for_remote(
         &inputs,
         &randomness,
     )?)
-}
-
-pub(super) fn random_box_randomness() -> Result<PukBoxRandomness> {
-    Ok(PukBoxRandomness {
-        kem_message: random_bytes()?,
-        nonce: random_bytes()?,
-    })
 }
 
 fn addition_operation_id(

@@ -339,10 +339,7 @@ impl FoksClient {
                 role: private_puk.role,
                 receiver: &new_device,
             }],
-            &[PukBoxRandomness {
-                kem_message: random_bytes()?,
-                nonce: random_bytes()?,
-            }],
+            &[PukBoxRandomness::generate()?],
         )?;
         let mut self_token: [u8; foks_proto::KEX_PERMISSION_TOKEN_BYTES] = random_bytes()?;
         self_token[0] = 54;

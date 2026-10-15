@@ -441,14 +441,7 @@ impl FoksClient {
                 receiver_generation: owner.generation,
             })
             .collect::<Vec<_>>();
-        let box_randomness = (0..box_inputs.len())
-            .map(|_| {
-                Ok(PukBoxRandomness {
-                    kem_message: random_bytes()?,
-                    nonce: random_bytes()?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let box_randomness = PukBoxRandomness::generate_many(box_inputs.len())?;
         let ptk_boxes = seal_shared_key_boxes(
             host.host_id(),
             &owner.seed,
@@ -484,16 +477,7 @@ impl FoksClient {
             owner.generation,
             &secrets.removal_key,
             removal_metadata,
-            [
-                PukBoxRandomness {
-                    kem_message: random_bytes()?,
-                    nonce: random_bytes()?,
-                },
-                PukBoxRandomness {
-                    kem_message: random_bytes()?,
-                    nonce: random_bytes()?,
-                },
-            ],
+            [PukBoxRandomness::generate()?, PukBoxRandomness::generate()?],
         )?;
         if removal_box.commitment != material.removal_key_commitment {
             return Err(Error::KeyBinding(

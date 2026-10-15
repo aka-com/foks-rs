@@ -215,13 +215,22 @@ rather than one per box.
 Every sealing function in `foks-crypto` takes its random values (the 32-byte
 KEM message, the 16-byte nonce, and for mixed rosters the ephemeral P-256
 scalar and a timestamp) as explicit arguments instead of drawing them
-internally. The client fills them from the OS generator; the tests replay
+internally. The client fills them through each randomness type's
+`generate` constructor, which reads the OS generator; the tests replay
 values captured from the Go implementation. This is a small design decision
 with a large payoff: it is what makes differential testing against the
 reference implementation possible at the byte level, and it makes the
 functions pure, so a crash between generating randomness and using it can
 be recovered by replaying the stored values (see
 [Chapter 19](19-agent.qmd)).
+
+Because the caller supplies these values, the box-set sealing functions
+check them. One call can legitimately box several generations to the same
+device, and a reused KEM message to that device would reproduce its hybrid
+key. A set in which two boxes share a KEM message, or in which one receiver
+gets the same nonce twice, is rejected with `Error::RandomnessReuse` before
+anything is sealed. The two boxes of a team-removal key get the same KEM
+message check.
 
 ## Trade-offs
 

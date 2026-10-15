@@ -26,7 +26,7 @@ use salsa20::hsalsa;
 use sha2::Sha512_256;
 use sha3::{Digest as Sha3Digest, Sha3_256};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(test)]
 type HybridDerivation = (Zeroizing<[u8; 32]>, Zeroizing<Vec<u8>>);
@@ -103,18 +103,73 @@ pub fn seal_puk_seed_chain_box(
 
 /// Random values consumed once by the initial PUK hybrid box. Exposing them
 /// as a value enables deterministic Go/Rust fixtures without weakening the
-/// production path, which fills every field from the OS CSPRNG.
+/// production path, which uses [`InitialPukBoxRandomness::generate`].
+/// `kem_message` is the ML-KEM encapsulation seed: with the receiver's public
+/// encapsulation key it determines the KEM shared secret, so it is zeroized
+/// on drop.
 pub struct InitialPukBoxRandomness {
     pub box_id: [u8; 16],
     pub kem_message: [u8; 32],
     pub nonce: [u8; 16],
 }
 
+impl InitialPukBoxRandomness {
+    /// Fills every field from the OS CSPRNG.
+    pub fn generate() -> Result<Self> {
+        let mut randomness = Self {
+            box_id: [0; 16],
+            kem_message: [0; 32],
+            nonce: [0; 16],
+        };
+        fill_random(&mut randomness.box_id)?;
+        fill_random(&mut randomness.kem_message)?;
+        fill_random(&mut randomness.nonce)?;
+        Ok(randomness)
+    }
+}
+
+impl Drop for InitialPukBoxRandomness {
+    fn drop(&mut self) {
+        self.kem_message.zeroize();
+    }
+}
+
+/// Per-box randomness for one hybrid box. `kem_message` is the ML-KEM
+/// encapsulation seed and is zeroized on drop. Box-set sealing functions
+/// reject a set in which two boxes share a `kem_message` or one receiver
+/// gets the same nonce twice.
 pub struct PukBoxRandomness {
     pub kem_message: [u8; 32],
     pub nonce: [u8; 16],
 }
 
+impl PukBoxRandomness {
+    /// Fills both fields from the OS CSPRNG.
+    pub fn generate() -> Result<Self> {
+        let mut randomness = Self {
+            kem_message: [0; 32],
+            nonce: [0; 16],
+        };
+        fill_random(&mut randomness.kem_message)?;
+        fill_random(&mut randomness.nonce)?;
+        Ok(randomness)
+    }
+
+    /// Generates independent randomness for `count` boxes of one box set.
+    pub fn generate_many(count: usize) -> Result<Vec<Self>> {
+        (0..count).map(|_| Self::generate()).collect()
+    }
+}
+
+impl Drop for PukBoxRandomness {
+    fn drop(&mut self) {
+        self.kem_message.zeroize();
+    }
+}
+
+/// Randomness for a single software-to-Yubi PUK box. `ephemeral_secret` is
+/// the temporary P-256 private scalar; it and `kem_message` are zeroized on
+/// drop.
 pub struct YubiPukBoxRandomness {
     pub ephemeral_secret: [u8; 32],
     pub kem_message: [u8; 32],
@@ -122,18 +177,134 @@ pub struct YubiPukBoxRandomness {
     pub time: u64,
 }
 
+impl YubiPukBoxRandomness {
+    /// Fills the secret fields and nonce from the OS CSPRNG. `time` is the
+    /// temporary key's signed creation time in milliseconds.
+    pub fn generate(time: u64) -> Result<Self> {
+        let mut randomness = Self {
+            ephemeral_secret: [0; 32],
+            kem_message: [0; 32],
+            nonce: [0; 16],
+            time,
+        };
+        fill_random_p256_secret(&mut randomness.ephemeral_secret)?;
+        fill_random(&mut randomness.kem_message)?;
+        fill_random(&mut randomness.nonce)?;
+        Ok(randomness)
+    }
+}
+
+impl Drop for YubiPukBoxRandomness {
+    fn drop(&mut self) {
+        self.ephemeral_secret.zeroize();
+        self.kem_message.zeroize();
+    }
+}
+
 /// Set-level randomness for the authenticated temporary X25519 sender used
 /// when a Yubi parent boxes to one or more software devices.
+/// `ephemeral_secret` is zeroized on drop.
 pub struct YubiPukBoxSetRandomness {
     pub ephemeral_secret: [u8; 32],
     pub time: u64,
 }
 
+impl YubiPukBoxSetRandomness {
+    /// Fills the X25519 secret from the OS CSPRNG. `time` is the temporary
+    /// key's signed creation time in milliseconds.
+    pub fn generate(time: u64) -> Result<Self> {
+        let mut randomness = Self {
+            ephemeral_secret: [0; 32],
+            time,
+        };
+        fill_random(&mut randomness.ephemeral_secret)?;
+        Ok(randomness)
+    }
+}
+
+impl Drop for YubiPukBoxSetRandomness {
+    fn drop(&mut self) {
+        self.ephemeral_secret.zeroize();
+    }
+}
+
 /// Set-level P-256 sender randomness for software parents boxing to Yubi
 /// recipients in an otherwise mixed X25519/P-256 device roster.
+/// `ephemeral_secret` is zeroized on drop.
 pub struct SoftwarePukBoxSetRandomness {
     pub ephemeral_secret: [u8; 32],
     pub time: u64,
+}
+
+impl SoftwarePukBoxSetRandomness {
+    /// Fills the P-256 secret from the OS CSPRNG. `time` is the temporary
+    /// key's signed creation time in milliseconds.
+    pub fn generate(time: u64) -> Result<Self> {
+        let mut randomness = Self {
+            ephemeral_secret: [0; 32],
+            time,
+        };
+        fill_random_p256_secret(&mut randomness.ephemeral_secret)?;
+        Ok(randomness)
+    }
+}
+
+impl Drop for SoftwarePukBoxSetRandomness {
+    fn drop(&mut self) {
+        self.ephemeral_secret.zeroize();
+    }
+}
+
+fn fill_random(bytes: &mut [u8]) -> Result<()> {
+    getrandom::fill(bytes).map_err(|_| Error::Entropy)
+}
+
+/// Fills `bytes` with a valid big-endian P-256 private scalar.
+fn fill_random_p256_secret(bytes: &mut [u8; 32]) -> Result<()> {
+    loop {
+        fill_random(bytes)?;
+        // Any nonzero value below 2^255 is a valid P-256 scalar. Sacrificing
+        // one bit avoids a platform-version-dependent rejection loop in the
+        // public cryptographic API while retaining 255 bits of entropy.
+        bytes[0] &= 0x7f;
+        if bytes.iter().any(|byte| *byte != 0) {
+            return Ok(());
+        }
+    }
+}
+
+/// Rejects a box-set randomness list in which two boxes share an ML-KEM
+/// encapsulation seed. A repeated seed to the same receiver reproduces the
+/// hybrid key. Only references are sorted, so no secret bytes are copied.
+pub(super) fn require_distinct_kem_messages(randomness: &[PukBoxRandomness]) -> Result<()> {
+    let mut kem_messages = randomness
+        .iter()
+        .map(|random| &random.kem_message)
+        .collect::<Vec<_>>();
+    kem_messages.sort_unstable();
+    if kem_messages.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(Error::RandomnessReuse);
+    }
+    Ok(())
+}
+
+/// Rejects a box-set randomness list that repeats an ML-KEM encapsulation
+/// seed, or that gives one receiver the same nonce twice. `receivers` pairs
+/// with `randomness` by position.
+fn require_distinct_box_randomness<'a>(
+    receivers: impl Iterator<Item = &'a EntityId>,
+    randomness: &[PukBoxRandomness],
+) -> Result<()> {
+    require_distinct_kem_messages(randomness)?;
+    let mut nonces = receivers
+        .zip(randomness)
+        .map(|(receiver, random)| (receiver.as_bytes(), &random.nonce))
+        .collect::<Vec<_>>();
+    nonces.sort_unstable();
+    if nonces.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(Error::RandomnessReuse);
+    }
+    Ok(())
 }
 
 pub struct YubiPukBoxInput<'a> {
@@ -165,7 +336,9 @@ pub struct SharedKeyBoxInput<'a> {
 
 /// Boxes one or more PUK generations from a software sender to software
 /// devices. A single authenticated box-set ID binds the complete recipient
-/// manifest; callers must supply one independent randomness pair per box.
+/// manifest; callers must supply one independent randomness pair per box,
+/// and a set that repeats a `kem_message` or a receiver's nonce is rejected
+/// with [`Error::RandomnessReuse`].
 pub fn seal_software_puk_boxes(
     host: &EntityId,
     sender_seed: &SecretSeed,
@@ -212,6 +385,7 @@ pub fn seal_software_puk_boxes_mixed(
     if inputs.is_empty() || inputs.len() != randomness.len() {
         return Err(Error::HybridBox);
     }
+    require_distinct_box_randomness(inputs.iter().map(|input| &input.receiver.id), randomness)?;
     let sender = derive_device_public(sender_seed)?;
     let sender_curve = sender.hepk.curve25519().copied().ok_or(Error::HybridBox)?;
     let ephemeral = P256SecretKey::from_slice(&set_randomness.ephemeral_secret)
@@ -264,7 +438,7 @@ pub fn seal_software_puk_boxes_mixed(
             ml_kem_768::EncapsulationKey::new_from_slice(input.receiver.hepk.mlkem768())
                 .map_err(|_| Error::MlKem)?;
         let (kem_ciphertext, kem_shared) =
-            receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(random.kem_message));
+            receiver_mlkem.encapsulate_deterministic(<&ml_kem::B32>::from(&random.kem_message));
         let derivation = hybrid_key_derivation_payload(
             kem_shared.as_slice(),
             dh_shared.as_slice(),
@@ -356,7 +530,7 @@ pub fn seal_software_puk_box_to_yubi(
         ml_kem_768::EncapsulationKey::new_from_slice(input.receiver.hepk.mlkem768())
             .map_err(|_| Error::MlKem)?;
     let (kem_ciphertext, kem_shared) =
-        receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(randomness.kem_message));
+        receiver_mlkem.encapsulate_deterministic(<&ml_kem::B32>::from(&randomness.kem_message));
     let sender_dh = DhPublicKey::P256(ephemeral_public);
     let derivation = hybrid_key_derivation_payload(
         kem_shared.as_slice(),
@@ -435,6 +609,7 @@ pub fn seal_yubi_puk_boxes(
     {
         return Err(Error::HybridBox);
     }
+    require_distinct_box_randomness(inputs.iter().map(|input| &input.receiver.id), randomness)?;
     let parent_dh = parent.hepk().p256().copied().ok_or(Error::HybridBox)?;
     let ephemeral_secret = StaticSecret::from(set_randomness.ephemeral_secret);
     let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
@@ -485,7 +660,7 @@ pub fn seal_yubi_puk_boxes(
             ml_kem_768::EncapsulationKey::new_from_slice(input.receiver.hepk.mlkem768())
                 .map_err(|_| Error::MlKem)?;
         let (kem_ciphertext, kem_shared) =
-            receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(random.kem_message));
+            receiver_mlkem.encapsulate_deterministic(<&ml_kem::B32>::from(&random.kem_message));
         let derivation = hybrid_key_derivation_payload(
             kem_shared.as_slice(),
             dh_shared.as_slice(),
@@ -627,6 +802,7 @@ pub(super) fn seal_shared_key_boxes_with_sender(
     if inputs.is_empty() || inputs.len() != randomness.len() {
         return Err(Error::HybridBox);
     }
+    require_distinct_box_randomness(inputs.iter().map(|input| input.receiver_id), randomness)?;
     if inputs.iter().any(|input| {
         input
             .receiver_host
@@ -655,7 +831,7 @@ pub(super) fn seal_shared_key_boxes_with_sender(
             ml_kem_768::EncapsulationKey::new_from_slice(input.receiver_hepk.mlkem768())
                 .map_err(|_| Error::MlKem)?;
         let (kem_ciphertext, kem_shared) =
-            receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(random.kem_message));
+            receiver_mlkem.encapsulate_deterministic(<&ml_kem::B32>::from(&random.kem_message));
         let receiver_dh = input
             .receiver_hepk
             .curve25519()
@@ -723,7 +899,7 @@ pub(super) fn seal_hybrid_payload(
     let receiver_mlkem = ml_kem_768::EncapsulationKey::new_from_slice(receiver_hepk.mlkem768())
         .map_err(|_| Error::MlKem)?;
     let (kem_ciphertext, kem_shared) =
-        receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(randomness.kem_message));
+        receiver_mlkem.encapsulate_deterministic(<&ml_kem::B32>::from(&randomness.kem_message));
     let receiver_dh = receiver_hepk
         .curve25519()
         .copied()
@@ -778,8 +954,8 @@ pub fn seal_initial_puk_box(
     let device = derive_device_public(device_seed)?;
     let receiver_mlkem = ml_kem_768::EncapsulationKey::new_from_slice(device.hepk.mlkem768())
         .map_err(|_| Error::MlKem)?;
-    let kem_message = ml_kem::B32::from(randomness.kem_message);
-    let (kem_ciphertext, kem_shared) = receiver_mlkem.encapsulate_deterministic(&kem_message);
+    let kem_message = <&ml_kem::B32>::from(&randomness.kem_message);
+    let (kem_ciphertext, kem_shared) = receiver_mlkem.encapsulate_deterministic(kem_message);
     let sender_dh = device.hepk.curve25519().copied().ok_or(Error::HybridBox)?;
     let dh_shared = software_dh_shared(device_seed, &DhPublicKey::Curve25519(sender_dh))?;
     let payload = hybrid_key_derivation_payload(
@@ -829,7 +1005,7 @@ pub fn seal_initial_yubi_puk_box(
     let receiver_mlkem = ml_kem_768::EncapsulationKey::new_from_slice(parent.hepk().mlkem768())
         .map_err(|_| Error::MlKem)?;
     let (kem_ciphertext, kem_shared) =
-        receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(randomness.kem_message));
+        receiver_mlkem.encapsulate_deterministic(<&ml_kem::B32>::from(&randomness.kem_message));
     let sender_dh = parent.hepk().p256().copied().ok_or(Error::HybridBox)?;
     let dh_shared = parent.derive_dh_shared(&DhPublicKey::P256(sender_dh))?;
     let payload = hybrid_key_derivation_payload(
@@ -955,9 +1131,29 @@ pub fn yubi_mlkem_decapsulate(
 }
 
 /// Caller-controlled randomness for a Yubi subkey recovery box.
+/// `kem_message` is the ML-KEM encapsulation seed and is zeroized on drop.
 pub struct YubiSubkeyBoxRandomness {
     pub kem_message: [u8; 32],
     pub nonce: [u8; 16],
+}
+
+impl YubiSubkeyBoxRandomness {
+    /// Fills both fields from the OS CSPRNG.
+    pub fn generate() -> Result<Self> {
+        let mut randomness = Self {
+            kem_message: [0; 32],
+            nonce: [0; 16],
+        };
+        fill_random(&mut randomness.kem_message)?;
+        fill_random(&mut randomness.nonce)?;
+        Ok(randomness)
+    }
+}
+
+impl Drop for YubiSubkeyBoxRandomness {
+    fn drop(&mut self) {
+        self.kem_message.zeroize();
+    }
 }
 
 /// Seals the delegated Ed25519 subkey to the Yubi parent. The parent performs
@@ -971,7 +1167,7 @@ pub fn seal_yubi_subkey_box(
     let receiver_mlkem = ml_kem_768::EncapsulationKey::new_from_slice(parent.hepk().mlkem768())
         .map_err(|_| Error::MlKem)?;
     let (kem_ciphertext, kem_shared) =
-        receiver_mlkem.encapsulate_deterministic(&ml_kem::B32::from(randomness.kem_message));
+        receiver_mlkem.encapsulate_deterministic(<&ml_kem::B32>::from(&randomness.kem_message));
     let sender = parent.hepk().p256().copied().ok_or(Error::HybridBox)?;
     let dh_shared = parent.derive_dh_shared(&DhPublicKey::P256(sender))?;
     let payload = hybrid_key_derivation_payload(

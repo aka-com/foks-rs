@@ -144,19 +144,12 @@ impl FoksClient {
             host.host_id(),
             parent,
             &secrets.puk_seed,
-            InitialPukBoxRandomness {
-                box_id: random_bytes()?,
-                kem_message: random_bytes()?,
-                nonce: random_bytes()?,
-            },
+            InitialPukBoxRandomness::generate()?,
         )?;
         let subkey_box = seal_yubi_subkey_box(
             parent,
             &secrets.subkey_seed,
-            YubiSubkeyBoxRandomness {
-                kem_message: random_bytes()?,
-                nonce: random_bytes()?,
-            },
+            YubiSubkeyBoxRandomness::generate()?,
         )?;
         let passphrase = request
             .passphrase
