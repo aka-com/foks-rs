@@ -56,6 +56,7 @@ pub(crate) struct ServerData {
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     execution: Arc<Semaphore>,
     realtime_polling: Arc<Semaphore>,
+    kex_polling: Arc<Semaphore>,
     request_memory: Arc<Semaphore>,
     small_request_memory: Arc<Semaphore>,
     memory: Arc<super::memory::Pools>,
@@ -208,6 +209,7 @@ impl ServerData {
             metrics: Arc::clone(&config.metrics),
             rate_limiter,
             execution: Arc::new(Semaphore::new(config.limits.maximum_in_flight_requests)),
+            kex_polling: Arc::new(Semaphore::new(config.limits.kex_receive_capacity())),
             realtime_polling: Arc::new(Semaphore::new(
                 config.limits.maximum_in_flight_requests.min(32),
             )),
@@ -1499,6 +1501,9 @@ pub(crate) async fn serve(
             service_data.metrics.request_rate_limited();
             return Ok(());
         }
+        // Keep admitted KEX capacity through response transmission and all early exits.
+        let mut kex_poll = None;
+        let mut kex_completion = None;
         let outcome = if sso_poll {
             let _request_memory = Arc::clone(&request_memory);
             let call = match routed {
@@ -1527,8 +1532,23 @@ pub(crate) async fn serve(
             }
         } else if kex_receive {
             // Go-compatible KEX receives can remain open for up to an hour.
-            // Await the relay directly rather than occupying a blocking worker;
-            // the listener's active-connection semaphore remains the bound.
+            // Admission never queues and cannot consume all ordinary connections.
+            let permit = match service_data.kex_polling.clone().try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(_) => {
+                    service_data.metrics.kex.rejected();
+                    service_data.metrics.request_rate_limited();
+                    let response = request_memory
+                        .sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
+                    write_response(&mut stream, &response, limits.io_timeout).await?;
+                    service_data.metrics.response_completed();
+                    return Ok(());
+                }
+            };
+            let poll = kex_poll.insert(crate::metrics::kex::Poll::new(
+                Arc::clone(&service_data.metrics),
+                permit,
+            ));
             let _request_memory = Arc::clone(&request_memory);
             let _handler_timer =
                 crate::ServerMetrics::handler_timer(Arc::clone(&service_data.metrics));
@@ -1552,8 +1572,14 @@ pub(crate) async fn serve(
                 let response = tokio::select! {
                     result = request_memory.run(handlers::kex_receive_response(service_data.as_ref(), call)) => {
                         match result {
-                            Ok(response) => response,
-                            Err(status) => request_memory.sync(|| encode_status_response_at(&status, sequence))?,
+                            Ok(response) => {
+                                kex_completion = Some(crate::metrics::kex::Completion::Delivered);
+                                response
+                            },
+                            Err(error) => {
+                                kex_completion = Some(error.completion);
+                                request_memory.sync(|| encode_status_response_at(&error.status, sequence))?
+                            },
                         }
                     }
                     // Snowpack is request/response serial. Readability while
@@ -1563,10 +1589,12 @@ pub(crate) async fn serve(
                     // permit instead of retaining an abandoned Go long poll.
                     result = stream.get_ref().0.readable() => {
                         let _ = result;
+                        poll.complete(crate::metrics::kex::Completion::Disconnected);
                         return Ok(());
                     }
                     result = stop.changed() => {
                         let _ = result;
+                        poll.complete(crate::metrics::kex::Completion::Shutdown);
                         break;
                     }
                 };
@@ -1809,11 +1837,17 @@ pub(crate) async fn serve(
         let write = tokio::select! {
             result = stop.changed() => {
                 let _ = result;
+                if let Some(poll) = kex_poll.as_mut() {
+                    poll.complete(crate::metrics::kex::Completion::Shutdown);
+                }
                 break;
             }
             result = write_response(&mut stream, &response, limits.io_timeout) => result,
         };
         write?;
+        if let (Some(poll), Some(completion)) = (kex_poll.as_mut(), kex_completion) {
+            poll.complete(completion);
+        }
         service_data.metrics.response_completed();
     }
     Ok(())

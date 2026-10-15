@@ -353,6 +353,9 @@ struct ServeArguments {
     maximum_active_connections: usize,
     #[arg(long, default_value_t = 32)]
     maximum_pending_connections: usize,
+    /// Anonymous receive limit, capped at half the active connections (zero disables).
+    #[arg(long, default_value_t = 32)]
+    maximum_kex_receive_polls: usize,
     #[arg(long, default_value_t = 64)]
     maximum_in_flight_requests: usize,
     #[arg(long, default_value_t = 30)]
@@ -600,6 +603,7 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         maximum_read_connections: 32,
         maximum_active_connections: 256,
         maximum_pending_connections: 32,
+        maximum_kex_receive_polls: 32,
         maximum_in_flight_requests: 64,
         request_timeout_seconds: 30,
         maximum_pending_writes: 64,
@@ -714,6 +718,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
             maximum_read_connections: arguments.maximum_read_connections,
             maximum_active_connections: arguments.maximum_active_connections,
             maximum_pending_connections: arguments.maximum_pending_connections,
+            maximum_kex_receive_polls: arguments.maximum_kex_receive_polls,
             maximum_in_flight_requests: arguments.maximum_in_flight_requests,
             request_timeout: std::time::Duration::from_secs(arguments.request_timeout_seconds),
             ..SessionLimits::default()
