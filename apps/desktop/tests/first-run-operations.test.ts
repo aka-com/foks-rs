@@ -1,21 +1,22 @@
-import { retainSetup, retainedSetups } from '../src/first-run-recovery';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { installDom } from './lib/dom-harness';
-import {
-  executeProvisioning,
-  provisioningInFlight,
-} from '../src/first-run-operations';
-import {
+import type { FirstRunCheckpoint } from '../src/first-run-state';
+import type { Bridge } from '../src/bridge';
+
+installDom({ url: 'http://localhost/' });
+// These modules reach src/data/roster-staleness.ts through the bridge, and it
+// reads `window` when it is evaluated.
+const { retainSetup, retainedSetups } =
+  await import('../src/first-run-recovery');
+const { executeProvisioning, provisioningInFlight } =
+  await import('../src/first-run-operations');
+const {
   initialFirstRun,
   decodeFirstRunCheckpoint,
   FIRST_RUN_CHECKPOINT_KEY,
   encodeFirstRunCheckpoint,
-  type FirstRunCheckpoint,
-} from '../src/first-run-state';
-import type { Bridge } from '../src/bridge';
-
-installDom({ url: 'http://localhost/' });
+} = await import('../src/first-run-state');
 const saved: FirstRunCheckpoint = {
   ...initialFirstRun('own', 'operation-pending'),
   profile: {

@@ -355,6 +355,105 @@ test('tests import application modules directly; only the entry-point test start
   assert.deepEqual(users, ['app-root.render.test.tsx']);
 });
 
+/** The DOM globals and timers that `installDom` defines or replaces. */
+const DOM_GLOBALS = new Set([
+  'window',
+  'document',
+  'navigator',
+  'localStorage',
+  'sessionStorage',
+  'matchMedia',
+  'getComputedStyle',
+  'requestAnimationFrame',
+  'setTimeout',
+  'setInterval',
+]);
+
+/**
+ * Each place a module names a DOM global or timer in code that runs when the
+ * module is evaluated: outside function bodies, types and instance members.
+ * A call made at evaluation into a function that names one is not found.
+ */
+async function evaluationDomReads(path: string): Promise<string[]> {
+  const source = ts.createSourceFile(
+    path,
+    await readFile(path, 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const found: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isFunctionLike(node) ||
+      ts.isTypeNode(node) ||
+      ts.isInterfaceDeclaration(node) ||
+      ts.isTypeAliasDeclaration(node) ||
+      ts.isModuleDeclaration(node) ||
+      (ts.isPropertyDeclaration(node) &&
+        !node.modifiers?.some(
+          (modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword,
+        ))
+    )
+      return;
+    if (ts.isIdentifier(node) && DOM_GLOBALS.has(node.text)) {
+      const parent = node.parent;
+      const named =
+        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        ((ts.isPropertyAssignment(parent) ||
+          ts.isPropertyDeclaration(parent)) &&
+          parent.name === node) ||
+        ts.isImportSpecifier(parent);
+      if (!named)
+        found.push(
+          `${node.text} at line ${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}`,
+        );
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+test('tests that install the DOM import statically no module that reads it at evaluation', async () => {
+  // A test file's static imports are evaluated before its first statement, so
+  // a module they reach runs before `installDom`, and a later `await import()`
+  // of it returns that instance. Such a module is loaded by `await import()`
+  // after `installDom` instead.
+  const app = fileURLToPath(new URL('../', import.meta.url));
+  const tests = fileURLToPath(new URL('./', import.meta.url));
+  const testFiles = await sources(tests);
+  const known = new Set([
+    ...(await sources(root)),
+    ...(await sources(join(app, 'kit'))),
+    ...testFiles,
+  ]);
+  const problems: string[] = [];
+  for (const file of testFiles) {
+    if (
+      !/\.test\.tsx?$/.test(file) ||
+      !(await readFile(file, 'utf8')).includes('installDom(')
+    )
+      continue;
+    const reached = new Set<string>();
+    const pending = [[file]];
+    for (let chain = pending.pop(); chain; chain = pending.pop()) {
+      const module = chain[chain.length - 1];
+      if (reached.has(module)) continue;
+      reached.add(module);
+      const reads = await evaluationDomReads(module);
+      if (reads.length > 0)
+        problems.push(
+          `${chain.map((path) => relative(app, path)).join(' -> ')} names ${reads.join(', ')}`,
+        );
+      for (const specifier of await imports(module)) {
+        const target = resolveSpecifier(module, specifier, known);
+        if (target) pending.push([...chain, target]);
+      }
+    }
+  }
+  assert.deepEqual(problems, []);
+});
+
 test('screen and shell model modules load without React or a view module', async () => {
   // These hold the pure logic split out of view modules, so they can be
   // unit-tested in node and read without the views around them.

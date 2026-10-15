@@ -1962,7 +1962,9 @@ static import of the test file already reaches was evaluated before
 listener only if `window` exists at evaluation. A render test's static value
 imports from `src/` and `kit/` must therefore reach only modules that read no
 DOM global or timer at evaluation; a test that needs no DOM can import modules
-statically. `import.meta.env` is undefined outside Vite, so `selectBridge()`
+statically. `module-boundaries.test.ts` walks the static imports of every test
+that calls `installDom` and fails if they reach a module that names `window`,
+`document`, another DOM global or a timer outside a function body. `import.meta.env` is undefined outside Vite, so `selectBridge()`
 throws instead of returning the mock bridge, and a render test passes its
 bridge explicitly. A screen or sheet that reads the shell services renders
 under the `TestShell` that `loadTestShell()` in `tests/lib/test-shell.ts`
@@ -1977,8 +1979,10 @@ cancelled, with the rest of its file.
 tsx compiles `src/` with the options of `apps/desktop/tsconfig.json` through
 the repository's root `tsconfig.json`, which extends it; without it tsx would
 compile JSX for the classic runtime. Only `app-root.render.test.tsx` starts
-Vite, because `src/main.tsx` imports the stylesheet; `module-boundaries.test.ts`
-fails if another test imports `vite`.
+Vite, because `src/main.tsx` imports the stylesheet; it also loads
+`src/app/deferred-screens.tsx` through Vite, since it needs the instance
+`src/main.tsx` loaded. `module-boundaries.test.ts` fails if another test
+imports `vite`.
 
 The Rust command layer covers runtime-dependent behavior. App lock, clipboard
 concealment/clearing, native picker/drop streaming and webview resident-set

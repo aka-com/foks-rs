@@ -2,27 +2,27 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useRef, useState } from 'react';
 import { installDom, settle } from './lib/dom-harness';
-import { useDesktopReconciliation } from '../src/data/use-desktop-reconciliation';
-import {
-  profileConnectivityKey,
-  profileRefreshKey,
-  type DesktopReconciliation,
-} from '../src/data/desktop-reconciliation';
-import { CatalogReadGate } from '../src/data/catalog-read-gate';
-import {
-  useCatalogRuntime,
-  useMutationError,
-} from '../src/app/catalog-runtime';
-import { AccessLifetime } from '../src/data/access-lifetime';
-import { ToastController } from '../kit/toasts';
-import { mockBridge } from '../src/mock/mock-bridge';
-import { FIXTURE } from '../src/mock/fixture';
+import type { DesktopReconciliation } from '../src/data/desktop-reconciliation';
 import type { Bridge, CatalogDto } from '../src/bridge';
-import { serverAvailability, type AgentSnapshot } from '../src/model';
+import type { AgentSnapshot } from '../src/model';
 import type { MutationFailureHandler } from '../src/data/mutation-recovery';
 import type { ReconciliationClock } from '../src/scheduling/reconciliation';
 
 installDom({ url: 'http://localhost/', timers: true, act: true });
+// These modules reach src/data/roster-staleness.ts through the bridge, and it
+// reads `window` when it is evaluated.
+const { useDesktopReconciliation } =
+  await import('../src/data/use-desktop-reconciliation');
+const { profileConnectivityKey, profileRefreshKey } =
+  await import('../src/data/desktop-reconciliation');
+const { CatalogReadGate } = await import('../src/data/catalog-read-gate');
+const { useCatalogRuntime, useMutationError } =
+  await import('../src/app/catalog-runtime');
+const { AccessLifetime } = await import('../src/data/access-lifetime');
+const { ToastController } = await import('../kit/toasts');
+const { mockBridge } = await import('../src/mock/mock-bridge');
+const { FIXTURE } = await import('../src/mock/fixture');
+const { serverAvailability } = await import('../src/model');
 let ui: typeof import('@testing-library/react');
 test.before(async () => {
   ui = await import('@testing-library/react');
@@ -831,7 +831,7 @@ type Shell = {
   reconciliation: DesktopReconciliation;
   mutationError: MutationFailureHandler;
   reported: unknown[];
-  toasts: ToastController;
+  toasts: InstanceType<typeof ToastController>;
 };
 function ShellHarness({
   bridge,
