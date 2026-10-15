@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, StrictMode } from 'react';
 import type { Bridge, CommandError, GoProfileCandidate } from '../src/bridge';
-import { identityRetryDelay } from '../src/screens/first-run/use-account-identity';
 import { installDom, settle } from './lib/dom-harness';
 
 installDom({
@@ -1064,6 +1063,8 @@ test('identity loading waits out a native mutation instead of failing setup', as
     decodeFirstRunCheckpoint,
     FIRST_RUN_CHECKPOINT_KEY,
   } = await import('../src/first-run-state');
+  const { identityRetryDelay } =
+    await import('../src/screens/first-run/use-account-identity');
   const profile = {
     profile: 'setup-foks-app-4430',
     acceptance: 'inserted' as const,

@@ -12,10 +12,19 @@ export const nativeSetInterval = globalThis.setInterval;
 export const nativeSetTimeout = globalThis.setTimeout;
 
 /**
+ * How long, from the start of a test, the `timers: true` keep-alive holds the
+ * event loop open. A test still waiting on unreferenced timers or an unsettled
+ * promise after this is cancelled by node, together with the rest of its file.
+ * The slowest render test takes about 40 seconds on a 4-core machine.
+ */
+const KEEP_ALIVE_MS = 120_000;
+
+/**
  * Resolves on the next timer tick, once the promises already queued have
- * settled. With `timers: true` the global timers are unreferenced, so a
- * `setTimeout` wait at the end of a test does not keep the process alive and
- * node can cancel the test before the timer fires. This timer is referenced.
+ * settled. With `timers: true` the global timers are unreferenced, and the
+ * harness's keep-alive timer holds the event loop open for at most
+ * `KEEP_ALIVE_MS` per test. This timer is referenced, so the wait does not
+ * depend on the keep-alive.
  */
 export function settle(): Promise<void> {
   return new Promise((resolve) => {
@@ -34,7 +43,12 @@ export interface InstallDomOptions {
   url?: string;
   /** Inner HTML of `<body>` — the mount points the app boots into. */
   body?: string;
-  /** Unref `setInterval`/`setTimeout` so a stray timer cannot hang the run. */
+  /**
+   * Unref `setInterval`/`setTimeout` so a stray timer cannot hang the run. A
+   * referenced keep-alive timer then holds the event loop open for at most
+   * `KEEP_ALIVE_MS` from the start of each test, so a test can await the
+   * unreferenced timers.
+   */
   timers?: boolean;
   /** Set `IS_REACT_ACT_ENVIRONMENT` for direct component rendering. */
   act?: boolean;
@@ -129,11 +143,16 @@ export function installDom(options: InstallDomOptions = {}): JSDOM {
     });
     // An unreferenced timer does not keep the process alive, so a test that
     // awaits one (`waitFor` polls on `setTimeout`) would be cancelled once
-    // nothing else is pending. This referenced handle keeps the event loop
-    // alive until the file's tests have finished.
-    const keepAlive = nativeSetInterval(() => {}, 60_000);
+    // nothing else is pending. This referenced timer keeps the event loop
+    // alive for at most KEEP_ALIVE_MS from installDom and from the start of
+    // each test. A test that awaits a promise nothing settles is cancelled
+    // when it expires instead of holding the file open.
+    const keepAlive = nativeSetTimeout(() => {}, KEEP_ALIVE_MS);
+    test.beforeEach(() => {
+      keepAlive.refresh();
+    });
     test.after(() => {
-      clearInterval(keepAlive);
+      clearTimeout(keepAlive);
     });
   }
 

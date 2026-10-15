@@ -639,7 +639,8 @@ test('activating a notification opens the Chat tab on that team and channel', as
   });
   const ui = await import('@testing-library/react');
   const { createElement } = await import('react');
-  // The provider is JSX, so it is loaded the way the render tests load one.
+  // Imported after installDom so the provider evaluates against the jsdom
+  // globals.
   const { NotificationProvider } =
     await import('../src/chat/notification-provider');
   const session = {

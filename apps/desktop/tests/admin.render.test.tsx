@@ -4,7 +4,6 @@ import { createElement } from 'react';
 import type { ReactNode } from 'react';
 import { installDom } from './lib/dom-harness';
 import { workflowScope } from './lib/workflow-scope';
-import { decodeCommandAck } from '../src/bridge';
 installDom({
   url: 'http://localhost/',
   body: '<div id="root"></div><div id="overlays"></div>',
@@ -34,7 +33,8 @@ const presentation = {
   onClose: () => {},
 };
 
-test('admin acknowledgments cannot return bearer URLs to the main webview', () => {
+test('admin acknowledgments cannot return bearer URLs to the main webview', async () => {
+  const { decodeCommandAck } = await import('../src/bridge');
   assert.deepEqual(decodeCommandAck({ ok: true }), { ok: true });
   assert.throws(() => decodeCommandAck({ ok: true, url: 'secret' }));
 });

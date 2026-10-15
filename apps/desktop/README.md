@@ -1872,9 +1872,20 @@ The unit and render-test layers live in `tests/`:
 Render tests call `installDom` from `tests/lib/dom-harness.ts` and then load
 the modules they render with `await import('../src/...')`, so the path is
 checked by the type checker and the module is the same instance a static
-import of it gives. The import runs after `installDom`, so a module evaluates
-against the jsdom globals and the harness's timers, as it did when it was
-loaded through Vite. A test that needs no DOM can import modules statically.
+import of it gives. A module is evaluated once, by the first import that
+reaches it. When that is an `await import()` after `installDom`, the module
+evaluates against the jsdom globals and the harness's timers. A module that a
+static import of the test file already reaches was evaluated before
+`installDom`: `src/roster-staleness.ts`, for example, registers its window
+listener only if `window` exists at evaluation. A render test's static value
+imports from `src/` and `kit/` must therefore reach only modules that read no
+DOM global or timer at evaluation; a test that needs no DOM can import modules
+statically. `import.meta.env` is undefined outside Vite, so `selectBridge()`
+throws instead of returning the mock bridge, and a render test passes its
+bridge explicitly. With `timers: true` the harness unreferences the global
+timers and keeps the event loop open for at most two minutes from the start of
+each test; a test still waiting on an unsettled promise after that is
+cancelled, with the rest of its file.
 tsx compiles `src/` with the options of `apps/desktop/tsconfig.json` through
 the repository's root `tsconfig.json`, which extends it; without it tsx would
 compile JSX for the classic runtime. Only `app-root.render.test.tsx` starts
