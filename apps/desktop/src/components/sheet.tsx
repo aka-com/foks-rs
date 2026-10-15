@@ -8,6 +8,8 @@
 import { useId } from 'react';
 import type { ReactNode } from 'react';
 import { Dialog, DismissibleDialog } from '../../kit/overlay-primitives';
+import type { FoksIconName } from '../icons';
+import { Icon } from './icon';
 
 /** `.sheet`, `.sheet.mid`, `.sheet.wide` — the three the stylesheet draws. */
 export type SheetWidth = 'base' | 'mid' | 'wide';
@@ -81,6 +83,26 @@ export interface SheetDialogProps extends Omit<SheetProps, 'titleId'> {
    * dialog's `aria-describedby`, so a screen reader announces it with the title.
    */
   describedBy?: string;
+  /**
+   * Draws `glyph` as a server mark holding this icon, tinted as a danger mark
+   * when `danger` is set. An explicit `glyph` takes precedence.
+   */
+  icon?: FoksIconName;
+}
+
+/** The round server mark the settings and device sheets show beside a title. */
+export function ServerMarkGlyph({
+  icon,
+  danger = false,
+}: {
+  icon: FoksIconName;
+  danger?: boolean;
+}): ReactNode {
+  return (
+    <span className={danger ? 'server-mark danger' : 'server-mark'}>
+      <Icon name={icon} />
+    </span>
+  );
 }
 
 export function SheetDialog({
@@ -88,11 +110,24 @@ export function SheetDialog({
   onClose,
   dismissible = true,
   describedBy,
+  icon,
+  glyph,
   ...sheet
 }: SheetDialogProps): ReactNode {
   const titleId = useId();
   const role = danger ? 'alertdialog' : 'dialog';
-  const panel = <Sheet {...sheet} titleId={titleId} />;
+  const panel = (
+    <Sheet
+      {...sheet}
+      glyph={
+        glyph ??
+        (icon === undefined ? undefined : (
+          <ServerMarkGlyph icon={icon} danger={danger} />
+        ))
+      }
+      titleId={titleId}
+    />
+  );
   if (!onClose) {
     return (
       <Dialog

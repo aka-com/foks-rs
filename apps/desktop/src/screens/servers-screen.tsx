@@ -1022,37 +1022,6 @@ function ServerBody({
   );
 }
 
-function SheetFrame({
-  title,
-  children,
-  footer,
-  onClose,
-  danger = false,
-}: {
-  title: string;
-  children: ReactNode;
-  footer: ReactNode;
-  onClose: () => void;
-  danger?: boolean;
-}): ReactNode {
-  return (
-    <SheetDialog
-      width="wide"
-      danger={danger}
-      onClose={onClose}
-      title={title}
-      footer={footer}
-      glyph={
-        <span className={`server-mark ${danger ? 'danger' : ''}`}>
-          <Icon name={danger ? 'trash' : 'server'} />
-        </span>
-      }
-    >
-      {children}
-    </SheetDialog>
-  );
-}
-
 function AddServerSheet({
   bridge,
   onClose,
@@ -1078,7 +1047,9 @@ function AddServerSheet({
     !cleanProbe.includes('\r') &&
     new TextEncoder().encode(cleanProbe).length <= 2048;
   return (
-    <SheetFrame
+    <SheetDialog
+      width="wide"
+      icon="server"
       title="Add a server"
       onClose={onClose}
       footer={
@@ -1119,7 +1090,7 @@ function AddServerSheet({
           onChange={setProbe}
         />
       </Inset>
-    </SheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -1145,7 +1116,9 @@ function RenameServerSheet({
     !trimmed.includes('\r') &&
     new TextEncoder().encode(trimmed).length <= 64;
   return (
-    <SheetFrame
+    <SheetDialog
+      width="wide"
+      icon="server"
       title="Rename server"
       onClose={onClose}
       footer={
@@ -1186,7 +1159,7 @@ function RenameServerSheet({
       <Inset>
         <Field label="Display name" value={name} onChange={setName} />
       </Inset>
-    </SheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -1212,7 +1185,9 @@ function RemoveServerSheet({
       : null,
   );
   return (
-    <SheetFrame
+    <SheetDialog
+      width="wide"
+      icon="trash"
       title={`Remove ${serverDisplayLabelOrLoading(server)} and its credentials?`}
       onClose={onClose}
       danger
@@ -1276,6 +1251,6 @@ function RemoveServerSheet({
           />
         </InsetRow>
       </Inset>
-    </SheetFrame>
+    </SheetDialog>
   );
 }

@@ -7,7 +7,6 @@
  */
 
 import type { ReactNode } from 'react';
-import { Icon } from './icon';
 import { SheetDialog } from './sheet';
 
 export interface PanelPresentation {
@@ -51,13 +50,8 @@ export function PanelSheet({
       dismissible={!busy}
       onClose={presentation.onClose}
       footer={footer}
-      glyph={
-        glyph ?? (
-          <span className="server-mark">
-            <Icon name="settings" />
-          </span>
-        )
-      }
+      glyph={glyph}
+      icon="settings"
     >
       <div className="panel-body">{children}</div>
     </SheetDialog>

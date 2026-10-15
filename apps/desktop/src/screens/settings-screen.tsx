@@ -42,7 +42,6 @@ import type {
 import {
   Band,
   Button,
-  Icon,
   Inset,
   InsetRow,
   SectionLabel,
@@ -824,11 +823,7 @@ function RestartAgentSheet({
         if (!busy) onClose();
       }}
       title={copy ? copy.title : 'Restart the agent?'}
-      glyph={
-        <span className="server-mark">
-          <Icon name="refresh" />
-        </span>
-      }
+      icon="refresh"
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>
@@ -1056,11 +1051,7 @@ function ResetMacSheet({
         onClose();
       }}
       title="Reset this device?"
-      glyph={
-        <span className="server-mark danger">
-          <Icon name="trash" />
-        </span>
-      }
+      icon="trash"
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>

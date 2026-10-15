@@ -312,11 +312,7 @@ export function RecoveryPhraseTestSheet({
       width="wide"
       onClose={onClose}
       dismissible={!busy}
-      glyph={
-        <span className="server-mark">
-          <Icon name="shield" />
-        </span>
-      }
+      icon="shield"
       title="Test recovery phrase"
       footer={footer}
     >

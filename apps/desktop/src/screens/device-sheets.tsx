@@ -52,7 +52,6 @@ import {
   Button,
   CopyBox,
   Field,
-  Icon,
   Inset,
   InsetRow,
   RadioCard,
@@ -165,7 +164,9 @@ export function AddDeviceSheet({
     account: choice === 'pair-accept' ? undefined : store.account,
   });
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="settings"
       title="Add a device"
       onClose={onClose}
       footer={
@@ -220,41 +221,6 @@ export function AddDeviceSheet({
           onSelect={() => setChoice('provision')}
         />
       </RadioGroup>
-    </DeviceSheetFrame>
-  );
-}
-
-/** The frame every sheet on this page shares: a glyph, a title and a footer. */
-function DeviceSheetFrame({
-  title,
-  children,
-  footer,
-  onClose,
-  danger = false,
-  dismissible = true,
-}: {
-  title: string;
-  children: ReactNode;
-  footer: ReactNode;
-  onClose: () => void;
-  danger?: boolean;
-  dismissible?: boolean;
-}): ReactNode {
-  return (
-    <SheetDialog
-      width="wide"
-      danger={danger}
-      onClose={onClose}
-      dismissible={dismissible}
-      title={title}
-      footer={footer}
-      glyph={
-        <span className={`server-mark ${danger ? 'danger' : ''}`}>
-          <Icon name={danger ? 'trash' : 'settings'} />
-        </span>
-      }
-    >
-      {children}
     </SheetDialog>
   );
 }
@@ -317,7 +283,9 @@ export function PhraseSheet({
         : null,
   );
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="settings"
       title={
         phrase && checking
           ? 'Check your copy'
@@ -446,7 +414,7 @@ export function PhraseSheet({
           />
         </Inset>
       )}
-    </DeviceSheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -582,7 +550,9 @@ export function PairSheet({
     mode === 'accept' && !busy,
   );
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="settings"
       title="Pair another device"
       onClose={() => {
         if (busy) return;
@@ -743,7 +713,7 @@ export function PairSheet({
           />
         </Inset>
       ) : null}
-    </DeviceSheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -788,7 +758,9 @@ export function RecoverSheet({
         : null,
   );
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="settings"
       title="Connect account via recovery key"
       onClose={() => {
         setPhrase('');
@@ -840,7 +812,7 @@ export function RecoverSheet({
           />
         </InsetRow>
       </Inset>
-    </DeviceSheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -909,7 +881,9 @@ export function EnrollSheet({
   const pq = enrollmentSlot(pqSlot);
   const validAttempts = validEnrollmentAttempts(pinAttempts, pukAttempts);
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="settings"
       title="Create an account on a hardware key"
       onClose={() => {
         clear();
@@ -1052,7 +1026,7 @@ export function EnrollSheet({
           </InsetRow>
         </Inset>
       </details>
-    </DeviceSheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -1114,7 +1088,9 @@ export function ProvisionSheet({
     validSecurityKeyPin(puk),
   );
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="settings"
       title="Connect a hardware key"
       onClose={() => {
         clear();
@@ -1192,7 +1168,7 @@ export function ProvisionSheet({
           onChange={setPuk}
         />
       </Inset>
-    </DeviceSheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -1321,7 +1297,9 @@ export function YubiActionSheet({
       .finally(controller.settled(() => setBusy(false)));
   };
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="settings"
       title={YUBI_ACTION_LABELS[action]}
       onClose={() => {
         setPin('');
@@ -1379,7 +1357,7 @@ export function YubiActionSheet({
           />
         ) : null}
       </Inset>
-    </DeviceSheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -1414,7 +1392,9 @@ export function RevokeSheet({
       : null,
   );
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="trash"
       title={`Revoke ${alias}?`}
       onClose={() => {
         if (busy) return;
@@ -1463,7 +1443,7 @@ export function RevokeSheet({
           />
         </InsetRow>
       </Inset>
-    </DeviceSheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -1496,7 +1476,9 @@ export function RevokeBackupSheet({
       : null,
   );
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="trash"
       title={`Revoke ${backup.backupAlias}?`}
       onClose={() => {
         if (busy) return;
@@ -1552,7 +1534,7 @@ export function RevokeBackupSheet({
           />
         </InsetRow>
       </Inset>
-    </DeviceSheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -1594,7 +1576,9 @@ export function RemoveDeviceSheet({
       : null,
   );
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="trash"
       title={`Remove ${device.name ?? 'device'}?`}
       // A removal already handed to the agent cannot be called back, so
       // Escape, the backdrop and Cancel all stop answering while it runs —
@@ -1673,7 +1657,7 @@ export function RemoveDeviceSheet({
         unlisted={exposure.unlisted}
         teamsUnlisted={exposure.teamsUnlisted}
       />
-    </DeviceSheetFrame>
+    </SheetDialog>
   );
 }
 
@@ -1804,7 +1788,9 @@ export function PassphraseSheet({
   const incomplete =
     !passphrase || passphrase !== confirmation || (checking && !current);
   return (
-    <DeviceSheetFrame
+    <SheetDialog
+      width="wide"
+      icon="settings"
       title={
         mode === null
           ? 'Account passphrase'
@@ -1930,6 +1916,6 @@ export function PassphraseSheet({
           ) : null}
         </>
       )}
-    </DeviceSheetFrame>
+    </SheetDialog>
   );
 }
