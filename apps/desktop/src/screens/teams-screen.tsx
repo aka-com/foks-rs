@@ -64,10 +64,9 @@ import type { DiscoveryContext } from '../model/group-model';
 import { AbandonGroupSheet, GroupSheet } from './groups-screen';
 import type { GroupSheetKind } from './groups-screen';
 
-/** Only what this page uses; the tab shares no state with Settings. */
 /**
- * The page reads the snapshot, the bridge, the catalog refreshes and the error
- * handlers from the shell services.
+ * Only what this page uses. The page reads the snapshot, the bridge, the
+ * catalog refreshes and the error handlers from the shell services.
  */
 export interface TeamsScreenProps {
   location: Extract<Location, { kind: 'teams' }>;
