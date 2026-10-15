@@ -58,6 +58,11 @@ fn bootstrap_input() -> BootstrapInput {
 // tests, rather than changing only user_version on the current schema.
 fn predecessor(connection: &Connection, version: i64) {
     assert!((43..=SCHEMA_VERSION).contains(&version));
+    if (51..=53).contains(&version) {
+        connection
+            .execute_batch("ALTER TABLE chunk_storage_binding DROP COLUMN authority_identity")
+            .unwrap();
+    }
     if version == 52 {
         connection
             .execute_batch(include_str!(

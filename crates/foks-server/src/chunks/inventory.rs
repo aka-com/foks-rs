@@ -20,7 +20,7 @@ impl FilesystemChunks {
         self.recheck()?;
         for entry in std::fs::read_dir(&self.directory)? {
             let entry = entry?;
-            if entry.file_name() != NAMESPACE_MARKER {
+            if entry.file_name() != NAMESPACE_MARKER && entry.file_name() != NAMESPACE_LOCK {
                 return Ok(false);
             }
         }
@@ -42,7 +42,10 @@ impl FilesystemChunks {
                 .file_name()
                 .into_string()
                 .map_err(|_| Error::Chunk("inventory key is not UTF-8"))?;
-            if name == NAMESPACE_MARKER || cursor.is_some_and(|c| name.as_str() <= c) {
+            if name == NAMESPACE_MARKER
+                || name == NAMESPACE_LOCK
+                || cursor.is_some_and(|c| name.as_str() <= c)
+            {
                 continue;
             }
             let metadata = std::fs::symlink_metadata(entry.path())?;

@@ -103,6 +103,33 @@ impl DatabasePathIdentity {
         }
     }
 
+    /// Host-local authority identity. This is not rollback detection or a distributed fence.
+    pub fn authority_identity(&self) -> Result<[u8; 32]> {
+        self.recheck()?;
+        #[cfg(unix)]
+        {
+            use sha2::{Digest as _, Sha256};
+            use std::os::unix::ffi::OsStrExt as _;
+            let path = self.path.as_os_str().as_bytes();
+            if path.len() > 4096 {
+                return Err(crate::Error::Invalid("database authority path length"));
+            }
+            let mut hash = Sha256::new();
+            hash.update(b"foks-local-chunk-authority-v2\0");
+            hash.update((path.len() as u64).to_be_bytes());
+            hash.update(path);
+            hash.update(self.device.to_be_bytes());
+            hash.update(self.inode.to_be_bytes());
+            Ok(hash.finalize().into())
+        }
+        #[cfg(not(unix))]
+        {
+            Err(crate::Error::Invalid(
+                "local collection authority unavailable",
+            ))
+        }
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }

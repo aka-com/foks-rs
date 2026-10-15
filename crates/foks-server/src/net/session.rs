@@ -117,7 +117,14 @@ impl ServerData {
         let storage_lease = config
             .read_database
             .as_ref()
-            .map(|db| crate::storage_lease::StorageLease::shared(&db.path).map(Arc::new))
+            .map(|db| {
+                crate::storage_lease::StorageLease::with_store(
+                    &db.path,
+                    config.chunk_store.as_deref(),
+                    false,
+                )
+                .map(Arc::new)
+            })
             .transpose()?;
         let probe_response = Arc::clone(&config.probe_response);
         let probe = foks_proto::ProbeResponse::decode(&probe_response)?;

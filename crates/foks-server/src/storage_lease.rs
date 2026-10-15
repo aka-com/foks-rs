@@ -4,15 +4,64 @@ use crate::{Error, Result};
 use std::path::Path;
 pub(crate) struct StorageLease {
     _file: std::fs::File,
+    identity: foks_server_db::DatabasePathIdentity,
+    namespace: Option<crate::chunks::ChunkNamespaceLease>,
 }
 impl StorageLease {
+    #[cfg(test)]
     pub(crate) fn shared(path: &Path) -> Result<Self> {
-        Self::acquire(path, false)
+        Self::acquire(path, false, None)
     }
+    #[cfg(test)]
     pub(crate) fn exclusive(path: &Path) -> Result<Self> {
-        Self::acquire(path, true)
+        Self::acquire(path, true, None)
     }
-    fn acquire(path: &Path, exclusive: bool) -> Result<Self> {
+    pub(crate) fn with_store(
+        path: &Path,
+        store: Option<&dyn crate::chunks::ChunkStore>,
+        exclusive: bool,
+    ) -> Result<Self> {
+        Self::acquire(path, exclusive, store)
+    }
+    pub(crate) fn require_writer(&self, writer: &crate::WriterHandle) -> Result<()> {
+        self.identity.recheck()?;
+        writer.database_identity().recheck()?;
+        if &self.identity != writer.database_identity() {
+            return Err(Error::Chunk("writer and storage source identities differ"));
+        }
+        Ok(())
+    }
+    pub(crate) fn authority_identity(&self) -> Result<Option<[u8; 32]>> {
+        self.identity.recheck()?;
+        #[cfg(unix)]
+        {
+            self.namespace
+                .as_ref()
+                .map(|_| self.identity.authority_identity().map_err(Error::from))
+                .transpose()
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(None)
+        }
+    }
+    pub(crate) fn verify_authority(&self, expected: Option<[u8; 32]>) -> Result<bool> {
+        self.identity.recheck()?;
+        if let Some(expected) = expected {
+            if self.authority_identity()? != Some(expected) {
+                return Err(Error::Chunk(
+                    "object namespace belongs to another database identity",
+                ));
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+    fn acquire(
+        path: &Path,
+        exclusive: bool,
+        store: Option<&dyn crate::chunks::ChunkStore>,
+    ) -> Result<Self> {
         let identity = foks_server_db::DatabasePathIdentity::existing(path)?;
         let mut lock_path = identity.path().as_os_str().to_os_string();
         lock_path.push(".storage-lock");
@@ -34,7 +83,16 @@ impl StorageLease {
         }
         .map_err(|_| Error::Chunk("storage is in use; retry after readers and backups finish"))?;
         identity.recheck()?;
-        Ok(Self { _file: file })
+        let namespace = store
+            .map(|s| s.namespace_lease(exclusive))
+            .transpose()?
+            .flatten();
+        identity.recheck()?;
+        Ok(Self {
+            _file: file,
+            identity,
+            namespace,
+        })
     }
 }
 

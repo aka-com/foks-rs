@@ -28,16 +28,22 @@ pub fn collect_chunk_store(
         return Err(Error::Chunk("collection requires an existing database"));
     }
     let writer = crate::DatabaseWriterGuard::acquire(path.as_ref())?;
-    let _storage = crate::storage_lease::StorageLease::exclusive(path.as_ref())?;
+    let _storage =
+        crate::storage_lease::StorageLease::with_store(path.as_ref(), Some(store), true)?;
     let mut db = writer.open_database(config)?;
-    crate::chunk_binding::initialize_offline(&mut db, store)?;
+    crate::chunk_binding::initialize_offline(&mut db, store, &_storage)?;
+    let qualified = store.supports_collection()
+        && _storage.verify_authority(
+            db.chunk_storage_binding()?
+                .and_then(|b| b.authority_identity),
+        )?;
     let eligible_objects = db.chunk_collection_candidates()?;
     let mut report = ChunkCollectionReport {
         eligible_objects,
-        report_only: dry_run || !store.supports_collection(),
+        report_only: dry_run || !qualified,
         deleted_objects: 0,
         deleted_bytes: 0,
-        backend_qualified: store.supports_collection(),
+        backend_qualified: qualified,
         usage: db.chunk_physical_usage()?,
     };
     if dry_run || !report.backend_qualified {

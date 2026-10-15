@@ -60,7 +60,24 @@ impl RunningServer {
 
     pub(crate) fn start_bound(config: Config, listeners: BoundListeners) -> Result<Self> {
         config.limits.validate()?;
+        let startup_storage = config
+            .read_database
+            .as_ref()
+            .map(|database| {
+                crate::storage_lease::StorageLease::with_store(
+                    &database.path,
+                    config.chunk_store.as_deref(),
+                    false,
+                )
+            })
+            .transpose()?;
         if let Some(database) = &config.read_database {
+            let source_storage = startup_storage
+                .as_ref()
+                .ok_or(Error::Chunk("missing source storage lease"))?;
+            if let Some(writer) = &config.writer {
+                source_storage.require_writer(writer)?;
+            }
             let reader =
                 foks_server_db::ReadDatabase::open(&database.path, database.database.clone())?;
             if config.chunk_store.is_some()
@@ -71,9 +88,17 @@ impl RunningServer {
                 let writer = config.writer.as_ref().ok_or(Error::Chunk(
                     "chunk storage initialization requires writer ownership",
                 ))?;
-                crate::chunk_binding::initialize_online(writer, config.chunk_store.as_deref())?;
+                crate::chunk_binding::initialize_online(
+                    writer,
+                    config.chunk_store.as_deref(),
+                    source_storage,
+                )?;
             }
-            crate::chunk_binding::verify_reader(&reader, config.chunk_store.as_deref())?;
+            crate::chunk_binding::verify_reader(
+                &reader,
+                config.chunk_store.as_deref(),
+                source_storage,
+            )?;
             if let (Some(writer), Some(store)) = (&config.writer, &config.chunk_store) {
                 crate::chunk_ledger::initialize_online(writer, store.as_ref())?;
             }

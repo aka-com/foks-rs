@@ -614,6 +614,9 @@ mod tests {
             .execute_batch(include_str!("../tests/fixtures/remove_chunk_ledger.sql"))
             .unwrap();
         db.connection
+            .execute_batch("ALTER TABLE chunk_storage_binding DROP COLUMN authority_identity")
+            .unwrap();
+        db.connection
             .pragma_update(None, "user_version", 51)
             .unwrap();
         drop(db);
@@ -671,6 +674,9 @@ mod tests {
             .execute_batch(include_str!("../tests/fixtures/remove_chunk_ledger.sql"))
             .unwrap();
         db.connection.execute("INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk,external_digest,external_ciphertext_bytes,external_encoded_bytes) SELECT uid,file_id,1,ciphertext,final_chunk,exact_upload_chunk,external_digest,external_ciphertext_bytes,11 FROM kv_file_chunks", []).unwrap();
+        db.connection
+            .execute_batch("ALTER TABLE chunk_storage_binding DROP COLUMN authority_identity")
+            .unwrap();
         db.connection
             .pragma_update(None, "user_version", 51)
             .unwrap();

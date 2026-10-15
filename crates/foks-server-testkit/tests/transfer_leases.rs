@@ -38,6 +38,12 @@ impl Gated {
     }
 }
 impl ChunkStore for Gated {
+    fn namespace_lease(
+        &self,
+        exclusive: bool,
+    ) -> foks_server::Result<Option<foks_server::chunks::ChunkNamespaceLease>> {
+        self.inner.namespace_lease(exclusive)
+    }
     fn locator(&self) -> foks_server::Result<String> {
         self.inner.locator()
     }

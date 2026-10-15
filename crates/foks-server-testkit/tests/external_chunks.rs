@@ -18,6 +18,12 @@ struct FaultStore {
 }
 
 impl ChunkStore for FaultStore {
+    fn namespace_lease(
+        &self,
+        exclusive: bool,
+    ) -> foks_server::Result<Option<foks_server::chunks::ChunkNamespaceLease>> {
+        self.inner.namespace_lease(exclusive)
+    }
     fn namespace_is_empty(&self) -> foks_server::Result<bool> {
         self.inner.namespace_is_empty()
     }
@@ -75,6 +81,12 @@ struct GatedStore {
 }
 
 impl ChunkStore for GatedStore {
+    fn namespace_lease(
+        &self,
+        exclusive: bool,
+    ) -> foks_server::Result<Option<foks_server::chunks::ChunkNamespaceLease>> {
+        self.inner.namespace_lease(exclusive)
+    }
     fn namespace_is_empty(&self) -> foks_server::Result<bool> {
         self.inner.namespace_is_empty()
     }
@@ -861,6 +873,12 @@ struct BackupReadGate {
     release: Mutex<mpsc::Receiver<()>>,
 }
 impl ChunkStore for BackupReadGate {
+    fn namespace_lease(
+        &self,
+        exclusive: bool,
+    ) -> foks_server::Result<Option<foks_server::chunks::ChunkNamespaceLease>> {
+        self.inner.namespace_lease(exclusive)
+    }
     fn locator(&self) -> foks_server::Result<String> {
         self.inner.locator()
     }
@@ -1105,6 +1123,12 @@ struct LostDeleteReply {
     lose: std::sync::atomic::AtomicBool,
 }
 impl ChunkStore for LostDeleteReply {
+    fn namespace_lease(
+        &self,
+        exclusive: bool,
+    ) -> foks_server::Result<Option<foks_server::chunks::ChunkNamespaceLease>> {
+        self.inner.namespace_lease(exclusive)
+    }
     fn locator(&self) -> foks_server::Result<String> {
         self.inner.locator()
     }
@@ -1215,4 +1239,78 @@ fn interrupted_delete_stays_charged_and_resumes_without_reusing_retired_key() {
         (1, 1, 1)
     );
     assert_eq!(inner.get_object(&new.object()).unwrap(), bytes);
+}
+
+#[test]
+fn legacy_clone_collection_never_deletes_another_copy_live_or_stopped_reference() {
+    let environment = TestEnvironment::new().unwrap();
+    // Initialize the genuine v1 marker before attaching the store. Existing
+    // namespaces cannot prove that older database copies do not exist.
+    let initial = environment.start_server().unwrap();
+    initial.shutdown().unwrap();
+    let store = environment.filesystem_chunk_store().unwrap();
+    let mut database =
+        foks_server_db::Database::open(environment.database_path(), Default::default()).unwrap();
+    let binding = database
+        .prepare_chunk_storage_binding(&[0xa4; 16], &store.locator().unwrap(), false)
+        .unwrap();
+    let mut marker = b"FOKS-CHUNK-NAMESPACE\0\x01".to_vec();
+    marker.extend_from_slice(&binding.namespace_id.unwrap());
+    marker.extend_from_slice(&binding.host_id.unwrap());
+    store.create_namespace_marker_if_absent(&marker).unwrap();
+    database.activate_chunk_storage_binding(&binding).unwrap();
+    drop(database);
+    environment.set_chunk_store(store.clone()).unwrap();
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "legacy-clone").unwrap();
+    let host = client.probe_and_pin().unwrap().pinned;
+    let account = client
+        .create_account(&host, &TestAccountSpec::new("legacyclone", 0xb4))
+        .unwrap();
+    let bytes = vec![0x43; 8192];
+    put(&client, &host, &account, "retained.bin", &bytes).unwrap();
+    server.shutdown().unwrap();
+    let clone = environment.root().join("stale-copy.sqlite");
+    std::fs::copy(environment.database_path(), &clone).unwrap();
+    let copied = rusqlite::Connection::open(&clone).unwrap();
+    copied
+        .execute_batch("PRAGMA foreign_keys=ON; DELETE FROM kv_file_uploads;")
+        .unwrap();
+    drop(copied);
+    let server = environment.start_server().unwrap();
+    let live = foks_server::collect_chunk_store(
+        &clone,
+        Default::default(),
+        store.as_ref(),
+        128,
+        1024 * 1024,
+        false,
+    );
+    assert!(
+        live.is_err(),
+        "physical namespace must exclude even another database's collector"
+    );
+    server.shutdown().unwrap();
+    let report = foks_server::collect_chunk_store(
+        &clone,
+        Default::default(),
+        store.as_ref(),
+        128,
+        1024 * 1024,
+        false,
+    )
+    .unwrap();
+    assert!(report.report_only);
+    assert!(!report.backend_qualified);
+    assert_eq!(report.deleted_objects, 0);
+    assert_eq!(report.eligible_objects, 1);
+    let reader = environment.read_database().unwrap();
+    assert_eq!(reader.chunk_physical_usage().unwrap().objects, 1);
+    drop(reader);
+    let server = environment.start_server().unwrap();
+    let fresh = TestClient::new(&environment, "legacy-clone-verify").unwrap();
+    let fresh_host = fresh.probe_and_pin().unwrap().pinned;
+    assert_eq!(fresh_host.host_id(), host.host_id());
+    assert_files(&fresh, &fresh_host, &account, &[("retained.bin", &bytes)]);
+    server.shutdown().unwrap();
 }

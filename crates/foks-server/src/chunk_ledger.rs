@@ -41,8 +41,9 @@ pub fn inventory_chunk_store(
         return Err(crate::Error::Chunk("inventory requires existing database"));
     }
     let guard = crate::DatabaseWriterGuard::acquire(path.as_ref())?;
+    let source = crate::storage_lease::StorageLease::with_store(path.as_ref(), Some(store), false)?;
     let mut db = guard.open_database(config)?;
-    crate::chunk_binding::initialize_offline(&mut db, store)?;
+    crate::chunk_binding::initialize_offline(&mut db, store, &source)?;
     let mut checkpoint = db.begin_chunk_inventory(restart)?;
     loop {
         let page = store.inventory_page(checkpoint.cursor.as_deref(), 256)?;

@@ -1,4 +1,4 @@
-//! Placement identity is not an ownership lease or a distributed fence.
+//! Namespace placement and optional local database authority; not a distributed fence.
 use std::path::Path;
 
 use foks_server_db::{
@@ -26,10 +26,20 @@ fn marker(binding: &ChunkStorageBinding) -> Result<Vec<u8>> {
             .host_id
             .ok_or(Error::Chunk("missing chunk binding host"))?,
     );
+    if let Some(identity) = binding.authority_identity {
+        bytes[b"FOKS-CHUNK-NAMESPACE\0".len()] = 2;
+        bytes.extend_from_slice(&identity);
+    }
     Ok(bytes)
 }
 
-fn verify(binding: &ChunkStorageBinding, store: &dyn ChunkStore, host: &[u8]) -> Result<()> {
+fn verify(
+    binding: &ChunkStorageBinding,
+    store: &dyn ChunkStore,
+    host: &[u8],
+    source: &crate::storage_lease::StorageLease,
+) -> Result<()> {
+    source.verify_authority(binding.authority_identity)?;
     if binding.state != State::Active {
         return Err(Error::Chunk(
             "chunk store adoption or initialization required",
@@ -52,7 +62,11 @@ fn verify(binding: &ChunkStorageBinding, store: &dyn ChunkStore, host: &[u8]) ->
 
 /// Validate a snapshot before it can be served or hydrated. No snapshot is held
 /// by this function; metadata is copied before the remote marker read.
-pub(crate) fn verify_reader(reader: &ReadDatabase, store: Option<&dyn ChunkStore>) -> Result<()> {
+pub(crate) fn verify_reader(
+    reader: &ReadDatabase,
+    store: Option<&dyn ChunkStore>,
+    source: &crate::storage_lease::StorageLease,
+) -> Result<()> {
     let binding = reader.chunk_storage_binding()?;
     let external = reader.has_external_chunks()?;
     match (binding, store) {
@@ -60,7 +74,7 @@ pub(crate) fn verify_reader(reader: &ReadDatabase, store: Option<&dyn ChunkStore
             let host = reader
                 .host_bootstrap()?
                 .ok_or(Error::Chunk("chunk binding requires host bootstrap"))?;
-            verify(&binding, store, &host.host_id)
+            verify(&binding, store, &host.host_id, source)
         }
         (None, None) if !external => Ok(()),
         (None, Some(_)) => Err(Error::Chunk(
@@ -77,7 +91,9 @@ pub(crate) fn verify_reader(reader: &ReadDatabase, store: Option<&dyn ChunkStore
 pub(crate) fn initialize_online(
     writer: &WriterHandle,
     store: Option<&dyn ChunkStore>,
+    source: &crate::storage_lease::StorageLease,
 ) -> Result<()> {
+    source.require_writer(writer)?;
     let Some(store) = store else {
         return writer.call(|db| {
             if db.chunk_storage_binding()?.is_some() || db.has_external_chunks()? {
@@ -91,8 +107,19 @@ pub(crate) fn initialize_online(
     let locator = store.locator()?;
     let mut namespace = [0; 16];
     crate::OsEntropy.fill(&mut namespace)?;
-    let binding = writer
-        .call(move |db| Ok(db.prepare_chunk_storage_binding(&namespace, &locator, false)?))?;
+    let authority = source.authority_identity()?;
+    let needs_empty = writer.call(|db| Ok(db.chunk_storage_binding()?.is_none()))?;
+    let empty = !needs_empty || store.namespace_is_empty()?;
+    let binding = writer.call(move |db| {
+        let requested = if db.chunk_storage_binding()?.is_none() && !empty {
+            None
+        } else {
+            authority
+        };
+        Ok(db
+            .prepare_chunk_storage_binding_with_authority(&namespace, &locator, false, requested)?)
+    })?;
+    source.verify_authority(binding.authority_identity)?;
     if binding.state == State::Active {
         verify(
             &binding,
@@ -100,6 +127,7 @@ pub(crate) fn initialize_online(
             &binding
                 .host_id
                 .ok_or(Error::Chunk("missing chunk binding host"))?,
+            source,
         )?;
     } else {
         store.create_namespace_marker_if_absent(&marker(&binding)?)?;
@@ -111,10 +139,25 @@ pub(crate) fn initialize_online(
     crate::chunk_ledger::initialize_online(writer, store)
 }
 
-pub(crate) fn initialize_offline(database: &mut Database, store: &dyn ChunkStore) -> Result<()> {
+pub(crate) fn initialize_offline(
+    database: &mut Database,
+    store: &dyn ChunkStore,
+    source: &crate::storage_lease::StorageLease,
+) -> Result<()> {
     let mut namespace = [0; 16];
     crate::OsEntropy.fill(&mut namespace)?;
-    let binding = database.prepare_chunk_storage_binding(&namespace, &store.locator()?, false)?;
+    let authority = if database.chunk_storage_binding()?.is_none() && !store.namespace_is_empty()? {
+        None
+    } else {
+        source.authority_identity()?
+    };
+    let binding = database.prepare_chunk_storage_binding_with_authority(
+        &namespace,
+        &store.locator()?,
+        false,
+        authority,
+    )?;
+    source.verify_authority(binding.authority_identity)?;
     if binding.state == State::Active {
         verify(
             &binding,
@@ -122,6 +165,7 @@ pub(crate) fn initialize_offline(database: &mut Database, store: &dyn ChunkStore
             &binding
                 .host_id
                 .ok_or(Error::Chunk("missing chunk binding host"))?,
+            source,
         )?;
     } else {
         store.create_namespace_marker_if_absent(&marker(&binding)?)?;
@@ -144,11 +188,22 @@ pub fn adopt_chunk_store(
         return Err(Error::Chunk("adoption requires an existing database"));
     }
     let guard = crate::DatabaseWriterGuard::acquire(path.as_ref())?;
+    let source = crate::storage_lease::StorageLease::with_store(path.as_ref(), Some(store), false)?;
     let mut database = guard.open_database(config)?;
     let mut namespace = [0; 16];
     crate::OsEntropy.fill(&mut namespace)?;
-    let mut binding =
-        database.prepare_chunk_storage_binding(&namespace, &store.locator()?, true)?;
+    let authority = if database.chunk_storage_binding()?.is_some() {
+        source.authority_identity()?
+    } else {
+        None
+    };
+    let mut binding = database.prepare_chunk_storage_binding_with_authority(
+        &namespace,
+        &store.locator()?,
+        true,
+        authority,
+    )?;
+    source.verify_authority(binding.authority_identity)?;
     if binding.state == State::Active {
         verify(
             &binding,
@@ -156,6 +211,7 @@ pub fn adopt_chunk_store(
             &binding
                 .host_id
                 .ok_or(Error::Chunk("missing chunk binding host"))?,
+            &source,
         )?;
     } else {
         let expected_marker = marker(&binding)?;
@@ -212,6 +268,12 @@ mod tests {
         lose: AtomicBool,
     }
     impl ChunkStore for LostMarkerReply {
+        fn namespace_lease(
+            &self,
+            exclusive: bool,
+        ) -> crate::Result<Option<crate::chunks::ChunkNamespaceLease>> {
+            self.inner.namespace_lease(exclusive)
+        }
         fn namespace_is_empty(&self) -> Result<bool> {
             self.inner.namespace_is_empty()
         }
@@ -267,7 +329,9 @@ mod tests {
         };
         let writer =
             crate::Writer::start(path.clone(), foks_server_db::Config::default(), 4).unwrap();
-        assert!(initialize_online(&writer.handle(), Some(&store)).is_err());
+        let source =
+            crate::storage_lease::StorageLease::with_store(&path, Some(&store), false).unwrap();
+        assert!(initialize_online(&writer.handle(), Some(&store), &source).is_err());
         let pending = writer
             .call(|db| Ok(db.chunk_storage_binding()?.unwrap()))
             .unwrap();
@@ -276,7 +340,7 @@ mod tests {
         writer.shutdown().unwrap();
         let writer =
             crate::Writer::start(path.clone(), foks_server_db::Config::default(), 4).unwrap();
-        initialize_online(&writer.handle(), Some(&store)).unwrap();
+        initialize_online(&writer.handle(), Some(&store), &source).unwrap();
         let active = writer
             .call(|db| Ok(db.chunk_storage_binding()?.unwrap()))
             .unwrap();
@@ -286,7 +350,234 @@ mod tests {
             store.read_namespace_marker().unwrap().unwrap(),
             original_marker
         );
-        assert!(initialize_online(&writer.handle(), None).is_err());
+        assert!(initialize_online(&writer.handle(), None, &source).is_err());
+        writer.shutdown().unwrap();
+    }
+
+    fn authority_fixture() -> (tempfile::TempDir, std::path::PathBuf, Arc<dyn ChunkStore>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("database");
+        drop(Database::open(&path, foks_server_db::Config::default()).unwrap());
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute(
+            "INSERT INTO host_metadata VALUES(1,?1,'test',X'',X'')",
+            [[3u8; 33].as_slice()],
+        )
+        .unwrap();
+        drop(c);
+        let store = crate::chunks::ChunkStoreConfig::Filesystem {
+            directory: dir.path().join("objects"),
+        }
+        .build()
+        .unwrap();
+        (dir, path, store)
+    }
+
+    #[test]
+    fn fresh_authority_rejects_stopped_clones_and_inode_replacement() {
+        let (dir, path, store) = authority_fixture();
+        let writer =
+            crate::Writer::start(path.clone(), foks_server_db::Config::default(), 4).unwrap();
+        let source =
+            crate::storage_lease::StorageLease::with_store(&path, Some(store.as_ref()), false)
+                .unwrap();
+        initialize_online(&writer.handle(), Some(store.as_ref()), &source).unwrap();
+        let binding = writer
+            .call(|db| Ok(db.chunk_storage_binding()?.unwrap()))
+            .unwrap();
+        assert!(binding.authority_identity.is_some());
+        let new_marker = store.read_namespace_marker().unwrap().unwrap();
+        let mut legacy = binding.clone();
+        legacy.authority_identity = None;
+        assert_ne!(
+            new_marker,
+            marker(&legacy).unwrap(),
+            "old binaries must reject exact marker mismatch"
+        );
+        writer.shutdown().unwrap();
+        drop(source);
+        let clone = dir.path().join("clone");
+        std::fs::copy(&path, &clone).unwrap();
+        let cloned_source =
+            crate::storage_lease::StorageLease::with_store(&clone, Some(store.as_ref()), false)
+                .unwrap();
+        let reader = ReadDatabase::open(&clone, foks_server_db::Config::default()).unwrap();
+        assert!(verify_reader(&reader, Some(store.as_ref()), &cloned_source).is_err());
+        drop(reader);
+        drop(cloned_source);
+        assert!(crate::chunk_collection::collect_chunk_store(
+            &clone,
+            foks_server_db::Config::default(),
+            store.as_ref(),
+            1,
+            1024,
+            false
+        )
+        .is_err());
+        let clone_writer =
+            crate::Writer::start(clone.clone(), foks_server_db::Config::default(), 4).unwrap();
+        let cloned_source =
+            crate::storage_lease::StorageLease::with_store(&clone, Some(store.as_ref()), false)
+                .unwrap();
+        assert!(
+            initialize_online(&clone_writer.handle(), Some(store.as_ref()), &cloned_source)
+                .is_err()
+        );
+        clone_writer.shutdown().unwrap();
+        drop(cloned_source);
+        std::fs::rename(&path, dir.path().join("old-inode")).unwrap();
+        std::fs::copy(&clone, &path).unwrap();
+        assert!(crate::chunk_collection::collect_chunk_store(
+            &path,
+            foks_server_db::Config::default(),
+            store.as_ref(),
+            1,
+            1024,
+            false
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn pending_authority_rejects_clone_before_marker_creation() {
+        let (dir, path, store) = authority_fixture();
+        let source =
+            crate::storage_lease::StorageLease::with_store(&path, Some(store.as_ref()), false)
+                .unwrap();
+        let mut db = Database::open(&path, foks_server_db::Config::default()).unwrap();
+        db.prepare_chunk_storage_binding_with_authority(
+            &[7; 16],
+            &store.locator().unwrap(),
+            false,
+            source.authority_identity().unwrap(),
+        )
+        .unwrap();
+        drop(db);
+        drop(source);
+        assert!(store.read_namespace_marker().unwrap().is_none());
+        let clone = dir.path().join("clone");
+        std::fs::copy(&path, &clone).unwrap();
+        let source =
+            crate::storage_lease::StorageLease::with_store(&clone, Some(store.as_ref()), false)
+                .unwrap();
+        let mut db = Database::open(&clone, foks_server_db::Config::default()).unwrap();
+        assert!(initialize_offline(&mut db, store.as_ref(), &source).is_err());
+        assert!(store.read_namespace_marker().unwrap().is_none());
+        drop(db);
+        drop(source);
+        let source =
+            crate::storage_lease::StorageLease::with_store(&path, Some(store.as_ref()), false)
+                .unwrap();
+        let mut db = Database::open(&path, foks_server_db::Config::default()).unwrap();
+        initialize_offline(&mut db, store.as_ref(), &source).unwrap();
+        assert!(db
+            .chunk_storage_binding()
+            .unwrap()
+            .unwrap()
+            .authority_identity
+            .is_some());
+    }
+
+    #[test]
+    fn legacy_namespace_never_autoqualifies_or_deletes_even_with_pending_intent() {
+        let (_dir, path, store) = authority_fixture();
+        let mut db = Database::open(&path, foks_server_db::Config::default()).unwrap();
+        let binding = db
+            .prepare_chunk_storage_binding(&[7; 16], &store.locator().unwrap(), false)
+            .unwrap();
+        store
+            .create_namespace_marker_if_absent(&marker(&binding).unwrap())
+            .unwrap();
+        db.activate_chunk_storage_binding(&binding).unwrap();
+        let source =
+            crate::storage_lease::StorageLease::with_store(&path, Some(store.as_ref()), false)
+                .unwrap();
+        initialize_offline(&mut db, store.as_ref(), &source).unwrap();
+        assert_eq!(
+            db.chunk_storage_binding()
+                .unwrap()
+                .unwrap()
+                .authority_identity,
+            None
+        );
+        let bytes = b"legacy orphan still owned by a possible clone";
+        let token = db
+            .reserve_chunk_object(
+                &crate::chunks::chunk_digest(bytes),
+                bytes.len() as u64,
+                &[9; 16],
+                1,
+            )
+            .unwrap();
+        store.put_object(&token.object(), bytes).unwrap();
+        db.settle_chunk_publication(&token, true).unwrap();
+        db.begin_chunk_collection(&[2; 16], 1, 1024).unwrap();
+        let before = db.chunk_physical_usage().unwrap();
+        drop(db);
+        drop(source);
+        let report = crate::chunk_collection::collect_chunk_store(
+            &path,
+            foks_server_db::Config::default(),
+            store.as_ref(),
+            1,
+            1024,
+            false,
+        )
+        .unwrap();
+        assert!(report.report_only);
+        assert!(!report.backend_qualified);
+        assert_eq!(report.deleted_objects, 0);
+        assert_eq!(report.usage, before);
+        assert_eq!(store.get_object(&token.object()).unwrap(), bytes);
+    }
+
+    #[test]
+    fn physical_namespace_lock_excludes_different_database_paths_and_store_instances() {
+        let (dir, path, store) = authority_fixture();
+        let clone = dir.path().join("clone");
+        std::fs::copy(&path, &clone).unwrap();
+        let second = crate::chunks::ChunkStoreConfig::Filesystem {
+            directory: dir.path().join("objects"),
+        }
+        .build()
+        .unwrap();
+        let shared = Arc::new(
+            crate::storage_lease::StorageLease::with_store(&path, Some(store.as_ref()), false)
+                .unwrap(),
+        );
+        let detached = shared.clone();
+        drop(shared);
+        assert!(crate::storage_lease::StorageLease::with_store(
+            &clone,
+            Some(second.as_ref()),
+            true
+        )
+        .is_err());
+        drop(detached);
+        let exclusive =
+            crate::storage_lease::StorageLease::with_store(&clone, Some(second.as_ref()), true)
+                .unwrap();
+        assert!(
+            crate::storage_lease::StorageLease::with_store(&path, Some(store.as_ref()), false)
+                .is_err()
+        );
+        drop(exclusive);
+    }
+    #[test]
+    fn mismatched_writer_source_is_rejected_before_namespace_binding() {
+        let (dir, path, store) = authority_fixture();
+        let other = dir.path().join("other");
+        std::fs::copy(&path, &other).unwrap();
+        let writer = crate::Writer::start(other, foks_server_db::Config::default(), 4).unwrap();
+        let source =
+            crate::storage_lease::StorageLease::with_store(&path, Some(store.as_ref()), false)
+                .unwrap();
+        assert!(initialize_online(&writer.handle(), Some(store.as_ref()), &source).is_err());
+        assert!(store.read_namespace_marker().unwrap().is_none());
+        assert!(writer
+            .call(|db| Ok(db.chunk_storage_binding()?))
+            .unwrap()
+            .is_none());
         writer.shutdown().unwrap();
     }
 }

@@ -108,7 +108,11 @@ fn run_backup(
     sequence: u64,
     cancelled: &AtomicBool,
 ) -> Result<u64> {
-    let _storage_lease = crate::storage_lease::StorageLease::shared(&source.database_path)?;
+    let _storage_lease = crate::storage_lease::StorageLease::with_store(
+        &source.database_path,
+        source.chunk_store.as_deref(),
+        false,
+    )?;
     let (now, database, host_key_files) = checked(
         Phase::BackupRead,
         (|| {
@@ -132,6 +136,7 @@ fn run_backup(
         source.database_config.clone(),
         source.chunk_store.as_deref(),
         Some(cancelled),
+        &_storage_lease,
         |backup_database| {
             database.online_backup_until(backup_database, || cancelled.load(Ordering::Acquire))?;
             Ok(())

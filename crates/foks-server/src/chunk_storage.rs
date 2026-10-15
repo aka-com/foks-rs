@@ -19,8 +19,10 @@ pub fn externalize_chunks(
         return Err(Error::Chunk("conversion requires an existing database"));
     }
     let guard = crate::DatabaseWriterGuard::acquire(database_path.as_ref())?;
+    let source =
+        crate::storage_lease::StorageLease::with_store(database_path.as_ref(), Some(store), false)?;
     let mut database = guard.open_database(config)?;
-    crate::chunk_binding::initialize_offline(&mut database, store)?;
+    crate::chunk_binding::initialize_offline(&mut database, store, &source)?;
     let mut after = None;
     let mut converted = 0;
     while let Some(stored) = database.next_kv_chunk(after.as_ref(), false)? {
@@ -109,10 +111,11 @@ pub(crate) fn hydrate_backup(
     config: foks_server_db::Config,
     store: Option<&dyn ChunkStore>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
+    source: &crate::storage_lease::StorageLease,
 ) -> Result<()> {
     {
         let reader = foks_server_db::ReadDatabase::open(path, config.clone())?;
-        crate::chunk_binding::verify_reader(&reader, store)?;
+        crate::chunk_binding::verify_reader(&reader, store, source)?;
     }
     let mut database = foks_server_db::Database::open(path, config)?;
     let mut after = None;

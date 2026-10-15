@@ -128,10 +128,20 @@ impl ChunkStoreConfig {
     }
 }
 
+/// Owned physical-namespace exclusion; obtained only from a concrete backend.
+pub struct ChunkNamespaceLease {
+    _file: std::fs::File,
+}
+
 /// Exact immutable object publication and bounded, integrity-checked retrieval.
 pub trait ChunkStore: Send + Sync {
     /// Canonical non-secret placement descriptor; credentials/timeouts are excluded.
     fn locator(&self) -> Result<String>;
+    /// None means no qualified local deletion. Custom wrappers must forward the
+    /// actual backend lease; claiming DELETE support alone never qualifies.
+    fn namespace_lease(&self, _exclusive: bool) -> Result<Option<ChunkNamespaceLease>> {
+        Ok(None)
+    }
     fn namespace_is_empty(&self) -> Result<bool>;
     fn inventory_page(&self, cursor: Option<&str>, maximum: usize) -> Result<ChunkInventoryPage>;
     /// Missing is distinct from an unavailable, malformed or oversized marker.
@@ -145,7 +155,8 @@ pub trait ChunkStore: Send + Sync {
     fn get(&self, digest: &[u8; 32], encoded_length: u64) -> Result<Vec<u8>> {
         self.get_object(&ChunkObject::legacy(*digest, encoded_length))
     }
-    /// Only local filesystem deletion is currently qualified. Remote mutation
+    /// DELETE mechanism capability only. The collector additionally requires a
+    /// matching v2 database authority under the physical namespace lease. Remote
     /// retries do not establish termination of every potentially late PUT.
     fn supports_collection(&self) -> bool {
         false
@@ -265,6 +276,7 @@ fn create_directory_durable(directory: &Path) -> Result<()> {
 }
 
 const NAMESPACE_MARKER: &str = "_foks_namespace_v1";
+const NAMESPACE_LOCK: &str = "_foks_namespace_lock_v2";
 const MAXIMUM_MARKER_BYTES: usize = 1024;
 
 fn check_marker_size(bytes: &[u8]) -> Result<()> {
@@ -275,6 +287,37 @@ fn check_marker_size(bytes: &[u8]) -> Result<()> {
 }
 
 impl ChunkStore for FilesystemChunks {
+    fn namespace_lease(&self, exclusive: bool) -> Result<Option<ChunkNamespaceLease>> {
+        self.recheck()?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(self.directory.join(NAMESPACE_LOCK))?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.len() != 0 {
+            return Err(Error::Chunk("invalid namespace lease file"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if metadata.nlink() != 1 {
+                return Err(Error::Chunk("invalid namespace lease link count"));
+            }
+        }
+        if exclusive {
+            file.try_lock()
+        } else {
+            file.try_lock_shared()
+        }
+        .map_err(|_| Error::Chunk("object namespace is in use"))?;
+        self.recheck()?;
+        Ok(Some(ChunkNamespaceLease { _file: file }))
+    }
+
     fn supports_collection(&self) -> bool {
         true
     }
@@ -1308,5 +1351,32 @@ secret_access_key = "not-accepted"
         store.put(&digest, &payload).unwrap();
         store.put(&digest, &payload).unwrap();
         assert_eq!(store.get(&digest, payload.len() as u64).unwrap(), payload);
+    }
+    #[test]
+    fn namespace_lock_rejects_nonempty_nonregular_and_aliased_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FilesystemChunks::open(dir.path()).unwrap();
+        let lock = dir.path().join(NAMESPACE_LOCK);
+        std::fs::write(&lock, b"unexpected metadata").unwrap();
+        assert!(store.namespace_lease(false).is_err());
+        std::fs::remove_file(&lock).unwrap();
+        std::fs::create_dir(&lock).unwrap();
+        assert!(store.namespace_lease(true).is_err());
+        std::fs::remove_dir(&lock).unwrap();
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("target");
+            std::fs::write(&target, []).unwrap();
+            std::os::unix::fs::symlink(&target, &lock).unwrap();
+            assert!(store.namespace_lease(false).is_err());
+            std::fs::remove_file(&lock).unwrap();
+            std::fs::hard_link(&target, &lock).unwrap();
+            assert!(store.namespace_lease(true).is_err());
+            std::fs::remove_file(&lock).unwrap();
+        }
+        let lease = store.namespace_lease(false).unwrap().unwrap();
+        assert!(store.namespace_lease(true).is_err());
+        drop(lease);
+        assert!(store.namespace_lease(true).unwrap().is_some());
     }
 }

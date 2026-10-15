@@ -83,6 +83,7 @@ struct WriteAuthorization {
 }
 
 struct WriterQueue {
+    database_identity: DatabasePathIdentity,
     sender: SyncSender<Message>,
     accepting: Mutex<bool>,
     accepted: AtomicU64,
@@ -150,6 +151,7 @@ impl Writer {
         } = guard;
         let (sender, receiver) = mpsc::sync_channel(maximum_pending);
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
+        let writer_identity = database_identity.clone();
         let thread = thread::spawn(move || {
             let database = Database::open_with_identity(database_identity, database_config);
             match database {
@@ -168,6 +170,7 @@ impl Writer {
                 handle: WriterHandle {
                     authorization: None,
                     queue: Arc::new(WriterQueue {
+                        database_identity: writer_identity,
                         sender,
                         accepting: Mutex::new(true),
                         accepted: AtomicU64::new(0),
@@ -226,6 +229,10 @@ impl Writer {
 }
 
 impl WriterHandle {
+    pub(crate) fn database_identity(&self) -> &DatabasePathIdentity {
+        &self.queue.database_identity
+    }
+
     // These mutations only account an already admitted physical side effect.
     // Revocation must not make published bytes disappear from the capacity ledger.
     pub(crate) fn settle_chunk_publication(

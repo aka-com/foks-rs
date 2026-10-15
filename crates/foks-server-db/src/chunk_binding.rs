@@ -18,6 +18,7 @@ pub struct ChunkStorageBinding {
     pub namespace_id: Option<[u8; 16]>,
     pub host_id: Option<[u8; 33]>,
     pub locator: Option<String>,
+    pub authority_identity: Option<[u8; 32]>,
     pub scan_revision: u64,
     pub after: Option<KvChunkKey>,
     pub verified_objects: u64,
@@ -27,7 +28,7 @@ pub struct ChunkStorageBinding {
 fn read(connection: &Connection) -> Result<Option<ChunkStorageBinding>> {
     let mut statement = connection.prepare(
         "SELECT state,namespace_id,host_id,locator,scan_revision,
-        after_uid,after_file_id,after_offset,verified_objects,verified_bytes
+        after_uid,after_file_id,after_offset,verified_objects,verified_bytes,authority_identity
         FROM chunk_storage_binding WHERE singleton=1",
     )?;
     let mut rows = statement.query([])?;
@@ -64,6 +65,13 @@ fn read(connection: &Connection) -> Result<Option<ChunkStorageBinding>> {
             })
             .transpose()?,
         locator: row.budgeted_get(3)?,
+        authority_identity: row
+            .budgeted_get::<_, Option<Vec<u8>>>(10)?
+            .map(|v| {
+                v.try_into()
+                    .map_err(|_| Error::Invalid("chunk authority identity"))
+            })
+            .transpose()?,
         scan_revision: crate::error::unsigned(row.budgeted_get(4)?)?,
         after: if uid.is_empty() && file.is_empty() && offset == -1 {
             None
@@ -102,6 +110,17 @@ impl Database {
         locator: &str,
         adopt: bool,
     ) -> Result<ChunkStorageBinding> {
+        self.prepare_chunk_storage_binding_with_authority(namespace_id, locator, adopt, None)
+    }
+
+    /// Authority is installed only by the original fresh binding transaction.
+    pub fn prepare_chunk_storage_binding_with_authority(
+        &mut self,
+        namespace_id: &[u8; 16],
+        locator: &str,
+        adopt: bool,
+        authority_identity: Option<[u8; 32]>,
+    ) -> Result<ChunkStorageBinding> {
         if locator.is_empty() || locator.len() > 4096 {
             return Err(Error::Invalid("chunk locator"));
         }
@@ -124,6 +143,11 @@ impl Database {
         )?;
         if let Some(binding) = &current {
             if binding.state != ChunkStorageBindingState::Legacy {
+                if binding.authority_identity.is_some()
+                    && binding.authority_identity != authority_identity
+                {
+                    return Err(Error::Invalid("chunk authority identity mismatch"));
+                }
                 if binding.locator.as_deref() != Some(locator)
                     || binding.host_id.as_ref().map(|v| v.as_slice()) != Some(host.as_slice())
                 {
@@ -151,10 +175,10 @@ impl Database {
         if legacy && !adopt {
             return Err(Error::Invalid("chunk storage adoption required"));
         }
-        transaction.execute("INSERT INTO chunk_storage_binding(singleton,state,namespace_id,host_id,locator,scan_revision)
-            VALUES(1,?1,?2,?3,?4,?5) ON CONFLICT(singleton) DO UPDATE SET state=excluded.state,
+        transaction.execute("INSERT INTO chunk_storage_binding(singleton,state,namespace_id,host_id,locator,scan_revision,authority_identity)
+            VALUES(1,?1,?2,?3,?4,?5,?6) ON CONFLICT(singleton) DO UPDATE SET state=excluded.state,
             namespace_id=excluded.namespace_id,host_id=excluded.host_id,locator=excluded.locator,
-            scan_revision=excluded.scan_revision", params![if legacy {3} else {2}, namespace_id.as_slice(),host,locator,revision])?;
+            scan_revision=excluded.scan_revision,authority_identity=excluded.authority_identity", params![if legacy {3} else {2}, namespace_id.as_slice(),host,locator,revision, if legacy {None} else {authority_identity}.as_ref().map(|v| v.as_slice())])?;
         let result = read(&transaction)?.ok_or(Error::Invalid("missing chunk binding"))?;
         transaction.commit()?;
         Ok(result)
@@ -394,5 +418,22 @@ mod tests {
         assert!(db.activate_chunk_storage_binding(&binding).is_err());
         let verified = db.checkpoint_chunk_adoption(&binding, &key(0), 2).unwrap();
         db.activate_chunk_storage_binding(&verified).unwrap();
+    }
+    #[test]
+    fn schema_53_binding_migrates_unqualified_and_stays_unqualified() {
+        let (dir, mut db) = fixture();
+        let original = db
+            .prepare_chunk_storage_binding(&[4; 16], "local", false)
+            .unwrap();
+        db.activate_chunk_storage_binding(&original).unwrap();
+        db.connection.execute_batch("ALTER TABLE chunk_storage_binding DROP COLUMN authority_identity; PRAGMA user_version=53").unwrap();
+        drop(db);
+        let mut db = Database::open(dir.path().join("db"), crate::Config::default()).unwrap();
+        let migrated = db
+            .prepare_chunk_storage_binding_with_authority(&[9; 16], "local", false, Some([2; 32]))
+            .unwrap();
+        assert_eq!(migrated.authority_identity, None);
+        assert_eq!(migrated.namespace_id, original.namespace_id);
+        assert_eq!(migrated.state, ChunkStorageBindingState::Active);
     }
 }

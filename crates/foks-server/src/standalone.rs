@@ -450,7 +450,8 @@ pub fn backup_standalone_installation_with_chunk_store(
     database_config: foks_server_db::Config,
     chunk_store: Option<&dyn crate::chunks::ChunkStore>,
 ) -> Result<BackupArtifacts> {
-    let _storage_lease = crate::storage_lease::StorageLease::shared(database_path.as_ref())?;
+    let _storage_lease =
+        crate::storage_lease::StorageLease::with_store(database_path.as_ref(), chunk_store, false)?;
     let source = foks_server_db::ReadDatabase::open(&database_path, database_config.clone())?;
     if !source.integrity_check()? {
         return Err(crate::Error::Database(foks_server_db::Error::Invalid(
@@ -521,6 +522,7 @@ pub fn backup_standalone_installation_with_chunk_store(
         database_config,
         chunk_store,
         None,
+        &_storage_lease,
         |backup_database| {
             source.online_backup(backup_database)?;
             Ok(())
@@ -537,6 +539,7 @@ pub(crate) fn create_backup(
     database_config: foks_server_db::Config,
     chunk_store: Option<&dyn crate::chunks::ChunkStore>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
+    source_storage: &crate::storage_lease::StorageLease,
     backup_database: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<BackupArtifacts> {
     std::fs::create_dir(destination)?;
@@ -575,6 +578,7 @@ pub(crate) fn create_backup(
         database_config.clone(),
         chunk_store,
         cancelled,
+        source_storage,
     )?;
     let backup_check = foks_server_db::ReadDatabase::open(&database, database_config)?;
     if !backup_check.integrity_check()? {
@@ -668,7 +672,11 @@ impl RunningStandaloneServer {
     /// snapshot in a new directory. The operator root key is intentionally
     /// never copied and must be restored through its original secret channel.
     pub fn backup(&self, destination: impl AsRef<std::path::Path>) -> Result<BackupArtifacts> {
-        let _storage_lease = crate::storage_lease::StorageLease::shared(&self.database_path)?;
+        let _storage_lease = crate::storage_lease::StorageLease::with_store(
+            &self.database_path,
+            self.chunk_store.as_deref(),
+            false,
+        )?;
         let manifest = self.bootstrap.key_manifest.encode();
         let source =
             foks_server_db::ReadDatabase::open(&self.database_path, self.database_config.clone())?;
@@ -681,6 +689,7 @@ impl RunningStandaloneServer {
             self.database_config.clone(),
             self.chunk_store.as_deref(),
             None,
+            &_storage_lease,
             |backup_database| {
                 source.online_backup(backup_database)?;
                 Ok(())
@@ -878,7 +887,16 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let bootstrap = writer.call(move |database| {
         load_or_bootstrap(database, bootstrap_keys.as_ref(), &bootstrap_input)
     })?;
-    crate::chunk_binding::initialize_online(&writer.handle(), config.chunk_store.as_deref())?;
+    let startup_storage = crate::storage_lease::StorageLease::with_store(
+        &config.database_path,
+        config.chunk_store.as_deref(),
+        false,
+    )?;
+    crate::chunk_binding::initialize_online(
+        &writer.handle(),
+        config.chunk_store.as_deref(),
+        &startup_storage,
+    )?;
     // Existing durable state is validated before PKI helpers can call their
     // create-on-first-bootstrap key APIs. A missing persisted purpose key must
     // fail closed rather than leave replacement material behind.
