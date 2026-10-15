@@ -136,7 +136,11 @@ export function useSetupCheckpoint({
   });
 }
 
-export function useSetupSession({
+/**
+ * Restarting and re-entering setup: both replace this session with a fresh
+ * checkpoint, and differ in whether the attempt in hand is retained.
+ */
+export function useSetupRestart({
   bridge,
   checkpoint,
   checkpointRef,
@@ -209,3 +213,5 @@ export function useSetupSession({
     startSetupOver,
   };
 }
+
+export type SetupRestart = ReturnType<typeof useSetupRestart>;
