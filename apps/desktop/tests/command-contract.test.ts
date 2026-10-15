@@ -35,7 +35,7 @@ const source = join(app, 'src');
 const transport = join(source, 'bridge', 'transport.ts');
 const yubikey = join(source, 'bridge', 'yubikey.ts');
 const contract = join(source, 'bridge', 'contract.ts');
-const mock = join(source, 'mock', 'mock-bridge.ts');
+const mock = join(source, 'mock');
 
 async function manifest(): Promise<Manifest> {
   return JSON.parse(
@@ -272,9 +272,10 @@ function problems(sites: Site[], { commands }: Manifest): string[] {
 
 /**
  * The Bridge methods that no file in src/ refers to apart from the contract,
- * the bridge/commands-*.ts wrappers and the mock bridge. A method is referred
- * to when an identifier in another file resolves to its declaration in the
- * Bridge interface, as the property in `bridge.readItem(...)` does.
+ * the bridge/commands-*.ts wrappers and the mock bridge in src/mock/. A method
+ * is referred to when an identifier in another file resolves to its
+ * declaration in the Bridge interface, as the property in
+ * `bridge.readItem(...)` does.
  */
 function uncalledBridgeMethods(compiled: ts.Program): string[] {
   const checker = compiled.getTypeChecker();
@@ -293,7 +294,7 @@ function uncalledBridgeMethods(compiled: ts.Program): string[] {
     if (
       !name.startsWith(source) ||
       name === contract ||
-      name === mock ||
+      name.startsWith(`${mock}/`) ||
       /\/bridge\/commands-[^/]+\.ts$/.test(name)
     )
       continue;
