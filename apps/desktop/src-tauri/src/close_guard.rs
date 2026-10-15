@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{Emitter as _, Manager as _, State, WindowEvent};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 
-use crate::agent::{AgentError, AgentHandle};
+use crate::agent::{AgentError, AgentHandle, MAINTENANCE_RESERVATION_WAIT};
 use crate::commands::{require_main_window, AppState};
 
 pub const EXIT_STATE_EVENT: &str = "foks://exit-state";
@@ -19,7 +19,7 @@ pub enum ExitState {
     Idle,
     /// The first close or quit request, with what it found. `unsent`,
     /// `mutation`, `maintenance` and `owned == false` are each a reason to ask
-    /// before stopping the agent; see [`asks_before_stopping`].
+    /// before stopping the agent; see [`QuitReasons::asks_before_stopping`].
     Decision {
         pid: Option<u32>,
         /// Chat messages queued in the renderer and not yet sent.
@@ -61,10 +61,9 @@ pub enum ExitAction {
 
 /// The device-local Ask before quitting preference, which the renderer
 /// stores and reports here. Until it reports one, every request asks.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum QuitConfirmation {
-    #[default]
     Always,
     /// Ask only when a request finds a reason in its decision; otherwise stop
     /// the agent and quit without asking.
@@ -80,24 +79,38 @@ pub struct CloseGuard {
     state: Mutex<ExitState>,
 }
 
-/// Whether `decision` must be shown before shutdown starts. A decision with
-/// no reason is skipped only when the preference allows it.
-fn asks_before_stopping(decision: &ExitState, confirmation: QuitConfirmation) -> bool {
-    match decision {
+/// What a first close or quit request finds; the fields are those of
+/// [`ExitState::Decision`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct QuitReasons {
+    pid: Option<u32>,
+    unsent: usize,
+    mutation: bool,
+    maintenance: bool,
+    owned: bool,
+}
+
+impl QuitReasons {
+    /// Whether the decision must be shown before shutdown starts. A request
+    /// that finds no reason skips it only when the preference allows that.
+    fn asks_before_stopping(&self, confirmation: QuitConfirmation) -> bool {
+        confirmation == QuitConfirmation::Always
+            || self.unsent > 0
+            || self.mutation
+            || self.maintenance
+            || !self.owned
+    }
+}
+
+impl From<QuitReasons> for ExitState {
+    fn from(reasons: QuitReasons) -> Self {
         ExitState::Decision {
-            unsent,
-            mutation,
-            maintenance,
-            owned,
-            ..
-        } => {
-            confirmation == QuitConfirmation::Always
-                || *unsent > 0
-                || *mutation
-                || *maintenance
-                || !*owned
+            pid: reasons.pid,
+            unsent: reasons.unsent,
+            mutation: reasons.mutation,
+            maintenance: reasons.maintenance,
+            owned: reasons.owned,
         }
-        _ => true,
     }
 }
 
@@ -144,6 +157,11 @@ impl CloseGuard {
     }
 
     fn begin(self: &Arc<Self>, app: &tauri::AppHandle, agent: &Arc<AgentHandle>) -> bool {
+        // decision() may read the whole process table, so it runs before the
+        // state lock is taken. A request that then finds the state no longer
+        // Idle discards the result.
+        let found = (self.state() == ExitState::Idle)
+            .then(|| decision(app, agent, self.unsent.load(Ordering::Relaxed)));
         let mut state = self
             .state
             .lock()
@@ -153,24 +171,25 @@ impl CloseGuard {
         }
         let repeated = *state != ExitState::Idle;
         if !repeated {
-            let decision = decision(app, agent, self.unsent.load(Ordering::Relaxed));
+            let reasons =
+                found.unwrap_or_else(|| decision(app, agent, self.unsent.load(Ordering::Relaxed)));
             // A request that finds nothing to interrupt starts shutdown at
             // once when the preference allows it. The same Stopping state
             // follows, so a failure still reaches the Failed questions.
-            if !asks_before_stopping(&decision, self.confirmation()) {
-                let ExitState::Decision { pid, .. } = decision else {
-                    unreachable!("decision() returns a decision");
-                };
+            if !reasons.asks_before_stopping(self.confirmation()) {
                 enter(
                     app,
                     self,
                     agent,
                     state,
-                    ExitState::Stopping { pid, force: false },
+                    ExitState::Stopping {
+                        pid: reasons.pid,
+                        force: false,
+                    },
                 );
                 return true;
             }
-            *state = decision;
+            *state = reasons.into();
         }
         let snapshot = state.clone();
         drop(state);
@@ -186,16 +205,19 @@ impl CloseGuard {
     }
 }
 
-/// What a first request finds. Missing endpoint or ownership information
-/// reads as an agent this app does not own, so it never skips the question.
-fn decision(app: &tauri::AppHandle, agent: &AgentHandle, unsent: usize) -> ExitState {
+/// What a first request finds. Missing endpoint or ownership information,
+/// and a failed process scan, read as an agent this app does not own, so they
+/// never skip the question. The scan runs only for an owned socket peer,
+/// since it cannot make any other agent count as owned.
+fn decision(app: &tauri::AppHandle, agent: &AgentHandle, unsent: usize) -> QuitReasons {
     let info = agent.process_info();
     let owned = info.owned
-        && agent
-            .stale_agent_processes()
-            .iter()
-            .all(|process| Some(process.pid) == info.pid);
-    ExitState::Decision {
+        && agent.state_dir_agent_processes().is_ok_and(|processes| {
+            processes
+                .iter()
+                .all(|process| Some(process.pid) == info.pid)
+        });
+    QuitReasons {
         pid: info.pid,
         unsent,
         mutation: app
@@ -381,13 +403,18 @@ fn decision_message(decision: &ExitState) -> String {
         count => message.push_str(&format!(" {count} unsent messages will be discarded.")),
     }
     if *mutation {
-        message.push_str(" A change is still in progress.");
+        message.push_str(
+            " A change is in progress. Shutdown starts none of its remaining agent requests.",
+        );
     }
     if *maintenance {
         message.push_str(" Maintenance of this device's FOKS data is in progress.");
     }
     if *mutation || *maintenance {
-        message.push_str(" Shutdown waits a few seconds for this work to finish.");
+        message.push_str(&format!(
+            " Shutdown waits up to {} seconds for the current work to finish. If it has not finished by then, FOKS stays open and offers Try again or Force stop.",
+            MAINTENANCE_RESERVATION_WAIT.as_secs()
+        ));
     }
     if pid.is_none() {
         message.push_str(" FOKS could not identify the agent process.");
@@ -473,8 +500,8 @@ pub fn intercept_exit_request(
 mod tests {
     use super::*;
 
-    fn idle_decision() -> ExitState {
-        ExitState::Decision {
+    fn quiet_reasons() -> QuitReasons {
+        QuitReasons {
             pid: Some(4242),
             unsent: 0,
             mutation: false,
@@ -566,111 +593,86 @@ mod tests {
 
     #[test]
     fn only_a_decision_without_reasons_is_skipped_and_only_when_allowed() {
-        assert!(asks_before_stopping(
-            &idle_decision(),
-            QuitConfirmation::Always
-        ));
-        assert!(!asks_before_stopping(
-            &idle_decision(),
-            QuitConfirmation::WhenPending
-        ));
+        assert!(quiet_reasons().asks_before_stopping(QuitConfirmation::Always));
+        assert!(!quiet_reasons().asks_before_stopping(QuitConfirmation::WhenPending));
         let reasons = [
-            ExitState::Decision {
-                pid: Some(4242),
+            QuitReasons {
                 unsent: 1,
-                mutation: false,
-                maintenance: false,
-                owned: true,
+                ..quiet_reasons()
             },
-            ExitState::Decision {
-                pid: Some(4242),
-                unsent: 0,
+            QuitReasons {
                 mutation: true,
-                maintenance: false,
-                owned: true,
+                ..quiet_reasons()
             },
-            ExitState::Decision {
-                pid: Some(4242),
-                unsent: 0,
-                mutation: false,
+            QuitReasons {
                 maintenance: true,
-                owned: true,
+                ..quiet_reasons()
             },
             // An agent that a CLI or another launch started may be shared.
-            ExitState::Decision {
-                pid: Some(4242),
-                unsent: 0,
-                mutation: false,
-                maintenance: false,
+            QuitReasons {
                 owned: false,
+                ..quiet_reasons()
             },
             // An unidentified socket owner is never treated as this app's.
-            ExitState::Decision {
+            QuitReasons {
                 pid: None,
-                unsent: 0,
-                mutation: false,
-                maintenance: false,
                 owned: false,
+                ..quiet_reasons()
             },
         ];
-        for decision in &reasons {
+        for reasons in &reasons {
             assert!(
-                asks_before_stopping(decision, QuitConfirmation::WhenPending),
-                "{decision:?}"
+                reasons.asks_before_stopping(QuitConfirmation::WhenPending),
+                "{reasons:?}"
             );
-        }
-        for state in [
-            ExitState::Idle,
-            ExitState::Finalizing,
-            ExitState::Failed {
-                pid: None,
-                error: "timeout".into(),
-            },
-        ] {
-            assert!(asks_before_stopping(&state, QuitConfirmation::WhenPending));
         }
     }
 
     #[test]
     fn native_decision_names_only_the_reasons_present() {
-        let quiet = decision_message(&idle_decision());
+        let quiet = decision_message(&quiet_reasons().into());
         assert!(!quiet.contains("unsent"), "{quiet}");
         assert!(!quiet.contains("in progress"), "{quiet}");
         assert!(!quiet.contains("did not start"), "{quiet}");
-        let one = decision_message(&ExitState::Decision {
-            pid: Some(4242),
-            unsent: 1,
-            mutation: false,
-            maintenance: false,
-            owned: true,
-        });
+        let one = decision_message(
+            &QuitReasons {
+                unsent: 1,
+                ..quiet_reasons()
+            }
+            .into(),
+        );
         assert!(
             one.contains(" 1 unsent message will be discarded."),
             "{one}"
         );
-        let busy = decision_message(&ExitState::Decision {
-            pid: Some(4242),
-            unsent: 3,
-            mutation: true,
-            maintenance: true,
-            owned: false,
-        });
+        let busy = decision_message(
+            &QuitReasons {
+                unsent: 3,
+                mutation: true,
+                maintenance: true,
+                owned: false,
+                ..quiet_reasons()
+            }
+            .into(),
+        );
         for part in [
             " 3 unsent messages will be discarded.",
-            " A change is still in progress.",
             " Maintenance of this device's FOKS data is in progress.",
-            " Shutdown waits a few seconds for this work to finish.",
+            " A change is in progress. Shutdown starts none of its remaining agent requests.",
+            " Shutdown waits up to 5 seconds for the current work to finish.",
+            " FOKS stays open and offers Try again or Force stop.",
             " Quitting also stops an agent this app did not start",
         ] {
             assert!(busy.contains(part), "{busy}");
         }
-        let unknown = decision_message(&ExitState::Decision {
-            pid: None,
-            unsent: 0,
-            mutation: false,
-            maintenance: false,
-            owned: false,
-        });
+        let unknown = decision_message(
+            &QuitReasons {
+                pid: None,
+                owned: false,
+                ..quiet_reasons()
+            }
+            .into(),
+        );
         assert!(
             unknown.contains("could not identify the agent process"),
             "{unknown}"

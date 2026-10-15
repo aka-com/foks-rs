@@ -728,8 +728,8 @@ A render error stays inside the nearest error boundary
   the boot screens) replaces the window with a full-window card, "This window
   could not be shown", with Reload window, Copy diagnostics and Quit FOKS, and
   focus moves to Reload window. The card uses no shell context, and it renders
-  inside the exit guard, so Quit FOKS and the window's own close still ask
-  about the agent. A failure in the app's boot hooks or in the exit guard
+  inside the exit guard, so Quit FOKS and the window's own close still go
+  through the close guard and its Ask before quitting preference. A failure in the app's boot hooks or in the exit guard
   itself (label `app`) shows the same card without Quit FOKS, and its Copy
   diagnostics holds the renderer's events only.
 
@@ -977,10 +977,14 @@ overrides stay in Chat's info panel, with a link here, and none of these
 preferences sync between devices. Its Quitting section sets Ask before quitting:
 Always (the default) or When work is pending, with which a window close or
 quit stops the agent without asking unless messages are unsent, a change or
-data maintenance is in progress, or the agent is not one this app launched or
-adopted (or cannot be identified). The renderer reports the choice to the
-native close guard (`set_quit_confirmation`), which asks every time until it
-has one. Device: Application (version, Lock now),
+data maintenance is in progress, the agent is not one this app launched or
+adopted (or cannot be identified), or another agent process uses this app's
+state directory (a failed process scan counts as one). When a change or
+maintenance is in progress, the question says that shutdown starts none of the
+change's remaining agent requests and waits up to 5 seconds for the current
+work, after which FOKS stays open and offers Try again or Force stop. The
+renderer reports the choice to the native close guard
+(`set_quit_confirmation`), which asks every time until it has one. Device: Application (version, Lock now),
 Agent (status with Retry connection while it is not ready, socket with Copy),
 FOKS data (export, import, verify online, move the data folder) and a danger
 zone whose Reset this device runs the per-server reset once per profile, each

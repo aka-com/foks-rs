@@ -229,8 +229,9 @@ pub struct MaintenanceWorker<'a> {
 /// How long a maintenance command waits for the transport to fall idle before
 /// it reports that other requests hold it. Read-only calls are asked to cancel
 /// as soon as the wait starts, so this budget covers the mutations and uploads
-/// that have to run to completion rather than the parked reads.
-const MAINTENANCE_RESERVATION_WAIT: Duration = Duration::from_secs(5);
+/// that have to run to completion rather than the parked reads. A graceful
+/// shutdown waits the same budget, and the close guard's text states it.
+pub(crate) const MAINTENANCE_RESERVATION_WAIT: Duration = Duration::from_secs(5);
 
 /// Closed while the desktop's startup check runs on a background thread, so a
 /// command the webview issues meanwhile waits for a verified agent instead of

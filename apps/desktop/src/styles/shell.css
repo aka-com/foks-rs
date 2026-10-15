@@ -923,7 +923,7 @@ details.adv summary{cursor:pointer;color:var(--accent-ink);font-weight:500;width
 .exit-card-icon .ic{font-size:24px}.exit-card-icon.danger{background:var(--danger-wash);color:var(--danger-ink)}
 .exit-card h2{margin:2px 0 8px;font-size:22px;font-weight:680;letter-spacing:-.02em}
 .exit-card p{max-width:66ch;color:var(--ink-3);line-height:1.5}
-.exit-card p.exit-unsent{margin-bottom:8px;color:var(--ink-2);font-weight:600}
+.exit-card p.exit-warning{margin-bottom:8px;color:var(--ink-2);font-weight:600}
 .exit-card p.exit-error{margin-top:10px;color:var(--danger-ink);font-size:12.5px}
 .exit-card p.exit-calm{margin-top:10px;color:var(--muted);font-size:12.5px}
 .exit-card>.action-error{margin:0 28px 12px}

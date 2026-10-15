@@ -362,11 +362,14 @@ the agent's termination has been verified; the state cannot move backward
 from `Finalizing`. `Decision` records what the request found: unsent chat
 messages, a held mutation reservation, running state maintenance, and
 whether this app launched or adopted every agent process using its state
-directory. With the device-local Ask before quitting preference set to When
-work is pending, a request that finds none of these goes from `Idle`
-directly to `Stopping`; otherwise the renderer, or the native dialog before
-the renderer subscribes and on a repeated quit, shows the decision with the
-reasons that apply.
+directory (a failed process scan counts as no). With the device-local Ask
+before quitting preference set to When work is pending, a request that finds
+none of these goes from `Idle` directly to `Stopping`; otherwise the
+renderer, or the native dialog before the renderer subscribes and on a
+repeated quit, shows the decision with the reasons that apply. `Stopping`
+refuses new agent requests at once and waits up to 5 seconds for requests
+in progress and running maintenance to release the transport; work still
+running after that leaves the app in `Failed`.
 
 **Startup failures.** The host waits for a launched agent to bind its socket
 for as long as the process is alive, up to 60 seconds: an initialized agent

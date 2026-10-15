@@ -141,16 +141,23 @@ test('the exit decision names each pending reason and an agent this app did not 
   const busy = await render({ ...decision, mutation: true, maintenance: true });
   assert.match(
     busy,
-    /A change and maintenance of this device’s FOKS data are in progress\./,
+    /A change is in progress\. Shutdown starts none of its remaining agent requests\. Maintenance of this device’s FOKS data is in progress\. Shutdown waits up to 5 seconds/,
+  );
+  const mutation = await render({ ...decision, mutation: true });
+  assert.match(
+    mutation,
+    /Shutdown starts none of its remaining agent requests/,
   );
   assert.match(
-    await render({ ...decision, mutation: true }),
-    /A change is in progress\. Shutdown waits a few seconds/,
+    mutation,
+    /Shutdown waits up to 5 seconds for the current work to finish\. If it has not finished by then, FOKS stays open and offers Try again or Force stop\./,
   );
+  const maintenance = await render({ ...decision, maintenance: true });
   assert.match(
-    await render({ ...decision, maintenance: true }),
-    /Maintenance of this device’s FOKS data is in progress\./,
+    maintenance,
+    /Maintenance of this device’s FOKS data is in progress\. Shutdown waits up to 5 seconds/,
   );
+  assert.doesNotMatch(maintenance, /A change is in progress/);
 
   const shared = await render({ ...decision, owned: false });
   assert.match(shared, /including an agent this app did not start/);

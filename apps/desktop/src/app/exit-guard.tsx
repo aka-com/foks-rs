@@ -15,14 +15,21 @@ function unsentCopy(count: number): string | null {
 
 type Decision = Extract<ExitState, { state: 'decision' }>;
 
+// The 5 seconds is the host's MAINTENANCE_RESERVATION_WAIT, which a
+// graceful shutdown waits before it reports the agent as busy.
 function busyCopy({ mutation, maintenance }: Decision): string | null {
-  if (mutation && maintenance)
-    return 'A change and maintenance of this device’s FOKS data are in progress. Shutdown waits a few seconds for them to finish.';
-  if (mutation)
-    return 'A change is in progress. Shutdown waits a few seconds for it to finish.';
-  if (maintenance)
-    return 'Maintenance of this device’s FOKS data is in progress. Shutdown waits a few seconds for it to finish.';
-  return null;
+  if (!mutation && !maintenance) return null;
+  return [
+    mutation
+      ? 'A change is in progress. Shutdown starts none of its remaining agent requests.'
+      : null,
+    maintenance
+      ? 'Maintenance of this device’s FOKS data is in progress.'
+      : null,
+    'Shutdown waits up to 5 seconds for the current work to finish. If it has not finished by then, FOKS stays open and offers Try again or Force stop.',
+  ]
+    .filter((sentence) => sentence !== null)
+    .join(' ');
 }
 
 function agentCopy({ pid, owned }: Decision): string {
@@ -92,8 +99,8 @@ function ExitOverlay({
             </span>
             <div>
               <h2 id="exit-decision-title">Stop FOKS Agent and quit?</h2>
-              {unsent ? <p className="exit-unsent">{unsent}</p> : null}
-              {busy ? <p className="exit-unsent">{busy}</p> : null}
+              {unsent ? <p className="exit-warning">{unsent}</p> : null}
+              {busy ? <p className="exit-warning">{busy}</p> : null}
               <p>{agentCopy(state)}</p>
             </div>
           </div>

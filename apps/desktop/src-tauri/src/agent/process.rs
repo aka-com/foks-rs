@@ -1500,16 +1500,25 @@ impl AgentHandle {
     }
 
     pub fn stale_agent_processes(&self) -> Vec<StaleAgentProcess> {
+        self.state_dir_agent_processes().unwrap_or_default()
+    }
+
+    /// The agent processes configured with this app's state directory. Unlike
+    /// [`Self::stale_agent_processes`], a failed process scan is an error.
+    pub fn state_dir_agent_processes(&self) -> std::io::Result<Vec<StaleAgentProcess>> {
         #[cfg(unix)]
         {
-            self.socket
-                .parent()
-                .and_then(|state_dir| matching_agent_processes(state_dir).ok())
-                .unwrap_or_default()
+            let state_dir = self.socket.parent().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "the agent socket has no state directory",
+                )
+            })?;
+            matching_agent_processes(state_dir)
         }
         #[cfg(not(unix))]
         {
-            Vec::new()
+            Err(std::io::ErrorKind::Unsupported.into())
         }
     }
 
