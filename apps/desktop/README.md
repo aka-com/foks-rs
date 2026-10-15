@@ -1784,12 +1784,15 @@ features, overrides` and imports each sheet into one of them:
 `shell/search-palette.css`), and `native-window.css` into `overrides`. A
 declaration in a later layer outranks one in an earlier layer whatever their
 specificity (`!important` reverses the order), so a feature's rules override
-the component rules without heavier selectors. `features.first-run` is the first sublayer, so the rules
-of the other features still outrank it. `tests/styles-geometry.test.ts`
-finds every `.css` file under `src/` and `kit/` and fails unless the entry
-imports it exactly once into a declared layer; it also fails if a module
+the component rules without heavier selectors. `features.first-run` is the
+first sublayer, so the rules of the other features still outrank it. Where a
+first-run rule must keep a component value, it declares the property as
+`revert-layer` rather than copying the value from `app.css`.
+`tests/styles-geometry.test.ts` finds every `.css` file under `src/` and
+`kit/` and fails unless the entry imports it exactly once into a declared
+layer; it also fails if any other sheet contains an `@import`, if a module
 other than `src/main.tsx` imports a stylesheet, which would put the sheet
-outside every layer.
+outside every layer, or if `app.css` selects a first-run class.
 
 Layout is a separate concern from color, and its custom properties are
 declared on the shell rather than on `:root`: `--side-w-open` (150px) and
@@ -1799,14 +1802,11 @@ its own width instead of the grid track, which avoids interpolating
 `grid-template-columns`, and `.window:has(>.app.side-narrow)` is what sets
 the collapsed width (`--side-w: 56px`).
 
-The one edit is the token block. Measured against `ui/styles.css`, the mock's
-48 `:root` tokens split **35 identical / 5 same-name-different-value / 8
-FOKS-only**. The 35 moved to `apps/desktop/kit/tokens.css`, which this sheet `@import`s
-first; the thirteen that remain are declared after it, so the cascade gives
-FOKS its own `--faint`, `--surface`, `--main-surface`, `--hover` and
-`--shadow-menu` plus `--sans`, `--mono` and the six `--c-*` kind tints.
-`tests/styles-geometry.test.ts` fails if a token is ever declared in both
-places.
+`kit/tokens.css` owns every global custom property: the `:root` tokens, the
+`data-rail` sidebar colors and the `:root[data-theme='dark']` overrides.
+`index.css` imports it into the `tokens` layer, and
+`tests/styles-geometry.test.ts` fails if any other sheet declares a `:root`
+block or a theme selector.
 
 **Appearance:** Preferences offers Light, Dark, and System. Light is the default;
 the choice is stored locally as `appearance`. `public/theme-init.js` applies the
@@ -1901,8 +1901,11 @@ The unit and render-test layers live in `tests/`:
   (the mock's whole render layer is `innerHTML`, and none of it came along), no
   `window.__TAURI__`, the Tauri API imported in one file, the model free of the
   DOM, the mock bundled out.
-- `styles-geometry.test.ts` — the token split, light and dark color schemes, and the
-  shell's grid, read off the CSS since jsdom computes no layout.
+- `styles-geometry.test.ts` — the stylesheet entry and its cascade layers,
+  the first-run rules' sheet and layer, the token sheet's ownership of global
+  custom properties, light and dark color schemes, the 12px type floor,
+  token-only colors and reduced motion, read off the CSS since jsdom computes
+  no layout.
 - `sync-status.render.test.tsx` — the topbar's refresh control: one button, and
   the Refresh status popover it opens on hover. The popover is portaled, so the
   pointer leaves the button's wrapper on the way into it; the test holds that

@@ -555,19 +555,20 @@
 
 /* An error line in a card, such as the SSO sign-up card of a pending
    operation, keeps the card's error box from app.css (.pcard p.crit). That
-   rule is in a lower layer, so its box is restated here; the type size
+   rule is in a lower layer, so revert-layer discards this layer's box for
+   these properties and the components-layer values apply; the type size
    above still applies. */
 .first-run-main .pcard p.crit {
-  margin: 0;
-  padding: 10px 12px;
+  margin: revert-layer;
+  padding: revert-layer;
 }
 
 /* A refused security-key PIN keeps the note's offset and type from app.css
-   (.inset .fr .v small.pin-note) for the same reason. */
+   (.inset .fr .v small.pin-note) the same way. */
 .first-run-main .inset .fr .v small.pin-note.crit {
-  margin-top: 1px;
-  font-size: 12px;
-  line-height: 1.4;
+  margin-top: revert-layer;
+  font-size: revert-layer;
+  line-height: revert-layer;
 }
 
 .first-run-main .crit b {

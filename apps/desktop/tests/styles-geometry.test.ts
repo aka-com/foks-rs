@@ -9,7 +9,27 @@ import { collectSourceFiles } from './lib/source';
 const TOKENS = new URL('../kit/tokens.css', import.meta.url);
 const STYLE_ENTRY = new URL('../src/styles/index.css', import.meta.url);
 const SHELL = new URL('../src/styles/shell.css', import.meta.url);
+const FIRST_RUN = new URL('../src/screens/first-run.css', import.meta.url);
 const CASCADE = ['tokens', 'base', 'components', 'features', 'overrides'];
+/**
+ * Classes that only the first-run screens render and only the first-run sheet
+ * selects, without the `local-` or `setup-` prefix the pattern below matches.
+ */
+const FIRST_RUN_ONLY_CLASSES = [
+  'alt-path',
+  'checked-address',
+  'checklist',
+  'checklist-actions',
+  'checklist-cta',
+  'checklist-notice',
+  'choice-body',
+  'facts',
+  'foot-slot',
+  'official-server',
+  'operation-actions',
+  'res',
+  'server-address-row',
+];
 
 /**
  * Every stylesheet under src/ and kit/ other than the token sheet and the
@@ -127,6 +147,14 @@ test('the stylesheet entry imports every stylesheet into a declared layer', asyn
     [...imported].sort(),
     [TOKENS, ...STYLES].map((sheet) => sheet.href).sort(),
   );
+  // An @import inside another sheet would load its target a second time,
+  // outside the layer the entry assigns.
+  for (const sheet of [TOKENS, ...STYLES])
+    assert.equal(
+      /^\s*@import\b/m.test(await readFile(sheet, 'utf8')),
+      false,
+      `${label(sheet)} imports a stylesheet; only the entry imports sheets`,
+    );
 });
 
 test('first-run rules live in the first-run sheet, below the other features', async () => {
@@ -140,6 +168,19 @@ test('first-run rules live in the first-run sheet, below the other features', as
     false,
     'app.css holds a first-run rule; it belongs in screens/first-run.css',
   );
+  const firstRun = await readFile(FIRST_RUN, 'utf8');
+  for (const name of FIRST_RUN_ONLY_CLASSES) {
+    const selector = new RegExp(`\\.${name}(?![\\w-])`);
+    assert.ok(
+      selector.test(firstRun),
+      `first-run.css no longer selects .${name}`,
+    );
+    assert.equal(
+      selector.test(components),
+      false,
+      `app.css selects .${name}, a first-run class; the rule belongs in screens/first-run.css`,
+    );
+  }
   // The first-run rules were in the components layer, under every feature's
   // rules; as the first feature sublayer they keep that order.
   const features = [...entry.matchAll(/layer\((features\.[\w-]+)\)/g)].map(
