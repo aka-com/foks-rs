@@ -90,7 +90,10 @@ fn field(line: &str) -> Option<(&str, &str)> {
 
 /// The user name, password and website of a login's text, the fields Copy
 /// finds, and its other lines as notes: the value of each `note:` line
-/// the import writes, and every other line as it is.
+/// the import writes, and every other line as it is. Copy reads the first
+/// line naming a field, so only that line becomes its column; a later line
+/// naming the same field, such as an earlier password kept below the
+/// current one, stays in the notes.
 pub(super) fn login_columns(
     text: &str,
 ) -> (
@@ -102,10 +105,21 @@ pub(super) fn login_columns(
     use foks_client_app::{login_field, LoginField};
     let take = |wanted| Zeroizing::new(login_field(text, wanted).unwrap_or_default().to_owned());
     let mut notes = Zeroizing::new(String::with_capacity(text.len()));
+    // The user name, password and website lines already passed.
+    let mut passed = [false; 3];
     for line in text.split('\n') {
         let line = line.strip_suffix('\r').unwrap_or(line);
+        let column = match field(line).map(|(key, _)| key) {
+            Some("user" | "username") => Some(0),
+            Some("password") => Some(1),
+            Some("url" | "website") => Some(2),
+            _ => None,
+        };
+        if let Some(at) = column.filter(|at| !passed[*at]) {
+            passed[at] = true;
+            continue;
+        }
         let note = match field(line) {
-            Some(("user" | "username" | "password" | "url" | "website", _)) => continue,
             Some(("note", value)) => value,
             _ => line,
         };

@@ -74,6 +74,13 @@ fn a_login_is_split_into_its_fields_and_its_other_lines() {
     assert_eq!(password.as_str(), " spaced ");
     assert_eq!(url.as_str(), "https://x.example");
     assert_eq!(notes.as_str(), "first\n\npin: 1234\nlast");
+    // Only the first line naming a field is its column, as for Copy; a
+    // later one stays in the notes rather than being dropped.
+    let (username, password, _, notes) =
+        login_columns("username: ana\npassword: new\npassword: old\nuser: ana-2");
+    assert_eq!(username.as_str(), "ana");
+    assert_eq!(password.as_str(), "new");
+    assert_eq!(notes.as_str(), "password: old\nuser: ana-2");
     let (username, _, url, notes) = login_columns("password: p\nwebsite: https://y.example");
     assert_eq!(username.as_str(), "");
     assert_eq!(url.as_str(), "https://y.example");

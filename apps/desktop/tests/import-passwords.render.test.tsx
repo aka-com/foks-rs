@@ -2,8 +2,9 @@
  * Import passwords in the running shell: the sheet opened from the New
  * menu lists what the host read from the file without any field value,
  * saves the logins under the chosen folder, leaves an occupied path as it
- * is, keeps the sheet open with Retry after a failure, and drops the held
- * file when it closes.
+ * is and keeps the sheet open to list it, keeps the sheet open with Retry
+ * after a failure, and drops the held file when it closes, even one read
+ * after it closed.
  */
 
 import assert from 'node:assert/strict';
@@ -155,11 +156,26 @@ test('the preview lists names and folders, and an import saves what is missing',
       ui.within(dialog).getByRole('button', { name: 'Import 3 logins' }),
     );
   });
-  // github.com is already in /logins, so it is left as it is.
-  await ui.waitFor(() =>
-    assert.match(toasts(), /Imported 2 logins to Personal; 1 already there/),
+  // github.com is already in /logins, so it is left as it is, and the sheet
+  // stays open to say which login that was: only the name matched.
+  const result = await rendered.findByRole('dialog', {
+    name: 'Imported 2 of 3 logins',
+  });
+  assert.match(
+    ui.within(result).getByRole('status').textContent ?? '',
+    /2 saved · 1 left out: name taken/,
   );
-  assert.equal(rendered.queryByRole('dialog'), null);
+  assert.match(
+    rowTexts(result, 'Logins')[0] ?? '',
+    /\/logins\/github\.com.*already in the vault/,
+  );
+  assert.ok(
+    ui
+      .within(result)
+      .getByRole('button', { name: 'Retry' })
+      .hasAttribute('disabled'),
+  );
+  assert.doesNotMatch(toasts(), /Imported/);
   assert.equal(commits.length, 1);
   // The request names the held file and the destination, and no value.
   assert.deepEqual(Object.keys(commits[0] ?? {}).sort(), [
@@ -178,6 +194,27 @@ test('the preview lists names and folders, and an import saves what is missing',
       path,
     );
   // The sheet drops the held file when it closes.
+  assert.deepEqual(discards, []);
+  ui.fireEvent.click(ui.within(result).getByRole('button', { name: 'Done' }));
+  await ui.waitFor(() => assert.equal(rendered.queryByRole('dialog'), null));
+  assert.deepEqual(discards, [commits[0]?.importId]);
+});
+
+test('an import that saves every login closes the sheet with a toast', async () => {
+  const { rendered, commits, discards } = await mount();
+  const dialog = await openPreview(rendered);
+  ui.fireEvent.change(ui.within(dialog).getByLabelText('Folder'), {
+    target: { value: '/imported' },
+  });
+  await ui.act(async () => {
+    ui.fireEvent.click(
+      ui.within(dialog).getByRole('button', { name: 'Import 3 logins' }),
+    );
+  });
+  await ui.waitFor(() =>
+    assert.match(toasts(), /Imported 3 logins to Personal/),
+  );
+  assert.equal(rendered.queryByRole('dialog'), null);
   assert.deepEqual(discards, [commits[0]?.importId]);
 });
 
@@ -211,7 +248,7 @@ test('a failure keeps the sheet open, and Retry sends only what was not saved', 
   });
   assert.match(
     ui.within(result).getByRole('status').textContent ?? '',
-    /1 already there · 2 not saved/,
+    /1 left out: name taken · 2 not saved/,
   );
   assert.match(
     rowTexts(result, 'Logins')[1] ?? '',
@@ -223,13 +260,18 @@ test('a failure keeps the sheet open, and Retry sends only what was not saved', 
     );
   });
   await ui.waitFor(() =>
-    assert.match(toasts(), /Imported 2 logins to Personal; 1 already there/),
+    assert.match(
+      ui.within(result).getByRole('status').textContent ?? '',
+      /2 saved · 1 left out: name taken/,
+    ),
   );
+  // The login not reached goes before the one that failed, so a failure
+  // of that login alone cannot stop the other again.
   assert.deepEqual(
     commits.map((request) => request.entries),
     [
       [0, 1, 2],
-      [1, 2],
+      [2, 1],
     ],
   );
 });
@@ -241,4 +283,46 @@ test('cancelling the preview drops the held file without saving anything', async
   await ui.waitFor(() => assert.equal(rendered.queryByRole('dialog'), null));
   assert.equal(commits.length, 0);
   assert.equal(discards.length, 1);
+});
+
+test('a file read after the sheet has gone is dropped as well', async () => {
+  let resolve: (
+    value: Awaited<ReturnType<Bridge['beginPasswordImport']>>,
+  ) => void = () => undefined;
+  const { rendered, discards } = await mount(() => ({
+    beginPasswordImport: () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  }));
+  ui.fireEvent.click(rendered.getByRole('button', { name: 'New' }));
+  ui.fireEvent.click(
+    await ui.screen.findByRole('menuitem', { name: 'Import passwords…' }),
+  );
+  const dialog = await rendered.findByRole('dialog', {
+    name: 'Import passwords',
+  });
+  ui.fireEvent.click(
+    ui.within(dialog).getByRole('button', { name: 'Choose CSV file…' }),
+  );
+  // While the native picker is open the sheet cannot be cancelled.
+  await ui.waitFor(() =>
+    assert.ok(
+      ui
+        .within(dialog)
+        .getByRole('button', { name: 'Cancel' })
+        .hasAttribute('disabled'),
+    ),
+  );
+  rendered.unmount();
+  await ui.act(async () => {
+    resolve({
+      id: 'late',
+      fileName: 'late.csv',
+      entries: [],
+      skipped: [],
+      ignoredColumns: [],
+    });
+  });
+  await ui.waitFor(() => assert.deepEqual(discards, ['late']));
 });

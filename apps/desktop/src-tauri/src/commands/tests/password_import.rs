@@ -206,6 +206,63 @@ Router,http://192.168.1.1,admin,\"a,b\"\"c\",,false,false,home,Reset: hold 10 s\
 }
 
 #[test]
+fn a_login_never_takes_the_name_of_a_folder_other_logins_are_written_in() {
+    // A login named like a folder that other rows use, before and after
+    // those rows: written as a file there, it would leave no folder for
+    // them, and their writes would fail.
+    let text = "folder,name,login_username,login_password\n\
+,Work,ana,pw1\n\
+Work,Mail,ana,pw2\n\
+Work/Email,Inbox,ana,pw3\n\
+Work,Email,ana,pw4\n\
+,Work,bob,pw5\n";
+    let parsed = parse_export(text.as_bytes()).unwrap();
+    assert_eq!(
+        names(&parsed.entries),
+        vec![
+            "Work (2)",
+            "Work/Mail",
+            "Work/Email/Inbox",
+            "Work/Email (2)",
+            "Work (3)"
+        ]
+    );
+}
+
+#[test]
+fn lastpass_secure_notes_are_left_out_and_bitwarden_uris_are_split() {
+    let lastpass = "url,username,password,totp,extra,name,grouping,fav\n\
+http://sn,,,,\"NoteType:Credit Card\nNumber:4111\",Visa,Cards,0\n\
+https://mail.example,ana,pw,,,Mail,Email,0\n";
+    let parsed = parse_export(lastpass.as_bytes()).unwrap();
+    assert_eq!(names(&parsed.entries), vec!["Email/Mail"]);
+    assert_eq!(
+        parsed.skipped,
+        vec![SkippedRowDto {
+            row: 2,
+            name: Some("Visa".to_owned()),
+            reason: "A secure note, not a login.".to_owned(),
+        }]
+    );
+
+    // Bitwarden joins a login's URIs with commas: the first is its website
+    // and the others are kept as notes. One URL with a comma stays whole.
+    let bitwarden = "name,login_uri,login_username,login_password,notes\n\
+Shop,\"https://shop.example, https://m.shop.example\",ana,pw,keep this\n\
+,\"https://search.example/?q=a,b\",ana,pw,\n";
+    let parsed = parse_export(bitwarden.as_bytes()).unwrap();
+    assert_eq!(names(&parsed.entries), vec!["Shop", "search.example"]);
+    assert_eq!(
+        parsed.entries[0].content.as_str(),
+        "user: ana\npassword: pw\nurl: https://shop.example\nnote: https://m.shop.example\nnote: keep this"
+    );
+    assert_eq!(
+        login_field(&parsed.entries[1].content, LoginField::Url),
+        Some("https://search.example/?q=a,b")
+    );
+}
+
+#[test]
 fn a_file_without_a_password_column_or_in_another_encoding_is_refused() {
     for bytes in [
         b"name,url,username\ngithub,https://github.com,ana\n".as_slice(),

@@ -94,6 +94,8 @@ test('the export waits for the vault name and sends only the store', async () =>
   const { rendered, exports } = await mount();
   const dialog = await openExport(rendered);
   assert.match(dialog.textContent ?? '', /plain text/);
+  // Values are written as stored, so the sheet warns against spreadsheets.
+  assert.match(dialog.textContent ?? '', /not a\s+spreadsheet app/);
   const button = ui.within(dialog).getByRole('button', { name: 'Export…' });
   assert.ok(button.hasAttribute('disabled'));
   const field = ui.within(dialog).getByLabelText('Type Personal to confirm');

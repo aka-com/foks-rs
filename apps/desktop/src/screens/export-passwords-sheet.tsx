@@ -125,7 +125,10 @@ export function ExportPasswordsSheet({
       </Band>
       <p>
         The columns are those of a Bitwarden export, which Import passwords and
-        most password managers read.
+        most password managers read. Open it in a password manager, not a
+        spreadsheet app: a spreadsheet can run a value that begins with =, +, -
+        or @ as a formula, and anyone who can write to this vault can choose
+        such a value.
       </p>
       <Inset>
         <Field
