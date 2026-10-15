@@ -12,6 +12,7 @@ const SHELL = new URL('../src/styles/shell.css', import.meta.url);
 const COMPONENTS = new URL('../src/styles/app.css', import.meta.url);
 const FIRST_RUN = new URL('../src/screens/first-run.css', import.meta.url);
 const SETTINGS = new URL('../src/screens/settings.css', import.meta.url);
+const TEAMS = new URL('../src/screens/teams.css', import.meta.url);
 const CASCADE = ['tokens', 'base', 'components', 'features', 'overrides'];
 /**
  * Classes that only the first-run screens render and only the first-run sheet
@@ -52,6 +53,24 @@ const SETTINGS_ONLY_CLASSES = [
   'swatch',
   'swatches',
   'verified-mark',
+];
+/**
+ * Classes that only the team and group pages render and only the teams sheet
+ * selects. `rowline` is not listed: the list divider rule in app.css selects
+ * it together with `.row`.
+ */
+const TEAMS_ONLY_CLASSES = [
+  'doorway',
+  'find-groups-account',
+  'find-groups-empty',
+  'find-groups-menu',
+  'find-groups-server',
+  'ghero',
+  'group-settings',
+  'roster',
+  'roster-actions',
+  'rowmenu',
+  'rt',
 ];
 
 /**
@@ -238,6 +257,20 @@ test('settings rules live in the settings sheet, in the sublayer after first-run
   // The settings rules were in the components layer, under the files, chat,
   // teams and search rules; the sublayer after first-run keeps that order.
   assert.equal((await featureLayers())[1], 'features.settings');
+});
+
+test('team rules live in the teams sheet, under the team details panel', async () => {
+  await assertFeatureClasses(TEAMS, TEAMS_ONLY_CLASSES);
+  // Both sheets share features.teams. The team details panel's rules outranked
+  // the team rules when those were in the components layer; importing them
+  // later keeps that for rules of equal specificity.
+  const entry = await readFile(STYLE_ENTRY, 'utf8');
+  const teams = entry.indexOf("'../screens/teams.css' layer(features.teams)");
+  const teamInfo = entry.indexOf(
+    "'../screens/team-info.css' layer(features.teams)",
+  );
+  assert.notEqual(teams, -1, 'the entry does not import teams.css');
+  assert.ok(teams < teamInfo, 'team-info.css is imported before teams.css');
 });
 
 test('only the entry point imports a stylesheet', async () => {

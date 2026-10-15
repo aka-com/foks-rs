@@ -1,0 +1,318 @@
+/* Teams: the group page header, the member roster and its tables, the Teams
+   list rows and their menus, group settings and the Find groups menu. */
+
+/* Group hero header */
+.ghero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px 0;
+}
+
+.ghero .back {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 16px;
+  margin-left: -8px;
+}
+
+.ghero .back:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.ghero .back .ic {
+  transform: rotate(90deg);
+}
+
+.ghero .t {
+  flex: 1;
+  min-width: 0;
+}
+
+.ghero h1 {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ghero h1 span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ghero .sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.ghero .header-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.ghero .header-action .btn {
+  height: 30px;
+  font-size: 13px;
+}
+
+.ghero .header-action .btn.icon {
+  width: 30px;
+}
+
+/* Data and roster tables */
+.roster {
+  max-width: 880px;
+}
+
+.rt {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* Roster table rows */
+.rt .prow {
+  min-height: 54px;
+  border-top: 1px solid var(--line-soft);
+  cursor: default;
+  width: 100%;
+  text-align: left;
+}
+
+.rt .prow:first-of-type {
+  border-top: 0;
+}
+
+.rt .prow:hover {
+  background: var(--hover);
+}
+
+/* Member roster sections */
+.rt.bare {
+  border: 0;
+  border-radius: 0;
+}
+
+.roster > .rt.bare {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.rt.bare .prow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 4px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.rt.bare .prow:first-of-type {
+  border-top: 1px solid var(--line-soft);
+}
+
+.rt.bare .prow .who2 {
+  flex: 1;
+}
+
+/* Files tab doorway row */
+.settings-inset .fr.doorway {
+  align-items: center;
+}
+.settings-inset .fr.doorway .v {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Channel activity timestamp */
+.rowtail .when {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.roster-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+/* Roster footnote */
+.roster p.fn {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 10px 2px 0;
+}
+
+.roster-actions p.fn {
+  margin: 0;
+}
+
+/* Teams list summary */
+.nav-rows .row .tail .summary {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* Read-only nav row */
+.nav-rows .row.flat {
+  cursor: default;
+  border-bottom: 0;
+  /* Disclosure inset alignment */
+  padding: 9px 8px;
+}
+
+.nav-rows .row.flat:hover {
+  background: transparent;
+}
+
+.nav-rows .row.flat > .kic,
+.nav-rows .row.flat > .kico {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  font-size: 14px;
+}
+
+.nav-rows .row.flat > .kic .ic,
+.nav-rows .row.flat > .kico .ic {
+  font-size: 15px;
+}
+
+/* Group row line */
+.nav-rows .rowline {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding-right: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.nav-rows .rowline:hover {
+  background: var(--wash);
+}
+
+.nav-rows .rowline .row {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+
+.nav-rows .rowline .row:hover {
+  background: transparent;
+}
+
+/* Row action menu */
+.nav-rows .rowmenu {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.nav-rows .rowline:hover .rowmenu,
+.nav-rows .rowmenu:focus-within,
+.nav-rows .rowmenu:has(button[aria-expanded='true']) {
+  opacity: 1;
+}
+
+/* Row chevron hover state */
+.nav-rows .rowline:hover .row .tail .go,
+.nav-rows .rowline:has(.rowmenu:focus-within) .row .tail .go,
+.nav-rows .rowline:has(.rowmenu button[aria-expanded='true']) .row .tail .go {
+  visibility: hidden;
+}
+
+.group-settings {
+  max-width: 640px;
+}
+
+.group-settings .sec:first-child {
+  margin-top: 6px;
+}
+
+/* Field hint */
+.group-settings .inset .fr .v .hint {
+  display: block;
+  margin: 2px 0 0;
+}
+
+.group-settings p.fn {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 8px 2px 0;
+  line-height: 1.5;
+}
+
+.roster > .band {
+  margin: 4px 0 10px;
+}
+
+/* Group discovery menu */
+.menu.find-groups-menu {
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  max-height: min(480px, calc(100vh - 120px));
+  overflow-y: auto;
+}
+.find-groups-server {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.find-groups-server .ic {
+  width: 14px;
+  height: 14px;
+}
+.find-groups-menu > [role='group'] + [role='group'] {
+  border-top: 1px solid var(--line);
+  margin-top: 6px;
+  padding-top: 4px;
+}
+.find-groups-account {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.find-groups-account small {
+  white-space: normal;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.find-groups-account small:empty {
+  display: none;
+}
+.find-groups-empty {
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}

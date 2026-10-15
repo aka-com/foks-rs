@@ -1829,20 +1829,23 @@ features, overrides` and imports each sheet into one of them:
 `kit/tokens.css` into `tokens`, `shell.css` into `base`, `app.css` into
 `components`, each feature's sheet into a `features.<name>` sublayer
 (`screens/first-run.css`, `screens/settings.css`, `screens/files.css`,
-`screens/chat.css` and `screens/chat-picker.css`, `screens/team-info.css`,
-`shell/search-palette.css`), and `native-window.css` into `overrides`. A
-declaration in a later layer outranks one in an earlier layer whatever their
-specificity (`!important` reverses the order), so a feature's rules override
-the component rules without heavier selectors. `features.first-run` is the
-first sublayer and `features.settings` the second, so the rules of the other
-features still outrank them, as they did when those rules were in `app.css`.
-Where a first-run rule must keep a component value, it declares the property
-as `revert-layer` rather than copying the value from `app.css`.
+`screens/chat.css` and `screens/chat-picker.css`, `screens/teams.css` and
+`screens/team-info.css`, `shell/search-palette.css`), and `native-window.css`
+into `overrides`. A declaration in a later layer outranks one in an earlier
+layer whatever their specificity (`!important` reverses the order), so a
+feature's rules override the component rules without heavier selectors.
+`features.first-run` is the first sublayer and `features.settings` the
+second, so the rules of the other features still outrank them, as they did
+when those rules were in `app.css`. Within `features.teams`, `team-info.css`
+is imported after `teams.css`, so the team details panel still wins a tie of
+specificity. Where a first-run rule must keep a component value, it declares
+the property as `revert-layer` rather than copying the value from `app.css`.
 `tests/styles-geometry.test.ts` finds every `.css` file under `src/` and
 `kit/` and fails unless the entry imports it exactly once into a declared
 layer; it also fails if any other sheet contains an `@import`, if a module
 other than `src/main.tsx` imports a stylesheet, which would put the sheet
-outside every layer, or if `app.css` selects a first-run or settings class.
+outside every layer, or if `app.css` selects a first-run, settings or team
+class.
 
 Layout is a separate concern from color, and its custom properties are
 declared on the shell rather than on `:root`: `--side-w-open` (150px) and
@@ -1957,7 +1960,7 @@ The unit and render-test layers live in `tests/`:
   `window.__TAURI__`, the Tauri API imported in one file, the model free of the
   DOM, the mock bundled out.
 - `styles-geometry.test.ts` — the stylesheet entry and its cascade layers,
-  the first-run and settings rules' sheets and layers, the token sheet's
+  the first-run, settings and team rules' sheets and layers, the token sheet's
   ownership of global custom properties, light and dark color schemes, the
   12px type floor, token-only colors and reduced motion, read off the CSS
   since jsdom computes no layout.
