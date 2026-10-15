@@ -219,10 +219,9 @@ is made more explicit.
 `tauri.conf.json` configures only the `main` window, and the renderer has no
 permission to create windows. Rust creates two kinds: a replacement `main`
 window from the same configuration (from the macOS menu when no main window is
-open), and the
-`host-admin-*` windows that `open_web_admin` opens on a server's HTTPS admin
-origin. The navigation policy keeps a hosted-admin window on its bound origin,
-and the app ACL above gives it no FOKS or core command.
+open), and the `host-admin-*` windows that `open_web_admin` opens on a server's
+HTTPS admin origin. The navigation policy keeps a hosted-admin window on its
+bound origin, and the app ACL above gives it no FOKS or core command.
 
 ## Clipboard platform difference
 

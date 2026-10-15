@@ -56,7 +56,9 @@ Tauri's capability model is an allowlist: a JSON file names which of the
 framework's built-in commands a window's scripts may invoke. The default
 set, `core:default`, expands to 92 commands, including
 `core:image|from_path` (read any file the renderer names) and
-`internal_toggle_devtools`. The FOKS capability file grants three:
+`internal_toggle_devtools`. The FOKS capability file grants three of the
+framework's commands (it also grants the app's own commands, described
+below):
 
 | Permission | What it allows |
 |---|---|
@@ -75,8 +77,8 @@ manifest describing every permission set and the commands each resolves to.
 A unit test parses that generated manifest and the generated capability,
 resolves each granted permission recursively to concrete
 `manifest|command` pairs, and asserts that the Tauri commands in the
-resulting set are exactly the three listed above. It then asserts a list of forbidden commands
-(`core:image|from_path`, `core:path|resolve`,
+resulting set are exactly the three listed above. It then asserts a list
+of forbidden commands (`core:image|from_path`, `core:path|resolve`,
 `core:webview|internal_toggle_devtools`, `core:event|emit`, and others) is
 unreachable. The project's permission notes give the reason this matters:
 whether a command is *compiled in* is not the security boundary, because

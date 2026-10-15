@@ -49,8 +49,8 @@ struct Command {
     module: String,
     /// camelCase key to [`REQUIRED`] or [`OPTIONAL`].
     arguments: BTreeMap<String, &'static str>,
-    /// The last path segment of every function the body calls, for
-    /// [`every_command_checks_the_main_window`].
+    /// The path of every function the body calls, segments joined with `::`,
+    /// for [`every_command_checks_the_main_window`].
     calls: BTreeSet<String>,
 }
 
@@ -153,34 +153,51 @@ fn signature(function: &syn::ItemFn, module: &str) -> Command {
     }
 }
 
-/// The functions a body calls by path, by their last segment.
+/// The functions a body calls by path, segments joined with `::`.
 #[derive(Default)]
 struct Calls(BTreeSet<String>);
 
 impl<'ast> Visit<'ast> for Calls {
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let syn::Expr::Path(path) = &*call.func {
-            if let Some(segment) = path.path.segments.last() {
-                self.0.insert(segment.ident.to_string());
-            }
+            let segments: Vec<String> = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            self.0.insert(segments.join("::"));
         }
         syn::visit::visit_expr_call(self, call);
     }
 }
 
 /// The commands that call `require_main_window`, directly or through
-/// another command they delegate to.
+/// another command they delegate to. A delegating call names the command
+/// either bare, from the command's own module, or by its full
+/// `crate::` path; a call to a same-named function elsewhere does not count.
 fn commands_checking_the_main_window(commands: &BTreeMap<String, Command>) -> BTreeSet<String> {
     let mut checked: BTreeSet<String> = commands
         .iter()
-        .filter(|(_, command)| command.calls.contains("require_main_window"))
+        .filter(|(_, command)| {
+            command
+                .calls
+                .iter()
+                .any(|call| call.rsplit("::").next() == Some("require_main_window"))
+        })
         .map(|(name, _)| name.clone())
         .collect();
     loop {
         let delegating: Vec<String> = commands
             .iter()
             .filter(|(name, command)| {
-                !checked.contains(*name) && command.calls.iter().any(|call| checked.contains(call))
+                !checked.contains(*name)
+                    && checked.iter().any(|callee| {
+                        command
+                            .calls
+                            .iter()
+                            .any(|call| calls_command(command, call, callee, &commands[callee]))
+                    })
             })
             .map(|(name, _)| name.clone())
             .collect();
@@ -189,6 +206,22 @@ fn commands_checking_the_main_window(commands: &BTreeMap<String, Command>) -> BT
         }
         checked.extend(delegating);
     }
+}
+
+/// Whether `call`, made in the body of `caller`, names the command `name`
+/// defined by `callee`: bare from the same module, or by its `crate::` path.
+fn calls_command(caller: &Command, call: &str, name: &str, callee: &Command) -> bool {
+    let path = std::iter::once("crate")
+        .chain(
+            callee
+                .module
+                .split("::")
+                .filter(|segment| !segment.is_empty()),
+        )
+        .chain(std::iter::once(name))
+        .collect::<Vec<_>>()
+        .join("::");
+    (call == name && caller.module == callee.module) || call == path
 }
 
 /// Record the commands in `items`, following `mod` declarations the way the
@@ -542,6 +575,12 @@ fn a_command_checks_the_main_window_directly_or_through_a_checked_command() {
             direct(webview)
         }
     };
+    let by_path: syn::ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub async fn by_path(webview: tauri::Webview) -> Result<(), AgentError> {
+            crate::applock::direct(webview)
+        }
+    };
     let unchecked: syn::ItemFn = syn::parse_quote! {
         #[tauri::command]
         pub fn unchecked(window: tauri::WebviewWindow) -> Result<(), AgentError> {
@@ -549,13 +588,27 @@ fn a_command_checks_the_main_window_directly_or_through_a_checked_command() {
             Ok(())
         }
     };
+    // `direct` here is another module's function, not the checked command.
+    let other_module: syn::ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub async fn other_module(webview: tauri::Webview) -> Result<(), AgentError> {
+            direct(webview);
+            client::direct(webview)
+        }
+    };
     let commands = BTreeMap::from([
         ("direct".to_owned(), signature(&direct, "applock")),
         ("delegating".to_owned(), signature(&delegating, "applock")),
+        ("by_path".to_owned(), signature(&by_path, "vault")),
         ("unchecked".to_owned(), signature(&unchecked, "applock")),
+        ("other_module".to_owned(), signature(&other_module, "vault")),
     ]);
     assert_eq!(
         commands_checking_the_main_window(&commands),
-        BTreeSet::from(["delegating".to_owned(), "direct".to_owned()])
+        BTreeSet::from([
+            "by_path".to_owned(),
+            "delegating".to_owned(),
+            "direct".to_owned()
+        ])
     );
 }

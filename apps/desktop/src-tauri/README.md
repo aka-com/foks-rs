@@ -91,7 +91,10 @@ its executable: `npm run test:foks-desktop:packaged -- /path/to/usr/bin/foks-des
 
 `src/commands/mod.rs` declares the command domains; `src/lib.rs` registers their
 handlers with Tauri. Command names and wire DTO shapes stay aligned with
-`wire-contract.json` and the frontend bridge.
+`wire-contract.json` and the frontend bridge. A new command also goes into
+`COMMANDS` in `build.rs` and, as `allow-<command>`, into
+`capabilities/default.json`; without both the app ACL refuses it (see
+[FOKS commands](PERMISSIONS.md#foks-commands)).
 
 `command-signatures.json` lists every registered command with the camelCase
 argument keys Tauri reads from its payload, each marked `required` or

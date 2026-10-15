@@ -508,9 +508,10 @@ mod tests {
     /// manifest an unprefixed capability entry refers to.
     const APP_ACL: &str = "__app-acl__";
 
-    /// The permission `build.rs` generates to allow one command.
-    fn allow_permission(command: &str) -> String {
-        format!("allow-{}", command.replace('_', "-"))
+    /// The permission `build.rs` generates to allow (`kind` is `"allow"`) or
+    /// deny (`"deny"`) one command.
+    fn command_permission(kind: &str, command: &str) -> String {
+        format!("{kind}-{}", command.replace('_', "-"))
     }
 
     /// Asserts that the capability grants the three core permissions in order,
@@ -549,9 +550,10 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>(),
             crate::command_signatures::registered_command_names()
                 .iter()
-                .map(|command| allow_permission(command))
+                .map(|command| command_permission("allow", command))
                 .collect::<std::collections::BTreeSet<_>>(),
-            "the capability must allow exactly the generate_handler! commands"
+            "the capability must allow exactly the generate_handler! commands and \
+             no plugin permission; FOKS drives its plugins from Rust"
         );
 
         // Explicitly check for disallowed sensitive permissions.
@@ -574,12 +576,6 @@ mod tests {
                 "forbidden permission present in capability: {forbidden}"
             );
         }
-        for permission in &app {
-            assert!(
-                permission.starts_with("allow-") && !permission.contains(':'),
-                "{permission} is not an app command grant; FOKS drives its plugins from Rust"
-            );
-        }
     }
 
     /// The app manifest that `build.rs` generates holds an allow and a deny
@@ -593,9 +589,9 @@ mod tests {
             .expect("build.rs declares an app manifest");
         let mut expected = std::collections::BTreeMap::new();
         for command in crate::command_signatures::registered_command_names() {
-            let slug = command.replace('_', "-");
-            expected.insert(format!("allow-{slug}"), (command.clone(), "allow"));
-            expected.insert(format!("deny-{slug}"), (command, "deny"));
+            for kind in ["allow", "deny"] {
+                expected.insert(command_permission(kind, &command), (command.clone(), kind));
+            }
         }
         let permissions = manifest["permissions"]
             .as_object()
