@@ -684,7 +684,10 @@ fn dispatch_with_page_rows(
                         continue;
                     }
                     Err(foks_client_app::Error::Client(foks_client::Error::Rpc(
-                        foks_rpc::Error::RemoteStatus { code: 12001, .. },
+                        foks_rpc::Error::RemoteStatus {
+                            code: foks_rpc::STATUS_RT_GENERIC_ERROR,
+                            ..
+                        },
                     ))) if width > 1 => {
                         width = (width / 2).max(1);
                         continue;
@@ -871,7 +874,10 @@ pub(super) fn contextual_error(error: Box<dyn std::error::Error>) -> Box<dyn std
     while let Some(cause) = source {
         if matches!(
             cause.downcast_ref::<foks_rpc::Error>(),
-            Some(foks_rpc::Error::RemoteStatus { code: 1013, .. })
+            Some(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_PERMISSION_ERROR,
+                ..
+            })
         ) {
             return Box::new(foks_client::Error::ChatAccessDenied(
                 "server denied this chat action",

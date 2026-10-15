@@ -696,14 +696,16 @@ impl FoksClient {
                 &request,
             ) {
                 Ok(response) => break response,
-                Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1014, .. }))
-                    if !requested_wait.is_zero() && Instant::now() < deadline =>
-                {
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                    code: foks_rpc::STATUS_TX_RETRY_ERROR,
+                    ..
+                })) if !requested_wait.is_zero() && Instant::now() < deadline => {
                     continue;
                 }
-                Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1014, .. }))
-                    if !requested_wait.is_zero() =>
-                {
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                    code: foks_rpc::STATUS_TX_RETRY_ERROR,
+                    ..
+                })) if !requested_wait.is_zero() => {
                     return Err(Error::DeadlineExceeded);
                 }
                 Err(error) => return Err(error),

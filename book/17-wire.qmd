@@ -221,6 +221,20 @@ Four codes receive special handling in the client:
 | 1020 | not implemented | none, and any payload is an error |
 | 8012 | KV stale cache | a path-version vector telling the client which versions to resync |
 
+Any other code becomes a remote-status error that carries the server's
+detail text. That text is untrusted: the client decodes it lossily, replaces
+control characters, line separators and invisible formatting characters
+(zero-width and bidirectional controls among them) with spaces, keeps at
+most 256 bytes, and quotes it in the error message. Both SSO layers classify
+an OAuth2 status (1067) from that sanitized text through one shared
+function, so they reach the same outcome for the same detail.
+
+Client and server code compare codes through the generated `STATUS_*`
+constants rather than numeric literals. The protocol policy's
+`[status_aliases]` table selects which upstream codes receive a constant; a
+code the client needs is added there and the constants are regenerated, so
+every value stays checked against the pinned upstream source.
+
 The Rust server builds its statuses through the Snowpack encoder, which
 reproduces Go's bytes exactly, including `[code, {}]` for a status with no
 payload.

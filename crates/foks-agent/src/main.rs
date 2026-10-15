@@ -2039,7 +2039,10 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
         }
         if matches!(
             candidate.downcast_ref::<foks_rpc::Error>(),
-            Some(foks_rpc::Error::RemoteStatus { code: 1069, .. })
+            Some(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_OAUTH2_AUTH_ERROR,
+                ..
+            })
         ) {
             return Response::error(id, ErrorCode::ReauthenticationRequired, "Organization sign-in is required. Sign in again for this account, then review the interrupted operation before retrying.");
         }

@@ -309,6 +309,8 @@ fn protocol_contract_is_valid_and_exactly_registered() {
             ("team_adhoc_duplicate".to_owned(), 7104),
             ("unsupported".to_owned(), 1020),
             ("user_not_found".to_owned(), 1027),
+            ("protocol_not_found".to_owned(), 210),
+            ("web_session_not_found".to_owned(), 1058),
         ])
     );
 

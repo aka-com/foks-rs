@@ -68,9 +68,10 @@ pub(super) fn report(alias: &str, purpose: foks_proto::SsoPurpose, p: SsoProgres
 fn apply_service_result<T>(report: &mut SsoReport, result: foks_client::Result<T>) {
     match result {
         Ok(_) => report.service_access = true,
-        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1069, .. })) => {
-            report.state = "reauthentication-required"
-        }
+        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: foks_rpc::STATUS_OAUTH2_AUTH_ERROR,
+            ..
+        })) => report.state = "reauthentication-required",
         Err(_) => report.state = "service-unavailable",
     }
 }
@@ -276,21 +277,19 @@ impl CheckedProfileSession<'_> {
                         "provider-unavailable"
                     }
                     foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
-                        code: 1069, ..
+                        code: foks_rpc::STATUS_OAUTH2_AUTH_ERROR,
+                        ..
                     }) => "reauthentication-required",
                     foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
-                        code: 1067,
+                        code: foks_rpc::STATUS_OAUTH2_ERROR,
                         detail,
-                    }) if detail.detail().is_some_and(|d| {
-                        d == "authorization denied" || d.contains("access_denied")
-                    }) =>
-                    {
-                        "denied"
-                    }
-                    foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
-                        code: 1067,
-                        detail,
-                    }) if detail.detail() == Some("provider unavailable") => "provider-unavailable",
+                    }) => match detail.oauth2_outcome() {
+                        Some(foks_rpc::OAuth2Outcome::Denied) => "denied",
+                        Some(foks_rpc::OAuth2Outcome::ProviderUnavailable) => {
+                            "provider-unavailable"
+                        }
+                        None => return Err(e.into()),
+                    },
                     _ => return Err(e.into()),
                 };
                 let mut p = report(

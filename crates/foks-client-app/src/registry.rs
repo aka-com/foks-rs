@@ -1736,24 +1736,11 @@ fn format_semver(version: SemVer) -> String {
     format!("{}.{}.{}", version.major, version.minor, version.patch)
 }
 
-/// The server's notice is untrusted display text. Decode it lossily, replace
-/// control characters, bound it, and collapse surrounding whitespace so it can
-/// never corrupt the desktop's strict response projection.
+/// The server's notice is untrusted display text. Sanitize it the way status
+/// details are sanitized, bounded to the desktop projection's 512-character and
+/// 1024-byte limits, so it can never corrupt the strict response projection.
 fn sanitize_server_message(bytes: &[u8]) -> String {
-    let mut message = String::new();
-    for character in String::from_utf8_lossy(bytes).chars().take(512) {
-        let character = if character.is_control() {
-            ' '
-        } else {
-            character
-        };
-        // Match the desktop projection's byte limit without splitting UTF-8.
-        if message.len() + character.len_utf8() > 1024 {
-            break;
-        }
-        message.push(character);
-    }
-    message.trim().to_owned()
+    foks_rpc::sanitize_server_text(bytes, 512, 1024)
 }
 
 fn semver_at_most(left: SemVer, right: SemVer) -> bool {
@@ -2255,6 +2242,10 @@ mod tests {
         assert_eq!(
             sanitize_server_message(b"\nhello\0world\r\n"),
             "hello world"
+        );
+        assert_eq!(
+            sanitize_server_message("upgrade\u{202e}txt.exe\u{200b}now".as_bytes()),
+            "upgrade txt.exe now"
         );
     }
 

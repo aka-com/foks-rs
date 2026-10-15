@@ -311,16 +311,14 @@ impl FoksClient {
             &foks_rpc::encode_poll_oauth2_session_request_at(&request, 1)?,
         ) {
             Ok(bytes) => Zeroizing::new(bytes),
-            Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1009, .. })) => {
-                return self.sso_progress(host, id, store)
-            }
             Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
-                code: 1067,
+                code: foks_rpc::STATUS_TIMEOUT_ERROR,
+                ..
+            })) => return self.sso_progress(host, id, store),
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_OAUTH2_ERROR,
                 ref detail,
-            })) if detail
-                .detail()
-                .is_some_and(|d| d == "authorization denied" || d.contains("access_denied")) =>
-            {
+            })) if detail.oauth2_outcome() == Some(foks_rpc::OAuth2Outcome::Denied) => {
                 HardStateStore::open(&host.database_path)?.sso_transition(
                     &id,
                     SsoFlowState::AwaitingBrowser,
@@ -431,7 +429,10 @@ impl FoksClient {
             // Existing Go reauthentication keeps its original wire path. First linkage
             // requires the foks-rs extension and cannot fall back to implicit linking.
             Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
-                code: 210 | 211 | 1020,
+                code:
+                    foks_rpc::STATUS_PROTO_NOT_FOUND_ERROR
+                    | foks_rpc::STATUS_METHOD_NOT_FOUND_ERROR
+                    | foks_rpc::STATUS_NOT_IMPLEMENTED,
                 ..
             })) if flow.purpose == foks_proto::SsoPurpose::Reauthenticate => {}
             Err(error) => return Err(error),

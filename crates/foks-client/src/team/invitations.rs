@@ -279,7 +279,11 @@ impl FoksClient {
             }
             Ok(_) => {}
             Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
-                code: 1013 | 7004 | 7006 | 7010,
+                code:
+                    foks_rpc::STATUS_PERMISSION_ERROR
+                    | foks_rpc::STATUS_TEAM_NOT_FOUND_ERROR
+                    | foks_rpc::STATUS_TEAM_ROSTER_ERROR
+                    | foks_rpc::STATUS_TEAM_EXPLORE_ERROR,
                 ..
             })) => {}
             Err(e) => return Err(e),

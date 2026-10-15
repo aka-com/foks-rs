@@ -869,7 +869,12 @@ impl FoksClient {
                 // traversal; the final cache check below still closes races.
                 let root_bytes = match fetch(auth, &KvRequest::Root) {
                     Ok(bytes) => bytes,
-                    Err(error @ Error::Rpc(foks_rpc::Error::RemoteStatus { code: 8016, .. })) => {
+                    Err(
+                        error @ Error::Rpc(foks_rpc::Error::RemoteStatus {
+                            code: foks_rpc::STATUS_KV_NOENT_ERROR,
+                            ..
+                        }),
+                    ) => {
                         // Go accounts may not have written their first item yet.
                         // Only absence of the root itself means an empty store;
                         // missing descendants and disappearance of a known root
@@ -1392,7 +1397,10 @@ fn kv_precondition_holds(
         // The server answers a vector citing an object it no longer has with
         // not-found. That is the same statement as stale for this purpose:
         // the remembered path is not evidence about the node any more.
-        Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1049, .. })) => Ok(false),
+        Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: foks_rpc::STATUS_GENERIC_NOT_FOUND_ERROR,
+            ..
+        })) => Ok(false),
         Err(error) => Err(error),
     }
 }
@@ -1422,7 +1430,10 @@ fn cached_kv_node(
 fn is_kv_permission_denied(error: &Error) -> bool {
     matches!(
         error,
-        Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1013, .. })
+        Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: foks_rpc::STATUS_PERMISSION_ERROR,
+            ..
+        })
     )
 }
 
@@ -1550,7 +1561,10 @@ where
                     eof: chunk.final_chunk && requested_end >= chunk_end,
                 });
             }
-            Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 8016, .. })) => {}
+            Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_KV_NOENT_ERROR,
+                ..
+            })) => {}
             Err(error) => return Err(error),
         }
     }

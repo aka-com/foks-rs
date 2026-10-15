@@ -3,7 +3,8 @@
 use super::{
     check_compatibility_header, check_status, decode_call, encode_call,
     encode_call_with_validated_argument, encode_status_response_at, read_frame, read_response,
-    resequence_call, unsigned, Cursor, Error, RpcStatus, DEFAULT_MAX_FRAME_LENGTH, METHOD_CALL_V2,
+    resequence_call, sanitize_server_text, unsigned, Cursor, Error, OAuth2Outcome, RpcStatus,
+    StatusDetail, DEFAULT_MAX_FRAME_LENGTH, MAXIMUM_STATUS_DETAIL_BYTES, METHOD_CALL_V2,
     RESPONSE_HEADER,
 };
 use foks_proto::{KvDirectoryVersion, KvDirentVersion, KvPathVersionVector};
@@ -108,6 +109,76 @@ fn status_responses_round_trip_in_the_positional_go_shape() {
     )
     .unwrap_err();
     assert!(matches!(error, Error::KvStaleCache(v) if v == pvv));
+}
+
+#[test]
+fn status_detail_is_sanitized_and_bounded_in_both_encodings() {
+    let hostile = format!("a\u{202e}b\x07c\u{200b}d\n{}", "界".repeat(200));
+    let positional = foks_snowpack::encode(&foks_snowpack::Value::Array(vec![
+        foks_snowpack::Value::Unsigned(1030),
+        foks_snowpack::Value::Variant(Some((
+            b"1".to_vec(),
+            Box::new(foks_snowpack::Value::Text(hostile.as_bytes().to_vec())),
+        ))),
+    ]))
+    .unwrap();
+    let mut named = vec![0x82];
+    super::encode_text(b"Sc", &mut named);
+    super::encode_unsigned(1030, &mut named);
+    super::encode_text(b"f1", &mut named);
+    super::encode_text(hostile.as_bytes(), &mut named);
+    for bytes in [positional, named] {
+        let Err(Error::RemoteStatus { code: 1030, detail }) = check_status(&bytes) else {
+            panic!("expected a remote status");
+        };
+        let detail = detail.detail().unwrap();
+        assert!(detail.len() <= MAXIMUM_STATUS_DETAIL_BYTES);
+        assert!(detail.starts_with("a b c d 界"));
+        assert!(!detail.chars().any(char::is_control));
+    }
+
+    // Invalid UTF-8 is replaced rather than discarded.
+    let mut invalid = vec![0x82];
+    super::encode_text(b"Sc", &mut invalid);
+    super::encode_unsigned(1030, &mut invalid);
+    super::encode_text(b"f1", &mut invalid);
+    super::encode_text(b"bad \xff byte", &mut invalid);
+    let Err(error @ Error::RemoteStatus { .. }) = check_status(&invalid) else {
+        panic!("expected a remote status");
+    };
+    assert_eq!(
+        error.to_string(),
+        "FOKS server refused: the server rejected the request as malformed (status 1030): \"bad \u{fffd} byte\""
+    );
+}
+
+#[test]
+fn server_text_keeps_whole_characters_within_both_bounds() {
+    assert_eq!(sanitize_server_text("ab界".as_bytes(), 3, 1024), "ab界");
+    assert_eq!(sanitize_server_text("ab界".as_bytes(), 2, 1024), "ab");
+    assert_eq!(sanitize_server_text("ab界".as_bytes(), 3, 4), "ab");
+    assert_eq!(
+        sanitize_server_text("\u{feff}x\u{2028}y\u{2066}z\u{00ad}".as_bytes(), 16, 64),
+        "x y z"
+    );
+}
+
+#[test]
+fn oauth2_status_details_share_one_classification() {
+    let detail = |text: &str| StatusDetail::from_server(text.as_bytes());
+    for (text, expected) in [
+        ("authorization denied", Some(OAuth2Outcome::Denied)),
+        ("callback error: access_denied", Some(OAuth2Outcome::Denied)),
+        (
+            "provider unavailable",
+            Some(OAuth2Outcome::ProviderUnavailable),
+        ),
+        ("authorization denied by policy", None),
+        ("email mismatch", None),
+    ] {
+        assert_eq!(detail(text).oauth2_outcome(), expected, "{text}");
+    }
+    assert_eq!(StatusDetail::default().oauth2_outcome(), None);
 }
 
 #[test]

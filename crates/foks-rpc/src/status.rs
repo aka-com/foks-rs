@@ -1,8 +1,8 @@
 //! Strict application-status decoding for named Go RPC and positional Snowpack.
 use super::{
     decode, map_length, named_path_version_vector, positional_path_version_vector, text, unsigned,
-    Cursor, Error, Result, StatusDetail, Value, ValueKind, STATUS_METHOD_NOT_FOUND_ERROR,
-    STATUS_NOT_IMPLEMENTED,
+    Cursor, Error, Result, StatusDetail, Value, ValueKind, STATUS_KV_STALE_CACHE_ERROR,
+    STATUS_METHOD_NOT_FOUND_ERROR, STATUS_NOT_IMPLEMENTED,
 };
 
 pub(super) fn check_status(bytes: &[u8]) -> Result<()> {
@@ -76,7 +76,7 @@ pub(super) fn check_status(bytes: &[u8]) -> Result<()> {
         };
         return Err(named_missing_method(bytes)?);
     }
-    if code == 8012 {
+    if code == STATUS_KV_STALE_CACHE_ERROR {
         let Some((tag, value)) = payload else {
             return Err(Error::Envelope {
                 expected: "KV stale-cache status payload",
@@ -93,16 +93,12 @@ pub(super) fn check_status(bytes: &[u8]) -> Result<()> {
     }
     let detail = match payload {
         Some((_, value)) => match decode(value) {
-            Ok(Value::Text(bytes)) => String::from_utf8(bytes).ok(),
-            Ok(other) => Some(format!("{other:?}")),
-            Err(_) => None,
+            Ok(value) => status_detail(&value),
+            Err(_) => StatusDetail::default(),
         },
-        None => None,
+        None => StatusDetail::default(),
     };
-    Err(Error::RemoteStatus {
-        code,
-        detail: StatusDetail(detail),
-    })
+    Err(Error::RemoteStatus { code, detail })
 }
 
 fn check_positional_status(bytes: &[u8]) -> Result<()> {
@@ -170,7 +166,7 @@ fn check_positional_status(bytes: &[u8]) -> Result<()> {
             position: *position,
         });
     }
-    if code == 8012 {
+    if code == STATUS_KV_STALE_CACHE_ERROR {
         let Value::Variant(Some((tag, value))) = &fields[1] else {
             return Err(Error::Envelope {
                 expected: "KV stale-cache status payload",
@@ -186,16 +182,19 @@ fn check_positional_status(bytes: &[u8]) -> Result<()> {
         return Err(Error::KvStaleCache(positional_path_version_vector(value)?));
     }
     let detail = match &fields[1] {
-        Value::Variant(Some((_, value))) => match value.as_ref() {
-            Value::Text(bytes) => String::from_utf8(bytes.clone()).ok(),
-            other => Some(format!("{other:?}")),
-        },
-        _ => None,
+        Value::Variant(Some((_, value))) => status_detail(value),
+        _ => StatusDetail::default(),
     };
-    Err(Error::RemoteStatus {
-        code,
-        detail: StatusDetail(detail),
-    })
+    Err(Error::RemoteStatus { code, detail })
+}
+
+/// The server's status payload as display text: a detail string, or the
+/// debug form of any other payload, sanitized and bounded either way.
+fn status_detail(value: &Value) -> StatusDetail {
+    match value {
+        Value::Text(bytes) => StatusDetail::from_server(bytes),
+        other => StatusDetail::from_server(format!("{other:?}").as_bytes()),
+    }
 }
 
 /// Decodes go-foks' positional `PathVersionVector` (`[Root, Path]`) carried in a

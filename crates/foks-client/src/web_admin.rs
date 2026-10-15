@@ -108,10 +108,12 @@ impl WebAdminHandoff {
 fn classify(e: Error) -> WebAdminError {
     match e {
         Error::Rpc(foks_rpc::Error::RemoteStatus { code, .. }) => match code {
-            1020 => WebAdminError::Unsupported,
-            1018 => WebAdminError::WrongAccount,
-            1058 | 1062 => WebAdminError::Expired,
-            1069 => WebAdminError::ReauthenticationRequired,
+            foks_rpc::STATUS_NOT_IMPLEMENTED => WebAdminError::Unsupported,
+            foks_rpc::STATUS_WRONG_USER_ERROR => WebAdminError::WrongAccount,
+            foks_rpc::STATUS_WEB_SESSION_NOT_FOUND_ERROR | foks_rpc::STATUS_EXPIRED_ERROR => {
+                WebAdminError::Expired
+            }
+            foks_rpc::STATUS_OAUTH2_AUTH_ERROR => WebAdminError::ReauthenticationRequired,
             _ => WebAdminError::Unavailable,
         },
         _ => WebAdminError::Unavailable,
@@ -192,6 +194,23 @@ mod tests {
         }
         assert!(AdminDestination::new("http://localhost/").is_err());
         assert!(AdminDestination::new("https://admin.example/a/..").is_err());
+    }
+    #[test]
+    fn remote_statuses_classify_by_their_wire_codes() {
+        for (code, expected) in [
+            (1020, WebAdminError::Unsupported),
+            (1018, WebAdminError::WrongAccount),
+            (1058, WebAdminError::Expired),
+            (1062, WebAdminError::Expired),
+            (1069, WebAdminError::ReauthenticationRequired),
+            (1013, WebAdminError::Unavailable),
+        ] {
+            let error = Error::Rpc(foks_rpc::Error::RemoteStatus {
+                code,
+                detail: foks_rpc::StatusDetail::default(),
+            });
+            assert_eq!(classify(error), expected, "status {code}");
+        }
     }
     #[test]
     fn bearer_debug_is_redacted() {

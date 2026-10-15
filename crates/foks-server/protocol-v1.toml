@@ -34,6 +34,7 @@ oauth2_auth = 1069
 ok = 0
 passphrase_not_found = 1043
 permission_denied = 1013
+protocol_not_found = 210
 quota_exceeded = 1060
 rate_limited = 1012
 revoke_race = 1044
@@ -64,6 +65,7 @@ timeout = 1009
 tx_retry = 1014
 unsupported = 1020
 user_not_found = 1027
+web_session_not_found = 1058
 wrong_user = 1018
 
 [[protocol]]

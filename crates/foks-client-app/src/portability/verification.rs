@@ -214,11 +214,11 @@ fn classify(error: &Error) -> &'static str {
         Error::YubiUnlockRequired(_) => "hardware-required",
         Error::Client(foks_client::Error::CredentialBinding(_)) => "revoked",
         Error::Client(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
-            code: 1069,
+            code: foks_rpc::STATUS_OAUTH2_AUTH_ERROR,
             ..
         })) => "reauthentication-required",
         Error::Client(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
-            code: 1018,
+            code: foks_rpc::STATUS_WRONG_USER_ERROR,
             ..
         })) => "revoked",
         Error::Client(
