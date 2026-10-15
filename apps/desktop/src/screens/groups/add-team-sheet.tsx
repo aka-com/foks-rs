@@ -40,7 +40,7 @@ import {
   VisibilityStepper,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../../kit/toasts';
 
 export function AddTeamSheet({
   snapshot,

@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Icon } from '../components';
-import { Popover } from '/kit/overlay-primitives';
+import { Popover } from '../../kit/overlay-primitives';
 import { commandKey } from './composer-format';
 import { useChatConversationContext } from './conversation-provider';
 import { MessageText } from './message-text';

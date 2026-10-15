@@ -4,7 +4,7 @@ import { SsoPanel } from '../../components/sso-panel';
 import { fixDeviceName } from '../../device-name';
 import type { PendingOperation } from '../../bridge';
 import { updateRetainedSetup } from '../../first-run-recovery';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../../kit/toasts';
 import { Foot, Pane } from '../first-run-view';
 import { AccountSetupStep } from './account-setup-step';
 import { FailureText } from './failure-text';

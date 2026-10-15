@@ -15,7 +15,7 @@ import { inventoryReadiness } from '../model';
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Menu, Popover, anyDialogOpen } from '/kit/overlay-primitives';
+import { Menu, Popover, anyDialogOpen } from '../../kit/overlay-primitives';
 import { Icon } from '../components';
 import { useSidebarResize } from './use-sidebar-resize';
 import {

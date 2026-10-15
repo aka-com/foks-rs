@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { Button, Icon } from '../components';
-import { Popover } from '/kit/overlay-primitives';
+import { Popover } from '../../kit/overlay-primitives';
 import { deliveryNeedsAttention, operationDelivery } from './delivery';
 import type { TrackedOperation } from './operations';
 import { PendingRow } from './pending-row';

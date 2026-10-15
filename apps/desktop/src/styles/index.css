@@ -1,6 +1,6 @@
 @layer tokens, base, components, features, overrides;
 
-@import '/kit/tokens.css' layer(tokens);
+@import '../../kit/tokens.css' layer(tokens);
 @import './shell.css' layer(base);
 @import './app.css' layer(components);
 @import '../screens/files.css' layer(features.files);

@@ -35,7 +35,7 @@ import {
   DismissibleDialog,
   anyDialogOpen,
   useDismissOnOverlayBlock,
-} from '/kit/overlay-primitives';
+} from '../../kit/overlay-primitives';
 import { Icon } from '../components/icon';
 import type { FoksIconName } from '../icons';
 import {

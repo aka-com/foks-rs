@@ -11,7 +11,7 @@ import type { Bridge } from '../bridge';
 import { Button } from '../components/button';
 import { Icon } from '../components/icon';
 import { SheetDialog } from '../components/sheet';
-import { useOptionalToast } from '/kit/toasts';
+import { useOptionalToast } from '../../kit/toasts';
 import { mentionKey, type ChatMentions } from './mentions';
 import { drawnLinkLabel, inlineParts, messageBlocks } from './message-syntax';
 

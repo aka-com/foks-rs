@@ -14,7 +14,7 @@ import {
   partyNames,
 } from '../chat/presentation';
 import { chatDiagnostic } from '../chat/diagnostic';
-import { useOptionalToast } from '/kit/toasts';
+import { useOptionalToast } from '../../kit/toasts';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { Button, Icon, Notice } from '../components';

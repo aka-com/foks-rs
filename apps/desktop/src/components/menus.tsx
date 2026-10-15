@@ -6,7 +6,7 @@
 
 import { useId, useRef, useState } from 'react';
 import type { MouseEvent, ReactNode, RefObject } from 'react';
-import { Menu, Popover } from '/kit/overlay-primitives';
+import { Menu, Popover } from '../../kit/overlay-primitives';
 import { Button } from './button';
 import type { ButtonSize, ButtonVariant } from './button';
 import { Icon } from './icon';

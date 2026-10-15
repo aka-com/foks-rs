@@ -1716,7 +1716,9 @@ the history, channel list and saved work can become stale.
 app-specific: `overlay-primitives.tsx`, `menu-position.ts`, `toasts.tsx`,
 `virtual-list.ts`, `icon.tsx`, and `tokens.css`. `apps/desktop/kit/README.md` is the
 authority on what is in it and why — including why `ui/src/sheet.tsx` stayed
-behind. Reach it as `/kit/*` (a Vite alias and a tsconfig path). Application-specific models, fixtures, icons, and shell styles remain in
+behind. Modules in `src/` import it by relative path, as they import each
+other, so node and `tsx` load them without Vite's resolver; there are no
+`/src/*` or `/kit/*` aliases. Application-specific models, fixtures, icons, and shell styles remain in
 `src/` to keep application logic separate from reusable UI components.
 
 `toasts.tsx` appends information toasts to a `role="status"` polite live

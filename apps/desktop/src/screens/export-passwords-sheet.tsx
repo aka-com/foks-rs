@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ToastOptions } from '/kit/toasts';
+import type { ToastOptions } from '../../kit/toasts';
 import { Band, Button, Field, Icon, Inset, SheetDialog } from '../components';
 import type { Bridge } from '../bridge';
 import { normalizeCommandError } from '../bridge';

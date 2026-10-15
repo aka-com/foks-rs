@@ -1,6 +1,6 @@
 import { inventoryReadiness } from '../model';
 import { CollectionStatus } from '../components/collection-status';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../kit/toasts';
 import { synchronizeApplied } from '../operation-outcome';
 import { useDeviceMetadata } from '../device-cache';
 import type { metadataFreshness } from '../device-cache';

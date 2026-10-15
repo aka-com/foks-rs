@@ -24,7 +24,7 @@ import type {
 } from '../../model';
 import type { MutationFailureHandler } from '../../mutation-recovery';
 import { synchronizeApplied } from '../../operation-outcome';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../../kit/toasts';
 
 export const VIS_MIN = -32768;
 export const VIS_MAX = 32767;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import type { ToastController } from '/kit/toasts';
+import type { ToastController } from '../../kit/toasts';
 import { AgentRecoveryController } from '../agent-recovery';
 import {
   maintenanceOutcomeMessage,

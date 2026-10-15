@@ -28,7 +28,7 @@ import { Composer } from './thread-composer';
 import { quoteInsertion } from './message-actions';
 import { channelRoster } from './mentions';
 import { channelReadRole, type ChannelAudience } from './audience';
-import { anyDialogOpen } from '/kit/overlay-primitives';
+import { anyDialogOpen } from '../../kit/overlay-primitives';
 import { applePlatform } from './composer-format';
 import { receiveChatFind, type FindReference } from './find';
 import { FindBar } from './find-bar';

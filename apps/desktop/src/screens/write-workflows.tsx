@@ -3,7 +3,7 @@ import { BulkProgressSheet } from './bulk-progress-sheet';
 import { useTabSheetState } from '../navigation-guard';
 import { useCallback, useId, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
-import { Dialog, DismissibleDialog } from '/kit/overlay-primitives';
+import { Dialog, DismissibleDialog } from '../../kit/overlay-primitives';
 import {
   Band,
   Button,
@@ -55,8 +55,8 @@ import type { GuardVerdict } from '../location';
 import { NavigationPrompt, useSheetGuard } from '../navigation-guard';
 import { useFileDrop } from '../file-drop';
 import type { MutationFailureHandler } from '../mutation-recovery';
-import { useToast } from '/kit/toasts';
-import type { ToastOptions } from '/kit/toasts';
+import { useToast } from '../../kit/toasts';
+import type { ToastOptions } from '../../kit/toasts';
 import { itemActionProblem } from './store-access';
 import { useTrashOrigins } from './trash-origins';
 import {

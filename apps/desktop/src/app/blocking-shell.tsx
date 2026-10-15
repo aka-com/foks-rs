@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Dialog, useHasOverlayProvider } from '/kit/overlay-primitives';
+import { Dialog, useHasOverlayProvider } from '../../kit/overlay-primitives';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import {
   agentLifecycleLabel,

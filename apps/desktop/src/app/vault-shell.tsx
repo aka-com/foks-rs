@@ -8,8 +8,8 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import { anyDialogOpen, OverlayProvider } from '/kit/overlay-primitives';
-import { ToastController, ToastProvider } from '/kit/toasts';
+import { anyDialogOpen, OverlayProvider } from '../../kit/overlay-primitives';
+import { ToastController, ToastProvider } from '../../kit/toasts';
 import type { AgentLifecycleController } from '../agent-lifecycle';
 import { attentionItems, setupChecklist } from '../attention';
 import type { AppLockState, Bridge, ItemField } from '../bridge';

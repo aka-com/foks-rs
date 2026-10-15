@@ -6,10 +6,6 @@
     "moduleResolution": "Bundler",
     "resolveJsonModule": true,
     "jsx": "react-jsx",
-    "paths": {
-      "/src/*": ["./src/*"],
-      "/kit/*": ["./kit/*"]
-    },
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
     "noUnusedLocals": true,

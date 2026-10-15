@@ -190,12 +190,8 @@ test('every chat module is reachable from the application entry point', async ()
     if (reached.has(file)) continue;
     reached.add(file);
     for (const specifier of await references(file)) {
-      const base = specifier.startsWith('/src/')
-        ? join(root, specifier.slice('/src/'.length))
-        : specifier.startsWith('.')
-          ? resolve(dirname(file), specifier)
-          : null;
-      if (!base) continue;
+      if (!specifier.startsWith('.')) continue;
+      const base = resolve(dirname(file), specifier);
       const target = [
         base,
         `${base}.ts`,
@@ -209,4 +205,14 @@ test('every chat module is reachable from the application entry point', async ()
     (await sources(join(root, 'chat'))).filter((file) => !reached.has(file)),
     [],
   );
+});
+
+test('application modules name other modules by relative path, so node loads them without Vite', async () => {
+  const kit = fileURLToPath(new URL('../kit/', import.meta.url));
+  for (const file of [...(await sources(root)), ...(await sources(kit))])
+    for (const specifier of await references(file))
+      assert.ok(
+        !specifier.startsWith('/'),
+        `${file} imports the root-absolute path ${specifier}`,
+      );
 });

@@ -14,7 +14,7 @@ import { useTabSheetState } from '../navigation-guard';
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { ContextMenu, Menu, Popover } from '/kit/overlay-primitives';
+import { ContextMenu, Menu, Popover } from '../../kit/overlay-primitives';
 import type { ReactNode } from 'react';
 import { Band, Button, Chip, Icon, MenuButton, MenuItem } from '../components';
 import { InvitationPanel } from '../components/invitation-panel';
@@ -53,7 +53,7 @@ import type { Location, NavigateOptions, TeamsSheetIntent } from '../location';
 import type { MutationFailureHandler } from '../mutation-recovery';
 import { markProfileRostersStale } from '../roster-staleness';
 import { PageHeader } from '../shell/page-header';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../kit/toasts';
 import { GroupMark } from './group-mark';
 import {
   discoveryContext,

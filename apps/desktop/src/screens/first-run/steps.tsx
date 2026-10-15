@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { FirstRunStateName } from '../../first-run-state';
 import { presentFirstRunFailure } from '../../first-run-failure';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../../kit/toasts';
 import { LocalCompleteStep } from '../first-run-complete-step';
 import { RecoveryStep } from '../first-run-recovery-step';
 import { ServerVerificationStep } from '../first-run-server-step';

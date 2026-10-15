@@ -20,10 +20,10 @@ import type {
   ReactNode,
   RefObject,
 } from 'react';
-import { useToast } from '/kit/toasts';
-import { anyDialogOpen, ContextMenu, Menu } from '/kit/overlay-primitives';
+import { useToast } from '../../kit/toasts';
+import { anyDialogOpen, ContextMenu, Menu } from '../../kit/overlay-primitives';
 import { useDismissedOnboardingTip } from '../onboarding-tips';
-import { virtualListWindow } from '/kit/virtual-list';
+import { virtualListWindow } from '../../kit/virtual-list';
 import { rememberFilesView, storedFilesView } from '../files-view-pref';
 import type { FilesView } from '../files-view-pref';
 import {

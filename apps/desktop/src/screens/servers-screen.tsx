@@ -4,7 +4,7 @@ import { CollectionStatus } from '../components/collection-status';
 
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../kit/toasts';
 import type {
   Bridge,
   CheckedServer,

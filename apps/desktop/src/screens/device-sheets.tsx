@@ -74,7 +74,7 @@ import {
 } from '../exposure-review';
 import { deviceAlertRegistry } from './device-alert';
 import { ExposureSummary, unstoredReview } from './exposure-review';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../kit/toasts';
 
 /** A YubiKey command that is one sheet of typed values. */
 export type SimpleYubiAction =

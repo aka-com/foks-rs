@@ -12,8 +12,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Popover } from '/kit/overlay-primitives';
-import type { ToastRecord } from '/kit/toasts';
+import { Popover } from '../../kit/overlay-primitives';
+import type { ToastRecord } from '../../kit/toasts';
 import type { AttentionItem, SetupStep } from '../attention';
 import { Icon } from '../components';
 import type { Location } from '../location';

@@ -8,13 +8,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   root: here,
   plugins: [react()],
-  resolve: {
-    alias: {
-      // Keep absolute source aliases aligned with tsconfig.json.
-      '/src': resolve(here, 'src'),
-      '/kit': resolve(here, 'kit'),
-    },
-  },
   server: {
     host: '127.0.0.1',
     port: 1421,

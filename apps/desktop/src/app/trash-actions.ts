@@ -5,8 +5,8 @@ import {
   type Dispatch,
   type SetStateAction,
 } from 'react';
-import type { ToastController, ToastOptions } from '/kit/toasts';
-import { anyDialogOpen } from '/kit/overlay-primitives';
+import type { ToastController, ToastOptions } from '../../kit/toasts';
+import { anyDialogOpen } from '../../kit/overlay-primitives';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import type { LocationStore } from '../location';
 import {

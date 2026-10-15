@@ -4,7 +4,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react';
-import type { ToastController, ToastOptions } from '/kit/toasts';
+import type { ToastController, ToastOptions } from '../../kit/toasts';
 import { normalizeCommandError, type Bridge } from '../bridge';
 import type { LocationStore } from '../location';
 import { nameOf, storeOf, type AgentSnapshot, type Item } from '../model';

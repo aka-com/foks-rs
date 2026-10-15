@@ -1,7 +1,7 @@
 import { refreshActivitiesFor } from '../refresh-activity';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import type { ToastController, ToastOptions } from '/kit/toasts';
+import type { ToastController, ToastOptions } from '../../kit/toasts';
 import {
   isAgentReadinessError,
   loadSnapshot,

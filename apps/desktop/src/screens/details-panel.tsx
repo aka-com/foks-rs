@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../kit/toasts';
 import type { ReactNode } from 'react';
 import {
   Button,

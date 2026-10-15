@@ -5,7 +5,7 @@
  * here for the same reason.
  */
 
-import type { ToastController } from '/kit/toasts';
+import type { ToastController } from '../../kit/toasts';
 import { kindOf } from '../model';
 import type { Item } from '../model';
 import { normalizeCommandError } from '../bridge';

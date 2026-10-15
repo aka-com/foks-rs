@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { AccessLifetime } from '../../app/access-lifetime';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../../kit/toasts';
 import { runDeviceMutation } from './operation-controller';
 import { attemptRead } from '../../commands/command-policy';
 import type { MutationPolicy } from '../../commands/command-policy';

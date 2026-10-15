@@ -34,8 +34,8 @@ import {
   ContextMenu,
   Menu,
   Popover,
-} from '/kit/overlay-primitives';
-import { useOptionalToast } from '/kit/toasts';
+} from '../../kit/overlay-primitives';
+import { useOptionalToast } from '../../kit/toasts';
 import { normalizeCommandError } from '../bridge';
 import { chatErrorText } from '../chat/error-copy';
 import { useChannelCreation } from '../chat/channel-creation-provider';

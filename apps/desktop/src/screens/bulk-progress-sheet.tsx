@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { anyDialogOpen } from '/kit/overlay-primitives';
-import type { ToastOptions } from '/kit/toasts';
-import { useToast } from '/kit/toasts';
+import { anyDialogOpen } from '../../kit/overlay-primitives';
+import type { ToastOptions } from '../../kit/toasts';
+import { useToast } from '../../kit/toasts';
 import { Button, Icon, SheetDialog } from '../components';
 import type { Bridge } from '../bridge';
 import type { FoksIconName } from '../icons';

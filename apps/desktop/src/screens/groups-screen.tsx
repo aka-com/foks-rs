@@ -94,7 +94,7 @@ import {
 import { GroupMark } from './group-mark';
 import { manageReason } from './group-model';
 import { StoreAccessTakeover } from './store-access';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../kit/toasts';
 import {
   entriesOf,
   exposureOrder,

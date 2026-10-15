@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { anyDialogOpen } from '/kit/overlay-primitives';
-import type { ToastController } from '/kit/toasts';
+import { anyDialogOpen } from '../../kit/overlay-primitives';
+import type { ToastController } from '../../kit/toasts';
 import {
   sceneHref,
   sceneOf,

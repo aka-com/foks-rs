@@ -7,7 +7,7 @@
 
 import { useId } from 'react';
 import type { ReactNode } from 'react';
-import { Dialog, DismissibleDialog } from '/kit/overlay-primitives';
+import { Dialog, DismissibleDialog } from '../../kit/overlay-primitives';
 
 /** `.sheet`, `.sheet.mid`, `.sheet.wide` — the three the stylesheet draws. */
 export type SheetWidth = 'base' | 'mid' | 'wide';

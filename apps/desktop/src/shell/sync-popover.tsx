@@ -16,7 +16,7 @@
 
 import { useEffect, useId, useState, useSyncExternalStore } from 'react';
 import type { ReactNode, RefObject } from 'react';
-import { Popover } from '/kit/overlay-primitives';
+import { Popover } from '../../kit/overlay-primitives';
 import type { AgentSnapshot, CatalogFreshnessEntry, Server } from '../model';
 import { chatAvailable, serverDisplayLabel } from '../model';
 import { useSidebarInbox } from '../chat/inbox-provider';

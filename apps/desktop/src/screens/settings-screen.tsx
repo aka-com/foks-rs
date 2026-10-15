@@ -31,7 +31,7 @@ import {
 
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useToast } from '/kit/toasts';
+import { useToast } from '../../kit/toasts';
 import { enqueueProfileWork, normalizeCommandError } from '../bridge';
 import type {
   AgentProcessInfo,

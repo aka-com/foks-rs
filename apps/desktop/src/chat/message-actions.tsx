@@ -21,8 +21,8 @@ import {
   ContextMenu,
   Menu,
   Popover,
-} from '/kit/overlay-primitives';
-import { useOptionalToast } from '/kit/toasts';
+} from '../../kit/overlay-primitives';
+import { useOptionalToast } from '../../kit/toasts';
 import { mentionKey, type ChatMentions } from './mentions';
 import { messageClock, messageTimeWithSeconds } from './presentation';
 import type { ChatOperation } from '../chat-contract';

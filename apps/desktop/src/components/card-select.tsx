@@ -5,7 +5,7 @@
 
 import { useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
-import { Listbox, Popover } from '/kit/overlay-primitives';
+import { Listbox, Popover } from '../../kit/overlay-primitives';
 import { Icon } from './icon';
 
 export interface CardOption {

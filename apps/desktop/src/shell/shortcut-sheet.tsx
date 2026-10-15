@@ -9,7 +9,7 @@ import type { ReactNode } from 'react';
 import {
   anyDialogOpen,
   useDismissOnOverlayBlock,
-} from '/kit/overlay-primitives';
+} from '../../kit/overlay-primitives';
 import { Button, SheetDialog } from '../components';
 import {
   SHORTCUTS,
