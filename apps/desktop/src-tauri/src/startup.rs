@@ -239,9 +239,18 @@ pub fn require_agent(app: &tauri::AppHandle, agent: &AgentHandle) {
                     unreachable_agent(socket, &error),
                 )
             };
-            let body = format!("{body}{}", agent_log_line(agent));
-            let root = match startup_recovery(&error, agent.startup_reset_directory()) {
-                StartupRecovery::Retry => {
+            let mut body = format!("{body}{}", agent_log_line(agent));
+            let recovery = startup_recovery(
+                &error,
+                agent.startup_agent_exited(),
+                agent.startup_reset_directory(),
+                || agent.startup_credentials_required(),
+            );
+            let root = match recovery {
+                StartupRecovery::Retry | StartupRecovery::RetryAfterCredentials => {
+                    if recovery == StartupRecovery::RetryAfterCredentials {
+                        body.push_str(CREDENTIALS_REQUIRED);
+                    }
                     let retry = app
                         .dialog()
                         .message(body)
@@ -326,21 +335,43 @@ const TRY_AGAIN: &str = "Try Again";
 const REVIEW_RESET: &str = "Review Reset…";
 const QUIT: &str = "Quit";
 
+const CREDENTIALS_REQUIRED: &str =
+    "\n\nReading this device's FOKS keys requires the system credential \
+     store, which is locked or has not allowed FOKS access. Unlock the Keychain or Secret Service \
+     collection, or allow access when prompted, then choose Try Again.";
+
 /// The recovery a startup failure dialog offers besides Quit.
 #[derive(Debug, Eq, PartialEq)]
 enum StartupRecovery {
     /// Try Again only. The failure does not show that the local state is
-    /// unreadable: the agent may still be starting, or never ran.
+    /// unreadable: the agent may still be starting or may answer with an
+    /// error, it never ran, or its supervision was lost.
     Retry,
-    /// Try Again, or move the state in this root aside. The launched agent
-    /// exited before it created its socket.
+    /// Try Again only. The launched agent exited, and the state root cannot be
+    /// inspected without a system credential-store prompt.
+    RetryAfterCredentials,
+    /// Try Again, or move the state in this root aside. The launched agent was
+    /// observed to exit before it answered on its socket.
     RetryOrReset(PathBuf),
 }
 
-fn startup_recovery(error: &AgentError, reset_root: Option<PathBuf>) -> StartupRecovery {
-    match reset_root {
-        Some(root) if error.code == "agent-start-failed" => StartupRecovery::RetryOrReset(root),
-        _ => StartupRecovery::Retry,
+/// Chooses the recovery for a startup failure. `exited` reports whether the
+/// launched agent was observed to exit; `credentials_required` runs a
+/// non-interactive credential-store check and is called only when a reset
+/// would otherwise be offered.
+fn startup_recovery(
+    error: &AgentError,
+    exited: bool,
+    reset_root: Option<PathBuf>,
+    credentials_required: impl FnOnce() -> bool,
+) -> StartupRecovery {
+    let Some(root) = reset_root.filter(|_| exited && error.code == "agent-start-failed") else {
+        return StartupRecovery::Retry;
+    };
+    if credentials_required() {
+        StartupRecovery::RetryAfterCredentials
+    } else {
+        StartupRecovery::RetryOrReset(root)
     }
 }
 
@@ -516,18 +547,49 @@ mod tests {
     fn startup_reset_is_offered_only_after_the_launched_agent_exited() {
         let root = PathBuf::from("/private/foks-state");
         let exited = AgentError::new("agent-start-failed", "exited (exit status: 1)", true);
+        let unsupervised = AgentError::new("agent-start-failed", "Failed to launch", true);
         let waiting = AgentError::new("agent-start-timeout", "still running", true);
         let busy = AgentError::new("agent-state", "state is busy", false);
+        let unchecked =
+            || -> bool { panic!("the credential check runs only before a reset offer") };
         assert_eq!(
-            startup_recovery(&exited, Some(root.clone())),
+            startup_recovery(&exited, true, Some(root.clone()), || false),
             StartupRecovery::RetryOrReset(root.clone())
         );
-        assert_eq!(startup_recovery(&exited, None), StartupRecovery::Retry);
         assert_eq!(
-            startup_recovery(&waiting, Some(root.clone())),
+            startup_recovery(&exited, true, None, unchecked),
             StartupRecovery::Retry
         );
-        assert_eq!(startup_recovery(&busy, Some(root)), StartupRecovery::Retry);
+        // A launch or supervision failure carries the same code but no
+        // observed exit.
+        assert_eq!(
+            startup_recovery(&unsupervised, false, Some(root.clone()), unchecked),
+            StartupRecovery::Retry
+        );
+        assert_eq!(
+            startup_recovery(&waiting, false, Some(root.clone()), unchecked),
+            StartupRecovery::Retry
+        );
+        assert_eq!(
+            startup_recovery(&busy, false, Some(root), unchecked),
+            StartupRecovery::Retry
+        );
+    }
+
+    #[test]
+    fn an_agent_that_exits_while_credentials_are_required_gets_no_reset_offer() {
+        let exited = AgentError::new("agent-start-failed", "exited (exit status: 1)", true);
+        assert_eq!(
+            startup_recovery(
+                &exited,
+                true,
+                Some(PathBuf::from("/private/foks-state")),
+                || true
+            ),
+            StartupRecovery::RetryAfterCredentials
+        );
+        assert!(CREDENTIALS_REQUIRED.contains("locked or has not allowed FOKS access"));
+        assert!(CREDENTIALS_REQUIRED.contains("choose Try Again"));
     }
 
     #[test]

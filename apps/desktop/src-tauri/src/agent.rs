@@ -53,6 +53,12 @@ const MAX_STARTUP_TAKEOVERS: usize = 4;
 /// the desktop passes to the agent.
 const AGENT_STARTUP_DEADLINE: Duration = Duration::from_secs(60);
 
+/// How long startup keeps probing a launched agent whose socket accepts
+/// connections but whose Hello or status request keeps failing. Such a
+/// failure is reported as it is, rather than as an agent that is still
+/// starting.
+const AGENT_STARTUP_PROBE_FAILURE_GRACE: Duration = Duration::from_secs(5);
+
 /// The socket selected for this process and any state that this desktop owns.
 ///
 /// An explicit argument or environment socket is an external trust boundary:
@@ -301,6 +307,10 @@ pub struct AgentHandle {
     /// The next start waits on it again instead of launching a second agent
     /// against the same state.
     startup_launch: Mutex<Option<process::ManagedAgentLaunch>>,
+    /// Whether the most recent start failed because the launched agent was
+    /// observed to exit, as opposed to failing to launch, losing supervision
+    /// or still running.
+    startup_agent_exited: AtomicBool,
     /// The wait bound for a launched agent; [`AGENT_STARTUP_DEADLINE`] except
     /// in tests.
     startup_deadline: Duration,
@@ -357,6 +367,7 @@ impl AgentHandle {
             startup_gate,
             last_hello: Mutex::new(None),
             startup_launch: Mutex::new(None),
+            startup_agent_exited: AtomicBool::new(false),
             startup_deadline: AGENT_STARTUP_DEADLINE,
             #[cfg(test)]
             managed_endpoint_override: false,

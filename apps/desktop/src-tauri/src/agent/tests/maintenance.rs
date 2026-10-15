@@ -534,6 +534,35 @@ fn recovery_credentials_are_distinct_and_explicit_retry_rechecks_them() {
 }
 
 #[test]
+fn startup_credential_check_reports_only_a_credential_store_condition() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = root.join("client-state.toml");
+    std::fs::write(&config, b"fixture").unwrap();
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+    for (kind, required) in [
+        ("credentials", true),
+        ("recovery", false),
+        ("current", false),
+    ] {
+        let handle = AgentHandle::new_for_maintenance_test(
+            root.join("agent.sock"),
+            FakeMaintenanceProcess::healthy(),
+            move |root, _| match kind {
+                "credentials" => SafeRootDisposition::CredentialsRequired(root.to_owned()),
+                "recovery" => SafeRootDisposition::Recovery(root.to_owned()),
+                _ => SafeRootDisposition::Current,
+            },
+        );
+        assert_eq!(handle.startup_credentials_required(), required, "{kind}");
+        // The startup check leaves the explicit-retry state of automatic
+        // recovery alone.
+        assert!(!handle.recovery_credentials_required.load(Ordering::Acquire));
+    }
+}
+
+#[test]
 fn automatic_recovery_checks_live_listener_before_credentials() {
     let directory = tempfile::tempdir().unwrap();
     let socket = directory.path().join("agent.sock");

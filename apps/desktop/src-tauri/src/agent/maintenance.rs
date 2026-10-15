@@ -528,6 +528,18 @@ impl AgentHandle {
             .then(|| root.to_owned())
     }
 
+    /// Reports whether the state root cannot be inspected without a system
+    /// credential-store prompt, as when the Keychain or Secret Service
+    /// collection is locked or access was denied. The check never prompts.
+    /// An agent that exited for this reason has not shown that its state is
+    /// unreadable.
+    pub fn startup_credentials_required(&self) -> bool {
+        matches!(
+            foks_keystore::without_user_interaction(|| self.require_auto_recovery_root()),
+            Err(error) if error.code == "agent-credentials-required"
+        )
+    }
+
     /// Moves the confirmed state root's entries into a sibling directory and
     /// returns that directory's path.
     pub fn reset_startup_state(&self, confirmed_root: &Path) -> Result<PathBuf, AgentError> {

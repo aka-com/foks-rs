@@ -294,6 +294,9 @@ fn managed_launch_reports_only_bounded_output_from_the_failed_process() {
     assert!(error.retryable);
     assert!(!error.fatal);
     assert!(error.message.contains("exit status: 23"));
+    assert!(launch.exited());
+    // A later check reports the same cause rather than a loss of supervision.
+    assert_eq!(launch.early_exit_error(), Some(error.clone()));
     assert!(!error.message.contains("stale failure"));
     let diagnostic = error.message.split_once("Agent output:\n").unwrap().1;
     assert!(diagnostic.starts_with("foks-agent: bind failed: Address already in use"));
@@ -312,25 +315,34 @@ fn managed_launch_reports_only_bounded_output_from_the_failed_process() {
     assert!(!error.message.contains("bind failed"));
 }
 
+/// Kills the managed agent a startup test launched.
 #[cfg(unix)]
-#[test]
-fn startup_keeps_waiting_on_a_running_agent_instead_of_launching_another() {
-    use std::os::unix::fs::PermissionsExt as _;
+struct KillManagedAgent;
 
-    struct Cleanup;
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            if let Some(pid) = *MANAGED_AGENT_PID.lock().unwrap() {
-                unsafe {
-                    libc::kill(pid as i32, libc::SIGKILL);
-                }
+#[cfg(unix)]
+impl Drop for KillManagedAgent {
+    fn drop(&mut self) {
+        if let Some(pid) = *MANAGED_AGENT_PID.lock().unwrap() {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
             }
         }
     }
+}
 
-    let temporary = tempfile::tempdir_in("/tmp").unwrap();
-    let fixture = temporary.path().join("takeover-agent");
-    let source = temporary.path().join("agent.c");
+/// Writes an agent script into `directory` that records each launch in
+/// `launches`, writes `output` to standard error, sleeps one second and then
+/// runs `then`. `then` may name `$FIXTURE`, the takeover-agent fixture built
+/// with `defines`. Returns the script and the launch record.
+#[cfg(unix)]
+fn delayed_agent(
+    directory: &Path,
+    defines: &[&str],
+    output: &str,
+    then: &str,
+) -> (PathBuf, PathBuf) {
+    let fixture = directory.join("takeover-agent");
+    let source = directory.join("agent.c");
     std::fs::write(
         &source,
         include_str!("../../../tests/fixtures/takeover-agent.c"),
@@ -341,29 +353,48 @@ fn startup_keeps_waiting_on_a_running_agent_instead_of_launching_another() {
             "-DPROTOCOL_VERSION={}",
             foks_agent_proto::PROTOCOL_VERSION
         ))
+        .args(defines)
         .arg("-o")
         .arg(&fixture)
         .arg(&source)
         .status()
         .unwrap()
         .success());
-    // Stands in for an agent held at a credential-store prompt: it records
-    // each launch, writes a line of output, and binds only after a delay.
-    let launches = temporary.path().join("launches");
-    let binary = temporary.path().join("foks-agent");
+    let launches = directory.join("launches");
+    let binary = directory.join("foks-agent");
     std::fs::write(
         &binary,
         format!(
-            "#!/bin/sh\necho launched >> '{}'\necho 'foks-agent: reading vault key' >&2\nsleep 1\nexec '{}' \"$@\"\n",
+            "#!/bin/sh\nFIXTURE='{}'\necho launched >> '{}'\necho '{output}' >&2\nsleep 1\n{then}\n",
+            fixture.display(),
             launches.display(),
-            fixture.display()
         ),
     )
     .unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    (binary, launches)
+}
+
+#[cfg(unix)]
+fn launch_count(launches: &Path) -> usize {
+    std::fs::read_to_string(launches).unwrap().lines().count()
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_keeps_waiting_on_a_running_agent_instead_of_launching_another() {
+    let temporary = tempfile::tempdir_in("/tmp").unwrap();
+    // Stands in for an agent held at a credential-store prompt: it binds
+    // only after a delay.
+    let (binary, launches) = delayed_agent(
+        temporary.path(),
+        &[],
+        "foks-agent: reading vault key",
+        "exec \"$FIXTURE\" \"$@\"",
+    );
     let socket = temporary.path().join("agent.sock");
     let mut handle = AgentHandle::new(socket.clone());
-    let _cleanup = Cleanup;
+    let _cleanup = KillManagedAgent;
 
     handle.startup_deadline = Duration::from_millis(300);
     let error = handle
@@ -372,11 +403,13 @@ fn startup_keeps_waiting_on_a_running_agent_instead_of_launching_another() {
     assert_eq!(error.code, "agent-start-timeout");
     assert!(error.retryable);
     assert!(error.message.contains("still running"));
+    assert!(error.message.contains("has not accepted a connection"));
     assert!(error.message.contains("Keychain or Secret Service prompt"));
     assert!(error
         .message
         .contains("Agent output:\nfoks-agent: reading vault key"));
     assert!(handle.startup_launch_running());
+    assert!(!handle.startup_agent_exited());
     assert!(!socket.exists());
 
     // Try Again waits on the same process rather than launching a second
@@ -386,11 +419,108 @@ fn startup_keeps_waiting_on_a_running_agent_instead_of_launching_another() {
         .start_with_binary(&binary, &|_| panic!("no takeover is involved"))
         .unwrap();
     assert_eq!(success_value(response).unwrap()["state"], "ready");
-    assert_eq!(
-        std::fs::read_to_string(&launches).unwrap().lines().count(),
-        1
-    );
+    assert_eq!(launch_count(&launches), 1);
     assert!(!handle.startup_launch_running());
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_drops_a_kept_agent_once_an_agent_answers() {
+    let temporary = tempfile::tempdir_in("/tmp").unwrap();
+    let (binary, launches) = delayed_agent(
+        temporary.path(),
+        &[],
+        "foks-agent: reading vault key",
+        "exec \"$FIXTURE\" \"$@\"",
+    );
+    let mut handle = AgentHandle::new(temporary.path().join("agent.sock"));
+    let _cleanup = KillManagedAgent;
+
+    handle.startup_deadline = Duration::from_millis(300);
+    let error = handle
+        .start_with_binary(&binary, &|_| panic!("no takeover is involved"))
+        .unwrap_err();
+    assert_eq!(error.code, "agent-start-timeout");
+    assert!(handle.startup_launch.lock().unwrap().is_some());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while handle.probe_status().is_err() {
+        assert!(Instant::now() < deadline, "the kept agent never answered");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    handle
+        .start_already_reserved(&|_| panic!("no takeover is involved"))
+        .unwrap();
+    assert!(handle.startup_launch.lock().unwrap().is_none());
+    assert_eq!(launch_count(&launches), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_reports_the_exit_of_a_kept_agent_instead_of_launching_another() {
+    let temporary = tempfile::tempdir_in("/tmp").unwrap();
+    // Stands in for an agent whose credential-store prompt was denied.
+    let (binary, launches) = delayed_agent(
+        temporary.path(),
+        &[],
+        "foks-agent: the system credential store denied access",
+        "exit 1",
+    );
+    let mut handle = AgentHandle::new(temporary.path().join("agent.sock"));
+    let _cleanup = KillManagedAgent;
+
+    handle.startup_deadline = Duration::from_millis(300);
+    let error = handle
+        .start_with_binary(&binary, &|_| panic!("no takeover is involved"))
+        .unwrap_err();
+    assert_eq!(error.code, "agent-start-timeout");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while handle.startup_launch_running() {
+        assert!(Instant::now() < deadline, "the kept agent never exited");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    handle.startup_deadline = Duration::from_secs(10);
+    let error = handle
+        .start_with_binary(&binary, &|_| panic!("no takeover is involved"))
+        .unwrap_err();
+    assert_eq!(error.code, "agent-start-failed");
+    assert!(error.message.contains("exit status: 1"));
+    assert!(error
+        .message
+        .contains("Agent output:\nfoks-agent: the system credential store denied access"));
+    assert!(handle.startup_agent_exited());
+    assert!(handle.startup_launch.lock().unwrap().is_none());
+    assert_eq!(launch_count(&launches), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_reports_a_probe_failure_from_an_agent_that_accepts_connections() {
+    let temporary = tempfile::tempdir_in("/tmp").unwrap();
+    // Binds a socket that the desktop client refuses, so every probe fails
+    // after the connection is possible.
+    let (binary, launches) = delayed_agent(
+        temporary.path(),
+        &["-DSOCKET_MODE=0644"],
+        "foks-agent: listening",
+        "exec \"$FIXTURE\" \"$@\"",
+    );
+    let socket = temporary.path().join("agent.sock");
+    let mut handle = AgentHandle::new(socket.clone());
+    let _cleanup = KillManagedAgent;
+
+    handle.startup_deadline = Duration::from_secs(30);
+    let started = Instant::now();
+    let error = handle
+        .start_with_binary(&binary, &|_| panic!("no takeover is involved"))
+        .unwrap_err();
+    assert_eq!(error.code, "unsafe-socket");
+    assert!(started.elapsed() < Duration::from_secs(15));
+    assert!(socket.exists());
+    assert!(!handle.startup_agent_exited());
+    // The bound agent is kept, so Try Again does not launch a second one.
+    assert!(handle.startup_launch_running());
+    assert_eq!(launch_count(&launches), 1);
 }
 
 #[test]

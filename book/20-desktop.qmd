@@ -353,11 +353,25 @@ from `Finalizing`.
 **Startup failures.** The host waits for a launched agent to bind its socket
 for as long as the process is alive, up to 60 seconds: an initialized agent
 reads its vault key from the system credential store before it binds, and
-that read can wait on a prompt. An agent still running at the deadline is
-kept, and the next attempt waits on it again rather than launching a second
-agent against the same state. The startup dialog always offers Try Again and
-names `agent.log`. It offers a reset only when the launched agent exited
-before binding, never while it is still starting. The reset deletes nothing:
+that read can wait on a prompt. A socket that is missing or refuses
+connections is the expected state until then. Any other probe failure, such
+as an unsafe socket or a failed Hello or status request, is reported as it is
+once it has persisted for 5 seconds. An agent still running when the wait
+ends is kept: the next attempt waits on it again rather than launching a
+second agent against the same state, reports its exit if it has exited since,
+and drops it once an agent answers. Restoration after an export, import or
+relocation, and Restart service on the restoration-failed screen, start the
+agent through the same path, so they also wait up to 60 seconds, report a
+timeout as `agent-start-timeout`, and reuse a kept agent; they hold the
+exclusive maintenance reservation while they wait.
+
+The startup dialog always offers Try Again and names `agent.log`. It offers a
+reset only when the launched agent was observed to exit before it answered,
+not when it is still starting, answers with an error, could not be launched,
+or lost supervision. Before offering the reset, the host inspects the state
+root with credential-store interaction disabled, as automatic recovery does;
+if the store is locked or denies access, the dialog offers Try Again only and
+says to unlock it or allow access. The reset deletes nothing:
 `quarantine_unreadable_state` moves every entry of the state root except its
 lock files into a new private sibling directory, `<root>.reset-<unix
 seconds>`, on the same file system, and leaves system credential-store

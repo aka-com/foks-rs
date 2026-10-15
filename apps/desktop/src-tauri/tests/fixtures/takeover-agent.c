@@ -11,6 +11,12 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+/* A test may build the fixture with another mode to bind a socket that the
+ * desktop client refuses as unsafe. */
+#ifndef SOCKET_MODE
+#define SOCKET_MODE 0600
+#endif
+
 static int read_all(int fd, void *buffer, unsigned size) {
     unsigned offset = 0;
     while (offset < size) {
@@ -39,7 +45,7 @@ int main(int argc, char **argv) {
     unlink(path);
     int server = socket(AF_UNIX, SOCK_STREAM, 0);
     if (bind(server, (struct sockaddr *)&address, sizeof address) != 0 ||
-        chmod(path, 0600) != 0 || listen(server, 32) != 0) return 5;
+        chmod(path, SOCKET_MODE) != 0 || listen(server, 32) != 0) return 5;
     if (!launched) {
         int marker = open(argv[2], O_CREAT | O_WRONLY, 0600);
         if (marker < 0) return 6;
