@@ -405,8 +405,9 @@ on the socket itself: ownership, permissions, and peer credentials.
   `call_current`, TLS client configuration), `host.rs`
   (`authenticated_tls_roots`).
 - `foks-server`: `pki/host_tls.rs` (the two CAs and listener configurations),
-  `auth/principal.rs` (certificate-to-credential binding), `net/session.rs`
-  (certificate issuance, asynchronous frame reading, memory permits).
+  `auth/principal.rs` (certificate-to-credential binding),
+  `services/signup.rs` (certificate issuance), `net/session.rs` (asynchronous
+  frame reading, memory permits).
 - `foks-agent-proto`: `frame.rs`, `hello.rs`, `base64_bytes.rs`, `message.rs`.
 - `tools/foks-protocol-sync`: `internal/extract/extract.go`
   (`bindingUsesDataWrap`).

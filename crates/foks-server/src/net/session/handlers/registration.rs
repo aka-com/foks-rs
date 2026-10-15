@@ -113,11 +113,11 @@ impl Operations for ServerData {
     }
 
     fn reserve_username(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::reserve_username(self, argument)
+        crate::services::signup::reserve_username(&self.identity_ports(), argument)
     }
 
     fn signup(&self, argument: &[u8]) -> Result<(), RpcStatus> {
-        ServerData::signup(self, argument)
+        crate::services::signup::signup(&self.identity_ports(), argument)
     }
 
     fn check_invite_code(&self, argument: &[u8]) -> Result<(), RpcStatus> {
@@ -126,7 +126,7 @@ impl Operations for ServerData {
     }
 
     fn client_certificate_chain(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::client_certificate_chain(self, argument)
+        crate::services::signup::client_certificate_chain(&self.identity_ports(), argument)
     }
 
     fn uid_lookup_challenge(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {

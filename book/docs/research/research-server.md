@@ -77,9 +77,9 @@ The canonical example is `Database::commit_user_mutation_with_failure` in `crate
 
 `inject(failure, ...)` points (lines 222, 298, 318, 340, 382, 391) are test seams that let tests crash the transaction at each stage and assert nothing partial is visible. The team variant (`team.rs` lines 143–...) follows the same skeleton, including consuming a team-name reservation with a single conditional `UPDATE ... WHERE ... AND expires_at > now AND team_id IS NULL` whose affected-row count is the check (lines 205–224).
 
-The RPC side (`crates/foks-server/src/net/session.rs` `commit_user_mutation_argument`, lines 189–330) shows the two-phase pattern: an early idempotency read on a pooled reader (lines 203–218) returns fast or detects a *conflicting* retry (`OperationConflict` → BadArguments), then the writer closure recomputes the Merkle commit from the authoritative root and applies it.
+The RPC side (`crates/foks-server/src/services/user_mutation.rs` `commit`) shows the two-phase pattern: an early idempotency read on a pooled reader returns fast or detects a *conflicting* retry (`OperationConflict` → BadArguments), then the writer closure recomputes the Merkle commit from the authoritative root and applies it.
 
-**Idempotency receipts** (`crates/foks-server-db/src/idempotency.rs`, `schema/receipts.sql`): key is the link hash (for chain mutations) or the self token (signup, session.rs:597), the request hash is stored to detect a different request reusing the key, the response blob is stored so a retry gets the *same* bytes, and receipts expire (24 h for mutations) via the maintenance sweep.
+**Idempotency receipts** (`crates/foks-server-db/src/idempotency.rs`, `schema/receipts.sql`): key is the link hash (for chain mutations) or the self token (signup, `services/signup.rs`), the request hash is stored to detect a different request reusing the key, the response blob is stored so a retry gets the *same* bytes, and receipts expire (24 h for mutations) via the maintenance sweep.
 
 ### 1.5 Signup invites consumed inside the publishing transaction
 

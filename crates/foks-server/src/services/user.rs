@@ -687,7 +687,7 @@ fn validate_root(root: &foks_server_db::RootSnapshot) -> Result<(), RpcStatus> {
     Ok(())
 }
 
-fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
+pub(super) fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
     let mut message = error.to_string();
     if message.len() > 160 {
         let mut end = 160;
@@ -699,6 +699,6 @@ fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
     RpcStatus::BadArguments(message)
 }
 
-fn permission_denied() -> RpcStatus {
+pub(super) fn permission_denied() -> RpcStatus {
     RpcStatus::PermissionDenied("active device does not authorize this request".to_owned())
 }

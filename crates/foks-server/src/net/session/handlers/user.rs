@@ -103,7 +103,7 @@ impl Operations for ServerData {
     ) -> Result<Vec<u8>, RpcStatus> {
         let database = self.read_database()?;
         crate::services::user::authorize_database(&database, principal)?;
-        self.reserve_username(argument)
+        crate::services::signup::reserve_username(&self.identity_ports(), argument)
     }
     fn get_tree_location(
         &self,
@@ -169,7 +169,8 @@ impl Operations for ServerData {
             let full = arg.full.ok_or_else(|| {
                 super::super::bad_arguments("normalized rename requires full update")
             })?;
-            self.commit_user_mutation_argument(
+            crate::services::user_mutation::commit(
+                &self.identity_ports(),
                 argument,
                 principal,
                 crate::identity::mutation::Argument::Rename(arg.username, full),
@@ -240,12 +241,22 @@ impl Operations for ServerData {
     }
 
     fn provision_device(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
-        self.user_mutation(argument, principal, true)
+        crate::services::user_mutation::provision_or_revoke(
+            &self.identity_ports(),
+            argument,
+            principal,
+            true,
+        )
     }
 
     fn revoke_device(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
         principal.require_ordinary_device()?;
-        self.user_mutation(argument, principal, false)
+        crate::services::user_mutation::provision_or_revoke(
+            &self.identity_ports(),
+            argument,
+            principal,
+            false,
+        )
     }
 
     fn host_config(&self, principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
@@ -294,7 +305,7 @@ impl Operations for ServerData {
         let link = decoded.user_settings_link.clone().ok_or_else(|| {
             RpcStatus::BadArguments("passphrase update omitted UserSettings link".to_owned())
         })?;
-        let owned = super::super::OwnedPassphraseMutation::from_argument(&decoded)
+        let owned = crate::services::passphrase::OwnedPassphraseMutation::from_argument(&decoded)
             .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
         crate::services::generic::commit(
             link,
@@ -319,7 +330,7 @@ impl Operations for ServerData {
         let link = decoded.user_settings_link.clone().ok_or_else(|| {
             RpcStatus::BadArguments("passphrase update omitted UserSettings link".to_owned())
         })?;
-        let owned = super::super::OwnedPassphraseMutation::from_argument(&decoded)
+        let owned = crate::services::passphrase::OwnedPassphraseMutation::from_argument(&decoded)
             .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
         crate::services::generic::commit(
             link,

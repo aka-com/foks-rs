@@ -9,7 +9,8 @@ use foks_rpc::RpcStatus;
 use crate::auth::Principal;
 use crate::keys::HostKeyProvider;
 use crate::merkle::decode_stored_root as decode_root;
-use crate::{net::session::OwnedPassphraseMutation, WriterHandle};
+use crate::services::passphrase::OwnedPassphraseMutation;
+use crate::WriterHandle;
 
 pub(crate) enum PassphraseCompanion {
     Set(OwnedPassphraseMutation),
