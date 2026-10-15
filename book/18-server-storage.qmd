@@ -187,7 +187,8 @@ mechanism differs by resource.
 | Active sessions per listener | 256 | accept loop waits for a permit |
 | Connections per source per listener | 32, loopback exempt | connection dropped |
 | Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
-| Realtime inbox polls | 256 in total, 8 per account | status 1012 |
+| Realtime inbox polls | 8 per account; 256 in total (the authenticated listener's sessions) | status 1012 |
+| Realtime poll state reads | 16 readers (half the reader pool) | reads wait for a permit |
 | Request memory | 64 MiB, 2 × frame length reserved per frame | frames wait for permits |
 | Frame size | 16 MiB | rejected before allocation |
 | Request execution timeout | 30 s | connection closed |

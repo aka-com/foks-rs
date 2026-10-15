@@ -624,7 +624,8 @@ impl TestProfile {
             } else {
                 foks_server::SessionLimits::default().maximum_read_connections
             },
-            // Isolate poll admission from the independently bounded writer/read pools.
+            // As many handler permits as poll slots below, so the capacity
+            // test shows that polls holding every slot occupy no handler permit.
             maximum_in_flight_requests: if matches!(self, Self::RealtimePollCapacity) {
                 4
             } else {

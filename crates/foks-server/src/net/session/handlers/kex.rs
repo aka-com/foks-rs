@@ -8,7 +8,13 @@ pub(super) fn response(data: &ServerData, call: RoutedCall) -> Result<Vec<u8>, R
     let sequence = call.call.sequence();
     match call.route.id {
         RouteId::KexSend => {
-            data.kex_relay.send(call.call.argument())?;
+            // Loopback peers are exempt, as from the per-source connection
+            // limit: behind a local proxy every client shares one source.
+            let source = data
+                .peer_ip
+                .filter(|address| !address.to_canonical().is_loopback())
+                .map(|address| data.rate_limiter.config().source(address));
+            data.kex_relay.send(call.call.argument(), source)?;
             encode_bare_void_success_response_at(sequence).map_err(|_| RpcStatus::Unsupported)
         }
         RouteId::KexReceive => Err(RpcStatus::Unsupported),

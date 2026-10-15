@@ -254,14 +254,10 @@ pub(crate) fn realtime_poll_capacity_is_separate_and_bounded() {
         panic!()
     };
     assert!(!other_result.bumped);
-    let rejections = fixture.server.metrics().admission_rejections;
     assert_eq!(
-        rejections[foks_server::AdmissionRejection::AccountRealtimePolls as usize],
+        fixture.server.metrics().admission_rejections
+            [foks_server::AdmissionRejection::AccountRealtimePolls as usize],
         1
-    );
-    assert_eq!(
-        rejections[foks_server::AdmissionRejection::RealtimePolls as usize],
-        0
     );
     for waiter in waiting {
         let Response::PollResult(result) = waiter.join().unwrap().unwrap() else {

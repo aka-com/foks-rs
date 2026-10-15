@@ -284,7 +284,8 @@ inbox version is the only source of truth. A poll runs as follows:
 | Default poll wait | 25 s |
 | Maximum poll wait | 55 s |
 | Fallback re-check interval | 1 s |
-| Concurrent polls per server | at most 32, and never more than the in-flight request limit |
+| Concurrent polls | 8 per account; in total, at most the authenticated listener's 256 connections |
+| Concurrent poll state reads | 16, half of the 32-connection reader pool; further reads wait |
 | Client-requested poll length | 55,000 ms |
 | Agent socket timeout for a poll | 60 s |
 

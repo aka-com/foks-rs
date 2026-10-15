@@ -31,20 +31,17 @@ pub enum AdmissionRejection {
     RequestRate,
     /// Every blocking request handler permit was in use.
     RequestHandlers,
-    /// Every realtime inbox poll permit was in use.
-    RealtimePolls,
     /// The account already held its maximum realtime inbox polls.
     AccountRealtimePolls,
 }
 
 impl AdmissionRejection {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 6] = [
         Self::ConnectionRate,
         Self::SourceConnections,
         Self::AdmissionQueue,
         Self::RequestRate,
         Self::RequestHandlers,
-        Self::RealtimePolls,
         Self::AccountRealtimePolls,
     ];
 
@@ -55,7 +52,6 @@ impl AdmissionRejection {
             Self::AdmissionQueue => "admission_queue",
             Self::RequestRate => "request_rate",
             Self::RequestHandlers => "request_handlers",
-            Self::RealtimePolls => "realtime_polls",
             Self::AccountRealtimePolls => "account_realtime_polls",
         }
     }

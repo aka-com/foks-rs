@@ -40,10 +40,13 @@ pub(crate) struct ServerData {
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     execution: Arc<Semaphore>,
-    /// Realtime inbox polls in progress. The route is served only on the
-    /// authenticated listener and each poll holds its connection, so the
-    /// bound is that listener's connection limit.
-    realtime_polls: Arc<Semaphore>,
+    /// Realtime inbox poll database reads in progress. The number of polls is
+    /// bounded by the authenticated listener's connection limit, since the
+    /// route is served only there and each poll holds its connection; a hint
+    /// can wake all of them at once. Poll reads wait for one of these permits
+    /// before leasing a reader, so they hold at most half of the reader pool
+    /// (or its only reader) and leave the rest to ordinary requests.
+    realtime_poll_reads: Arc<Semaphore>,
     /// Realtime inbox polls in progress per account UID.
     account_realtime_polls: Arc<crate::rate_limit::KeyedLimit<Vec<u8>>>,
     request_memory: Arc<Semaphore>,
@@ -109,7 +112,9 @@ impl ServerData {
             metrics: Arc::clone(&config.metrics),
             rate_limiter,
             execution: Arc::new(Semaphore::new(config.limits.maximum_in_flight_requests)),
-            realtime_polls: Arc::new(Semaphore::new(config.limits.maximum_active_connections)),
+            realtime_poll_reads: Arc::new(Semaphore::new(realtime_poll_read_permits(
+                config.limits.maximum_read_connections,
+            ))),
             account_realtime_polls: Arc::new(crate::rate_limit::KeyedLimit::new(
                 config.limits.maximum_realtime_polls_per_account,
             )),
@@ -783,6 +788,11 @@ fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
         message.truncate(end);
     }
     RpcStatus::BadArguments(message)
+}
+
+/// Half of the reader pool, and at least one reader.
+fn realtime_poll_read_permits(maximum_read_connections: usize) -> usize {
+    (maximum_read_connections / 2).max(1)
 }
 
 fn permission_denied() -> RpcStatus {

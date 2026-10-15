@@ -163,20 +163,14 @@ pub(super) async fn kex_receive_response(
     kex::receive_response(data, call).await
 }
 
-/// Answers an inbox poll while holding one of the bounded realtime poll
-/// permits and, once the certificate is authenticated, one of its account's
-/// `maximum_realtime_polls_per_account` slots. A poll without a free permit
-/// or slot is rate limited.
+/// Answers an inbox poll while holding, once the certificate is
+/// authenticated, one of its account's `maximum_realtime_polls_per_account`
+/// slots. A poll without a free slot is rate limited.
 pub(super) async fn realtime_poll_response(
     data: &ServerData,
     call: RoutedCall,
     certificate: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, RpcStatus> {
-    let Ok(_poll_permit) = data.realtime_polls.clone().try_acquire_owned() else {
-        data.metrics
-            .admission_rejected(crate::AdmissionRejection::RealtimePolls);
-        return Err(RpcStatus::RateLimited);
-    };
     let certificate = certificate.ok_or_else(super::permission_denied)?;
     realtime::poll_response(data, call, certificate).await
 }

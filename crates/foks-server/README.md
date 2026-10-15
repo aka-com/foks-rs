@@ -160,7 +160,7 @@ the same default.
 - `[rate_limits]` sets the per-source admission limits: the token buckets
   `connection_burst` (512), `connections_per_second` (256), `request_burst`
   (2,000) and `requests_per_second` (1,000), `maximum_tracked_ips` (4,096),
-  `ipv6_source_prefix` (64, at most 128) and
+  `ipv6_source_prefix` (64, 1 to 128) and
   `maximum_connections_per_source` (32). The `serve` flags set the same
   values; the token bucket and tracking flags are named
   `--connection-rate-burst`, `--request-rate-burst` and
@@ -247,8 +247,8 @@ handler-permit refusals. `foks_admission_rejected_total{reason}` counts every
 admission refusal by its cause: `connection_rate` and `request_rate` (the
 per-source token buckets), `source_connections` (the per-source connection
 limit), `admission_queue` (a full queue of accepted connections),
-`request_handlers` (every handler permit in use), and `realtime_polls` and
-`account_realtime_polls` (the realtime inbox poll limits).
+`request_handlers` (every handler permit in use), and `account_realtime_polls`
+(the per-account realtime inbox poll limit).
 
 When OIDC is configured and the host has a rollout policy, `/metrics` also
 reports the `foks_oidc_*` rollout gauges: mode, provider block, authorization
@@ -303,9 +303,21 @@ such a proxy every client would share one source.
 
 A realtime inbox poll (`RtPollInbox`) holds its connection for up to 55
 seconds. One account, across all of its devices, can hold at most
-`maximum_realtime_polls_per_account` polls; the total is bounded by the
-authenticated listener's `maximum_active_connections`. A poll over either
-limit receives status 1012 (rate limited).
+`maximum_realtime_polls_per_account` polls; a poll over that limit receives
+status 1012 (rate limited). The route is served only on the authenticated
+listener, so that listener's `maximum_active_connections` bounds the total.
+Each poll re-reads its inbox state from the reader pool at least once per
+second and after every wake hint, and one hint can wake many polls at once.
+Poll reads therefore wait for one of `maximum_read_connections / 2` permits
+(at least one) before leasing a reader, so that polls never hold more than
+half of the pool and ordinary requests are not refused with status 1012
+because polls hold every reader.
+
+The public KEX relay holds at most 4,096 pairing packets or 32 MiB of them,
+each for up to two hours, and refuses a send at either bound with status 1012.
+One source can hold at most a sixteenth of each (256 packets or 2 MiB), so
+that it cannot fill the relay and block device pairing for other users.
+Loopback peers are exempt, as from the per-source connection limit.
 
 Automatic backups are opt-in:
 
@@ -470,7 +482,9 @@ Clean `PollInbox` and `GetChangedThreads` requests read authenticated durable
 inbox state without entering the writer queue. Membership changes invalidate
 existing inboxes transactionally. Dirty or incomplete inboxes advance one bounded
 page per request/iteration. Polls retain the one-second authorization and missed
-notification check, the 25-second default/55-second maximum, and the 32-poll cap.
+notification check and the 25-second default/55-second maximum. The
+per-account poll limit and the poll reads' share of the reader pool are
+described under [Running](#running).
 
 Schema 44 automatically upgrades only FOKS schema 43 during writer database
 initialization, under the process lock and before reader pools open. Stop the

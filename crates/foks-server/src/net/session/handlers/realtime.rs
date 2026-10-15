@@ -43,8 +43,7 @@ pub(super) async fn poll_response(
                 PollOutcome::TimedOut => s.timed_out_polls += 1,
                 PollOutcome::Failed => s.failed_polls += 1,
                 PollOutcome::Cancelled => s.cancelled_polls += 1,
-                // Counted in foks_admission_rejected_total, as a poll refused
-                // for want of a global permit is.
+                // Counted in foks_admission_rejected_total.
                 PollOutcome::Refused => {}
             });
         }
@@ -92,7 +91,7 @@ async fn poll_inner(
     };
     let pool = data.read_database.clone().ok_or(RpcStatus::Unsupported)?;
     let clock = Arc::clone(&data.clock);
-    let principal = blocking({
+    let principal = poll_read(&data.realtime_poll_reads, {
         let pool = pool.clone();
         let metrics = Arc::clone(&data.metrics);
         move || {
@@ -135,7 +134,7 @@ async fn poll_inner(
                           clock: Arc<dyn foks_server_db::Clock>,
                           service: crate::services::realtime::RealtimeService,
                           metrics: Arc<crate::ServerMetrics>| async move {
-            blocking(move || {
+            poll_read(&data.realtime_poll_reads, move || {
                 let database = pool.lease(&metrics)?;
                 let snapshot = database
                     .snapshot()
@@ -224,10 +223,87 @@ fn poll_result(sequence: u64, inbox_version: u64, bumped: bool) -> Result<Vec<u8
     .map_err(|_| RpcStatus::TransactionRetry)
 }
 
+/// Runs a poll's database read on a blocking worker after waiting for one of
+/// the `realtime_poll_reads` permits. Polls woken together then take their
+/// turns for a reader instead of each leasing one at once, which would fail
+/// polls and ordinary requests with status 1012 once the pool is exhausted.
+async fn poll_read<T: Send + 'static>(
+    permits: &Arc<tokio::sync::Semaphore>,
+    operation: impl FnOnce() -> Result<T, RpcStatus> + Send + 'static,
+) -> Result<T, RpcStatus> {
+    let permit = Arc::clone(permits)
+        .acquire_owned()
+        .await
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    blocking(move || {
+        let _permit = permit;
+        operation()
+    })
+    .await
+}
+
 async fn blocking<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T, RpcStatus> + Send + 'static,
 ) -> Result<T, RpcStatus> {
     tokio::task::spawn_blocking(operation)
         .await
         .map_err(|_| RpcStatus::TransactionRetry)?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::session::realtime_poll_read_permits;
+
+    #[test]
+    fn poll_reads_take_half_of_the_reader_pool_and_at_least_one_reader() {
+        assert_eq!(realtime_poll_read_permits(32), 16);
+        assert_eq!(realtime_poll_read_permits(3), 1);
+        assert_eq!(realtime_poll_read_permits(1), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn waiting_poll_reads_leave_readers_for_ordinary_requests() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("poll.sqlite");
+        drop(foks_server_db::Database::open(&path, foks_server_db::Config::default()).unwrap());
+        let pool = crate::read_pool::ReadPool::new(
+            crate::ReadDatabaseConfig {
+                path,
+                database: foks_server_db::Config::default(),
+            },
+            2,
+        )
+        .unwrap();
+        let metrics = Arc::new(crate::ServerMetrics::default());
+        let permits = Arc::new(tokio::sync::Semaphore::new(realtime_poll_read_permits(2)));
+        let (held, holding) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let first = tokio::spawn({
+            let (pool, metrics, permits) = (pool.clone(), Arc::clone(&metrics), permits.clone());
+            async move {
+                poll_read(&permits, move || {
+                    let _database = pool.lease(&metrics)?;
+                    let _ = held.send(());
+                    let _ = released.recv();
+                    Ok(())
+                })
+                .await
+            }
+        });
+        holding.await.unwrap();
+        // A second poll read, as from a poll woken by the same hint, waits for
+        // the permit rather than leasing the remaining reader.
+        let second = tokio::spawn({
+            let (pool, metrics, permits) = (pool.clone(), Arc::clone(&metrics), permits.clone());
+            async move { poll_read(&permits, move || pool.lease(&metrics).map(drop)).await }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!second.is_finished());
+        drop(pool.lease(&metrics).unwrap());
+        release.send(()).unwrap();
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+        assert_eq!(metrics.snapshot().reader_pool_exhausted, 0);
+    }
 }
