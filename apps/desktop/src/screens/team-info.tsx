@@ -30,7 +30,6 @@ import { itemCountOf } from './group-tabs';
 import { manageReason } from './group-model';
 import { GroupMark } from './group-mark';
 import { storeUsageText, useStoreUsage } from '../store-usage';
-import './team-info.css';
 
 /** A read-only summary; membership changes keep their existing guarded pages. */
 export function TeamInfoPanel({

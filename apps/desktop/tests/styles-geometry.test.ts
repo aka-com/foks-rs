@@ -1,9 +1,10 @@
 /** Durable policy checks for the desktop stylesheets. */
 
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { readSource } from './lib/source';
+import { collectSourceFiles, readSource } from './lib/source';
 
 const TOKENS = '../kit/tokens.css';
 const STYLE_ENTRY = '../src/styles/index.css';
@@ -15,6 +16,7 @@ const STYLES = [
   '../src/screens/files.css',
   '../src/screens/chat.css',
   '../src/screens/chat-picker.css',
+  '../src/screens/team-info.css',
   '../src/shell/search-palette.css',
 ];
 const TOKEN_ONLY_COLORS = STYLES;
@@ -101,6 +103,22 @@ test('the stylesheet entry declares the cascade and imports each style area', as
       `${sheet} is outside the cascade`,
     );
   }
+});
+
+test('only the entry point imports a stylesheet', async () => {
+  // A stylesheet imported by a component sits outside the cascade layers and
+  // outranks every layered rule; it also stops node from loading the module
+  // without Vite.
+  const importers: string[] = [];
+  for (const directory of ['../src/', '../kit/'])
+    for (const file of await collectSourceFiles(
+      new URL(directory, import.meta.url),
+    )) {
+      const source = await readFile(file, 'utf8');
+      if (/^\s*import\s+['"][^'"]+\.css['"]/m.test(source))
+        importers.push(file.pathname.split('/apps/desktop/')[1]);
+    }
+  assert.deepEqual(importers, ['src/main.tsx']);
 });
 
 test('authored text respects the 12px type floor', async () => {

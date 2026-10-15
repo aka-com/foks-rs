@@ -6,5 +6,6 @@
 @import '../screens/files.css' layer(features.files);
 @import '../screens/chat.css' layer(features.chat);
 @import '../screens/chat-picker.css' layer(features.chat);
+@import '../screens/team-info.css' layer(features.teams);
 @import '../shell/search-palette.css' layer(features.search);
 @import './native-window.css' layer(overrides);
