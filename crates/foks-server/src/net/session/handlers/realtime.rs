@@ -85,10 +85,7 @@ async fn poll_inner(
         0 => Duration::from_secs(25),
         milliseconds => Duration::from_millis(milliseconds).min(Duration::from_secs(55)),
     };
-    let pool = data
-        .read_database
-        .clone()
-        .ok_or(RpcStatus::TransactionRetry)?;
+    let pool = data.read_database.clone().ok_or(RpcStatus::Unsupported)?;
     let clock = Arc::clone(&data.clock);
     let principal = blocking({
         let pool = pool.clone();
@@ -97,7 +94,7 @@ async fn poll_inner(
             let database = pool.lease(&metrics)?;
             let now = clock
                 .now_micros()
-                .map_err(|_| RpcStatus::TransactionRetry)?;
+                .map_err(|error| crate::status::unmapped(error.into(), "realtime_poll"))?;
             Principal::authenticate(&CertificateDer::from(certificate), &database, now)
                 .map_err(|_| permission_denied())
         }
@@ -131,7 +128,7 @@ async fn poll_inner(
                     .map_err(|error| crate::status::unmapped(error.into(), "realtime_poll"))?;
                 let now = clock
                     .now_micros()
-                    .map_err(|_| RpcStatus::TransactionRetry)?;
+                    .map_err(|error| crate::status::unmapped(error.into(), "realtime_poll"))?;
                 service.inbox_state(&actor, app, &snapshot, now, ReconcileSource::Poll)
             })
             .await
