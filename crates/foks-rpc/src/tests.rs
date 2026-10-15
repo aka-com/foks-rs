@@ -161,6 +161,38 @@ fn server_text_keeps_whole_characters_within_both_bounds() {
         sanitize_server_text("\u{feff}x\u{2028}y\u{2066}z\u{00ad}".as_bytes(), 16, 64),
         "x y z"
     );
+    // Tag characters can spell hidden ASCII text; annotation controls,
+    // U+180E and U+034F are also invisible.
+    assert_eq!(
+        sanitize_server_text(
+            "a\u{e0001}\u{e0068}\u{e0069}b\u{fff9}c\u{fffb}d\u{180e}e\u{034f}f".as_bytes(),
+            32,
+            64
+        ),
+        "a   b c d e f"
+    );
+}
+
+#[test]
+fn empty_status_detail_is_omitted_from_the_message() {
+    for text in ["", "\n", " \u{200b}\u{202e} ", "\u{e0041}"] {
+        let mut bytes = vec![0x82];
+        super::encode_text(b"Sc", &mut bytes);
+        super::encode_unsigned(1030, &mut bytes);
+        super::encode_text(b"f1", &mut bytes);
+        super::encode_text(text.as_bytes(), &mut bytes);
+        let Err(error) = check_status(&bytes) else {
+            panic!("expected a remote status");
+        };
+        assert!(
+            matches!(&error, Error::RemoteStatus { code: 1030, detail } if detail.detail().is_none()),
+            "{text:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "FOKS server refused: the server rejected the request as malformed (status 1030)"
+        );
+    }
 }
 
 #[test]

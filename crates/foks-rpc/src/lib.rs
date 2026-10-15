@@ -114,10 +114,12 @@ pub enum OAuth2Outcome {
 
 /// Converts untrusted server text to display text. Invalid UTF-8 becomes
 /// U+FFFD; control characters, line and paragraph separators, and invisible
-/// formatting characters (the soft hyphen, zero-width characters, bidirectional
-/// controls and the byte-order mark) become spaces. The result keeps at most
-/// `maximum_characters` characters and `maximum_bytes` bytes without splitting
-/// a character, and has no leading or trailing whitespace.
+/// formatting characters (the soft hyphen, the combining grapheme joiner,
+/// zero-width characters, bidirectional controls, the byte-order mark,
+/// interlinear annotation controls and tag characters) become spaces. The
+/// result keeps at most `maximum_characters` characters and `maximum_bytes`
+/// bytes without splitting a character, and has no leading or trailing
+/// whitespace.
 pub fn sanitize_server_text(
     bytes: &[u8],
     maximum_characters: usize,
@@ -132,11 +134,15 @@ pub fn sanitize_server_text(
             || matches!(
                 character,
                 '\u{00ad}'
+                    | '\u{034f}'
                     | '\u{061c}'
+                    | '\u{180e}'
                     | '\u{200b}'..='\u{200f}'
                     | '\u{2028}'..='\u{202e}'
                     | '\u{2060}'..='\u{206f}'
                     | '\u{feff}'
+                    | '\u{fff9}'..='\u{fffb}'
+                    | '\u{e0000}'..='\u{e007f}'
             ) {
             ' '
         } else {
@@ -195,13 +201,15 @@ fn describe_status(code: u64, detail: &StatusDetail) -> String {
 }
 
 impl StatusDetail {
-    /// Sanitizes and bounds the text a server attached to a status.
+    /// Sanitizes and bounds the text a server attached to a status. Text that
+    /// is empty after sanitizing is no detail.
     pub(crate) fn from_server(bytes: &[u8]) -> Self {
-        Self(Some(sanitize_server_text(
+        let text = sanitize_server_text(
             bytes,
             MAXIMUM_STATUS_DETAIL_BYTES,
             MAXIMUM_STATUS_DETAIL_BYTES,
-        )))
+        );
+        Self((!text.is_empty()).then_some(text))
     }
 
     pub fn detail(&self) -> Option<&str> {

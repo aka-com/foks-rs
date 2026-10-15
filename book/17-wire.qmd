@@ -224,16 +224,23 @@ Four codes receive special handling in the client:
 Any other code becomes a remote-status error that carries the server's
 detail text. That text is untrusted: the client decodes it lossily, replaces
 control characters, line separators and invisible formatting characters
-(zero-width and bidirectional controls among them) with spaces, keeps at
-most 256 bytes, and quotes it in the error message. Both SSO layers classify
-an OAuth2 status (1067) from that sanitized text through one shared
-function, so they reach the same outcome for the same detail.
+(zero-width, bidirectional, interlinear annotation and tag characters among
+them) with spaces, keeps at most 256 bytes, and quotes it in the error
+message. Text that is empty after this is omitted, so the message ends at the
+status number. Both SSO layers classify an OAuth2 status (1067) from that
+sanitized text through one shared function, so they reach the same outcome
+for the same detail.
 
 Client and server code compare codes through the generated `STATUS_*`
 constants rather than numeric literals. The protocol policy's
 `[status_aliases]` table selects which upstream codes receive a constant; a
 code the client needs is added there and the constants are regenerated, so
-every value stays checked against the pinned upstream source.
+every value stays checked against the pinned upstream source. The
+`status_literals` test in `foks-protocol-metadata` scans the non-test
+workspace sources and fails on a 3-5 digit literal in a `code: N` field or
+pattern, a `code == N` comparison, a `matches!(code, N)` pattern or a
+`match code` arm, where the operand is named `code` or `status` or ends in
+`_code` or `_status`.
 
 The Rust server builds its statuses through the Snowpack encoder, which
 reproduces Go's bytes exactly, including `[code, {}]` for a status with no
