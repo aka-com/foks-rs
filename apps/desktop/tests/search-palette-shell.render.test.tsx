@@ -11,7 +11,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge, CopyFieldRequest, ItemRequest } from '../src/bridge';
 import type { Location, LocationStore } from '../src/location';
@@ -25,20 +24,13 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => {
   ui.cleanup();
   window.localStorage.clear();
 });
-test.after(async () => vite.close());
 
 /**
  * The app open at `location`. `lapse` expires the Acme server's compatibility
@@ -56,21 +48,11 @@ async function mount({
   lapse?: boolean | string;
   plaintext?: Record<string, string>;
 } = {}) {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/lease.ts',
-  )) as typeof import('../src/model/lease');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { LocationStore, INITIAL_STATE } = await import('../src/location');
+  const { applyLease } = await import('../src/model/lease');
   const stored: AgentSnapshot = {
     ...FIXTURE,
     plaintext: { ...FIXTURE.plaintext, ...plaintext },
@@ -159,9 +141,7 @@ test('⌘C on an item whose access has stopped warns and copies nothing', async 
 });
 
 test('⌘O on a Password opens its website through the host', async () => {
-  const { mockOpenedSites } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { mockOpenedSites } = await import('../src/mock-bridge');
   const before = mockOpenedSites.length;
   const { opens } = await mount();
   await openPalette('github');
@@ -185,9 +165,7 @@ test('⌘O on a Password opens its website through the host', async () => {
 });
 
 test('⌘O on a website with no scheme opens it as https', async () => {
-  const { mockOpenedSites } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { mockOpenedSites } = await import('../src/mock-bridge');
   const before = mockOpenedSites.length;
   // The `://` in the redirect parameter is not a scheme.
   await mount({

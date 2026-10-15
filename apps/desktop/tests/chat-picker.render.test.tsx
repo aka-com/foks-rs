@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, StrictMode, useState } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { readSource } from './lib/source';
 import type { Bridge } from '../src/bridge';
@@ -15,19 +14,10 @@ installDom({
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => {
-  await vite.close();
-});
 
 test('the creation form reserves vertical focus-ring clearance inside the scrolling sheet body', async () => {
   const css = await readSource(
@@ -38,9 +28,7 @@ test('the creation form reserves vertical focus-ring clearance inside the scroll
 });
 
 async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   const snapshot: AgentSnapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map(
@@ -51,32 +39,19 @@ async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
       }),
     ),
   };
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { ChatInboxProvider } = await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  );
-  const { NewChatSheet } = await vite.ssrLoadModule(
-    '/src/screens/chat-new.tsx',
-  );
-  const { OverlayProvider } = await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  );
-  const locations = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
-  const { NavigationGuardProvider } = await vite.ssrLoadModule(
-    '/src/navigation-guard.tsx',
-  );
-  const { ChatTab } = await vite.ssrLoadModule('/src/screens/chat-tab.tsx');
-  const { ChannelCreationCompletions } = await vite.ssrLoadModule(
-    '/src/chat/channel-creation-provider.tsx',
-  );
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+  const { NewChatSheet } = await import('../src/screens/chat-new');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const locations = await import('../src/location');
+  const { NavigationGuardProvider } = await import('../src/navigation-guard');
+  const { ChatTab } = await import('../src/screens/chat-tab');
+  const { ChannelCreationCompletions } =
+    await import('../src/chat/channel-creation-provider');
   const navigation = new locations.LocationStore();
   const base: Bridge = mockBridge(snapshot);
   const bridge = override?.(base) ?? base;
-  const opened: { store: string; channel: string }[] = [];
+  const opened: { store: string; channel?: string }[] = [];
   const team = snapshot.stores.find(
     (store): store is TeamStore =>
       store.kind === 'team' && store.name === 'Household',
@@ -113,7 +88,7 @@ async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
           bridge,
           snapshot,
           onClose: () => setShown(false),
-          onOpen: (store: string, channel: string) => {
+          onOpen: (store: string, channel?: string) => {
             opened.push({ store, channel });
             setShown(false);
           },
@@ -126,7 +101,7 @@ async function mount(override?: (base: Bridge) => Bridge, tabbed = false) {
       null,
       createElement(OverlayProvider, {
         backgroundRef: { current: null },
-        portalRoot: document.getElementById('overlays'),
+        portalRoot: document.getElementById('overlays')!,
         children: createElement(ChatInboxProvider, {
           bridge,
           snapshot,
@@ -554,9 +529,8 @@ test('Check again only reconciles; Retry creation explicitly delivers a saved pr
 });
 
 test('standalone creation consumers explicitly report the missing application owner', async () => {
-  const { useChannelCreation } = (await vite.ssrLoadModule(
-    '/src/chat/channel-creation-provider.tsx',
-  )) as typeof import('../src/chat/channel-creation-provider');
+  const { useChannelCreation } =
+    await import('../src/chat/channel-creation-provider');
   function Consumer() {
     const { controller, creations } = useChannelCreation();
     assert.equal(controller, null);

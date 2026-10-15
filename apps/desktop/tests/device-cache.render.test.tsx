@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import type { Bridge } from '../src/bridge';
 
@@ -11,36 +10,23 @@ installDom({
   timers: true,
   act: true,
 });
-let vite: ViteDevServer;
 let ui: typeof import('@testing-library/react');
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => {
   ui.cleanup();
   Reflect.deleteProperty(document, 'hidden');
 });
-test.after(async () => vite.close());
 
 test('Account and Devices share metadata across navigation; Refresh reloads it and card presence stays live', async () => {
   Object.defineProperty(document, 'hidden', {
     configurable: true,
     value: false,
   });
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const base = mockBridge(FIXTURE);
   let releaseCard!: (cards: { serial: number }[]) => void;
   let connected: { serial: number }[] = [];
@@ -68,9 +54,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
       return connected;
     },
   };
-  const { deviceAlertRegistry } = (await vite.ssrLoadModule(
-    '/src/screens/device-alert.ts',
-  )) as typeof import('../src/screens/device-alert');
+  const { deviceAlertRegistry } = await import('../src/screens/device-alert');
   ui.render(createElement(App, { bridge }));
   // The shell preloads every eligible account before visiting Devices.
   await ui.waitFor(() => {

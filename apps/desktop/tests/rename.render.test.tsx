@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { workflowScope } from './lib/workflow-scope';
 import { decodeRenameProgress } from '../src/rename-contract';
@@ -13,29 +12,20 @@ installDom({
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 /** The sheet portals into the overlay root, so every panel needs a provider. */
 async function overlay(children: ReactNode) {
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   return createElement(OverlayProvider, {
     backgroundRef: { current: null },
     portalRoot,
-    children: await workflowScope(vite, children),
+    children: await workflowScope(children),
   });
 }
 
@@ -64,12 +54,8 @@ test('rename status rejects secrets, unknown fields and invalid handles', () => 
   assert.throws(() => decodeRenameProgress(Array(161).fill(progress)));
 });
 test('the dialog prepares a rename and returns its operation', async () => {
-  const { RenamePanel } = (await vite.ssrLoadModule(
-    '/src/components/rename-panel.tsx',
-  )) as typeof import('../src/components/rename-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { RenamePanel } = await import('../src/components/rename-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const actions: string[] = [];
   const prepared: RenameProgress[][] = [];
   const bridge = {
@@ -109,12 +95,8 @@ test('the dialog prepares a rename and returns its operation', async () => {
   assert.deepEqual(actions, ['prepare']);
 });
 test('a prepare answered for another account is rejected', async () => {
-  const { RenamePanel } = (await vite.ssrLoadModule(
-    '/src/components/rename-panel.tsx',
-  )) as typeof import('../src/components/rename-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { RenamePanel } = await import('../src/components/rename-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const bridge = {
     ...mockBridge(),
     renameAccount: async () => [{ ...progress, account_alias: 'other' }],

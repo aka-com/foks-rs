@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useCallback, useState } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom, settle } from './lib/dom-harness';
 import type {
   ChatAction,
@@ -18,28 +17,16 @@ import { phaseOf, running } from '../src/chat/send/outgoing';
 
 installDom({ act: true, timers: true });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 let useChatComposer: typeof Hook;
 let useChatDraft: typeof DraftHook;
 let useChatHistory: typeof HistoryHook;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  ({ useChatComposer, useChatDraft } = await vite.ssrLoadModule(
-    '/src/chat/use-chat-composer.ts',
-  ));
-  ({ useChatHistory } = await vite.ssrLoadModule(
-    '/src/chat/use-chat-history.ts',
-  ));
+  ({ useChatComposer, useChatDraft } =
+    await import('../src/chat/use-chat-composer'));
+  ({ useChatHistory } = await import('../src/chat/use-chat-history'));
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => {
-  await vite.close();
-});
 
 function deferred() {
   let resolve!: () => void;
@@ -65,15 +52,10 @@ async function setup(
     run: (action?: ChatAction) => Promise<ChatReply>,
   ) => Promise<ChatReply>,
 ) {
-  const { ChatInboxProvider, useChatInbox } = (await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  )) as typeof import('../src/chat/inbox-provider');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { ChatInboxProvider, useChatInbox } =
+    await import('../src/chat/inbox-provider');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
@@ -473,12 +455,8 @@ test('the application service completes preparation after the composer unmounts'
 });
 
 test('history revisions append incrementally, retain older rows, and replace gaps and resets', async () => {
-  const { mergeHistoryPage } = (await vite.ssrLoadModule(
-    '/src/chat/conversation-model.ts',
-  )) as typeof import('../src/chat/conversation-model');
-  const { historyEvent } = (await vite.ssrLoadModule(
-    '/src/chat/conversation-events.ts',
-  )) as typeof import('../src/chat/conversation-events');
+  const { mergeHistoryPage } = await import('../src/chat/conversation-model');
+  const { historyEvent } = await import('../src/chat/conversation-events');
   const channel: ChatChannel = {
     id: channelId,
     name: '',
@@ -686,12 +664,8 @@ test('changing channels ignores the old in-flight page and starts a full load', 
 });
 
 test('inline history callbacks neither reload the window nor go stale', async () => {
-  const { mergeHistoryPage } = (await vite.ssrLoadModule(
-    '/src/chat/conversation-model.ts',
-  )) as typeof import('../src/chat/conversation-model');
-  const { historyEvent } = (await vite.ssrLoadModule(
-    '/src/chat/conversation-events.ts',
-  )) as typeof import('../src/chat/conversation-events');
+  const { mergeHistoryPage } = await import('../src/chat/conversation-model');
+  const { historyEvent } = await import('../src/chat/conversation-events');
   const channel: ChatChannel = {
     id: channelId,
     name: '',
@@ -864,12 +838,8 @@ test('a new request owner reads the window again and drops the old reply', async
 });
 
 test('a tail costs one read per arrival, and a revision that moved no position costs none', async () => {
-  const { mergeHistoryPage } = (await vite.ssrLoadModule(
-    '/src/chat/conversation-model.ts',
-  )) as typeof import('../src/chat/conversation-model');
-  const { historyEvent } = (await vite.ssrLoadModule(
-    '/src/chat/conversation-events.ts',
-  )) as typeof import('../src/chat/conversation-events');
+  const { mergeHistoryPage } = await import('../src/chat/conversation-model');
+  const { historyEvent } = await import('../src/chat/conversation-events');
   const channel: ChatChannel = {
     id: channelId,
     name: '',
@@ -1021,12 +991,8 @@ test('a tail costs one read per arrival, and a revision that moved no position c
 });
 
 test('an unread channel opens at its first unread row and pages forward while detached', async () => {
-  const { mergeHistoryPage } = (await vite.ssrLoadModule(
-    '/src/chat/conversation-model.ts',
-  )) as typeof import('../src/chat/conversation-model');
-  const { historyEvent } = (await vite.ssrLoadModule(
-    '/src/chat/conversation-events.ts',
-  )) as typeof import('../src/chat/conversation-events');
+  const { mergeHistoryPage } = await import('../src/chat/conversation-model');
+  const { historyEvent } = await import('../src/chat/conversation-events');
   const channel: ChatChannel = {
     id: channelId,
     name: '',

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
 import type { AgentSnapshot } from '../src/model/types';
@@ -13,20 +12,13 @@ const dom = installDom({
   timers: true,
 });
 
-let vite: ViteDevServer;
 let ui: typeof import('@testing-library/react');
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 
 test.after(async () => {
-  await vite.close();
   dom.window.close();
 });
 
@@ -35,9 +27,7 @@ function resetLocation(): void {
 }
 
 async function unclaimedSnapshot(): Promise<AgentSnapshot> {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   return {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) =>
@@ -53,16 +43,10 @@ async function unclaimedSnapshot(): Promise<AgentSnapshot> {
 }
 
 test('first-run resume reports an unreachable managed local server', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { mockBridge } = await import('../src/mock-bridge');
   const { encodeFirstRunCheckpoint, FIRST_RUN_CHECKPOINT_KEY } =
-    (await vite.ssrLoadModule(
-      '/src/first-run-state.ts',
-    )) as typeof import('../src/first-run-state');
+    await import('../src/first-run-state');
 
   const base = mockBridge(await unclaimedSnapshot());
   const describedProfiles: string[] = [];
@@ -111,15 +95,9 @@ test('first-run resume reports an unreachable managed local server', async () =>
 });
 
 test('first-run retry reconnects the agent transport after a connection loss', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIRST_RUN_CHECKPOINT_KEY } = (await vite.ssrLoadModule(
-    '/src/first-run-state.ts',
-  )) as typeof import('../src/first-run-state');
+  const { App } = await import('../src/app-root');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIRST_RUN_CHECKPOINT_KEY } = await import('../src/first-run-state');
   window.localStorage.removeItem(FIRST_RUN_CHECKPOINT_KEY);
   resetLocation();
 

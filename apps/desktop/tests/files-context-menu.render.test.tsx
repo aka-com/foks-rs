@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useSyncExternalStore } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import type { AgentSnapshot, Item, TrashEntry } from '../src/model';
 import type { CopyFieldRequest, ItemRequest } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
@@ -13,40 +12,21 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => {
   ui.cleanup();
   window.localStorage.removeItem('filesView');
 });
-test.after(async () => vite.close());
 
 async function mount(accessNow?: () => number) {
-  const { ItemsScreen } = (await vite.ssrLoadModule(
-    '/src/screens/items-screen.tsx',
-  )) as typeof import('../src/screens/items-screen');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
+  const { ItemsScreen } = await import('../src/screens/items-screen');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { LocationStore, INITIAL_STATE } = await import('../src/location');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
   const toasts = new ToastController();
   const locations = new LocationStore({
     ...INITIAL_STATE,

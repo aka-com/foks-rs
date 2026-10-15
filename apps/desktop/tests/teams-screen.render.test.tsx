@@ -17,7 +17,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
 import type { Location, LocationStore, NavigateOptions } from '../src/location';
@@ -30,20 +29,11 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => {
-  await vite.close();
-});
 
 /** The Teams tab mounted over a store, with every other tab a placeholder. */
 async function setup(
@@ -51,31 +41,15 @@ async function setup(
   /** The fixture scene, which `?state=create` sets alongside the address. */
   scene = 'groups',
 ): Promise<{ store: LocationStore }> {
-  const locations = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
-  const { TeamsScreen } = (await vite.ssrLoadModule(
-    '/src/screens/teams-screen.tsx',
-  )) as typeof import('../src/screens/teams-screen');
+  const locations = await import('../src/location');
+  const { TeamsScreen } = await import('../src/screens/teams-screen');
   const { ScreenErrorBoundary, screenBoundaryKey, screenIdentity } =
-    (await vite.ssrLoadModule(
-      '/src/app/screen-error-boundary.tsx',
-    )) as typeof import('../src/app/screen-error-boundary');
-  const { NavigationGuardProvider } = (await vite.ssrLoadModule(
-    '/src/navigation-guard.tsx',
-  )) as typeof import('../src/navigation-guard');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+    await import('../src/app/screen-error-boundary');
+  const { NavigationGuardProvider } = await import('../src/navigation-guard');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { ToastController, ToastProvider } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
 
   const snapshot = FIXTURE;
   const bridge = mockBridge(snapshot);

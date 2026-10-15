@@ -9,7 +9,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
 import type { AgentSnapshot } from '../src/model';
@@ -23,22 +22,15 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.beforeEach(() => window.localStorage.clear());
 test.afterEach(() => {
   ui.cleanup();
   window.localStorage.clear();
 });
-test.after(async () => vite.close());
 
 /** The mock's written copy of the personal account's recovery phrase. */
 const PHRASE =
@@ -50,21 +42,11 @@ async function renderDevices(
   decorate: (bridge: Bridge) => Bridge = (bridge) => bridge,
   scene = 'devices',
 ) {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { DevicesScreen } = (await vite.ssrLoadModule(
-    '/src/screens/devices-screen.tsx',
-  )) as typeof import('../src/screens/devices-screen');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { FIXTURE } = await import('../src/fixture');
+  const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { ToastController, ToastProvider } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const snapshot: AgentSnapshot = FIXTURE;

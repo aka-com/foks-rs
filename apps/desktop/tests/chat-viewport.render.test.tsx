@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { layOutLists } from './lib/list-layout';
 import type { ChatMessage } from '../src/chat-contract';
@@ -10,25 +9,16 @@ import type { useChatViewport as ViewportHook } from '../src/chat/use-chat-viewp
 
 installDom({ act: true, timers: true });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 let useChatViewport: typeof ViewportHook;
 let restoreLayout: () => void;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  ({ useChatViewport } = await vite.ssrLoadModule(
-    '/src/chat/use-chat-viewport.ts',
-  ));
+  ({ useChatViewport } = await import('../src/chat/use-chat-viewport'));
   restoreLayout = layOutLists();
 });
 test.afterEach(() => ui.cleanup());
 test.after(async () => {
   restoreLayout();
-  await vite.close();
 });
 
 const id = (sequence: number) => sequence.toString(16).padStart(32, '0');

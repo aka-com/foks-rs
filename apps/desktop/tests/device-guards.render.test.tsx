@@ -10,7 +10,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { ComponentType, ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
 import type { GuardVerdict, Location, LocationStore } from '../src/location';
@@ -25,18 +24,11 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 /** A call the sheet is still waiting on when the guard is asked. */
 function never<T>(): Promise<T> {
@@ -47,30 +39,14 @@ function never<T>(): Promise<T> {
 const AWAY: Location = { kind: 'files' };
 
 async function harness() {
-  const sheets = (await vite.ssrLoadModule(
-    '/src/screens/device-sheets.tsx',
-  )) as typeof import('../src/screens/device-sheets');
-  const locations = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
-  const guards = (await vite.ssrLoadModule(
-    '/src/navigation-guard.tsx',
-  )) as typeof import('../src/navigation-guard');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { WorkflowProvider } = (await vite.ssrLoadModule(
-    '/src/workflow-context.tsx',
-  )) as typeof import('../src/workflow-context');
+  const sheets = await import('../src/screens/device-sheets');
+  const locations = await import('../src/location');
+  const guards = await import('../src/navigation-guard');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
+  const { ToastController, ToastProvider } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { WorkflowProvider } = await import('../src/workflow-context');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const account = FIXTURE.stores.find(
@@ -398,15 +374,9 @@ test('a revocation already sent refuses the move', async () => {
 
 test('the two default routes are canonicalized without asking the guards', async () => {
   const h = await harness();
-  const { DevicesScreen } = (await vite.ssrLoadModule(
-    '/src/screens/devices-screen.tsx',
-  )) as typeof import('../src/screens/devices-screen');
-  const { AccountSection } = (await vite.ssrLoadModule(
-    '/src/screens/account-section.tsx',
-  )) as typeof import('../src/screens/account-section');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const { AccountSection } = await import('../src/screens/account-section');
+  const { FIXTURE } = await import('../src/fixture');
   const snapshot: AgentSnapshot = FIXTURE;
 
   for (const [screen, kind] of [
@@ -450,15 +420,9 @@ test('the two default routes are canonicalized without asking the guards', async
 
 test('Devices and Account wait for account inventory instead of showing a missing account', async () => {
   const h = await harness();
-  const { DevicesScreen } = (await vite.ssrLoadModule(
-    '/src/screens/devices-screen.tsx',
-  )) as typeof import('../src/screens/devices-screen');
-  const { AccountSection } = (await vite.ssrLoadModule(
-    '/src/screens/account-section.tsx',
-  )) as typeof import('../src/screens/account-section');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const { AccountSection } = await import('../src/screens/account-section');
+  const { FIXTURE } = await import('../src/fixture');
   const snapshot: AgentSnapshot = {
     ...FIXTURE,
     accounts: [],

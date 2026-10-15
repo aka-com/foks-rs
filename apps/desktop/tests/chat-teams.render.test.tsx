@@ -8,10 +8,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, StrictMode, useState } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom, settle } from './lib/dom-harness';
 import { readSource } from './lib/source';
 import type { Location } from '../src/location';
+
+type ChatLocation = Extract<Location, { kind: 'chat' }>;
 import type { AgentSnapshot } from '../src/model';
 import type { Bridge } from '../src/bridge';
 import type { ChatClock } from '../src/chat/clock';
@@ -52,15 +53,9 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => {
   ui.cleanup();
@@ -68,15 +63,10 @@ test.afterEach(() => {
   // each test starts from their defaults.
   window.localStorage.clear();
 });
-test.after(async () => {
-  await vite.close();
-});
 
 /** The fixture with chat granted on the named servers and nowhere else. */
 async function snapshotWithChat(servers: string[]): Promise<AgentSnapshot> {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   return {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) => ({
@@ -122,22 +112,12 @@ async function mount(
   /** Also mount the navigation rail, which draws the Chat unread count. */
   rail = false,
 ) {
-  const { ChatTab } = await vite.ssrLoadModule('/src/screens/chat-tab.tsx');
-  const { Sidebar } = (await vite.ssrLoadModule(
-    '/src/shell/sidebar.tsx',
-  )) as typeof import('../src/shell/sidebar');
-  const { ChatInboxProvider } = await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  );
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { ChatTab } = await import('../src/screens/chat-tab');
+  const { Sidebar } = await import('../src/shell/sidebar');
+  const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { mockBridge } = await import('../src/mock-bridge');
   const base = mockBridge(snapshot);
   const bridge = override?.(base) ?? base;
   const portalRoot = document.getElementById('overlays');
@@ -177,7 +157,7 @@ async function mount(
                 key: 'tab',
                 snapshot: live,
                 bridge,
-                location,
+                location: location as ChatLocation,
                 query,
                 accessNow: shell?.accessNow,
                 accessGenerations: generations,
@@ -622,9 +602,7 @@ test('a team whose server offers no chat sits under No chat with the reason', as
 });
 
 test('a team with a lapsed server check-in remains listed with recovery actions', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/lease.ts',
-  )) as typeof import('../src/model/lease');
+  const { applyLease } = await import('../src/model/lease');
   // Engineering's server offers chat but its check-in has expired, so the team
   // is listed and locked rather than filed under "No chat".
   const snapshot = applyLease(
@@ -961,12 +939,8 @@ test('a channel creation retried from the unsent list reports its failure as a c
 });
 
 test('the rail returns to the chat the tab last had open', async () => {
-  const { sidebarCycleLocations } = (await vite.ssrLoadModule(
-    '/src/shell/sidebar.tsx',
-  )) as typeof import('../src/shell/sidebar');
-  const { railTabOf, rememberChatLocation } = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
+  const { sidebarCycleLocations } = await import('../src/shell/sidebar');
+  const { railTabOf, rememberChatLocation } = await import('../src/location');
   /** Where the rail's Chat tab goes, whatever its place in the cycle. */
   const railChat = () =>
     sidebarCycleLocations().find((place) => railTabOf(place) === 'chat');
@@ -1590,9 +1564,7 @@ test('New channel waits for a team’s channels before either step can be answer
 });
 
 test('a team that goes out of reach while step two is open refuses it and says why', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/lease.ts',
-  )) as typeof import('../src/model/lease');
+  const { applyLease } = await import('../src/model/lease');
   const fresh = await snapshotWithChat(['personal', 'acme']);
   const shell: Partial<Shell> = {};
   await mount(
@@ -1815,9 +1787,7 @@ test('changing channels abandons the initiating sheet without redirecting when c
 });
 
 test('an ambiguous access failure keeps the submission a recovery re-issues', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/lease.ts',
-  )) as typeof import('../src/model/lease');
+  const { applyLease } = await import('../src/model/lease');
   const fresh = await snapshotWithChat(['personal', 'acme']);
   const submissions: string[] = [];
   const shell: Partial<Shell> = {};
@@ -2000,9 +1970,7 @@ test('a team inbox stays channel-less until a conversation is selected', async (
   await ui.screen.findByText('Choose a channel to open a conversation.');
   await ui.waitFor(() => assert.ok(head('Engineering')));
   assert.equal(journal.length, 0);
-  const { crumbTrail } = (await vite.ssrLoadModule(
-    '/src/shell/topbar.tsx',
-  )) as typeof import('../src/shell/topbar');
+  const { crumbTrail } = await import('../src/shell/topbar');
   assert.deepEqual(crumbTrail({ kind: 'chat', ref: 'team:eng' }, snapshot), [
     'Chat',
     'Engineering',
@@ -2017,9 +1985,7 @@ test('a team inbox stays channel-less until a conversation is selected', async (
       'ab'.repeat(16),
     ),
   );
-  const { parentLocation } = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
+  const { parentLocation } = await import('../src/location');
   const parent = parentLocation(journal.at(-1)!);
   assert.ok(parent);
   await ui.act(async () => {
@@ -3324,18 +3290,10 @@ test('New channel opens the Create channel sheet on the open team', async () => 
 
 test('the Create channel sheet selects the only team with chat when no team is open', async () => {
   const snapshot = await snapshotWithChat(['personal']);
-  const { NewChatSheet } = await vite.ssrLoadModule(
-    '/src/screens/chat-new.tsx',
-  );
-  const { ChatInboxProvider } = await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  );
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { NewChatSheet } = await import('../src/screens/chat-new');
+  const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { mockBridge } = await import('../src/mock-bridge');
   const bridge = mockBridge(snapshot);
   ui.render(
     createElement(OverlayProvider, {

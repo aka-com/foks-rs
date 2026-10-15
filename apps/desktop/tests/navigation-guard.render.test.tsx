@@ -11,7 +11,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
 import type { GuardVerdict, LocationStore } from '../src/location';
@@ -24,30 +23,17 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 let location: typeof import('../src/location');
 let guards: typeof import('../src/navigation-guard');
 let overlays: typeof import('../kit/overlay-primitives');
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  location = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
-  guards = (await vite.ssrLoadModule(
-    '/src/navigation-guard.tsx',
-  )) as typeof import('../src/navigation-guard');
-  overlays = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  location = await import('../src/location');
+  guards = await import('../src/navigation-guard');
+  overlays = await import('../kit/overlay-primitives');
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 const DISCARD: GuardVerdict = {
   verdict: 'prompt',

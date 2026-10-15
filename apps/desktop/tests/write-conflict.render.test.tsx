@@ -8,7 +8,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
@@ -20,34 +19,19 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 const PATH = '/logins/github.com';
 
 /** The app open on the personal vault's GitHub login, details showing. */
 async function mount(decorate: (base: Bridge) => Partial<Bridge>) {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const item = FIXTURE.items.find(
     (entry) => entry.store === 'acct:personal' && entry.path === PATH,
   );
@@ -116,12 +100,9 @@ test('an edit conflict with a deleted item preserves a new-item draft', async ()
 });
 
 test('a deleted login resumes as a Document when the Password sheet cannot hold every line', async () => {
-  const { conflictDraftWorkflow } = (await vite.ssrLoadModule(
-    '/src/screens/write-workflows.tsx',
-  )) as typeof import('../src/screens/write-workflows');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { conflictDraftWorkflow } =
+    await import('../src/screens/write-workflows');
+  const { FIXTURE } = await import('../src/fixture');
   const item = FIXTURE.items.find(
     (entry) => entry.store === 'acct:personal' && entry.path === PATH,
   );

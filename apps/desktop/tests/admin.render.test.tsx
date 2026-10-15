@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { workflowScope } from './lib/workflow-scope';
 import { decodeCommandAck } from '../src/bridge';
@@ -12,29 +11,20 @@ installDom({
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 /** The sheet portals into the overlay root, so every panel needs a provider. */
 async function overlay(children: ReactNode) {
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   return createElement(OverlayProvider, {
     backgroundRef: { current: null },
     portalRoot,
-    children: await workflowScope(vite, children),
+    children: await workflowScope(children),
   });
 }
 
@@ -49,12 +39,8 @@ test('admin acknowledgments cannot return bearer URLs to the main webview', () =
   assert.throws(() => decodeCommandAck({ ok: true, url: 'secret' }));
 });
 test('admin configuration and opening are distinct explicit actions and PIN is cleared', async () => {
-  const { AdminPanel } = (await vite.ssrLoadModule(
-    '/src/components/admin-panel.tsx',
-  )) as typeof import('../src/components/admin-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { AdminPanel } = await import('../src/components/admin-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const calls: unknown[][] = [];
   const bridge = {
     ...mockBridge(),

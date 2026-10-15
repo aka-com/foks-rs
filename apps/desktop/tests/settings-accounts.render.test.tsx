@@ -9,7 +9,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
 import type { Location } from '../src/location';
@@ -24,24 +23,15 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 async function fixture(): Promise<AgentSnapshot> {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   return FIXTURE;
 }
 
@@ -64,18 +54,10 @@ async function renderPeople(
     holdRefresh,
   }: PeopleOptions = {},
 ) {
-  const { AccountSection } = (await vite.ssrLoadModule(
-    '/src/screens/account-section.tsx',
-  )) as typeof import('../src/screens/account-section');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { AccountSection } = await import('../src/screens/account-section');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { ToastController, ToastProvider } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const refreshed: string[] = [];
@@ -169,9 +151,7 @@ test('an ungranted device capability does not invent a missing backup key', asyn
       },
     },
   );
-  const { deviceAlertRegistry } = (await vite.ssrLoadModule(
-    '/src/screens/device-alert.ts',
-  )) as typeof import('../src/screens/device-alert');
+  const { deviceAlertRegistry } = await import('../src/screens/device-alert');
   assert.equal(reads, 0);
   assert.equal(
     deviceAlertRegistry(observed)
@@ -475,9 +455,7 @@ test('a read answering after the account changed is dropped', async () => {
 });
 
 test('a stopped account displays an unavailable notice on the Devices field and disables the link', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/index.ts',
-  )) as typeof import('../src/model');
+  const { applyLease } = await import('../src/model');
   const { rendered } = await renderPeople(
     applyLease(await fixture(), 'lapsed'),
     'acct:work',
@@ -579,9 +557,7 @@ test('an unpaired server is hidden until its account inventory loads successfull
 });
 
 test('a notice this page can route elsewhere is not repeated here', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/index.ts',
-  )) as typeof import('../src/model');
+  const { applyLease } = await import('../src/model');
   const lapsed = applyLease(await fixture(), 'lapsed');
   const { rendered } = await renderPeople(lapsed, 'acct:personal');
 
@@ -1530,9 +1506,7 @@ test('the Storage fact reads what the account’s vault stores, without a quota'
 });
 
 test('a stopped account does not read its storage', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/index.ts',
-  )) as typeof import('../src/model');
+  const { applyLease } = await import('../src/model');
   const reads: string[] = [];
   const { rendered } = await renderPeople(
     applyLease(await fixture(), 'lapsed'),

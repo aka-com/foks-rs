@@ -3,28 +3,19 @@
  *
  * The index is what the palette can find at all; `searchResults` is the order
  * it finds it in, the scope chips, the `in:` and `kind:` tokens, the per-group
- * cap, and the Recent, Favorites and Actions lists an empty query shows. The
- * module is loaded
- * through Vite because the palette it lives in imports its own stylesheet and
- * the kit by absolute alias; neither resolves under a bare node loader.
+ * cap, and the Recent, Favorites and Actions lists an empty query shows.
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { FIXTURE } from '../src/fixture';
+import * as palette from '../src/shell/search-palette';
 import type {
   SearchAction,
   SearchChannel,
   SearchEntry,
 } from '../src/shell/search-palette';
-
-type Palette = typeof import('../src/shell/search-palette');
-
-let palette: Palette;
-let vite: ViteDevServer;
-let INDEX: readonly SearchEntry[];
 
 const CHANNELS: readonly SearchChannel[] = [
   { store: 'team:eng', name: 'deploys', id: 'a'.repeat(32) },
@@ -34,18 +25,7 @@ const CHANNELS: readonly SearchChannel[] = [
   { store: 'team:missing', name: 'ghosts' },
 ];
 
-test.before(async () => {
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  palette = (await vite.ssrLoadModule(
-    '/src/shell/search-palette.tsx',
-  )) as Palette;
-  INDEX = palette.searchIndex(FIXTURE, CHANNELS);
-});
-test.after(async () => vite.close());
+const INDEX = palette.searchIndex(FIXTURE, CHANNELS);
 
 function names(entries: readonly SearchEntry[]): string[] {
   return entries.map((entry) => entry.name);

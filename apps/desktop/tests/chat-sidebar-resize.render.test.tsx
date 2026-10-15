@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 
 const dom = installDom({ url: 'http://localhost/', act: true });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 let useResize: typeof import('../src/screens/use-chat-sidebar-resize').useChatSidebarResize;
 let frameWidth = 1100;
 let resized: (() => void) | undefined;
@@ -17,14 +15,8 @@ const originalObserver = globalThis.ResizeObserver;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  ({ useChatSidebarResize: useResize } = await vite.ssrLoadModule(
-    '/src/screens/use-chat-sidebar-resize.tsx',
-  ));
+  ({ useChatSidebarResize: useResize } =
+    await import('../src/screens/use-chat-sidebar-resize'));
   HTMLElement.prototype.getBoundingClientRect = function () {
     return this.classList.contains('chat-screen')
       ? { ...originalRect.call(this), width: frameWidth }
@@ -55,7 +47,6 @@ test.after(async () => {
     configurable: true,
     value: originalObserver,
   });
-  await vite.close();
   dom.window.close();
 });
 

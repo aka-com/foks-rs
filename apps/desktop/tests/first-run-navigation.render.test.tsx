@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import type { Bridge } from '../src/bridge';
 import type { FirstRunExperienceProps } from '../src/screens/first-run-screen';
 import type { FirstRunCheckpoint } from '../src/first-run-state';
@@ -13,21 +12,12 @@ installDom({
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => {
   ui.cleanup();
   window.localStorage.clear();
-});
-test.after(async () => {
-  await vite.close();
 });
 
 function deferred<T>() {
@@ -51,26 +41,15 @@ function restartSetup(view: ReturnType<typeof ui.render>): void {
 }
 
 async function harness() {
-  const { FirstRunExperience } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-screen.tsx',
-  )) as typeof import('../src/screens/first-run-screen');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { FirstRunExperience } =
+    await import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
-  const state = (await vite.ssrLoadModule(
-    '/src/first-run-state.ts',
-  )) as typeof import('../src/first-run-state');
+  const state = await import('../src/first-run-state');
   const profile = {
     profile: 'personal',
     hostId: `02${'2'.repeat(64)}`,
@@ -347,9 +326,8 @@ test('entry without prerequisites and changed navigation resolve to valid steps'
 
 test('restarting setup is confirmed first and then drops retained attempts', async () => {
   const h = await harness();
-  const { retainSetup, retainedSetups } = (await vite.ssrLoadModule(
-    '/src/first-run-recovery.ts',
-  )) as typeof import('../src/first-run-recovery');
+  const { retainSetup, retainedSetups } =
+    await import('../src/first-run-recovery');
   const pending = h.transitionFirstRun(
     { ...h.checkpoint, account: undefined, state: 'account' },
     { type: 'account-provisioned', alias: 'personal', deviceName: 'Device' },
@@ -539,9 +517,7 @@ test('restart during identity loading ignores the old read when it completes', a
 
 test('a retained attempt on the same target is reconciled instead of creating again', async () => {
   const h = await harness();
-  const { retainSetup } = (await vite.ssrLoadModule(
-    '/src/first-run-recovery.ts',
-  )) as typeof import('../src/first-run-recovery');
+  const { retainSetup } = await import('../src/first-run-recovery');
   retainSetup({
     ...h.checkpoint,
     account: undefined,

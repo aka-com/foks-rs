@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, type ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 
 installDom({
@@ -11,31 +10,16 @@ installDom({
   act: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 async function setup(label: string | null) {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((server) => ({
@@ -59,12 +43,8 @@ async function setup(label: string | null) {
 for (const label of ['Local server alias', null]) {
   test(`server page and breadcrumb use ${label ?? 'Loading...'} while retaining the Internal ID`, async () => {
     const h = await setup(label);
-    const { ServersSection } = (await vite.ssrLoadModule(
-      '/src/screens/servers-screen.tsx',
-    )) as typeof import('../src/screens/servers-screen');
-    const { crumbTrail } = (await vite.ssrLoadModule(
-      '/src/shell/topbar.tsx',
-    )) as typeof import('../src/shell/topbar');
+    const { ServersSection } = await import('../src/screens/servers-screen');
+    const { crumbTrail } = await import('../src/shell/topbar');
     const profile = h.snapshot.servers[0].profileName;
     const props = {
       snapshot: h.snapshot,

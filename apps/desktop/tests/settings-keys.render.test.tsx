@@ -8,7 +8,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
 import type { Location } from '../src/location';
@@ -23,24 +22,15 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 async function fixture(): Promise<AgentSnapshot> {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   return FIXTURE;
 }
 
@@ -77,18 +67,10 @@ async function renderDevices(
     refresh = async () => snapshot,
   }: DevicesOptions = {},
 ) {
-  const { DevicesScreen } = (await vite.ssrLoadModule(
-    '/src/screens/devices-screen.tsx',
-  )) as typeof import('../src/screens/devices-screen');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { ToastController, ToastProvider } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const bridge = decorate(mockBridge(snapshot));
@@ -387,9 +369,7 @@ test('the recovery operations moved to a security key’s own page, each saying 
 
 test('a stopped account lists nothing and says why every action is off', async () => {
   const snapshot = await fixture();
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/index.ts',
-  )) as typeof import('../src/model');
+  const { applyLease } = await import('../src/model');
   const rendered = await renderDevices(applyLease(snapshot, 'lapsed'), {
     store: 'acct:work',
   });
@@ -1314,9 +1294,7 @@ test('device removal refreshes native device records before submitting the write
 });
 
 test('an account with no recovery phrase gets its own band without publishing shell alerts', async () => {
-  const { deviceAlertRegistry } = (await vite.ssrLoadModule(
-    '/src/screens/device-alert.ts',
-  )) as typeof import('../src/screens/device-alert');
+  const { deviceAlertRegistry } = await import('../src/screens/device-alert');
   const snapshot = await fixture();
   const bridgeRef: { current: Bridge | null } = { current: null };
   const page = await renderDevices(snapshot, {
@@ -1346,9 +1324,7 @@ test('an account with no recovery phrase gets its own band without publishing sh
 });
 
 test('an account with a recovery phrase draws no band without publishing shell alerts', async () => {
-  const { deviceAlertRegistry } = (await vite.ssrLoadModule(
-    '/src/screens/device-alert.ts',
-  )) as typeof import('../src/screens/device-alert');
+  const { deviceAlertRegistry } = await import('../src/screens/device-alert');
   const snapshot = await fixture();
   const bridgeRef: { current: Bridge | null } = { current: null };
   const page = await renderDevices(snapshot, {

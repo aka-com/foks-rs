@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, StrictMode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import type { Bridge, CommandError, GoProfileCandidate } from '../src/bridge';
 import { identityRetryDelay } from '../src/screens/first-run/use-account-identity';
 import { installDom, settle } from './lib/dom-harness';
@@ -12,7 +11,6 @@ installDom({
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 const candidate = {
   candidateId: 'candidate',
   username: 'cli-owner',
@@ -29,40 +27,22 @@ const candidate = {
 } satisfies GoProfileCandidate;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => {
   ui.cleanup();
   window.localStorage.clear();
 });
-test.after(async () => {
-  await vite.close();
-});
 
 async function discoveryRecoveryHarness() {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const {
     initialFirstRun,
     encodeFirstRunCheckpoint,
     FIRST_RUN_CHECKPOINT_KEY,
-  } = (await vite.ssrLoadModule(
-    '/src/first-run-state.ts',
-  )) as typeof import('../src/first-run-state');
+  } = await import('../src/first-run-state');
   const snapshot = {
     ...FIXTURE,
     servers: [],
@@ -119,9 +99,8 @@ function discoveryFailure(code: string): CommandError {
 for (const notifyGlobally of [false, true]) {
   test(`bootstrap discovery failure recovers through shared setup (${notifyGlobally ? 'bridge and callback' : 'callback only'})`, async () => {
     const harness = await discoveryRecoveryHarness();
-    const { tauriBridge, onAgentReadinessRequired } = (await vite.ssrLoadModule(
-      '/src/bridge.ts',
-    )) as typeof import('../src/bridge');
+    const { tauriBridge, onAgentReadinessRequired } =
+      await import('../src/bridge');
     let discoveries = 0;
     let initializations = 0;
     let notifications = 0;
@@ -300,18 +279,11 @@ test('joining choices continue without a next-steps module', async () => {
 });
 
 test('discovers Go CLI profile in StrictMode and passes profile credentials to server check', async () => {
-  const { FirstRunExperience } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-screen.tsx',
-  )) as typeof import('../src/screens/first-run-screen');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { FirstRunExperience } =
+    await import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   let scans = 0;
   const checks: unknown[][] = [];
   const bridge: Bridge = {
@@ -371,18 +343,11 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
 });
 
 test('the start fork selects nested CLI accounts with row actions', async () => {
-  const { FirstRunExperience } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-screen.tsx',
-  )) as typeof import('../src/screens/first-run-screen');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { FirstRunExperience } =
+    await import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const second: GoProfileCandidate = {
     ...candidate,
     candidateId: 'second',
@@ -473,12 +438,9 @@ test('the start fork selects nested CLI accounts with row actions', async () => 
 });
 
 test('disables account selection and dialog dismissal while server verification is pending', async () => {
-  const { GoProfileConnectSheet } = (await vite.ssrLoadModule(
-    '/src/screens/go-profile-connect.tsx',
-  )) as typeof import('../src/screens/go-profile-connect');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { GoProfileConnectSheet } =
+    await import('../src/screens/go-profile-connect');
+  const { mockBridge } = await import('../src/mock-bridge');
   let resolve!: (
     value: Awaited<ReturnType<Bridge['checkAndAddGoProfile']>>,
   ) => void;
@@ -494,9 +456,7 @@ test('disables account selection and dialog dismissal while server verification 
         resolve = done;
       }),
   };
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const rendered = ui.render(
@@ -570,18 +530,11 @@ test('disables account selection and dialog dismissal while server verification 
 });
 
 test('first-run waits for shared readiness and never initializes itself', async () => {
-  const { FirstRunExperience } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-screen.tsx',
-  )) as typeof import('../src/screens/first-run-screen.tsx');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts.tsx');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture.ts');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge.ts');
+  const { FirstRunExperience } =
+    await import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   let initializations = 0;
   let discoveries = 0;
   const bridge: Bridge = {
@@ -619,18 +572,11 @@ test('first-run waits for shared readiness and never initializes itself', async 
 });
 
 test('first-run exposes shared agent recovery without discarding its current step', async () => {
-  const { FirstRunExperience } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-screen.tsx',
-  )) as typeof import('../src/screens/first-run-screen.tsx');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts.tsx');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture.ts');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge.ts');
+  const { FirstRunExperience } =
+    await import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   let retries = 0;
   const rendered = ui.render(
     createElement(ToastProvider, {
@@ -660,18 +606,11 @@ test('first-run exposes shared agent recovery without discarding its current ste
 });
 
 test('native-shaped account creation is not rewound by the pre-mutation inventory', async () => {
-  const { FirstRunExperience } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-screen.tsx',
-  )) as typeof import('../src/screens/first-run-screen.tsx');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts.tsx');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture.ts');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge.ts');
+  const { FirstRunExperience } =
+    await import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const base = mockBridge(FIXTURE);
   const profile = 'foks-app';
   const hostId = `02${'7'.repeat(64)}`;
@@ -781,18 +720,11 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
 });
 
 test('first-run account navigation, server edits, and connection errors stay scoped', async () => {
-  const { FirstRunExperience } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-screen.tsx',
-  )) as typeof import('../src/screens/first-run-screen.tsx');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts.tsx');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture.ts');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge.ts');
+  const { FirstRunExperience } =
+    await import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const failure = (message: string) => ({
     code: 'invalid-request',
     message,
@@ -970,18 +902,11 @@ test('first-run account navigation, server edits, and connection errors stay sco
 });
 
 test('personal recovery puts backup first and completes without creating a group', async () => {
-  const { FirstRunExperience } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-screen.tsx',
-  )) as typeof import('../src/screens/first-run-screen');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { FirstRunExperience } =
+    await import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   window.history.replaceState(null, '', '/?state=protect&path=own');
   let creations = 0;
   const bridge: Bridge = {
@@ -1026,26 +951,17 @@ test('personal recovery puts backup first and completes without creating a group
 });
 
 test('resumed sign-in step rediscovers the CLI profile for the verified server', async () => {
-  const { FirstRunExperience } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-screen.tsx',
-  )) as typeof import('../src/screens/first-run-screen');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { FirstRunExperience } =
+    await import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const {
     initialFirstRun,
     transitionFirstRun,
     encodeFirstRunCheckpoint,
     FIRST_RUN_CHECKPOINT_KEY,
-  } = (await vite.ssrLoadModule(
-    '/src/first-run-state.ts',
-  )) as typeof import('../src/first-run-state');
+  } = await import('../src/first-run-state');
   // A checkpoint saved after server verification, restarted at the sign-in
   // step without passing through the joining step's CLI chooser.
   const chosen = transitionFirstRun(initialFirstRun('own'), {
@@ -1136,27 +1052,18 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
 });
 
 test('identity loading waits out a native mutation instead of failing setup', async (t) => {
-  const { FirstRunExperience } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-screen.tsx',
-  )) as typeof import('../src/screens/first-run-screen');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { FirstRunExperience } =
+    await import('../src/screens/first-run-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const {
     initialFirstRun,
     transitionFirstRun,
     encodeFirstRunCheckpoint,
     decodeFirstRunCheckpoint,
     FIRST_RUN_CHECKPOINT_KEY,
-  } = (await vite.ssrLoadModule(
-    '/src/first-run-state.ts',
-  )) as typeof import('../src/first-run-state');
+  } = await import('../src/first-run-state');
   const profile = {
     profile: 'setup-foks-app-4430',
     acceptance: 'inserted' as const,
@@ -1316,24 +1223,13 @@ test('identity loading waits out a native mutation instead of failing setup', as
 });
 
 test('a server added after unmount is listed on Accounts and pairs without another add', async () => {
-  const { AccountSection } = (await vite.ssrLoadModule(
-    '/src/screens/account-section.tsx',
-  )) as typeof import('../src/screens/account-section');
-  const { GoProfileConnectSheet } = (await vite.ssrLoadModule(
-    '/src/screens/go-profile-connect.tsx',
-  )) as typeof import('../src/screens/go-profile-connect');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
+  const { AccountSection } = await import('../src/screens/account-section');
+  const { GoProfileConnectSheet } =
+    await import('../src/screens/go-profile-connect');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
   const snapshot = {
     ...FIXTURE,
     servers: [
@@ -1461,15 +1357,10 @@ test('a server added after unmount is listed on Accounts and pairs without anoth
 });
 
 test('CLI pairing resumes without entering a new device name', async () => {
-  const { GoProfileConnectSheet } = (await vite.ssrLoadModule(
-    '/src/screens/go-profile-connect.tsx',
-  )) as typeof import('../src/screens/go-profile-connect');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { GoProfileConnectSheet } =
+    await import('../src/screens/go-profile-connect');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const calls: string[][] = [];
   const bridge: Bridge = {
     ...mockBridge(),

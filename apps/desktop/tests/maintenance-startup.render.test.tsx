@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge, MaintenanceSnapshot } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
@@ -12,33 +11,20 @@ const dom = installDom({
   timers: true,
 });
 
-let vite: ViteDevServer;
 let ui: typeof import('@testing-library/react');
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 
 test.after(async () => {
-  await vite.close();
   dom.window.close();
 });
 
 test('startup waits for catalog completion and hands off maintenance once', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const base = mockBridge(FIXTURE);
   const full = await base.listCatalog();
   const local = {
@@ -118,15 +104,9 @@ test('completed startup catalog yields to a later shell refresh', async () => {
     configurable: true,
     value: false,
   });
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const base = mockBridge(FIXTURE);
   const full = await base.listCatalog();
   const item = full.items[0];
@@ -205,15 +185,9 @@ test('completed startup catalog yields to a later shell refresh', async () => {
 });
 
 test('startup paused by maintenance resumes from the terminal native event', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   let snapshot: MaintenanceSnapshot = {
     state: 'active',
     generation: 3,
@@ -273,15 +247,9 @@ test('startup paused by maintenance resumes from the terminal native event', asy
 });
 
 test('mounted shell ignores duplicate maintenance completion side effects', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   let snapshot: MaintenanceSnapshot = {
     state: 'idle',
     generation: 0,
@@ -391,15 +359,9 @@ test('mounted shell ignores duplicate maintenance completion side effects', asyn
 });
 
 test('startup restoration retry continues through catalog load into the shell', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   let snapshot: MaintenanceSnapshot = {
     state: 'complete',
     generation: 4,
@@ -480,15 +442,9 @@ test('startup restoration retry continues through catalog load into the shell', 
 });
 
 test('maintenance invalidates a pending startup catalog before shell handoff', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   let snapshot: MaintenanceSnapshot = {
     state: 'idle',
     generation: 0,

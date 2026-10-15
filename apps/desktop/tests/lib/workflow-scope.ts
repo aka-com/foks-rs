@@ -1,19 +1,13 @@
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
-import type { ViteDevServer } from 'vite';
 import type { AgentSnapshot } from '../../src/model/types';
 
 export async function workflowScope(
-  vite: ViteDevServer,
   children: ReactNode,
   snapshot?: AgentSnapshot,
 ) {
-  const { WorkflowProvider } = (await vite.ssrLoadModule(
-    '/src/workflow-context.tsx',
-  )) as typeof import('../../src/workflow-context');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../../src/fixture');
+  const { WorkflowProvider } = await import('../../src/workflow-context');
+  const { FIXTURE } = await import('../../src/fixture');
   const ready: AgentSnapshot = snapshot ?? {
     ...FIXTURE,
     servers: ['personal', 'acme', 'local', 'host'].map((profileName) => ({

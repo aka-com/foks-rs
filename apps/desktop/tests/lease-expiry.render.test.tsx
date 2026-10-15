@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { LeaseExpiryClock } from '../src/scheduling/lease-expiry';
 import type { Bridge, MaintenanceSnapshot } from '../src/bridge';
@@ -41,31 +40,16 @@ class Clock implements LeaseExpiryClock {
 }
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 test('an expiring open vault conceals details while a healthy neighbor stays usable', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const item = FIXTURE.items.find(
     (entry) => entry.store === 'team:eng' && entry.kind === 'Secret',
   );
@@ -135,18 +119,10 @@ test('an expiring open vault conceals details while a healthy neighbor stays usa
 });
 
 test('expiry on one profile preserves a healthy neighboring editor draft', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const item = FIXTURE.items.find(
     (entry) =>
       entry.store === 'acct:personal' && entry.path === '/logins/github.com',
@@ -199,15 +175,9 @@ test('expiry on one profile preserves a healthy neighboring editor draft', async
 });
 
 test('foreground retries authenticated reconciliation after an expiry refresh fails', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const start = Date.now() / 1_000;
   const expiresAt = Math.ceil(start) + 10;
   const agentSnapshot = {
@@ -259,15 +229,9 @@ test('foreground retries authenticated reconciliation after an expiry refresh fa
 });
 
 test('an authoritative zero-profile catalog enters fresh-install onboarding', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   window.history.replaceState(null, '', '/');
   const empty = {
     ...FIXTURE,
@@ -293,15 +257,9 @@ test('an authoritative zero-profile catalog enters fresh-install onboarding', as
 });
 
 test('expiry during native maintenance waits for lifecycle restoration to refresh', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const start = Date.now() / 1_000;
   const expiresAt = Math.ceil(start) + 10;
   const agentSnapshot = {
@@ -375,15 +333,9 @@ test('expiry during native maintenance waits for lifecycle restoration to refres
 });
 
 test('a forced expiry refresh waits for the in-flight foreground load', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const start = Date.now() / 1_000;
   const expiresAt = Math.ceil(start) + 10;
   const agentSnapshot = {

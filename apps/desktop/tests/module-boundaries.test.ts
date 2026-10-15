@@ -216,3 +216,16 @@ test('application modules name other modules by relative path, so node loads the
         `${file} imports the root-absolute path ${specifier}`,
       );
 });
+
+test('tests import application modules directly; only the entry-point test starts Vite', async () => {
+  // A module loaded through `vite.ssrLoadModule` is typed only by a cast that
+  // can name a different path, and is a second copy of any module the test
+  // also imports. `app-root.render.test.tsx` boots `src/main.tsx`, which
+  // imports the stylesheet, so it alone still needs Vite.
+  const tests = fileURLToPath(new URL('./', import.meta.url));
+  const users: string[] = [];
+  for (const file of await sources(tests))
+    if ((await references(file)).includes('vite'))
+      users.push(file.slice(tests.length));
+  assert.deepEqual(users, ['app-root.render.test.tsx']);
+});

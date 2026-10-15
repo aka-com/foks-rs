@@ -6,7 +6,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useRef, useState } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge, ExitState, MaintenanceSnapshot } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
@@ -17,16 +16,10 @@ const dom = installDom({
   timers: true,
 });
 
-let vite: ViteDevServer;
 let ui: typeof import('@testing-library/react');
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 
 test.afterEach(() => {
@@ -36,23 +29,14 @@ test.afterEach(() => {
 });
 
 test.after(async () => {
-  await vite.close();
   dom.window.close();
 });
 
 async function modules() {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { ExitGuard } = (await vite.ssrLoadModule(
-    '/src/app/exit-guard.tsx',
-  )) as typeof import('../src/app/exit-guard');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { ExitGuard } = await import('../src/app/exit-guard');
   return { App, FIXTURE, mockBridge, ExitGuard };
 }
 
@@ -169,9 +153,7 @@ test('the exit decision names each pending reason and an agent this app did not 
 
 test('the exit guard reports the Ask before quitting preference to the native host', async () => {
   const { FIXTURE, mockBridge, ExitGuard } = await modules();
-  const { rememberQuitConfirmation } = (await vite.ssrLoadModule(
-    '/src/quit-confirmation.ts',
-  )) as typeof import('../src/quit-confirmation');
+  const { rememberQuitConfirmation } = await import('../src/quit-confirmation');
   const reported: string[] = [];
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),
@@ -577,9 +559,7 @@ async function primitiveBlock(
   initialBlocking: boolean,
 ): Promise<void> {
   const { ContextMenu, Dialog, Menu, OverlayProvider, Popover } =
-    (await vite.ssrLoadModule(
-      '/kit/overlay-primitives.tsx',
-    )) as typeof import('../kit/overlay-primitives');
+    await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   const background = document.getElementById('root');
   assert.ok(portalRoot);

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, StrictMode, useState } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { layOutLists } from './lib/list-layout';
 import { readSource } from './lib/source';
 import type { Location } from '../src/location';
+
+type ChatLocation = Extract<Location, { kind: 'chat' }>;
 import type { Bridge } from '../src/bridge';
 import type { ChatAction, ChatChannel } from '../src/chat-contract';
 import type { AgentSnapshot } from '../src/model';
@@ -17,19 +18,10 @@ installDom({
 /** The chat view a test names when it calls the bridge directly. */
 const VIEW = 'cd'.repeat(16);
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => {
-  await vite.close();
-});
 async function setup(
   override?: (b: Bridge) => Bridge,
   waitForHistory = true,
@@ -39,24 +31,14 @@ async function setup(
   incrementalHistory = false,
   adjust: (snapshot: AgentSnapshot) => AgentSnapshot = (snapshot) => snapshot,
 ) {
-  const { ChatTeamColumn } = await vite.ssrLoadModule(
-    '/src/screens/chat-teams.tsx',
-  );
-  const { ChatInboxProvider } = await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  );
+  const { ChatTeamColumn } = await import('../src/screens/chat-teams');
+  const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   // The tab is what the shell renders: the team column and, beside it, the
   // conversation of the team the location names.
-  const { ChatTab } = await vite.ssrLoadModule('/src/screens/chat-tab.tsx');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { ChatTab } = await import('../src/screens/chat-tab');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const enabledSnapshot = adjust({
     ...FIXTURE,
     agent: { state: 'ready' as const, historyAfter: incrementalHistory },
@@ -96,7 +78,7 @@ async function setup(
             ? createElement(ChatTab, {
                 snapshot: enabledSnapshot,
                 bridge,
-                location,
+                location: location as ChatLocation,
                 onNavigate: (next: Location) => {
                   onNavigate(next);
                   if (navigate) setLocation(next);
@@ -115,8 +97,8 @@ async function setup(
                   setLocation(next);
                   setVisible(true);
                 },
+                onChannelInfo: () => {},
                 onNewChat: () => {},
-                onSettings: () => {},
                 onTeams: () => {},
               }),
         }),
@@ -1714,9 +1696,7 @@ test('own messages read as You and unread messages sit under a New divider', asy
     value: () => false,
   });
   const actor = '01' + 'ab'.repeat(32);
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   const namedSender = FIXTURE.parties.find(
     (party) => party.store === 'team:eng' && party.username,
   );
@@ -1900,9 +1880,7 @@ const sleep = (ms: number) =>
  * gives each message its text. `arrive` adds messages and wakes the inbox.
  */
 async function busyChannel(count: number, read: number) {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   const other = FIXTURE.parties.find(
     (party) => party.store === 'team:eng' && party.username,
   )?.party_id_hex;
@@ -2920,7 +2898,7 @@ test('a team the catalog no longer lists is reported as inaccessible, not as a f
 });
 
 test('deduplicated alerts retain severity and distinct recovery actions without retrying twice', async () => {
-  const { ChatAlerts } = await vite.ssrLoadModule('/src/chat/chat-alerts.tsx');
+  const { ChatAlerts } = await import('../src/chat/chat-alerts');
   const calls: string[] = [];
   const retry = { label: 'Retry', run: () => calls.push('inbox') };
   ui.render(
@@ -4318,15 +4296,9 @@ class ManualClock {
 }
 
 test('the provider stops periodic team synchronization while the window is hidden', async () => {
-  const { ChatInboxProvider } = await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  );
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const snapshot = {
     ...FIXTURE,
     stores: FIXTURE.stores.filter(
@@ -4432,18 +4404,12 @@ test('clicking outside channel info dismisses it without stealing focus or toggl
 });
 
 test('opening a channel keeps its retained history ahead of channels not reopened, and rendering leaves the eviction order alone', async () => {
-  const { ChatInboxProvider, useChatInbox } = (await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  )) as typeof import('../src/chat/inbox-provider');
-  const { useChatConversation } = (await vite.ssrLoadModule(
-    '/src/chat/use-chat-conversation.ts',
-  )) as typeof import('../src/chat/use-chat-conversation');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { ChatInboxProvider, useChatInbox } =
+    await import('../src/chat/inbox-provider');
+  const { useChatConversation } =
+    await import('../src/chat/use-chat-conversation');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   type Inbox = import('../src/chat/inbox-service').ChatInboxService;
   type Conversation = ReturnType<
     typeof import('../src/chat/use-chat-conversation').useChatConversation
@@ -4582,18 +4548,12 @@ test('opening a channel keeps its retained history ahead of channels not reopene
 });
 
 test('a history read whose access lapses in flight is refused locally and leaves the team ready', async () => {
-  const { ChatInboxProvider, useChatInbox } = (await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  )) as typeof import('../src/chat/inbox-provider');
-  const { useChatConversation } = (await vite.ssrLoadModule(
-    '/src/chat/use-chat-conversation.ts',
-  )) as typeof import('../src/chat/use-chat-conversation');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { ChatInboxProvider, useChatInbox } =
+    await import('../src/chat/inbox-provider');
+  const { useChatConversation } =
+    await import('../src/chat/use-chat-conversation');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   type Inbox = import('../src/chat/inbox-service').ChatInboxService;
   type Conversation = ReturnType<
     typeof import('../src/chat/use-chat-conversation').useChatConversation

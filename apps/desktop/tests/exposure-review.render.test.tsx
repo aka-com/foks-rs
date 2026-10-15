@@ -8,7 +8,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
 import type { Bridge } from '../src/bridge';
@@ -22,22 +21,15 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.beforeEach(() => window.localStorage.clear());
 test.afterEach(() => {
   ui.cleanup();
   window.localStorage.clear();
 });
-test.after(async () => vite.close());
 
 const STORAGE_KEY = 'foks.exposureReviews';
 
@@ -56,19 +48,13 @@ function stored(): StoredReview[] {
 }
 
 async function fixture(): Promise<AgentSnapshot> {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   return FIXTURE;
 }
 
 async function providers(child: ReturnType<typeof createElement>) {
-  const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { ToastController, ToastProvider } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   return createElement(OverlayProvider, {
@@ -96,12 +82,8 @@ async function teamPage(
     tab?: 'settings' | 'people';
   } = {},
 ) {
-  const { GroupSettingsScreen } = (await vite.ssrLoadModule(
-    '/src/screens/groups-screen.tsx',
-  )) as typeof import('../src/screens/groups-screen');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
+  const { mockBridge } = await import('../src/mock-bridge');
   const rendered = ui.render(
     await providers(
       createElement(GroupSettingsScreen, {
@@ -335,12 +317,8 @@ test('the removal waits while the team’s items are still being read', async ()
 
 test('lowering a role lists only the items the new role no longer admits', async () => {
   const snapshot = await fixture();
-  const { GroupSheet } = (await vite.ssrLoadModule(
-    '/src/screens/groups-screen.tsx',
-  )) as typeof import('../src/screens/groups-screen');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { GroupSheet } = await import('../src/screens/groups-screen');
+  const { mockBridge } = await import('../src/mock-bridge');
   const store = snapshot.stores.find((entry) => entry.id === 'team:eng');
   assert.ok(store);
   const priya = snapshot.parties.find(
@@ -383,12 +361,8 @@ test('lowering a role lists only the items the new role no longer admits', async
 
 /** Devices for the personal account, with the Remove device sheet open. */
 async function removeDeviceSheet(snapshot: AgentSnapshot) {
-  const { DevicesScreen } = (await vite.ssrLoadModule(
-    '/src/screens/devices-screen.tsx',
-  )) as typeof import('../src/screens/devices-screen');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const { mockBridge } = await import('../src/mock-bridge');
   const device = snapshot.devices[1]?.id_hex.replace(/^02/, '04');
   assert.ok(device);
   const page = async (at?: string) =>

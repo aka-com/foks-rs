@@ -6,7 +6,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useState } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
 import type { Location } from '../src/location';
@@ -19,25 +18,14 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 let boundary: typeof import('../src/app/screen-error-boundary');
 let logs: typeof import('../src/diagnostics/log');
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  boundary = (await vite.ssrLoadModule(
-    '/src/app/screen-error-boundary.tsx',
-  )) as typeof import('../src/app/screen-error-boundary');
-  logs = (await vite.ssrLoadModule(
-    '/src/diagnostics/log.ts',
-  )) as typeof import('../src/diagnostics/log');
+  boundary = await import('../src/app/screen-error-boundary');
+  logs = await import('../src/diagnostics/log');
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 /** Captures React's console report for a caught render error. */
 function quietly<T>(run: () => T): { value: T; reported: unknown[][] } {

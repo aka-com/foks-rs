@@ -1,12 +1,10 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 
 installDom({ url: 'http://localhost/', timers: true, act: true });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 let ToastController: typeof import('../kit/toasts').ToastController;
 let ToastProvider: typeof import('../kit/toasts').ToastProvider;
 let toastDurationMs: typeof import('../kit/toasts').toastDurationMs;
@@ -16,11 +14,6 @@ let MIN_WARNING_DURATION_MS: number;
 let MAX_DURATION_MS: number;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
   ({
     ToastController,
     ToastProvider,
@@ -29,10 +22,9 @@ test.before(async () => {
     MIN_INFO_DURATION_MS,
     MIN_WARNING_DURATION_MS,
     MAX_DURATION_MS,
-  } = await vite.ssrLoadModule('/kit/toasts.tsx'));
+  } = await import('../kit/toasts'));
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 const regions = (container: HTMLElement) => {
   const host = container.querySelector('#toasts')!;

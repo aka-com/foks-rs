@@ -639,16 +639,9 @@ test('activating a notification opens the Chat tab on that team and channel', as
   });
   const ui = await import('@testing-library/react');
   const { createElement } = await import('react');
-  const { createServer } = await import('vite');
   // The provider is JSX, so it is loaded the way the render tests load one.
-  const vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  const { NotificationProvider } = (await vite.ssrLoadModule(
-    '/src/chat/notification-provider.tsx',
-  )) as typeof import('../src/chat/notification-provider');
+  const { NotificationProvider } =
+    await import('../src/chat/notification-provider');
   const session = {
     epoch: 'a'.repeat(32),
     available: true,
@@ -706,7 +699,6 @@ test('activating a notification opens the Chat tab on that team and channel', as
     );
   } finally {
     ui.cleanup();
-    await vite.close();
   }
 });
 
@@ -720,15 +712,8 @@ test('NotificationProvider builds its consumer on the clock it is given and appl
   });
   const ui = await import('@testing-library/react');
   const { createElement } = await import('react');
-  const { createServer } = await import('vite');
-  const vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  const { NotificationProvider } = (await vite.ssrLoadModule(
-    '/src/chat/notification-provider.tsx',
-  )) as typeof import('../src/chat/notification-provider');
+  const { NotificationProvider } =
+    await import('../src/chat/notification-provider');
   const muted = [notificationKey(scope, CHANNEL)];
   const session = {
     epoch: 'a'.repeat(32),
@@ -784,7 +769,6 @@ test('NotificationProvider builds its consumer on the clock it is given and appl
     assert.deepEqual(mutes, [muted]);
   } finally {
     ui.cleanup();
-    await vite.close();
   }
 });
 

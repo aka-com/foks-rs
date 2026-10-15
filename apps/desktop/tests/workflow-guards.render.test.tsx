@@ -8,7 +8,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge, GoProfileCandidate } from '../src/bridge';
 import type { GuardVerdict, Location, LocationStore } from '../src/location';
@@ -23,18 +22,11 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 function never<T>(): Promise<T> {
   return new Promise<T>(() => {});
@@ -57,27 +49,13 @@ const CLI_CANDIDATE: GoProfileCandidate = {
 };
 
 async function harness() {
-  const locations = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
-  const guards = (await vite.ssrLoadModule(
-    '/src/navigation-guard.tsx',
-  )) as typeof import('../src/navigation-guard');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { WorkflowProvider } = (await vite.ssrLoadModule(
-    '/src/workflow-context.tsx',
-  )) as typeof import('../src/workflow-context');
+  const locations = await import('../src/location');
+  const guards = await import('../src/navigation-guard');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
+  const { ToastController, ToastProvider } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { WorkflowProvider } = await import('../src/workflow-context');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const group = FIXTURE.stores.find((store) => store.id === 'team:household');
@@ -143,9 +121,8 @@ async function invitationPanel(
   h: Awaited<ReturnType<typeof harness>>,
   bridge: Bridge,
 ) {
-  const { InvitationPanel } = (await vite.ssrLoadModule(
-    '/src/components/invitation-panel.tsx',
-  )) as typeof import('../src/components/invitation-panel');
+  const { InvitationPanel } =
+    await import('../src/components/invitation-panel');
   return h.mount(
     createElement(InvitationPanel, {
       bridge,
@@ -188,9 +165,8 @@ test('unsaved invitation input prompts before navigation and clears on confirmat
 
 test('a durable invitation creation allows navigation', async () => {
   const h = await harness();
-  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
-    '/src/components/invite-new-user-sheet.tsx',
-  )) as typeof import('../src/components/invite-new-user-sheet');
+  const { InviteNewUserSheet } =
+    await import('../src/components/invite-new-user-sheet');
   const team = h.fixture.stores.find(
     (candidate): candidate is TeamStore =>
       candidate.kind === 'team' && candidate.alias === 'household',
@@ -224,9 +200,7 @@ async function groupSheet(
   onClose: () => void,
   bridge: Bridge = h.bridge(),
 ) {
-  const { GroupSheet } = (await vite.ssrLoadModule(
-    '/src/screens/groups-screen.tsx',
-  )) as typeof import('../src/screens/groups-screen');
+  const { GroupSheet } = await import('../src/screens/groups-screen');
   return h.mount(
     createElement(GroupSheet, {
       snapshot: h.fixture,
@@ -289,9 +263,7 @@ test('an unsaved team name prompts before navigation', async () => {
 
 test('an active server check blocks navigation', async () => {
   const h = await harness();
-  const { ServersSection } = (await vite.ssrLoadModule(
-    '/src/screens/servers-screen.tsx',
-  )) as typeof import('../src/screens/servers-screen');
+  const { ServersSection } = await import('../src/screens/servers-screen');
   const unprobed: AgentSnapshot = {
     ...h.fixture,
     servers: h.fixture.servers.map((server) =>
@@ -331,9 +303,8 @@ test('an active server check blocks navigation', async () => {
 
 test('scanning and adding a CLI server both allow navigation', async () => {
   const h = await harness();
-  const { GoProfileConnectSheet } = (await vite.ssrLoadModule(
-    '/src/screens/go-profile-connect.tsx',
-  )) as typeof import('../src/screens/go-profile-connect');
+  const { GoProfileConnectSheet } =
+    await import('../src/screens/go-profile-connect');
   const bridge = h.bridge({
     discoverGoProfiles: async () => ({
       installed: true,
@@ -372,9 +343,8 @@ test('scanning and adding a CLI server both allow navigation', async () => {
 
 test('local alias draft prompts on navigation and an active save refuses it', async () => {
   const h = await harness();
-  const { LocalAliasPanel } = (await vite.ssrLoadModule(
-    '/src/components/local-alias-panel.tsx',
-  )) as typeof import('../src/components/local-alias-panel');
+  const { LocalAliasPanel } =
+    await import('../src/components/local-alias-panel');
   const { store, rendered } = h.mount(
     createElement(LocalAliasPanel, {
       bridge: h.bridge({ setLocalAccountAlias: () => never() }),

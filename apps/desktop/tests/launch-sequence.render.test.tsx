@@ -7,7 +7,6 @@
 import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge, CatalogDto } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
@@ -18,16 +17,10 @@ const dom = installDom({
   timers: true,
 });
 
-let vite: ViteDevServer;
 let ui: typeof import('@testing-library/react');
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 
 test.afterEach(() => {
@@ -37,27 +30,16 @@ test.afterEach(() => {
 });
 
 test.after(async () => {
-  await vite.close();
   dom.window.close();
 });
 
 async function modules() {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIRST_PAINT_DEADLINE_MS } = (await vite.ssrLoadModule(
-    '/src/app/app-bootstrap.ts',
-  )) as typeof import('../src/app/app-bootstrap');
+  const { App } = await import('../src/app-root');
+  const { FIRST_PAINT_DEADLINE_MS } = await import('../src/app/app-bootstrap');
   const { STARTING_PROMPT_HINT_MS, Takeover, startingProgressDetail } =
-    (await vite.ssrLoadModule(
-      '/src/app/blocking-shell.tsx',
-    )) as typeof import('../src/app/blocking-shell');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+    await import('../src/app/blocking-shell');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   return {
     App,
     FIRST_PAINT_DEADLINE_MS,

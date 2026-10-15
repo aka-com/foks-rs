@@ -6,6 +6,7 @@
  */
 
 import { JSDOM } from 'jsdom';
+import test from 'node:test';
 
 export const nativeSetInterval = globalThis.setInterval;
 export const nativeSetTimeout = globalThis.setTimeout;
@@ -125,6 +126,14 @@ export function installDom(options: InstallDomOptions = {}): JSDOM {
           return timer;
         },
       },
+    });
+    // An unreferenced timer does not keep the process alive, so a test that
+    // awaits one (`waitFor` polls on `setTimeout`) would be cancelled once
+    // nothing else is pending. This referenced handle keeps the event loop
+    // alive until the file's tests have finished.
+    const keepAlive = nativeSetInterval(() => {}, 60_000);
+    test.after(() => {
+      clearInterval(keepAlive);
     });
   }
 

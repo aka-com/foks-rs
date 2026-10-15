@@ -7,32 +7,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 
 installDom({ timers: true, act: true });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 async function load() {
-  const steps = (await vite.ssrLoadModule(
-    '/src/screens/first-run/steps.tsx',
-  )) as typeof import('../src/screens/first-run/steps');
-  const state = (await vite.ssrLoadModule(
-    '/src/first-run-state.ts',
-  )) as typeof import('../src/first-run-state');
+  const steps = await import('../src/screens/first-run/steps');
+  const state = await import('../src/first-run-state');
   return { ...steps, ...state };
 }
 

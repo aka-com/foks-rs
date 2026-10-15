@@ -1869,6 +1869,18 @@ The unit and render-test layers live in `tests/`:
   as `ui/tests/app-root.render.test.tsx`: the app mounts itself into `#root`
   from `src/main.tsx`, exactly as it does in the browser.
 
+Render tests call `installDom` from `tests/lib/dom-harness.ts` and then load
+the modules they render with `await import('../src/...')`, so the path is
+checked by the type checker and the module is the same instance a static
+import of it gives. The import runs after `installDom`, so a module evaluates
+against the jsdom globals and the harness's timers, as it did when it was
+loaded through Vite. A test that needs no DOM can import modules statically.
+tsx compiles `src/` with the options of `apps/desktop/tsconfig.json` through
+the repository's root `tsconfig.json`, which extends it; without it tsx would
+compile JSX for the classic runtime. Only `app-root.render.test.tsx` starts
+Vite, because `src/main.tsx` imports the stylesheet; `module-boundaries.test.ts`
+fails if another test imports `vite`.
+
 The Rust command layer covers runtime-dependent behavior. App lock, clipboard
 concealment/clearing, native picker/drop streaming and webview resident-set
 behavior are tested there or manually.

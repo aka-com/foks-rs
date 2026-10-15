@@ -20,7 +20,6 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
 import type { Bridge } from '../src/bridge';
@@ -39,20 +38,11 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => {
-  await vite.close();
-});
 
 /** Where these tests start: the Chat tab with Engineering's conversation. */
 const IN_CHAT: Location = {
@@ -132,26 +122,14 @@ async function setup(
     includeHousehold?: boolean;
   } = {},
 ): Promise<Harness> {
-  const { ChatTab } = await vite.ssrLoadModule('/src/screens/chat-tab.tsx');
-  const { ChatInboxProvider } = await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  );
-  const locations = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
+  const { ChatTab } = await import('../src/screens/chat-tab');
+  const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+  const locations = await import('../src/location');
   const { NavigationGuardProvider, NavigationPrompt } =
-    (await vite.ssrLoadModule(
-      '/src/navigation-guard.tsx',
-    )) as typeof import('../src/navigation-guard');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+    await import('../src/navigation-guard');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
 
   const snapshot = {
     ...FIXTURE,

@@ -3,7 +3,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import type { GroupSheetKind } from '../src/screens/groups-screen';
 import type { Party } from '../src/model';
@@ -16,37 +15,18 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 async function sheet(kind: GroupSheetKind, target: string | null = null) {
-  const { GroupSheet } = (await vite.ssrLoadModule(
-    '/src/screens/groups-screen.tsx',
-  )) as typeof import('../src/screens/groups-screen');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { partiesOf } = (await vite.ssrLoadModule(
-    '/src/model/index.ts',
-  )) as typeof import('../src/model');
-  const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { GroupSheet } = await import('../src/screens/groups-screen');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { partiesOf } = await import('../src/model');
+  const { ToastController, ToastProvider } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const store = FIXTURE.stores.find((entry) => entry.id === 'team:eng');
   assert.ok(store?.kind === 'team');
   const party: Party | null = target

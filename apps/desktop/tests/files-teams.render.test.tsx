@@ -13,7 +13,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useState } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
 import type { Bridge } from '../src/bridge';
@@ -29,18 +28,11 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 /** The row a name is drawn in. */
 function row(name: string): HTMLElement {
@@ -67,9 +59,7 @@ function kindChip(node: HTMLElement): string | null {
 }
 
 async function fixture(): Promise<AgentSnapshot> {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   return FIXTURE;
 }
 
@@ -105,18 +95,10 @@ async function teams(
   ) => void = () => {},
   options: TeamsOptions = {},
 ) {
-  const { TeamsScreen } = (await vite.ssrLoadModule(
-    '/src/screens/teams-screen.tsx',
-  )) as typeof import('../src/screens/teams-screen');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { TeamsScreen } = await import('../src/screens/teams-screen');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { ToastController, ToastProvider } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const snapshot = options.snapshot ?? (await fixture());
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
@@ -225,12 +207,9 @@ test('a Teams row in an abnormal state carries the same chip, and opens team set
 
 test('a Teams row says how many requests are waiting on it without its page having been opened', async () => {
   const snapshot = await fixture();
-  const { manageReason } = (await vite.ssrLoadModule(
-    '/src/screens/group-model.ts',
-  )) as typeof import('../src/screens/group-model');
-  const { INVITATION_ACTIVITY } = (await vite.ssrLoadModule(
-    '/src/components/invitation-panel.tsx',
-  )) as typeof import('../src/components/invitation-panel');
+  const { manageReason } = await import('../src/screens/group-model');
+  const { INVITATION_ACTIVITY } =
+    await import('../src/components/invitation-panel');
   const asked: string[] = [];
   await teams(() => {}, {
     snapshot,
@@ -637,9 +616,7 @@ test('a roster failure gives the Teams row menu its own reasons', async () => {
 });
 
 test('an unavailable account explains why discovery is disabled', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/lease.ts',
-  )) as typeof import('../src/model/lease');
+  const { applyLease } = await import('../src/model/lease');
   const rendered = await teams(() => {}, {
     snapshot: applyLease(await fixture(), 'lapsed'),
   });
@@ -787,13 +764,9 @@ test('a created group closes its sheet when only the post-write refresh fails', 
 
 test('group creation replaces a cancelled foreground catalog load without repeating the write', async () => {
   const snapshot = await fixture();
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock-bridge');
   const base = mockBridge(snapshot);
-  const { loadSnapshot } = (await vite.ssrLoadModule(
-    '/src/bridge.ts',
-  )) as typeof import('../src/bridge');
+  const { loadSnapshot } = await import('../src/bridge');
   let writes = 0;
   let reads = 0;
   let cancelRead!: (error: unknown) => void;

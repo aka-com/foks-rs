@@ -7,7 +7,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import type { Bridge } from '../src/bridge';
 
@@ -17,22 +16,15 @@ installDom({
   timers: true,
   act: true,
 });
-let vite: ViteDevServer;
 let ui: typeof import('@testing-library/react');
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => {
   ui.cleanup();
   window.localStorage.clear();
   Reflect.deleteProperty(document, 'hidden');
 });
-test.after(async () => vite.close());
 
 const UNAVAILABLE = {
   locked: false,
@@ -63,18 +55,10 @@ test('the bell lists each signal, links it to its page, and keeps the setup step
     configurable: true,
     value: false,
   });
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { deviceAlertRegistry } = (await vite.ssrLoadModule(
-    '/src/screens/device-alert.ts',
-  )) as typeof import('../src/screens/device-alert');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { deviceAlertRegistry } = await import('../src/screens/device-alert');
   const base = mockBridge(FIXTURE);
   const bridge: Bridge = {
     ...base,
@@ -170,15 +154,9 @@ test('the recovery-phrase step opens Create recovery phrase on the account that 
     configurable: true,
     value: false,
   });
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   ui.render(createElement(App, { bridge: mockBridge(FIXTURE) }));
   const step = await ui.waitFor(async () => {
     const found = [
@@ -198,18 +176,10 @@ test('the recovery-phrase step opens Create recovery phrase on the account that 
 });
 
 test('a lock that holds clears the recent messages', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { ToastController } = await import('../kit/toasts');
   // The lock also unmounts the shell and its controller, so the controller
   // the shell connected is held here to read its history afterwards.
   const controllers = new Set<InstanceType<typeof ToastController>>();
@@ -262,15 +232,9 @@ test('a lock that holds clears the recent messages', async () => {
 });
 
 test('an interrupted membership change is read once per profile and links to its team', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const reads = new Map<string, number>();
   const bridge: Bridge = {
     ...mockBridge(FIXTURE),
@@ -307,12 +271,8 @@ test('an interrupted membership change is read once per profile and links to its
 });
 
 test('a warning in Recent is marked by more than its colour', async () => {
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { AttentionControl } = (await vite.ssrLoadModule(
-    '/src/shell/attention-centre.tsx',
-  )) as typeof import('../src/shell/attention-centre');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { AttentionControl } = await import('../src/shell/attention-centre');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   ui.render(

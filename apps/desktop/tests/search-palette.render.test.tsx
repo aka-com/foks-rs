@@ -9,7 +9,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useState } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
 import type { Location } from '../src/location';
@@ -24,21 +23,14 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => {
   ui.cleanup();
   window.localStorage.clear();
 });
-test.after(async () => vite.close());
 
 const CHANNELS: readonly SearchChannel[] = [
   { store: 'team:eng', name: 'deploys', id: 'a'.repeat(32) },
@@ -65,15 +57,10 @@ async function palette(
   transform: (snapshot: AgentSnapshot) => AgentSnapshot = (snapshot) =>
     snapshot,
 ) {
-  const { SearchPalette, useSearchShortcut } = (await vite.ssrLoadModule(
-    '/src/shell/search-palette.tsx',
-  )) as typeof import('../src/shell/search-palette');
-  const { Dialog, OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { SearchPalette, useSearchShortcut } =
+    await import('../src/shell/search-palette');
+  const { Dialog, OverlayProvider } = await import('../kit/overlay-primitives');
+  const { FIXTURE } = await import('../src/fixture');
 
   const journal: Journal = {
     navigations: [],

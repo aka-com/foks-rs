@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { createServer, type ViteDevServer } from 'vite';
 import { metadataFreshness } from '../src/device-cache';
 import {
   DesktopReconciliation,
@@ -15,24 +14,14 @@ import {
   failWholeCatalogRefresh,
   markCatalogRefresh,
 } from '../src/catalog-state';
-let FreshnessCaption: typeof import('../src/components/metadata-status').FreshnessCaption;
-let summarizeSync: typeof import('../src/shell/sync-popover').summarizeSync;
-let JobTimes: typeof import('../src/shell/sync-popover').JobTimes;
-let syncStatusLabel: typeof import('../src/shell/sync-popover').syncStatusLabel;
-let vite: ViteDevServer;
-test.before(async () => {
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  ({ FreshnessCaption } = await vite.ssrLoadModule(
-    '/src/components/metadata-status.tsx',
-  ));
-  ({ summarizeSync, JobTimes, syncStatusLabel } = await vite.ssrLoadModule(
-    '/src/shell/sync-popover.tsx',
-  ));
-});
+import { FreshnessCaption } from '../src/components/metadata-status';
+import { diagnosticLog } from '../src/diagnostics/log';
+import {
+  diagnosticsText,
+  JobTimes,
+  summarizeSync,
+  syncStatusLabel,
+} from '../src/shell/sync-popover';
 
 test('refresh rows use compact state labels', () => {
   const base = {
@@ -73,9 +62,6 @@ test('refresh rows use compact state labels', () => {
     syncStatusLabel({ ...base, state: 'unknown', message: '' }),
     'Not refreshed',
   );
-});
-test.after(async () => {
-  await vite.close();
 });
 
 test('the freshness caption names a retained failure, spins while loading, and is silent when fresh', () => {
@@ -664,12 +650,6 @@ test('Chat follows Devices in each server refresh group', () => {
 });
 
 test('copied diagnostics keep the status lines first and append the timing log', async () => {
-  const { diagnosticsText } = (await vite.ssrLoadModule(
-    '/src/shell/sync-popover.tsx',
-  )) as typeof import('../src/shell/sync-popover');
-  const { diagnosticLog } = (await vite.ssrLoadModule(
-    '/src/diagnostics/log.ts',
-  )) as typeof import('../src/diagnostics/log');
   const snapshot = {
     ...FIXTURE,
     catalogFreshness: {

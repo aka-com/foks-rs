@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import {
   decodeInvitationReply,
@@ -17,23 +16,14 @@ installDom({
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 /** The sheet portals into the overlay root, so every panel needs a provider. */
 async function overlay(children: ReactNode) {
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   return createElement(OverlayProvider, {
@@ -62,15 +52,10 @@ test('invitation boundary rejects secret fields, bad handles and oversized inbox
   );
 });
 test('the unfinished activity band stays quiet about a read the profile could not admit', async () => {
-  const { UnfinishedActivity } = (await vite.ssrLoadModule(
-    '/src/components/unfinished-activity.tsx',
-  )) as typeof import('../src/components/unfinished-activity');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { UnfinishedActivity } =
+    await import('../src/components/unfinished-activity');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -126,12 +111,9 @@ test('the unfinished activity band stays quiet about a read the profile could no
 });
 
 test('the join sheet confirms the resolved team, then prepares and sends in one press', async () => {
-  const { InvitationPanel } = (await vite.ssrLoadModule(
-    '/src/components/invitation-panel.tsx',
-  )) as typeof import('../src/components/invitation-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { InvitationPanel } =
+    await import('../src/components/invitation-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const actions: string[] = [];
   const bridge = {
     ...mockBridge(),
@@ -213,12 +195,9 @@ test('the join sheet confirms the resolved team, then prepares and sends in one 
   );
 });
 test('a team the account administers is picked from a list and sent by its alias', async () => {
-  const { InvitationPanel } = (await vite.ssrLoadModule(
-    '/src/components/invitation-panel.tsx',
-  )) as typeof import('../src/components/invitation-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { InvitationPanel } =
+    await import('../src/components/invitation-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const seen: InvitationAction[] = [];
   const bridge = {
     ...mockBridge(),
@@ -279,15 +258,10 @@ test('a team the account administers is picked from a list and sent by its alias
   assert.ok(r.getByText('Platform (owner)'));
 });
 test('the join sheet names a configured profile rather than asking for one', async () => {
-  const { InvitationPanel } = (await vite.ssrLoadModule(
-    '/src/components/invitation-panel.tsx',
-  )) as typeof import('../src/components/invitation-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { InvitationPanel } =
+    await import('../src/components/invitation-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const seen: InvitationAction[] = [];
   const bridge = {
     ...mockBridge(FIXTURE),
@@ -337,15 +311,10 @@ test('the join sheet names a configured profile rather than asking for one', asy
   });
 });
 test('Invite new user prepares and submits in one press, then shares the token', async () => {
-  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
-    '/src/components/invite-new-user-sheet.tsx',
-  )) as typeof import('../src/components/invite-new-user-sheet');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { InviteNewUserSheet } =
+    await import('../src/components/invite-new-user-sheet');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -399,15 +368,10 @@ test('Invite new user prepares and submits in one press, then shares the token',
 });
 
 test('Invite new user asks for the security key PIN only when the key requires it', async () => {
-  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
-    '/src/components/invite-new-user-sheet.tsx',
-  )) as typeof import('../src/components/invite-new-user-sheet');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { InviteNewUserSheet } =
+    await import('../src/components/invite-new-user-sheet');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -456,15 +420,10 @@ test('Invite new user asks for the security key PIN only when the key requires i
 });
 
 test('Invite new user keeps a PIN refusal and states the attempts left', async () => {
-  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
-    '/src/components/invite-new-user-sheet.tsx',
-  )) as typeof import('../src/components/invite-new-user-sheet');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { InviteNewUserSheet } =
+    await import('../src/components/invite-new-user-sheet');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -557,15 +516,10 @@ test('Invite new user keeps a PIN refusal and states the attempts left', async (
 });
 
 test('a resumed hardware-key request can receive its PIN on step one', async () => {
-  const { InvitationPanel } = (await vite.ssrLoadModule(
-    '/src/components/invitation-panel.tsx',
-  )) as typeof import('../src/components/invitation-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { InvitationPanel } =
+    await import('../src/components/invitation-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const received: Array<string | null> = [];
   const operation = { operation_id: 'a'.repeat(32), state: 'prepared' };
   const bridge = {
@@ -608,15 +562,10 @@ test('a resumed hardware-key request can receive its PIN on step one', async () 
 });
 
 test('a refused PIN on a resumed request is cleared and not sent again', async () => {
-  const { InvitationPanel } = (await vite.ssrLoadModule(
-    '/src/components/invitation-panel.tsx',
-  )) as typeof import('../src/components/invitation-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { InvitationPanel } =
+    await import('../src/components/invitation-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const received: Array<string | null> = [];
   const operation = { operation_id: 'e'.repeat(32), state: 'prepared' };
   const bridge = {
@@ -676,21 +625,12 @@ test('a refused PIN on a resumed request is cleared and not sent again', async (
 });
 
 test('an invitation action discards the profile’s journal of unfinished operations', async () => {
-  const { InvitationPanel } = (await vite.ssrLoadModule(
-    '/src/components/invitation-panel.tsx',
-  )) as typeof import('../src/components/invitation-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { MetadataRepository } = (await vite.ssrLoadModule(
-    '/src/metadata-repository.ts',
-  )) as typeof import('../src/metadata-repository');
-  const { MetadataRepositoryContext } = (await vite.ssrLoadModule(
-    '/src/query-hooks.ts',
-  )) as typeof import('../src/query-hooks');
-  const { pendingOperationsQuery } = (await vite.ssrLoadModule(
-    '/src/operation-queries.ts',
-  )) as typeof import('../src/operation-queries');
+  const { InvitationPanel } =
+    await import('../src/components/invitation-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { MetadataRepository } = await import('../src/metadata-repository');
+  const { MetadataRepositoryContext } = await import('../src/query-hooks');
+  const { pendingOperationsQuery } = await import('../src/operation-queries');
   let now = 0;
   let reads = 0;
   const repository = new MetadataRepository(() => now);
@@ -752,15 +692,10 @@ test('an invitation action discards the profile’s journal of unfinished operat
 });
 
 test('remote requests select a configured server before verification and approval', async () => {
-  const { MembershipRequests } = (await vite.ssrLoadModule(
-    '/src/components/membership-requests.tsx',
-  )) as typeof import('../src/components/membership-requests');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { MembershipRequests } =
+    await import('../src/components/membership-requests');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -845,15 +780,10 @@ test('remote requests select a configured server before verification and approva
 });
 
 test('hardware inbox loads prompt for a PIN and use it only on explicit refresh', async () => {
-  const { MembershipRequests } = (await vite.ssrLoadModule(
-    '/src/components/membership-requests.tsx',
-  )) as typeof import('../src/components/membership-requests');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { MembershipRequests } =
+    await import('../src/components/membership-requests');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -905,15 +835,10 @@ test('hardware inbox loads prompt for a PIN and use it only on explicit refresh'
 });
 
 test('a failed invitation submission retries the original operation', async () => {
-  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
-    '/src/components/invite-new-user-sheet.tsx',
-  )) as typeof import('../src/components/invite-new-user-sheet');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { InviteNewUserSheet } =
+    await import('../src/components/invite-new-user-sheet');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -970,15 +895,10 @@ test('a failed invitation submission retries the original operation', async () =
 for (const state of ['prepared', 'submission-unknown'] as const) {
   test(`resuming a saved ${state} invitation retains its identity after a connection failure`, async () => {
     const actionName = state === 'prepared' ? 'attempt' : 'status';
-    const { InviteNewUserSheet } = (await vite.ssrLoadModule(
-      '/src/components/invite-new-user-sheet.tsx',
-    )) as typeof import('../src/components/invite-new-user-sheet');
-    const { mockBridge } = (await vite.ssrLoadModule(
-      '/src/mock-bridge.ts',
-    )) as typeof import('../src/mock-bridge');
-    const { FIXTURE } = (await vite.ssrLoadModule(
-      '/src/fixture.ts',
-    )) as typeof import('../src/fixture');
+    const { InviteNewUserSheet } =
+      await import('../src/components/invite-new-user-sheet');
+    const { mockBridge } = await import('../src/mock-bridge');
+    const { FIXTURE } = await import('../src/fixture');
     const team = FIXTURE.stores.find(
       (store): store is TeamStore => store.kind === 'team',
     );
@@ -1027,15 +947,10 @@ for (const state of ['prepared', 'submission-unknown'] as const) {
 }
 
 test('an acknowledged invitation is finalized and refresh failure preserves successful creation', async () => {
-  const { InviteNewUserSheet } = (await vite.ssrLoadModule(
-    '/src/components/invite-new-user-sheet.tsx',
-  )) as typeof import('../src/components/invite-new-user-sheet');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { InviteNewUserSheet } =
+    await import('../src/components/invite-new-user-sheet');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -1085,12 +1000,9 @@ test('an acknowledged invitation is finalized and refresh failure preserves succ
 });
 
 test('delivered requests remain reachable pending membership approval', async () => {
-  const { InvitationPanel } = (await vite.ssrLoadModule(
-    '/src/components/invitation-panel.tsx',
-  )) as typeof import('../src/components/invitation-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { InvitationPanel } =
+    await import('../src/components/invitation-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const bridge = {
     ...mockBridge(),
     invitation: async () => [
@@ -1120,12 +1032,9 @@ test('delivered requests remain reachable pending membership approval', async ()
 for (const remoteRequest of [false, true]) {
   for (const state of ['prepared', 'submission-unknown']) {
     test(`${remoteRequest ? 'remote' : 'local'} saved ${state} request keeps its destination across retries and status replies`, async () => {
-      const { InvitationPanel } = (await vite.ssrLoadModule(
-        '/src/components/invitation-panel.tsx',
-      )) as typeof import('../src/components/invitation-panel');
-      const { mockBridge } = (await vite.ssrLoadModule(
-        '/src/mock-bridge.ts',
-      )) as typeof import('../src/mock-bridge');
+      const { InvitationPanel } =
+        await import('../src/components/invitation-panel');
+      const { mockBridge } = await import('../src/mock-bridge');
       const actions: InvitationAction[] = [];
       const row = {
         operation_id: '1'.repeat(32),
@@ -1192,15 +1101,10 @@ for (const remoteRequest of [false, true]) {
 }
 
 test('requests load independently, show truncation and use millisecond ages', async () => {
-  const { MembershipRequests } = (await vite.ssrLoadModule(
-    '/src/components/membership-requests.tsx',
-  )) as typeof import('../src/components/membership-requests');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { MembershipRequests } =
+    await import('../src/components/membership-requests');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );
@@ -1262,15 +1166,10 @@ test('requests load independently, show truncation and use millisecond ages', as
 
 for (const first of ['inbox', 'list'] as const) {
   test(`Requests waits for each read independently when ${first} finishes first`, async () => {
-    const { MembershipRequests } = (await vite.ssrLoadModule(
-      '/src/components/membership-requests.tsx',
-    )) as typeof import('../src/components/membership-requests');
-    const { mockBridge } = (await vite.ssrLoadModule(
-      '/src/mock-bridge.ts',
-    )) as typeof import('../src/mock-bridge');
-    const { FIXTURE } = (await vite.ssrLoadModule(
-      '/src/fixture.ts',
-    )) as typeof import('../src/fixture');
+    const { MembershipRequests } =
+      await import('../src/components/membership-requests');
+    const { mockBridge } = await import('../src/mock-bridge');
+    const { FIXTURE } = await import('../src/fixture');
     const team = FIXTURE.stores.find(
       (store): store is TeamStore => store.kind === 'team',
     );
@@ -1359,15 +1258,10 @@ for (const first of ['inbox', 'list'] as const) {
 }
 
 test('activity opens with loading, keeps known membership work, and recovers from a failed read', async () => {
-  const { InvitationActivitySheet } = (await vite.ssrLoadModule(
-    '/src/components/invitation-activity-sheet.tsx',
-  )) as typeof import('../src/components/invitation-activity-sheet');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { InvitationActivitySheet } =
+    await import('../src/components/invitation-activity-sheet');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { FIXTURE } = await import('../src/fixture');
   const team = FIXTURE.stores.find(
     (store): store is TeamStore => store.kind === 'team',
   );

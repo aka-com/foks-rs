@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import type { Bridge, PendingOperation } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
 
@@ -11,41 +10,23 @@ installDom({
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => {
   ui.cleanup();
   window.history.replaceState(null, '', '/');
 });
-test.after(async () => {
-  await vite.close();
-});
 
 for (const action of ['add', 'demote', 'promote'] as const) {
   const kind = action === 'add' ? 'team-member-addition' : 'team-member-edit';
   test(`exposes and completes ${action} ${kind} after an interrupted change without reopening settings`, async () => {
-    const { GroupSettingsScreen } = (await vite.ssrLoadModule(
-      '/src/screens/groups-screen.tsx',
-    )) as typeof import('../src/screens/groups-screen');
-    const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-      '/kit/toasts.tsx',
-    )) as typeof import('../kit/toasts');
-    const { OverlayProvider } = (await vite.ssrLoadModule(
-      '/kit/overlay-primitives.tsx',
-    )) as typeof import('../kit/overlay-primitives');
-    const { FIXTURE } = (await vite.ssrLoadModule(
-      '/src/fixture.ts',
-    )) as typeof import('../src/fixture');
-    const { mockBridge } = (await vite.ssrLoadModule(
-      '/src/mock-bridge.ts',
-    )) as typeof import('../src/mock-bridge');
+    const { GroupSettingsScreen } =
+      await import('../src/screens/groups-screen');
+    const { ToastProvider, ToastController } = await import('../kit/toasts');
+    const { OverlayProvider } = await import('../kit/overlay-primitives');
+    const { FIXTURE } = await import('../src/fixture');
+    const { mockBridge } = await import('../src/mock-bridge');
     const addition = kind === 'team-member-addition';
     window.history.replaceState(null, '', `/?state=${action}`);
     const store = FIXTURE.stores.find((entry) => entry.id === 'team:eng');
@@ -169,21 +150,11 @@ for (const action of ['add', 'demote', 'promote'] as const) {
 }
 
 test('a failed pending-operation query reports one error and renders no recovery banner', async () => {
-  const { GroupSettingsScreen } = (await vite.ssrLoadModule(
-    '/src/screens/groups-screen.tsx',
-  )) as typeof import('../src/screens/groups-screen');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const store = FIXTURE.stores.find((entry) => entry.id === 'team:eng');
   assert.ok(store?.kind === 'team');
   const portalRoot = document.getElementById('overlays');

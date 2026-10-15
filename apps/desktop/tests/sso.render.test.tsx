@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { workflowScope } from './lib/workflow-scope';
 import { decodeSsoProgress } from '../src/sso-contract';
@@ -13,29 +12,20 @@ installDom({
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 /** The sheet portals into the overlay root, so every panel needs a provider. */
 async function overlay(children: ReactNode) {
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   return createElement(OverlayProvider, {
     backgroundRef: { current: null },
     portalRoot,
-    children: await workflowScope(vite, children),
+    children: await workflowScope(children),
   });
 }
 
@@ -87,18 +77,13 @@ test('account status uses the public provider block reason field', () => {
   );
 });
 test('reopening a saved accepted signup uses status without replaying signup', async () => {
-  const { SsoPanel } = (await vite.ssrLoadModule(
-    '/src/components/sso-panel.tsx',
-  )) as typeof import('../src/components/sso-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   for (const state of ['complete', 'service-unavailable'] as const) {
     const actions: string[] = [];
     let completed = 0;
     const view = ui.render(
       await workflowScope(
-        vite,
         createElement(SsoPanel, {
           bridge: {
             ...mockBridge(),
@@ -123,12 +108,8 @@ test('reopening a saved accepted signup uses status without replaying signup', a
   }
 });
 test('consent, signed completion and usable access are distinct; no automatic operation replay', async () => {
-  const { SsoPanel } = (await vite.ssrLoadModule(
-    '/src/components/sso-panel.tsx',
-  )) as typeof import('../src/components/sso-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const actions: string[] = [];
   let opened = 0;
   let complete = 0;
@@ -186,12 +167,8 @@ test('consent, signed completion and usable access are distinct; no automatic op
   assert.deepEqual(actions, ['begin', 'poll', 'finish-login']);
 });
 test('a response for another account never updates the displayed flow', async () => {
-  const { SsoPanel } = (await vite.ssrLoadModule(
-    '/src/components/sso-panel.tsx',
-  )) as typeof import('../src/components/sso-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const bridge = {
     ...mockBridge(),
     sso: async () => ({ ...progress, accountAlias: 'other' }),
@@ -216,12 +193,8 @@ test('a response for another account never updates the displayed flow', async ()
 });
 
 test('account linkage status chooses explicit first-link action and preserves lockout messaging', async () => {
-  const { SsoPanel } = (await vite.ssrLoadModule(
-    '/src/components/sso-panel.tsx',
-  )) as typeof import('../src/components/sso-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const actions: import('../src/sso-contract').SsoAction[] = [];
   const bridge = {
     ...mockBridge(),
@@ -279,12 +252,8 @@ test('account linkage status chooses explicit first-link action and preserves lo
 });
 
 test('SSO login hides the PIN behind the security key choice and clears it when disabled', async () => {
-  const { SsoPanel } = (await vite.ssrLoadModule(
-    '/src/components/sso-panel.tsx',
-  )) as typeof import('../src/components/sso-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   ui.render(
     await overlay(
       createElement(SsoPanel, {
@@ -311,12 +280,8 @@ test('SSO login hides the PIN behind the security key choice and clears it when 
 });
 
 test('the sign-in sheet runs in two steps with one primary action each', async () => {
-  const { SsoPanel } = (await vite.ssrLoadModule(
-    '/src/components/sso-panel.tsx',
-  )) as typeof import('../src/components/sso-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { SsoPanel } = await import('../src/components/sso-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const bridge = {
     ...mockBridge(),
     sso: async (

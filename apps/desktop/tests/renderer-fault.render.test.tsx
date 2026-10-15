@@ -9,7 +9,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge, ReadItemResponse } from '../src/bridge';
 import type { TimingEvent } from '../src/diagnostics/log';
@@ -23,29 +22,16 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 let faults: typeof import('../src/diagnostics/renderer-fault');
 let logs: typeof import('../src/diagnostics/log');
 let boundaries: typeof import('../src/app/fault-boundaries');
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  faults = (await vite.ssrLoadModule(
-    '/src/diagnostics/renderer-fault.ts',
-  )) as typeof import('../src/diagnostics/renderer-fault');
-  logs = (await vite.ssrLoadModule(
-    '/src/diagnostics/log.ts',
-  )) as typeof import('../src/diagnostics/log');
-  boundaries = (await vite.ssrLoadModule(
-    '/src/app/fault-boundaries.tsx',
-  )) as typeof import('../src/app/fault-boundaries');
+  faults = await import('../src/diagnostics/renderer-fault');
+  logs = await import('../src/diagnostics/log');
+  boundaries = await import('../src/app/fault-boundaries');
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 /** Runs `body` with React's console reports captured instead of printed. */
 async function quietly<T>(
@@ -173,9 +159,7 @@ test('window script errors and unhandled rejections are recorded until the liste
 });
 
 test('Copy diagnostics lists faults by boundary and error type', async () => {
-  const { formatTimings } = (await vite.ssrLoadModule(
-    '/src/diagnostics/format.ts',
-  )) as typeof import('../src/diagnostics/format');
+  const { formatTimings } = await import('../src/diagnostics/format');
   const log = new logs.DiagnosticLog(64, {
     now: () => Date.UTC(2026, 0, 1, 12, 0, 0),
     elapsed: () => 0,
@@ -195,9 +179,7 @@ test('Copy diagnostics lists faults by boundary and error type', async () => {
 });
 
 test('Copy diagnostics lists a fault older than the timeline window', async () => {
-  const { formatTimings } = (await vite.ssrLoadModule(
-    '/src/diagnostics/format.ts',
-  )) as typeof import('../src/diagnostics/format');
+  const { formatTimings } = await import('../src/diagnostics/format');
   const log = new logs.DiagnosticLog(64, {
     now: () => Date.UTC(2026, 0, 1, 12, 0, 0),
     elapsed: () => 0,
@@ -217,18 +199,10 @@ test('Copy diagnostics lists a fault older than the timeline window', async () =
 });
 
 async function mountApp(decorate: (base: Bridge) => Partial<Bridge>) {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { LocationStore, INITIAL_STATE } = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { LocationStore, INITIAL_STATE } = await import('../src/location');
   const base = mockBridge(FIXTURE);
   const bridge: Bridge = { ...base, ...decorate(base) };
   const vault = 'acct:personal';
@@ -304,12 +278,8 @@ test('a render error in the details panel closes it, discards the read value and
 });
 
 test('a render error outside the panels shows the fault screen inside the exit guard', async () => {
-  const { ExitGuard } = (await vite.ssrLoadModule(
-    '/src/app/exit-guard.tsx',
-  )) as typeof import('../src/app/exit-guard');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { ExitGuard } = await import('../src/app/exit-guard');
+  const { mockBridge } = await import('../src/mock-bridge');
   const since = logs.diagnosticLog.length;
   let quits = 0;
   const bridge: Bridge = {

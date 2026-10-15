@@ -7,7 +7,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom, settle } from './lib/dom-harness';
 import { readSource } from './lib/source';
@@ -20,7 +19,6 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 let MessageText: typeof import('../src/chat/message-text').MessageText;
 let useMessageActions: typeof import('../src/chat/message-actions').useMessageActions;
 let overlays: typeof import('../kit/overlay-primitives');
@@ -28,24 +26,12 @@ let toasts: typeof import('../kit/toasts');
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  ({ MessageText } = await vite.ssrLoadModule('/src/chat/message-text.tsx'));
-  ({ useMessageActions } = await vite.ssrLoadModule(
-    '/src/chat/message-actions.tsx',
-  ));
-  overlays = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  toasts = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
+  ({ MessageText } = await import('../src/chat/message-text'));
+  ({ useMessageActions } = await import('../src/chat/message-actions'));
+  overlays = await import('../kit/overlay-primitives');
+  toasts = await import('../kit/toasts');
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 const SPOOF =
   'Sign in at [https://bank.example/login](https://evil.example/x) or read [the notes](https://docs.example/n).';

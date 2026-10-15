@@ -17,8 +17,8 @@ export default defineConfig({
     outDir: resolve(here, 'dist'),
     emptyOutDir: true,
   },
-  // The render tests boot the app through `vite.ssrLoadModule`, which
-  // externalises bare imports by default. `@tauri-apps/api` must be bundled
+  // app-root.render.test.tsx boots src/main.tsx through `vite.ssrLoadModule`,
+  // which externalises bare imports by default. `@tauri-apps/api` must be bundled
   // instead: it is ESM-only and reaches for the Tauri runtime's globals.
   ssr: {
     noExternal: ['@tauri-apps/api'],

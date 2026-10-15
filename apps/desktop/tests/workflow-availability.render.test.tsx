@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import type { AgentSnapshot } from '../src/model/types';
 import { installDom } from './lib/dom-harness';
 import { workflowScope } from './lib/workflow-scope';
@@ -14,40 +13,27 @@ installDom({
   act: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 async function overlay(children: ReactNode, snapshot: AgentSnapshot) {
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   return createElement(OverlayProvider, {
     backgroundRef: { current: null },
     portalRoot: document.getElementById('overlays')!,
-    children: await workflowScope(vite, children, snapshot),
+    children: await workflowScope(children, snapshot),
   });
 }
 
 async function fixture() {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   return structuredClone(FIXTURE);
 }
 
 test('a queued workflow uses the latest snapshot instead of launch permission', async () => {
-  const { useWorkflowAccess } = (await vite.ssrLoadModule(
-    '/src/workflow-context.tsx',
-  )) as typeof import('../src/workflow-context');
+  const { useWorkflowAccess } = await import('../src/workflow-context');
   const current = await fixture();
   let dispatch: () => Promise<void> = async () => {};
   let calls = 0;
@@ -77,12 +63,9 @@ test('a queued workflow uses the latest snapshot instead of launch permission', 
 });
 
 test('local aliases save while remote operations are unavailable', async () => {
-  const { LocalAliasPanel } = (await vite.ssrLoadModule(
-    '/src/components/local-alias-panel.tsx',
-  )) as typeof import('../src/components/local-alias-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { LocalAliasPanel } =
+    await import('../src/components/local-alias-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const current = await fixture();
   current.servers[0].compatibility = { status: 'required-unavailable' };
   let saved = '';
@@ -113,12 +96,8 @@ test('local aliases save while remote operations are unavailable', async () => {
 });
 
 test('web admin needs user-sync, not device administration, and rechecks submit', async () => {
-  const { AdminPanel } = (await vite.ssrLoadModule(
-    '/src/components/admin-panel.tsx',
-  )) as typeof import('../src/components/admin-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { AdminPanel } = await import('../src/components/admin-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const current = await fixture();
   current.servers[0].compatibility = {
     status: 'required',
@@ -159,12 +138,8 @@ test('web admin needs user-sync, not device administration, and rechecks submit'
 });
 
 test('metadata dispatch checks current account capability before either device or backup reads', async () => {
-  const { DeviceCache } = (await vite.ssrLoadModule(
-    '/src/device-cache.ts',
-  )) as typeof import('../src/device-cache');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { DeviceCache } = await import('../src/device-cache');
+  const { mockBridge } = await import('../src/mock-bridge');
   const current = await fixture();
   let reads = 0;
   const cache = new DeviceCache({
@@ -191,12 +166,8 @@ test('metadata dispatch checks current account capability before either device o
 });
 
 test('shared metadata preflight keeps its root snapshot source after a view leaves', async () => {
-  const module = (await vite.ssrLoadModule(
-    '/src/device-cache.ts',
-  )) as typeof import('../src/device-cache');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const module = await import('../src/device-cache');
+  const { mockBridge } = await import('../src/mock-bridge');
   const initial = await fixture();
   let current = initial,
     calls = 0;
@@ -230,15 +201,9 @@ test('shared metadata preflight keeps its root snapshot source after a view leav
 });
 
 test('device rendering never scans hardware or prompts for credentials', async () => {
-  const { DevicesScreen } = (await vite.ssrLoadModule(
-    '/src/screens/devices-screen.tsx',
-  )) as typeof import('../src/screens/devices-screen');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
+  const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
   const current = await fixture();
   let scans = 0;
   let hardwareCommands = 0;

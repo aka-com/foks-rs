@@ -2,9 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { JSDOM } from 'jsdom';
-let vite: ViteDevServer;
 let MessageText: typeof import('../src/chat/message-text').MessageText;
 let safeChatLink: typeof import('../src/chat/message-text').safeChatLink;
 let labelHosts: typeof import('../src/chat/message-text').labelHosts;
@@ -21,11 +19,6 @@ let ToastController: typeof import('../kit/toasts').ToastController;
 let MessageFindContext: typeof import('../src/chat/message-text').MessageFindContext;
 let find: typeof import('../src/chat/find');
 test.before(async () => {
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
   ({
     MessageText,
     MessageFindContext,
@@ -33,24 +26,14 @@ test.before(async () => {
     labelHosts,
     chatLinkDisplay,
     trimBareUrl,
-  } = await vite.ssrLoadModule('/src/chat/message-text.tsx'));
-  find = (await vite.ssrLoadModule(
-    '/src/chat/find.ts',
-  )) as typeof import('../src/chat/find');
-  ({ chatMentions, mentionKey } = await vite.ssrLoadModule(
-    '/src/chat/mentions.ts',
-  ));
-  ({ relativeMessageTime, messageClock } = await vite.ssrLoadModule(
-    '/src/chat/presentation.ts',
-  ));
-  ({ quoteReply, quoteInsertion } = await vite.ssrLoadModule(
-    '/src/chat/message-actions.tsx',
-  ));
-  ({ ToastProvider, ToastController } =
-    await vite.ssrLoadModule('/kit/toasts.tsx'));
-});
-test.after(async () => {
-  await vite.close();
+  } = await import('../src/chat/message-text'));
+  find = await import('../src/chat/find');
+  ({ chatMentions, mentionKey } = await import('../src/chat/mentions'));
+  ({ relativeMessageTime, messageClock } =
+    await import('../src/chat/presentation'));
+  ({ quoteReply, quoteInsertion } =
+    await import('../src/chat/message-actions'));
+  ({ ToastProvider, ToastController } = await import('../kit/toasts'));
 });
 const actions = {
   copyText: async () => ({ ok: true as const }),

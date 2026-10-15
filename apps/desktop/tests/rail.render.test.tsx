@@ -9,7 +9,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
 import type { Location } from '../src/location';
@@ -22,18 +21,11 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 interface Journal {
   navigations: Location[];
@@ -53,19 +45,11 @@ async function rail(
   settingsAlert: { description: string } | null = null,
   agent: import('../src/shell/sidebar').RailAgentState = 'ready',
 ) {
-  const { Sidebar } = await vite.ssrLoadModule('/src/shell/sidebar.tsx');
-  const { ChatInboxProvider } = await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  );
-  const { Dialog, OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { Sidebar } = await import('../src/shell/sidebar');
+  const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+  const { Dialog, OverlayProvider } = await import('../kit/overlay-primitives');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   // Chat on every fixture server, so the badge sums more than one team.
   const snapshot = {
     ...FIXTURE,
@@ -355,12 +339,8 @@ for (const agent of ['ready', 'starting', 'stopped', 'locked'] as const) {
 }
 
 test('both setup rails omit the connection footer while keeping setup actions', async () => {
-  const { SetupSidebar } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-view.tsx',
-  )) as typeof import('../src/screens/first-run-view');
-  const { initialFirstRun } = (await vite.ssrLoadModule(
-    '/src/first-run-state.ts',
-  )) as typeof import('../src/first-run-state');
+  const { SetupSidebar } = await import('../src/screens/first-run-view');
+  const { initialFirstRun } = await import('../src/first-run-state');
   for (const managedLocal of [false, true]) {
     const view = ui.render(
       createElement(SetupSidebar, {
@@ -377,12 +357,8 @@ test('both setup rails omit the connection footer while keeping setup actions', 
 });
 
 test('setup omits Restart until leaving the first step', async () => {
-  const { SetupSidebar } = (await vite.ssrLoadModule(
-    '/src/screens/first-run-view.tsx',
-  )) as typeof import('../src/screens/first-run-view');
-  const { initialFirstRun } = (await vite.ssrLoadModule(
-    '/src/first-run-state.ts',
-  )) as typeof import('../src/first-run-state');
+  const { SetupSidebar } = await import('../src/screens/first-run-view');
+  const { initialFirstRun } = await import('../src/first-run-state');
   const onRestart = () => {};
   const view = ui.render(
     createElement(SetupSidebar, {
@@ -452,9 +428,7 @@ test('a tab is titled only where its label is hidden', async () => {
 
 test('the cycle helpers hold the rail order and wrap at both ends', async () => {
   const { sidebarCycleLocations, nextSidebarCycleLocation } =
-    (await vite.ssrLoadModule(
-      '/src/shell/sidebar.tsx',
-    )) as typeof import('../src/shell/sidebar');
+    await import('../src/shell/sidebar');
   assert.deepEqual(sidebarCycleLocations(), [
     { kind: 'files' },
     { kind: 'chat' },
@@ -592,15 +566,9 @@ test('the rail names the account through which the selected group is accessed', 
 });
 
 test('native titlebar controls follow rail collapse and expansion', async () => {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const calls: boolean[] = [];
   window.localStorage.clear();
   const bridge: Bridge = {
@@ -621,9 +589,7 @@ test('native titlebar controls follow rail collapse and expansion', async () => 
 });
 
 test('device crumbs use the name resolved for the exact account and address', async () => {
-  const { crumbTrail } = (await vite.ssrLoadModule(
-    '/src/shell/topbar.tsx',
-  )) as typeof import('../src/shell/topbar');
+  const { crumbTrail } = await import('../src/shell/topbar');
   const location = {
     kind: 'devices',
     store: 'acct:work',
@@ -680,8 +646,8 @@ test('an unresolved account is distinguished from an empty device and can be rep
 });
 
 test('an empty device still says No account', async () => {
-  const { AccountHeader } = await vite.ssrLoadModule('/src/shell/sidebar.tsx');
-  const { FIXTURE } = await vite.ssrLoadModule('/src/fixture.ts');
+  const { AccountHeader } = await import('../src/shell/sidebar');
+  const { FIXTURE } = await import('../src/fixture');
   ui.render(
     createElement(AccountHeader, {
       snapshot: { ...FIXTURE, stores: [], accounts: [] },

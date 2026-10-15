@@ -8,7 +8,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
 import { installDom } from './lib/dom-harness';
@@ -19,16 +18,10 @@ const dom = installDom({
   timers: true,
 });
 
-let vite: ViteDevServer;
 let ui: typeof import('@testing-library/react');
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 
 test.afterEach(async () => {
@@ -39,27 +32,18 @@ test.afterEach(async () => {
 });
 
 test.after(async () => {
-  await vite.close();
   dom.window.close();
 });
 
 async function modules() {
-  const { App } = (await vite.ssrLoadModule(
-    '/src/app-root.tsx',
-  )) as typeof import('../src/app-root');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { App } = await import('../src/app-root');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   return { App, FIXTURE, mockBridge };
 }
 
 async function chatMemory() {
-  return (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
+  return await import('../src/location');
 }
 
 function deferred<T>(): {

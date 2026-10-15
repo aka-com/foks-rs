@@ -1,26 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useState } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import type { Bridge } from '../src/bridge';
 import type { Location } from '../src/location';
 
+type ChatLocation = Extract<Location, { kind: 'chat' }>;
+
 installDom({ body: '<div id="overlays"></div>', timers: true });
-let vite: ViteDevServer;
 let ui: typeof import('@testing-library/react');
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => {
-  await vite.close();
-});
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -29,19 +21,11 @@ function deferred() {
   return { promise, resolve };
 }
 async function setup(override?: (base: Bridge) => Bridge) {
-  const { ChatInboxProvider } = await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  );
-  const { ChatTab } = await vite.ssrLoadModule('/src/screens/chat-tab.tsx');
-  const { OverlayProvider } = await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  );
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+  const { ChatTab } = await import('../src/screens/chat-tab');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const snapshot = {
     ...FIXTURE,
     servers: FIXTURE.servers.map((s) =>
@@ -78,7 +62,7 @@ async function setup(override?: (base: Bridge) => Bridge) {
     });
     return createElement(OverlayProvider, {
       backgroundRef: { current: null },
-      portalRoot: document.getElementById('overlays'),
+      portalRoot: document.getElementById('overlays')!,
       children: createElement(ChatInboxProvider, {
         enabled,
         bridge,
@@ -105,7 +89,7 @@ async function setup(override?: (base: Bridge) => Bridge) {
             ? createElement(ChatTab, {
                 bridge,
                 snapshot: shown,
-                location,
+                location: location as ChatLocation,
                 onNavigate: setLocation,
               })
             : createElement('p', null, 'Other view'),

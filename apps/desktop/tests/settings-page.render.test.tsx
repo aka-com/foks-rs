@@ -8,7 +8,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useState } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import type { Bridge } from '../src/bridge';
 import type { Location, SettingsSection } from '../src/location';
@@ -23,15 +22,9 @@ installDom({
 });
 
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 
 test.afterEach(() => {
@@ -64,12 +57,9 @@ function labelledProfiles(): string[] {
     ) as object,
   ).map((key) => key.split('/')[0]);
 }
-test.after(async () => vite.close());
 
 async function fixture(): Promise<AgentSnapshot> {
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
+  const { FIXTURE } = await import('../src/fixture');
   return FIXTURE;
 }
 
@@ -106,26 +96,14 @@ async function renderSettings(
     shellKeyed = false,
   }: SettingsOptions = {},
 ) {
-  const { SettingsScreen } = (await vite.ssrLoadModule(
-    '/src/screens/settings-screen.tsx',
-  )) as typeof import('../src/screens/settings-screen');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
-  const { ToastController, ToastProvider } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { SettingsScreen } = await import('../src/screens/settings-screen');
+  const { mockBridge } = await import('../src/mock-bridge');
+  const { ToastController, ToastProvider } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
-  const { ChatInboxProvider } = await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  );
-  const boundary = (await vite.ssrLoadModule(
-    '/src/app/screen-error-boundary.tsx',
-  )) as typeof import('../src/app/screen-error-boundary');
+  const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+  const boundary = await import('../src/app/screen-error-boundary');
   const bridge = decorate(mockBridge(snapshot));
   const controller = new ToastController();
   const page = (
@@ -212,9 +190,7 @@ function countingStatus(counter: { reads: number }) {
 }
 
 test('the server inventory states lease and identity from the catalog, reading no server status', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/index.ts',
-  )) as typeof import('../src/model');
+  const { applyLease } = await import('../src/model');
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = now + 12 * 86_400;
   const snapshot = applyLease(await fixture(), 'fresh', 'acme', now);
@@ -240,9 +216,7 @@ test('the server inventory states lease and identity from the catalog, reading n
 });
 
 test('the explicit check reads the signed status fresh and states what it read', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/index.ts',
-  )) as typeof import('../src/model');
+  const { applyLease } = await import('../src/model');
   const now = Math.floor(Date.now() / 1000);
   const snapshot = applyLease(await fixture(), 'fresh', 'acme', now);
   const renewed = now + 30 * 86_400;
@@ -1122,9 +1096,7 @@ test('a server holding no group says so', async () => {
 });
 
 test('a lapsed server says its check-in expired and offers the check', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/index.ts',
-  )) as typeof import('../src/model');
+  const { applyLease } = await import('../src/model');
   const rendered = await renderSettings(applyLease(await fixture(), 'lapsed'), {
     where: { profile: 'acme' },
   });
@@ -1150,9 +1122,7 @@ test('a never-checked server says what a check would discover', async () => {
 });
 
 test('a lapsed server can be checked from its row in the list', async () => {
-  const { applyLease } = (await vite.ssrLoadModule(
-    '/src/model/index.ts',
-  )) as typeof import('../src/model');
+  const { applyLease } = await import('../src/model');
   const rendered = await renderSettings(applyLease(await fixture(), 'lapsed'), {
     where: { section: 'account' },
   });

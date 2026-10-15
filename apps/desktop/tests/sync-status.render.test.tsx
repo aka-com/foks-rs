@@ -11,7 +11,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, useRef } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 
 import { installDom } from './lib/dom-harness';
 
@@ -25,7 +24,6 @@ installDom({
 /** The chat view a test names when it calls the bridge directly. */
 const VIEW = 'cd'.repeat(16);
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 let OverlayProvider: typeof import('../kit/overlay-primitives').OverlayProvider;
 let DesktopReconciliation: typeof import('../src/desktop-reconciliation').DesktopReconciliation;
 let Topbar: typeof import('../src/shell/topbar').Topbar;
@@ -33,27 +31,13 @@ let FIXTURE: typeof import('../src/fixture').FIXTURE;
 
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
-  ({ OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives'));
-  ({ DesktopReconciliation } = (await vite.ssrLoadModule(
-    '/src/desktop-reconciliation.ts',
-  )) as typeof import('../src/desktop-reconciliation'));
-  ({ Topbar } = (await vite.ssrLoadModule(
-    '/src/shell/topbar.tsx',
-  )) as typeof import('../src/shell/topbar'));
-  ({ FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture'));
+  ({ OverlayProvider } = await import('../kit/overlay-primitives'));
+  ({ DesktopReconciliation } = await import('../src/desktop-reconciliation'));
+  ({ Topbar } = await import('../src/shell/topbar'));
+  ({ FIXTURE } = await import('../src/fixture'));
 });
 
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 /** Longer than the control's own close delay, so a close has had its chance. */
 const AFTER_CLOSE_MS = 400;
@@ -356,12 +340,8 @@ test('Chat with teams keeps New channel and a live field', () => {
 
 for (const drop of ['the badge button', 'Backspace'] as const) {
   test(`in a channel the field finds text in it until ${drop} drops its badge`, async () => {
-    const { ChatInboxProvider } = (await vite.ssrLoadModule(
-      '/src/chat/inbox-provider.tsx',
-    )) as typeof import('../src/chat/inbox-provider');
-    const { mockBridge } = (await vite.ssrLoadModule(
-      '/src/mock-bridge.ts',
-    )) as typeof import('../src/mock-bridge');
+    const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+    const { mockBridge } = await import('../src/mock-bridge');
     const snapshot = {
       ...FIXTURE,
       servers: FIXTURE.servers.map((server) => ({
@@ -454,12 +434,8 @@ for (const location of [
 ] as const) {
   test(`the intermediate ${location.kind} breadcrumb navigates to its parent`, async () => {
     const navigations: unknown[] = [];
-    const { ChatInboxProvider } = (await vite.ssrLoadModule(
-      '/src/chat/inbox-provider.tsx',
-    )) as typeof import('../src/chat/inbox-provider');
-    const { mockBridge } = (await vite.ssrLoadModule(
-      '/src/mock-bridge.ts',
-    )) as typeof import('../src/mock-bridge');
+    const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+    const { mockBridge } = await import('../src/mock-bridge');
     const snapshot = {
       ...FIXTURE,
       servers: FIXTURE.servers.map((server) => ({
@@ -513,9 +489,7 @@ for (const location of [
 }
 
 test('an unavailable team retains its settings action in the takeover band', async () => {
-  const { StoreAccessTakeover } = (await vite.ssrLoadModule(
-    '/src/screens/store-access.tsx',
-  )) as typeof import('../src/screens/store-access');
+  const { StoreAccessTakeover } = await import('../src/screens/store-access');
   const team = FIXTURE.stores.find((store) => store.kind === 'team');
   assert.ok(team && team.kind === 'team');
   let opened = 0;

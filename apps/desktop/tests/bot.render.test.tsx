@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { ReactNode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import { installDom } from './lib/dom-harness';
 import { workflowScope } from './lib/workflow-scope';
 import { decodeBotReply } from '../src/bot-contract';
@@ -13,29 +12,20 @@ installDom({
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 /** The sheet portals into the overlay root, so every panel needs a provider. */
 async function overlay(children: ReactNode) {
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   return createElement(OverlayProvider, {
     backgroundRef: { current: null },
     portalRoot,
-    children: await workflowScope(vite, children),
+    children: await workflowScope(children),
   });
 }
 
@@ -74,12 +64,8 @@ test('bot DTOs reject secret fields and wrong handles', () => {
   );
 });
 test('hardware-needed enrollment stays passive until a PIN is explicitly supplied', async () => {
-  const { BotPanel } = (await vite.ssrLoadModule(
-    '/src/components/bot-panel.tsx',
-  )) as typeof import('../src/components/bot-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { BotPanel } = await import('../src/components/bot-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const actions: BotAction[] = [];
   let scans = 0;
   const bridge = {
@@ -129,12 +115,8 @@ test('hardware-needed enrollment stays passive until a PIN is explicitly supplie
 });
 
 test('explicit role, confirmation and unknown recovery never export or replay', async () => {
-  const { BotPanel } = (await vite.ssrLoadModule(
-    '/src/components/bot-panel.tsx',
-  )) as typeof import('../src/components/bot-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { BotPanel } = await import('../src/components/bot-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const actions: BotAction[] = [];
   const bridge = {
     ...mockBridge(),
@@ -208,12 +190,8 @@ test('explicit role, confirmation and unknown recovery never export or replay', 
 });
 
 test('revocation accepts a security key PIN directly in the Revoke pane', async () => {
-  const { BotPanel } = (await vite.ssrLoadModule(
-    '/src/components/bot-panel.tsx',
-  )) as typeof import('../src/components/bot-panel');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { BotPanel } = await import('../src/components/bot-panel');
+  const { mockBridge } = await import('../src/mock-bridge');
   const actions: BotAction[] = [];
   const bridge = {
     ...mockBridge(),

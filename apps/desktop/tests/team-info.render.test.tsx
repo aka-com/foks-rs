@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import type { AgentSnapshot, TeamStore } from '../src/model';
 import type { Location } from '../src/location';
 import type { Bridge } from '../src/bridge';
@@ -14,34 +13,19 @@ installDom({
   act: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 async function mount(
   transform: (snapshot: AgentSnapshot) => AgentSnapshot = (snapshot) =>
     snapshot,
   overrides: Partial<Bridge> = {},
 ) {
-  const { TeamInfoPanel } = (await vite.ssrLoadModule(
-    '/src/screens/team-info.tsx',
-  )) as typeof import('../src/screens/team-info');
-  const { ChatInboxProvider } = (await vite.ssrLoadModule(
-    '/src/chat/inbox-provider.tsx',
-  )) as typeof import('../src/chat/inbox-provider');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { TeamInfoPanel } = await import('../src/screens/team-info');
+  const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const snapshot = transform(FIXTURE);
   const store = snapshot.stores.find(
     (store) => store.id === 'team:eng',

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PROTOCOL_CAPABILITIES } from '../src/model/types';
 import { createElement, StrictMode } from 'react';
-import { createServer, type ViteDevServer } from 'vite';
 import type { Bridge, ReadItemResponse } from '../src/bridge';
 import type { GuardVerdict, LocationStore } from '../src/location';
 import type { DetailsPanelProps } from '../src/screens/details-panel';
@@ -14,17 +13,10 @@ installDom({
   timers: true,
 });
 let ui: typeof import('@testing-library/react');
-let vite: ViteDevServer;
 test.before(async () => {
   ui = await import('@testing-library/react');
-  vite = await createServer({
-    configFile: new URL('../vite.config.ts', import.meta.url).pathname,
-    appType: 'custom',
-    server: { middlewareMode: true, hmr: false, ws: false, watch: null },
-  });
 });
 test.afterEach(() => ui.cleanup());
-test.after(async () => vite.close());
 
 async function setup(
   readItem?: Bridge['readItem'],
@@ -34,24 +26,12 @@ async function setup(
   /** Present when the panel is mounted under a store's guard registry. */
   store?: LocationStore,
 ) {
-  const { DetailsPanel } = (await vite.ssrLoadModule(
-    '/src/screens/details-panel.tsx',
-  )) as typeof import('../src/screens/details-panel');
-  const { NavigationGuardProvider } = (await vite.ssrLoadModule(
-    '/src/navigation-guard.tsx',
-  )) as typeof import('../src/navigation-guard');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { FIXTURE } = (await vite.ssrLoadModule(
-    '/src/fixture.ts',
-  )) as typeof import('../src/fixture');
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { DetailsPanel } = await import('../src/screens/details-panel');
+  const { NavigationGuardProvider } = await import('../src/navigation-guard');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { FIXTURE } = await import('../src/fixture');
+  const { mockBridge } = await import('../src/mock-bridge');
   const subject = FIXTURE.items.find(
     selectItem ?? ((item) => item.path === '/env/prod/DATABASE_URL'),
   )!;
@@ -282,15 +262,9 @@ test('an already-open Delete permanently sheet disables its action when access i
     undefined,
     (item) => item.path === '/logins/github.com',
   );
-  const { WriteOverlay } = (await vite.ssrLoadModule(
-    '/src/screens/write-workflows.tsx',
-  )) as typeof import('../src/screens/write-workflows');
-  const { OverlayProvider } = (await vite.ssrLoadModule(
-    '/kit/overlay-primitives.tsx',
-  )) as typeof import('../kit/overlay-primitives');
-  const { ToastProvider, ToastController } = (await vite.ssrLoadModule(
-    '/kit/toasts.tsx',
-  )) as typeof import('../kit/toasts');
+  const { WriteOverlay } = await import('../src/screens/write-workflows');
+  const { OverlayProvider } = await import('../kit/overlay-primitives');
+  const { ToastProvider, ToastController } = await import('../kit/toasts');
   let snapshot = p.props.snapshot;
   let writes = 0;
   p.bridge.removeItem = async () => {
@@ -867,9 +841,7 @@ async function leave(store: LocationStore): Promise<void> {
 }
 
 async function guardStore(): Promise<LocationStore> {
-  const { LocationStore } = (await vite.ssrLoadModule(
-    '/src/location.ts',
-  )) as typeof import('../src/location');
+  const { LocationStore } = await import('../src/location');
   return new LocationStore();
 }
 
@@ -1119,9 +1091,7 @@ test('login copies put only the chosen field on the clipboard', async () => {
     undefined,
     (item) => item.path === '/logins/github.com',
   );
-  const { mockCopies } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { mockCopies } = await import('../src/mock-bridge');
   const before = mockCopies.length;
   const r = ui.render(p.draw());
   ui.fireEvent.click(r.getByRole('button', { name: 'Copy user name' }));
@@ -1150,9 +1120,7 @@ test('a field the login lacks is reported, not copied, and reads as not set', as
     undefined,
     (item) => item.path === '/logins/fastmail.com',
   );
-  const { mockCopies } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { mockCopies } = await import('../src/mock-bridge');
   const before = mockCopies.length;
   const handled: unknown[] = [];
   p.props.onCommandError = (error) => {
@@ -1174,9 +1142,7 @@ test('a field the login lacks is reported, not copied, and reads as not set', as
 
 test('a login saved outside /logins/ is a Password by its listed shape', async () => {
   const p = await setup();
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock-bridge');
   const login = {
     ...p.subject,
     path: '/env/prod/grafana',
@@ -1225,9 +1191,7 @@ async function setupLogin(
   { path = '/wifi/cabin', shaped = true } = {},
 ) {
   const p = await setup();
-  const { mockBridge } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { mockBridge } = await import('../src/mock-bridge');
   const login = {
     ...p.subject,
     path,
@@ -1342,9 +1306,7 @@ test('a Password known only by its /logins/ path also copies its whole value', a
     path: '/logins/legacy.example',
     shaped: false,
   });
-  const { mockCopies } = (await vite.ssrLoadModule(
-    '/src/mock-bridge.ts',
-  )) as typeof import('../src/mock-bridge');
+  const { mockCopies } = await import('../src/mock-bridge');
   const before = mockCopies.length;
   const r = ui.render(p.draw());
   assert.ok(r.getAllByRole('button', { name: 'Copy password' }).length);

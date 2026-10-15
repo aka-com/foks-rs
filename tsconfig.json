@@ -1,0 +1,7 @@
+{
+  // tsx reads the tsconfig.json of the directory it is started in, and the
+  // desktop tests are run from the repository root. This makes it compile
+  // apps/desktop with that package's options, the automatic JSX runtime in
+  // particular, so tests can import components without Vite.
+  "extends": "./apps/desktop/tsconfig.json"
+}
