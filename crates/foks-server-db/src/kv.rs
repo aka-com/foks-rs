@@ -624,11 +624,20 @@ impl Database {
             return Ok(());
         }
         let external = digest.is_some();
+        let object_id = digest
+            .map(|digest| {
+                crate::chunk_ledger::require_present(
+                    &transaction,
+                    digest,
+                    mutation.exact_chunk.len() as u64,
+                )
+            })
+            .transpose()?;
         transaction.execute(
             "INSERT INTO kv_file_chunks
              (uid, file_id, clear_offset, ciphertext, final_chunk, exact_upload_chunk,
-              external_digest, external_ciphertext_bytes, external_encoded_bytes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+              external_digest, external_ciphertext_bytes, external_encoded_bytes, external_object_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 mutation.uid,
                 mutation.file_id,
@@ -647,6 +656,7 @@ impl Database {
                 digest.map(|value| value.as_slice()),
                 external.then_some(mutation.ciphertext.len() as i64),
                 external.then_some(mutation.exact_chunk.len() as i64),
+                object_id.as_ref().map(|id|id.as_slice()),
             ],
         )?;
         transaction.execute(

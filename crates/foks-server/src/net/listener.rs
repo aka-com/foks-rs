@@ -74,6 +74,9 @@ impl RunningServer {
                 crate::chunk_binding::initialize_online(writer, config.chunk_store.as_deref())?;
             }
             crate::chunk_binding::verify_reader(&reader, config.chunk_store.as_deref())?;
+            if let (Some(writer), Some(store)) = (&config.writer, &config.chunk_store) {
+                crate::chunk_ledger::initialize_online(writer, store.as_ref())?;
+            }
         } else if config.chunk_store.is_some() {
             return Err(Error::Chunk("chunk storage requires a bound database"));
         }

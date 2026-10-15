@@ -7,9 +7,11 @@
 #![forbid(unsafe_code)]
 
 mod auth;
-mod chunk_storage;
 mod chunk_binding;
+mod chunk_ledger;
+mod chunk_storage;
 pub use chunk_binding::{adopt_chunk_store, ChunkAdoptionProgress};
+pub use chunk_ledger::{inventory_chunk_store, ChunkCapacityConfig};
 pub mod chunks;
 mod config;
 mod diagnostics;

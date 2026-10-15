@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("chunk storage admission refused: {0}")]
+    ChunkAdmission(&'static str),
     #[error("browser ticket belongs to another account")]
     WebWrongUser,
     #[error("SQLite storage failed: {0}")]

@@ -94,19 +94,21 @@ pub(crate) fn initialize_online(
     let binding = writer
         .call(move |db| Ok(db.prepare_chunk_storage_binding(&namespace, &locator, false)?))?;
     if binding.state == State::Active {
-        return verify(
+        verify(
             &binding,
             store,
             &binding
                 .host_id
                 .ok_or(Error::Chunk("missing chunk binding host"))?,
-        );
+        )?;
+    } else {
+        store.create_namespace_marker_if_absent(&marker(&binding)?)?;
+        writer.call(move |db| {
+            db.activate_chunk_storage_binding(&binding)?;
+            Ok(())
+        })?;
     }
-    store.create_namespace_marker_if_absent(&marker(&binding)?)?;
-    writer.call(move |db| {
-        db.activate_chunk_storage_binding(&binding)?;
-        Ok(())
-    })
+    crate::chunk_ledger::initialize_online(writer, store)
 }
 
 pub(crate) fn initialize_offline(database: &mut Database, store: &dyn ChunkStore) -> Result<()> {
@@ -114,17 +116,18 @@ pub(crate) fn initialize_offline(database: &mut Database, store: &dyn ChunkStore
     crate::OsEntropy.fill(&mut namespace)?;
     let binding = database.prepare_chunk_storage_binding(&namespace, &store.locator()?, false)?;
     if binding.state == State::Active {
-        return verify(
+        verify(
             &binding,
             store,
             &binding
                 .host_id
                 .ok_or(Error::Chunk("missing chunk binding host"))?,
-        );
+        )?;
+    } else {
+        store.create_namespace_marker_if_absent(&marker(&binding)?)?;
+        database.activate_chunk_storage_binding(&binding)?;
     }
-    store.create_namespace_marker_if_absent(&marker(&binding)?)?;
-    database.activate_chunk_storage_binding(&binding)?;
-    Ok(())
+    crate::chunk_ledger::initialize_offline(database, store)
 }
 
 /// Explicit offline adoption of legacy external references. Each verified row is
@@ -209,6 +212,16 @@ mod tests {
         lose: AtomicBool,
     }
     impl ChunkStore for LostMarkerReply {
+        fn namespace_is_empty(&self) -> Result<bool> {
+            self.inner.namespace_is_empty()
+        }
+        fn inventory_page(
+            &self,
+            cursor: Option<&str>,
+            maximum: usize,
+        ) -> Result<crate::chunks::ChunkInventoryPage> {
+            self.inner.inventory_page(cursor, maximum)
+        }
         fn locator(&self) -> Result<String> {
             self.inner.locator()
         }

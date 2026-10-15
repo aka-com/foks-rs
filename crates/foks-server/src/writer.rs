@@ -226,6 +226,36 @@ impl Writer {
 }
 
 impl WriterHandle {
+    // These mutations only account an already admitted physical side effect.
+    // Revocation must not make published bytes disappear from the capacity ledger.
+    pub(crate) fn settle_chunk_publication(
+        &self,
+        token: foks_server_db::ChunkReservation,
+        success: bool,
+    ) -> Result<()> {
+        let accounting = Self {
+            queue: Arc::clone(&self.queue),
+            authorization: None,
+        };
+        accounting.call(move |db| {
+            db.settle_chunk_publication(&token, success)?;
+            Ok(())
+        })
+    }
+    pub(crate) fn confirm_chunk_presence(
+        &self,
+        token: foks_server_db::ChunkReservation,
+    ) -> Result<()> {
+        let accounting = Self {
+            queue: Arc::clone(&self.queue),
+            authorization: None,
+        };
+        accounting.call(move |db| {
+            db.confirm_chunk_presence(&token)?;
+            Ok(())
+        })
+    }
+
     pub(crate) fn for_authenticated_request(
         &self,
         uid: &[u8],

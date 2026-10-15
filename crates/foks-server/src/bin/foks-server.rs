@@ -58,6 +58,14 @@ enum Command {
         #[arg(long)]
         config: PathBuf,
     },
+    /// Offline report-only object inventory; never deletes objects.
+    InventoryChunkStore {
+        #[arg(long)]
+        config: PathBuf,
+        /// Restart enumeration after correcting missing objects or a stale cursor.
+        #[arg(long)]
+        restart: bool,
+    },
     /// Installs a validated backup into an empty installation.
     Restore(RestoreArguments),
     /// Atomically rewraps installation keys under a new operator root key.
@@ -284,6 +292,14 @@ struct InitArguments {
 
 #[derive(clap::Args)]
 struct ServeArguments {
+    #[arg(long,default_value_t=64*1024*1024*1024)]
+    maximum_chunk_bytes: u64,
+    #[arg(long, default_value_t = 1_000_000)]
+    maximum_chunk_objects: u64,
+    #[arg(long, default_value_t = 128)]
+    maximum_chunk_unresolved_attempts: u64,
+    #[arg(long,default_value_t=256*1024*1024)]
+    maximum_chunk_uncertain_bytes: u64,
     #[arg(skip)]
     chunk_store: Option<foks_server::chunks::ChunkStoreConfig>,
     /// TOML chunk-store settings (the contents of an installation's chunk_store table).
@@ -407,6 +423,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Backup(arguments) => backup(arguments),
         Command::ExternalizeChunks { config } => externalize_chunks(config),
         Command::AdoptChunkStore { config } => adopt_chunk_store(config),
+        Command::InventoryChunkStore { config, restart } => inventory_chunk_store(config, restart),
         Command::Restore(arguments) => restore(arguments),
         Command::RotateOperatorRoot(arguments) => rotate_operator_root(arguments),
         Command::BeginHostKeyRotation { config } => rotate_host_key(config),
@@ -541,6 +558,10 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config = foks_server::installation::load_config(path)?;
     foks_server::installation::validate_artifacts(&config)?;
     serve(ServeArguments {
+        maximum_chunk_bytes: config.chunk_capacity.maximum_bytes,
+        maximum_chunk_objects: config.chunk_capacity.maximum_objects,
+        maximum_chunk_unresolved_attempts: config.chunk_capacity.maximum_unresolved_attempts,
+        maximum_chunk_uncertain_bytes: config.chunk_capacity.maximum_uncertain_bytes,
         chunk_store: config.chunk_store,
         chunk_store_config: None,
         oidc: config.oidc,
@@ -663,7 +684,13 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         authenticated_address: arguments.authenticated_address,
         management_address: arguments.management_address,
         probe_tls,
-        database: foks_server_db::Config::default(),
+        database: foks_server::ChunkCapacityConfig {
+            maximum_bytes: arguments.maximum_chunk_bytes,
+            maximum_objects: arguments.maximum_chunk_objects,
+            maximum_unresolved_attempts: arguments.maximum_chunk_unresolved_attempts,
+            maximum_uncertain_bytes: arguments.maximum_chunk_uncertain_bytes,
+        }
+        .database_config()?,
         limits: SessionLimits {
             worker_threads: arguments.worker_threads,
             maximum_read_connections: arguments.maximum_read_connections,
@@ -754,7 +781,7 @@ fn externalize_chunks(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let converted = foks_server::externalize_chunks(
         &config.database,
-        foks_server_db::Config::default(),
+        config.chunk_capacity.database_config()?,
         store.as_ref(),
     )?;
     println!("externalized {converted} encrypted chunks");
@@ -770,7 +797,7 @@ fn adopt_chunk_store(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let result = foks_server::adopt_chunk_store(
         &config.database,
-        foks_server_db::Config::default(),
+        config.chunk_capacity.database_config()?,
         store.as_ref(),
         |progress| {
             eprintln!(
@@ -783,6 +810,30 @@ fn adopt_chunk_store(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         "chunk store bound; verified {} references ({} encoded bytes)",
         result.verified_objects, result.verified_bytes
     );
+    Ok(())
+}
+
+fn inventory_chunk_store(path: PathBuf, restart: bool) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Inventory requires a stopped installation and drained legacy remote publishers. A timeout or missing object does not prove a prior PUT stopped. This command accounts objects and never deletes them.");
+    let config = foks_server::installation::load_config(path)?;
+    let store = config
+        .chunk_store
+        .ok_or("installation has no chunk store")?
+        .build()?;
+    let usage = foks_server::inventory_chunk_store(
+        &config.database,
+        config.chunk_capacity.database_config()?,
+        store.as_ref(),
+        restart,
+        |checkpoint| {
+            eprintln!(
+                "inventory generation={} continuation={}",
+                checkpoint.generation,
+                checkpoint.cursor.is_some()
+            )
+        },
+    )?;
+    println!("inventory_complete={} present_bytes={} reserved_bytes={} uncertain_bytes={} objects={} unresolved_attempts={} admission_rejections={} orphan_objects={} orphan_bytes={} unknown_objects={} unknown_bytes={} missing_objects={} missing_referenced_objects={} oldest_attempt_micros={:?}",usage.inventory_complete,usage.present_bytes,usage.reserved_bytes,usage.uncertain_bytes,usage.objects,usage.unresolved_attempts,usage.admission_rejections,usage.orphan_objects,usage.orphan_bytes,usage.unknown_objects,usage.unknown_bytes,usage.missing_objects,usage.missing_referenced_objects,usage.oldest_attempt_micros);
     Ok(())
 }
 

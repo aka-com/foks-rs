@@ -39,7 +39,26 @@ pub fn externalize_chunks(
             return Err(Error::Chunk("inline encoding does not match stored chunk"));
         }
         let digest = chunk_digest(exact);
-        store.put(&digest, exact)?;
+        let mut attempt = [0; 16];
+        crate::Entropy::fill(&crate::OsEntropy, &mut attempt)?;
+        let now = foks_server_db::Clock::now_micros(&foks_server_db::SystemClock)?;
+        let token = database.reserve_chunk_object(&digest, exact.len() as u64, &attempt, now)?;
+        match token.action {
+            foks_server_db::ChunkReservationAction::Publish => {
+                let published = store.put(&digest, exact);
+                database.settle_chunk_publication(&token, published.is_ok())?;
+                published?;
+            }
+            foks_server_db::ChunkReservationAction::Verify => {
+                let observed = store.get(&digest, exact.len() as u64)?;
+                if observed != exact {
+                    return Err(Error::Chunk("conversion retry object mismatch"));
+                }
+                database.confirm_chunk_presence(&token)?;
+            }
+            foks_server_db::ChunkReservationAction::Present => {}
+        }
+        database.validate_chunk_reservation(&token)?;
         if !database.externalize_kv_chunk(&stored.key, exact, &digest)? {
             return Err(Error::Chunk("chunk changed during offline conversion"));
         }

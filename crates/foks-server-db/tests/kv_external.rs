@@ -12,6 +12,20 @@ fn setup(config: Config) -> common::TestDatabase {
     let mut test = common::TestDatabase::with_config(config);
     test.reserve(1_000_000);
     test.commit(None).unwrap();
+    let c = Connection::open(&test.path).unwrap();
+    c.execute(
+        "INSERT OR IGNORE INTO host_metadata VALUES(1,?1,'test',X'',X'')",
+        [&[4u8; 33][..]],
+    )
+    .unwrap();
+    let binding = test
+        .database
+        .prepare_chunk_storage_binding(&[5; 16], "test-store", false)
+        .unwrap();
+    test.database
+        .activate_chunk_storage_binding(&binding)
+        .unwrap();
+    test.database.confirm_empty_chunk_inventory().unwrap();
     test
 }
 
@@ -69,10 +83,10 @@ fn mixed_uploads_preserve_exact_retries_usage_and_charge_through_conversion() {
         0
     );
     test.database
-        .put_kv_file_chunk_external(&mutation, &digest(&first))
+        .publish_kv_file_chunk_external(&mutation, &digest(&first))
         .unwrap();
     test.database
-        .put_kv_file_chunk_external(&mutation, &digest(&first))
+        .publish_kv_file_chunk_external(&mutation, &digest(&first))
         .unwrap();
     // A replay through the inline path must recognize an external row too.
     test.database.put_kv_file_chunk(&mutation).unwrap();
@@ -91,7 +105,7 @@ fn mixed_uploads_preserve_exact_retries_usage_and_charge_through_conversion() {
     test.database.put_kv_file_chunk(&final_mutation).unwrap();
     // Replay external publication against a preexisting inline chunk is a no-op.
     test.database
-        .put_kv_file_chunk_external(&final_mutation, &digest(&last))
+        .publish_kv_file_chunk_external(&final_mutation, &digest(&last))
         .unwrap();
     let original = totals(&c);
     assert_eq!(
@@ -174,6 +188,15 @@ fn mixed_uploads_preserve_exact_retries_usage_and_charge_through_conversion() {
     test.database.run_maintenance(1000, 100).unwrap();
     assert_eq!(totals(&c), (0, 0, 0, 0));
     assert!(!test.database.has_external_chunks().unwrap());
+    let physical = test.database.chunk_physical_usage().unwrap();
+    assert_eq!(
+        (
+            physical.objects,
+            physical.orphan_objects,
+            physical.present_bytes
+        ),
+        (2, 2, (first.len() + last.len()) as u64)
+    );
 }
 
 #[test]
@@ -197,12 +220,12 @@ fn external_admission_rejects_digest_field_order_and_quota_errors_atomically() {
     };
     assert!(matches!(
         test.database
-            .put_kv_file_chunk_external(&mutation, &[0; 32]),
+            .publish_kv_file_chunk_external(&mutation, &[0; 32]),
         Err(Error::Invalid(_))
     ));
     test.database.preflight_kv_file_chunk(&mutation).unwrap();
     test.database
-        .put_kv_file_chunk_external(&mutation, &digest(&first))
+        .publish_kv_file_chunk_external(&mutation, &digest(&first))
         .unwrap();
     let before = totals(&c);
     let conflict = encode(b"xyz", 0, None);
@@ -215,7 +238,7 @@ fn external_admission_rejects_digest_field_order_and_quota_errors_atomically() {
         Err(Error::KvConflict)
     ));
     assert!(matches!(
-        test.database.put_kv_file_chunk_external(
+        test.database.publish_kv_file_chunk_external(
             &KvFileChunkMutation {
                 ciphertext: b"xyz",
                 exact_chunk: &conflict,
@@ -240,7 +263,7 @@ fn external_admission_rejects_digest_field_order_and_quota_errors_atomically() {
     ));
     assert!(matches!(
         test.database
-            .put_kv_file_chunk_external(&final_mutation, &digest(&next)),
+            .publish_kv_file_chunk_external(&final_mutation, &digest(&next)),
         Err(Error::QuotaExceeded)
     ));
     assert!(matches!(
@@ -300,7 +323,7 @@ fn preflight_does_not_reserve_capacity_and_commit_rechecks_after_intervening_wri
     };
     test.database.preflight_kv_file_chunk(&mutation).unwrap();
     test.database
-        .put_kv_file_chunk_external(
+        .publish_kv_file_chunk_external(
             &KvFileChunkMutation {
                 file_id: &[3; 16],
                 ..mutation
@@ -310,7 +333,7 @@ fn preflight_does_not_reserve_capacity_and_commit_rechecks_after_intervening_wri
         .unwrap();
     assert!(matches!(
         test.database
-            .put_kv_file_chunk_external(&mutation, &digest(&first)),
+            .publish_kv_file_chunk_external(&mutation, &digest(&first)),
         Err(Error::QuotaExceeded)
     ));
     let c = Connection::open(&test.path).unwrap();
@@ -320,4 +343,33 @@ fn preflight_does_not_reserve_capacity_and_commit_rechecks_after_intervening_wri
             .unwrap(),
         1
     );
+}
+
+trait PublishTestObject {
+    fn publish_kv_file_chunk_external(
+        &mut self,
+        mutation: &KvFileChunkMutation<'_>,
+        digest: &[u8; 32],
+    ) -> foks_server_db::Result<()>;
+}
+impl PublishTestObject for foks_server_db::Database {
+    fn publish_kv_file_chunk_external(
+        &mut self,
+        mutation: &KvFileChunkMutation<'_>,
+        object_digest: &[u8; 32],
+    ) -> foks_server_db::Result<()> {
+        if digest(mutation.exact_chunk) == *object_digest {
+            self.preflight_kv_file_chunk(mutation)?;
+            let token = self.reserve_chunk_object(
+                object_digest,
+                mutation.exact_chunk.len() as u64,
+                &object_digest[..16].try_into().unwrap(),
+                mutation.now,
+            )?;
+            if token.action == foks_server_db::ChunkReservationAction::Publish {
+                self.settle_chunk_publication(&token, true)?;
+            }
+        }
+        self.put_kv_file_chunk_external(mutation, object_digest)
+    }
 }

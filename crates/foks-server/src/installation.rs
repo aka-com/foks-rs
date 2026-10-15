@@ -14,6 +14,8 @@ const MAXIMUM_CONFIG_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InstallationConfig {
+    #[serde(default)]
+    pub chunk_capacity: crate::ChunkCapacityConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunk_store: Option<crate::chunks::ChunkStoreConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -40,6 +42,7 @@ pub struct InstallationConfig {
 
 impl InstallationConfig {
     pub fn validate(&self) -> crate::Result<()> {
+        self.chunk_capacity.database_config()?;
         if let Some(store) = &self.chunk_store {
             store.validate()?;
         }
@@ -171,6 +174,7 @@ pub fn initialize(
     write_new_file(&probe_certificate_der, certificate.der(), 0o644)?;
 
     let config = InstallationConfig {
+        chunk_capacity: Default::default(),
         chunk_store: None,
         vhost_management_host: String::new(),
         oidc: None,

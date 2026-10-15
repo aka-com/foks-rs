@@ -258,6 +258,7 @@ impl Database {
         if self.has_external_chunks()? {
             return Err(Error::Invalid("cannot clear binding with external chunks"));
         }
+        self.clear_private_chunk_ledger()?;
         self.connection
             .execute("DELETE FROM chunk_storage_binding", [])?;
         Ok(())
@@ -287,8 +288,9 @@ mod tests {
         (temporary, db)
     }
     fn insert(db: &Database, offset: i64) {
-        db.connection.execute("INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk,external_digest,external_ciphertext_bytes,external_encoded_bytes)
-            VALUES(?1,?2,?3,X'',0,X'',?4,1,2)", params![[1_u8;33].as_slice(),[2_u8;16].as_slice(),offset,[3_u8;32].as_slice()]).unwrap();
+        db.connection.execute("INSERT OR IGNORE INTO chunk_objects(object_id,object_key,digest,encoded_bytes,state) VALUES(?1,lower(hex(?1)),?1,2,3)",[[3_u8;32].as_slice()]).unwrap();
+        db.connection.execute("INSERT INTO kv_file_chunks(uid,file_id,clear_offset,ciphertext,final_chunk,exact_upload_chunk,external_digest,external_ciphertext_bytes,external_encoded_bytes,external_object_id)
+            VALUES(?1,?2,?3,X'',0,X'',?4,1,2,?4)", params![[1_u8;33].as_slice(),[2_u8;16].as_slice(),offset,[3_u8;32].as_slice()]).unwrap();
     }
     fn key(offset: u64) -> KvChunkKey {
         KvChunkKey {

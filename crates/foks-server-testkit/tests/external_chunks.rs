@@ -1,5 +1,5 @@
 use std::io::{Cursor, Write as _};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::{mpsc, Condvar, Mutex};
 use std::time::Duration;
@@ -12,11 +12,22 @@ use foks_server_testkit::{TestAccountSpec, TestClient, TestEnvironment, TestFaul
 
 struct FaultStore {
     inner: Arc<dyn ChunkStore>,
-    // 1: reject put; 2: reject get; 3: corrupt get.
+    // 1: reject put; 2: reject get; 3: corrupt get; 4: publish then lose reply.
+    puts: AtomicUsize,
     mode: AtomicU8,
 }
 
 impl ChunkStore for FaultStore {
+    fn namespace_is_empty(&self) -> foks_server::Result<bool> {
+        self.inner.namespace_is_empty()
+    }
+    fn inventory_page(
+        &self,
+        cursor: Option<&str>,
+        maximum: usize,
+    ) -> foks_server::Result<foks_server::chunks::ChunkInventoryPage> {
+        self.inner.inventory_page(cursor, maximum)
+    }
     fn locator(&self) -> foks_server::Result<String> {
         self.inner.locator()
     }
@@ -28,10 +39,15 @@ impl ChunkStore for FaultStore {
     }
 
     fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> foks_server::Result<()> {
+        self.puts.fetch_add(1, Ordering::SeqCst);
         if self.mode.load(Ordering::SeqCst) == 1 {
             return Err(foks_server::Error::Chunk("injected object put failure"));
         }
-        self.inner.put(digest, bytes)
+        self.inner.put(digest, bytes)?;
+        if self.mode.load(Ordering::SeqCst) == 4 {
+            return Err(foks_server::Error::Chunk("injected lost PUT reply"));
+        }
+        Ok(())
     }
 
     fn get(&self, digest: &[u8; 32], length: u64) -> foks_server::Result<Vec<u8>> {
@@ -55,6 +71,16 @@ struct GatedStore {
 }
 
 impl ChunkStore for GatedStore {
+    fn namespace_is_empty(&self) -> foks_server::Result<bool> {
+        self.inner.namespace_is_empty()
+    }
+    fn inventory_page(
+        &self,
+        cursor: Option<&str>,
+        maximum: usize,
+    ) -> foks_server::Result<foks_server::chunks::ChunkInventoryPage> {
+        self.inner.inventory_page(cursor, maximum)
+    }
     fn locator(&self) -> foks_server::Result<String> {
         self.inner.locator()
     }
@@ -166,6 +192,20 @@ fn revocation_during_external_put_prevents_publication_without_blocking_writer()
         .unwrap();
     assert_eq!(usage.large.base.number, 0);
     assert_eq!(usage.large.chunks, 0);
+    let physical = environment
+        .read_database()
+        .unwrap()
+        .chunk_physical_usage()
+        .unwrap();
+    assert_eq!(
+        (
+            physical.objects,
+            physical.orphan_objects,
+            physical.unresolved_attempts
+        ),
+        (1, 1, 0)
+    );
+    assert!(physical.present_bytes > 0);
     server.shutdown().unwrap();
 }
 
@@ -275,6 +315,7 @@ fn object_failures_never_publish_missing_chunks_or_serve_corrupt_ciphertext() {
     let environment = TestEnvironment::new().unwrap();
     let inner = environment.filesystem_chunk_store().unwrap();
     let store = Arc::new(FaultStore {
+        puts: AtomicUsize::new(0),
         inner,
         mode: AtomicU8::new(1),
     });
@@ -320,15 +361,33 @@ fn object_failures_never_publish_missing_chunks_or_serve_corrupt_ciphertext() {
 
 #[test]
 fn external_upload_reconciles_lost_response_without_duplicate_quota_charge() {
+    exact_upload_retry(false);
+}
+
+#[test]
+fn lost_put_reply_remains_charged_across_restart_and_reconciles_without_another_put() {
+    exact_upload_retry(true);
+}
+
+fn exact_upload_retry(lost_put: bool) {
     let environment = TestEnvironment::new().unwrap();
-    environment.use_filesystem_chunks().unwrap();
-    let server = environment.start_server().unwrap();
+    let store = Arc::new(FaultStore {
+        inner: environment.filesystem_chunk_store().unwrap(),
+        puts: AtomicUsize::new(0),
+        mode: AtomicU8::new(if lost_put { 4 } else { 0 }),
+    });
+    environment.set_chunk_store(store.clone()).unwrap();
+    let mut server = environment.start_server().unwrap();
     let client = TestClient::new(&environment, "external-retry").unwrap();
     let host = client.probe_and_pin().unwrap().pinned;
     let account = client
         .create_account(&host, &TestAccountSpec::new("externalretry", 0x81))
         .unwrap();
-    let before = environment.arm_fault(TestFault::UploadInitAfterCommitBeforeResponse);
+    let before = if lost_put {
+        environment.fault_hits()
+    } else {
+        environment.arm_fault(TestFault::UploadInitAfterCommitBeforeResponse)
+    };
     let bytes = vec![0x52; 8192];
     let mut node = [0x53; 17];
     node[0] = 2;
@@ -365,7 +424,21 @@ fn external_upload_reconciles_lost_response_without_duplicate_quota_charge() {
             .is_err()
     );
     drop(connection);
-    assert_eq!(environment.fault_hits(), before + 1);
+    if !lost_put {
+        assert_eq!(environment.fault_hits(), before + 1);
+    }
+    if lost_put {
+        let usage = environment
+            .read_database()
+            .unwrap()
+            .chunk_physical_usage()
+            .unwrap();
+        assert!(usage.uncertain_bytes > 0);
+        assert_eq!((usage.objects, usage.unresolved_attempts), (1, 1));
+        store.mode.store(0, Ordering::SeqCst);
+        server.shutdown().unwrap();
+        server = environment.start_server().unwrap();
+    }
     let before_replay = environment
         .read_database()
         .unwrap()
@@ -382,7 +455,20 @@ fn external_upload_reconciles_lost_response_without_duplicate_quota_charge() {
         .unwrap()
         .kv_usage(account.credential.uid.as_bytes())
         .unwrap();
-    assert_eq!(usage, before_replay);
+    if !lost_put {
+        assert_eq!(usage, before_replay);
+    } else {
+        assert_eq!(before_replay.large.chunks, 0);
+    }
+    assert_eq!(store.puts.load(Ordering::SeqCst), 1);
+    let physical = environment
+        .read_database()
+        .unwrap()
+        .chunk_physical_usage()
+        .unwrap();
+    assert_eq!(physical.objects, 1);
+    assert_eq!(physical.uncertain_bytes, 0);
+    assert_eq!(physical.unresolved_attempts, u64::from(lost_put));
     assert_eq!(usage.large.base.number, 1);
     assert_eq!(usage.large.chunks, 1);
     let fetched = client
@@ -595,6 +681,7 @@ fn legacy_external_adoption_is_explicit_resumable_and_preserves_wire_reads() {
     std::fs::remove_file(environment.root().join("chunks/_foks_namespace_v1")).unwrap();
     assert!(environment.start_server().is_err());
     let store = FaultStore {
+        puts: AtomicUsize::new(0),
         inner: environment.filesystem_chunk_store().unwrap(),
         mode: AtomicU8::new(0),
     };
@@ -671,5 +758,73 @@ fn legacy_external_adoption_is_explicit_resumable_and_preserves_wire_reads() {
         binding.namespace_id
     );
     assert_files(&client, &host, &account, &[("adopt.bin", &content)]);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn preexisting_unknown_objects_require_inventory_and_remain_charged_without_deletion() {
+    let environment = TestEnvironment::new().unwrap();
+    environment.use_filesystem_chunks().unwrap();
+    let store = environment.filesystem_chunk_store().unwrap();
+    let orphan = environment.root().join("chunks/old-temporary-object");
+    std::fs::write(&orphan, vec![0x77; 100]).unwrap();
+    let server = environment.start_server().unwrap();
+    let client = TestClient::new(&environment, "inventory").unwrap();
+    let host = client.probe_and_pin().unwrap().pinned;
+    let account = client
+        .create_account(&host, &TestAccountSpec::new("inventoryuser", 0x92))
+        .unwrap();
+    assert!(
+        !environment
+            .read_database()
+            .unwrap()
+            .chunk_physical_usage()
+            .unwrap()
+            .inventory_complete
+    );
+    assert!(put(&client, &host, &account, "blocked.bin", &vec![3; 8192]).is_err());
+    assert_eq!(
+        environment
+            .read_database()
+            .unwrap()
+            .kv_usage(account.credential.uid.as_bytes())
+            .unwrap()
+            .large
+            .chunks,
+        0
+    );
+    server.shutdown().unwrap();
+    let report = foks_server::inventory_chunk_store(
+        environment.database_path(),
+        Default::default(),
+        store.as_ref(),
+        false,
+        |_| {},
+    )
+    .unwrap();
+    assert!(report.inventory_complete);
+    assert_eq!(
+        (
+            report.present_bytes,
+            report.unknown_objects,
+            report.orphan_bytes
+        ),
+        (100, 1, 100)
+    );
+    assert!(orphan.exists());
+    let server = environment.start_server().unwrap();
+    put(&client, &host, &account, "ready.bin", &vec![4; 8192]).unwrap();
+    let report = environment
+        .read_database()
+        .unwrap()
+        .chunk_physical_usage()
+        .unwrap();
+    assert_eq!(
+        (report.objects, report.unknown_objects, report.orphan_bytes),
+        (2, 1, 100)
+    );
+    assert!(report.present_bytes > 100);
+    assert_eq!(report.unresolved_attempts, 0);
+    assert_files(&client, &host, &account, &[("ready.bin", &vec![4; 8192])]);
     server.shutdown().unwrap();
 }

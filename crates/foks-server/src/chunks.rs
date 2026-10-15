@@ -22,6 +22,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{Error, Result};
 
+mod inventory;
+pub use inventory::{ChunkInventoryEntry, ChunkInventoryPage};
+
 pub const MAXIMUM_ENCODED_CHUNK_BYTES: usize = 9 * 1024 * 1024 + 1024;
 
 /// Configuration contains no credentials. AWS access keys/session tokens and
@@ -128,6 +131,8 @@ impl ChunkStoreConfig {
 pub trait ChunkStore: Send + Sync {
     /// Canonical non-secret placement descriptor; credentials/timeouts are excluded.
     fn locator(&self) -> Result<String>;
+    fn namespace_is_empty(&self) -> Result<bool>;
+    fn inventory_page(&self, cursor: Option<&str>, maximum: usize) -> Result<ChunkInventoryPage>;
     /// Missing is distinct from an unavailable, malformed or oversized marker.
     fn read_namespace_marker(&self) -> Result<Option<Vec<u8>>>;
     fn create_namespace_marker_if_absent(&self, marker: &[u8]) -> Result<()>;
@@ -254,6 +259,12 @@ fn check_marker_size(bytes: &[u8]) -> Result<()> {
 }
 
 impl ChunkStore for FilesystemChunks {
+    fn namespace_is_empty(&self) -> Result<bool> {
+        self.empty()
+    }
+    fn inventory_page(&self, cursor: Option<&str>, maximum: usize) -> Result<ChunkInventoryPage> {
+        self.inventory(cursor, maximum)
+    }
     fn locator(&self) -> Result<String> {
         self.recheck()?;
         let directory = self
@@ -428,7 +439,7 @@ impl HttpConnector for NoRedirectConnector {
 
 struct S3Chunks {
     locator: String,
-    store: Arc<dyn ObjectStore>,
+    store: Arc<object_store::aws::AmazonS3>,
     prefix: object_store::path::Path,
     timeout: Duration,
 }
@@ -496,7 +507,8 @@ impl S3Chunks {
     ) -> Result<T> {
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let timeout = self.timeout;
-        // Keep payload and result memory charged even when the waiter cancels.
+        // The caller can time out before a spawned transfer is dropped. Keep
+        // its allocation reservation with the future that owns payload buffers.
         let task = remote_runtime()?.spawn(crate::net::memory::retain_future(async move {
             let result = tokio::time::timeout(timeout, future)
                 .await
@@ -584,6 +596,12 @@ async fn read_remote_marker(
 }
 
 impl ChunkStore for S3Chunks {
+    fn namespace_is_empty(&self) -> Result<bool> {
+        self.empty()
+    }
+    fn inventory_page(&self, cursor: Option<&str>, maximum: usize) -> Result<ChunkInventoryPage> {
+        self.inventory(cursor, maximum)
+    }
     fn locator(&self) -> Result<String> {
         Ok(self.locator.clone())
     }
@@ -675,6 +693,69 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::Mutex;
     use std::time::Instant;
+
+    #[test]
+    fn inventory_pages_count_unknown_objects_and_preserve_opaque_provider_tokens() {
+        let directory = tempfile::tempdir().unwrap();
+        let fs = FilesystemChunks::open(directory.path()).unwrap();
+        fs.create_namespace_marker_if_absent(b"marker").unwrap();
+        assert!(fs.namespace_is_empty().unwrap());
+        for name in ["z", "b", "a", "old-temp"] {
+            std::fs::write(directory.path().join(name), [1; 3]).unwrap();
+        }
+        assert!(!fs.namespace_is_empty().unwrap());
+        let first = fs.inventory_page(None, 2).unwrap();
+        assert_eq!(
+            first
+                .entries
+                .iter()
+                .map(|e| e.key.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        let second = fs.inventory_page(first.next.as_deref(), 2).unwrap();
+        assert_eq!(
+            second
+                .entries
+                .iter()
+                .map(|e| e.key.as_str())
+                .collect::<Vec<_>>(),
+            ["old-temp", "z"]
+        );
+        assert!(second.next.is_none());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("a", directory.path().join("unsafe")).unwrap();
+            assert!(fs.inventory_page(None, 2).is_err());
+        }
+        let mock = MockS3::start();
+        let store = mock.store();
+        store.create_namespace_marker_if_absent(b"marker").unwrap();
+        assert!(store.namespace_is_empty().unwrap());
+        {
+            let mut objects = mock.state.objects.lock().unwrap();
+            for key in ["a", "b", "c", "d"] {
+                objects.insert(format!("/test-bucket/tenant/chunks/{key}"), vec![1; 3]);
+            }
+            objects.insert("/test-bucket/another-tenant/secret".into(), vec![9; 9]);
+        }
+        assert!(!store.namespace_is_empty().unwrap());
+        let mut cursor = None;
+        let mut keys = Vec::new();
+        loop {
+            let page = store.inventory_page(cursor.as_deref(), 2).unwrap();
+            assert!(page.entries.len() <= 2);
+            keys.extend(page.entries.into_iter().map(|e| e.key));
+            cursor = page.next;
+            if cursor.is_none() {
+                break;
+            }
+            assert!(cursor.as_ref().unwrap().starts_with("opaque:"));
+        }
+        assert_eq!(keys, ["a", "b", "c", "d"]);
+        mock.state.redirect.store(true, Ordering::Release);
+        assert!(store.inventory_page(None, 2).is_err());
+    }
 
     #[test]
     fn filesystem_namespace_marker_is_bounded_immutable_and_not_a_chunk() {
@@ -965,6 +1046,45 @@ secret_access_key = "not-accepted"
             let port = state.redirect_port.load(Ordering::Acquire);
             let response = format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:{port}/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             let _ = stream.write_all(response.as_bytes());
+            return;
+        }
+        if method == "GET" && path.contains("list-type=2") {
+            let url = url::Url::parse(&format!("http://localhost{path}")).unwrap();
+            let query = url
+                .query_pairs()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let maximum = query.get("max-keys").unwrap().parse::<usize>().unwrap();
+            let prefix = query.get("prefix").map(|s| s.as_ref()).unwrap_or("");
+            let offset = query
+                .get("continuation-token")
+                .map(|s| s.strip_prefix("opaque:").unwrap().parse::<usize>().unwrap())
+                .unwrap_or(0);
+            let objects = state.objects.lock().unwrap();
+            let entries = objects
+                .iter()
+                .filter_map(|(path, bytes)| {
+                    path.strip_prefix("/test-bucket/")
+                        .filter(|key| key.starts_with(prefix))
+                        .map(|key| (key, bytes.len()))
+                })
+                .collect::<Vec<_>>();
+            let mut body = String::from("<ListBucketResult>");
+            for (key, bytes) in entries.iter().skip(offset).take(maximum) {
+                body.push_str(&format!("<Contents><Key>{key}</Key><Size>{bytes}</Size><LastModified>2026-01-01T00:00:00Z</LastModified></Contents>"));
+            }
+            if offset + maximum < entries.len() {
+                body.push_str(&format!(
+                    "<NextContinuationToken>opaque:{}</NextContinuationToken>",
+                    offset + maximum
+                ));
+            }
+            body.push_str("</ListBucketResult>");
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
             return;
         }
         let (status, response) = match method {

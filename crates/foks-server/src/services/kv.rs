@@ -473,32 +473,49 @@ fn put_file_chunk(
         chunk,
         exact_chunk,
     });
-    let digest = chunk_store.map(|_| crate::chunks::chunk_digest(&upload.exact_chunk));
-    if let Some(store) = chunk_store {
-        // Admission is checked before uploading, then checked again at commit.
-        // A racing revocation or quota change can leave an unreferenced object.
-        write_file_chunk(
+    let reservation = if let Some(store) = chunk_store {
+        let digest = crate::chunks::chunk_digest(&upload.exact_chunk);
+        let Some(token) = reserve_file_chunk(
             writer,
             authority,
             principal.device_id(),
             upload.clone(),
             digest,
-            true,
-        )?;
-        store
-            .put(
-                &digest.expect("configured store has digest"),
-                &upload.exact_chunk,
-            )
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-    }
+        )?
+        else {
+            return Ok(Response::Void); // authenticated exact metadata replay
+        };
+        match token.action {
+            foks_server_db::ChunkReservationAction::Publish => {
+                let result = store.put(&digest, &upload.exact_chunk);
+                writer
+                    .settle_chunk_publication(token.clone(), result.is_ok())
+                    .map_err(|_| RpcStatus::TransactionRetry)?;
+                result.map_err(|_| RpcStatus::TransactionRetry)?;
+            }
+            foks_server_db::ChunkReservationAction::Verify => {
+                let bytes = store
+                    .get(&digest, token.encoded_bytes)
+                    .map_err(|_| RpcStatus::TransactionRetry)?;
+                if bytes != upload.exact_chunk {
+                    return Err(RpcStatus::TransactionRetry);
+                }
+                writer
+                    .confirm_chunk_presence(token.clone())
+                    .map_err(|_| RpcStatus::TransactionRetry)?;
+            }
+            foks_server_db::ChunkReservationAction::Present => {}
+        }
+        Some(token)
+    } else {
+        None
+    };
     write_file_chunk(
         writer,
         authority,
         principal.device_id(),
         upload,
-        digest,
-        false,
+        reservation,
     )?;
     Ok(Response::Void)
 }
@@ -511,13 +528,57 @@ struct PendingFileChunk {
     exact_chunk: Vec<u8>,
 }
 
+fn reserve_file_chunk(
+    writer: &WriterHandle,
+    authority: &KvAuthority,
+    credential: &[u8],
+    upload: Arc<PendingFileChunk>,
+    digest: [u8; 32],
+) -> Result<Option<foks_server_db::ChunkReservation>, RpcStatus> {
+    let device = credential.to_vec();
+    let authority = authority.clone();
+    let mut attempt = [0; 16];
+    crate::Entropy::fill(&crate::OsEntropy, &mut attempt)
+        .map_err(|_| RpcStatus::TransactionRetry)?;
+    writer
+        .call_with_current_time(Arc::clone(&authority.clock), move |database, now| {
+            if !kv_write_is_current(database, &authority, &device, now)? {
+                return Err(crate::Error::AuthorizationChanged);
+            }
+            let mutation = upload.mutation(now);
+            database.preflight_kv_file_chunk(&mutation)?;
+            if database.kv_file_chunk_exists(&upload.uid, &upload.file_id, upload.chunk.offset)? {
+                return Ok(None);
+            }
+            Ok(Some(database.reserve_chunk_object(
+                &digest,
+                upload.exact_chunk.len() as u64,
+                &attempt,
+                now,
+            )?))
+        })
+        .map_err(map_upload_error)
+}
+impl PendingFileChunk {
+    fn mutation(&self, now: u64) -> foks_server_db::KvFileChunkMutation<'_> {
+        foks_server_db::KvFileChunkMutation {
+            uid: &self.uid,
+            file_id: &self.file_id,
+            exact_metadata: self.exact_metadata.as_deref(),
+            offset: self.chunk.offset,
+            ciphertext: &self.chunk.ciphertext,
+            final_size: self.chunk.final_upload.as_ref().map(|v| v.size),
+            exact_chunk: &self.exact_chunk,
+            now,
+        }
+    }
+}
 fn write_file_chunk(
     writer: &WriterHandle,
     authority: &KvAuthority,
     credential: &[u8],
     upload: Arc<PendingFileChunk>,
-    digest: Option<[u8; 32]>,
-    preflight: bool,
+    reservation: Option<foks_server_db::ChunkReservation>,
 ) -> Result<(), RpcStatus> {
     let device = credential.to_vec();
     let authority = authority.clone();
@@ -526,20 +587,10 @@ fn write_file_chunk(
             if !kv_write_is_current(database, &authority, &device, now)? {
                 return Err(crate::Error::AuthorizationChanged);
             }
-            let mutation = foks_server_db::KvFileChunkMutation {
-                uid: &upload.uid,
-                file_id: &upload.file_id,
-                exact_metadata: upload.exact_metadata.as_deref(),
-                offset: upload.chunk.offset,
-                ciphertext: &upload.chunk.ciphertext,
-                final_size: upload.chunk.final_upload.as_ref().map(|value| value.size),
-                exact_chunk: &upload.exact_chunk,
-                now,
-            };
-            if preflight {
-                database.preflight_kv_file_chunk(&mutation)?;
-            } else if let Some(digest) = digest {
-                database.put_kv_file_chunk_external(&mutation, &digest)?;
+            let mutation = upload.mutation(now);
+            if let Some(token) = reservation {
+                database.validate_chunk_reservation(&token)?;
+                database.put_kv_file_chunk_external(&mutation, &token.digest)?;
             } else {
                 database.put_kv_file_chunk(&mutation)?;
             }
@@ -1318,6 +1369,12 @@ fn map_write_error(error: crate::Error) -> RpcStatus {
 }
 
 fn map_upload_error(error: crate::Error) -> RpcStatus {
+    if matches!(
+        error,
+        crate::Error::Database(foks_server_db::Error::ChunkAdmission(_))
+    ) {
+        return RpcStatus::RateLimited;
+    }
     if matches!(&error, crate::Error::Database(error) if error.is_quota()) {
         return RpcStatus::QuotaExceeded;
     }

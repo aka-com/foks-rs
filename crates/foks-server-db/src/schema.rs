@@ -4,7 +4,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 51;
+pub const SCHEMA_VERSION: i64 = 52;
 
 const SCHEMA: &str = concat!(
     include_str!("schema/core.sql"),
@@ -26,6 +26,7 @@ const SCHEMA: &str = concat!(
     include_str!("schema/kv_accounting.sql"),
     include_str!("schema/kv_external.sql"),
     include_str!("schema/chunk_binding.sql"),
+    include_str!("schema/chunk_ledger.sql"),
     include_str!("schema/realtime.sql"),
     include_str!("schema/realtime_invalidation.sql"),
     include_str!("schema/waitlist.sql"),
@@ -46,14 +47,14 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         transaction.commit()?;
         return Ok(());
     }
-    if application_id == APPLICATION_ID && matches!(version, 43..=50) {
+    if application_id == APPLICATION_ID && matches!(version, 43..=51) {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Recheck under the write lock: another opener may already have upgraded.
         let application_id =
             transaction.pragma_query_value(None, "application_id", |r| r.budgeted_get(0))?;
         let version =
             transaction.pragma_query_value(None, "user_version", |r| r.budgeted_get(0))?;
-        if application_id == APPLICATION_ID && matches!(version, 43..=50) {
+        if application_id == APPLICATION_ID && matches!(version, 43..=51) {
             if version <= 47 {
                 if version == 43 {
                     transaction.execute_batch(
@@ -120,7 +121,10 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
             if version <= 49 {
                 transaction.execute_batch(include_str!("schema/kv_external.sql"))?;
             }
-            transaction.execute_batch(include_str!("schema/chunk_binding.sql"))?;
+            if version <= 50 {
+                transaction.execute_batch(include_str!("schema/chunk_binding.sql"))?;
+            }
+            transaction.execute_batch(include_str!("schema/chunk_ledger.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else {
             validate(application_id, version)?;

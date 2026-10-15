@@ -47,6 +47,16 @@ impl ChunkStore for Gated {
     fn create_namespace_marker_if_absent(&self, bytes: &[u8]) -> foks_server::Result<()> {
         self.inner.create_namespace_marker_if_absent(bytes)
     }
+    fn namespace_is_empty(&self) -> foks_server::Result<bool> {
+        self.inner.namespace_is_empty()
+    }
+    fn inventory_page(
+        &self,
+        cursor: Option<&str>,
+        maximum: usize,
+    ) -> foks_server::Result<foks_server::chunks::ChunkInventoryPage> {
+        self.inner.inventory_page(cursor, maximum)
+    }
     fn put(&self, digest: &[u8; 32], bytes: &[u8]) -> foks_server::Result<()> {
         self.wait(1)?;
         self.inner.put(digest, bytes)

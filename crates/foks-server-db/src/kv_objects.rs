@@ -102,6 +102,14 @@ fn has_external_chunks(connection: &Connection) -> Result<bool> {
 }
 
 impl Database {
+    pub fn kv_file_chunk_exists(
+        &self,
+        uid: &[u8],
+        file_id: &[u8; 16],
+        offset: u64,
+    ) -> Result<bool> {
+        Ok(self.connection.query_row("SELECT EXISTS(SELECT 1 FROM kv_file_chunks WHERE uid=?1 AND file_id=?2 AND clear_offset=?3)",params![uid,file_id,sql_integer(offset)?],|r|r.budgeted_get(0))?)
+    }
     /// Includes incomplete and reclaiming uploads: they may still need the store
     /// for backup or an exact retry even if downloads cannot currently see them.
     pub fn has_external_chunks(&self) -> Result<bool> {
@@ -185,14 +193,19 @@ impl Database {
             decoded.final_upload.is_some(),
             Some(*digest),
         )?;
+        let object_id = crate::chunk_ledger::require_present(
+            &self.connection,
+            digest,
+            expected_exact.len() as u64,
+        )?;
         Ok(self.connection.execute(
-            "UPDATE kv_file_chunks SET external_digest=?4,
+            "UPDATE kv_file_chunks SET external_digest=?4,external_object_id=?8,
                 external_ciphertext_bytes=length(ciphertext), external_encoded_bytes=length(exact_upload_chunk),
                 ciphertext=X'',exact_upload_chunk=X''
              WHERE uid=?1 AND file_id=?2 AND clear_offset=?3 AND external_digest IS NULL
                 AND exact_upload_chunk=?5 AND ciphertext=?6 AND final_chunk=?7",
             params![key.uid,key.file_id,sql_integer(key.offset)?,digest.as_slice(),expected_exact,
-                decoded.ciphertext,decoded.final_upload.is_some()],
+                decoded.ciphertext,decoded.final_upload.is_some(),object_id.as_slice()],
         )? == 1)
     }
 
@@ -227,7 +240,7 @@ impl Database {
         )?;
         Ok(self.connection.execute(
             "UPDATE kv_file_chunks SET ciphertext=?4,exact_upload_chunk=?5,
-                external_encoded_bytes=NULL,external_ciphertext_bytes=NULL,external_digest=NULL
+                external_encoded_bytes=NULL,external_ciphertext_bytes=NULL,external_digest=NULL,external_object_id=NULL
              WHERE uid=?1 AND file_id=?2 AND clear_offset=?3 AND external_digest=?6
                 AND external_ciphertext_bytes=?7 AND external_encoded_bytes=?8 AND final_chunk=?9",
             params![
