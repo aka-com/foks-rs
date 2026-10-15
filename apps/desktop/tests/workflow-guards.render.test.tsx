@@ -203,7 +203,7 @@ async function groupSheet(
   onClose: () => void,
   bridge: Bridge = h.bridge(),
 ) {
-  const { GroupSheet } = await import('../src/screens/groups-screen');
+  const { GroupSheet } = await import('../src/screens/groups/group-sheet');
   return h.mount(
     createElement(GroupSheet, {
       store: h.group,

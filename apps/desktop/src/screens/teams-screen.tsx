@@ -61,8 +61,9 @@ import {
   unavailableTitle,
 } from '../model/group-model';
 import type { DiscoveryContext } from '../model/group-model';
-import { AbandonGroupSheet, GroupSheet } from './groups-screen';
-import type { GroupSheetKind } from './groups-screen';
+import { AbandonGroupSheet } from './groups/abandon-group-sheet';
+import { GroupSheet } from './groups/group-sheet';
+import type { GroupSheetKind } from './groups/group-sheet';
 
 /**
  * Only what this page uses. The page reads the snapshot, the bridge, the
