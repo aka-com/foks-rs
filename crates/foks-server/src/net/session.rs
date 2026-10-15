@@ -789,14 +789,7 @@ impl ServerData {
 
     fn read_database(&self) -> std::result::Result<crate::read_pool::ReadLease, RpcStatus> {
         let pool = self.read_database.as_ref().ok_or(RpcStatus::Unsupported)?;
-        match pool.checkout() {
-            Ok(database) => Ok(database),
-            Err(crate::Error::ReaderPool) => {
-                self.metrics.reader_pool_exhausted();
-                Err(RpcStatus::RateLimited)
-            }
-            Err(error) => Err(crate::status::internal(error, "read_pool")),
-        }
+        pool.lease(&self.metrics)
     }
 
     fn host(&self) -> std::result::Result<EntityId, RpcStatus> {

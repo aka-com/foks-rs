@@ -92,8 +92,9 @@ async fn poll_inner(
     let clock = Arc::clone(&data.clock);
     let principal = blocking({
         let pool = pool.clone();
+        let metrics = Arc::clone(&data.metrics);
         move || {
-            let database = pool.checkout().map_err(|_| RpcStatus::TransactionRetry)?;
+            let database = pool.lease(&metrics)?;
             let now = clock
                 .now_micros()
                 .map_err(|_| RpcStatus::TransactionRetry)?;
@@ -118,28 +119,29 @@ async fn poll_inner(
     loop {
         let mut notified = Box::pin(Arc::clone(&listener).notified_owned());
         notified.as_mut().enable();
-        let read_state =
-            |pool: crate::read_pool::ReadPool,
-             actor: foks_server_db::RealtimeActor,
-             clock: Arc<dyn foks_server_db::Clock>,
-             service: crate::services::realtime::RealtimeService| async move {
-                blocking(move || {
-                    let database = pool.checkout().map_err(|_| RpcStatus::TransactionRetry)?;
-                    let snapshot = database
-                        .snapshot()
-                        .map_err(|_| RpcStatus::TransactionRetry)?;
-                    let now = clock
-                        .now_micros()
-                        .map_err(|_| RpcStatus::TransactionRetry)?;
-                    service.inbox_state(&actor, app, &snapshot, now, ReconcileSource::Poll)
-                })
-                .await
-            };
+        let read_state = |pool: crate::read_pool::ReadPool,
+                          actor: foks_server_db::RealtimeActor,
+                          clock: Arc<dyn foks_server_db::Clock>,
+                          service: crate::services::realtime::RealtimeService,
+                          metrics: Arc<crate::ServerMetrics>| async move {
+            blocking(move || {
+                let database = pool.lease(&metrics)?;
+                let snapshot = database
+                    .snapshot()
+                    .map_err(|error| crate::status::unmapped(error.into(), "realtime_poll"))?;
+                let now = clock
+                    .now_micros()
+                    .map_err(|_| RpcStatus::TransactionRetry)?;
+                service.inbox_state(&actor, app, &snapshot, now, ReconcileSource::Poll)
+            })
+            .await
+        };
         let mut state = read_state(
             pool.clone(),
             actor.clone(),
             Arc::clone(&data.clock),
             service.clone(),
+            Arc::clone(&data.metrics),
         )
         .await?;
         if state.version > since {
@@ -166,6 +168,7 @@ async fn poll_inner(
                 actor.clone(),
                 Arc::clone(&data.clock),
                 service.clone(),
+                Arc::clone(&data.metrics),
             )
             .await?;
         } else {

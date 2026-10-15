@@ -74,6 +74,24 @@ impl ReadPool {
             }
         }
     }
+
+    /// Checks out a connection for an RPC request. An exhausted pool is
+    /// reported as `RateLimited` and counted in
+    /// `foks_reader_pool_exhausted_total`; any other failure is a server fault
+    /// counted at the `read_pool` site.
+    pub(crate) fn lease(
+        &self,
+        metrics: &crate::ServerMetrics,
+    ) -> std::result::Result<ReadLease, foks_rpc::RpcStatus> {
+        match self.checkout() {
+            Ok(lease) => Ok(lease),
+            Err(Error::ReaderPool) => {
+                metrics.reader_pool_exhausted();
+                Err(foks_rpc::RpcStatus::RateLimited)
+            }
+            Err(error) => Err(crate::status::internal(error, "read_pool")),
+        }
+    }
 }
 
 impl Deref for ReadLease {
@@ -119,6 +137,32 @@ mod tests {
         assert!(matches!(pool.checkout(), Err(Error::ReaderPool)));
         drop(first);
         pool.checkout().unwrap();
+    }
+
+    #[test]
+    fn exhausted_lease_is_rate_limited_and_counted() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("pool.sqlite");
+        foks_server_db::Database::open(&path, foks_server_db::Config::default()).unwrap();
+        let pool = ReadPool::new(
+            ReadDatabaseConfig {
+                path,
+                database: foks_server_db::Config::default(),
+            },
+            1,
+        )
+        .unwrap();
+        let metrics = crate::ServerMetrics::default();
+
+        let first = pool.lease(&metrics).unwrap();
+        assert!(matches!(
+            pool.lease(&metrics),
+            Err(foks_rpc::RpcStatus::RateLimited)
+        ));
+        assert_eq!(metrics.snapshot().reader_pool_exhausted, 1);
+        drop(first);
+        pool.lease(&metrics).unwrap();
+        assert_eq!(metrics.snapshot().reader_pool_exhausted, 1);
     }
 
     #[test]
