@@ -68,14 +68,13 @@ fn join(fixture: &Fixture, email: &[u8]) -> foks_rpc::Result<Vec<u8>> {
 }
 
 fn entry_count(fixture: &Fixture) -> usize {
-    foks_server_db::ReadDatabase::open(
-        fixture.environment.database_path(),
-        foks_server_db::Config::default(),
-    )
-    .unwrap()
-    .waitlist_entries()
-    .unwrap()
-    .len()
+    fixture
+        .environment
+        .read_database()
+        .unwrap()
+        .waitlist_entries()
+        .unwrap()
+        .len()
 }
 
 fn public_stream(
