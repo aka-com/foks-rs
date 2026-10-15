@@ -75,6 +75,7 @@ pub struct ServerMetricsSnapshot {
     pub backup_duration_microseconds_total: u64,
     pub backup_duration_microseconds_max: u64,
     pub storage_sample_failures: u64,
+    pub oidc_sample_failures: u64,
     pub maintenance_attempts: u64,
     pub maintenance_successes: u64,
     pub maintenance_failures: u64,
@@ -114,6 +115,7 @@ pub struct ServerMetrics {
     last_backup_success_unixtime: AtomicU64,
     backup_duration: DurationMetric,
     storage_sample_failures: AtomicU64,
+    oidc_sample_failures: AtomicU64,
     maintenance_attempts: AtomicU64,
     maintenance_successes: AtomicU64,
     maintenance_failures: AtomicU64,
@@ -187,6 +189,7 @@ impl ServerMetrics {
             backup_duration_microseconds_total: backup_duration.microseconds_total,
             backup_duration_microseconds_max: backup_duration.microseconds_max,
             storage_sample_failures: self.storage_sample_failures.load(Ordering::Relaxed),
+            oidc_sample_failures: self.oidc_sample_failures.load(Ordering::Relaxed),
             maintenance_attempts: self.maintenance_attempts.load(Ordering::Relaxed),
             maintenance_successes: self.maintenance_successes.load(Ordering::Relaxed),
             maintenance_failures: self.maintenance_failures.load(Ordering::Relaxed),
@@ -325,6 +328,10 @@ impl ServerMetrics {
 
     pub(crate) fn storage_sample_failed(&self) {
         self.storage_sample_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn oidc_sample_failed(&self) {
+        self.oidc_sample_failures.fetch_add(1, Ordering::Relaxed);
     }
 }
 

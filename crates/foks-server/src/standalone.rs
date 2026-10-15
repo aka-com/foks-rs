@@ -860,6 +860,7 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let metrics = Arc::new(crate::ServerMetrics::default());
     let backup_schedule = config.backup;
 
+    let oidc_configured = config.oidc.is_some();
     let sso = if let Some((operator, policy)) = config.oidc {
         let host: [u8; 33] = bootstrap
             .host_id
@@ -982,7 +983,11 @@ pub fn start_standalone(config: StandaloneConfig) -> Result<RunningStandaloneSer
     let management = crate::operations::ManagementServer::start(
         config.management_address,
         writer_handle,
-        config.database_path.clone(),
+        ReadDatabaseConfig {
+            path: config.database_path.clone(),
+            database: database_config.clone(),
+        },
+        oidc_configured,
         Arc::clone(&metrics),
         server.liveness(),
         fatal.clone(),

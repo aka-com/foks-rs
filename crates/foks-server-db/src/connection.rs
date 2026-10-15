@@ -211,7 +211,23 @@ impl Database {
 }
 
 impl ReadDatabase {
+    /// Opens a reader after checking the application ID, the schema version
+    /// and that every stored KV tree fits `config`. The KV check reads every
+    /// row of the KV head, node and dirent tables, so its cost grows with the
+    /// stored data. Offline tools and backup and restore verification use this
+    /// constructor.
     pub fn open(path: impl AsRef<Path>, config: Config) -> Result<Self> {
+        let database = Self::open_pooled(path, config)?;
+        crate::kv::validate_kv_tree_capacity(&database.connection, &database.config)?;
+        Ok(database)
+    }
+
+    /// Opens a reader after checking only the application ID and the schema
+    /// version. A running server uses this for its read pools and its metrics
+    /// reader. The server's writer runs the KV capacity check when it opens the
+    /// same file at startup, and repeating that scan for each additional
+    /// connection costs time without adding a check.
+    pub fn open_pooled(path: impl AsRef<Path>, config: Config) -> Result<Self> {
         let identity = DatabasePathIdentity::existing(path.as_ref())?;
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
@@ -220,7 +236,6 @@ impl ReadDatabase {
         identity.recheck()?;
         configure_reader(&connection, &config)?;
         schema::validate_connection(&connection)?;
-        crate::kv::validate_kv_tree_capacity(&connection, &config)?;
         Ok(Self { connection, config })
     }
 

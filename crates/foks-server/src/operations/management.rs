@@ -3,14 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::fatal::{CoreThread, FatalSignal};
-use crate::{Error, Result, ServerMetrics, WriterHandle};
+use crate::{Error, ReadDatabaseConfig, Result, ServerMetrics, WriterHandle};
+
+mod sso_sample;
 
 const MAXIMUM_REQUEST_BYTES: usize = 8 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
@@ -31,13 +33,15 @@ struct ManagementState {
     readiness_in_flight: Arc<AtomicBool>,
     database_path: PathBuf,
     metrics: Arc<ServerMetrics>,
+    sso: sso_sample::SsoSampler,
 }
 
 impl ManagementServer {
     pub(crate) fn start(
         address: SocketAddr,
         writer: WriterHandle,
-        database_path: PathBuf,
+        database: ReadDatabaseConfig,
+        oidc_configured: bool,
         metrics: Arc<ServerMetrics>,
         service_live: Arc<AtomicBool>,
         fatal: FatalSignal,
@@ -49,6 +53,8 @@ impl ManagementServer {
         let ready = Arc::new(AtomicBool::new(false));
         let thread_ready = Arc::clone(&ready);
         let (stop, receiver) = watch::channel(false);
+        let database_path = database.path.clone();
+        let sso = sso_sample::SsoSampler::new(oidc_configured.then_some(database));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .thread_name("foks-server-management")
             .enable_all()
@@ -67,6 +73,7 @@ impl ManagementServer {
                     readiness_in_flight: Arc::new(AtomicBool::new(false)),
                     database_path,
                     metrics,
+                    sso,
                 },
                 receiver,
             ));
@@ -209,11 +216,19 @@ async fn handle(
                 response(503, "text/plain", "not ready\n".to_owned())
             }
         }
-        Some(b"GET /metrics HTTP/1.1") => response(
-            200,
-            "text/plain; version=0.0.4",
-            prometheus(&state.metrics, &state.writer, &state.database_path),
-        ),
+        Some(b"GET /metrics HTTP/1.1") => {
+            let sso = state.sso.sample(&state.metrics, Instant::now()).await;
+            response(
+                200,
+                "text/plain; version=0.0.4",
+                prometheus(
+                    &state.metrics,
+                    &state.writer,
+                    &state.database_path,
+                    sso.as_ref(),
+                ),
+            )
+        }
         Some(line) if !line.starts_with(b"GET ") => {
             response(405, "text/plain", "method not allowed\n".to_owned())
         }
@@ -259,7 +274,7 @@ async fn readiness(
     {
         return false;
     }
-    let guard = ReadinessFlight(in_flight);
+    let guard = InFlight(in_flight);
     matches!(
         tokio::time::timeout(
             Duration::from_secs(1),
@@ -273,9 +288,9 @@ async fn readiness(
     )
 }
 
-struct ReadinessFlight(Arc<AtomicBool>);
+struct InFlight(Arc<AtomicBool>);
 
-impl Drop for ReadinessFlight {
+impl Drop for InFlight {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
@@ -296,7 +311,12 @@ fn response(status: u16, content_type: &str, body: String) -> Vec<u8> {
     .into_bytes()
 }
 
-fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Path) -> String {
+fn prometheus(
+    metrics: &ServerMetrics,
+    writer: &WriterHandle,
+    database_path: &Path,
+    sso: Option<&foks_server_db::SsoRolloutStatus>,
+) -> String {
     let (database_bytes, wal_bytes) = match storage_bytes(database_path) {
         Ok(storage) => storage,
         Err(()) => {
@@ -449,6 +469,10 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
                 "foks_admin_reclaimed_records_total",
                 metrics.admin_reclaimed_records,
             ),
+            (
+                "foks_oidc_sample_failures_total",
+                metrics.oidc_sample_failures,
+            ),
         ] {
             let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
         }
@@ -465,48 +489,41 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
     expiry_prometheus(&mut output, &metrics.expiry);
     checkpoint_prometheus(&mut output, &metrics.checkpoint);
     realtime_prometheus(&mut output, &metrics.realtime);
-    // Independent read snapshot; metrics never enqueue a policy mutation.
-    let sample = (|| -> crate::Result<Option<foks_server_db::SsoRolloutStatus>> {
-        let db = foks_server_db::ReadDatabase::open(database_path, Default::default())?;
-        let Some(host) = db.host_bootstrap()? else {
-            return Ok(None);
-        };
-        let host = host
-            .host_id
-            .as_slice()
-            .try_into()
-            .map_err(|_| crate::Error::Config("invalid host ID"))?;
-        let snapshot = db.snapshot()?;
-        Ok(snapshot.sso_rollout_status(host)?)
-    })();
-    if let Ok(Some(s)) = sample {
-        use std::fmt::Write as _;
-        for (name, value) in [
-            ("foks_oidc_rollout_mode", s.policy.mode as u64 + 1),
-            (
-                "foks_oidc_provider_blocked",
-                u64::from(s.policy.blocked_reason.is_some()),
-            ),
-            (
-                "foks_oidc_authorization_epoch",
-                s.policy.authorization_epoch,
-            ),
-            ("foks_oidc_cohort_accounts", s.cohort),
-            ("foks_oidc_cohort_linked", s.linked),
-            ("foks_oidc_cohort_unlinked", s.unlinked),
-            (
-                "foks_oidc_cohort_locked_out",
-                if s.policy.mode == foks_server_db::SsoRolloutMode::Enforced {
-                    s.unlinked
-                } else {
-                    0
-                },
-            ),
-        ] {
-            let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
-        }
-    }
+    sso_prometheus(&mut output, sso);
     output
+}
+
+/// Writes the OIDC rollout gauges. They are omitted when OIDC is not
+/// configured, the host has no rollout policy, or no sample is available.
+fn sso_prometheus(output: &mut String, sso: Option<&foks_server_db::SsoRolloutStatus>) {
+    use std::fmt::Write as _;
+    let Some(s) = sso else {
+        return;
+    };
+    for (name, value) in [
+        ("foks_oidc_rollout_mode", s.policy.mode as u64 + 1),
+        (
+            "foks_oidc_provider_blocked",
+            u64::from(s.policy.blocked_reason.is_some()),
+        ),
+        (
+            "foks_oidc_authorization_epoch",
+            s.policy.authorization_epoch,
+        ),
+        ("foks_oidc_cohort_accounts", s.cohort),
+        ("foks_oidc_cohort_linked", s.linked),
+        ("foks_oidc_cohort_unlinked", s.unlinked),
+        (
+            "foks_oidc_cohort_locked_out",
+            if s.policy.mode == foks_server_db::SsoRolloutMode::Enforced {
+                s.unlinked
+            } else {
+                0
+            },
+        ),
+    ] {
+        let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
+    }
 }
 
 fn expiry_prometheus(output: &mut String, expiry: &crate::ExpiryMetricsSnapshot) {
@@ -649,6 +666,42 @@ mod tests {
         }
         assert!(text.contains("# TYPE foks_expiry_deleted_rows_total counter\n"));
         assert!(text.contains("# TYPE foks_expiry_empty_passes_total counter\n"));
+    }
+
+    #[test]
+    fn sso_gauges_are_written_only_for_a_sample() {
+        let mut text = String::new();
+        sso_prometheus(&mut text, None);
+        assert!(text.is_empty());
+
+        let status = foks_server_db::SsoRolloutStatus {
+            policy: foks_server_db::SsoPolicy {
+                host: [1; 33],
+                rollout_id: [2; 16],
+                config_hash: [3; 32],
+                issuer: "https://issuer.example".to_owned(),
+                mode: foks_server_db::SsoRolloutMode::Enforced,
+                blocked_reason: None,
+                revision: 4,
+                authorization_epoch: 5,
+            },
+            cohort: 9,
+            linked: 7,
+            unlinked: 2,
+        };
+        sso_prometheus(&mut text, Some(&status));
+        assert_eq!(
+            text,
+            concat!(
+                "# TYPE foks_oidc_rollout_mode gauge\nfoks_oidc_rollout_mode 2\n",
+                "# TYPE foks_oidc_provider_blocked gauge\nfoks_oidc_provider_blocked 0\n",
+                "# TYPE foks_oidc_authorization_epoch gauge\nfoks_oidc_authorization_epoch 5\n",
+                "# TYPE foks_oidc_cohort_accounts gauge\nfoks_oidc_cohort_accounts 9\n",
+                "# TYPE foks_oidc_cohort_linked gauge\nfoks_oidc_cohort_linked 7\n",
+                "# TYPE foks_oidc_cohort_unlinked gauge\nfoks_oidc_cohort_unlinked 2\n",
+                "# TYPE foks_oidc_cohort_locked_out gauge\nfoks_oidc_cohort_locked_out 2\n",
+            )
+        );
     }
 
     #[test]

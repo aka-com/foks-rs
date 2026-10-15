@@ -151,10 +151,16 @@ registry of inodes.
 
 Network reads go through read-only connections opened with
 `SQLITE_OPEN_READ_ONLY | NO_MUTEX | NOFOLLOW`. Each validates the
-application ID and schema version before use. The pool is a vector of idle
-connections behind a mutex; it opens connections lazily up to a maximum
-(default 32) and, when exhausted, returns `Error::ReaderPool` rather than
-waiting. A lease returns its connection to the pool on drop.
+application ID and schema version before use. Pooled connections, the
+administration readers and the metrics reader use
+`ReadDatabase::open_pooled`, which skips the KV-tree capacity check that
+`ReadDatabase::open` runs. That check reads every row of the KV head, node
+and dirent tables; the writer already ran it when it opened the database
+at startup. Offline commands and backup and restore verification keep the
+full check. The pool is a vector of idle connections behind a mutex; it
+opens connections lazily up to a maximum (default 32) and, when exhausted,
+returns `Error::ReaderPool` rather than waiting. A lease returns its
+connection to the pool on drop.
 
 A `ReadSnapshot` wraps a read transaction on one of these connections and
 is the unit of consistency: every query inside it sees the same WAL state.

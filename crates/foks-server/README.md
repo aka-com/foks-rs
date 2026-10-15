@@ -174,6 +174,14 @@ duration, saturation, backup outcomes, and transient `accept()` failures. They
 use fixed, non-user-derived names and never export paths, identities, request
 values, or key material.
 
+When OIDC is configured and the host has a rollout policy, `/metrics` also
+reports the `foks_oidc_*` rollout gauges: mode, provider block, authorization
+epoch and cohort counts. The sample runs on a blocking worker over one retained
+read connection and answers scrapes for 30 seconds. A scrape that receives no
+sample within 1 second, or whose sample fails, omits these gauges and
+increments `foks_oidc_sample_failures_total`. Without OIDC configuration the
+gauges are absent and `/metrics` does not read the database for them.
+
 `/healthz` returns 200 while every core thread runs: the three RPC listeners,
 the SQLite writer, the maintenance loop, the automatic backup scheduler, the
 management listener, and the administration and OIDC listeners when they are

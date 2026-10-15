@@ -31,7 +31,8 @@ impl ReadPool {
                 "maximum read connections must be greater than zero",
             ));
         }
-        let database = foks_server_db::ReadDatabase::open(&config.path, config.database.clone())?;
+        let database =
+            foks_server_db::ReadDatabase::open_pooled(&config.path, config.database.clone())?;
         Ok(Self {
             inner: Arc::new(Inner {
                 config,
@@ -58,7 +59,7 @@ impl ReadPool {
         state.open_connections += 1;
         drop(state);
 
-        match foks_server_db::ReadDatabase::open(
+        match foks_server_db::ReadDatabase::open_pooled(
             &self.inner.config.path,
             self.inner.config.database.clone(),
         ) {
@@ -118,5 +119,48 @@ mod tests {
         assert!(matches!(pool.checkout(), Err(Error::ReaderPool)));
         drop(first);
         pool.checkout().unwrap();
+    }
+
+    #[test]
+    fn pooled_connections_skip_the_kv_capacity_scan() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("pool.sqlite");
+        drop(foks_server_db::Database::open(&path, foks_server_db::Config::default()).unwrap());
+        // Only the KV capacity scan in ReadDatabase::open visits this row; its
+        // node exceeds the tighter limit below.
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .unwrap();
+        let mut node_id = [0u8; 17];
+        node_id[0] = 3;
+        connection
+            .execute(
+                "INSERT INTO kv_nodes(uid, node_id, node_type, exact_node) VALUES (?1, ?2, 3, ?3)",
+                rusqlite::params![[1u8; 33], node_id, [0u8; 5]],
+            )
+            .unwrap();
+        drop(connection);
+        let config = foks_server_db::Config {
+            maximum_kv_node_bytes: 4,
+            ..foks_server_db::Config::default()
+        };
+        assert!(matches!(
+            foks_server_db::ReadDatabase::open(&path, config.clone()),
+            Err(foks_server_db::Error::QuotaExceeded)
+        ));
+
+        let pool = ReadPool::new(
+            ReadDatabaseConfig {
+                path,
+                database: config,
+            },
+            2,
+        )
+        .unwrap();
+        let first = pool.checkout().unwrap();
+        let second = pool.checkout().unwrap();
+        assert!(first.host_bootstrap().unwrap().is_none());
+        assert!(second.host_bootstrap().unwrap().is_none());
     }
 }

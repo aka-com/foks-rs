@@ -64,6 +64,37 @@ fn namespace_byte_limit_accepts_minus_one_and_exact_but_rejects_plus_one() {
 }
 
 #[test]
+fn pooled_reader_open_skips_the_kv_tree_capacity_check() {
+    let (mut test, _) = initialized(foks_server_db::Config::default());
+    test.database
+        .put_kv_node(&KvNodeMutation {
+            uid: &UID,
+            id: &[3; 17],
+            node_type: 3,
+            exact: &[0x41; 5],
+        })
+        .unwrap();
+    let tighter = foks_server_db::Config {
+        maximum_kv_node_bytes: 4,
+        ..foks_server_db::Config::default()
+    };
+    assert!(matches!(
+        foks_server_db::ReadDatabase::open(&test.path, tighter.clone()),
+        Err(Error::QuotaExceeded)
+    ));
+    let reader = foks_server_db::ReadDatabase::open_pooled(&test.path, tighter).unwrap();
+    assert!(reader.kv_version_vector(&UID).unwrap().is_some());
+
+    let directory = tempfile::tempdir().unwrap();
+    let other = directory.path().join("other.sqlite");
+    rusqlite::Connection::open(&other).unwrap();
+    assert!(matches!(
+        foks_server_db::ReadDatabase::open_pooled(&other, foks_server_db::Config::default()),
+        Err(Error::ApplicationId { found: 0 })
+    ));
+}
+
+#[test]
 fn namespace_object_and_node_limits_are_exact_and_atomic() {
     let config = foks_server_db::Config {
         maximum_kv_namespace_objects: 3,
