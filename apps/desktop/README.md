@@ -2034,7 +2034,7 @@ enrollments are shared by profile. Fresh entries are reused for one minute.
 Returning to either tab paints cached rows immediately; expired entries remain
 visible while a read refreshes them. Concurrent metadata reads share requests.
 
-The shared `QueryRepository` owns immutable metadata, subscriptions, freshness,
+The shared `MetadataRepository` owns immutable metadata, subscriptions, freshness,
 and one shared read per resource generation. Accounts, Devices and the server's enrollment
 page subscribe to the same resources. Pending group operations and invitation
 recovery counts use the same repository; invitation payloads are not retained.

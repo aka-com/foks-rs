@@ -38,9 +38,6 @@ export function useMetadataRepository(
   return shared ?? local;
 }
 
-export const QueryRepositoryContext = MetadataRepositoryContext;
-export const useQueryRepository = useMetadataRepository;
-
 const EMPTY: QuerySnapshot<never> = Object.freeze({
   data: undefined,
   error: undefined,

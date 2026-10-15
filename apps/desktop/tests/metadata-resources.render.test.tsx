@@ -5,7 +5,6 @@ import type { Bridge } from '../src/bridge';
 import { MetadataRepository } from '../src/metadata-repository';
 import {
   MetadataRepositoryContext,
-  QueryRepositoryContext,
   useMetadataQuery,
   useMetadataRepository,
 } from '../src/query-hooks';
@@ -36,7 +35,7 @@ test('legacy providers share the canonical resource across views and view remoun
   };
   const rendered = ui.render(
     createElement(
-      QueryRepositoryContext.Provider,
+      MetadataRepositoryContext.Provider,
       { value: repository },
       createElement(View, { bridge }),
       createElement(View, { bridge }),

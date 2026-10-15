@@ -8,13 +8,6 @@ import {
   MetadataRepository,
   RetiredQueryError,
 } from '../src/metadata-repository';
-import { QueryRepository } from '../src/query-repository';
-import {
-  MetadataRepositoryContext,
-  QueryRepositoryContext,
-  useMetadataRepository,
-  useQueryRepository,
-} from '../src/query-hooks';
 import {
   APP_INFO_FRESHNESS,
   appInfoKey,
@@ -44,13 +37,6 @@ function deferred<T>() {
 }
 
 const tick = () => new Promise<void>((done) => setImmediate(done));
-
-test('legacy metadata names are aliases, not separate repositories or contexts', () => {
-  assert.equal(QueryRepository, MetadataRepository);
-  assert.equal(QueryRepositoryContext, MetadataRepositoryContext);
-  assert.equal(useQueryRepository, useMetadataRepository);
-  assert.ok(new QueryRepository() instanceof MetadataRepository);
-});
 
 test('app info coalesces, publishes only display metadata, and remains reusable after unsubscribe', async () => {
   let now = 0;
