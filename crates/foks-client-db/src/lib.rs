@@ -660,6 +660,8 @@ pub enum Error {
     InvalidSnapshot(&'static str),
     #[error("hard-state database path must not be a symbolic link")]
     SymlinkDatabase,
+    #[error("hard-state database does not exist or is not initialized")]
+    StateMissing,
     #[error("hard-state database has application id {found:#x}, expected {expected:#x}")]
     WrongApplicationId { found: i64, expected: i64 },
     #[error(

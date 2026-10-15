@@ -37,6 +37,15 @@ Every repository uses the same immediate-write transaction layer; the split
 does not create independent connections or weaken atomic
 host/Merkle/user/team acceptance.
 
+`HardStateStore::open` creates and initializes the database when the file is
+absent, assigning a new database id. Exclusive admission of a pristine profile
+relies on this, and code inside a checked session uses it after admission has
+created the file. Reads that can run outside the profile lock, such as the
+import gate check, use `HardStateStore::open_existing`. It returns
+`StateMissing` for an absent or uninitialized file without writing to the
+filesystem, so a read after a profile reset does not recreate the database
+before the next exclusive admission.
+
 The separate soft-state schema stores complete verified KV roots,
 directories, dirent versions, and content projections. It reconstructs durable
 FOKS path-version vectors for cache checks, atomically replaces and prunes
