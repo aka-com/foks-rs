@@ -1,5 +1,4 @@
 use super::*;
-use crate::allocation::RowAllocationExt as _;
 
 impl Database {
     pub fn web_issue_ticket(

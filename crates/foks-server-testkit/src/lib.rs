@@ -4,6 +4,8 @@
 
 mod account;
 mod binary;
+#[cfg(feature = "celld-proof")]
+pub mod celld_proof;
 mod certs;
 mod client;
 mod clock;

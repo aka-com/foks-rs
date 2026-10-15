@@ -59,6 +59,41 @@ impl RunningServer {
     }
 
     pub(crate) fn start_bound(config: Config, listeners: BoundListeners) -> Result<Self> {
+        Self::start_inner(
+            config,
+            listeners,
+            #[cfg(feature = "celld-proof")]
+            None,
+        )
+    }
+
+    #[cfg(feature = "celld-proof")]
+    pub(crate) fn start_proof(
+        config: Config,
+        proof: Arc<dyn crate::proof::RpcProof>,
+    ) -> Result<Self> {
+        if config.writer.is_some()
+            || config.sso.is_some()
+            || config.web_admin.is_some()
+            || config.chunk_store.is_some()
+        {
+            return Err(Error::Config(
+                "proof startup requires no ordinary writer or secondary services",
+            ));
+        }
+        let listeners = bind_addresses(
+            config.probe_address,
+            config.public_address,
+            config.authenticated_address,
+        )?;
+        Self::start_inner(config, listeners, Some(proof))
+    }
+
+    fn start_inner(
+        config: Config,
+        listeners: BoundListeners,
+        #[cfg(feature = "celld-proof")] proof: Option<Arc<dyn crate::proof::RpcProof>>,
+    ) -> Result<Self> {
         config.limits.validate()?;
         let startup_storage = config
             .read_database
@@ -112,7 +147,10 @@ impl RunningServer {
             addresses,
         } = listeners;
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(config.rate_limits)?);
-        let service_data = Arc::new(ServerData::from_config(&config, Arc::clone(&rate_limiter))?);
+        let service_data = ServerData::from_config(&config, Arc::clone(&rate_limiter))?;
+        #[cfg(feature = "celld-proof")]
+        let service_data = service_data.with_proof(proof);
+        let service_data = Arc::new(service_data);
         let (stop, stop_receiver) = watch::channel(false);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(config.limits.worker_threads)

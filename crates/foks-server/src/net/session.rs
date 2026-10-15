@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 mod handlers;
 mod kex;
+#[cfg(feature = "celld-proof")]
+mod proof;
 
 use foks_proto::{
     DecodedSignupArgument, EntityId, HistoricalMerkleRoots, InviteCode, MerkleExistsResponse,
@@ -29,6 +31,8 @@ use crate::{Entropy, Result, SessionLimits, WriterHandle};
 
 #[derive(Clone)]
 pub(crate) struct ServerData {
+    #[cfg(feature = "celld-proof")]
+    proof: Option<Arc<dyn crate::proof::RpcProof>>,
     chunk_store: Option<Arc<dyn crate::chunks::ChunkStore>>,
     vhost_management_host: String,
     web_admin: Option<Arc<crate::web_admin::WebAdminService>>,
@@ -109,6 +113,23 @@ impl OwnedPassphraseMutation {
 }
 
 impl ServerData {
+    #[cfg(feature = "celld-proof")]
+    pub(crate) fn with_proof(mut self, proof: Option<Arc<dyn crate::proof::RpcProof>>) -> Self {
+        self.proof = proof;
+        self
+    }
+
+    fn proof_enabled(&self) -> bool {
+        #[cfg(feature = "celld-proof")]
+        {
+            self.proof.is_some()
+        }
+        #[cfg(not(feature = "celld-proof"))]
+        {
+            false
+        }
+    }
+
     pub(crate) fn from_config(
         config: &crate::Config,
         rate_limiter: Arc<crate::rate_limit::RateLimiter>,
@@ -150,6 +171,8 @@ impl ServerData {
             .to_owned();
         Ok(Self {
             _storage_lease: storage_lease,
+            #[cfg(feature = "celld-proof")]
+            proof: None,
             sso: config.sso.clone(),
             web_admin: config.web_admin.clone(),
             vhost_management_host: config.vhost_management_host.clone(),
@@ -1348,6 +1371,9 @@ pub(crate) async fn serve(
             Ok(Err(error)) => return Err(error.into()),
         };
         if !service_data.rate_limiter.allow_request(peer_ip) {
+            if service_data.proof_enabled() {
+                return Ok(());
+            }
             service_data.metrics.request_started();
             let _request_timer =
                 crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
@@ -1412,17 +1438,24 @@ pub(crate) async fn serve(
         let data = Arc::clone(service_data);
         let certificate = peer_certificate.clone();
         let routed = route_call(call, listener);
-        let kex_receive = matches!(
-            &routed,
-            Ok(call) if call.route.id == crate::rpc::RouteId::KexReceive
-        );
-        let realtime_poll = matches!(
-            &routed,
-            Ok(call) if call.route.id == crate::rpc::RouteId::RealTimeRtPollInbox
-        );
-        let sso_poll = matches!(&routed,Ok(call) if call.route.id==crate::rpc::RouteId::RegPollOAuth2SessionCompletion);
-        let chunk_download = matches!(&routed, Ok(call) if call.route.id == crate::rpc::RouteId::KvStoreGetEncryptedChunk);
+        let kex_receive = !data.proof_enabled()
+            && matches!(
+                &routed,
+                Ok(call) if call.route.id == crate::rpc::RouteId::KexReceive
+            );
+        let realtime_poll = !data.proof_enabled()
+            && matches!(
+                &routed,
+                Ok(call) if call.route.id == crate::rpc::RouteId::RealTimeRtPollInbox
+            );
+        let sso_poll = !data.proof_enabled()
+            && matches!(&routed,Ok(call) if call.route.id==crate::rpc::RouteId::RegPollOAuth2SessionCompletion);
+        let chunk_download = !data.proof_enabled()
+            && matches!(&routed, Ok(call) if call.route.id == crate::rpc::RouteId::KvStoreGetEncryptedChunk);
         if !request_memory.admit_working(argument_bytes, chunk_download) {
+            if service_data.proof_enabled() {
+                return Ok(());
+            }
             let response = request_memory
                 .sync(|| encode_status_response_at(&RpcStatus::RateLimited, sequence))?;
             write_response(&mut stream, &response, limits.io_timeout).await?;
@@ -1579,6 +1612,24 @@ pub(crate) async fn serve(
                         let _request_memory = Arc::clone(&request_memory);
                         let _handler_timer =
                             crate::ServerMetrics::handler_timer(Arc::clone(&data.metrics));
+                        #[cfg(feature = "celld-proof")]
+                        if data.proof_enabled() {
+                            let route = routed.as_ref().ok().map(|call| call.route);
+                            let response = proof::response(
+                                &data,
+                                listener,
+                                routed,
+                                certificate,
+                                peer_ip,
+                                sequence,
+                            )?;
+                            return Ok(RequestOutcome {
+                                _memory: Arc::clone(&request_memory),
+                                response,
+                                route,
+                                disconnect_before_response: false,
+                            });
+                        }
                         let principal = if listener == Listener::Authenticated {
                             let certificate =
                                 CertificateDer::from(certificate.ok_or(crate::Error::Config(
@@ -1666,6 +1717,9 @@ pub(crate) async fn serve(
             {
                 BoundedExecution::Completed(outcome) => outcome?,
                 BoundedExecution::Saturated => {
+                    if service_data.proof_enabled() {
+                        return Ok(());
+                    }
                     service_data.metrics.request_rate_limited();
                     let memory = service_data.memory.request(None);
                     let response = memory

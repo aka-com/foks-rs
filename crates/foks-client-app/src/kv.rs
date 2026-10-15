@@ -958,6 +958,7 @@ impl CheckedProfileSession<'_> {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn put_kv_file_identified<R: Read>(
         &self,
         alias: &str,

@@ -1,5 +1,4 @@
 use super::*;
-use crate::allocation::RowAllocationExt as _;
 
 impl Database {
     pub fn admin_set_grant(

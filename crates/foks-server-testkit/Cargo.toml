@@ -6,6 +6,13 @@ license.workspace = true
 publish = false
 description = "Sealed isolated-process test composition for foks-server"
 
+[features]
+celld-proof = ["dep:rusqlite", "dep:serde", "foks-server/celld-proof"]
+
+[[example]]
+name = "celld-proof-vectors"
+required-features = ["celld-proof"]
+
 [dependencies]
 foks-oidc = { workspace = true, features = ["test-support"] }
 base64 = { workspace = true }
@@ -27,6 +34,8 @@ rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 tempfile = { workspace = true }
 zeroize = { workspace = true }
+rusqlite = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 foks-desktop = { path = "../foks-desktop", default-features = false }

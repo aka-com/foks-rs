@@ -7,6 +7,8 @@ use crate::{
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
+type StoredChunkAdmission = (Vec<u8>, Option<Vec<u8>>, i64, i64, String, i64);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChunkReservationAction {
     Publish,
@@ -204,7 +206,7 @@ impl Database {
         if !totals.5 {
             return reject(tx, "chunk inventory is incomplete");
         }
-        let stored:Option<(Vec<u8>,Option<Vec<u8>>,i64,i64,String,i64)>=tx.query_row("SELECT object_id,namespace_id,encoded_bytes,state,object_key,key_format FROM chunk_objects WHERE digest=?1 AND state IN(1,2,3)",[digest.as_slice()],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?,r.budgeted_get(2)?,r.budgeted_get(3)?,r.budgeted_get(4)?,r.budgeted_get(5)?))).optional()?;
+        let stored:Option<StoredChunkAdmission>=tx.query_row("SELECT object_id,namespace_id,encoded_bytes,state,object_key,key_format FROM chunk_objects WHERE digest=?1 AND state IN(1,2,3)",[digest.as_slice()],|r|Ok((r.budgeted_get(0)?,r.budgeted_get(1)?,r.budgeted_get(2)?,r.budgeted_get(3)?,r.budgeted_get(4)?,r.budgeted_get(5)?))).optional()?;
         if let Some((id, stored_ns, size, state, key, key_format)) = stored {
             if stored_ns.as_deref() != Some(ns.as_slice()) || unsigned(size)? != encoded_bytes {
                 return Err(Error::Invalid("physical object binding mismatch"));

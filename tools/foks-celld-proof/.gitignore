@@ -1,0 +1,4 @@
+generated-schema.json
+wrangler.jsonc
+.wrangler/
+__pycache__/

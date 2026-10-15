@@ -154,6 +154,79 @@ impl foks_rpc::ResponseAllocationBudget for Request {
     }
 }
 
+impl foks_snowpack::AllocationBudget for Request {
+    fn reserve(&self, bytes: usize) -> bool {
+        let accepted = self.reserve_working(bytes);
+        if !accepted {
+            self.failed.store(true, Ordering::Relaxed);
+        }
+        accepted
+    }
+}
+
+// Field order also matters if a task is cancelled before its first poll/run.
+// Keep the whole owner in spawned closures instead of separately captured fields.
+pub(crate) struct RetainedWork<F> {
+    work: F,
+    memory: Option<Arc<Request>>,
+}
+pub(crate) fn retain_work<F>(work: F) -> RetainedWork<F> {
+    RetainedWork {
+        work,
+        memory: current(),
+    }
+}
+pub(crate) struct RetainedValue<T> {
+    value: T,
+    _memory: Option<Arc<Request>>,
+}
+impl<T> RetainedValue<T> {
+    // The awaiting request still owns its scope when taking the value. If its
+    // waiter was cancelled, Tokio drops this whole owner in field order.
+    pub(crate) fn into_inner(self) -> T {
+        self.value
+    }
+}
+impl<F> RetainedWork<F> {
+    pub(crate) fn run<T>(self) -> RetainedValue<T>
+    where
+        F: FnOnce() -> T,
+    {
+        let Self { memory, work } = self;
+        let value = match memory.as_ref() {
+            Some(memory) => memory.sync(work),
+            None => work(),
+        };
+        RetainedValue {
+            value,
+            _memory: memory,
+        }
+    }
+}
+struct RetainedFuture<F> {
+    future: std::pin::Pin<Box<F>>,
+    _memory: Option<Arc<Request>>,
+}
+impl<F: Future> Future for RetainedFuture<F> {
+    type Output = F::Output;
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+        match this._memory.as_ref() {
+            Some(memory) => memory.sync(|| this.future.as_mut().poll(cx)),
+            None => this.future.as_mut().poll(cx),
+        }
+    }
+}
+pub(crate) fn retain_future<F: Future<Output = ()>>(future: F) -> impl Future<Output = ()> {
+    RetainedFuture {
+        future: Box::pin(future),
+        _memory: current(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,78 +402,5 @@ mod tests {
         assert!(current().is_none());
         assert_eq!(a.control.available_permits(), 16 * 1024 - 256);
         assert_eq!(b.control.available_permits(), 16 * 1024 - 256);
-    }
-}
-
-impl foks_snowpack::AllocationBudget for Request {
-    fn reserve(&self, bytes: usize) -> bool {
-        let accepted = self.reserve_working(bytes);
-        if !accepted {
-            self.failed.store(true, Ordering::Relaxed);
-        }
-        accepted
-    }
-}
-
-// Field order also matters if a task is cancelled before its first poll/run.
-// Keep the whole owner in spawned closures instead of separately captured fields.
-pub(crate) struct RetainedWork<F> {
-    work: F,
-    memory: Option<Arc<Request>>,
-}
-pub(crate) fn retain_work<F>(work: F) -> RetainedWork<F> {
-    RetainedWork {
-        work,
-        memory: current(),
-    }
-}
-pub(crate) struct RetainedValue<T> {
-    value: T,
-    _memory: Option<Arc<Request>>,
-}
-impl<T> RetainedValue<T> {
-    // The awaiting request still owns its scope when taking the value. If its
-    // waiter was cancelled, Tokio drops this whole owner in field order.
-    pub(crate) fn into_inner(self) -> T {
-        self.value
-    }
-}
-impl<F> RetainedWork<F> {
-    pub(crate) fn run<T>(self) -> RetainedValue<T>
-    where
-        F: FnOnce() -> T,
-    {
-        let Self { memory, work } = self;
-        let value = match memory.as_ref() {
-            Some(memory) => memory.sync(work),
-            None => work(),
-        };
-        RetainedValue {
-            value,
-            _memory: memory,
-        }
-    }
-}
-struct RetainedFuture<F> {
-    future: std::pin::Pin<Box<F>>,
-    _memory: Option<Arc<Request>>,
-}
-impl<F: Future> Future for RetainedFuture<F> {
-    type Output = F::Output;
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let this = self.get_mut();
-        match this._memory.as_ref() {
-            Some(memory) => memory.sync(|| this.future.as_mut().poll(cx)),
-            None => this.future.as_mut().poll(cx),
-        }
-    }
-}
-pub(crate) fn retain_future<F: Future<Output = ()>>(future: F) -> impl Future<Output = ()> {
-    RetainedFuture {
-        future: Box::pin(future),
-        _memory: current(),
     }
 }

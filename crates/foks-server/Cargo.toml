@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Standalone single-host FOKS v0.1.9 server"
 
+[features]
+celld-proof = []
+
 [dependencies]
 nix = { version = "0.30", default-features = false, features = ["time"] }
 base64 = { workspace = true }

@@ -173,10 +173,7 @@ impl AgentClient {
                         if value.get("state").and_then(|value| value.as_str())
                             == Some("awaiting-source")
                             && value.get("upload_id").and_then(|value| value.as_str())
-                                == Some(expected_upload.as_str()) =>
-                    {
-                        ()
-                    }
+                                == Some(expected_upload.as_str()) => {}
                     _ => return Err(Error::ResponseBinding),
                 }
             }
@@ -259,10 +256,7 @@ fn upload_platform<R: std::io::Read + ?Sized>(
         match &ready.result {
             foks_agent_proto::ResponseResult::Error { .. } => return Ok(ready),
             foks_agent_proto::ResponseResult::Success { value }
-                if value.get("upload_ready").and_then(|v| v.as_bool()) == Some(true) =>
-            {
-                ()
-            }
+                if value.get("upload_ready").and_then(|v| v.as_bool()) == Some(true) => {}
             _ => return Err(Error::ResponseBinding),
         }
     }

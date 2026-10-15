@@ -61,3 +61,6 @@ pub use standalone::{
 pub use writer::{DatabaseWriterGuard, GuardedDatabase, Writer, WriterHandle, WriterMetrics};
 
 pub mod web_admin;
+
+#[cfg(feature = "celld-proof")]
+pub mod proof;

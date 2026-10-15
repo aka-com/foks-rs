@@ -710,6 +710,7 @@ impl FoksClient {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn team_kv_write_session_with_material<'a>(
         &'a self,
         host: &PinnedHost,

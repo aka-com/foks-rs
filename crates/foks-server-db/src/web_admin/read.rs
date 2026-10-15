@@ -1,5 +1,4 @@
 use super::*;
-use crate::allocation::RowAllocationExt as _;
 
 impl ReadSnapshot<'_> {
     pub fn web_overview(
