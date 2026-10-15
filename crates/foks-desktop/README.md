@@ -2,9 +2,19 @@
 
 `foks-desktop` is the renderer-independent command library and scripted backend
 used by the Tauri desktop. It retains `foks-desktop-backend` as a JSON shell for
-protocol transcripts, while `DesktopModel` keeps operation-building logic unit
-testable. It does not provide the product executable; the only shipping desktop
-binary is `apps/desktop/src-tauri`'s `foks-desktop`. Agent calls in that app run on blocking
+protocol transcripts. It does not provide the product executable; the only shipping desktop
+binary is `apps/desktop/src-tauri`'s `foks-desktop`.
+
+Operation builders that both the Tauri command layer and the backend call live
+in this library: the KV mutation and upload-header builders at the crate root,
+and team creation and membership builders in `ops::groups`. Each caller maps its
+own input (renderer DTOs or command-line arguments) onto the shared function, so
+the real-agent transcript (`scripts/test-foks-desktop-real-agent.sh`) exercises
+the input rules the app ships with. A rejected input is an `ops::InvalidInput`,
+which the Tauri layer reports as `invalid-request`. For example, an ad-hoc team
+has no server-side name, so `create_team_operation` ignores a supplied name for
+it in both callers. Account, backup, recovery, passphrase and security key
+operations are still built separately by each caller. Agent calls in that app run on blocking
 workers, never the webview thread. The scripted backend accepts secrets only
 through private files, never process arguments.
 

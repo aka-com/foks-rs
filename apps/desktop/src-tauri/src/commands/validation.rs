@@ -426,3 +426,10 @@ pub(super) const MAXIMUM_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
 pub(super) fn invalid_request(message: impl Into<String>) -> AgentError {
     AgentError::new("invalid-request", message, false)
 }
+
+/// Input rejected by a shared `foks_desktop::ops` builder is a request error.
+impl From<foks_desktop::ops::InvalidInput> for AgentError {
+    fn from(error: foks_desktop::ops::InvalidInput) -> Self {
+        invalid_request(error.message())
+    }
+}
