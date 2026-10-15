@@ -15,6 +15,7 @@ import type { Bridge } from '../src/bridge';
 import type { GuardVerdict, Location, LocationStore } from '../src/location';
 import type { AccountStore, AgentSnapshot, StoreRef } from '../src/model';
 import { installDom } from './lib/dom-harness';
+import { loadTestShell } from './lib/test-shell';
 
 installDom({
   url: 'http://localhost/',
@@ -46,7 +47,7 @@ async function harness() {
   const { FIXTURE } = await import('../src/fixture');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
-  const { ShellSnapshotProvider } = await import('../src/shell-services');
+  const TestShell = await loadTestShell();
   const portalRoot = document.getElementById('overlays');
   assert.ok(portalRoot);
   const account = FIXTURE.stores.find(
@@ -85,7 +86,7 @@ async function harness() {
           controller: new ToastController(),
           children: createElement(guards.NavigationGuardProvider, {
             store,
-            children: createElement(ShellSnapshotProvider, {
+            children: createElement(TestShell, {
               snapshot: FIXTURE,
               children: node,
             }),
@@ -104,6 +105,9 @@ async function harness() {
       ...mockBridge(FIXTURE),
       ...overrides,
     }),
+    /** Renders `node` with `bridge` as the shell's bridge. */
+    withBridge: (bridge: Bridge, node: ReactNode): ReactNode =>
+      createElement(TestShell, { snapshot: FIXTURE, bridge, children: node }),
     /** What the guards say about leaving, without moving anything. */
     verdict: (store: LocationStore): GuardVerdict =>
       store.navigationVerdict({ kind: 'navigate', location: AWAY }),
@@ -123,7 +127,6 @@ test('recovery phrase modal allows navigation when no phrase is displayed', asyn
   const h = await harness();
   const { store } = h.mount(
     createElement(h.sheets.PhraseSheet, {
-      bridge: h.bridge(),
       profile: 'personal',
       accountAlias: 'personal',
       onClose: () => {},
@@ -139,7 +142,6 @@ test('revealed recovery phrase blocks navigation and displays guidance message',
   const closed: boolean[] = [];
   const { store, refusals } = h.mount(
     createElement(h.sheets.PhraseSheet, {
-      bridge: h.bridge(),
       profile: 'personal',
       accountAlias: 'personal',
       seedPhrase: 'alpha bravo charlie delta',
@@ -167,15 +169,17 @@ function pairSheet(
   bridge: Bridge,
   onClose: () => void = () => {},
 ): ReactNode {
-  return createElement(h.sheets.PairSheet, {
+  return h.withBridge(
     bridge,
-    store: h.account,
-    initialMode: mode,
-    onCopy: () => {},
-    onClose,
-    onDone: async () => {},
-    onError: () => {},
-  });
+    createElement(h.sheets.PairSheet, {
+      store: h.account,
+      initialMode: mode,
+      onCopy: () => {},
+      onClose,
+      onDone: async () => {},
+      onError: () => {},
+    }),
+  );
 }
 
 test('an untouched accept form answers nothing', async () => {
@@ -297,13 +301,15 @@ test('a typed passphrase is asked about and an outstanding change is not', async
   const h = await harness();
   const bridge = h.bridge({ changeAccountPassphrase: () => never() });
   const { store, rendered } = h.mount(
-    createElement(h.sheets.PassphraseSheet, {
+    h.withBridge(
       bridge,
-      store: h.account,
-      onClose: () => {},
-      onDone: () => {},
-      onError: () => {},
-    }),
+      createElement(h.sheets.PassphraseSheet, {
+        store: h.account,
+        onClose: () => {},
+        onDone: () => {},
+        onError: () => {},
+      }),
+    ),
   );
   assert.equal(h.verdict(store), null);
 
@@ -343,14 +349,16 @@ test('a typed passphrase is asked about and an outstanding change is not', async
 test('a revocation already sent refuses the move', async () => {
   const h = await harness();
   const { store, rendered } = h.mount(
-    createElement(h.sheets.RevokeSheet, {
-      bridge: h.bridge({ runYubi: () => never() }),
-      store: h.account,
-      alias: 'work-key',
-      onClose: () => {},
-      onDone: async () => {},
-      onError: () => {},
-    }),
+    h.withBridge(
+      h.bridge({ runYubi: () => never() }),
+      createElement(h.sheets.RevokeSheet, {
+        store: h.account,
+        alias: 'work-key',
+        onClose: () => {},
+        onDone: async () => {},
+        onError: () => {},
+      }),
+    ),
   );
   const confirmation = rendered.getByPlaceholderText('type work-key');
   await ui.act(async () => {

@@ -142,7 +142,6 @@ export function ProfileKeys({
       />
       {action && available && action.profile === server.profileName && (
         <YubiActionSheet
-          bridge={bridge}
           profile={server.profileName}
           alias={action.alias}
           action={action.kind}

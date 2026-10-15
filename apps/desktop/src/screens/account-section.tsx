@@ -695,7 +695,6 @@ export function AccountSection({
       ) : null}
       {selected && sheet === 'passphrase' ? (
         <PassphraseSheet
-          bridge={bridge}
           store={selected}
           onClose={() => setSheet(null)}
           onDone={(message) => {
@@ -745,7 +744,6 @@ export function AccountSection({
       ) : null}
       {selected && sheet === 'recover' ? (
         <RecoverSheet
-          bridge={bridge}
           store={selected}
           onClose={() => setSheet(null)}
           onDone={async () => {
@@ -760,7 +758,6 @@ export function AccountSection({
       ) : null}
       {selected && sheet === 'enroll' ? (
         <EnrollSheet
-          bridge={bridge}
           store={selected}
           card={snapshot.cardsConnected[0]}
           onClose={() => setSheet(null)}

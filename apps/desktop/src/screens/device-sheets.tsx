@@ -43,7 +43,6 @@ import { useSheetGuard } from '../navigation-guard';
 import type {
   AccountDevice,
   BackupEnrollment,
-  Bridge,
   PairingOffer,
   PassphraseStatus,
 } from '../bridge';
@@ -61,7 +60,7 @@ import {
   SecurityKeyPinField,
   SheetDialog,
 } from '../components';
-import type { AccountStore, AgentSnapshot } from '../model';
+import type { AccountStore } from '../model';
 import {
   SECURITY_KEY_RETRY_RANGE,
   validSecurityKeyPin,
@@ -75,6 +74,7 @@ import {
 import { deviceAlertRegistry } from './device-alert';
 import { ExposureSummary, unstoredReview } from './exposure-review';
 import { useToast } from '../../kit/toasts';
+import { useShellServices, useShellSnapshot } from '../shell-services';
 
 /** A YubiKey command that is one sheet of typed values. */
 export type SimpleYubiAction =
@@ -260,7 +260,6 @@ function DeviceSheetFrame({
 }
 
 export function PhraseSheet({
-  bridge,
   profile,
   accountAlias,
   seedPhrase,
@@ -268,7 +267,6 @@ export function PhraseSheet({
   onDone,
   onError,
 }: {
-  bridge: Bridge;
   profile: string;
   accountAlias: string;
   seedPhrase?: string;
@@ -276,6 +274,7 @@ export function PhraseSheet({
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const { bridge } = useShellServices();
   const access = useWorkflowAccess();
   const target = { profile, account: accountAlias };
   const eligibility = access.props('backup-create', target);
@@ -452,7 +451,6 @@ export function PhraseSheet({
 }
 
 export function PairSheet({
-  bridge,
   store,
   initialMode,
   onCopy,
@@ -461,7 +459,6 @@ export function PairSheet({
   onDone,
   onError,
 }: {
-  bridge: Bridge;
   store: AccountStore;
   initialMode: 'offer' | 'accept';
   /** Copies the revealed phrase, which is live-form only. */
@@ -472,6 +469,7 @@ export function PairSheet({
   onDone: (message: string) => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const { bridge } = useShellServices();
   // The direction is the chooser's answer, and the two steps are written for
   // it: there is no control here that silently changes what Start would do.
   const mode = initialMode;
@@ -750,18 +748,17 @@ export function PairSheet({
 }
 
 export function RecoverSheet({
-  bridge,
   store,
   onClose,
   onDone,
   onError,
 }: {
-  bridge: Bridge;
   store: AccountStore;
   onClose: () => void;
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const { bridge } = useShellServices();
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server };
   const eligibility = access.props('account-recover', workflowTarget);
@@ -848,20 +845,19 @@ export function RecoverSheet({
 }
 
 export function EnrollSheet({
-  bridge,
   store,
   card,
   onClose,
   onDone,
   onError,
 }: {
-  bridge: Bridge;
   store: AccountStore;
   card?: { serial: number };
   onClose: () => void;
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const { bridge } = useShellServices();
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server };
   const operation = 'yubi-create';
@@ -1061,20 +1057,19 @@ export function EnrollSheet({
 }
 
 export function ProvisionSheet({
-  bridge,
   store,
   cards,
   onClose,
   onDone,
   onError,
 }: {
-  bridge: Bridge;
   store: AccountStore;
   cards: { serial: number }[];
   onClose: () => void;
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const { bridge } = useShellServices();
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server, account: store.account };
   const operation = 'yubi-provision';
@@ -1202,7 +1197,6 @@ export function ProvisionSheet({
 }
 
 export function YubiActionSheet({
-  bridge,
   store,
   profile,
   action,
@@ -1211,7 +1205,6 @@ export function YubiActionSheet({
   onDone,
   onError,
 }: {
-  bridge: Bridge;
   store?: AccountStore;
   profile?: string;
   action: SimpleYubiAction;
@@ -1220,6 +1213,7 @@ export function YubiActionSheet({
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const { bridge } = useShellServices();
   const access = useWorkflowAccess();
   const operation = YUBI_WORKFLOWS[action];
   const workflowTarget = {
@@ -1390,20 +1384,19 @@ export function YubiActionSheet({
 }
 
 export function RevokeSheet({
-  bridge,
   store,
   alias,
   onClose,
   onDone,
   onError,
 }: {
-  bridge: Bridge;
   store: AccountStore;
   alias: string;
   onClose: () => void;
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const { bridge } = useShellServices();
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server, account: store.account };
   const eligibility = access.props('yubi-revoke', workflowTarget);
@@ -1475,20 +1468,19 @@ export function RevokeSheet({
 }
 
 export function RevokeBackupSheet({
-  bridge,
   store,
   backup,
   onClose,
   onDone,
   onError,
 }: {
-  bridge: Bridge;
   store: AccountStore;
   backup: BackupEnrollment;
   onClose: () => void;
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const { bridge } = useShellServices();
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server, account: store.account };
   const eligibility = access.props('backup-revoke', workflowTarget);
@@ -1565,22 +1557,20 @@ export function RevokeBackupSheet({
 }
 
 export function RemoveDeviceSheet({
-  snapshot,
-  bridge,
   store,
   device,
   onClose,
   onDone,
   onError,
 }: {
-  snapshot: AgentSnapshot;
-  bridge: Bridge;
   store: AccountStore;
   device: AccountDevice;
   onClose: () => void;
   onDone: () => Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const snapshot = useShellSnapshot();
+  const { bridge } = useShellServices();
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server, account: store.account };
   const eligibility = access.props('device-remove', workflowTarget);
@@ -1688,18 +1678,17 @@ export function RemoveDeviceSheet({
 }
 
 export function PassphraseSheet({
-  bridge,
   store,
   onClose,
   onDone,
   onError,
 }: {
-  bridge: Bridge;
   store: AccountStore;
   onClose: () => void;
   onDone: (message: string) => void | Promise<void>;
   onError: (error: unknown) => void;
 }): ReactNode {
+  const { bridge } = useShellServices();
   const access = useWorkflowAccess();
   const workflowTarget = { profile: store.server, account: store.account };
   const eligibility = access.props('passphrase', workflowTarget);

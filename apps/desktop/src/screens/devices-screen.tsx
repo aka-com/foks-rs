@@ -996,7 +996,6 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'pair' && selected ? (
         <PairSheet
-          bridge={bridge}
           store={selected}
           initialMode={pairMode}
           onCopy={copy}
@@ -1008,7 +1007,6 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'phrase' && selected ? (
         <PhraseSheet
-          bridge={bridge}
           profile={selected.server}
           accountAlias={selected.account}
           seedPhrase={
@@ -1025,7 +1023,6 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'enroll' && selected ? (
         <EnrollSheet
-          bridge={bridge}
           store={selected}
           card={cards[0]}
           onClose={() => setSheet(null)}
@@ -1035,7 +1032,6 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'provision' && selected ? (
         <ProvisionSheet
-          bridge={bridge}
           store={selected}
           cards={cards}
           onClose={() => setSheet(null)}
@@ -1045,7 +1041,6 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'yubi' && selected && pendingYubi ? (
         <YubiActionSheet
-          bridge={bridge}
           store={selected}
           action={pendingYubi}
           // The row or Card operations button this was opened from names its
@@ -1065,7 +1060,6 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'revoke' && selected && actingKey ? (
         <RevokeSheet
-          bridge={bridge}
           store={selected}
           alias={actingKey.alias}
           onClose={() => {
@@ -1083,8 +1077,6 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'remove-device' && selected && removing ? (
         <RemoveDeviceSheet
-          snapshot={snapshot}
-          bridge={bridge}
           store={selected}
           device={removing}
           onClose={() => {
@@ -1127,7 +1119,6 @@ export function DevicesScreen({
       ) : null}
       {sheet === 'revoke-backup' && selected && revoking ? (
         <RevokeBackupSheet
-          bridge={bridge}
           store={selected}
           backup={revoking}
           onClose={() => {
