@@ -44,11 +44,30 @@ The renderer is treated as untrusted. It renders a catalog of names,
 types, sizes, and whether each small file holds a login; it asks for one
 value at a time; and it receives that value only through the single
 content-returning command. The host is
-privileged but holds no long-lived secrets: it forwards requests to the
-agent and moves bytes between the agent and the disk or clipboard. The
-agent, described in [Chapter 19](19-agent.qmd), is a separate process that
-outlives the window and that the command-line tool and the MCP server
-([Chapter 21](21-mcp.qmd)) connect to as well.
+privileged but, outside offline maintenance, holds no long-lived secrets: it
+forwards requests to the agent and moves bytes between the agent and the disk
+or clipboard. The agent, described in [Chapter 19](19-agent.qmd), is a
+separate process that outlives the window and that the command-line tool and
+the MCP server ([Chapter 21](21-mcp.qmd)) connect to as well.
+
+**The offline-maintenance exception.** State export, import, relocation,
+verification of an imported profile, and the reset of an unreadable state
+root run in the host after it has stopped the agent it owns. For these the
+host links `foks-client-app`, `foks-keystore` and `foks-yubi` and operates on
+the state root directly: it holds the client state leases, checks maintenance
+readiness, and, to verify an imported profile, opens `ClientCredentials` and
+`ProfileSession` and calls `verify_imported_profile` with YubiKey PINs and bot
+tokens read from private files the user selects, rechecking the app lock
+between steps. The opened credentials, PINs and tokens are dropped when the
+operation ends, and the agent is then started again. The host also calls stateless input validators from
+`foks-client-app` (profile labels, local aliases, server capabilities, login
+fields). `tools/crate-layers.toml` records these dependencies as exceptions to
+the rule that front ends reach client state only through the agent, and lists
+the host source files that may use each one; `scripts/check-crate-layers.py`,
+run by the CI client, server and desktop checks, fails when any other file
+uses them. Removing the exception would need an agent operation for import
+verification and a separate crate for the leases, readiness and reset
+functions and the validators.
 
 ## Exactly three core permissions
 
@@ -888,6 +907,9 @@ no agent operation and no protocol change.
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.
+- `apps/desktop/src-tauri/src/commands/portability.rs` (`verify_accounts`),
+  `apps/desktop/src-tauri/src/agent/maintenance.rs` and
+  `tools/crate-layers.toml`: the offline-maintenance exception.
 - `apps/desktop/src/exposure-review.ts` and
   `apps/desktop/src/screens/exposure-review.tsx`: the exposure review.
 - `apps/desktop/src/chat`: `notification-consumer.ts`, `inbox-service.ts`,

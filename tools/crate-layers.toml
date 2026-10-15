@@ -1,0 +1,161 @@
+# Workspace crate layers, checked by scripts/check-crate-layers.py from
+# tools/foks-client/check.sh and tools/foks-server/check.sh.
+#
+# Every workspace package belongs to exactly one layer. A normal or build
+# dependency on another workspace package must stay inside the package's own
+# layer or reach a layer listed in its `may_depend_on`; any other edge needs an
+# [[exception]] entry. Dev-dependencies are not layer-checked, but every path
+# dependency must resolve to a workspace package, and no package may reach a
+# `test_only` layer through normal or build dependencies, directly or
+# transitively.
+#
+# An exception names the Rust source files (`sites`, repository-relative glob
+# patterns) that may use the dependency's crate. A source file in the
+# depending package that names the crate outside a line comment and matches no
+# site fails the check, so new uses of an exceptional edge are reviewed here.
+# An exception for an edge that no longer exists, or that the layer rules
+# already allow, also fails the check and has to be removed.
+#
+# Book Appendix D describes the layers; chapter 20 describes the desktop host's
+# offline-maintenance exception.
+
+[workspace]
+package_roots = ["crates/foks-*", "apps/desktop/src-tauri"]
+
+# Encoding, cryptography, verification, RPC and protocol metadata shared by
+# client and server. Holds no local state and no credentials.
+[layer.core]
+packages = [
+    "foks-compat-artifact",
+    "foks-crypto",
+    "foks-merkle-store",
+    "foks-oidc",
+    "foks-proto",
+    "foks-protocol-metadata",
+    "foks-rpc",
+    "foks-snowpack",
+    "foks-verify",
+]
+may_depend_on = []
+
+# Credential stores and hardware keys.
+[layer.device]
+packages = ["foks-keystore", "foks-yubi"]
+may_depend_on = ["core"]
+
+# The local IPC protocol between the agent and its front ends. foks-client-app
+# shares its KV entry shapes and base64 encoding.
+[layer.agent-protocol]
+packages = ["foks-agent-proto"]
+may_depend_on = ["core"]
+
+# Client state, protocol client and application composition.
+[layer.client]
+packages = ["foks-client", "foks-client-app", "foks-client-db", "foks-go-interop"]
+may_depend_on = ["core", "device", "agent-protocol"]
+
+# The resident agent: the one process that opens client state and credentials
+# during normal operation.
+[layer.agent]
+packages = ["foks-agent"]
+may_depend_on = ["core", "device", "agent-protocol", "client"]
+
+# The client side of the agent socket.
+[layer.agent-client]
+packages = ["foks-agent-client"]
+may_depend_on = ["core", "agent-protocol"]
+
+# Front ends reach client state and credentials only through the agent seam.
+[layer.front-end]
+packages = ["foks-cli", "foks-desktop", "foks-desktop-app", "foks-mcp"]
+may_depend_on = ["core", "agent-protocol", "agent-client"]
+
+# Server crates never depend on client, device, agent or front-end crates.
+[layer.server]
+packages = ["foks-server", "foks-server-db"]
+may_depend_on = ["core"]
+
+[layer.test-support]
+packages = ["foks-server-testkit"]
+may_depend_on = ["core", "device", "agent-protocol", "client", "agent", "agent-client", "front-end", "server"]
+test_only = true
+
+# foks-rs predates the agent and remains a direct client: the init, profile,
+# account, kv, jobs, device, recovery, passphrase, team and yubi commands open
+# ClientCredentials and ProfileSession in-process, and `state` calls the
+# portability functions directly, including verify_imported_profile for
+# `state verify-online`. The account admin, bot and rename commands, team
+# invitations, mcp, sso and retention use the agent. The integration tests seed
+# state through foks-client-app and the encrypted-file keystore before starting
+# an agent.
+[[exception]]
+package = "foks-cli"
+dependency = "foks-client-app"
+reason = "direct in-process client commands and offline state maintenance"
+sites = [
+    "crates/foks-cli/src/main.rs",
+    "crates/foks-cli/src/state.rs",
+    "crates/foks-cli/tests/*.rs",
+]
+
+[[exception]]
+package = "foks-cli"
+dependency = "foks-keystore"
+reason = "the encrypted account vault for in-process commands, and test state seeding"
+sites = ["crates/foks-cli/src/main.rs", "crates/foks-cli/tests/*.rs"]
+
+[[exception]]
+package = "foks-cli"
+dependency = "foks-yubi"
+reason = "in-process YubiKey commands and PIN input for state verify-online"
+sites = ["crates/foks-cli/src/main.rs", "crates/foks-cli/src/state.rs"]
+
+# Offline maintenance. With the owned agent stopped, the desktop host imports,
+# exports, relocates and resets client state, checks maintenance readiness,
+# holds the client state leases around agent start-up and maintenance, and
+# opens ClientCredentials and ProfileSession to run verify_imported_profile on
+# an imported profile.
+[[exception]]
+package = "foks-desktop-app"
+dependency = "foks-client-app"
+reason = "offline state maintenance with the agent stopped"
+sites = [
+    "apps/desktop/src-tauri/src/agent/maintenance.rs",
+    "apps/desktop/src-tauri/src/agent/process.rs",
+    "apps/desktop/src-tauri/src/commands/chat_migration.rs",
+    "apps/desktop/src-tauri/src/commands/first_run.rs",
+    "apps/desktop/src-tauri/src/commands/portability.rs",
+]
+
+# Input validation shared with the client: profile labels, local aliases,
+# server capabilities and login-field parsing. These functions hold no state.
+[[exception]]
+package = "foks-desktop-app"
+dependency = "foks-client-app"
+reason = "stateless input validation helpers"
+sites = [
+    "apps/desktop/src-tauri/src/commands/account_conveniences.rs",
+    "apps/desktop/src-tauri/src/commands/accounts.rs",
+    "apps/desktop/src-tauri/src/commands/password_export.rs",
+    "apps/desktop/src-tauri/src/commands/servers.rs",
+    "apps/desktop/src-tauri/src/commands/tests/password_import.rs",
+    "apps/desktop/src-tauri/src/commands/vault.rs",
+]
+
+[[exception]]
+package = "foks-desktop-app"
+dependency = "foks-keystore"
+reason = "keystore errors and non-interactive access during offline maintenance"
+sites = ["apps/desktop/src-tauri/src/agent/maintenance.rs"]
+
+[[exception]]
+package = "foks-desktop-app"
+dependency = "foks-yubi"
+reason = "YubiKey PINs for verify_imported_profile during offline maintenance"
+sites = ["apps/desktop/src-tauri/src/commands/portability.rs"]
+
+[[exception]]
+package = "foks-desktop"
+dependency = "foks-client"
+reason = "device-name normalization rules shared with the client"
+sites = ["crates/foks-desktop/src/ops/accounts.rs"]

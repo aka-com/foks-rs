@@ -7,6 +7,7 @@ on:
       - 'crates/foks-*/**'
       - 'packaging/foks-desktop/**'
       - 'scripts/**'
+      - 'tools/crate-layers.toml'
       - '.github/workflows/foks-desktop.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -87,6 +88,8 @@ jobs:
         run: |
           npm install --global "$(node -p "require('./package.json').packageManager")"
           npm ci
+      - name: Check crate layers
+        run: python3 scripts/check-crate-layers.py
       - name: Check frontend and desktop
         run: |
           npm run typecheck

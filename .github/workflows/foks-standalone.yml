@@ -8,6 +8,9 @@ on:
       - "rust-toolchain.toml"
       - "crates/foks-*/**"
       - "packaging/**"
+      - "scripts/check-crate-layers.py"
+      - "scripts/test_check_crate_layers.py"
+      - "tools/crate-layers.toml"
       - "tools/foks-client/**"
       - "tools/foks-protocol-sync/**"
       - "tools/foks-server/**"
@@ -64,7 +67,9 @@ jobs:
       - name: Install Linux client dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y dbus-x11 gnome-keyring libpcsclite-dev
-      - name: Test the isolated AKA-free client graph
+      - name: Test the crate-layer checker
+        run: python3 -m unittest discover -s scripts -p 'test_check_crate_layers.py'
+      - name: Test the client graph
         if: runner.os != 'Linux'
         run: tools/foks-client/check.sh
       - name: Test macOS Keychain integration
