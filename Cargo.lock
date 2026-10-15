@@ -1947,6 +1947,7 @@ dependencies = [
 name = "foks-desktop-app"
 version = "0.4.0"
 dependencies = [
+ "arboard",
  "block2",
  "chacha20poly1305",
  "foks-agent-client",

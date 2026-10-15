@@ -1,8 +1,10 @@
 //! Core-side clipboard writes with digest-only tracking and timed clearing.
 //!
-//! macOS receives the concealed pasteboard type. Linux offers no equivalent
-//! hint, so its timeout is intentionally shorter. No copied vault value is
-//! retained after the platform write and no value crosses back to JavaScript.
+//! macOS receives the concealed pasteboard type. Linux copies carry the
+//! `x-kde-passwordManagerHint` target set to `secret`, which Klipper and
+//! clipboard managers that follow it decline to record; others still can, so
+//! the Linux timeout is shorter. No copied vault value is retained after the
+//! platform write and no value crosses back to JavaScript.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -46,7 +48,9 @@ pub fn copy_with_hygiene(app: &AppHandle, value: Zeroizing<String>) -> Result<()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     #[cfg(target_os = "macos")]
     macos::write_concealed(&value)?;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    linux::write_excluded_from_history(&value)?;
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     app.clipboard()
         .write_text(value.as_str())
         .map_err(|error| format!("Failed to write to system clipboard: {error}"))?;
@@ -123,6 +127,22 @@ pub fn defer_exit_cleanup(app: &AppHandle, code: Option<i32>, api: &tauri::ExitR
         EXIT_FINISHED.store(true, Ordering::Release);
         app.exit(code.unwrap_or(0));
     });
+}
+
+/// Writes through arboard directly because the clipboard plugin's
+/// `write_text` sets no history hint. The plugin keeps its own arboard
+/// clipboard alive for the life of the app, which keeps the X11 selection
+/// owner that serves this value running after the local handle is dropped;
+/// reads and the timed clear still go through the plugin.
+#[cfg(target_os = "linux")]
+mod linux {
+    use arboard::{Clipboard, SetExtLinux as _};
+
+    pub fn write_excluded_from_history(value: &str) -> Result<(), String> {
+        Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set().exclude_from_history().text(value))
+            .map_err(|error| format!("Failed to write to system clipboard: {error}"))
+    }
 }
 
 #[cfg(target_os = "macos")]

@@ -16,6 +16,7 @@ mod commands;
 mod diagnostics;
 mod dragdrop;
 mod navigation;
+mod opener;
 mod startup;
 mod window_state;
 

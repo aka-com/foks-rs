@@ -156,8 +156,8 @@ permanently inaccessible.
 the same exact-version read but writes directly to the system clipboard;
 `copy_item_field` does the same with one field of a login (password, user name
 or website) selected in Rust; `open_item_url` selects a login's website the
-same way and passes it to the platform's opener only when it is an http or
-https address; `download_file` sends bounded exact-version
+same way and passes it to the platform's opener (`src/opener.rs`) only when
+it is an http or https address; `download_file` sends bounded exact-version
 chunks directly to a native-picked destination. None of them returns content
 through IPC.
 
@@ -226,10 +226,13 @@ bound origin, and the app ACL above gives it no FOKS or core command.
 ## Clipboard platform difference
 
 macOS copies include `org.nspasteboard.ConcealedType`, which asks cooperating
-clipboard-history tools not to retain the value. Linux has no equivalent hint:
-clipboard managers can capture it, and X11 selection ownership can disappear
-with the process. Linux therefore clears after 15 seconds instead of 30;
-shutdown waits for one best-effort clear before exiting. For long-lived file content, use Download rather than clipboard copying.
+clipboard-history tools not to retain the value. Linux copies, on X11 and on
+Wayland compositors with the data-control protocol, include the
+`x-kde-passwordManagerHint` target with the value `secret`, which Klipper and
+clipboard managers that follow its convention decline to record. Other Linux
+clipboard managers can still capture the value, and X11 selection ownership
+can disappear with the process. Linux therefore clears after 15 seconds
+instead of 30; shutdown waits for one best-effort clear before exiting. For long-lived file content, use Download rather than clipboard copying.
 On Linux environments without installed polkit actions, app lock reports
 as unavailable.
 

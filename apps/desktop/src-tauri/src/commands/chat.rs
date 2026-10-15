@@ -348,32 +348,14 @@ pub async fn open_chat_link(
     Ok(serde_json::json!({"ok": true}))
 }
 
-/// Hands an address [`safe_external_url`] accepted to the platform's opener,
-/// which shows it in the default browser.
+/// Hands an address [`safe_external_url`] accepted to the platform's opener
+/// (see [`crate::opener`]), which shows it in the default browser.
 pub(super) async fn open_external_url(parsed: url::Url) -> Result<(), AgentError> {
     tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(target_os = "macos")]
-        let command = "open";
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let command = "xdg-open";
-        #[cfg(not(unix))]
-        return Err(invalid_request(
-            "Opening links is unavailable on this platform.",
-        ));
-        #[cfg(unix)]
-        {
-            let status = std::process::Command::new(command)
-                .arg(parsed.as_str())
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map_err(|_| invalid_request("Could not open the link."))?;
-            if !status.success() {
-                return Err(invalid_request("Could not open the link."));
-            }
-            Ok(())
-        }
+        crate::opener::open(parsed.as_str()).map_err(|error| {
+            tracing::warn!(%error, "Could not open an external link");
+            invalid_request("Could not open the link.")
+        })
     })
     .await
     .map_err(|_| invalid_request("Link opening was interrupted."))?

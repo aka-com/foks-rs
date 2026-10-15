@@ -198,7 +198,10 @@ tool on the machine. The host's `copy_with_hygiene` does three things:
    ensures a repeated copy of the same value gets its own timer.
 3. On macOS it also sets the `org.nspasteboard.ConcealedType` pasteboard
    type, a convention that asks clipboard managers not to record the item.
-   Linux has no equivalent, which is why its timer is shorter.
+   On Linux it offers the `x-kde-passwordManagerHint` target with the value
+   `secret`, which Klipper and clipboard managers that follow that
+   convention honour. Fewer Linux clipboard managers follow it, which is why
+   the Linux timer is shorter.
 
 | Platform | Auto-clear |
 |---|---|
@@ -258,13 +261,17 @@ text document its value, so a value reaches the clipboard without being
 shown or opened. The same keys do the same on the focused row of the Files
 list. ⌘O on a highlighted Password calls `open_item_url`, which reads the
 exact listed version, selects the website line as `copy_item_field` does,
-and hands it to the platform's opener (`open` on macOS, `xdg-open` on Linux)
+and hands it to the platform's opener
 only when it is an http or https address with a host and no user name or
 password; a value with no scheme, such as `example.com/login`, is taken as
 https. The address is not returned to the renderer, and a lock that engages
 during the read stops the browser from opening. A missing website fails with
-`field-missing` and any other value with `website-unsupported`. The palette
-searches names and paths only, never values.
+`field-missing` and any other value with `website-unsupported`. The opener,
+which chat links and the SSO browser step also use, is `/usr/bin/open` on
+macOS. On Linux it is the XDG desktop portal's `OpenURI` method, and when no
+portal is reachable `/usr/bin/xdg-open`, started without waiting for it to
+exit so a browser that stays in the foreground does not hold the worker.
+The palette searches names and paths only, never values.
 Its Recent and Favorites lists are kept in the webview's local storage,
 which is not cleared by the app lock, so they hold an item's `StoreRef` and
 dirent id and nothing else. The `StoreRef` names the server profile, the
