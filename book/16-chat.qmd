@@ -37,7 +37,7 @@ random nonces under purpose-specific keys derived from the team's PTK, so
 the server does not learn what a channel is called. A team may have at most 256 channels;
 the server refuses the next creation with status 1060 (`STATUS_OVER_QUOTA_ERROR`) before
 committing it, and refuses a send or creation the same way when the team has more than 1,024
-members whose inboxes the change would update.
+direct membership rows, counted before the channel's read role is applied.
 
 Chat keys are derived from the same PTK seed as the KV keys of
 [Chapter 14](14-kv-store.qmd), one branch over:
