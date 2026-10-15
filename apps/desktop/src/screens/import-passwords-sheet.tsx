@@ -50,7 +50,8 @@ const ROW_CLASS: Readonly<Record<RowStatus, string>> = {
   pending: 'pending',
   running: 'running',
   created: 'done',
-  exists: 'skipped',
+  // Only the name matched: what is in the vault may be another login.
+  exists: 'refused',
   failed: 'failed',
   uncertain: 'uncertain',
   'not-started': 'pending',
@@ -60,7 +61,7 @@ const ROW_ICON: Readonly<Record<Exclude<RowStatus, 'running'>, FoksIconName>> =
   {
     pending: 'ellipsis',
     created: 'circleCheck',
-    exists: 'check',
+    exists: 'alert',
     failed: 'close',
     uncertain: 'info',
     'not-started': 'ellipsis',
@@ -153,8 +154,11 @@ export function ImportPasswordsSheet({
   const [error, setError] = useState<string | null>(null);
   // The held import, for the discard when the sheet goes away.
   const held = useRef<string | null>(null);
+  // Set once the sheet has gone, so a file read after that is dropped too.
+  const closed = useRef(false);
   useEffect(
     () => () => {
+      closed.current = true;
       if (held.current)
         void bridge.discardPasswordImport(held.current).catch(() => undefined);
     },
@@ -180,6 +184,10 @@ export function ImportPasswordsSheet({
     try {
       const chosen = await bridge.beginPasswordImport();
       if (!chosen) return;
+      if (closed.current) {
+        void bridge.discardPasswordImport(chosen.id).catch(() => undefined);
+        return;
+      }
       // A new file replaces the one held before, in the host as well.
       held.current = chosen.id;
       setPreview(chosen);
@@ -208,9 +216,10 @@ export function ImportPasswordsSheet({
   ): Promise<void> => {
     if (!preview || !store) return;
     const profile = store.server;
+    const sent = new Set(indexes);
     let current = base.map((row, index) =>
-      indexes.includes(index)
-        ? { status: 'running' as const, message: '' }
+      sent.has(index)
+        ? { status: 'running' as const, message: 'Saving…' }
         : row,
     );
     setRows(current);
@@ -256,14 +265,15 @@ export function ImportPasswordsSheet({
     setRunning(false);
     if (thrown) await onMutationError(thrown, { report: false });
     const created = current.filter((row) => row.status === 'created').length;
-    const existing = current.filter((row) => row.status === 'exists').length;
-    if (created + existing === current.length) {
+    // A login left out because its name was taken stays listed: only the
+    // name matched, so the one in the vault may be a different login.
+    if (created === current.length) {
       setWorkflow(null);
-      const message = created
-        ? `Imported ${loginCount(created)} to ${store.name}${existing ? `; ${existing} already there` : ''}`
-        : `All ${loginCount(existing)} are already in ${store.name}`;
       try {
-        await onApplied(message, profile);
+        await onApplied(
+          `Imported ${loginCount(created)} to ${store.name}`,
+          profile,
+        );
       } catch (failure) {
         await onMutationError(failure, { report: false });
       }
@@ -289,9 +299,14 @@ export function ImportPasswordsSheet({
   };
 
   // A login that failed, was not reached or has an unknown outcome is sent
-  // again; its create-only write cannot replace one that was saved.
-  const retryable = (rows ?? []).flatMap((row, index) =>
-    ['failed', 'uncertain', 'not-started'].includes(row.status) ? [index] : [],
+  // again; its create-only write cannot replace one that was saved. Those
+  // not reached go first, so a login whose write fails again for its own
+  // reason does not stop the others a second time.
+  const retryable = (['not-started', 'uncertain', 'failed'] as const).flatMap(
+    (status) =>
+      (rows ?? []).flatMap((row, index) =>
+        row.status === status ? [index] : [],
+      ),
   );
   const retry = async (): Promise<void> => {
     if (!rows || running || !retryable.length || !store) return;
@@ -320,7 +335,7 @@ export function ImportPasswordsSheet({
     ? `${(rows?.length ?? 0) - counts.running - counts.pending} of ${rows?.length ?? 0} done`
     : [
         counts.created ? `${counts.created} saved` : '',
-        counts.exists ? `${counts.exists} already there` : '',
+        counts.exists ? `${counts.exists} left out: name taken` : '',
         counts.failed + counts['not-started']
           ? `${counts.failed + counts['not-started']} not saved`
           : '',
@@ -347,7 +362,7 @@ export function ImportPasswordsSheet({
         </span>
       }
       onClose={close}
-      dismissible={!running}
+      dismissible={!running && !picking}
       footer={
         <>
           {blocked && !started ? (

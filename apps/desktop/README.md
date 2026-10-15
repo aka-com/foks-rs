@@ -200,16 +200,20 @@ vault's cards, reads a CSV file exported by 1Password, Bitwarden, KeePass,
 KeePassXC, LastPass or the Chrome, Edge, Firefox or Safari password manager.
 The host opens the file in the native picker and parses it; the sheet
 receives the file's name and, for each login, the name and folder it will
-take, and lists rows that are left out (a Bitwarden note or card, a row with
-no user name, password or website, a value with a line break) and the
+take, and lists rows that are left out (a Bitwarden note or card, a LastPass
+secure note, a row with no user name, password or website, a value with a
+line break) and the
 columns that are not read, such as a TOTP column. The sheet takes the vault,
 a destination folder (`/logins` unless New would save in another) and in a
 team the read and write roles; each login keeps its own folder from the file
 below it. Each login is saved as a password in the layout the New password
 sheet writes, with its notes as `note:` lines, and a path that is already
 taken is left as it is, so importing the same file again saves only what is
-missing. A failure stops the run; the sheet stays open with each outcome and
-Retry sends the logins that were not saved. The export holds every password
+missing. The sheet closes with a toast only when every login was saved;
+otherwise it stays open and lists each outcome, including each login left
+out because its name was taken, since the item already there may be a
+different login. A failure stops the run, and Retry sends the logins that
+were not reached before those that failed. The export holds every password
 in plain text, and the sheet says to delete it afterwards. An account
 already used with the FOKS command line needs no export: its items are on its
 server, and the empty vault's note points to Settings › Account › Import from
@@ -219,9 +223,13 @@ Export passwords…, in a vault's folder menu at its top level and the
 palette's Actions, writes the vault's passwords (what Files lists as a
 Password, outside Trash) to a CSV file with the columns of a Bitwarden
 export, which Import passwords and most password managers read. The sheet
-states that the file is plain text and is sent only once the vault's name is
+states that the file is plain text, says to open it in a password manager
+rather than a spreadsheet app (which can run a value beginning with `=`,
+`+`, `-` or `@` as a formula), and is sent only once the vault's name is
 typed; the host reads each password and writes the file named in the native
-save dialog. Documents and files are not exported.
+save dialog. Values are written as stored, without a formula-escaping
+prefix, so that passwords read back unchanged. Documents and files are not
+exported.
 
 Several rows of the list can be chosen with ⌘-click, Shift-click, ⌘A,
 ⌘/Shift with Enter or Space, and cleared with Escape; a bar above the list then

@@ -690,9 +690,13 @@ Columns are found by their header, so the CSV exports of 1Password,
 Bitwarden, KeePass, KeePassXC, LastPass and the browsers' password managers
 need no format choice. A login's name is its title, else its website's host,
 else its user name; a `/` or `%` in it is percent-encoded as the Files list
-decodes it, and a second login with the same name in the same folder takes
-a ` (2)` suffix. A folder or group column becomes folders below the chosen
-destination, without the `Root` group KeePassXC writes in every row.
+decodes it, and a second login with the same name in the same folder, or a
+login named like a folder other logins of the file are written in, takes a
+` (2)` suffix. A folder or group column becomes folders below the chosen
+destination, without the `Root` group KeePassXC writes in every row. A
+LastPass secure note (website `http://sn`) is left out, and when a URL
+column lists several comma-separated URLs, as Bitwarden writes them, the
+first is the website and the others are kept as notes.
 
 `commit_password_import` writes each login as one small file of `user:`,
 `password:` and `url:` lines, followed by one `note:` line per line of its
@@ -704,7 +708,11 @@ occupied path is reported and left unchanged, and a login that failed or
 whose outcome is unknown can be sent again without saving it twice. The
 writes run one at a time under one mutation reservation; the first failure
 other than an occupied path ends the run, and an unknown outcome requires a
-refresh before the next write, as for any other mutation.
+refresh before the next write, as for any other mutation. Retry sends the
+logins the run did not reach before the one that failed, so a login whose
+write fails for its own reason does not stop the others twice. An occupied
+path matches only by name, so the sheet closes by itself only when every
+login was saved and otherwise lists the logins it left out.
 
 `export_logins` goes the other way, for one vault. It writes the column
 layout of a Bitwarden export: a password's folder (relative to `/logins`
@@ -715,7 +723,13 @@ version the catalog listed and writes the records to a temporary file next
 to the destination, which replaces the destination only when every record
 is written; a lock during the export stops it and removes the temporary
 file. The file is plain text, like every password manager's CSV export, so
-the sheet asks for the vault's name before the save dialog opens.
+the sheet asks for the vault's name before the save dialog opens. Values are
+written as stored: a formula-escaping prefix would change any password that
+begins with `=`, `+`, `-` or `@`, so the sheet instead says to open the file
+in a password manager rather than a spreadsheet app, where anyone able to
+write to the vault could otherwise plant a formula. Only the first line
+naming a field fills its column, as for Copy; a later line naming the same
+field stays in the notes.
 
 ### Trash
 

@@ -15,8 +15,10 @@
 //! Every line is then a field line, so the agent's listing classifies the
 //! item as a login (`foks_client::kv::login`). A login longer than 2,040
 //! bytes is stored as a file node, which the desktop lists as a Document.
-//! Each write is a `Create`, so an occupied path is reported and left
-//! unchanged, and running the same import again skips the logins it saved.
+//! A login's name is made unique within its folder and never equals a
+//! folder that other logins of the file are written in. Each write is a
+//! `Create`, so an occupied path is reported and left unchanged, and running
+//! the same import again skips the logins it saved.
 
 use crate::agent::AgentError;
 use crate::commands::context::AppState;
@@ -273,6 +275,20 @@ fn entry_name(title: &str, url: &str, username: &str) -> String {
         .unwrap_or_else(|| "Login".to_owned())
 }
 
+/// The website of a login and the other addresses its URL column lists.
+/// Bitwarden writes every URI of a login into `login_uri`, joined by commas;
+/// the value is split only when each part is an absolute URL, so a single
+/// address with a comma in it is kept whole.
+fn website_and_others(value: &str) -> (&str, Vec<&str>) {
+    let value = value.trim();
+    let parts: Vec<&str> = value.split(',').map(str::trim).collect();
+    if parts.len() > 1 && parts.iter().all(|part| url::Url::parse(part).is_ok()) {
+        (parts[0], parts[1..].to_vec())
+    } else {
+        (value, Vec::new())
+    }
+}
+
 /// The folders a login's folder or group value names below the destination.
 /// KeePassXC names its top group `Root` in every row, so a first `Root` of a
 /// `Group` column is dropped.
@@ -356,9 +372,11 @@ pub(super) fn parse_export(bytes: &[u8]) -> Result<ParsedImport, AgentError> {
         .iter()
         .zip(&columns)
         .any(|(name, found)| *found == Some(Column::Folder) && name.trim() == "Group");
-    let mut entries = Vec::new();
+    // Each login's folders, name and text, before names are made unique.
+    let mut rows: Vec<(Vec<String>, String, Zeroizing<String>)> = Vec::new();
+    // Every folder a login is written in, and each folder above it.
+    let mut folders: BTreeSet<Vec<String>> = BTreeSet::new();
     let mut skipped = Vec::new();
-    let mut taken = BTreeSet::new();
     for (position, record) in records.enumerate() {
         let row = position + 2;
         let value = |wanted: Column| -> &str {
@@ -407,23 +425,58 @@ pub(super) fn parse_export(bytes: &[u8]) -> Result<ParsedImport, AgentError> {
             )));
             continue;
         }
-        if entries.len() == MAXIMUM_IMPORT_ENTRIES {
+        // LastPass exports each secure note as a row whose website is
+        // `http://sn`, with the note's text in its notes column.
+        if url.trim() == "http://sn" && username.trim().is_empty() && password.is_empty() {
+            skipped.push(skip("A secure note, not a login.".to_owned()));
+            continue;
+        }
+        if rows.len() == MAXIMUM_IMPORT_ENTRIES {
             return Err(file_error(format!(
                 "This file holds more than {MAXIMUM_IMPORT_ENTRIES} logins. Split it and import each part."
             )));
         }
         let folder = entry_folder(value(Column::Folder), keepass_group);
-        let base = entry_name(title, url, username);
-        let mut name = base.clone();
-        let mut copy = 1;
-        while !taken.insert((folder.clone(), name.clone())) {
-            copy += 1;
-            name = format!("{base} ({copy})");
+        for depth in 1..=folder.len() {
+            folders.insert(folder[..depth].to_vec());
         }
+        let (url, other_urls) = website_and_others(url);
+        let notes = value(Column::Notes);
+        let content = if other_urls.is_empty() {
+            login_text(username.trim(), password, url, notes)
+        } else {
+            let mut lines = other_urls;
+            lines.push(notes);
+            login_text(
+                username.trim(),
+                password,
+                url,
+                &Zeroizing::new(lines.join("\n")),
+            )
+        };
+        rows.push((folder, entry_name(title, url, username), content));
+    }
+    // A login does not take the name of a folder that other logins are
+    // written in, which would put a file where they need a folder, nor a
+    // name another login of its folder took.
+    let mut taken = BTreeSet::new();
+    let mut entries = Vec::with_capacity(rows.len());
+    for (folder, base, content) in rows {
+        let mut path = folder;
+        path.push(base.clone());
+        let mut copy = 1;
+        while folders.contains(&path) || taken.contains(&path) {
+            copy += 1;
+            if let Some(name) = path.last_mut() {
+                *name = format!("{base} ({copy})");
+            }
+        }
+        taken.insert(path.clone());
+        let name = path.pop().unwrap_or(base);
         entries.push(ImportEntry {
-            folder,
+            folder: path,
             name,
-            content: login_text(username.trim(), password, url.trim(), value(Column::Notes)),
+            content,
         });
     }
     Ok(ParsedImport {
