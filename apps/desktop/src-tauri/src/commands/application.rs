@@ -437,13 +437,21 @@ mod tests {
     #[test]
     fn linux_suggests_a_computer_and_user_name() {
         assert!(computer_name().is_some());
-        let user = user_name().expect("the effective user has a password database entry");
-        // The login name is a single token; the GECOS full name often is not.
-        assert!(!user.contains(char::is_whitespace), "{user:?}");
+        // `id -un` fails when the effective UID has no password database
+        // entry, as in a container started with an arbitrary UID.
         let output = std::process::Command::new("id")
             .arg("-un")
             .output()
             .unwrap();
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), user);
+        let expected = String::from_utf8(output.stdout).unwrap();
+        let expected = expected.trim();
+        if !output.status.success() || expected.is_empty() {
+            assert_eq!(user_name(), None);
+            return;
+        }
+        let user = user_name().expect("the effective user has a password database entry");
+        // The login name is a single token; the GECOS full name often is not.
+        assert!(!user.contains(char::is_whitespace), "{user:?}");
+        assert_eq!(expected, user);
     }
 }
