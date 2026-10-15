@@ -103,8 +103,8 @@ import {
   folderTree,
   scopedItems,
   whereOf,
-} from './scope';
-import type { FolderNode } from './scope';
+} from '../model/scope';
+import type { FolderNode } from '../model/scope';
 import {
   NO_ROWS,
   allRows,
@@ -119,7 +119,7 @@ import {
 import type { DropVerdict, MultiSelection } from './item-moves';
 import { matchesShortcut, shortcutLabel } from '../shortcuts';
 import type { KeyPress } from '../shortcuts';
-import { manageReason } from './group-model';
+import { manageReason } from '../model/group-model';
 import {
   itemActionProblem,
   StoreAccessTakeover,

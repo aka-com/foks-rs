@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { AccessLifetime } from '../../app/access-lifetime';
+import { AccessLifetime } from '../../data/access-lifetime';
 import { useToast } from '../../../kit/toasts';
 import { runDeviceMutation } from './operation-controller';
 import { attemptRead } from '../../commands/command-policy';

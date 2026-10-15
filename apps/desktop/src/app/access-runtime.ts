@@ -20,7 +20,7 @@ export function useAccessRuntime({
   refreshSnapshotRef,
   commandErrorRef,
 }: {
-  lifetime: import('./access-lifetime').AccessLifetime;
+  lifetime: import('../data/access-lifetime').AccessLifetime;
   agentSnapshot: AgentSnapshot;
   latest: AgentSnapshot;
   bridge: Bridge;

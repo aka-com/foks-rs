@@ -4,7 +4,7 @@ import { decodeYubiAccounts } from '../src/bridge';
 import {
   enrollmentForCard,
   enrollmentForDevice,
-} from '../src/screens/device-model';
+} from '../src/data/device-model';
 const id = '0802' + 'ab'.repeat(32);
 
 test('enrollment identity survives the bridge and selects the exact device and card', () => {

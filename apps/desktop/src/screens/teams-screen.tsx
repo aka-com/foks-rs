@@ -54,14 +54,14 @@ import type { MutationFailureHandler } from '../mutation-recovery';
 import { markProfileRostersStale } from '../roster-staleness';
 import { PageHeader } from '../shell/page-header';
 import { useToast } from '../../kit/toasts';
-import { GroupMark } from './group-mark';
+import { GroupMark } from '../components/group-mark';
 import {
   discoveryContext,
   manageReason,
   rosterManageable,
   unavailableTitle,
-} from './group-model';
-import type { DiscoveryContext } from './group-model';
+} from '../model/group-model';
+import type { DiscoveryContext } from '../model/group-model';
 import { AbandonGroupSheet, GroupSheet } from './groups-screen';
 import type { GroupSheetKind } from './groups-screen';
 

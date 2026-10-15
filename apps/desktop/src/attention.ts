@@ -33,8 +33,8 @@ import {
 import { teamRequestTotals } from './operation-queries';
 import type { TeamRequestCount } from './operation-queries';
 import type { recoveryPhraseTests } from './recovery-phrase-tests';
-import type { DeviceAlertSnapshot } from './screens/device-alert';
-import { deviceAlertReasons } from './screens/device-alert';
+import type { DeviceAlertSnapshot } from './data/device-alert';
+import { deviceAlertReasons } from './data/device-alert';
 
 /** Which of the shell's signals an item restates. */
 export type AttentionSource = 'servers' | 'devices' | 'teams' | 'notices';

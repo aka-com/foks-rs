@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { Item } from '../src/model';
-import { folderAt, folderTree } from '../src/screens/scope';
+import { folderAt, folderTree } from '../src/model/scope';
 
 const item = (path: string): Item => ({
   store: 'acct:personal',

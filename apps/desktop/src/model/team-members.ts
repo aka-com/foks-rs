@@ -1,5 +1,5 @@
-import { partiesOf } from '../model';
-import type { AgentSnapshot, FederationEntry, Party, Store } from '../model';
+import { partiesOf } from './readers';
+import type { AgentSnapshot, FederationEntry, Party, Store } from './types';
 
 /**
  * The federated teams that are members here, each one drawn once.

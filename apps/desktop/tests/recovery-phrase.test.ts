@@ -27,7 +27,7 @@ import {
 import {
   DeviceAlertRegistry,
   devicesAlertSummary,
-} from '../src/screens/device-alert';
+} from '../src/data/device-alert';
 import { FIXTURE } from '../src/fixture';
 
 installDom({ url: 'http://localhost/' });

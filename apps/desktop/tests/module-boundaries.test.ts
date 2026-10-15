@@ -236,7 +236,7 @@ test('screen and shell model modules load without React or a view module', async
   const models = [
     'shell/sync-summary.ts',
     'screens/devices/credential-actions.ts',
-    'screens/group-model.ts',
+    'model/group-model.ts',
     'screens/servers/server-model.ts',
     'screens/write-workflow-model.ts',
   ].map((path) => join(root, path));

@@ -57,7 +57,7 @@ export function useShellRuntime({
   setWorkflow,
   leaseClock,
 }: {
-  lifetime: import('./access-lifetime').AccessLifetime;
+  lifetime: import('../data/access-lifetime').AccessLifetime;
   bridge: Bridge;
   agentController: AgentLifecycleController;
   maintenanceOwnership: MaintenanceOwnership;

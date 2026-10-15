@@ -351,7 +351,7 @@ test('an already-open Delete permanently sheet disables its action when access i
 });
 
 test('a retired access ticket rejects a late secret read without relying on component remount', async () => {
-  const { AccessLifetime } = await import('../src/app/access-lifetime');
+  const { AccessLifetime } = await import('../src/data/access-lifetime');
   const lifetime = new AccessLifetime();
   let finish!: (value: ReadItemResponse) => void;
   const response = new Promise<ReadItemResponse>((resolve) => {

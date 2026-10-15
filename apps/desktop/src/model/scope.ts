@@ -2,19 +2,11 @@
  * Item filtering and sorting utilities for vault catalog views.
  */
 
-import {
-  KIND_LIST,
-  catalog,
-  displayPathComponent,
-  isTrashPath,
-  kindOf,
-  nameOf,
-  readersOf,
-  partyName,
-  peopleLabel,
-  storeOf,
-} from '../model';
-import type { Item, AgentSnapshot } from '../model';
+import { KIND_LIST, displayPathComponent, kindOf, nameOf } from './kinds';
+import { catalog } from './lease';
+import { partyName, peopleLabel, readersOf, storeOf } from './readers';
+import { isTrashPath } from './trash';
+import type { Item, AgentSnapshot } from './types';
 import type { Location, LocationState, SortKey } from '../location';
 
 /** Returns the store display name for an item. */

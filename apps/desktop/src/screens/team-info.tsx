@@ -25,10 +25,10 @@ import {
 import type { AgentSnapshot, TeamStore } from '../model';
 import { useSidebarInbox } from '../chat/inbox-provider';
 import { channelTitle, listChannels } from '../chat/presentation';
-import { federatedTeamMembers, memberCountOf } from './team-members';
+import { federatedTeamMembers, memberCountOf } from '../model/team-members';
 import { itemCountOf } from './group-tabs';
-import { manageReason } from './group-model';
-import { GroupMark } from './group-mark';
+import { manageReason } from '../model/group-model';
+import { GroupMark } from '../components/group-mark';
 import { storeUsageText, useStoreUsage } from '../store-usage';
 
 /** A read-only summary; membership changes keep their existing guarded pages. */

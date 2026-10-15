@@ -54,7 +54,7 @@ test('Account and Devices share metadata across navigation; Refresh reloads it a
       return connected;
     },
   };
-  const { deviceAlertRegistry } = await import('../src/screens/device-alert');
+  const { deviceAlertRegistry } = await import('../src/data/device-alert');
   ui.render(createElement(App, { bridge }));
   // The shell preloads every eligible account before visiting Devices.
   await ui.waitFor(() => {

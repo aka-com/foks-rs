@@ -17,7 +17,7 @@ import { initialScene } from './scenes';
 import { MaintenanceOwnership } from './maintenance-ownership';
 import { DeviceCache } from '../device-cache';
 import { DeviceMetadata } from '../device-metadata';
-import { deviceAlertRegistry } from '../screens/device-alert';
+import { deviceAlertRegistry } from '../data/device-alert';
 
 /**
  * How long to wait before preloading devices from a partial catalog. The

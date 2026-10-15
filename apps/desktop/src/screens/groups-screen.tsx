@@ -1,6 +1,6 @@
 import { groupDetailReadiness, combineReadiness } from '../model';
 import { CollectionStatus } from '../components/collection-status';
-import { federatedTeamMembers, memberCountOf } from './team-members';
+import { federatedTeamMembers, memberCountOf } from '../model/team-members';
 import { useGroupOperationController } from './groups/operation-controller';
 import { AddPersonSheet } from './groups/add-person-sheet';
 import { AddTeamSheet } from './groups/add-team-sheet';
@@ -87,8 +87,8 @@ import {
   IncompleteGroupPage,
   itemCountOf,
 } from './group-tabs';
-import { GroupMark } from './group-mark';
-import { manageReason, sortRoster, targetReason } from './group-model';
+import { GroupMark } from '../components/group-mark';
+import { manageReason, sortRoster, targetReason } from '../model/group-model';
 import { StoreAccessTakeover } from './store-access';
 import { useToast } from '../../kit/toasts';
 import {

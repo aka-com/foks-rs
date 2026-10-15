@@ -157,7 +157,7 @@ test('an ungranted device capability does not invent a missing backup key', asyn
       },
     },
   );
-  const { deviceAlertRegistry } = await import('../src/screens/device-alert');
+  const { deviceAlertRegistry } = await import('../src/data/device-alert');
   assert.equal(reads, 0);
   assert.equal(
     deviceAlertRegistry(observed)

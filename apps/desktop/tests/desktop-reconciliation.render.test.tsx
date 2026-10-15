@@ -13,7 +13,7 @@ import {
   useCatalogRuntime,
   useMutationError,
 } from '../src/app/catalog-runtime';
-import { AccessLifetime } from '../src/app/access-lifetime';
+import { AccessLifetime } from '../src/data/access-lifetime';
 import { ToastController } from '../kit/toasts';
 import { mockBridge } from '../src/mock-bridge';
 import { FIXTURE } from '../src/fixture';

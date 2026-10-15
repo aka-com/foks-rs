@@ -19,7 +19,7 @@ import {
 } from '../../model';
 import type { Party } from '../../model';
 import { markProfileRostersStale } from '../../roster-staleness';
-import { GroupMark } from '../group-mark';
+import { GroupMark } from '../../components/group-mark';
 import {
   canTarget,
   DetailUnavailable,

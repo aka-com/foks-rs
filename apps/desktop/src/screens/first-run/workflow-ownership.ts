@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { AccessLifetime, type AccessTicket } from '../../app/access-lifetime';
+import { AccessLifetime, type AccessTicket } from '../../data/access-lifetime';
 import type { Bridge } from '../../bridge';
 import type { FirstRunCheckpoint } from '../../first-run-state';
 import type { useFirstRunController } from '../../use-first-run-controller';

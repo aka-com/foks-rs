@@ -24,7 +24,7 @@ import {
   treeEntries,
   treeKeyAction,
 } from '../src/screens/files-keyboard';
-import type { FolderNode } from '../src/screens/scope';
+import type { FolderNode } from '../src/model/scope';
 
 function press(key: string, modifiers: Partial<KeyPress> = {}): KeyPress {
   return {

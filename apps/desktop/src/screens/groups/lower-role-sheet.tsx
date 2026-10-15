@@ -24,7 +24,7 @@ import { groupDetailFailure, parseRole, partyName } from '../../model';
 import type { Party } from '../../model';
 import { markProfileRostersStale } from '../../roster-staleness';
 import { ExposureSummary, unstoredReview } from '../exposure-review';
-import { GroupMark } from '../group-mark';
+import { GroupMark } from '../../components/group-mark';
 import {
   canTarget,
   demotionFor,

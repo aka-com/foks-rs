@@ -44,7 +44,7 @@ import {
   matchesShortcut,
   shortcutLabel,
 } from '../shortcuts';
-import { GroupMark } from '../screens/group-mark';
+import { GroupMark } from '../components/group-mark';
 import { copyActions, opensWebsite } from '../screens/item-copy';
 import type { CopyAction } from '../screens/item-copy';
 import type { ItemField } from '../bridge';

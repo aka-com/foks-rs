@@ -98,8 +98,8 @@ import {
 } from '../sidebar-prefs';
 import type { ChannelSort } from '../sidebar-prefs';
 import { matchesShortcut } from '../shortcuts';
-import { GroupMark } from './group-mark';
-import { manageReason } from './group-model';
+import { GroupMark } from '../components/group-mark';
+import { manageReason } from '../model/group-model';
 
 /** The server a store belongs to, whatever its state. */
 function serverFor(

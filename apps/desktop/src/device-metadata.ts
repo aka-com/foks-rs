@@ -5,7 +5,7 @@ import type { DeviceCache } from './device-cache';
 import type { MetadataQuery } from './metadata-repository';
 import { accountStores, type AgentSnapshot } from './model';
 import { workflowAvailability } from './model/workflow-availability';
-import type { DeviceAlertRegistry } from './screens/device-alert';
+import type { DeviceAlertRegistry } from './data/device-alert';
 
 type Query = Pick<
   MetadataQuery<unknown>,

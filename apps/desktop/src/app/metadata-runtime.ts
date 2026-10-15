@@ -3,7 +3,7 @@ import type { RefObject } from 'react';
 import type { Bridge } from '../bridge';
 import { DeviceCache } from '../device-cache';
 import { DeviceMetadata, isDeviceQuery } from '../device-metadata';
-import { deviceAlertRegistry } from '../screens/device-alert';
+import { deviceAlertRegistry } from '../data/device-alert';
 import { accountStopped, type AgentSnapshot } from '../model';
 import { readRecoveryFor } from '../query-read-recovery';
 import type { QueryKey } from '../metadata-repository';
@@ -46,7 +46,7 @@ export function useMetadataRuntime({
   report,
   initialDeviceCache,
 }: {
-  lifetime: import('./access-lifetime').AccessLifetime;
+  lifetime: import('../data/access-lifetime').AccessLifetime;
   bridge: Bridge;
   shown: AgentSnapshot;
   concealSignal: number;

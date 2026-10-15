@@ -220,7 +220,7 @@ export interface DetailsPanelProps {
   accessNow?: () => number;
   /** Unique unlocked-shell identity preventing reads from crossing lock cycles. */
   accessSession?: object;
-  accessTicket?: import('../app/access-lifetime').AccessTicket;
+  accessTicket?: import('../data/access-lifetime').AccessTicket;
   resumeDraft?: {
     store: string;
     path: string;

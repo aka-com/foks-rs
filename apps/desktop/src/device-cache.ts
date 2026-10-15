@@ -13,8 +13,8 @@ import type {
   YubiEnrollment,
 } from './bridge';
 import type { StoreRef } from './model';
-import type { DeviceLists } from './screens/device-model';
-import { NO_DEVICES } from './screens/device-model';
+import type { DeviceLists } from './data/device-model';
+import { NO_DEVICES } from './data/device-model';
 import { MetadataRepository } from './metadata-repository';
 import type { QuerySnapshot } from './metadata-repository';
 import { useMetadataQuery, useMetadataRepository } from './query-hooks';

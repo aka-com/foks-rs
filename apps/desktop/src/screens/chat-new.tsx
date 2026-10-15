@@ -59,7 +59,7 @@ import {
   normalizeChannelName,
 } from '../chat/presentation';
 import { chatTeams, noChatReason, noChatTeams } from './chat-teams';
-import { GroupMark } from './group-mark';
+import { GroupMark } from '../components/group-mark';
 
 const fieldText = (value: string): string =>
   lowercaseChatText(value.replace(/\r\n?|\n/g, ' '));

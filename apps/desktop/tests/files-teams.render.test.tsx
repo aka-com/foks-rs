@@ -213,7 +213,7 @@ test('a Teams row in an abnormal state carries the same chip, and opens team set
 
 test('a Teams row says how many requests are waiting on it without its page having been opened', async () => {
   const snapshot = await fixture();
-  const { manageReason } = await import('../src/screens/group-model');
+  const { manageReason } = await import('../src/model/group-model');
   const { INVITATION_ACTIVITY } =
     await import('../src/components/invitation-panel');
   const asked: string[] = [];

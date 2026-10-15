@@ -61,7 +61,7 @@ export function useCatalogRuntime({
   currentBootSnapshot,
   toasts,
 }: {
-  lifetime: import('./access-lifetime').AccessLifetime;
+  lifetime: import('../data/access-lifetime').AccessLifetime;
   bridge: Bridge;
   agentSnapshot: AgentSnapshot;
   retireBoot: () => void;

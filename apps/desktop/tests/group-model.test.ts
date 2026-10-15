@@ -1,6 +1,6 @@
 /**
  * The group page's roster order and the reasons a member's menu gives for an
- * action it cannot take, from src/screens/group-model.ts. Loaded in node with
+ * action it cannot take, from src/model/group-model.ts. Loaded in node with
  * no DOM.
  */
 
@@ -10,7 +10,7 @@ import test from 'node:test';
 import { FIXTURE } from '../src/fixture';
 import { partiesOf, partyName } from '../src/model';
 import type { Party, TeamStore } from '../src/model';
-import { sortRoster, targetReason } from '../src/screens/group-model';
+import { sortRoster, targetReason } from '../src/model/group-model';
 
 function engineering(): TeamStore {
   const store = FIXTURE.stores.find((entry) => entry.id === 'team:eng');

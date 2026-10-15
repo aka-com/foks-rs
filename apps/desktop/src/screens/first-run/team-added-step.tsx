@@ -3,7 +3,7 @@ import { Button, Chip, KindIcon, Notice } from '../../components';
 import type { FilterKind } from '../../components';
 import { displayPath, kindOf, nameOf } from '../../model';
 import { Pane } from '../first-run-view';
-import { readableBy } from '../scope';
+import { readableBy } from '../../model/scope';
 import { useSetupContext } from './setup-context';
 
 /** The team setup joined, with the first of its items once its vault reads. */

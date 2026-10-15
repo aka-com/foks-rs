@@ -32,8 +32,8 @@ import {
 } from '../../model/workflow-availability';
 import { useTabSheetState } from '../../navigation-guard';
 import { markProfileRostersStale } from '../../roster-staleness';
-import { GroupMark } from '../group-mark';
-import { manageReason } from '../group-model';
+import { GroupMark } from '../../components/group-mark';
+import { manageReason } from '../../model/group-model';
 import {
   DetailUnavailable,
   useSheetWrite,

@@ -7,7 +7,7 @@ import {
   treeEntries,
   treeKeyAction,
 } from '../src/screens/files-keyboard';
-import type { FolderNode } from '../src/screens/scope';
+import type { FolderNode } from '../src/model/scope';
 
 test('list keys move one row, a page, or to either end', () => {
   const at = (key: string, index: number) =>

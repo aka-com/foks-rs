@@ -21,7 +21,7 @@ import {
   SheetDialog,
 } from '../../../components';
 import type { AccountStore } from '../../../model';
-import { deviceAlertRegistry } from '../../device-alert';
+import { deviceAlertRegistry } from '../../../data/device-alert';
 import { useShellServices } from '../../../shell-services';
 
 export function PairSheet({

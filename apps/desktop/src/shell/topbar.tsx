@@ -41,7 +41,7 @@ import {
   filesFolderCrumb,
   folderKey,
   folderSelection,
-} from '../screens/scope';
+} from '../model/scope';
 
 /** The word each tab is called, as the rail labels it. */
 const TAB_LABEL: Readonly<Record<RailTab, string>> = {

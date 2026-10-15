@@ -1300,7 +1300,7 @@ test('device removal refreshes native device records before submitting the write
 });
 
 test('an account with no recovery phrase gets its own band without publishing shell alerts', async () => {
-  const { deviceAlertRegistry } = await import('../src/screens/device-alert');
+  const { deviceAlertRegistry } = await import('../src/data/device-alert');
   const snapshot = await fixture();
   const bridgeRef: { current: Bridge | null } = { current: null };
   const page = await renderDevices(snapshot, {
@@ -1330,7 +1330,7 @@ test('an account with no recovery phrase gets its own band without publishing sh
 });
 
 test('an account with a recovery phrase draws no band without publishing shell alerts', async () => {
-  const { deviceAlertRegistry } = await import('../src/screens/device-alert');
+  const { deviceAlertRegistry } = await import('../src/data/device-alert');
   const snapshot = await fixture();
   const bridgeRef: { current: Bridge | null } = { current: null };
   const page = await renderDevices(snapshot, {

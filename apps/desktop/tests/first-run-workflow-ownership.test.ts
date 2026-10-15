@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AccessLifetime } from '../src/app/access-lifetime';
+import { AccessLifetime } from '../src/data/access-lifetime';
 import {
   enqueueProfileWork,
   type Bridge,

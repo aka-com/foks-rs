@@ -24,7 +24,7 @@ import {
 } from '../../model';
 import { useSheetGuard, useTabSheetState } from '../../navigation-guard';
 import { markProfileRostersStale } from '../../roster-staleness';
-import { GroupMark } from '../group-mark';
+import { GroupMark } from '../../components/group-mark';
 import {
   DetailUnavailable,
   useSheetWrite,

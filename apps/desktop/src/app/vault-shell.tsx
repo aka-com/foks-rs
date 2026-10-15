@@ -49,10 +49,7 @@ import {
   systemLeaseExpiryClock,
   type LeaseExpiryClock,
 } from '../scheduling/lease-expiry';
-import {
-  deviceAlertRegistry,
-  devicesAlertSummary,
-} from '../screens/device-alert';
+import { deviceAlertRegistry, devicesAlertSummary } from '../data/device-alert';
 import {
   recoveryPhraseTests,
   subscribeRecoveryPhraseTests,
@@ -65,7 +62,7 @@ import {
   folderKey,
   folderSelection,
   listsItems,
-} from '../screens/scope';
+} from '../model/scope';
 import { copyAndAnnounce, openWebsiteAndAnnounce } from '../screens/item-copy';
 import { exportedPasswords } from '../screens/export-passwords-sheet';
 import { itemActionProblem } from '../screens/store-access';
@@ -89,7 +86,7 @@ import { requestNewChat } from '../screens/chat-tab';
 import { requestChatFind } from '../chat/find';
 import { chatTeams } from '../screens/chat-teams';
 import { useAccessRuntime } from './access-runtime';
-import { AccessLifetime } from './access-lifetime';
+import { AccessLifetime } from '../data/access-lifetime';
 import { shellBlock, shellChrome } from './blocking-shell';
 import { useCatalogRuntime } from './catalog-runtime';
 import type { MaintenanceOwnership } from './maintenance-ownership';

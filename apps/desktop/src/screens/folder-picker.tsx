@@ -11,8 +11,8 @@ import { Icon } from '../components';
 import { displayPathComponent, isTrashPath } from '../model';
 import type { AgentSnapshot, Item } from '../model';
 import { within } from './item-moves';
-import { folderTree } from './scope';
-import type { FolderNode } from './scope';
+import { folderTree } from '../model/scope';
+import type { FolderNode } from '../model/scope';
 
 export interface PickerFolder {
   path: string;

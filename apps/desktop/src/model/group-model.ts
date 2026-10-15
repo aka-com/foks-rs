@@ -5,14 +5,11 @@
  * opens never disagree about what applies or why. Nothing here renders.
  */
 
-import {
-  groupDetailFailure,
-  partiesOf,
-  roleRank,
-  serverDisplayLabel,
-  serverDisplayLabelForStore,
-  storeOperationAvailability,
-} from '../model';
+import { groupDetailFailure, storeOperationAvailability } from './lease';
+import { partiesOf } from './readers';
+import { roleRank } from './roles';
+import { serverDisplayLabelForStore } from './server-name';
+import { serverDisplayLabel } from './types';
 import type {
   Account,
   AccountStore,
@@ -22,7 +19,7 @@ import type {
   Store,
   StoreRef,
   TeamStore,
-} from '../model';
+} from './types';
 
 /**
  * What discovery needs to run for one account, resolved from its exact

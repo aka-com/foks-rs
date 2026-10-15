@@ -58,7 +58,7 @@ test('the bell lists each signal, links it to its page, and keeps the setup step
   const { App } = await import('../src/app-root');
   const { FIXTURE } = await import('../src/fixture');
   const { mockBridge } = await import('../src/mock-bridge');
-  const { deviceAlertRegistry } = await import('../src/screens/device-alert');
+  const { deviceAlertRegistry } = await import('../src/data/device-alert');
   const base = mockBridge(FIXTURE);
   const bridge: Bridge = {
     ...base,

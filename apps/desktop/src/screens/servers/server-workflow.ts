@@ -1,4 +1,4 @@
-import { AccessLifetime } from '../../app/access-lifetime';
+import { AccessLifetime } from '../../data/access-lifetime';
 import { enqueueProfileWork, sharedServerStatus } from '../../bridge';
 import type { Bridge, CheckedServer, ServerStatusSnapshot } from '../../bridge';
 import { attemptMutation } from '../../commands/command-policy';

@@ -9,7 +9,7 @@ import { DevicesScreen } from '../screens/devices-screen';
 import { GroupSettingsScreen } from '../screens/groups-screen';
 import { ItemsScreen, type DropUpload } from '../screens/items-screen';
 import { PlaceholderScreen } from '../screens/placeholder-screen';
-import { listsItems } from '../screens/scope';
+import { listsItems } from '../model/scope';
 import { SettingsScreen } from '../screens/settings-screen';
 import { TeamsScreen } from '../screens/teams-screen';
 import { useShellServices, useShellSnapshot } from '../shell-services';

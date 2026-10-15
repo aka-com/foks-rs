@@ -19,7 +19,7 @@ import {
 } from './query-hooks';
 import type { MetadataRepository } from './metadata-repository';
 import type { InvitationReply } from './invitation-contract';
-import { manageReason } from './screens/group-model';
+import { manageReason } from './model/group-model';
 
 export const pendingOperationKey = (profile: string) =>
   ['pending-operations', profile] as const;
