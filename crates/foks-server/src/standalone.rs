@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use zeroize::Zeroizing;
 
+mod backup_finalization;
+
 use crate::host::{load_or_bootstrap, BootstrapEndpoints, BootstrapInput, BootstrapState};
 use crate::keys::{DirectoryKeyProvider, HostKeyProvider as _};
 use crate::maintenance::Maintenance;
@@ -592,23 +594,8 @@ pub(crate) fn create_backup(
         )));
     }
     drop(backup_check);
-    if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
-        return Err(crate::Error::Chunk("backup cancelled"));
-    }
-    // Publish the manifest last; its presence is the durable completeness
-    // marker for an otherwise possibly partial crash artifact.
     let key_manifest = destination.join("key-manifest.txt");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut manifest_file = options.open(&key_manifest)?;
-    manifest_file.write_all(manifest)?;
-    manifest_file.sync_all()?;
-    std::fs::File::open(destination)?.sync_all()?;
+    backup_finalization::finalize_and_publish(&database, &key_manifest, manifest, cancelled)?;
     Ok(BackupArtifacts {
         database,
         key_directory,
