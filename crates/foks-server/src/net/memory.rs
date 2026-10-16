@@ -44,6 +44,39 @@ impl Pools {
         })
     }
 
+    /// Restricted qualification construction: reserve the real Arc allocation
+    /// before creating it, then retain that permit in the same fixed slots.
+    #[cfg(any(test, feature = "celld-proof"))]
+    pub(crate) fn admitted_request(
+        self: &Arc<Self>,
+        input: Option<OwnedSemaphorePermit>,
+    ) -> foks_metadata_core::Result<Arc<Request>> {
+        #[repr(C)]
+        struct Layout {
+            strong: std::sync::atomic::AtomicUsize,
+            weak: std::sync::atomic::AtomicUsize,
+            value: Request,
+        }
+        let bytes = u32::try_from(std::mem::size_of::<Layout>())
+            .map_err(|_| foks_metadata_core::Error::Bounds)?;
+        let permit = self
+            .working
+            .clone()
+            .try_acquire_many_owned(bytes)
+            .map_err(|_| foks_metadata_core::Error::Bounds)?;
+        let reservations = PermitSlots {
+            working: Some(permit),
+            ..PermitSlots::default()
+        };
+        Ok(Arc::new(Request {
+            pools: self.clone(),
+            _input: input,
+            reservations: Mutex::new(reservations),
+            failed: AtomicBool::new(false),
+            small_request: AtomicBool::new(true),
+        }))
+    }
+
     pub(crate) fn request(self: &Arc<Self>, input: Option<OwnedSemaphorePermit>) -> Arc<Request> {
         Arc::new(Request {
             pools: self.clone(),

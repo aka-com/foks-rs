@@ -747,3 +747,314 @@ fn hooked_key_adapters_match_nontrivial_rotation_and_revoked_native_rows() {
         );
     }
 }
+
+#[test]
+fn key_binding_uses_verified_identity_and_canonical_encrypted_inventory() {
+    let f = Fixture::new();
+    let first = f.backup("key-binding-first");
+    let second = f.backup("key-binding-second");
+    edit(
+        &second,
+        "UPDATE services SET endpoint='different-service-row'",
+    );
+    let a = run(&first);
+    let b = run(&second);
+    assert_eq!(a.binding.canonical_name, "localhost");
+    let reader = foks_server_db::ReadDatabase::open(&f.database, Default::default()).unwrap();
+    assert_eq!(
+        a.binding.host.as_slice(),
+        reader.host_bootstrap().unwrap().unwrap().host_id
+    );
+    assert_ne!(a.qualification.source_digest, b.qualification.source_digest);
+    assert_eq!(a.binding.key_bundle_digest, b.binding.key_bundle_digest);
+    assert_ne!(
+        a.qualification.target_incarnation,
+        b.qualification.target_incarnation
+    );
+
+    // Independent fixture oracle reads the real encrypted files and sorts their
+    // names with the manifest. It intentionally does not use capture's inventory.
+    let mut files = vec![(
+        "key-manifest.txt".to_owned(),
+        0u8,
+        first.key_manifest.clone(),
+    )];
+    for entry in std::fs::read_dir(&first.key_directory).unwrap() {
+        let entry = entry.unwrap();
+        files.push((entry.file_name().into_string().unwrap(), 1, entry.path()));
+    }
+    files.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    let manifest = files.iter().position(|v| v.1 == 0).unwrap();
+    assert!(manifest > 0 && manifest + 1 < files.len());
+    let mut expected = Sha256::new();
+    expected.update(b"foks-native-personal-list-encrypted-keys-v1\0");
+    for (name, kind, path) in files {
+        let content = std::fs::read(path).unwrap();
+        expected.update([kind]);
+        expected.update((name.len() as u64).to_le_bytes());
+        expected.update(name.as_bytes());
+        expected.update((content.len() as u64).to_le_bytes());
+        expected.update(Sha256::digest(content));
+    }
+    assert_eq!(
+        a.binding.key_bundle_digest,
+        <[u8; 32]>::from(expected.finalize())
+    );
+}
+
+#[test]
+fn consuming_database_handoff_intersects_original_job_and_cannot_clear_failure() {
+    let original = control();
+    let shorter = ScanControl::new(
+        original
+            .deadline
+            .shorten(Instant::now() + Duration::from_secs(60))
+            .unwrap(),
+        Arc::clone(&original.cancelled),
+    );
+    let job = Control::new(&original).unwrap();
+    let database =
+        scan::Database::private_target(Connection::open_in_memory().unwrap(), Arc::clone(&job))
+            .unwrap();
+    let (connection, retained) = database.into_owned_connection(&shorter).unwrap();
+    assert!(Arc::ptr_eq(&job, &retained));
+    assert_eq!(
+        retained.control.lock().unwrap().deadline.envelope(),
+        shorter.deadline.envelope()
+    );
+    retained.intersect(&original).unwrap();
+    assert_eq!(
+        retained.control.lock().unwrap().deadline.envelope(),
+        shorter.deadline.envelope()
+    );
+    original.cancelled.store(true, Ordering::Release);
+    assert!(connection.query_row(
+        "WITH RECURSIVE sequence(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM sequence WHERE x<10000) SELECT sum(x) FROM sequence",
+        [],
+        |row| row.get::<_, i64>(0),
+    ).is_err());
+    assert!(retained.interrupted.load(Ordering::Acquire));
+    drop(connection);
+
+    for rejection in 0..3 {
+        let original = control();
+        let job = Control::new(&original).unwrap();
+        let database =
+            scan::Database::private_target(Connection::open_in_memory().unwrap(), Arc::clone(&job))
+                .unwrap();
+        let supplied = match rejection {
+            0 => control(),
+            1 => {
+                original.cancelled.store(true, Ordering::Release);
+                original.clone()
+            }
+            _ => {
+                job.interrupted.store(true, Ordering::Release);
+                original.clone()
+            }
+        };
+        let result = database.into_owned_connection(&supplied);
+        assert!(match rejection {
+            0 => matches!(
+                result,
+                Err(ScanError::Unsupported("different cancellation owner"))
+            ),
+            1 => matches!(result, Err(ScanError::Cancelled)),
+            _ => matches!(
+                result,
+                Err(ScanError::Unsupported("SQLite operation/deadline limit"))
+            ),
+        });
+    }
+}
+
+fn certificate_fixture() -> Fixture {
+    let f = Fixture::new();
+    let uid = f.user(false, 1, 0);
+    let db = Connection::open(&f.database).unwrap();
+    // The offline DER audit intentionally does not require this inactive owner
+    // or its credential to match a current device/subkey public key.
+    db.execute(
+        "INSERT INTO devices(device_id,uid,active,role_type,visibility,hepk_fingerprint,self_token,exact_hepk,exact_name) VALUES(?1,?2,0,1,0,zeroblob(32),zeroblob(17),X'00',X'00')",
+        params![[0x44_u8; 33].as_slice(), uid.as_slice()],
+    ).unwrap();
+    drop(db);
+    f
+}
+fn insert_certificate(fixture: &Fixture, serial: &[u8], der: &[u8]) {
+    Connection::open(&fixture.database).unwrap().execute(
+        "INSERT INTO issued_certificates(serial,uid,device_id,credential_id,not_before,not_after,exact_certificate) SELECT ?1,uid,device_id,?2,1234567,987654321,?3 FROM devices LIMIT 1",
+        params![serial, [0x55_u8; 33].as_slice(), der],
+    ).unwrap();
+}
+fn issued_certificate(serial: &[u8]) -> Vec<u8> {
+    crate::pki::issue_bounded_device_certificate(
+        &crate::keys::MemoryKeyProvider::default(),
+        "localhost",
+        foks_crypto::ed25519_public_key(&[0x42; 32]),
+        serial,
+        1_700_000_000_000_000,
+        1_800_000_000_000_000,
+    )
+    .unwrap()
+}
+fn certificate_workspace() -> (
+    Arc<crate::net::memory::Request>,
+    list::certificate::CertificateWorkspace,
+) {
+    let owner = crate::net::memory::Pools::new(Default::default()).request(None);
+    let workspace = list::certificate::CertificateWorkspace::new(Arc::clone(&owner), 4096).unwrap();
+    (owner, workspace)
+}
+fn audit_certificates(owner: &NativePersonalListImport) -> Result<()> {
+    let (_memory, mut workspace) = certificate_workspace();
+    let before = semantic::coordinate(&owner.database)?;
+    let result = certificates::audit(&owner.database, &mut workspace);
+    if result.is_ok() {
+        assert_eq!(semantic::coordinate(&owner.database)?, before);
+    }
+    result
+}
+
+#[test]
+fn certificate_inventory_accepts_all_padding_widths_zero_and_sign_padded_magnitude() {
+    let f = certificate_fixture();
+    for width in 1..=20 {
+        let mut serial = vec![0; width];
+        serial[width - 1] = width as u8;
+        insert_certificate(&f, &serial, &issued_certificate(&[width as u8]));
+    }
+    insert_certificate(&f, &[0; 20], &issued_certificate(&[0]));
+    insert_certificate(&f, &[0x80; 20], &issued_certificate(&[0x80; 20]));
+    let artifacts = f.backup("certificate-widths");
+    let original = hash(&artifacts.database);
+    let owner = run(&artifacts);
+    audit_certificates(&owner).unwrap();
+    assert_eq!(hash(&artifacts.database), original);
+}
+
+#[test]
+fn certificate_inventory_rejects_duplicates_only_after_complete_first_pass() {
+    for malformed_last in [false, true] {
+        let f = certificate_fixture();
+        let der = issued_certificate(&[1]);
+        insert_certificate(&f, &[1], &der);
+        insert_certificate(&f, &[0, 1], &der);
+        if malformed_last {
+            insert_certificate(&f, &[2], &[1, 2, 3]);
+        }
+        let owner = run(&f.backup("certificate-duplicate"));
+        let expected = if malformed_last {
+            "issued certificate restricted DER"
+        } else {
+            "duplicate issued certificate DER"
+        };
+        assert!(
+            matches!(audit_certificates(&owner), Err(ScanError::Unsupported(reason)) if reason == expected)
+        );
+    }
+}
+
+#[test]
+fn certificate_inventory_rejects_unbounded_unsupported_or_misbound_der() {
+    let valid = issued_certificate(&[1]);
+    let mut trailing = valid.clone();
+    trailing.push(0);
+    let mut negative = valid.clone();
+    let serial_offset = {
+        let (_, parsed) = x509_parser::parse_x509_certificate(&valid).unwrap();
+        parsed.raw_serial().as_ptr() as usize - valid.as_ptr() as usize
+    };
+    negative[serial_offset] |= 0x80;
+    let ec = rcgen::CertificateParams::default()
+        .self_signed(&rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap())
+        .unwrap()
+        .der()
+        .to_vec();
+    for (name, serial, der, reason) in [
+        (
+            "mismatch",
+            vec![2],
+            valid,
+            "issued certificate serial mismatch",
+        ),
+        (
+            "trailing",
+            vec![1],
+            trailing,
+            "issued certificate restricted DER",
+        ),
+        (
+            "negative",
+            vec![1],
+            negative,
+            "issued certificate restricted DER",
+        ),
+        (
+            "unsupported",
+            vec![1],
+            ec,
+            "issued certificate restricted DER",
+        ),
+        ("empty", vec![1], vec![], "issued certificate DER bytes"),
+        (
+            "oversized",
+            vec![1],
+            vec![0; 4097],
+            "issued certificate DER bytes",
+        ),
+        (
+            "magnitude",
+            vec![1],
+            issued_certificate(&[1; 21]),
+            "issued certificate restricted DER",
+        ),
+    ] {
+        let f = certificate_fixture();
+        insert_certificate(&f, &serial, &der);
+        let owner = run(&f.backup(name));
+        assert!(
+            matches!(audit_certificates(&owner), Err(ScanError::Unsupported(actual)) if actual == reason),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn certificate_inventory_preserves_raw_negative_expiry_and_different_sql_times() {
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
+    let mut parameters = rcgen::CertificateParams::default();
+    parameters.not_before = time::OffsetDateTime::from_unix_timestamp(-2).unwrap();
+    parameters.not_after = time::OffsetDateTime::from_unix_timestamp(-1).unwrap();
+    parameters.serial_number = Some(rcgen::SerialNumber::from_slice(&[1]));
+    let certificate = parameters.self_signed(&key).unwrap();
+    let f = certificate_fixture();
+    insert_certificate(&f, &[1], certificate.der());
+    let owner = run(&f.backup("negative-der-expiry"));
+    audit_certificates(&owner).unwrap();
+}
+
+#[test]
+fn certificate_inventory_cannot_refresh_cancellation_or_failed_memory_owner() {
+    let f = certificate_fixture();
+    insert_certificate(&f, &[1], &issued_certificate(&[1]));
+    let artifacts = f.backup("certificate-cancellation");
+    let owner = run(&artifacts);
+    let job = owner.database.control();
+    let cancelled = Arc::clone(&job.control.lock().unwrap().cancelled);
+    certificates::after_first_pass(move || cancelled.store(true, Ordering::Release));
+    assert!(matches!(
+        audit_certificates(&owner),
+        Err(ScanError::Cancelled)
+    ));
+    let owner = run(&artifacts);
+    let (memory, mut workspace) = certificate_workspace();
+    assert!(!foks_snowpack::AllocationBudget::reserve(
+        memory.as_ref(),
+        usize::MAX
+    ));
+    assert!(matches!(
+        certificates::audit(&owner.database, &mut workspace),
+        Err(ScanError::Allocation)
+    ));
+}

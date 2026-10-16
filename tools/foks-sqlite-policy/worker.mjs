@@ -2,24 +2,34 @@
 import fixture from './fixture.json' with {type:'json'};
 const ROOTS='SELECT type,name,rootpage FROM sqlite_schema WHERE rootpage>0 ORDER BY rootpage';
 const SCHEMA="SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type,name";
+const TEMP_QUERY={id:'connection/empty_temp',sql:"SELECT CASE WHEN EXISTS(SELECT 1 FROM temp.sqlite_schema) THEN '1' ELSE '0' END"};
+const ATTACHMENTS_QUERY={id:'connection/no_attachments',sql:"SELECT CASE WHEN EXISTS(SELECT 1 FROM pragma_table_list WHERE schema NOT IN ('main','temp')) THEN '1' ELSE '0' END AS value"};
 const utf8=new TextEncoder();
 export function normalize(rows,roots,query){
-  const virtual=query?.id==='scalar/44'&&query.sql==='SELECT CAST(schema_version AS TEXT) FROM pragma_schema_version';
-  let vopen=0;
+  const exact=expected=>query?.id===expected.id&&query.sql===expected.sql;
+  const virtual=exact({id:'scalar/44',sql:'SELECT CAST(schema_version AS TEXT) FROM pragma_schema_version'})?'pragma_schema_version':
+    exact(ATTACHMENTS_QUERY)?'pragma_table_list':null;
+  const temp=exact(TEMP_QUERY);
+  let vopen=0,tempRoots=0;
   const out=rows.map(original=>{
     if(original.length!==8||typeof original[1]!=='string')throw Error('EXPLAIN row shape');
     const row=[...original];
     if(['OpenRead','OpenWrite','ReopenIdx'].includes(row[1])){
-      if(row[4]!==0||(row[6]&16)||!roots.has(row[3]))throw Error('unqualified root operand');
-      row[3]=roots.get(row[3]);
+      if(temp&&row[1]==='OpenRead'&&row[4]===1&&row[3]===1&&!(row[6]&16)){
+        tempRoots++;row[3]='table/temp.sqlite_schema';
+      }else{
+        if(row[4]!==0||(row[6]&16)||!roots.has(row[3]))throw Error('unqualified root operand');
+        row[3]=roots.get(row[3]);
+      }
     }
     if(row[1]==='VOpen'){
       if(!virtual||typeof row[5]!=='string'||!/^vtab:[0-9A-Fa-f]+$/.test(row[5]))throw Error('unqualified virtual-table operand');
-      vopen++;row[5]='vtab/builtin/pragma_schema_version';
+      vopen++;row[5]='vtab/builtin/'+virtual;
     }
     return row;
   });
   if(vopen!==(virtual?1:0))throw Error('virtual-table operand count');
+  if(tempRoots!==(temp?1:0))throw Error('temp schema operand count');
   return out;
 }
 export function selected(url){

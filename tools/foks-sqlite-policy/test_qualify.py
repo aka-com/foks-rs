@@ -2,7 +2,7 @@ import os
 import pathlib
 import tempfile
 import unittest
-from qualify import Engine, SqlError, configure, normalize, root_map, pinned, validate_collations, function_dependencies, PRAGMA_QUERY, execution, CONTROLS, CONTROL_BINDING, program_order
+from qualify import Engine, SqlError, configure, normalize, root_map, pinned, validate_collations, function_dependencies, PRAGMA_QUERY, TEMP_QUERY, ATTACHMENTS_QUERY, CONNECTION_POLICY, connection_programs, PINS, execution, CONTROLS, CONTROL_BINDING, program_order
 
 
 class StructuralTests(unittest.TestCase):
@@ -34,6 +34,52 @@ class StructuralTests(unittest.TestCase):
         for rows,query in [([row],None),([row],{**PRAGMA_QUERY,'sql':'SELECT 1'}),([row],{**PRAGMA_QUERY,'id':'scalar/45'}),([row,row],PRAGMA_QUERY),([],PRAGMA_QUERY)]:
             with self.assertRaises(ValueError):normalize(rows,{},query)
         with self.assertRaises(ValueError):normalize([[0,'VOpen',0,0,0,'vtab:unknown',0,None]],{},PRAGMA_QUERY)
+
+    def test_attachment_pragma_requires_its_exact_identity_and_one_vopen(self):
+        row=[0,'VOpen',0,0,0,'vtab:ABC123',0,None]
+        result=normalize([row],{},ATTACHMENTS_QUERY)
+        self.assertEqual(result[0][5],'vtab/builtin/pragma_table_list')
+        self.assertEqual(row[5],'vtab:ABC123')
+        for rows,query in [([],ATTACHMENTS_QUERY),([row,row],ATTACHMENTS_QUERY),
+                           ([row],{**ATTACHMENTS_QUERY,'id':'connection/other'}),
+                           ([row],{**ATTACHMENTS_QUERY,'sql':'SELECT * FROM pragma_table_list'})]:
+            with self.assertRaises(ValueError):normalize(rows,{},query)
+
+    def test_temp_schema_normalization_admits_only_one_fixed_read(self):
+        row=[0,'OpenRead',0,1,1,'0',0,None]
+        result=normalize([row],{1:'table/sqlite_schema'},TEMP_QUERY)
+        self.assertEqual(result,[[0,'OpenRead',0,'table/temp.sqlite_schema',1,'0',0,None]])
+        self.assertEqual(row[3],1)
+        for index,value in [(1,'OpenWrite'),(1,'ReopenIdx'),(3,2),(4,2),(6,16)]:
+            changed=list(row);changed[index]=value
+            with self.assertRaises(ValueError):normalize([changed],{1:'table/sqlite_schema'},TEMP_QUERY)
+        for rows,query in [([],TEMP_QUERY),([row,row],TEMP_QUERY),([row],None),
+                           ([row],{**TEMP_QUERY,'id':'connection/other'}),
+                           ([row],{**TEMP_QUERY,'sql':'SELECT 1'})]:
+            with self.assertRaises(ValueError):normalize(rows,{1:'table/sqlite_schema'},query)
+        # The same numeric root in main has a different database operand/name.
+        main=list(row);main[4]=0
+        self.assertEqual(normalize([main],{1:'table/sqlite_schema'})[0][3],'table/sqlite_schema')
+        with self.assertRaises(ValueError):normalize([main],{1:'table/sqlite_schema'},TEMP_QUERY)
+
+    def test_connection_inventory_has_five_shared_and_three_native_only_checks(self):
+        import copy
+        import json
+        policy=json.loads(pinned(CONNECTION_POLICY,PINS['connection-policy.json'],4096))
+        source={'connection-policy.json':policy}
+        shared=connection_programs(source,False)
+        native=connection_programs(source,True)
+        self.assertEqual([row['id'] for row in shared],['connection/foreign_keys','connection/ignore_check_constraints',
+            'connection/recursive_triggers','connection/empty_temp','connection/no_attachments'])
+        self.assertEqual([row['id'] for row in native],['connection/trusted_schema','connection/journal_mode','connection/synchronous'])
+        mutations=[lambda rows:rows.pop(),lambda rows:rows.append(rows[0]),lambda rows:rows.reverse(),
+                   lambda rows:rows[3].update(targets=['native','celld']),
+                   lambda rows:rows[0].update(sql='PRAGMA foreign_keys=OFF'),
+                   lambda rows:rows[0].update(id='connection/other'),
+                   lambda rows:rows[0]['expected'].update(value=True)]
+        for mutate in mutations:
+            changed=copy.deepcopy(policy);mutate(changed['programs'])
+            with self.assertRaises(ValueError):connection_programs({'connection-policy.json':changed},False)
 
     def test_only_three_exact_zero_parameter_controls_are_mapped(self):
         for identity,sql in CONTROLS.items():
@@ -117,6 +163,25 @@ class EngineTests(unittest.TestCase):
                 self.assertEqual(db.query('SELECT count(*) FROM c'),[[0]])
                 db.query('INSERT INTO r VALUES(1,0)');db.query('UPDATE r SET n=1 WHERE id=1')
                 self.assertEqual(db.query('SELECT n FROM r'),[[3]])
+
+    def test_fixed_connection_readbacks_compile_without_broadening_operands(self):
+        for trusted in (0,1):
+            with self.engine.connect() as db:
+                configure(db,trusted)
+                for query in (PRAGMA_QUERY,TEMP_QUERY,ATTACHMENTS_QUERY):
+                    program=db.query('EXPLAIN '+query['sql'])
+                    normalized=normalize(program,root_map([]),query)
+                    self.assertEqual(len(program),len(normalized))
+                self.assertEqual(db.query(TEMP_QUERY['sql']),[['0']])
+                self.assertEqual(db.query(ATTACHMENTS_QUERY['sql']),[['0']])
+                db.query('CREATE TEMP TABLE occupied(v)')
+                self.assertEqual(db.query(TEMP_QUERY['sql']),[['1']])
+                # Diagnostic only: the admitted F3 connection always forbids attach.
+                db.engine.limit(db.handle,7,1)
+                db.query("ATTACH ':memory:' AS other")
+                self.assertEqual(db.query(ATTACHMENTS_QUERY['sql']),[['1']])
+                db.query('CREATE TABLE other.present(v)')
+                self.assertEqual(db.query(ATTACHMENTS_QUERY['sql']),[['1']])
 
 
 if __name__=='__main__':unittest.main()

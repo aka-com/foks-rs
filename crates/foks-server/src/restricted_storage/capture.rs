@@ -339,6 +339,60 @@ impl Package {
         }
         Ok(bytes)
     }
+    /// Called only after copied-key equality and the existing key-ledger audit.
+    /// Merge the manifest into the captured key roster by raw ASCII filename;
+    /// capture's overall `(kind, name)` ordering is not this binding's ordering.
+    #[cfg(any(test, feature = "celld-proof"))]
+    pub(super) fn key_bundle_digest(&mut self, control: &Control) -> Result<[u8; 32]> {
+        self.verify(control)?;
+        let mut manifest = Some(
+            self.entries
+                .iter()
+                .find(|entry| !entry.key && entry.name == MANIFEST)
+                .ok_or(ScanError::Unsupported("key digest manifest missing"))?,
+        );
+        let mut hash = Sha256::new();
+        hash.update(b"foks-native-personal-list-encrypted-keys-v1\0");
+        let mut previous: Option<&str> = None;
+        fn append<'a>(
+            hash: &mut Sha256,
+            previous: &mut Option<&'a str>,
+            entry: &'a Entry,
+            control: &Control,
+        ) -> Result<()> {
+            control.check()?;
+            if previous.is_some_and(|name| name.as_bytes() >= entry.name.as_bytes()) {
+                return Err(ScanError::Unsupported("key digest filename order"));
+            }
+            hash.update([u8::from(entry.key)]);
+            hash.update(
+                u64::try_from(entry.name.len())
+                    .map_err(|_| ScanError::Allocation)?
+                    .to_le_bytes(),
+            );
+            hash.update(entry.name.as_bytes());
+            hash.update(entry.length.to_le_bytes());
+            hash.update(entry.hash);
+            *previous = Some(&entry.name);
+            Ok(())
+        }
+        for key in self.entries.iter().filter(|entry| entry.key) {
+            if manifest.is_some_and(|entry| entry.name.as_bytes() <= key.name.as_bytes()) {
+                append(
+                    &mut hash,
+                    &mut previous,
+                    manifest.take().ok_or(ScanError::Incomplete)?,
+                    control,
+                )?;
+            }
+            append(&mut hash, &mut previous, key, control)?;
+        }
+        if let Some(manifest) = manifest {
+            append(&mut hash, &mut previous, manifest, control)?;
+        }
+        control.check()?;
+        Ok(hash.finalize().into())
+    }
     #[cfg(any(test, feature = "celld-proof"))]
     pub(super) fn copy_keys(&mut self, destination: &Path, control: &Control) -> Result<()> {
         self.verify(control)?;

@@ -14,9 +14,11 @@ PINS = {
     'foks-59.json': '3cc399cd4f787af3324362f83378f6e148e469527fc30624a25f1c2ff571ceb5',
     'authority-v1.json': '14c93336778f8fef6323289edf8e063f4c324ade2051ddc2dc55e93abfeab998',
     'celld-0.6.2.json': 'c6848f846b47a76fa89abdb078bd9bc534e6ba2321391245b5de45c04d8c692f',
-    'scalar-catalog.json': 'f148c7aad3859b8bc633c1cfd19adc3700f54f3779f2bddca049d88d46dd3b53',
+    'scalar-catalog.json': '07b52d5b3405ec6d6826a3cb66c8f7a41422edd890179c6615d46d469af1f705',
     'page-catalog.json': 'a2b83eb458c38a39b3245fbcaa669bd9bd85255db0be08c4124813248b4f955b',
+    'connection-policy.json': '26ae0d8f73b51666e65e909f246ce3c847d64ba11b15075d4e152311c6965370',
 }
+CONNECTION_POLICY = pathlib.Path(__file__).resolve().parents[2] / 'crates/foks-server/src/restricted_list/profile/connection-policy.json'
 SOURCE_PIN = '7956a38f236a6be6c0bb30c96ba4f85f19e5a69f6beb6d2c62c9d246972a6775'
 BUILD_PIN = 'a3a0c7f409e20573d21448fb53c5a1f168fd04c5983af68671da126cc3bf9ff4'
 SOURCE_ID = '2024-01-15 17:01:13 1066602b2b1976fe58b5150777cced894af17c803e068f5918390d6915b46e1d'
@@ -28,6 +30,23 @@ DEFINES = ['SQLITE_CORE', 'SQLITE_DEFAULT_FOREIGN_KEYS=1', 'SQLITE_ENABLE_API_AR
     'SQLITE_USE_URI', 'HAVE_USLEEP=1', '_POSIX_THREAD_SAFE_FUNCTIONS', 'HAVE_ISNAN', 'HAVE_LOCALTIME_R']
 LIMITS = [(0,2200000),(1,100000),(2,100),(3,100),(4,5),(5,25000),(6,127),(7,0),(8,50),(9,100),(10,10),(11,0)]
 PRAGMA_QUERY = {'id':'scalar/44','sql':'SELECT CAST(schema_version AS TEXT) FROM pragma_schema_version'}
+TEMP_QUERY = {'id':'connection/empty_temp','sql':"SELECT CASE WHEN EXISTS(SELECT 1 FROM temp.sqlite_schema) THEN '1' ELSE '0' END"}
+ATTACHMENTS_QUERY = {'id':'connection/no_attachments','sql':"SELECT CASE WHEN EXISTS(SELECT 1 FROM pragma_table_list WHERE schema NOT IN ('main','temp')) THEN '1' ELSE '0' END AS value"}
+CONNECTION_CHECKS = [
+    ('foreign_keys','PRAGMA foreign_keys',False,'integer',1),
+    ('ignore_check_constraints','PRAGMA ignore_check_constraints',False,'integer',0),
+    ('recursive_triggers','PRAGMA recursive_triggers',False,'integer',1),
+    ('trusted_schema','PRAGMA trusted_schema',True,'integer',0),
+    ('journal_mode','PRAGMA main.journal_mode',True,'text','wal'),
+    ('synchronous','PRAGMA main.synchronous',True,'integer',2),
+    ('empty_temp',TEMP_QUERY['sql'],False,'text','0'),
+    ('no_attachments',ATTACHMENTS_QUERY['sql'],False,'text','0'),
+]
+NATIVE_ONLY_SCOPE = {
+    'engine':'sqlite-3.45.0-celld-build',
+    'qualifies_native_f3_engine':False,
+    'reason':'Preparation diagnostics only. The three native-only readbacks are excluded from trusted_schema ON/OFF equality and celld execution. Native F3 validates all eight checks, including WAL/FULL, on its own pinned bundled engine.',
+}
 FUNCTION_OPS = {'Function','PureFunc','AggStep','AggStep1','AggInverse','AggValue','AggFinal'}
 HOST_PIN = 'da8d96348f693bbcedfc0107b19335e6d7278e846fbbb6cef16c97657f5cd085'
 CONTROLS = {'scalar/29':'SAVEPOINT metadata_domain','scalar/30':'ROLLBACK TO metadata_domain','scalar/31':'RELEASE metadata_domain'}
@@ -56,7 +75,21 @@ def pinned(path, expected, cap):
 
 
 def artifacts(source):
-    return {name: json.loads(pinned(source / name, sha, 2 * 1024 * 1024)) for name, sha in PINS.items()}
+    return {name: json.loads(pinned(CONNECTION_POLICY if name == 'connection-policy.json' else source / name,
+                                   sha, 2 * 1024 * 1024)) for name, sha in PINS.items()}
+
+
+def connection_programs(source, native_only):
+    expected = [{'id':'connection/'+name,'sql':sql,'targets':['native'] if native else ['native','celld'],
+                 'expected':{'kind':kind,'value':value}}
+                for name,sql,native,kind,value in CONNECTION_CHECKS]
+    actual = source['connection-policy.json']['programs']
+    # Exact order, targets, SQL and result types. A caller cannot reclassify a
+    # native-only readback to hide it from comparison or deploy it to celld.
+    if encoded(actual) != encoded(expected):
+        raise ValueError('connection program inventory')
+    return [{'id':p['id'],'sql':p['sql']} for p in actual
+            if (p['targets'] == ['native']) == native_only]
 
 
 def quote(name):
@@ -107,6 +140,7 @@ def corpus(db, source):
         result.extend({'id':'table/'+name+'/'+operation,'sql':sql} for operation, sql in queries)
     for kind, values in [('scalar',source['scalar-catalog.json']),('page',source['page-catalog.json']['descriptor']['statements'])]:
         result.extend({'id':kind+'/'+str(value['id']),'sql':value['sql']} for value in values)
+    result.extend(connection_programs(source,False))
     if len({row['id'] for row in result}) != len(result) or len(result) > 1024:
         raise ValueError('corpus identity/count')
     return result
@@ -123,24 +157,35 @@ def root_map(rows):
 
 def normalize(rows, roots, query=None):
     out = []
-    virtual = query is not None and all(query.get(k)==v for k,v in PRAGMA_QUERY.items())
-    vopen = 0
+    def exact(expected):
+        return query is not None and all(query.get(k)==v for k,v in expected.items())
+    virtual = ('pragma_schema_version' if exact(PRAGMA_QUERY) else
+               'pragma_table_list' if exact(ATTACHMENTS_QUERY) else None)
+    temp = exact(TEMP_QUERY)
+    vopen = temp_roots = 0
     for original in rows:
         if len(original) != 8 or not isinstance(original[1], str):
             raise ValueError('EXPLAIN row shape')
         row = list(original)
         if row[1] in ('OpenRead','OpenWrite','ReopenIdx'):
-            if row[4] != 0 or row[6] & 0x10 or row[3] not in roots:
+            if (temp and row[1] == 'OpenRead' and row[4] == 1 and row[3] == 1
+                    and not row[6] & 0x10):
+                temp_roots += 1
+                row[3] = 'table/temp.sqlite_schema'
+            elif row[4] != 0 or row[6] & 0x10 or row[3] not in roots:
                 raise ValueError('unqualified root operand')
-            row[3] = roots[row[3]]
+            else:
+                row[3] = roots[row[3]]
         if row[1] == 'VOpen':
             if not virtual or not isinstance(row[5],str) or not re.fullmatch(r'vtab:[0-9A-Fa-f]+',row[5]):
                 raise ValueError('unqualified virtual-table operand')
             vopen += 1
-            row[5] = 'vtab/builtin/pragma_schema_version'
+            row[5] = 'vtab/builtin/' + virtual
         out.append(row)
     if vopen != (1 if virtual else 0):
         raise ValueError('virtual-table operand count')
+    if temp_roots != (1 if temp else 0):
+        raise ValueError('temp schema operand count')
     return out
 
 
@@ -290,10 +335,13 @@ def qualify(engine, source, runs):
                 raise ValueError('unreviewed schema function')
             queries = corpus(db,source)
             programs=[]
-            run={'trusted_schema':trusted,'programs':programs,'schema_functions':schema_functions}
+            native_only=[]
+            run={'trusted_schema':trusted,'programs':programs,'schema_functions':schema_functions,
+                 'native_only_diagnostics':{**NATIVE_ONLY_SCOPE,'programs':native_only}}
             runs.append(run)
             compile_programs(db,queries,programs)
-            used = set(schema_functions) | {name for row in programs for name in row['functions']}
+            compile_programs(db,connection_programs(source,True),native_only)
+            used = set(schema_functions) | {name for row in programs + native_only for name in row['functions']}
             functions = [row for row in db.query('PRAGMA function_list',maximum_rows=512) if row[0] in used]
             if used - {row[0] for row in functions} or any(row[1] != 1 or not row[5] & 0x200000 for row in functions):
                 raise ValueError('non-builtin/non-innocuous dependency')
@@ -301,13 +349,14 @@ def qualify(engine, source, runs):
             statements, outcomes = behavior(db)
             run.update(functions=functions,compile_options=options,behavior=outcomes)
     def comparable(run):
-        return {**{k:v for k,v in run.items() if k not in ('trusted_schema','programs')},
+        return {**{k:v for k,v in run.items() if k not in ('trusted_schema','programs','native_only_diagnostics')},
                 'programs':[{k:v for k,v in row.items() if k!='rows'} for row in run['programs']]}
     if comparable(runs[0]) != comparable(runs[1]):
         raise ValueError('trusted_schema ON/OFF programs or behavior differ')
     base = runs[0]
     fixture = {'pins':PINS,'platform':source['celld-0.6.2.json'],'app':source['foks-59.json']+source['authority-v1.json'],
                'programs':[{**{k:v for k,v in row.items() if k!='rows'},'execution':execution(row)} for row in base['programs']],
+               'native_only_exclusions':{**NATIVE_ONLY_SCOPE,'programs':connection_programs(source,True)},
                'control_host_sha256':HOST_PIN,
                'compile_options':base['compile_options'],'behavior':statements,'behavior_expected':base['behavior']}
     return fixture
@@ -332,7 +381,10 @@ def main():
         raw=encoded(fixture)
         if len(raw)>4*1024*1024:raise ValueError('worker fixture bound')
         (args.output/'fixture.json').write_bytes(raw)
-        report.update(passed=True,programs=len(fixture['programs']),fixture_sha256=hashlib.sha256(raw).hexdigest())
+        report.update(passed=True,programs=len(fixture['programs']),fixture_sha256=hashlib.sha256(raw).hexdigest(),
+                      shared_connection_programs=len(connection_programs(source,False)),
+                      native_only_diagnostics=len(connection_programs(source,True)),
+                      native_f3_connection_policy_qualified=False)
     except Exception as error:
         report['error']=str(error)[:400]
     (args.output/'native-programs.json').write_bytes(encoded(runs))

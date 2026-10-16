@@ -8,10 +8,16 @@ struct Parent {
     retained: AtomicUsize,
     failed: AtomicBool,
     refuse_workspace: AtomicBool,
+    refuse_allocation: AtomicBool,
 }
 impl foks_snowpack::AllocationBudget for Parent {
     fn reserve(&self, _: usize) -> bool {
-        true
+        if self.refuse_allocation.load(Ordering::SeqCst) {
+            self.fail();
+            false
+        } else {
+            true
+        }
     }
 }
 impl foks_rpc::ResponseAllocationBudget for Parent {
@@ -148,7 +154,7 @@ fn nested_entry_unwind_and_counter_overflow_latch_without_reset() {
     }
 }
 #[test]
-fn workspace_refusal_and_earlier_domain_error_preserve_provenance() {
+fn workspace_refusal_is_fatal_but_clean_corrupt_retires_only_the_child() {
     let parent = Arc::new(Parent::default());
     parent.refuse_workspace.store(true, Ordering::SeqCst);
     assert!(matches!(Budget::new(parent.clone()), Err(Error::Bounds)));
@@ -156,15 +162,120 @@ fn workspace_refusal_and_earlier_domain_error_preserve_provenance() {
     assert_eq!(parent.held.load(Ordering::SeqCst), 0);
     let parent = Arc::new(Parent::default());
     let budget = Budget::new(parent.clone()).unwrap();
+    let held = budget.terms.workspace_bytes + budget.terms.control_bytes;
     assert!(matches!(
-        budget.run(|| Err(PageFault::Corrupt)),
+        budget.run(|| {
+            assert!(budget.reserve(17));
+            assert!(parent.reserve_retained(23));
+            Err(PageFault::Corrupt)
+        }),
         Err(PageFault::Corrupt)
     ));
-    assert!(parent.failed());
+    assert!(budget.state.failed.load(Ordering::SeqCst));
+    assert!(!budget.state.occupied.load(Ordering::SeqCst));
+    assert!(!parent.failed());
+    assert_eq!(parent.held.load(Ordering::SeqCst), held);
+    assert_eq!(parent.reservations.load(Ordering::SeqCst), 1);
+    assert_eq!(parent.retained.load(Ordering::SeqCst), 23);
+    assert_eq!(budget.state.generation.load(Ordering::SeqCst), 1);
+    assert_eq!(budget.state.attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(budget.state.traffic.load(Ordering::SeqCst), 17);
+    // Later status work still uses the original owner; previous debt stays held.
+    assert!(parent.reserve_retained(7));
+    assert_eq!(parent.retained.load(Ordering::SeqCst), 30);
+    assert_eq!(parent.held.load(Ordering::SeqCst), held);
     assert!(matches!(
         budget.run(|| panic!("failed page")),
         Err(PageFault::Bounds)
     ));
+    assert!(parent.failed());
+    assert_eq!(budget.state.generation.load(Ordering::SeqCst), 1);
+    assert_eq!(budget.state.traffic.load(Ordering::SeqCst), 17);
+    assert_eq!(parent.held.load(Ordering::SeqCst), held);
+}
+#[test]
+fn every_other_page_fault_remains_parent_fatal() {
+    for fault in [
+        PageFault::Unauthenticated,
+        PageFault::Permission,
+        PageFault::Missing,
+        PageFault::UnsupportedProfile,
+        PageFault::BadArguments,
+        PageFault::StalePreparation,
+        PageFault::CachedObjectMissing,
+        PageFault::Invalid("fixed"),
+        PageFault::IntegerRange,
+        PageFault::Conflict,
+        PageFault::KernelPermission,
+        PageFault::Quota,
+        PageFault::Bounds,
+        PageFault::Storage,
+        PageFault::Expired,
+    ] {
+        let parent = Arc::new(Parent::default());
+        let budget = Budget::new(parent.clone()).unwrap();
+        let held = parent.held.load(Ordering::SeqCst);
+        assert!(matches!(budget.run(|| Err(fault)), Err(actual) if actual == fault));
+        assert!(parent.failed());
+        assert!(budget.state.failed.load(Ordering::SeqCst));
+        assert!(!budget.state.occupied.load(Ordering::SeqCst));
+        assert_eq!(parent.held.load(Ordering::SeqCst), held);
+        assert!(matches!(
+            budget.run(|| panic!("failed page")),
+            Err(PageFault::Bounds)
+        ));
+    }
+}
+#[test]
+fn ignored_refusal_before_corrupt_cannot_recover_parent_or_finish_owned_output() {
+    for parent_refusal in [false, true] {
+        let parent = Arc::new(Parent::default());
+        let encoder = crate::list_encoder::owned::OwnedListEncoder::new(1, parent.clone()).unwrap();
+        let budget = Budget::new(parent.clone()).unwrap();
+        let held = parent.held.load(Ordering::SeqCst);
+        let result = budget.run(|| {
+            if parent_refusal {
+                parent.refuse_allocation.store(true, Ordering::SeqCst);
+                assert!(!AllocationBudget::reserve(parent.as_ref(), 1));
+            } else {
+                assert!(
+                    foks_snowpack::reserve_allocation(budget.terms.dynamic_credits + 1).is_err()
+                );
+            }
+            // Deliberately hide the admission error behind a normal data error.
+            Err(PageFault::Corrupt)
+        });
+        // Preserve error provenance while retaining the irreversible poison.
+        assert!(matches!(result, Err(PageFault::Corrupt)));
+        assert!(parent.failed());
+        assert!(budget.state.failed.load(Ordering::SeqCst));
+        assert!(!budget.state.occupied.load(Ordering::SeqCst));
+        assert_eq!(parent.held.load(Ordering::SeqCst), held);
+        assert!(matches!(encoder.finish(false), Err(Error::Bounds)));
+        assert!(matches!(
+            budget.run(|| panic!("poisoned page")),
+            Err(PageFault::Bounds)
+        ));
+        assert_eq!(parent.held.load(Ordering::SeqCst), held);
+    }
+}
+#[test]
+fn preexisting_child_or_parent_failure_never_enters_corrupt_exception() {
+    for parent_failure in [false, true] {
+        let parent = Arc::new(Parent::default());
+        let budget = Budget::new(parent.clone()).unwrap();
+        if parent_failure {
+            parent.fail();
+        } else {
+            budget.state.failed.store(true, Ordering::SeqCst);
+        }
+        assert!(matches!(
+            budget.run(|| panic!("must not enter already failed work")),
+            Err(PageFault::Bounds)
+        ));
+        assert!(parent.failed());
+        assert_eq!(budget.state.generation.load(Ordering::SeqCst), 0);
+    }
 }
 #[test]
 fn checked_terms_match_valid_schema_formula_and_pinned_layout_assumptions() {

@@ -93,7 +93,7 @@ fn current(kind: CredentialKind) -> CurrentCredential {
     CurrentCredential {
         uid: [1; 33],
         credential: EntityId::from_bytes(id(c)).unwrap(),
-        owner: EntityId::from_bytes(id(o)).unwrap(),
+        owner: EntityId::from_bytes(id(o)).unwrap().into_bytes(),
         role: Role::OWNER,
         kind,
         expires_at_micros: 100,
