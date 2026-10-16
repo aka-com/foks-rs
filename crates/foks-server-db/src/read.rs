@@ -1497,8 +1497,9 @@ mod tests {
     fn request_snapshot_keeps_repository_reads_on_one_concurrent_view() {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("snapshot.sqlite");
-        let setup = Connection::open(&path).unwrap();
+        let setup = crate::Database::open(&path, Default::default()).unwrap();
         setup
+            .connection
             .execute_batch(
                 "PRAGMA journal_mode = WAL;
                  CREATE TABLE value(version INTEGER NOT NULL);
@@ -1506,11 +1507,7 @@ mod tests {
             )
             .unwrap();
         drop(setup);
-
-        let database = ReadDatabase {
-            connection: Connection::open(&path).unwrap(),
-            config: crate::Config::default(),
-        };
+        let database = ReadDatabase::open(&path, Default::default()).unwrap();
         let (read_sender, read_receiver) = std::sync::mpsc::sync_channel(1);
         let (commit_sender, commit_receiver) = std::sync::mpsc::sync_channel(1);
         let writer = std::thread::spawn(move || {

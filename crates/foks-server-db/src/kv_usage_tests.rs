@@ -101,8 +101,11 @@ fn schema(c: &Connection) -> Vec<(String, String, Option<String>)> {
     .unwrap()
 }
 fn downgrade(c: &Connection) {
-    c.execute_batch(include_str!("../tests/fixtures/remove_kv_usage.sql"))
-        .unwrap();
+    c.execute_batch(concat!(
+        include_str!("../tests/fixtures/remove_read_dependency.sql"),
+        include_str!("../tests/fixtures/remove_kv_usage.sql")
+    ))
+    .unwrap();
     c.pragma_update(None, "user_version", 57).unwrap();
 }
 fn upload(c: &Connection, n: u64) {

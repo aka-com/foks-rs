@@ -58,6 +58,13 @@ fn bootstrap_input() -> BootstrapInput {
 // tests, rather than changing only user_version on the current schema.
 fn predecessor(connection: &Connection, version: i64) {
     assert!((43..=SCHEMA_VERSION).contains(&version));
+    if version <= 58 {
+        connection
+            .execute_batch(include_str!(
+                "../../../../foks-server-db/tests/fixtures/remove_read_dependency.sql"
+            ))
+            .unwrap();
+    }
     if version <= 57 {
         connection
             .execute_batch(include_str!(
@@ -518,4 +525,51 @@ fn retention_accepts_supported_prior_schemas_and_preserves_retained_artifacts() 
     let before = snapshot(root.path());
     assert!(super::enforce_retention(root.path(), 1, &Config::default()).is_err());
     assert_eq!(snapshot(root.path()), before);
+}
+
+#[test]
+fn restore_rotates_private_read_identity_and_reopen_preserves_it() {
+    let fixture = Fixture::new();
+    let temporary = tempfile::tempdir().unwrap();
+    let backup_root = temporary.path().join("backup");
+    let artifacts = fixture.backup(&backup_root);
+    let original = ReadDatabase::open(&artifacts.database, Config::default())
+        .unwrap()
+        .read_dependency()
+        .unwrap();
+    let before = snapshot(&backup_root);
+    let mut previous = original;
+    for index in 0..2 {
+        let destination = temporary.path().join(format!("restore-{index}"));
+        let database = destination.join("server.sqlite");
+        restore_backup(
+            &artifacts,
+            &database,
+            destination.join("keys"),
+            Config::default(),
+        )
+        .unwrap();
+        let reader = ReadDatabase::open(&database, Config::default()).unwrap();
+        let restored = reader.read_dependency().unwrap();
+        assert_ne!(restored.incarnation, original.incarnation);
+        assert_ne!(restored.incarnation, previous.incarnation);
+        assert_eq!(restored.revision, 1);
+        assert!(matches!(
+            reader
+                .snapshot()
+                .unwrap()
+                .require_read_dependency(&original),
+            Err(foks_server_db::Error::ReadDependencyChanged)
+        ));
+        drop(reader);
+        assert_eq!(
+            Database::open(&database, Config::default())
+                .unwrap()
+                .read_dependency()
+                .unwrap(),
+            restored
+        );
+        assert_eq!(snapshot(&backup_root), before);
+        previous = restored;
+    }
 }

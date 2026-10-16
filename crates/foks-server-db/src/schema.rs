@@ -4,13 +4,15 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 pub const APPLICATION_ID: i64 = 0x464f_4b53;
-pub const SCHEMA_VERSION: i64 = 58;
+pub const SCHEMA_VERSION: i64 = 59;
 #[path = "schema/chunk_incarnations.rs"]
 mod chunk_incarnations;
 #[path = "schema/kv_current.rs"]
 mod kv_current;
 #[path = "schema/kv_usage.rs"]
 mod kv_usage;
+#[path = "schema/read_dependency.rs"]
+pub(crate) mod read_dependency;
 
 const SCHEMA: &str = concat!(
     include_str!("schema/core.sql"),
@@ -40,6 +42,28 @@ const SCHEMA: &str = concat!(
     include_str!("schema/expiry_indexes.sql"),
 );
 
+fn create_domain_schema(connection: &rusqlite::Transaction<'_>) -> Result<()> {
+    connection.execute_batch(SCHEMA)?;
+    chunk_incarnations::migrate(connection)?;
+    connection.execute_batch(include_str!("schema/chunk_authority.sql"))?;
+    connection.execute_batch(include_str!("schema/chunk_publication.sql"))?;
+    kv_current::migrate(connection)?;
+    connection.execute_batch(include_str!("schema/kv_historical.sql"))?;
+    kv_usage::migrate(connection)?;
+    Ok(())
+}
+
+/// Non-serving, in-memory DDL reference. Its fixed coordinate is never published
+/// or returned to callers; reopening a real store does not require fresh entropy.
+pub(crate) fn reference_connection() -> Result<Connection> {
+    let mut connection = Connection::open_in_memory()?;
+    let transaction = connection.transaction()?;
+    create_domain_schema(&transaction)?;
+    read_dependency::install(&transaction, &[1; 32])?;
+    transaction.commit()?;
+    Ok(connection)
+}
+
 pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
     let application_id: i64 =
         connection.pragma_query_value(None, "application_id", |row| row.budgeted_get(0))?;
@@ -47,26 +71,22 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
         connection.pragma_query_value(None, "user_version", |row| row.budgeted_get(0))?;
     if application_id == 0 && version == 0 {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(SCHEMA)?;
-        chunk_incarnations::migrate(&transaction)?;
-        transaction.execute_batch(include_str!("schema/chunk_authority.sql"))?;
-        transaction.execute_batch(include_str!("schema/chunk_publication.sql"))?;
-        kv_current::migrate(&transaction)?;
-        transaction.execute_batch(include_str!("schema/kv_historical.sql"))?;
-        kv_usage::migrate(&transaction)?;
+        create_domain_schema(&transaction)?;
+        read_dependency::migrate(&transaction)?;
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        crate::read_dependency::verify_in_transaction(&transaction)?;
         transaction.commit()?;
         return Ok(());
     }
-    if application_id == APPLICATION_ID && matches!(version, 43..=57) {
+    if application_id == APPLICATION_ID && matches!(version, 43..=58) {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Recheck under the write lock: another opener may already have upgraded.
         let application_id =
             transaction.pragma_query_value(None, "application_id", |r| r.budgeted_get(0))?;
         let version =
             transaction.pragma_query_value(None, "user_version", |r| r.budgeted_get(0))?;
-        if application_id == APPLICATION_ID && matches!(version, 43..=57) {
+        if application_id == APPLICATION_ID && matches!(version, 43..=58) {
             if version <= 47 {
                 if version == 43 {
                     transaction.execute_batch(
@@ -154,11 +174,15 @@ pub(crate) fn initialize(connection: &mut Connection) -> Result<()> {
             if version <= 56 {
                 transaction.execute_batch(include_str!("schema/kv_historical.sql"))?;
             }
-            kv_usage::migrate(&transaction)?;
+            if version <= 57 {
+                kv_usage::migrate(&transaction)?;
+            }
+            read_dependency::migrate(&transaction)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         } else {
             validate(application_id, version)?;
         }
+        crate::read_dependency::verify_in_transaction(&transaction)?;
         transaction.commit()?;
         return Ok(());
     }

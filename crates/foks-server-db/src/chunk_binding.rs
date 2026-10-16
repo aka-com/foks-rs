@@ -398,6 +398,7 @@ mod tests {
         insert(&db, 0);
         db.connection
             .execute_batch(concat!(
+                include_str!("../tests/fixtures/remove_read_dependency.sql"),
                 include_str!("../tests/fixtures/remove_kv_usage.sql"),
                 include_str!("../tests/fixtures/remove_kv_current.sql")
             ))
@@ -434,6 +435,7 @@ mod tests {
         db.activate_chunk_storage_binding(&original).unwrap();
         db.connection
             .execute_batch(concat!(
+                include_str!("../tests/fixtures/remove_read_dependency.sql"),
                 include_str!("../tests/fixtures/remove_kv_usage.sql"),
                 include_str!("../tests/fixtures/remove_kv_current.sql")
             ))

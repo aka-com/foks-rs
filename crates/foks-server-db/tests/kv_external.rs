@@ -74,7 +74,11 @@ fn mixed_uploads_preserve_exact_retries_usage_and_charge_through_conversion() {
         exact_chunk: &first,
         now: 1,
     };
+    let before = test.database.read_dependency().unwrap();
     test.database.preflight_kv_file_chunk(&mutation).unwrap();
+    // Preflight rolls back the upload, but namespace admission is an earlier
+    // equal-value UPSERT; conservative hooks intentionally invalidate on it.
+    assert!(test.database.read_dependency().unwrap().revision > before.revision);
     assert_eq!(totals(&c), (0, 0, 0, 0));
     assert_eq!(
         c.query_row("SELECT count(*) FROM kv_file_uploads", [], |r| r
@@ -82,9 +86,11 @@ fn mixed_uploads_preserve_exact_retries_usage_and_charge_through_conversion() {
             .unwrap(),
         0
     );
+    let before = test.database.read_dependency().unwrap();
     test.database
         .publish_kv_file_chunk_external(&mutation, &digest(&first))
         .unwrap();
+    assert!(test.database.read_dependency().unwrap().revision > before.revision);
     test.database
         .publish_kv_file_chunk_external(&mutation, &digest(&first))
         .unwrap();

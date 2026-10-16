@@ -245,6 +245,7 @@ fn membership_rollback_and_foreign_parties_do_not_invalidate_or_create_inboxes()
 fn legacy(f: &mut Fixture) {
     f.db.connection
         .execute_batch(concat!(
+            include_str!("../../../tests/fixtures/remove_read_dependency.sql"),
             include_str!("../../../tests/fixtures/remove_kv_usage.sql"),
             include_str!("../../../tests/fixtures/remove_kv_current.sql")
         ))

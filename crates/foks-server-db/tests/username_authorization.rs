@@ -165,14 +165,18 @@ fn database_username_mutations_recheck_role_and_preserve_committed_receipts() {
         Err(Error::AuthorizationChanged)
     ));
     mutation.authenticated_credential_id = &[4; 33];
+    let before = fixture.database.read_dependency().unwrap();
     fixture.database.commit_user_mutation(&mutation).unwrap();
+    assert!(fixture.database.read_dependency().unwrap().revision > before.revision);
     sql.execute("UPDATE devices SET active=0,role_type=1", [])
         .unwrap();
+    let revoked = fixture.database.read_dependency().unwrap();
     // Historical success is a receipt lookup, not permission to author a new mutation.
     assert_eq!(
         fixture.database.commit_user_mutation(&mutation).unwrap(),
         b""
     );
+    assert_eq!(fixture.database.read_dependency().unwrap(), revoked);
     assert_eq!(
         sql.query_row("SELECT seqno FROM user_chain_heads", [], |r| r
             .get::<_, i64>(0))

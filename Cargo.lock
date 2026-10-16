@@ -2214,6 +2214,7 @@ dependencies = [
  "foks-merkle-store",
  "foks-proto",
  "foks-snowpack",
+ "getrandom 0.4.3",
  "libc",
  "rusqlite",
  "sha2 0.11.0",

@@ -758,6 +758,7 @@ mod tests {
         reference(&db, &[1; 32]);
         db.connection
             .execute_batch(concat!(
+                include_str!("../tests/fixtures/remove_read_dependency.sql"),
                 include_str!("../tests/fixtures/remove_kv_usage.sql"),
                 include_str!("../tests/fixtures/remove_kv_current.sql")
             ))
@@ -824,6 +825,7 @@ mod tests {
         reference(&db, &[1; 32]);
         db.connection
             .execute_batch(concat!(
+                include_str!("../tests/fixtures/remove_read_dependency.sql"),
                 include_str!("../tests/fixtures/remove_kv_usage.sql"),
                 include_str!("../tests/fixtures/remove_kv_current.sql")
             ))

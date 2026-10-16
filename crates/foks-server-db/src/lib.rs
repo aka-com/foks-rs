@@ -40,6 +40,11 @@ mod merkle;
 mod names;
 mod passphrases;
 mod read;
+mod read_dependency;
+pub use read_dependency::{ReadDependency, ReadDependencySchema};
+pub use schema::read_dependency::{
+    READ_DEPENDENCY_SCHEMA, READ_DEPENDENCY_TABLES, READ_DEPENDENCY_TRIGGERS,
+};
 mod realtime;
 mod recovery;
 mod schema;

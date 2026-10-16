@@ -52,8 +52,15 @@ fn incomplete_uploads_are_hidden_and_final_chunks_replay_exactly() {
         exact_chunk: b"first",
         now: 100,
     };
+    let before = test.database.read_dependency().unwrap();
     test.database.put_kv_file_chunk(&first).unwrap();
+    let published = test.database.read_dependency().unwrap();
+    assert!(published.revision > before.revision);
     test.database.put_kv_file_chunk(&first).unwrap();
+    // Namespace admission performs a real equal-value UPSERT even on replay.
+    let replayed = test.database.read_dependency().unwrap();
+    assert_eq!(replayed.incarnation, published.incarnation);
+    assert!(replayed.revision > published.revision);
     let reader = ReadDatabase::open(&test.path, foks_server_db::Config::default()).unwrap();
     assert!(reader.kv_file(&UID, &file).unwrap().is_none());
     assert!(reader.kv_file_chunk(&UID, &file, 0).unwrap().is_none());
@@ -92,8 +99,15 @@ fn incomplete_uploads_are_hidden_and_final_chunks_replay_exactly() {
         exact_chunk: b"final",
         now: 200,
     };
+    let before = test.database.read_dependency().unwrap();
     test.database.put_kv_file_chunk(&final_chunk).unwrap();
+    let published = test.database.read_dependency().unwrap();
+    assert!(published.revision > before.revision);
     test.database.put_kv_file_chunk(&final_chunk).unwrap();
+    // Namespace admission performs a real equal-value UPSERT even on replay.
+    let replayed = test.database.read_dependency().unwrap();
+    assert_eq!(replayed.incarnation, published.incarnation);
+    assert!(replayed.revision > published.revision);
     assert_eq!(
         reader.kv_file(&UID, &file).unwrap().unwrap().exact_metadata,
         b"metadata"

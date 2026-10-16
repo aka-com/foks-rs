@@ -64,6 +64,7 @@ pub(super) fn legacy(
 }
 fn downgrade(c: &Connection) {
     c.execute_batch(concat!(
+        include_str!("../tests/fixtures/remove_read_dependency.sql"),
         include_str!("../tests/fixtures/remove_kv_usage.sql"),
         include_str!("../tests/fixtures/remove_kv_historical.sql")
     ))
@@ -74,7 +75,7 @@ fn schema(c: &Connection) -> Vec<(String, String, Option<String>)> {
     c.prepare("SELECT type,name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_stat%' ORDER BY type,name").unwrap().query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
 }
 fn data(c: &Connection) -> Vec<(String, Vec<String>)> {
-    let names:Vec<String>=c.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").unwrap().query_map([],|r|r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    let names:Vec<String>=c.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name!='metadata_read_dependency' AND name NOT LIKE 'sqlite_%' ORDER BY name").unwrap().query_map([],|r|r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
     names
         .into_iter()
         .map(|name| {
