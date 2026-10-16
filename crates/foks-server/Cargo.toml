@@ -9,7 +9,7 @@ description = "Standalone single-host FOKS v0.1.9 server"
 celld-proof = []
 
 [dependencies]
-nix = { version = "0.30", default-features = false, features = ["time"] }
+nix = { version = "0.30", default-features = false, features = ["time", "fs", "dir"] }
 base64 = { workspace = true }
 foks-oidc = { workspace = true }
 serde_json = { workspace = true }
@@ -20,10 +20,12 @@ url = "2"
 chacha20poly1305 = { workspace = true }
 clap = { workspace = true }
 foks-crypto = { workspace = true }
+foks-local-deadline = { workspace = true, features = ["clock"] }
 foks-merkle-store = { workspace = true }
 foks-metadata-core = { workspace = true }
 foks-proto = { workspace = true }
 foks-rpc = { workspace = true }
+foks-schema-contract = { workspace = true }
 foks-server-db = { workspace = true }
 foks-snowpack = { workspace = true }
 foks-verify = { workspace = true }
@@ -36,7 +38,7 @@ sha2 = { workspace = true }
 reqwest = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
-rusqlite = { workspace = true }
+rusqlite = { workspace = true, features = ["limits", "hooks"] }
 rustls-pki-types = { workspace = true }
 signal-hook = { workspace = true }
 serde = { workspace = true }
