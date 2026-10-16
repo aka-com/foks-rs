@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Prepare and qualify pinned A1/A2 inputs; no command downloads dependencies.
+"""Prepare and qualify pinned A1/A2 inputs and the closed A3a node baseline.
 
 verify checks only the original upstream archive. prepare also applies the closed
 A2 patch in private staging. assets accepts the two reviewed local V8 assets.
-Graph collection and build are explicit later actions after source/lock review,
+No command downloads dependencies. Graph/build/runtime are explicit actions after review,
 and share one fail-closed process-group build slot.
 """
 import argparse
+import ast
 import contextlib
 import gzip
 import hashlib
@@ -16,6 +17,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -31,6 +33,19 @@ CHUNK = 64 * 1024
 A1 = "a1-library-identity"
 A2 = "a2-physical-lifetimes"
 A2_BASE = "8e31944080e03651caaa3512169fe468f8375342"
+NODE = "a3a-canonical-node-baseline"
+NODE_CLAIM = "a3a-observed-canonical-handoff-restore-preserve"
+NODE_BASE = "dca38eecb08263a3594f70025df7a309ed3682a5"
+NODE_PROFILE_SHA256 = "af0c4f23c08fd2c1d17126c0b7c2d68720ecd275840945de444eae7d46bcc866"
+NODE_SOURCE_PATHS = ("prepare-runtime.py", "check_graph.py", "test_prepare_runtime.py", "test_check_graph.py", "node.lock.json", "run-node.py", "test_run_node.py")
+NODE_ROLES = ("s3", "public_ac", "internal_ac", "public_b", "internal_b")
+NODE_POLICY = '(version 1)\n(allow default)\n(deny network*)\n(allow network-bind (local tcp "localhost:*"))\n' + "".join(
+    "(allow network-" + direction + " " + " ".join('(' + address + ' tcp "localhost:{' + role + '}")' for role in NODE_ROLES) + ")\n"
+    for direction, address in (("inbound", "local"), ("outbound", "remote"))
+)
+NODE_LIMITS = {"clock_drift_ns": 1_000_000_000, "diagnostic_bytes": 65536, "evidence_bytes": 256 * 1024**2, "log_bytes": 32 * 1024**2, "maximum_nodes": 2, "node_directories": 3, "node_incarnations": 4, "report_bytes": 2 * 1024**2, "request_seconds": 15, "scenario_seconds": 600, "shutdown_seconds": 50, "startup_seconds": 120, "successful_shutdown_ns": 35_000_000_000}
+FIXTURE_LIMITS = {"bytes": 1024**3, "canonical_json_bytes": 8 * 1024**2, "entries": 25000, "native_files": 150, "symlink_hops": 32}
+MACHO_MAGICS = {bytes.fromhex(value) for value in ("feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca")}
 PATCH_PATH = "patches/0001-guarded-physical-lifetimes.patch"
 PATCH_PATHS = (
     "crates/celld/Cargo.toml", "crates/celld/lib.rs", "crates/celld/pool.rs",
@@ -185,9 +200,9 @@ def patch_series(root, pins):
 
 
 def selected_mode(pins, mode):
-    if mode not in ("identity", "lifecycle") or (mode == "lifecycle" and pins["profile"] != A2):
+    if mode not in ("identity", "lifecycle", "node-baseline") or (mode != "identity" and pins["profile"] != A2):
         fail("unsupported graph/build mode for input profile")
-    return [] if mode == "identity" else ["--features", "lifecycle"]
+    return ["--features", "lifecycle"] if mode == "lifecycle" else []
 
 
 def inventory(root, pins):
@@ -981,9 +996,11 @@ def finish_group(process, known, events, term_grace, kill_grace):
     return False, observe_children(group, known)
 
 
-def run_owned(argv, cwd, environment, directory, name, slot, timeout, monitor=None, term_grace=3, kill_grace=3):
+def run_owned(argv, cwd, environment, directory, name, slot, timeout, monitor=None, term_grace=3, kill_grace=3, maximum_log_bytes=128 * 1024 * 1024):
     """One process group, direct argv, bounded wait and durable failure evidence."""
     directory = Path(directory)
+    if type(maximum_log_bytes) is not int or not 0 < maximum_log_bytes <= 128 * 1024 * 1024:
+        fail("invalid command log allowance")
     directory.mkdir(parents=True, exist_ok=True)
     record = {"argv": [str(arg) for arg in argv], "cwd": str(cwd), "timeout_seconds": timeout, "events": [], "cleanup_established": False}
     process = None
@@ -1021,7 +1038,7 @@ def run_owned(argv, cwd, environment, directory, name, slot, timeout, monitor=No
                     if refusal:
                         record["reason"] = refusal
                         break
-                if stdout.tell() + stderr.tell() > 128 * 1024 * 1024:
+                if stdout.tell() + stderr.tell() > maximum_log_bytes:
                     record["reason"] = "command log allowance exceeded"
                     break
                 status = process.poll()
@@ -1077,6 +1094,673 @@ def network_command(argv):
     return [str(sandbox), "-p", "(version 1) (allow default) (deny network*)", *map(str, argv)]
 
 
+def closed_fields(value, names, label):
+    if not isinstance(value, dict) or set(value) != set(names):
+        fail("invalid " + label + " fields")
+
+
+def node_json(data):
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                fail("duplicate node JSON field: " + key)
+            value[key] = item
+        return value
+    return json.loads(data, object_pairs_hook=unique, parse_constant=lambda _: fail("nonfinite node JSON number"))
+
+
+def node_hash(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+        fail("invalid node input hash")
+
+
+def node_path(value):
+    if not isinstance(value, str) or not value.startswith("/") or len(value.encode()) > 4096 or any(ord(character) < 32 or ord(character) == 127 for character in value):
+        fail("invalid absolute node input path")
+    if any(part in ("", ".", "..") for part in value.split("/")[1:]):
+        fail("noncanonical node input path")
+
+
+def node_image(value, extra=()):
+    closed_fields(value, ("bytes", "sha256", *extra), "node image")
+    if type(value["bytes"]) is not int or not 0 <= value["bytes"] <= FIXTURE_LIMITS["bytes"]:
+        fail("invalid node image length")
+    node_hash(value["sha256"])
+    if "mode" in extra and (type(value["mode"]) is not int or not 0 <= value["mode"] <= 0o7777):
+        fail("invalid node image mode")
+    if "path" in extra:
+        node_path(value["path"])
+
+
+def validate_node_profile(profile):
+    """Schema checks supplement the exact reviewed whole-profile byte pin."""
+    closed_fields(profile, ("format", "profile", "accepted_a2_commit", "target", "runtime_lock", "patch_series", "source_manifest", "command_profile", "program", "fixture", "launch", "network", "limits", "node_settings"), "node profile")
+    if type(profile["format"]) is not int or profile["format"] != 1 or profile["profile"] != NODE or profile["accepted_a2_commit"] != NODE_BASE or profile["target"] != TARGET or profile["command_profile"] != "outer-ordinary-celld-v1":
+        fail("unsupported node profile identity")
+    for name in ("runtime_lock", "patch_series", "source_manifest"):
+        node_image(profile[name])
+    closed_fields(profile["program"], ("js", "wrangler"), "node program")
+    for image in profile["program"].values():
+        node_image(image)
+    if profile["limits"] != NODE_LIMITS or any(type(value) is not int for value in profile["limits"].values()):
+        fail("node limits differ from reviewed finite policy")
+    network = profile["network"]
+    if network != {"address": "127.0.0.1", "roles": list(NODE_ROLES), "sandbox_executable": "/usr/bin/sandbox-exec", "template": NODE_POLICY}:
+        fail("node network policy changed")
+    launch = profile["launch"]
+    closed_fields(launch, ("bootstrap", "certifi", "controller", "empty_native_directory", "environment", "flags", "moto_module", "process_inspection", "python", "sys_path"), "node launch")
+    if launch["bootstrap"] != "closed-sys-path-runpy-v1" or launch["controller"] != "run-node.py" or launch["empty_native_directory"] != "empty-native-config" or launch["flags"] != ["-I", "-S", "-B"] or launch["moto_module"] != "moto.server":
+        fail("node launch contract changed")
+    for name in ("python", "certifi"):
+        node_path(launch[name])
+    if not isinstance(launch["sys_path"], list) or len(launch["sys_path"]) != 3 or len(set(launch["sys_path"])) != 3:
+        fail("invalid node import path inventory")
+    for path in launch["sys_path"]:
+        node_path(path)
+    inspection = launch["process_inspection"]
+    closed_fields(inspection, ("abi", "backend", "bootstrap", "headers", "library", "library_policy", "limits", "source"), "process inspection")
+    if inspection["backend"] != "darwin-libproc-shortbsdinfo" or inspection["bootstrap"] != "closed-stdlib-literal-v1" or inspection["library"] != "/usr/lib/libproc.dylib" or inspection["library_policy"] != "operating-system-shared-cache":
+        fail("process inspection platform contract changed")
+    expected_abi = {"alignment": 4, "arg": 1, "bytes": 64, "c_int_bytes": 4, "flavor": 13, "uint32_bytes": 4, "uint64_bytes": 8,
+                    "fields": [["pid", 0], ["ppid", 4], ["pgid", 8], ["status", 12], ["comm", 16], ["flags", 32], ["uid", 36], ["gid", 40], ["ruid", 44], ["rgid", 48], ["svuid", 52], ["svgid", 56], ["reserved", 60]],
+                    "statuses": [1, 2, 3, 4, 5]}
+    expected_limits = {"helper_timeout_ns": 3_000_000_000, "pid_capacity": 4096, "stderr_bytes": 65536, "stdout_bytes": 65536}
+    # Canonical encodings distinguish bool from int even in nested ABI rows.
+    if json.dumps(inspection["abi"], sort_keys=True) != json.dumps(expected_abi, sort_keys=True) or json.dumps(inspection["limits"], sort_keys=True) != json.dumps(expected_limits, sort_keys=True):
+        fail("process inspection ABI or bounds changed")
+    node_image(inspection["source"])
+    if not 0 < inspection["source"]["bytes"] <= 65536:
+        fail("process inspection source bound")
+    header_root = "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/"
+    header_names = ["libproc.h", "sys/proc_info.h", "sys/param.h", "sys/proc.h"]
+    if not isinstance(inspection["headers"], list) or len(inspection["headers"]) != len(header_names):
+        fail("process inspection header roster")
+    for header, name in zip(inspection["headers"], header_names):
+        node_image(header, ("path",))
+        if header["path"] != header_root + name or not 0 < header["bytes"] <= 131072:
+            fail("process inspection header identity/bound")
+    for environment in (launch["environment"], profile["node_settings"]):
+        if not isinstance(environment, dict) or any(not isinstance(name, str) or not isinstance(value, str) or "\0" in name + value for name, value in environment.items()):
+            fail("invalid node environment")
+    fixture = profile["fixture"]
+    closed_fields(fixture, ("aliases", "bytecode", "external_native", "inventory_limits", "native_roster", "non_os_load_edges", "platform", "required_absence", "startup", "trees", "versions"), "node fixture")
+    if fixture["inventory_limits"] != FIXTURE_LIMITS or any(type(value) is not int for value in fixture["inventory_limits"].values()):
+        fail("fixture inventory bounds changed")
+    for name, count in (("trees", 2), ("external_native", 8), ("aliases", 12), ("native_roster", 95), ("non_os_load_edges", 9), ("required_absence", 3), ("startup", 15)):
+        if not isinstance(fixture[name], list) or len(fixture[name]) != count:
+            fail("fixture inventory count changed: " + name)
+    labels = set()
+    for tree in fixture["trees"]:
+        closed_fields(tree, ("bytes", "entries", "files", "label", "path", "sha256"), "fixture tree")
+        node_path(tree["path"])
+        node_hash(tree["sha256"])
+        if tree["label"] not in ("venv", "stdlib") or tree["label"] in labels or any(type(tree[key]) is not int or tree[key] < 0 for key in ("bytes", "entries", "files")):
+            fail("invalid fixture tree counts/label")
+        labels.add(tree["label"])
+    if fixture["bytecode"] != {"stdlib": 398, "venv": 448} or any(type(value) is not int for value in fixture["bytecode"].values()):
+        fail("fixture bytecode inventory changed")
+    if fixture["versions"] != {"boto3": "1.43.114", "botocore": "1.43.114", "moto": "5.1.17", "python": "3.14.3"}:
+        fail("fixture version inventory changed")
+    for native in [*fixture["external_native"], fixture["platform"]]:
+        node_image(native, ("mode", "path"))
+    for alias in fixture["aliases"]:
+        closed_fields(alias, ("path", "resolved", "symlink_chain", "target_sha256"), "fixture alias")
+        node_path(alias["path"])
+        node_path(alias["resolved"])
+        node_hash(alias["target_sha256"])
+        if not isinstance(alias["symlink_chain"], list) or len(alias["symlink_chain"]) > 32:
+            fail("invalid alias link chain")
+        for link in alias["symlink_chain"]:
+            closed_fields(link, ("path", "target"), "fixture alias link")
+            node_path(link["path"])
+            if not isinstance(link["target"], str) or not link["target"] or len(link["target"].encode()) > 4096:
+                fail("invalid alias target")
+    for key in ("native_roster", "required_absence"):
+        if len(fixture[key]) != len(set(fixture[key])):
+            fail("duplicate fixture path")
+        for path in fixture[key]:
+            node_path(path)
+    for edge in fixture["non_os_load_edges"]:
+        closed_fields(edge, ("from", "name", "resolved"), "native load edge")
+        for path in edge.values():
+            node_path(path)
+    for candidate in fixture["startup"]:
+        if not isinstance(candidate, dict):
+            fail("invalid fixture startup record")
+        if candidate.get("required") == "regular-file":
+            node_image(candidate, ("path", "required"))
+        elif candidate.get("required") == "absent-including-dangling-symlink":
+            closed_fields(candidate, ("path", "required"), "startup absence")
+            node_path(candidate["path"])
+        else:
+            fail("unknown startup input requirement")
+
+
+def node_program(root):
+    path = root / "run-node.py"
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024:
+        fail("invalid node controller source")
+    try:
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+    except SyntaxError as error:
+        raise ValueError("node controller source is not parseable") from error
+    selected = {"WORKER_JS": "js", "WRANGLER_JSON": "wrangler"}
+    values = {}
+    # Only literal top-level assignments are admissible. ast.literal_eval is
+    # deliberately unnecessary: no operators, calls or concatenation execute.
+    for statement in tree.body:
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target] if isinstance(statement, ast.AnnAssign) else []
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id in selected:
+                if len(targets) != 1 or target.id in values or not isinstance(statement.value, ast.Constant) or not isinstance(statement.value.value, bytes):
+                    fail("node program must be a unique literal byte assignment")
+                data = statement.value.value
+                if len(data) > 65536:
+                    fail("node program exceeds fixed allowance")
+                values[target.id] = {"bytes": len(data), "sha256": digest(data)}
+    if set(values) != set(selected):
+        fail("missing literal node program")
+    return {selected[name]: value for name, value in values.items()}
+
+
+def node_process_inspector(root):
+    path = root / "run-node.py"
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024:
+        fail("invalid node controller source")
+    try:
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+    except SyntaxError as error:
+        raise ValueError("node controller source is not parseable") from error
+    value = None
+    for statement in tree.body:
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target] if isinstance(statement, ast.AnnAssign) else []
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == "PROCESS_INSPECTOR":
+                if len(targets) != 1 or value is not None or not isinstance(statement.value, ast.Constant) or not isinstance(statement.value.value, str):
+                    fail("process inspector must be a unique literal string assignment")
+                value = statement.value.value.encode("utf-8")
+    if value is None or not 0 < len(value) <= 65536:
+        fail("missing or oversized literal process inspector")
+    return {"bytes": len(value), "sha256": digest(value)}
+
+
+def node_process_inputs(root, profile):
+    inspection = profile["launch"]["process_inspection"]
+    actual_source = node_process_inspector(root)
+    if actual_source != inspection["source"]:
+        fail("process inspector literal differs from reviewed input")
+    headers = []
+    for expected in inspection["headers"]:
+        actual, _ = stable_fixture_file(expected["path"], expected["bytes"], expected)
+        headers.append({"path": expected["path"], "bytes": actual["bytes"], "sha256": actual["sha256"]})
+    return {"source": actual_source, "headers": headers, "library": inspection["library"], "library_policy": inspection["library_policy"]}
+
+
+def load_node_profile(root=ROOT):
+    path = root / "node.lock.json"
+    profile = read_json(path, 128 * 1024)
+    validate_node_profile(profile)
+    # Paths, aliases, launch whitelist and all data rows are a closed immutable
+    # qualification input, not user-supplied configuration. Changing them needs
+    # a new source-reviewed pin as well as passing the structural checks above.
+    if file_hash(path) != NODE_PROFILE_SHA256:
+        fail("node profile differs from reviewed immutable bytes")
+    for name, relative in (("runtime_lock", "runtime.lock.json"), ("patch_series", "patches/series.json"), ("source_manifest", "runtime/source-manifest.json")):
+        checked_file(root / relative, profile[name])
+    if node_program(root) != profile["program"]:
+        fail("node program bytes differ from reviewed input")
+    if node_process_inspector(root) != profile["launch"]["process_inspection"]["source"]:
+        fail("process inspector literal differs from reviewed input")
+    return profile
+
+
+def resolve_fixture_path(path, maximum_hops=32):
+    """Finite component-wise resolution records opt/venv aliases as well."""
+    path = Path(path)
+    if not path.is_absolute():
+        fail("fixture resolution requires an absolute path")
+    pending = list(path.parts[1:])
+    current = Path("/")
+    chain, seen = [], set()
+    while pending:
+        part = pending.pop(0)
+        if part in ("", "."):
+            continue
+        if part == "..":
+            current = current.parent
+            continue
+        candidate = current / part
+        try:
+            status = candidate.lstat()
+        except FileNotFoundError:
+            # No traversal of an absent subtree. Canonicalize the remaining
+            # lexical suffix, matching resolve(strict=False) for these pins.
+            return str(Path(os.path.normpath(str(candidate.joinpath(*pending))))), chain, False
+        if stat.S_ISLNK(status.st_mode):
+            marker = (str(candidate), tuple(pending))
+            if marker in seen or len(chain) >= maximum_hops:
+                fail("fixture symlink cycle or hop limit")
+            seen.add(marker)
+            target = os.readlink(candidate)
+            target.encode("utf-8", "strict")
+            if not target or len(target.encode()) > 4096:
+                fail("invalid fixture symlink target")
+            chain.append({"path": str(candidate), "target": target})
+            parts = list(PurePosixPath(target).parts)
+            if target.startswith("/"):
+                current = Path("/")
+                parts = parts[1:]
+            pending = parts + pending
+        else:
+            current = candidate
+    return str(current), chain, True
+
+
+def fixture_stat_identity(status):
+    return (status.st_dev, status.st_ino, status.st_mode, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
+
+
+def stable_fixture_file(path, maximum=1024**3, expected=None):
+    """Hash actual regular bytes and detect replacement/change around the read."""
+    path = Path(path)
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        fail("fixture input is not a regular nonsymlink file: " + str(path))
+    if type(maximum) is not int or not 0 <= before.st_size <= maximum:
+        fail("fixture file exceeds admitted length before read")
+    if expected is not None and (before.st_size != expected["bytes"] or ("mode" in expected and stat.S_IMODE(before.st_mode) != expected["mode"])):
+        fail("fixture input size/mode mismatch before read")
+    checksum = hashlib.sha256()
+    count, first = 0, b""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as stream:
+        if fixture_stat_identity(os.fstat(stream.fileno())) != fixture_stat_identity(before):
+            fail("fixture file replaced before read")
+        while chunk := stream.read(CHUNK):
+            if not first:
+                first = chunk[:4]
+            count += len(chunk)
+            if count > before.st_size:
+                fail("fixture file grew during read")
+            checksum.update(chunk)
+        if fixture_stat_identity(os.fstat(stream.fileno())) != fixture_stat_identity(before):
+            fail("fixture file changed during read")
+    if count != before.st_size or fixture_stat_identity(path.lstat()) != fixture_stat_identity(before):
+        fail("fixture file replaced or resized during read")
+    result = {"bytes": count, "mode": stat.S_IMODE(before.st_mode), "sha256": checksum.hexdigest()}
+    if expected is not None and result["sha256"] != expected["sha256"]:
+        fail("fixture input hash mismatch")
+    return result, first in MACHO_MAGICS
+
+
+def fixture_tree(root, allowance):
+    root = Path(root)
+    resolved, chain, exists = resolve_fixture_path(root, allowance["symlink_hops"])
+    if not exists or chain or resolved != str(root) or not stat.S_ISDIR(root.lstat().st_mode):
+        fail("fixture tree root changed or is aliased")
+
+    def roster():
+        result = {}
+        pending = [root]
+        while pending:
+            directory = pending.pop()
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    relative = relative_name(path.relative_to(root).as_posix())
+                    if relative in result or len(result) >= allowance["entries"]:
+                        fail("fixture entry count exceeds allowance")
+                    status = path.lstat()
+                    if not any(check(status.st_mode) for check in (stat.S_ISDIR, stat.S_ISREG, stat.S_ISLNK)):
+                        fail("special file in fixture tree")
+                    result[relative] = fixture_stat_identity(status)
+                    if stat.S_ISDIR(status.st_mode):
+                        pending.append(path)
+        return result
+
+    root_before = fixture_stat_identity(root.lstat())
+    before = roster()
+    rows, native = [], []
+    total, files, bytecode = 0, 0, 0
+    for relative, identity in sorted(before.items()):
+        path = root / relative
+        status = path.lstat()
+        if fixture_stat_identity(status) != identity:
+            fail("fixture roster changed during scan")
+        if stat.S_ISLNK(status.st_mode):
+            target = os.readlink(path)
+            target.encode("utf-8", "strict")
+            resolved, _, exists = resolve_fixture_path(path, allowance["symlink_hops"])
+            rows.append({"path": relative, "kind": "symlink", "target": target, "resolved": resolved, "exists": exists})
+        elif stat.S_ISDIR(status.st_mode):
+            rows.append({"path": relative, "kind": "directory", "mode": stat.S_IMODE(status.st_mode)})
+        else:
+            if total + status.st_size > allowance["bytes"]:
+                fail("fixture logical bytes exceed allowance")
+            image, is_native = stable_fixture_file(path, allowance["bytes"] - total)
+            rows.append({"path": relative, "kind": "file", **image})
+            total += image["bytes"]
+            files += 1
+            bytecode += relative.endswith(".pyc")
+            if is_native:
+                native.append(str(path))
+                if len(native) > allowance["native_files"]:
+                    fail("fixture native count exceeds allowance")
+    if roster() != before or fixture_stat_identity(root.lstat()) != root_before:
+        fail("fixture roster changed during scan")
+    encoded = json.dumps(rows, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    if len(encoded) > allowance["canonical_json_bytes"]:
+        fail("fixture inventory JSON exceeds allowance")
+    return {"entries": len(rows), "files": files, "bytes": total, "sha256": digest(encoded)}, encoded, native, bytecode
+
+
+def fixture_absent(path):
+    try:
+        Path(path).lstat()
+    except FileNotFoundError:
+        return
+    fail("unexpected fixture startup/import input: " + str(path))
+
+
+def verify_node_fixture(profile, evidence_directory=None):
+    fixture = profile["fixture"]
+    allowance = dict(fixture["inventory_limits"])
+    trees, native = [], []
+    for expected in fixture["trees"]:
+        actual, encoded, found, bytecode = fixture_tree(expected["path"], allowance)
+        if actual != {key: expected[key] for key in ("entries", "files", "bytes", "sha256")} or bytecode != fixture["bytecode"][expected["label"]]:
+            fail("complete fixture tree identity changed: " + expected["label"])
+        if evidence_directory is not None:
+            with (Path(evidence_directory) / (expected["label"] + "-inventory.json")).open("xb") as output:
+                output.write(encoded)
+        trees.append({**actual, "label": expected["label"], "path": expected["path"]})
+        native.extend(found)
+        for key, amount in (("entries", actual["entries"]), ("bytes", actual["bytes"]), ("canonical_json_bytes", len(encoded)), ("native_files", len(found))):
+            allowance[key] -= amount
+    for expected in [*fixture["external_native"], fixture["platform"]]:
+        if expected is not fixture["platform"]:
+            allowance["bytes"] -= expected["bytes"]
+            if allowance["bytes"] < 0:
+                fail("combined fixture bytes exceed allowance")
+        actual, is_native = stable_fixture_file(expected["path"], expected["bytes"], expected)
+        if actual != {key: expected[key] for key in ("bytes", "mode", "sha256")}:
+            fail("native/platform fixture input changed")
+        if expected is not fixture["platform"]:
+            if not is_native:
+                fail("expected native fixture is not Mach-O")
+            native.append(expected["path"])
+    if len(native) > fixture["inventory_limits"]["native_files"] or sorted(native) != fixture["native_roster"]:
+        fail("native fixture roster changed")
+    for alias in fixture["aliases"]:
+        resolved, chain, exists = resolve_fixture_path(alias["path"], allowance["symlink_hops"])
+        expected = next((item for item in fixture["external_native"] if item["path"] == resolved), None)
+        if not exists or resolved != alias["resolved"] or chain != alias["symlink_chain"] or expected is None or stable_fixture_file(resolved, expected["bytes"], expected)[0]["sha256"] != alias["target_sha256"]:
+            fail("fixture executable/load alias changed")
+    aliases = {item["path"]: item["resolved"] for item in fixture["aliases"]}
+    for edge in fixture["non_os_load_edges"]:
+        if edge["from"] not in native or edge["resolved"] not in native or aliases.get(edge["name"]) != edge["resolved"]:
+            fail("unbound non-OS native load edge")
+    for path in fixture["required_absence"]:
+        fixture_absent(path)
+    for entry in fixture["startup"]:
+        if entry["required"] == "absent-including-dangling-symlink":
+            fixture_absent(entry["path"])
+        else:
+            actual, _ = stable_fixture_file(entry["path"], entry["bytes"], entry)
+            if any(actual[name] != entry[name] for name in ("bytes", "sha256")):
+                fail("fixture startup input changed")
+    verify_platform_null()
+    # Return immutable evidence, not thousands of retained per-file rows.
+    return {"trees": trees, "supplements_sha256": digest(json.dumps({key: value for key, value in fixture.items() if key != "trees"}, sort_keys=True, separators=(",", ":")).encode()), "native_files": len(native)}
+
+
+def node_inputs(root=ROOT, profile=None, evidence_directory=None):
+    current = load_node_profile(root)
+    if profile is not None and profile != current:
+        fail("node profile changed during qualification")
+    return {"source": {name: stable_fixture_file(root / name, 256 * 1024)[0]["sha256"] for name in NODE_SOURCE_PATHS}, "node_lock_sha256": file_hash(root / "node.lock.json"), "fixture": verify_node_fixture(current, evidence_directory), "process_inspection": node_process_inputs(root, current)}
+
+
+def verify_platform_null():
+    status = Path("/dev/null").lstat()
+    if not stat.S_ISCHR(status.st_mode) or (os.major(status.st_rdev), os.minor(status.st_rdev)) != (3, 2):
+        fail("platform /dev/null is not the pinned Darwin character device 3:2")
+
+
+def validate_node_ports(ports):
+    if not isinstance(ports, dict) or set(ports) != set(NODE_ROLES) or any(type(port) is not int or not 1024 <= port <= 65535 for port in ports.values()) or len(set(ports.values())) != 5:
+        fail("invalid closed node port allocation")
+
+
+def choose_node_ports():
+    with contextlib.ExitStack() as held:
+        ports = {}
+        for role in NODE_ROLES:
+            listener = held.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+            listener.bind(("127.0.0.1", 0))
+            ports[role] = listener.getsockname()[1]
+        validate_node_ports(ports)
+        return ports
+
+
+def node_network_command(argv, ports):
+    validate_node_ports(ports)
+    sandbox = Path("/usr/bin/sandbox-exec")
+    if not sandbox.is_file():
+        fail("reviewed node sandbox launcher unavailable")
+    return [str(sandbox), "-p", NODE_POLICY.format(**ports), *map(str, argv)]
+
+
+def verify_empty_native_directory(directory):
+    path = Path(directory) / "empty-native-config"
+    if path.is_symlink() or not path.is_dir() or any(path.iterdir()):
+        fail("isolated native configuration directory changed")
+
+
+def node_environment(root, profile, directory, ports):
+    validate_node_ports(ports)
+    directory = Path(directory)
+    empty = directory / "empty-native-config"
+    temporary = directory / "tmp"
+    empty.mkdir()
+    temporary.mkdir()
+    verify_empty_native_directory(directory)
+    verify_platform_null()
+    return {**profile["launch"]["environment"], "TMPDIR": str(temporary), "OPENSSL_CONF_INCLUDE": str(empty), "OPENSSL_MODULES": str(empty), "SSL_CERT_DIR": str(empty), "SSL_CERT_FILE": profile["launch"]["certifi"]}
+
+
+def node_controller_command(root, profile, binary, directory, ports, deadline_ns):
+    validate_node_ports(ports)
+    if type(deadline_ns) is not int or deadline_ns <= time.monotonic_ns():
+        fail("node scenario deadline expired before launch")
+    # sys is built in. Replace the import path before loading even runpy.
+    bootstrap = "import sys; sys.path[:] = " + repr(profile["launch"]["sys_path"]) + "; import runpy; sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
+    args = [profile["launch"]["python"], *profile["launch"]["flags"], "-c", bootstrap, str(root / "run-node.py"), "--profile", str(root / "node.lock.json"), "--node-lock-sha256", file_hash(root / "node.lock.json"), "--binary", binary["path"], "--binary-sha256", binary["sha256"], "--directory", str(directory), "--deadline-ns", str(deadline_ns)]
+    for role in NODE_ROLES:
+        args.extend(("--" + role.replace("_", "-") + "-port", str(ports[role])))
+    return node_network_command(args, ports)
+
+
+def verify_node_artifact(stdout_path, graph, root=ROOT):
+    target = graph.get("node_target")
+    if not isinstance(target, dict):
+        fail("missing actual node target graph")
+    expected_path = root / "runtime/target" / TARGET / "debug/celld"
+    artifacts, finished = [], []
+    consumed = 0
+    with Path(stdout_path).open("rb") as stream:
+        while line := stream.readline(4 * 1024 * 1024 + 1):
+            consumed += len(line)
+            if consumed > 128 * 1024 * 1024 or len(line) > 4 * 1024 * 1024:
+                fail("compiler message allowance exceeded")
+            try:
+                message = node_json(line)
+            except (ValueError, UnicodeError) as error:
+                raise ValueError("unclassified compiler message") from error
+            if not isinstance(message, dict):
+                fail("unclassified compiler message")
+            if message.get("reason") == "compiler-artifact" and message.get("executable") is not None:
+                actual = message.get("target", {})
+                if message.get("package_id") != target["package_id"] or message.get("features") != [] or message.get("executable") != str(expected_path) or any(actual.get(key) != target[key] for key in ("name", "kind", "crate_types", "src_path")) or message.get("profile", {}).get("test") is not False:
+                    fail("unexpected executable compiler artifact")
+                artifacts.append(message)
+            elif message.get("reason") == "build-finished":
+                if type(message.get("success")) is not bool:
+                    fail("compiler completion is not a boolean")
+                finished.append(message["success"])
+            elif message.get("reason") not in ("compiler-artifact", "compiler-message", "build-script-executed"):
+                fail("unclassified compiler message reason")
+    if len(artifacts) != 1 or finished != [True]:
+        fail("missing unique successful celld compiler artifact")
+    # The executable is inside the already admitted four-GiB target allowance.
+    image, _ = stable_fixture_file(expected_path, 4 * 1024**3)
+    if not image["bytes"] or image["mode"] & 0o111 == 0:
+        fail("celld artifact is not executable")
+    return {"path": str(expected_path), "bytes": image["bytes"], "sha256": image["sha256"], "artifact": {**target, "features": []}}
+
+
+def verify_node_report(path, profile, binary, ports, node_lock_hash):
+    report = read_json(path, profile["limits"]["report_bytes"])
+    closed_fields(report, ("format", "profile", "claim", "status", "node_lock_sha256", "binary", "program", "ports", "run_id", "startup", "sequence", "cleanup", "observation_limits"), "node report")
+    if type(report["format"]) is not int or report["format"] != 1 or report["profile"] != NODE or report["claim"] != NODE_CLAIM or report["status"] != "passed":
+        fail("node controller did not report the closed successful claim")
+    if report["node_lock_sha256"] != node_lock_hash or report["binary"] != {key: binary[key] for key in ("path", "sha256")} or report["program"] != profile["program"] or report["ports"] != ports:
+        fail("node controller input binding mismatch")
+    validate_node_ports(report["ports"])
+    if not isinstance(report["run_id"], str) or not re.fullmatch(r"[0-9a-f]{32}", report["run_id"]):
+        fail("invalid node run identity")
+    if not isinstance(report["startup"], dict) or not report["startup"]:
+        fail("missing actual node startup/sequence observations")
+    sequence = report["sequence"]
+    closed_fields(sequence, ("completed", "steps", "incarnations", "error"), "node sequence")
+    if sequence["completed"] is not True or sequence["error"] is not None or not isinstance(sequence["steps"], list) or not 1 <= len(sequence["steps"]) <= 64 or not isinstance(sequence["incarnations"], list) or len(sequence["incarnations"]) != 4:
+        fail("node sequence incomplete")
+    cleanup = report["cleanup"]
+    closed_fields(cleanup, ("completed", "children", "storage_tasks_joined", "active_responses", "outer_group_disappearance_observed", "error"), "node cleanup")
+    if cleanup["completed"] is not True or cleanup["storage_tasks_joined"] is not True or type(cleanup["active_responses"]) is not int or cleanup["active_responses"] != 0 or cleanup["outer_group_disappearance_observed"] is not False or cleanup["error"] is not None or not isinstance(cleanup["children"], list) or not cleanup["children"]:
+        fail("node controller child cleanup incomplete")
+    children = {}
+    for child in cleanup["children"]:
+        closed_fields(child, ("label", "pid", "argv", "node", "directory", "ports", "generation", "started_ns", "exit_ns", "returncode", "attributed_pids", "retired", "log"), "node child")
+        label = child["label"]
+        if not isinstance(label, str) or label in children or child["retired"] is not True or type(child["returncode"]) is not int or (child["returncode"] == 0) != (label != "invalid-option"):
+            fail("node child retirement/result not established")
+        if any(type(child[key]) is not int or child[key] <= 0 for key in ("pid", "started_ns", "exit_ns")) or child["exit_ns"] < child["started_ns"]:
+            fail("node child physical lifetime missing")
+        if not isinstance(child["argv"], list) or not child["argv"] or any(not isinstance(value, str) for value in child["argv"]) or not isinstance(child["log"], str):
+            fail("node child command/log identity missing")
+        if not isinstance(child["attributed_pids"], list) or child["pid"] not in child["attributed_pids"] or any(type(pid) is not int or pid <= 0 for pid in child["attributed_pids"]):
+            fail("node child descendant inventory missing")
+        if child["node"] is not None and not isinstance(child["node"], str) or child["directory"] is not None and not isinstance(child["directory"], str) or child["ports"] is not None and not isinstance(child["ports"], dict):
+            fail("node child metadata has invalid types")
+        children[label] = child
+    if set(children) != {"version", "help", "invalid-option", "moto", "deploy", "a", "b", "b-restart", "c"}:
+        fail("node child inventory incomplete or unexpected")
+    expected_incarnations = [children[label] for label in ("a", "b", "b-restart", "c")]
+    if sequence["incarnations"] != expected_incarnations or any(not isinstance(child["generation"], str) or not child["generation"] for child in expected_incarnations):
+        fail("node incarnation evidence differs from retired children")
+    for child in expected_incarnations:
+        suffix = "b" if child["label"] in ("b", "b-restart") else "ac"
+        expected_ports = {"public": ports["public_" + suffix], "internal": ports["internal_" + suffix]}
+        if child["ports"] != expected_ports or not child["node"] or not child["directory"] or child["argv"][0] != binary["path"]:
+            fail("node incarnation address/command binding mismatch")
+    if report["observation_limits"] != {"final_transport_grace_observed": False, "internal_task_drain_observed": False} or any(type(value) is not bool for value in report["observation_limits"].values()):
+        fail("unsupported node drain observation claim")
+    return report
+
+
+def node_monitor(root, directory, profile):
+    refusal, resources = resource_refusal(root)
+    resources["evidence_bytes"] = directory_bytes(directory)
+    if resources["evidence_bytes"] > profile["limits"]["evidence_bytes"]:
+        refusal = "node evidence allowance exceeded"
+    return refusal, resources
+
+
+def build_node(graph_directory, root=ROOT):
+    import check_graph
+    pins, profile = load_pins(root), load_node_profile(root)
+    selected_mode(pins, "node-baseline")
+    source, assets = verify_source(root), verify_assets(root)
+    graph = check_graph.verify(graph_directory, root, "node-baseline")
+    refusal, resources = resource_refusal(root, initial=True)
+    if refusal:
+        fail(refusal + ": " + json.dumps(resources))
+    toolchain, environment = controlled_environment(root)
+    evidence_root = runtime_directory(root) / "evidence"
+    evidence_root.mkdir(exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix="node-", dir=evidence_root))
+    before_directory = directory / "fixture-before"
+    before_directory.mkdir()
+    receipt = {"format": 1, "profile": NODE, "mode": "node-baseline", "claim": NODE_CLAIM, "status": "incomplete", "source": source, "assets": assets, "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": resources}
+    write_json(directory / "receipt.json", receipt)
+    runtime_started = False
+    with BuildSlot(root) as slot:
+        try:
+            receipt["node_inputs_before"] = node_inputs(root, profile, before_directory)
+            receipt["tools"] = tool_identity(root, directory, slot, environment, toolchain)
+            for name, argv in build_commands(root, toolchain, pins, "node-baseline").items():
+                receipt[name] = run_owned(argv, root, environment, directory, name, slot, pins["build"]["timeout_seconds"], lambda: node_monitor(root, directory, profile))
+            binary = verify_node_artifact(directory / "build.stdout", graph, root)
+            receipt["binary"] = binary
+            # No selected interpreter starts until all actual input bytes have
+            # been checked again after build, including the before-bound source.
+            if node_inputs(root, profile) != receipt["node_inputs_before"]:
+                fail("node inputs changed before runtime launch")
+            run_directory = directory / "run"
+            run_directory.mkdir()
+            ports = choose_node_ports()
+            runtime_environment = node_environment(root, profile, run_directory, ports)
+            deadline_ns = time.monotonic_ns() + profile["limits"]["scenario_seconds"] * 1_000_000_000
+            argv = node_controller_command(root, profile, binary, run_directory, ports, deadline_ns)
+            receipt.update(ports=ports, runtime_environment=runtime_environment, network_policy=NODE_POLICY.format(**ports), deadline_ns=deadline_ns)
+            runtime_started = True
+            receipt["controller"] = run_owned(argv, root, runtime_environment, directory, "controller", slot, max(0, (deadline_ns - time.monotonic_ns()) / 1_000_000_000), lambda: node_monitor(root, directory, profile), maximum_log_bytes=profile["limits"]["log_bytes"])
+            # run_owned has now established actual whole-process-group cleanup.
+            verify_empty_native_directory(run_directory)
+            stable_fixture_file(binary["path"], binary["bytes"], binary)
+            report_path = run_directory / "report.json"
+            receipt["report"] = verify_node_report(report_path, profile, binary, ports, receipt["node_inputs_before"]["node_lock_sha256"])
+            receipt["report_sha256"] = file_hash(report_path)
+            after_directory = directory / "fixture-after"
+            after_directory.mkdir()
+            receipt["node_inputs_after"] = node_inputs(root, profile, after_directory)
+            if receipt["node_inputs_before"] != receipt["node_inputs_after"]:
+                fail("node inputs changed during qualification")
+            if verify_source(root) != source or verify_assets(root) != assets or check_graph.verify(graph_directory, root, "node-baseline") != graph:
+                fail("node build inputs changed during qualification")
+            if config_inputs(root) != receipt["tools"]["cargo_configs"] or any(file_hash(path) != expected for path, expected in receipt["tools"]["native_tools"].items()):
+                fail("native tools/Cargo configuration changed during qualification")
+            controlled_environment(root)
+            refusal, _ = node_monitor(root, directory, profile)
+            if refusal:
+                fail(refusal)
+            receipt["status"] = "passed"
+        except BaseException as error:
+            receipt["error"] = str(error)
+            receipt["status"] = "failed" if slot.clean else "cleanup uncertain"
+            raise
+        finally:
+            if runtime_started and slot.clean and "node_inputs_after" not in receipt:
+                # Failed commands still get post-run identity evidence once
+                # physical cleanup is established. Preserve the original error;
+                # a second failure cannot manufacture a passed receipt.
+                try:
+                    verify_empty_native_directory(run_directory)
+                    after_directory = directory / "fixture-after-failure"
+                    after_directory.mkdir()
+                    receipt["node_inputs_after"] = node_inputs(root, profile, after_directory)
+                    if receipt["node_inputs_after"] != receipt["node_inputs_before"]:
+                        fail("node inputs changed during failed qualification")
+                except BaseException as error:
+                    receipt["post_cleanup_input_error"] = str(error)
+                    receipt["status"] = "failed"
+            receipt["final_resources"] = disk_status(root)
+            write_json(directory / "receipt.json", receipt)
+    return {"directory": str(directory), "receipt_sha256": file_hash(directory / "receipt.json"), "status": receipt["status"]}
+
+
 def identity_commands(root, toolchain):
     pins = load_pins(root)
     return {
@@ -1118,6 +1802,13 @@ def tool_identity(root, directory, slot, environment, toolchain):
 
 def build_commands(root, toolchain, pins, mode="identity"):
     features = selected_mode(pins, mode)
+    if mode == "node-baseline":
+        shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", "--bin", "celld", "-j", "2", "--target", TARGET]
+        cargo = toolchain / "bin/cargo"
+        return {
+            "build": network_command([cargo, "build", *shared, "--message-format=json-render-diagnostics"]),
+            "clippy": network_command([cargo, "clippy", *shared, "--", "-D", "warnings"]),
+        }
     shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", *features, "-j", "2", "--target", TARGET]
     binary = ["--bin", "foks-celld-guarded"]
     cargo = toolchain / "bin/cargo"
@@ -1131,6 +1822,8 @@ def build_commands(root, toolchain, pins, mode="identity"):
 
 
 def build(graph_directory, root=ROOT, mode="identity"):
+    if mode == "node-baseline":
+        return build_node(graph_directory, root)
     import check_graph
     pins = load_pins(root)
     selected_mode(pins, mode)
@@ -1206,7 +1899,7 @@ def main():
     sub.add_parser("verify-assets")
     build_parser = sub.add_parser("build")
     build_parser.add_argument("graph_directory", type=Path)
-    build_parser.add_argument("--mode", choices=("identity", "lifecycle"), default="identity")
+    build_parser.add_argument("--mode", choices=("identity", "lifecycle", "node-baseline"), default="identity")
     args = parser.parse_args()
     try:
         if args.operation == "verify":

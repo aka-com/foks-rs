@@ -37,11 +37,11 @@ def commands(root, toolchain, mode="identity"):
     cargo = str(toolchain / "bin/cargo")
     return {
         "metadata": preparation.network_command([cargo, "metadata", *shared, "--format-version", "1", "--filter-platform", TARGET]),
-        "tree": preparation.network_command([cargo, "tree", *shared, "--target", TARGET, "--edges", "normal,build,features"]),
+        "tree": preparation.network_command([cargo, "tree", *shared, *(["--package", FIXTURE, "--package", "celld@0.6.2"] if mode == "node-baseline" else []), "--target", TARGET, "--edges", "normal,build,features"]),
     }
 
 
-def graph_report(metadata, pins, mode="identity"):
+def graph_report(metadata, pins, mode="identity", source_root=ROOT):
     if pins.get("target") != TARGET or pins.get("profile") not in (preparation.A1, preparation.A2):
         fail("missing or unexpected target/profile")
     preparation.selected_mode(pins, mode)
@@ -132,8 +132,8 @@ def graph_report(metadata, pins, mode="identity"):
             fail("unexpected engine/package version: " + name)
         return identity
 
-    exact(FIXTURE, [] if mode == "identity" else ["lifecycle"])
-    exact("celld", [] if mode == "identity" else ["foks-guarded-qualification"], pins["upstream"]["version"])
+    exact(FIXTURE, ["lifecycle"] if mode == "lifecycle" else [])
+    celld = exact("celld", ["foks-guarded-qualification"] if mode == "lifecycle" else [], pins["upstream"]["version"])
     core = exact("foks-metadata-core", ["owned-list"])
     transport = exact("foks-hosted-transport", ["qualification"])
     exact("v8", pins["v8"]["features"], pins["v8"]["version"])
@@ -160,7 +160,27 @@ def graph_report(metadata, pins, mode="identity"):
         if direct_tokio != (mode == "lifecycle"):
             fail("direct optional Tokio edge does not match selected mode")
     inventory = [{"id": identity, "name": packages[identity]["name"], "version": packages[identity]["version"], "source": packages[identity]["source"], "features": sorted(nodes[identity]["features"])} for identity in sorted(reached)]
-    return {"format": 1, "target": TARGET, "profile": pins["profile"], "mode": mode, "packages": inventory, "foks_subclosure": sorted(fokscore)}
+    report = {"format": 1, "target": TARGET, "profile": pins["profile"], "mode": mode, "packages": inventory, "foks_subclosure": sorted(fokscore)}
+    if mode == "node-baseline":
+        celld_closure = closure([celld])
+        if any(packages[identity]["name"].startswith("foks-") for identity in celld_closure):
+            fail("ordinary celld binary subclosure includes FOKS integration")
+        package = packages[celld]
+        expected = source_root / "runtime/source/crates/celld"
+        if package["source"] is not None or package["manifest_path"] != str(expected / "Cargo.toml"):
+            fail("ordinary celld package is not the actual prepared source")
+        targets = package.get("targets")
+        if not isinstance(targets, list):
+            fail("missing actual celld target inventory")
+        binaries = [target for target in targets if isinstance(target, dict) and target.get("kind") == ["bin"]]
+        if len(binaries) != 1:
+            fail("missing or ambiguous ordinary celld binary target")
+        target = binaries[0]
+        if target.get("name") != "celld" or target.get("crate_types") != ["bin"] or target.get("src_path") != str(expected / "main.rs") or target.get("required-features", []) != []:
+            fail("ordinary celld binary target changed")
+        report["node_target"] = {"package_id": celld, **{key: target[key] for key in ("name", "kind", "crate_types", "src_path")}, "features": []}
+        report["node_subclosure"] = sorted(celld_closure)
+    return report
 
 
 def regular_files(directory):
@@ -172,11 +192,11 @@ def regular_files(directory):
             yield path
 
 
-def candidate_inputs(root):
+def candidate_inputs(root, mode="identity"):
     """Snapshot before Cargo; the selected local subset must already be bound."""
     repo = root.parents[1]
     pins = preparation.load_pins(root)
-    paths = {repo / "Cargo.toml", *(root / name for name in source_paths(pins))}
+    paths = {repo / "Cargo.toml", *(root / name for name in source_paths(pins, mode))}
     paths.add(repo / pins["foks_additional_versions"]["baseline_lock"])
     for directory in (repo / "crates").iterdir():
         if directory.is_dir() and (directory / "Cargo.toml").is_file():
@@ -186,14 +206,15 @@ def candidate_inputs(root):
     return {str(path): preparation.file_hash(path) for path in sorted(paths)}
 
 
-def source_paths(pins):
-    return SOURCE_PATHS + (A2_SOURCE_PATHS if pins["profile"] == preparation.A2 else ())
+def source_paths(pins, mode="identity"):
+    preparation.selected_mode(pins, mode)
+    return SOURCE_PATHS + (A2_SOURCE_PATHS if pins["profile"] == preparation.A2 else ()) + (("node.lock.json", "run-node.py", "test_run_node.py") if mode == "node-baseline" else ())
 
 
-def selected_inputs(metadata, reached, root):
+def selected_inputs(metadata, reached, root, mode="identity"):
     repo = root.parents[1]
     pins = preparation.load_pins(root)
-    paths = {repo / "Cargo.toml", *(root / name for name in source_paths(pins)), root / "runtime/source/Cargo.toml", root / "runtime/source/Cargo.lock"}
+    paths = {repo / "Cargo.toml", *(root / name for name in source_paths(pins, mode)), root / "runtime/source/Cargo.toml", root / "runtime/source/Cargo.lock"}
     paths.add(repo / pins["foks_additional_versions"]["baseline_lock"])
     for package in metadata["packages"]:
         if package["id"] not in reached or package["source"] is not None:
@@ -256,9 +277,9 @@ def verify(directory, root=ROOT, mode="identity"):
     if any(preparation.file_hash(path) != expected for path, expected in tools["native_tools"].items()):
         fail("native compiler/linker/SDK inputs changed")
     metadata = preparation.read_json(directory / "metadata.stdout", 32 * 1024 * 1024)
-    report = graph_report(metadata, pins, mode)
+    report = graph_report(metadata, pins, mode, root)
     reached = {package["id"] for package in report["packages"]}
-    current = selected_inputs(metadata, reached, root)
+    current = selected_inputs(metadata, reached, root, mode)
     if evidence.get("inputs") != current:
         fail("local manifest/lock/source inputs changed or incomplete")
     if evidence.get("source") != preparation.verify_source(root):
@@ -269,6 +290,13 @@ def verify(directory, root=ROOT, mode="identity"):
         fail("selected upstream dependency provenance changed")
     if evidence.get("registry_inputs") != preparation.registry_inputs(metadata, reached, root):
         fail("registry manifest/build/MSRV inputs changed")
+    if mode == "node-baseline":
+        node_inputs = preparation.node_inputs(root)
+        if evidence.get("node_inputs") != node_inputs:
+            fail("node profile/controller/fixture inputs changed or incomplete")
+        report["node_inputs"] = node_inputs
+    elif "node_inputs" in evidence:
+        fail("node input evidence is invalid for a historical mode")
     report["lock_delta"] = evidence["lock_delta"]
     report["upstream_edges"] = evidence["upstream_edges"]
     report["registry_inputs"] = evidence["registry_inputs"]
@@ -286,8 +314,10 @@ def collect(directory, root=ROOT, mode="identity"):
     source = preparation.verify_source(root)
     lock_delta = preparation.compare_locks(root)
     toolchain, environment = preparation.controlled_environment(root)
-    before = candidate_inputs(root)
+    before = candidate_inputs(root, mode)
     evidence = {"format": 1, "target": TARGET, "profile": pins["profile"], "mode": mode, "manifest": str(root / "Cargo.toml"), "cwd": str(root), "source": source, "lock_delta": lock_delta, "commands": {}}
+    if mode == "node-baseline":
+        evidence["node_inputs"] = preparation.node_inputs(root)
     with preparation.BuildSlot(root) as slot:
         try:
             evidence["tools"] = preparation.tool_identity(root, directory, slot, environment, toolchain)
@@ -295,14 +325,16 @@ def collect(directory, root=ROOT, mode="identity"):
                 evidence["commands"][name] = preparation.run_owned(argv, root, environment, directory, name, slot, 120)
                 preparation.write_json(directory / "evidence.json", evidence)
             metadata = preparation.read_json(directory / "metadata.stdout", 32 * 1024 * 1024)
-            report = graph_report(metadata, pins, mode)
+            report = graph_report(metadata, pins, mode, root)
             reached = {package["id"] for package in report["packages"]}
-            current = selected_inputs(metadata, reached, root)
+            current = selected_inputs(metadata, reached, root, mode)
             if any(before.get(path) != value for path, value in current.items()):
                 fail("local input changed during graph collection")
             evidence["inputs"] = current
             evidence["upstream_edges"] = preparation.upstream_edges(metadata, reached, root)
             evidence["registry_inputs"] = preparation.registry_inputs(metadata, reached, root)
+            if mode == "node-baseline" and evidence["node_inputs"] != preparation.node_inputs(root):
+                fail("node profile/controller/fixture changed during graph collection")
         finally:
             preparation.write_json(directory / "evidence.json", evidence)
     report = verify(directory, root, mode)
@@ -316,7 +348,7 @@ def main():
     for name in ("collect", "verify"):
         operation = sub.add_parser(name)
         operation.add_argument("directory", type=Path)
-        operation.add_argument("--mode", choices=("identity", "lifecycle"), default="identity")
+        operation.add_argument("--mode", choices=("identity", "lifecycle", "node-baseline"), default="identity")
     args = parser.parse_args()
     try:
         report = collect(args.directory, mode=args.mode) if args.operation == "collect" else verify(args.directory, mode=args.mode)

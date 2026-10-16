@@ -15,7 +15,7 @@ def fixture(mode="identity", profile=c.preparation.A1):
     if profile == c.preparation.A2:
         pins.update(format=2, profile=profile)
     names = {
-        c.FIXTURE: ("0.0.0", [] if mode == "identity" else ["lifecycle"]), "celld": ("0.6.2", [] if mode == "identity" else ["foks-guarded-qualification"]),
+        c.FIXTURE: ("0.0.0", ["lifecycle"] if mode == "lifecycle" else []), "celld": ("0.6.2", ["foks-guarded-qualification"] if mode == "lifecycle" else []),
         "foks-hosted-transport": ("0.4.0", ["qualification"]),
         "foks-metadata-core": ("0.4.0", ["owned-list"]),
         "tokio": ("1.53.1", ["full"]),
@@ -328,6 +328,94 @@ class ModeTests(unittest.TestCase):
             with patch.object(c.preparation, "config_inputs", return_value={}):
                 current = c.selected_inputs(metadata, reached, root)
             self.assertNotEqual(current[str(changed)], inventories[0][str(changed)])
+
+
+class NodeGraphTests(unittest.TestCase):
+    def fixture(self, root=Path("/fixture")):
+        metadata, pins = fixture("node-baseline", c.preparation.A2)
+        celld = next(package for package in metadata["packages"] if package["name"] == "celld")
+        celld["manifest_path"] = str(root / "runtime/source/crates/celld/Cargo.toml")
+        celld["targets"] = [{"name": "celld", "kind": ["lib"], "crate_types": ["lib"], "src_path": str(root / "runtime/source/crates/celld/lib.rs")}, {"name": "celld", "kind": ["bin"], "crate_types": ["bin"], "src_path": str(root / "runtime/source/crates/celld/main.rs")}]
+        return metadata, pins
+
+    def test_node_requires_actual_prepared_bin_and_sqlite_free_foks_subclosure(self):
+        root = Path("/fixture")
+        metadata, pins = self.fixture(root)
+        report = c.graph_report(metadata, pins, "node-baseline", root)
+        self.assertEqual(report["node_target"], {"package_id": "celld", "name": "celld", "kind": ["bin"], "crate_types": ["bin"], "src_path": "/fixture/runtime/source/crates/celld/main.rs", "features": []})
+        self.assertIn("rusqlite", report["node_subclosure"])
+        self.assertNotIn("foks-hosted-transport", report["node_subclosure"])
+        self.assertNotIn("rusqlite", report["foks_subclosure"])
+        mutations = [
+            lambda package: package.update(manifest_path="/different/Cargo.toml"),
+            lambda package: package.update(source=c.preparation.CRATES_IO),
+            lambda package: package.pop("targets"),
+            lambda package: package["targets"].append(copy.deepcopy(package["targets"][1])),
+            lambda package: package["targets"][1].update(src_path="/different/main.rs"),
+            lambda package: package["targets"][1].update(required_features=["ignored"] , **{"required-features": ["foks-guarded-qualification"]}),
+            lambda package: package["targets"][1].update(crate_types=["lib"]),
+            lambda package: package["targets"][1].update(name="other"),
+        ]
+        for mutation in mutations:
+            altered = copy.deepcopy(metadata)
+            mutation(next(package for package in altered["packages"] if package["name"] == "celld"))
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                c.graph_report(altered, pins, "node-baseline", root)
+        edge(metadata, "celld", "foks-hosted-transport")
+        with self.assertRaisesRegex(ValueError, "ordinary celld binary subclosure"):
+            c.graph_report(metadata, pins, "node-baseline", root)
+
+    def test_node_features_and_optional_root_tokio_cannot_enter(self):
+        for package, feature in ((c.FIXTURE, "lifecycle"), ("celld", "foks-guarded-qualification")):
+            metadata, pins = self.fixture()
+            next(node for node in metadata["resolve"]["nodes"] if node["id"] == package)["features"].append(feature)
+            with self.subTest(package=package), self.assertRaisesRegex(ValueError, "features"):
+                c.graph_report(metadata, pins, "node-baseline", Path("/fixture"))
+        metadata, pins = self.fixture()
+        edge(metadata, c.FIXTURE, "tokio")
+        with self.assertRaisesRegex(ValueError, "direct optional Tokio"):
+            c.graph_report(metadata, pins, "node-baseline", Path("/fixture"))
+        metadata, pins = fixture()
+        with self.assertRaisesRegex(ValueError, "mode"):
+            c.graph_report(metadata, pins, "node-baseline")
+
+    def test_node_tree_selects_both_packages_but_metadata_has_no_package_filter(self):
+        root, toolchain = Path("/fixture"), Path("/toolchain")
+        _, pins = self.fixture()
+        with patch.object(c.preparation, "load_pins", return_value=pins), patch.object(c.preparation, "network_command", side_effect=lambda args: list(map(str, args))):
+            commands = c.commands(root, toolchain, "node-baseline")
+        self.assertNotIn("--package", commands["metadata"])
+        tree = commands["tree"]
+        self.assertEqual([tree[index + 1] for index, value in enumerate(tree) if value == "--package"], [c.FIXTURE, "celld@0.6.2"])
+        for argv in commands.values():
+            self.assertNotIn("--features", argv)
+            self.assertIn("--no-default-features", argv)
+            self.assertIn("--locked", argv)
+            self.assertIn("--offline", argv)
+        self.assertEqual(commands["metadata"][commands["metadata"].index("--filter-platform") + 1], c.TARGET)
+        self.assertEqual(tree[tree.index("--target") + 1], c.TARGET)
+
+    def test_only_node_mode_extends_input_roster_and_requires_fixture(self):
+        _, pins = self.fixture()
+        prior = set(c.source_paths(pins, "identity"))
+        self.assertEqual(prior, set(c.source_paths(pins, "lifecycle")))
+        self.assertEqual(set(c.source_paths(pins, "node-baseline")) - prior, {"node.lock.json", "run-node.py", "test_run_node.py"})
+        self.assertNotIn("node.lock.json", c.source_paths(historical_pins()))
+        with self.assertRaisesRegex(ValueError, "mode"):
+            c.source_paths(historical_pins(), "node-baseline")
+
+    def test_saved_node_evidence_cannot_be_relabelled_as_library_identity(self):
+        for requested, recorded in (("identity", "node-baseline"), ("lifecycle", "node-baseline"), ("node-baseline", "identity"), ("node-baseline", None)):
+            with self.subTest(requested=requested, recorded=recorded), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                _, pins = self.fixture()
+                evidence = {"format": 1, "target": c.TARGET, "profile": c.preparation.A2, "manifest": str(c.ROOT / "Cargo.toml"), "cwd": str(c.ROOT), "mode": recorded}
+                (root / "evidence.json").write_text(json.dumps(evidence))
+                with patch.object(c.preparation, "load_pins", return_value=pins), patch.object(c.preparation, "controlled_environment") as environment, patch.object(c.preparation, "node_inputs") as node_inputs:
+                    with self.assertRaisesRegex(ValueError, "evidence mode"):
+                        c.verify(root, mode=requested)
+                    environment.assert_not_called()
+                    node_inputs.assert_not_called()
 
 
 def write_lock(path, packages):
