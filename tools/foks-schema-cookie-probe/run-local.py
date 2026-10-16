@@ -20,8 +20,14 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def result_ok(status, result):
-    return status == 200 and isinstance(result, dict) and result.get("passed") is True and result.get("final_table_absent") is True
+def result_ok(status, result, configuration=False):
+    base = status == 200 and isinstance(result, dict) and result.get("passed") is True and result.get("final_table_absent") is True
+    if not base or not configuration:
+        return base
+    return (result.get("mode") == "configuration" and result.get("settings") == [1, 0, 1]
+            and result.get("denied") == ["temp_table", "qualified_temp_table", "temp_view", "temp_trigger", "attach"]
+            and result.get("rollback_restored") is True and result.get("trusted_schema") == "unqualified"
+            and result.get("production_admission") is False)
 
 
 def bounded_json(response):
@@ -35,9 +41,11 @@ def main():
     parser = argparse.ArgumentParser()
     for name in ("celld", "moto", "esbuild", "output"):
         parser.add_argument("--" + name, type=pathlib.Path, required=True)
+    parser.add_argument("--configuration", action="store_true")
     args = parser.parse_args()
     source = pathlib.Path(__file__).resolve().parent
-    inputs = [args.celld, args.moto, args.esbuild, source / "probe.mjs", source / "worker.mjs", pathlib.Path(__file__)]
+    copies = {"probe.mjs": source / ("configuration.mjs" if args.configuration else "probe.mjs"), "worker.mjs": source / "worker.mjs"}
+    inputs = [args.celld, args.moto, args.esbuild, *copies.values(), pathlib.Path(__file__)]
     if any(not item.is_file() for item in inputs):
         parser.error("missing immutable input")
     before = {str(item.resolve()): digest(item) for item in inputs}
@@ -90,10 +98,10 @@ def main():
         s3.create_bucket(Bucket=bucket)
         project = root / "worker"
         project.mkdir(mode=0o700)
-        for name in ("probe.mjs", "worker.mjs"):
-            data = (source / name).read_bytes()
+        for name, original in copies.items():
+            data = original.read_bytes()
             (project / name).write_bytes(data)
-            if digest(project / name) != before[str((source / name).resolve())]:
+            if digest(project / name) != before[str(original.resolve())]:
                 raise RuntimeError("source copy changed")
         config = {
             "name": "foks-schema-cookie-probe", "main": "worker.mjs", "compatibility_date": "2026-01-01",
@@ -129,7 +137,7 @@ def main():
                 raise RuntimeError("capability rejected incorrectly")
         with request(url, token) as response:
             result = bounded_json(response)
-            passed = result_ok(response.status, result)
+            passed = result_ok(response.status, result, args.configuration)
         print(json.dumps(result), flush=True)
         # Reusing an invocation cannot rerun DDL or turn a failure into success.
         with request(url, token) as response:
@@ -151,11 +159,11 @@ def main():
             log.close()
         after = {str(item.resolve()): digest(item) for item in inputs}
         unchanged = before == after
-        for name in ("probe.mjs", "worker.mjs"):
+        for name, original in copies.items():
             copied = root / "worker" / name
-            unchanged = unchanged and copied.is_file() and digest(copied) == before[str((source / name).resolve())]
+            unchanged = unchanged and copied.is_file() and digest(copied) == before[str(original.resolve())]
         passed = passed and unchanged
-        evidence = {"passed": passed, "result": result, "error": error, "sources_unchanged": unchanged, "sha256_before": before, "sha256_after": after, "scope": "Fixed schema-cookie capability/transaction probe; no FOKS route, activation, latency or HA qualification"}
+        evidence = {"passed": passed, "result": result, "error": error, "sources_unchanged": unchanged, "sha256_before": before, "sha256_after": after, "configuration_mode": args.configuration, "scope": "Fixed connection capability/transaction probe; trusted_schema remains unqualified; no FOKS route, activation, latency or HA qualification" if args.configuration else "Fixed schema-cookie capability/transaction probe; no FOKS route, activation, latency or HA qualification"}
         (root / "qualification.json").write_text(json.dumps(evidence, indent=2) + "\n")
     return 0 if passed else 1
 
