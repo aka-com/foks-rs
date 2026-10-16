@@ -2,7 +2,7 @@
 //!
 //! The frontend, not this module, proves TLS possession and parses the exact
 //! certificate. No result here commits, publishes, or establishes a tenant fence.
-mod admission;
+pub(crate) mod admission;
 pub(crate) mod catalog;
 mod generations;
 mod list;
@@ -95,7 +95,19 @@ mod micros {
         value: &u64,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(&value.to_string())
+        let mut digits = [0u8; 20];
+        let mut at = digits.len();
+        let mut remaining = *value;
+        loop {
+            at -= 1;
+            digits[at] = b'0' + (remaining % 10) as u8;
+            remaining /= 10;
+            if remaining == 0 {
+                break;
+            }
+        }
+        // Every written byte is an ASCII digit; no owned formatting temporary.
+        serializer.serialize_str(std::str::from_utf8(&digits[at..]).expect("decimal digits"))
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
@@ -106,6 +118,30 @@ mod micros {
             return Err(serde::de::Error::custom("noncanonical certificate time"));
         }
         Ok(value)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[derive(serde::Serialize)]
+        struct Decimal(#[serde(serialize_with = "super::serialize")] u64);
+
+        #[test]
+        fn stack_decimal_matches_legacy_full_u64_range_boundaries() {
+            let check = |value| {
+                assert_eq!(
+                    serde_json::to_vec(&Decimal(value)).unwrap(),
+                    serde_json::to_vec(&value.to_string()).unwrap()
+                );
+            };
+            check(0);
+            check(u64::MAX);
+            for exponent in 0..=19 {
+                let power = 10u64.pow(exponent);
+                check(power - 1);
+                check(power);
+                check(power + 1);
+            }
+        }
     }
 }
 

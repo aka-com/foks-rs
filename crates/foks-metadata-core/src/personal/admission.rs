@@ -21,7 +21,7 @@ fn allocate_with(
     })?;
     Ok(bytes)
 }
-pub(super) fn copy(input: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn copy(input: &[u8]) -> Result<Vec<u8>> {
     let mut bytes = allocate(input.len())?;
     bytes.extend_from_slice(input);
     Ok(bytes)
