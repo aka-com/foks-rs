@@ -2,6 +2,7 @@
 //! not public FOKS claims. The host owns the outer transaction and durable sync.
 pub(crate) mod catalog;
 mod personal;
+mod state_decode;
 pub use personal::{
     read_point as read_personal_point, run as run_personal, ErrorPayload as PersonalErrorPayload,
     Invocation as PersonalInvocation, PointInvocation as PersonalPointInvocation,
@@ -226,8 +227,8 @@ fn load(sql: &mut impl Sql) -> Result<State> {
         return Err(Error::Storage);
     }
     Ok(State {
-        identity: serde_json::from_str(text(&r[0])?).map_err(|_| Error::Storage)?,
-        activation: serde_json::from_str(text(&r[1])?).map_err(|_| Error::Storage)?,
+        identity: state_decode::identity(text(&r[0])?)?,
+        activation: state_decode::activation(text(&r[1])?)?,
         owner: blob(&r[2])?.try_into().map_err(|_| Error::Storage)?,
         epoch: num(&r[3])?,
         revision: num(&r[4])?,
