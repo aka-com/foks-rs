@@ -1,20 +1,20 @@
 /** Confirms and applies removal of a team member. */
 
 import type { ReactNode } from 'react';
-import { Button, Inset, Notice, SheetDialog } from '../../components';
+import { Button, Inset, Notice, SheetDialog } from '../../../components';
 import {
   entriesOf,
   exposureOrder,
   memberExposureReadiness,
   memberReads,
   withExposureReview,
-} from '../../exposure-review';
-import { groupDetailFailure, partyName } from '../../model';
-import type { Party } from '../../model';
-import { markProfileRostersStale } from '../../data/roster-staleness';
+} from '../exposure-review-model';
+import { groupDetailFailure, partyName } from '../../../model';
+import type { Party } from '../../../model';
+import { markProfileRostersStale } from '../../../data/roster-staleness';
 import { ExposureSummary, unstoredReview } from '../exposure-review';
-import { GroupMark } from '../../components/group-mark';
-import { useToast } from '../../../kit/toasts';
+import { GroupMark } from '../../../components/group-mark';
+import { useToast } from '../../../../kit/toasts';
 import {
   canTarget,
   DetailUnavailable,
@@ -22,7 +22,7 @@ import {
   useSheetWrite,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
-import { useShellServices, useShellSnapshot } from '../../shell-services';
+import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 export function RemoveMemberSheet({
   store,

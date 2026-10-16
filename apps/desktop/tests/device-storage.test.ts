@@ -16,12 +16,13 @@ import { collectSourceFiles } from './lib/source';
 installDom({ url: 'http://localhost/' });
 
 const storage = await import('../src/platform/device-storage');
-const labels = await import('../src/invitation-labels');
+const labels =
+  await import('../src/features/teams/invitations/invitation-labels');
 const recovery = await import('../src/first-run-recovery');
 const operations = await import('../src/first-run-operations');
 const firstRun = await import('../src/first-run-state');
 const lists = await import('../src/recent-favorites');
-const reviews = await import('../src/exposure-review');
+const reviews = await import('../src/features/teams/exposure-review-model');
 const { rememberFilesView, storedFilesView } =
   await import('../src/files-view-pref');
 

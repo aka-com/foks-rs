@@ -23,7 +23,7 @@ for (const action of ['add', 'demote', 'promote'] as const) {
   const kind = action === 'add' ? 'team-member-addition' : 'team-member-edit';
   test(`exposes and completes ${action} ${kind} after an interrupted change without reopening settings`, async () => {
     const { GroupSettingsScreen } =
-      await import('../src/screens/groups-screen');
+      await import('../src/features/teams/groups-screen');
     const TestShell = await loadTestShell();
     const { ToastProvider, ToastController } = await import('../kit/toasts');
     const { OverlayProvider } = await import('../kit/overlay-primitives');
@@ -157,7 +157,8 @@ for (const action of ['add', 'demote', 'promote'] as const) {
 }
 
 test('a failed pending-operation query reports one error and renders no recovery banner', async () => {
-  const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
+  const { GroupSettingsScreen } =
+    await import('../src/features/teams/groups-screen');
   const TestShell = await loadTestShell();
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');

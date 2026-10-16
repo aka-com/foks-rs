@@ -83,7 +83,8 @@ async function teamPage(
     tab?: 'settings' | 'people';
   } = {},
 ) {
-  const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
+  const { GroupSettingsScreen } =
+    await import('../src/features/teams/groups-screen');
   const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const bridge = { ...mockBridge(snapshot), ...overrides };
@@ -321,7 +322,8 @@ test('the removal waits while the team’s items are still being read', async ()
 
 test('lowering a role lists only the items the new role no longer admits', async () => {
   const snapshot = await fixture();
-  const { GroupSheet } = await import('../src/screens/groups/group-sheet');
+  const { GroupSheet } =
+    await import('../src/features/teams/groups/group-sheet');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const TestShell = await loadTestShell();
   const store = snapshot.stores.find((entry) => entry.id === 'team:eng');

@@ -8,7 +8,7 @@ import { LowerRoleSheet } from './lower-role-sheet';
 import { RemoveMemberSheet } from './remove-member-sheet';
 import type { GroupSheetBaseProps } from './sheet-support';
 import type { ReactNode } from 'react';
-import type { Party } from '../../model';
+import type { Party } from '../../../model';
 
 /** The team-management actions that open a sheet. */
 export type GroupSheetKind =

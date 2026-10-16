@@ -7,7 +7,7 @@ import type { DeviceLabel, Item } from '../model';
 import { markProfileRostersStale } from '../data/roster-staleness';
 import { ItemsScreen } from '../screens/items-screen';
 import type { DropUpload } from '../screens/files/vault-drop-zone';
-import { PlaceholderScreen } from '../screens/placeholder-screen';
+import { PlaceholderScreen } from '../features/teams/placeholder-screen';
 import { listsItems } from '../model/scope';
 import { useShellServices, useShellSnapshot } from '../shell-services';
 import type { WriteWorkflow } from '../screens/files/write-workflow-model';

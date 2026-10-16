@@ -1,15 +1,18 @@
-import { CollectionStatus } from './collection-status';
+import { CollectionStatus } from '../../../components/collection-status';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { normalizeCommandError } from '../bridge';
-import type { Bridge, PendingOperation } from '../bridge';
-import { useDeviceCache } from '../data/device-cache';
-import type { InvitationAction, InvitationRow } from '../invitation-contract';
+import { normalizeCommandError } from '../../../bridge';
+import type { Bridge, PendingOperation } from '../../../bridge';
+import { useDeviceCache } from '../../../data/device-cache';
+import type {
+  InvitationAction,
+  InvitationRow,
+} from '../../../invitation-contract';
 import {
   forgetInvitationLabel,
   invitationLabel,
   relativeTime,
-} from '../invitation-labels';
+} from './invitation-labels';
 import {
   grantRoleName,
   hardwareUnlockRequested,
@@ -19,18 +22,18 @@ import {
   rowRole,
   settleInvitationWrite,
   unfinishedOperation,
-} from '../invitation-writes';
-import { securityKeyPinRefusal } from '../security-key-pin';
-import type { TeamStore } from '../model';
-import { useMetadataRepository } from '../data/query-hooks';
-import { Button } from './button';
-import { Chip } from './chips';
-import { Icon } from './icon';
-import { Inset } from './inset';
-import { PanelSheet } from './panel-sheet';
-import { SectionLabel } from './section-label';
-import { SecurityKeyPinField } from './security-key-pin-field';
-import { SegmentedControl } from './segmented-control';
+} from './invitation-writes';
+import { securityKeyPinRefusal } from '../../../security-key-pin';
+import type { TeamStore } from '../../../model';
+import { useMetadataRepository } from '../../../data/query-hooks';
+import { Button } from '../../../components/button';
+import { Chip } from '../../../components/chips';
+import { Icon } from '../../../components/icon';
+import { Inset } from '../../../components/inset';
+import { PanelSheet } from '../../../components/panel-sheet';
+import { SectionLabel } from '../../../components/section-label';
+import { SecurityKeyPinField } from '../../../components/security-key-pin-field';
+import { SegmentedControl } from '../../../components/segmented-control';
 
 type View = 'attention' | 'issued';
 

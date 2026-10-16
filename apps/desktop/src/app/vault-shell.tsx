@@ -1,4 +1,4 @@
-import { TeamInfoPanel } from '../screens/team-info';
+import { TeamInfoPanel } from '../features/teams/team-info';
 import {
   useCallback,
   useEffect,

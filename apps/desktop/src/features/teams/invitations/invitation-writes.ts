@@ -1,10 +1,13 @@
-import { normalizeCommandError } from './bridge';
-import { INVITATION_ACTIVITY } from './invitation-activity';
-import type { InvitationRole, InvitationRow } from './invitation-contract';
+import { normalizeCommandError } from '../../../bridge';
+import { INVITATION_ACTIVITY } from '../../../invitation-activity';
+import type {
+  InvitationRole,
+  InvitationRow,
+} from '../../../invitation-contract';
 import type { InvitationGrantRole } from './invitation-labels';
-import type { MetadataRepository } from './data/metadata-repository';
-import { pendingOperationKey } from './data/operation-queries';
-import { securityKeyPinRefusal } from './security-key-pin';
+import type { MetadataRepository } from '../../../data/metadata-repository';
+import { pendingOperationKey } from '../../../data/operation-queries';
+import { securityKeyPinRefusal } from '../../../security-key-pin';
 
 export function settleInvitationWrite(
   queries: MetadataRepository,

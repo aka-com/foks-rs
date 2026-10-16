@@ -125,7 +125,7 @@ async function invitationPanel(
   bridge: Bridge,
 ) {
   const { InvitationPanel } =
-    await import('../src/components/invitation-panel');
+    await import('../src/features/teams/invitations/invitation-panel');
   return h.mount(
     createElement(InvitationPanel, {
       bridge,
@@ -169,7 +169,7 @@ test('unsaved invitation input prompts before navigation and clears on confirmat
 test('a durable invitation creation allows navigation', async () => {
   const h = await harness();
   const { InviteNewUserSheet } =
-    await import('../src/components/invite-new-user-sheet');
+    await import('../src/features/teams/invitations/invite-new-user-sheet');
   const team = h.fixture.stores.find(
     (candidate): candidate is TeamStore =>
       candidate.kind === 'team' && candidate.alias === 'household',
@@ -203,7 +203,8 @@ async function groupSheet(
   onClose: () => void,
   bridge: Bridge = h.bridge(),
 ) {
-  const { GroupSheet } = await import('../src/screens/groups/group-sheet');
+  const { GroupSheet } =
+    await import('../src/features/teams/groups/group-sheet');
   return h.mount(
     createElement(GroupSheet, {
       store: h.group,

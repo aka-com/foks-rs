@@ -1,7 +1,7 @@
-import { inventoryReadiness, groupDetailReadiness } from '../model';
-import { CollectionStatus } from '../components/collection-status';
-import { synchronizeApplied } from '../data/operation-outcome';
-import { useTabSheetState } from '../navigation-guard';
+import { inventoryReadiness, groupDetailReadiness } from '../../model';
+import { CollectionStatus } from '../../components/collection-status';
+import { synchronizeApplied } from '../../data/operation-outcome';
+import { useTabSheetState } from '../../navigation-guard';
 /**
  * The Teams tab: every named team and ad-hoc share on this Mac in one list,
  * the per-account checks that find more of them, and the entries that create
@@ -14,18 +14,25 @@ import { useTabSheetState } from '../navigation-guard';
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { ContextMenu, Menu, Popover } from '../../kit/overlay-primitives';
+import { ContextMenu, Menu, Popover } from '../../../kit/overlay-primitives';
 import type { ReactNode } from 'react';
-import { Band, Button, Chip, Icon, MenuButton, MenuItem } from '../components';
-import { InvitationPanel } from '../components/invitation-panel';
-import { InviteNewUserSheet } from '../components/invite-new-user-sheet';
-import { useTeamRequestCounts } from '../data/operation-queries';
+import {
+  Band,
+  Button,
+  Chip,
+  Icon,
+  MenuButton,
+  MenuItem,
+} from '../../components';
+import { InvitationPanel } from './invitations/invitation-panel';
+import { InviteNewUserSheet } from './invitations/invite-new-user-sheet';
+import { useTeamRequestCounts } from '../../data/operation-queries';
 import {
   commandRecovery,
   enqueueProfileWork,
   isTerminalCommandError,
   normalizeCommandError,
-} from '../bridge';
+} from '../../bridge';
 import {
   storeOperationAvailability,
   groupDetailFailure,
@@ -39,28 +46,32 @@ import {
   storeDescription,
   storeDescriptionState,
   storeNavigationOrder,
-} from '../model';
+} from '../../model';
 import type {
   AccountStore,
   AgentSnapshot,
   Store,
   StoreRef,
   TeamStore,
-} from '../model';
-import { accountAtLocation, normalizeTeamsLocation } from '../location';
-import type { Location, NavigateOptions, TeamsSheetIntent } from '../location';
-import { markProfileRostersStale } from '../data/roster-staleness';
-import { PageHeader } from '../shell/page-header';
-import { useShellServices, useShellSnapshot } from '../shell-services';
-import { useToast } from '../../kit/toasts';
-import { GroupMark } from '../components/group-mark';
+} from '../../model';
+import { accountAtLocation, normalizeTeamsLocation } from '../../location';
+import type {
+  Location,
+  NavigateOptions,
+  TeamsSheetIntent,
+} from '../../location';
+import { markProfileRostersStale } from '../../data/roster-staleness';
+import { PageHeader } from '../../shell/page-header';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
+import { useToast } from '../../../kit/toasts';
+import { GroupMark } from '../../components/group-mark';
 import {
   discoveryContext,
   manageReason,
   rosterManageable,
   unavailableTitle,
-} from '../model/group-model';
-import type { DiscoveryContext } from '../model/group-model';
+} from '../../model/group-model';
+import type { DiscoveryContext } from '../../model/group-model';
 import { AbandonGroupSheet } from './groups/abandon-group-sheet';
 import { GroupSheet } from './groups/group-sheet';
 import type { GroupSheetKind } from './groups/group-sheet';
@@ -206,7 +217,7 @@ function TeamRow({
   snapshot: AgentSnapshot;
   store: TeamStore;
   /** Membership requests waiting on this team, drawn as a chip on the row. */
-  requests?: import('../data/operation-queries').TeamRequestCount;
+  requests?: import('../../data/operation-queries').TeamRequestCount;
   menu: ReactNode;
   onOpen: () => void;
   onContextMenu: (point: { x: number; y: number }) => void;

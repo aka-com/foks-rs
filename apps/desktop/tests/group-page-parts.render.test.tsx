@@ -1,7 +1,7 @@
 /**
  * The group page's tabs and band rendered from their own modules under
- * screens/groups, without the page around them: which rows and menus each
- * draws, and which sheet a menu choice asks the page to open.
+ * features/teams/groups, without the page around them: which rows and menus
+ * each draws, and which sheet a menu choice asks the page to open.
  */
 
 import assert from 'node:assert/strict';
@@ -10,7 +10,7 @@ import { createElement } from 'react';
 import type { ReactNode } from 'react';
 
 import type { AgentSnapshot, Party, Store, TeamStore } from '../src/model';
-import type { GroupSheetKind } from '../src/screens/groups/group-sheet';
+import type { GroupSheetKind } from '../src/features/teams/groups/group-sheet';
 import { installDom } from './lib/dom-harness';
 import { loadTestShell } from './lib/test-shell';
 
@@ -31,9 +31,11 @@ test.afterEach(() => ui.cleanup());
 async function harness() {
   const { FIXTURE } = await import('../src/mock/fixture');
   const { SituationBand } =
-    await import('../src/screens/groups/situation-band');
-  const { MembersTab } = await import('../src/screens/groups/members-tab');
-  const { SettingsTab } = await import('../src/screens/groups/settings-tab');
+    await import('../src/features/teams/groups/situation-band');
+  const { MembersTab } =
+    await import('../src/features/teams/groups/members-tab');
+  const { SettingsTab } =
+    await import('../src/features/teams/groups/settings-tab');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const TestShell = await loadTestShell();

@@ -14,13 +14,11 @@ import type { AccountStore } from '../../../model';
 import {
   accountExposure,
   entriesOf,
-  exposureOrder,
-  withExposureReview,
-} from '../../../exposure-review';
-import {
   ExposureSummary,
+  exposureOrder,
   unstoredReview,
-} from '../../../screens/exposure-review';
+  withExposureReview,
+} from '../../teams';
 import { useToast } from '../../../../kit/toasts';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
 

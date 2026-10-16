@@ -12,7 +12,7 @@ const SHELL = new URL('../src/styles/shell.css', import.meta.url);
 const COMPONENTS = new URL('../src/styles/app.css', import.meta.url);
 const FIRST_RUN = new URL('../src/screens/first-run.css', import.meta.url);
 const SETTINGS = new URL('../src/screens/settings.css', import.meta.url);
-const TEAMS = new URL('../src/screens/teams.css', import.meta.url);
+const TEAMS = new URL('../src/features/teams/teams.css', import.meta.url);
 const CASCADE = ['tokens', 'base', 'components', 'features', 'overrides'];
 /**
  * Classes that only the first-run screens render and only the first-run sheet
@@ -266,9 +266,11 @@ test('team rules live in the teams sheet, under the team details panel', async (
   // the team rules when those were in the components layer; importing them
   // later keeps that for rules of equal specificity.
   const entry = await readFile(STYLE_ENTRY, 'utf8');
-  const teams = entry.indexOf("'../screens/teams.css' layer(features.teams)");
+  const teams = entry.indexOf(
+    "'../features/teams/teams.css' layer(features.teams)",
+  );
   const teamInfo = entry.indexOf(
-    "'../screens/team-info.css' layer(features.teams)",
+    "'../features/teams/team-info.css' layer(features.teams)",
   );
   assert.notEqual(teams, -1, 'the entry does not import teams.css');
   assert.ok(teams < teamInfo, 'team-info.css is imported before teams.css');

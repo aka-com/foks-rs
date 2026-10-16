@@ -2,7 +2,7 @@ import {
   readStorage,
   STORAGE_KEYS,
   writeStorage,
-} from './platform/device-storage';
+} from '../../../platform/device-storage';
 
 export type InvitationGrantRole = 'member' | 'admin' | 'owner';
 

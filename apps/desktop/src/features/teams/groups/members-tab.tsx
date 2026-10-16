@@ -3,9 +3,12 @@
  * one group, each row with the actions that apply to it.
  */
 
-import { groupDetailReadiness, combineReadiness } from '../../model';
-import { CollectionStatus } from '../../components/collection-status';
-import { federatedTeamMembers, memberCountOf } from '../../model/team-members';
+import { groupDetailReadiness, combineReadiness } from '../../../model';
+import { CollectionStatus } from '../../../components/collection-status';
+import {
+  federatedTeamMembers,
+  memberCountOf,
+} from '../../../model/team-members';
 import { canTarget, demotionFor, partySubtitle } from './sheet-support';
 import type { ReactNode } from 'react';
 import {
@@ -18,7 +21,7 @@ import {
   PartyRow,
   RoleChip,
   SectionLabel,
-} from '../../components';
+} from '../../../components';
 import {
   hue,
   isMachine,
@@ -27,15 +30,15 @@ import {
   partyName,
   plural,
   serverDisplayLabel,
-} from '../../model';
+} from '../../../model';
 import type {
   FederationEntry,
   GroupDetailFailure,
   Party,
   Store,
   AgentSnapshot,
-} from '../../model';
-import { sortRoster, targetReason } from '../../model/group-model';
+} from '../../../model';
+import { sortRoster, targetReason } from '../../../model/group-model';
 import type { GroupSheetKind } from './group-sheet';
 import { SituationBand } from './situation-band';
 

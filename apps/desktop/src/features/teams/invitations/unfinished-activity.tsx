@@ -2,17 +2,20 @@
 
 import { useCallback, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { useDeviceCache } from '../data/device-cache';
-import { useMetadataQuery, useMetadataRepository } from '../data/query-hooks';
+import { useDeviceCache } from '../../../data/device-cache';
+import {
+  useMetadataQuery,
+  useMetadataRepository,
+} from '../../../data/query-hooks';
 import {
   invitationRecoveryQuery,
   reportableTeamRequestError,
-} from '../data/operation-queries';
-import type { Bridge, PendingOperation } from '../bridge';
-import type { TeamStore } from '../model';
-import { Button } from './button';
-import { Band } from './notice';
-import { INVITATION_ACTIVITY } from '../invitation-activity';
+} from '../../../data/operation-queries';
+import type { Bridge, PendingOperation } from '../../../bridge';
+import type { TeamStore } from '../../../model';
+import { Button } from '../../../components/button';
+import { Band } from '../../../components/notice';
+import { INVITATION_ACTIVITY } from '../../../invitation-activity';
 
 /** Formats pending and blocking operation counts for the summary band. */
 export function unfinishedActivityText(

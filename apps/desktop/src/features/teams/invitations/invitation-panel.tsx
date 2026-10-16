@@ -2,32 +2,35 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useDeviceCache } from '../data/device-cache';
-import { useMetadataRepository } from '../data/query-hooks';
-import { useSheetGuard, useTabSheetState } from '../navigation-guard';
-import { normalizeCommandError, type Bridge } from '../bridge';
-import type { InvitationAction, InvitationRow } from '../invitation-contract';
-import type { InvitationGrantRole } from '../invitation-labels';
+import { useDeviceCache } from '../../../data/device-cache';
+import { useMetadataRepository } from '../../../data/query-hooks';
+import { useSheetGuard, useTabSheetState } from '../../../navigation-guard';
+import { normalizeCommandError, type Bridge } from '../../../bridge';
+import type {
+  InvitationAction,
+  InvitationRow,
+} from '../../../invitation-contract';
+import type { InvitationGrantRole } from './invitation-labels';
 import {
   hardwareUnlockRequested,
   invitationRow,
   invitationRows,
   nativeRole,
   settleInvitationWrite,
-} from '../invitation-writes';
-import { securityKeyPinRefusal } from '../security-key-pin';
-import { Button } from './button';
-import { Chip } from './chips';
-import { Icon } from './icon';
-import { Inset, InsetRow } from './inset';
-import { PanelSheet } from './panel-sheet';
-import type { PanelPresentation } from './panel-sheet';
-import { RadioCard, RadioGroup } from './radio-card';
-import { SectionLabel } from './section-label';
-import { SecurityKeyPinField } from './security-key-pin-field';
-import { serverDisplayLabel } from '../model';
-import type { Server, TeamStore } from '../model';
-import { INVITATION_ACTIVITY } from '../invitation-activity';
+} from './invitation-writes';
+import { securityKeyPinRefusal } from '../../../security-key-pin';
+import { Button } from '../../../components/button';
+import { Chip } from '../../../components/chips';
+import { Icon } from '../../../components/icon';
+import { Inset, InsetRow } from '../../../components/inset';
+import { PanelSheet } from '../../../components/panel-sheet';
+import type { PanelPresentation } from '../../../components/panel-sheet';
+import { RadioCard, RadioGroup } from '../../../components/radio-card';
+import { SectionLabel } from '../../../components/section-label';
+import { SecurityKeyPinField } from '../../../components/security-key-pin-field';
+import { serverDisplayLabel } from '../../../model';
+import type { Server, TeamStore } from '../../../model';
+import { INVITATION_ACTIVITY } from '../../../invitation-activity';
 export { INVITATION_ACTIVITY };
 
 export type JoinServer = Pick<

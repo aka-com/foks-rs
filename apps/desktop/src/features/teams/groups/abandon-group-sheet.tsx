@@ -3,18 +3,18 @@
 import {
   attemptMutation,
   reportMutationOutcome,
-} from '../../data/command-policy';
+} from '../../../data/command-policy';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Inset, InsetRow, SheetDialog } from '../../components';
-import { serverDisplayLabelForStore as displayServerName } from '../../model';
-import type { TeamStore, AgentSnapshot } from '../../model';
-import type { Bridge } from '../../bridge';
-import type { MutationFailureHandler } from '../../data/mutation-recovery';
-import { useSheetGuard } from '../../navigation-guard';
-import { markProfileRostersStale } from '../../data/roster-staleness';
-import { GroupMark } from '../../components/group-mark';
-import { useToast } from '../../../kit/toasts';
+import { Button, Inset, InsetRow, SheetDialog } from '../../../components';
+import { serverDisplayLabelForStore as displayServerName } from '../../../model';
+import type { TeamStore, AgentSnapshot } from '../../../model';
+import type { Bridge } from '../../../bridge';
+import type { MutationFailureHandler } from '../../../data/mutation-recovery';
+import { useSheetGuard } from '../../../navigation-guard';
+import { markProfileRostersStale } from '../../../data/roster-staleness';
+import { GroupMark } from '../../../components/group-mark';
+import { useToast } from '../../../../kit/toasts';
 
 /**
  * The way out of a creation that finishing cannot fix: a name the server

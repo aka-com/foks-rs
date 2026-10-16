@@ -3,8 +3,8 @@
  */
 
 import type { ReactNode } from 'react';
-import { PageHeader } from '../shell/page-header';
-import type { Location } from '../location';
+import { PageHeader } from '../../shell/page-header';
+import type { Location } from '../../location';
 
 interface Pane {
   title: string;

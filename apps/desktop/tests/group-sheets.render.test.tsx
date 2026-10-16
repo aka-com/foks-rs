@@ -5,7 +5,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { installDom } from './lib/dom-harness';
 import { loadTestShell } from './lib/test-shell';
-import type { GroupSheetKind } from '../src/screens/groups/group-sheet';
+import type { GroupSheetKind } from '../src/features/teams/groups/group-sheet';
 import type { Party } from '../src/model';
 
 installDom({
@@ -22,7 +22,8 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 
 async function sheet(kind: GroupSheetKind, target: string | null = null) {
-  const { GroupSheet } = await import('../src/screens/groups/group-sheet');
+  const { GroupSheet } =
+    await import('../src/features/teams/groups/group-sheet');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { partiesOf } = await import('../src/model');

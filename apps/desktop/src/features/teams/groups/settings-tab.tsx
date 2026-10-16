@@ -11,7 +11,7 @@ import {
   InsetRow,
   MenuButton,
   SectionLabel,
-} from '../../components';
+} from '../../../components';
 import {
   catalog,
   parseRole,
@@ -23,10 +23,10 @@ import {
   serverOf,
   shortId,
   visibilityOf,
-} from '../../model';
-import type { Item, Party, Store, AgentSnapshot } from '../../model';
-import type { Location } from '../../location';
-import { memberReads } from '../../exposure-review';
+} from '../../../model';
+import type { Item, Party, Store, AgentSnapshot } from '../../../model';
+import type { Location } from '../../../location';
+import { memberReads } from '../exposure-review-model';
 import type { GroupSheetKind } from './group-sheet';
 import { SituationBand } from './situation-band';
 

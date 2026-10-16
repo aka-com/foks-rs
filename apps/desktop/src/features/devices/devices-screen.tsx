@@ -79,11 +79,11 @@ import type { DeviceEntry } from '../../data/device-model';
 import { UnavailableAccount } from '../../screens/settings/unavailable-account';
 import { deviceAlertRegistry } from '../../data/device-alert';
 import { RecoveryPhraseTestSheet } from './recovery-phrase-test-sheet';
-import { useExposureReviews } from '../../exposure-review';
 import {
   ExposureReviewBands,
   ExposureReviewSheet,
-} from '../../screens/exposure-review';
+  useExposureReviews,
+} from '../teams';
 import {
   RECOVERY_TEST_INTERVAL_DAYS,
   recoveryPhraseTestDue,

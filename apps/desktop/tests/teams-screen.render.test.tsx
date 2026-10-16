@@ -43,7 +43,7 @@ async function setup(
   scene = 'groups',
 ): Promise<{ store: LocationStore }> {
   const locations = await import('../src/location');
-  const { TeamsScreen } = await import('../src/screens/teams-screen');
+  const { TeamsScreen } = await import('../src/features/teams/teams-screen');
   const TestShell = await loadTestShell();
   const { ScreenErrorBoundary, screenBoundaryKey, screenIdentity } =
     await import('../src/app/screen-error-boundary');

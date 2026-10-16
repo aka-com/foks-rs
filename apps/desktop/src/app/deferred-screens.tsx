@@ -51,7 +51,7 @@ const chatTab = deferredScreen('ChatTab', () =>
   import('../screens/chat-tab').then((m) => m.ChatTab),
 );
 const teams = deferredScreen('TeamsScreen', () =>
-  import('../screens/teams-screen').then((m) => m.TeamsScreen),
+  import('../features/teams/teams-screen').then((m) => m.TeamsScreen),
 );
 const devices = deferredScreen('DevicesScreen', () =>
   import('../features/devices/devices-screen').then((m) => m.DevicesScreen),
@@ -60,7 +60,7 @@ const settings = deferredScreen('SettingsScreen', () =>
   import('../screens/settings-screen').then((m) => m.SettingsScreen),
 );
 const groupSettings = deferredScreen('GroupSettingsScreen', () =>
-  import('../screens/groups-screen').then((m) => m.GroupSettingsScreen),
+  import('../features/teams/groups-screen').then((m) => m.GroupSettingsScreen),
 );
 
 export const FirstRunExperience = firstRun.Component;

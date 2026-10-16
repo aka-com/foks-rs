@@ -3,24 +3,24 @@
 import {
   attemptMutation,
   reportMutationOutcome,
-} from '../../data/command-policy';
+} from '../../../data/command-policy';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Inset, InsetRow, SheetDialog } from '../../components';
-import { partiesOf, shortId } from '../../model';
-import type { FederationEntry, Store, AgentSnapshot } from '../../model';
-import type { Bridge } from '../../bridge';
-import type { MutationFailureHandler } from '../../data/mutation-recovery';
-import { markProfileRostersStale } from '../../data/roster-staleness';
-import { GroupMark } from '../../components/group-mark';
-import { useToast } from '../../../kit/toasts';
+import { Button, Inset, InsetRow, SheetDialog } from '../../../components';
+import { partiesOf, shortId } from '../../../model';
+import type { FederationEntry, Store, AgentSnapshot } from '../../../model';
+import type { Bridge } from '../../../bridge';
+import type { MutationFailureHandler } from '../../../data/mutation-recovery';
+import { markProfileRostersStale } from '../../../data/roster-staleness';
+import { GroupMark } from '../../../components/group-mark';
+import { useToast } from '../../../../kit/toasts';
 import {
   entriesOf,
   exposureOrder,
   memberExposureReadiness,
   memberReads,
   withExposureReview,
-} from '../../exposure-review';
+} from '../exposure-review-model';
 import { ExposureSummary, unstoredReview } from '../exposure-review';
 
 export function FederationRemovalSheet({

@@ -1,7 +1,7 @@
 /** Grants a higher role while retaining the authenticated membership identity. */
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { RoleDto } from '../../bridge';
+import type { RoleDto } from '../../../bridge';
 import {
   Button,
   Inset,
@@ -10,16 +10,16 @@ import {
   RadioCard,
   RadioGroup,
   SheetDialog,
-} from '../../components';
+} from '../../../components';
 import {
   groupDetailFailure,
   parseRole,
   partiesOf,
   partyName,
-} from '../../model';
-import type { Party } from '../../model';
-import { markProfileRostersStale } from '../../data/roster-staleness';
-import { GroupMark } from '../../components/group-mark';
+} from '../../../model';
+import type { Party } from '../../../model';
+import { markProfileRostersStale } from '../../../data/roster-staleness';
+import { GroupMark } from '../../../components/group-mark';
 import {
   canTarget,
   DetailUnavailable,
@@ -29,7 +29,7 @@ import {
   VIS_MAX,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
-import { useShellServices, useShellSnapshot } from '../../shell-services';
+import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 export function RaiseRoleSheet({
   store,

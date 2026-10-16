@@ -1,18 +1,21 @@
-import { CollectionStatus } from './collection-status';
-import type { CollectionReadiness } from '../model';
+import { CollectionStatus } from '../../../components/collection-status';
+import type { CollectionReadiness } from '../../../model';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { normalizeCommandError, type Bridge } from '../bridge';
-import { useDeviceCache } from '../data/device-cache';
-import { INVITATION_ACTIVITY } from '../invitation-activity';
-import type { InvitationActivityDetail } from '../invitation-activity';
-import type { InvitationAction, InvitationRow } from '../invitation-contract';
+import { normalizeCommandError, type Bridge } from '../../../bridge';
+import { useDeviceCache } from '../../../data/device-cache';
+import { INVITATION_ACTIVITY } from '../../../invitation-activity';
+import type { InvitationActivityDetail } from '../../../invitation-activity';
+import type {
+  InvitationAction,
+  InvitationRow,
+} from '../../../invitation-contract';
 import {
   forgetInvitationLabel,
   invitationLabel,
   relativeTime,
-} from '../invitation-labels';
-import type { InvitationGrantRole } from '../invitation-labels';
+} from './invitation-labels';
+import type { InvitationGrantRole } from './invitation-labels';
 import {
   grantRoleName,
   hardwareUnlockRequested,
@@ -22,19 +25,19 @@ import {
   operationStateText,
   settleInvitationWrite,
   unfinishedOperation,
-} from '../invitation-writes';
-import { securityKeyPinRefusal } from '../security-key-pin';
-import type { TeamStore } from '../model';
-import { serverDisplayLabel } from '../model';
+} from './invitation-writes';
+import { securityKeyPinRefusal } from '../../../security-key-pin';
+import type { TeamStore } from '../../../model';
+import { serverDisplayLabel } from '../../../model';
 import type { JoinServer } from './invitation-panel';
-import { useMetadataRepository } from '../data/query-hooks';
-import { Button } from './button';
-import { Chip } from './chips';
-import { Icon } from './icon';
-import { Inset, InsetRow } from './inset';
-import { Notice } from './notice';
-import { SectionLabel } from './section-label';
-import { SecurityKeyPinField } from './security-key-pin-field';
+import { useMetadataRepository } from '../../../data/query-hooks';
+import { Button } from '../../../components/button';
+import { Chip } from '../../../components/chips';
+import { Icon } from '../../../components/icon';
+import { Inset, InsetRow } from '../../../components/inset';
+import { Notice } from '../../../components/notice';
+import { SectionLabel } from '../../../components/section-label';
+import { SecurityKeyPinField } from '../../../components/security-key-pin-field';
 
 export function MembershipRequests({
   bridge,

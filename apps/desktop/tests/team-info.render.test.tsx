@@ -23,7 +23,7 @@ async function mount(
     snapshot,
   overrides: Partial<Bridge> = {},
 ) {
-  const { TeamInfoPanel } = await import('../src/screens/team-info');
+  const { TeamInfoPanel } = await import('../src/features/teams/team-info');
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');

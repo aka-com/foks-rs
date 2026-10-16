@@ -16,7 +16,7 @@
 @import '../screens/chat-picker.css' layer(features.chat);
 /* teams.css precedes team-info.css in their sublayer, so the team details
    panel's rules win a specificity tie with the team rules. */
-@import '../screens/teams.css' layer(features.teams);
-@import '../screens/team-info.css' layer(features.teams);
+@import '../features/teams/teams.css' layer(features.teams);
+@import '../features/teams/team-info.css' layer(features.teams);
 @import '../shell/search-palette.css' layer(features.search);
 @import './native-window.css' layer(overrides);

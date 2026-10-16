@@ -43,7 +43,8 @@ async function group(
   ref = 'team:eng',
   tab: 'people' | 'settings' = 'people',
 ) {
-  const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
+  const { GroupSettingsScreen } =
+    await import('../src/features/teams/groups-screen');
   const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const bridge = { ...mockBridge(snapshot), ...overrides };

@@ -1,13 +1,13 @@
 import { useCallback } from 'react';
-import type { Bridge, PendingOperation } from '../../bridge';
-import type { TeamStore } from '../../model';
-import type { MutationFailureHandler } from '../../data/mutation-recovery';
-import { usePendingGroupOperations } from '../../data/operation-queries';
-import { markProfileRostersStale } from '../../data/roster-staleness';
+import type { Bridge, PendingOperation } from '../../../bridge';
+import type { TeamStore } from '../../../model';
+import type { MutationFailureHandler } from '../../../data/mutation-recovery';
+import { usePendingGroupOperations } from '../../../data/operation-queries';
+import { markProfileRostersStale } from '../../../data/roster-staleness';
 import {
   attemptMutation,
   reportMutationOutcome,
-} from '../../data/command-policy';
+} from '../../../data/command-policy';
 
 export function membershipResume(
   bridge: Bridge,

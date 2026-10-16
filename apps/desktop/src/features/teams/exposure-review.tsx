@@ -2,7 +2,7 @@
  * The exposure review's three views: the list a removal or demotion sheet
  * shows before its write, the band a team page or Devices shows while a
  * review has unmarked entries, and the sheet that walks those entries.
- * `exposure-review.ts` holds the model and the stored records.
+ * `exposure-review-model.ts` holds the model and the stored records.
  */
 
 import { useEffect, useRef } from 'react';
@@ -15,28 +15,28 @@ import {
   Notice,
   SectionLabel,
   SheetDialog,
-} from '../components';
-import type { ChipTone } from '../components';
+} from '../../components';
+import type { ChipTone } from '../../components';
 import {
   dismissExposure,
   entryItem,
   entryState,
   markExposure,
   openEntries,
-} from '../exposure-review';
+} from './exposure-review-model';
 import type {
   ExposureEntry,
   ExposureMark,
   ExposureReview,
   ExposureState,
-} from '../exposure-review';
-import { kindOf, nameOf, plural, prefixOf, storeOf } from '../model';
+} from './exposure-review-model';
+import { kindOf, nameOf, plural, prefixOf, storeOf } from '../../model';
 import type {
   AgentSnapshot,
   CollectionReadiness,
   Item,
   StoreRef,
-} from '../model';
+} from '../../model';
 
 /** The toast shown when storage refuses a review the sheet said it would keep. */
 export function unstoredReview(name: string): string {

@@ -59,7 +59,8 @@ async function group(
     onApplied?: (message: string, profile?: string) => Promise<void>;
   } = {},
 ) {
-  const { GroupSettingsScreen } = await import('../src/screens/groups-screen');
+  const { GroupSettingsScreen } =
+    await import('../src/features/teams/groups-screen');
   const TestShell = await loadTestShell();
   const { ChatInboxProvider } = await import('../src/chat/inbox-provider');
   const { mockBridge } = await import('../src/mock/mock-bridge');

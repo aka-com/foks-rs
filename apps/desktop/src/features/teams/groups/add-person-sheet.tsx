@@ -2,8 +2,8 @@
 
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { RoleDto } from '../../bridge';
-import { normalizeCommandError } from '../../bridge';
+import type { RoleDto } from '../../../bridge';
+import { normalizeCommandError } from '../../../bridge';
 import {
   Button,
   Chip,
@@ -14,24 +14,24 @@ import {
   RadioGroup,
   SectionLabel,
   SheetDialog,
-} from '../../components';
+} from '../../../components';
 import {
   groupDetailFailure,
   partiesOf,
   partyName,
   roleRank,
   serverDisplayLabelForStore as displayServerName,
-} from '../../model';
-import { useSheetGuard, useTabSheetState } from '../../navigation-guard';
-import { markProfileRostersStale } from '../../data/roster-staleness';
-import { GroupMark } from '../../components/group-mark';
+} from '../../../model';
+import { useSheetGuard, useTabSheetState } from '../../../navigation-guard';
+import { markProfileRostersStale } from '../../../data/roster-staleness';
+import { GroupMark } from '../../../components/group-mark';
 import {
   DetailUnavailable,
   useSheetWrite,
   VisibilityStepper,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
-import { useShellServices, useShellSnapshot } from '../../shell-services';
+import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 export function AddPersonSheet({
   store,

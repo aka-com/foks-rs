@@ -1,9 +1,9 @@
 /** The standing condition the group page's tabs state above their content. */
 
 import type { ReactNode } from 'react';
-import { Band } from '../../components';
-import type { Store } from '../../model';
-import type { GroupSettingsTab } from '../../location';
+import { Band } from '../../../components';
+import type { Store } from '../../../model';
+import type { GroupSettingsTab } from '../../../location';
 
 /**
  * The one standing condition a tab states before its own content. A group

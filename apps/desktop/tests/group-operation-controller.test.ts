@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Bridge } from '../src/bridge';
 import type { TeamStore } from '../src/model';
-import { membershipResume } from '../src/screens/groups/operation-controller';
+import { membershipResume } from '../src/features/teams/groups/operation-controller';
 import { attemptMutation } from '../src/data/command-policy';
 
 const store: TeamStore = {

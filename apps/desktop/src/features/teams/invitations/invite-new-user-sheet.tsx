@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { normalizeCommandError, type Bridge } from '../bridge';
-import { useDeviceCache } from '../data/device-cache';
-import type { InvitationAction, InvitationRow } from '../invitation-contract';
+import { normalizeCommandError, type Bridge } from '../../../bridge';
+import { useDeviceCache } from '../../../data/device-cache';
+import type {
+  InvitationAction,
+  InvitationRow,
+} from '../../../invitation-contract';
 import {
   forgetInvitationLabel,
   invitationLabel,
   rememberInvitationLabel,
   relativeTime,
-} from '../invitation-labels';
-import type { InvitationGrantRole } from '../invitation-labels';
+} from './invitation-labels';
+import type { InvitationGrantRole } from './invitation-labels';
 import {
   grantRoleName,
   hardwareUnlockRequested,
@@ -19,24 +22,24 @@ import {
   operationStateText,
   settleInvitationWrite,
   unfinishedOperation,
-} from '../invitation-writes';
-import type { TeamStore } from '../model';
+} from './invitation-writes';
+import type { TeamStore } from '../../../model';
 import {
   securityKeyPinRefusal,
   validSecurityKeyPin,
-} from '../security-key-pin';
-import { useMetadataRepository } from '../data/query-hooks';
-import { useSheetGuard, useTabSheetState } from '../navigation-guard';
-import { Button } from './button';
-import { Chip } from './chips';
-import { CopyBox } from './copy-box';
-import { Icon } from './icon';
-import { Inset, InsetRow } from './inset';
-import { Band, Notice } from './notice';
-import { PanelSheet } from './panel-sheet';
-import { RadioCard, RadioGroup } from './radio-card';
-import { SectionLabel } from './section-label';
-import { SecurityKeyPinField } from './security-key-pin-field';
+} from '../../../security-key-pin';
+import { useMetadataRepository } from '../../../data/query-hooks';
+import { useSheetGuard, useTabSheetState } from '../../../navigation-guard';
+import { Button } from '../../../components/button';
+import { Chip } from '../../../components/chips';
+import { CopyBox } from '../../../components/copy-box';
+import { Icon } from '../../../components/icon';
+import { Inset, InsetRow } from '../../../components/inset';
+import { Band, Notice } from '../../../components/notice';
+import { PanelSheet } from '../../../components/panel-sheet';
+import { RadioCard, RadioGroup } from '../../../components/radio-card';
+import { SectionLabel } from '../../../components/section-label';
+import { SecurityKeyPinField } from '../../../components/security-key-pin-field';
 
 type ApprovalRole = Extract<InvitationGrantRole, 'member' | 'admin'>;
 

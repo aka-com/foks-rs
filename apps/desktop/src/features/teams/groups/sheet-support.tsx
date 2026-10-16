@@ -1,10 +1,10 @@
-export { serverTeamName, teamAliasOf } from '../../name-normalization';
+export { serverTeamName, teamAliasOf } from '../../../name-normalization';
 /** Shared types, helpers, and components for team-management sheets. */
 
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { RoleDto } from '../../bridge';
-import { Button, InsetRow, Notice, RoleChip } from '../../components';
+import type { RoleDto } from '../../../bridge';
+import { Button, InsetRow, Notice, RoleChip } from '../../../components';
 import {
   actionableGroupMember,
   isMachine,
@@ -12,17 +12,17 @@ import {
   partiesOf,
   partyName,
   roleRank,
-} from '../../model';
+} from '../../../model';
 import type {
   AgentSnapshot,
   GroupDetailFailure,
   Party,
   Store,
   StoreRef,
-} from '../../model';
-import type { MutationFailureHandler } from '../../data/mutation-recovery';
-import { synchronizeApplied } from '../../data/operation-outcome';
-import { useToast } from '../../../kit/toasts';
+} from '../../../model';
+import type { MutationFailureHandler } from '../../../data/mutation-recovery';
+import { synchronizeApplied } from '../../../data/operation-outcome';
+import { useToast } from '../../../../kit/toasts';
 
 export const VIS_MIN = -32768;
 export const VIS_MAX = 32767;

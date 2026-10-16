@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { RoleDto } from '../../bridge';
+import type { RoleDto } from '../../../bridge';
 import {
   Button,
   Inset,
@@ -12,19 +12,19 @@ import {
   RadioGroup,
   SectionLabel,
   SheetDialog,
-} from '../../components';
+} from '../../../components';
 import {
   entriesOf,
   exposureOrder,
   loweredReads,
   memberExposureReadiness,
   withExposureReview,
-} from '../../exposure-review';
-import { groupDetailFailure, parseRole, partyName } from '../../model';
-import type { Party } from '../../model';
-import { markProfileRostersStale } from '../../data/roster-staleness';
+} from '../exposure-review-model';
+import { groupDetailFailure, parseRole, partyName } from '../../../model';
+import type { Party } from '../../../model';
+import { markProfileRostersStale } from '../../../data/roster-staleness';
 import { ExposureSummary, unstoredReview } from '../exposure-review';
-import { GroupMark } from '../../components/group-mark';
+import { GroupMark } from '../../../components/group-mark';
 import {
   canTarget,
   demotionFor,
@@ -35,8 +35,8 @@ import {
   VisibilityStepper,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
-import { useToast } from '../../../kit/toasts';
-import { useShellServices, useShellSnapshot } from '../../shell-services';
+import { useToast } from '../../../../kit/toasts';
+import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 export function LowerRoleSheet({
   store,

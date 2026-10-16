@@ -3,15 +3,15 @@
  * and the sheets they open. The tabs and sheets are in `groups/`.
  */
 
-import { groupDetailReadiness } from '../model';
-import { memberCountOf } from '../model/team-members';
+import { groupDetailReadiness } from '../../model';
+import { memberCountOf } from '../../model/team-members';
 import { useGroupOperationController } from './groups/operation-controller';
-import { useTabSheetState } from '../navigation-guard';
-import { UnfinishedActivity } from '../components/unfinished-activity';
-import { InviteNewUserSheet } from '../components/invite-new-user-sheet';
-import { InvitationActivitySheet } from '../components/invitation-activity-sheet';
-import { MembershipRequests } from '../components/membership-requests';
-import { useTeamRequestCounts } from '../data/operation-queries';
+import { useTabSheetState } from '../../navigation-guard';
+import { UnfinishedActivity } from './invitations/unfinished-activity';
+import { InviteNewUserSheet } from './invitations/invite-new-user-sheet';
+import { InvitationActivitySheet } from './invitations/invitation-activity-sheet';
+import { MembershipRequests } from './invitations/membership-requests';
+import { useTeamRequestCounts } from '../../data/operation-queries';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -23,7 +23,7 @@ import {
   tabId,
   tabPanelId,
   Tabs,
-} from '../components';
+} from '../../components';
 import {
   storeOperationAvailability,
   groupDetailFailure,
@@ -32,34 +32,38 @@ import {
   serverDisplayLabelForStore as displayServerName,
   storeDescriptionState,
   storeOf,
-} from '../model';
+} from '../../model';
 import type {
   AccountStore,
   AvailabilityOptions,
   FederationEntry,
   Item,
   Party,
-} from '../model';
-import type { Bridge } from '../bridge';
-import { useSidebarInbox } from '../chat/inbox-provider';
-import { listChannels } from '../chat/presentation';
-import { GROUP_SETTINGS_TABS } from '../location';
-import type { GroupSettingsTab, Location, NavigateOptions } from '../location';
-import { markProfileRostersStale } from '../data/roster-staleness';
-import { PageHeader } from '../shell/page-header';
-import { useShellServices, useShellSnapshot } from '../shell-services';
-import { NewChatSheet } from './chat-new';
+} from '../../model';
+import type { Bridge } from '../../bridge';
+import { useSidebarInbox } from '../../chat/inbox-provider';
+import { listChannels } from '../../chat/presentation';
+import { GROUP_SETTINGS_TABS } from '../../location';
+import type {
+  GroupSettingsTab,
+  Location,
+  NavigateOptions,
+} from '../../location';
+import { markProfileRostersStale } from '../../data/roster-staleness';
+import { PageHeader } from '../../shell/page-header';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
+import { NewChatSheet } from '../../screens/chat-new';
 import {
   ChannelsTab,
   FilesTab,
   IncompleteGroupPage,
   itemCountOf,
 } from './group-tabs';
-import { GroupMark } from '../components/group-mark';
-import { manageReason } from '../model/group-model';
-import { StoreAccessTakeover } from './store-access';
-import { useToast } from '../../kit/toasts';
-import { useExposureReviews } from '../exposure-review';
+import { GroupMark } from '../../components/group-mark';
+import { manageReason } from '../../model/group-model';
+import { StoreAccessTakeover } from '../../screens/store-access';
+import { useToast } from '../../../kit/toasts';
+import { useExposureReviews } from './exposure-review-model';
 import { ExposureReviewBands, ExposureReviewSheet } from './exposure-review';
 import { GroupSheet } from './groups/group-sheet';
 import type { GroupSheetKind } from './groups/group-sheet';

@@ -96,7 +96,7 @@ async function teams(
   ) => void = () => {},
   options: TeamsOptions = {},
 ) {
-  const { TeamsScreen } = await import('../src/screens/teams-screen');
+  const { TeamsScreen } = await import('../src/features/teams/teams-screen');
   const TestShell = await loadTestShell();
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ToastController, ToastProvider } = await import('../kit/toasts');
@@ -212,7 +212,7 @@ test('a Teams row says how many requests are waiting on it without its page havi
   const snapshot = await fixture();
   const { manageReason } = await import('../src/model/group-model');
   const { INVITATION_ACTIVITY } =
-    await import('../src/components/invitation-panel');
+    await import('../src/features/teams/invitations/invitation-panel');
   const asked: string[] = [];
   await teams(() => {}, {
     snapshot,

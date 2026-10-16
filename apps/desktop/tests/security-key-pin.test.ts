@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { hardwareUnlockRequested } from '../src/invitation-writes';
+import { hardwareUnlockRequested } from '../src/features/teams/invitations/invitation-writes';
 import {
   SECURITY_KEY_RETRY_RANGE,
   securityKeyPinProblem,

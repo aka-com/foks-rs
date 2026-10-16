@@ -11,14 +11,14 @@ import {
   RadioGroup,
   SectionLabel,
   SheetDialog,
-} from '../../components';
+} from '../../../components';
 import {
   storeOperationAvailability,
   serverDisplayLabelForStore as displayServerName,
-} from '../../model';
-import type { AccountStore } from '../../model';
-import { useSheetGuard, useTabSheetState } from '../../navigation-guard';
-import { markProfileRostersStale } from '../../data/roster-staleness';
+} from '../../../model';
+import type { AccountStore } from '../../../model';
+import { useSheetGuard, useTabSheetState } from '../../../navigation-guard';
+import { markProfileRostersStale } from '../../../data/roster-staleness';
 import {
   serverTeamName,
   SUGGESTED_GROUP,
@@ -26,7 +26,7 @@ import {
   useSheetWrite,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
-import { useShellServices, useShellSnapshot } from '../../shell-services';
+import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 type Kind = 'named' | 'adhoc';
 

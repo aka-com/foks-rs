@@ -2,11 +2,11 @@ import {
   groupDetailReadiness,
   combineReadiness,
   itemsReadiness,
-} from '../model';
-import { CollectionStatus } from '../components/collection-status';
+} from '../../model';
+import { CollectionStatus } from '../../components/collection-status';
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Button } from '../components';
-import type { Location, GroupSettingsTab } from '../location';
+import { Button } from '../../components';
+import type { Location, GroupSettingsTab } from '../../location';
 import {
   groupDetailFailure,
   isMachine,
@@ -20,16 +20,16 @@ import {
   shortId,
   storeDescription,
   storeOperationAvailability,
-} from '../model';
-import type { TeamStore } from '../model';
-import { useSidebarInbox } from '../chat/inbox-provider';
-import { channelTitle, listChannels } from '../chat/presentation';
-import { federatedTeamMembers, memberCountOf } from '../model/team-members';
+} from '../../model';
+import type { TeamStore } from '../../model';
+import { useSidebarInbox } from '../../chat/inbox-provider';
+import { channelTitle, listChannels } from '../../chat/presentation';
+import { federatedTeamMembers, memberCountOf } from '../../model/team-members';
 import { itemCountOf } from './group-tabs';
-import { manageReason } from '../model/group-model';
-import { GroupMark } from '../components/group-mark';
-import { storeUsageText, useStoreUsage } from '../store-usage';
-import { useShellServices, useShellSnapshot } from '../shell-services';
+import { manageReason } from '../../model/group-model';
+import { GroupMark } from '../../components/group-mark';
+import { storeUsageText, useStoreUsage } from '../../store-usage';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
 
 /**
  * A read-only summary; membership changes keep their existing guarded pages.
@@ -43,7 +43,7 @@ export function TeamInfoPanel({
   onClose,
 }: {
   store: TeamStore;
-  requestCount?: import('../data/operation-queries').TeamRequestCount;
+  requestCount?: import('../../data/operation-queries').TeamRequestCount;
   onNavigate: (location: Location) => void;
   onClose: (restoreFocus?: boolean) => void;
 }): ReactNode {

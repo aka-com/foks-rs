@@ -1,10 +1,10 @@
-import { CollectionStatus } from '../../components/collection-status';
-import { inventoryReadiness } from '../../model';
+import { CollectionStatus } from '../../../components/collection-status';
+import { inventoryReadiness } from '../../../model';
 /** Adds an administered team from another server as a federated member. */
 
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { normalizeCommandError } from '../../bridge';
+import { normalizeCommandError } from '../../../bridge';
 import {
   Button,
   Chip,
@@ -15,33 +15,33 @@ import {
   RadioGroup,
   SectionLabel,
   SheetDialog,
-} from '../../components';
-import { isNestingRefusal } from '../../invitation-writes';
+} from '../../../components';
+import { isNestingRefusal } from '../invitations/invitation-writes';
 import {
   groupDetailFailure,
   serverDisplayLabel,
   serverDisplayLabelForStore as displayServerName,
   serverOf,
   storeOperationAvailability,
-} from '../../model';
-import type { Store } from '../../model';
+} from '../../../model';
+import type { Store } from '../../../model';
 import {
   requireWorkflow,
   workflowAvailability,
   workflowMessage,
-} from '../../model/workflow-availability';
-import { useTabSheetState } from '../../navigation-guard';
-import { markProfileRostersStale } from '../../data/roster-staleness';
-import { GroupMark } from '../../components/group-mark';
-import { manageReason } from '../../model/group-model';
+} from '../../../model/workflow-availability';
+import { useTabSheetState } from '../../../navigation-guard';
+import { markProfileRostersStale } from '../../../data/roster-staleness';
+import { GroupMark } from '../../../components/group-mark';
+import { manageReason } from '../../../model/group-model';
 import {
   DetailUnavailable,
   useSheetWrite,
   VisibilityStepper,
 } from './sheet-support';
 import type { GroupSheetBaseProps } from './sheet-support';
-import { useToast } from '../../../kit/toasts';
-import { useShellServices, useShellSnapshot } from '../../shell-services';
+import { useToast } from '../../../../kit/toasts';
+import { useShellServices, useShellSnapshot } from '../../../shell-services';
 
 export function AddTeamSheet({
   store,

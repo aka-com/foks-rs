@@ -16,7 +16,7 @@ import {
   Inset,
   InsetRow,
   SectionLabel,
-} from '../components';
+} from '../../components';
 import {
   catalog,
   chatAvailable,
@@ -27,23 +27,23 @@ import {
   serverOf,
   shortId,
   storeDescriptionState,
-} from '../model';
+} from '../../model';
 import type {
   AgentSnapshot,
   AvailabilityOptions,
   AvailabilityReason,
   TeamStore,
-} from '../model';
-import { useSidebarInbox } from '../chat/inbox-provider';
+} from '../../model';
+import { useSidebarInbox } from '../../chat/inbox-provider';
 import {
   accessSummary,
   channelMeta,
   channelTitle,
   listChannels,
   previewTime,
-} from '../chat/presentation';
-import type { Location } from '../location';
-import { accessCopy } from './store-access';
+} from '../../chat/presentation';
+import type { Location } from '../../location';
+import { accessCopy } from '../../screens/store-access';
 
 /** The items the catalog holds for one store. */
 export function itemCountOf(snapshot: AgentSnapshot, store: TeamStore): number {
