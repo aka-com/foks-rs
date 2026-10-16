@@ -14,6 +14,7 @@ pub enum PageStatement {
     ListTimeContinue,
     DirectoryProbe,
     DirectorySlice,
+    SchemaObjects,
 }
 
 const INTEGER: Column = Column {
@@ -34,6 +35,89 @@ const fn text(maximum_bytes: u32) -> Column {
         maximum_bytes,
         nullable: false,
     }
+}
+const fn nullable_text(maximum_bytes: u32) -> Column {
+    Column {
+        kind: PageKind::Text,
+        maximum_bytes,
+        nullable: true,
+    }
+}
+const SCHEMA_PARAMETERS: &[Column] = &[INTEGER, text(8), text(256), INTEGER];
+const SCHEMA_COLUMNS: &[Column] = &[
+    text(7),
+    INTEGER,
+    nullable_text(8),
+    text(7),
+    INTEGER,
+    nullable_text(256),
+    text(7),
+    INTEGER,
+    nullable_text(256),
+    text(7),
+    INTEGER,
+    nullable_text(65536),
+];
+macro_rules! schema_field {
+    ($field:literal, $cap:literal) => {
+        concat!(
+            "typeof(",
+            $field,
+            "),CASE WHEN typeof(",
+            $field,
+            ")='text' THEN CAST(length(CAST(",
+            $field,
+            " AS BLOB)) AS TEXT) ELSE '-1' END,CASE WHEN typeof(",
+            $field,
+            ")='text' AND length(CAST(",
+            $field,
+            " AS BLOB))<=",
+            $cap,
+            " THEN ",
+            $field,
+            " ELSE NULL END"
+        )
+    };
+}
+/// Every non-internal object is visible, including unexpected NULL SQL. Guarded
+/// fields preserve type/length errors without copying oversized SQL or names.
+pub const SCHEMA_OBJECTS_SQL: &str = concat!(
+    "SELECT ", schema_field!("type", "8"), ",", schema_field!("name", "256"),
+    ",", schema_field!("tbl_name", "256"), ",", schema_field!("sql", "65536"),
+    " FROM sqlite_schema WHERE (typeof(name)!='text' OR substr(name,1,7) != 'sqlite_' COLLATE NOCASE) AND (CAST(?1 AS INTEGER)=1 OR (type COLLATE BINARY,name COLLATE BINARY)>(?2 COLLATE BINARY,?3 COLLATE BINARY)) ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT CAST(?4 AS INTEGER)"
+);
+
+/// Activation-owned cursor construction. Generic PageSpec admission checks only
+/// types/bounds; it does not prove this initial/continuation relationship or that
+/// a cursor came from the last successfully validated schema page.
+pub fn schema_objects_parameters(
+    after: Option<(&str, &str)>,
+    limit: u16,
+) -> crate::Result<[crate::Value; 4]> {
+    use crate::{Error, Value};
+    let (initial, kind, name) = match after {
+        None => (1, "", ""),
+        Some((kind, name)) => {
+            if !matches!(kind, "table" | "index" | "trigger" | "view")
+                || name.is_empty()
+                || name.len() > 256
+            {
+                return Err(Error::Bounds);
+            }
+            (0, kind, name)
+        }
+    };
+    crate::page::charge(kind.len() + name.len())?;
+    let parameters = [
+        Value::Integer(initial),
+        Value::Text(kind.into()),
+        Value::Text(name.into()),
+        Value::Integer(i64::from(limit)),
+    ];
+    PageStatement::SchemaObjects
+        .spec()
+        .validate_parameters(&parameters)?;
+    Ok(parameters)
 }
 
 // Probes precede payloads, distinguishing a missing optional row from a
@@ -134,7 +218,7 @@ const TIME_CONTINUE: &str = concat!(list_projection!(),
     "WHERE c.uid=?1 AND c.parent_id=?2 AND (c.creation_time,c.dirent_id)>(CAST(?3 AS INTEGER),?4) ORDER BY c.creation_time,c.dirent_id LIMIT CAST(?6 AS INTEGER)");
 
 impl PageStatement {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::ProbeTypes,
         Self::ListInitial,
         Self::ListMacStart,
@@ -143,6 +227,7 @@ impl PageStatement {
         Self::ListTimeContinue,
         Self::DirectoryProbe,
         Self::DirectorySlice,
+        Self::SchemaObjects,
     ];
     pub fn from_id(id: u32) -> Option<Self> {
         Self::ALL
@@ -151,6 +236,9 @@ impl PageStatement {
     }
     pub fn spec(self) -> PageSpec {
         let (sql,parameters,columns,integer_ranges,limit_parameter):(_, &'static [_], &'static [_], &'static [_], _) = match self {
+            Self::SchemaObjects => (
+                SCHEMA_OBJECTS_SQL, SCHEMA_PARAMETERS, SCHEMA_COLUMNS,
+                &[IntegerRange{parameter:0,minimum:0,maximum:1}], Some(3)),
             Self::DirectoryProbe => (
                 "SELECT CAST(d.version AS TEXT),typeof(d.exact_directory),CAST(length(CAST(d.exact_directory AS BLOB)) AS TEXT) FROM kv_directory_heads h JOIN kv_directories d ON d.uid=h.uid AND d.directory_id=h.directory_id AND d.version=h.version WHERE h.uid=?1 AND h.directory_id=?2 AND CAST(?3 AS INTEGER)>0",
                 DIRECTORY_PROBE_PARAMETERS,DIRECTORY_PROBE_COLUMNS,

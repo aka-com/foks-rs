@@ -81,6 +81,8 @@ pub enum Statement {
     PersonalSmallNode,
     HistoricalName,
     PublicUsage,
+    ReadDependency,
+    ReadSchemaCookie,
 }
 
 #[derive(Serialize)]
@@ -94,7 +96,7 @@ pub struct Spec {
 }
 
 impl Statement {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 44] = [
         Self::NamespaceParty,
         Self::NamespaceEnsure,
         Self::Head,
@@ -137,6 +139,8 @@ impl Statement {
         Self::PersonalSmallNode,
         Self::HistoricalName,
         Self::PublicUsage,
+        Self::ReadDependency,
+        Self::ReadSchemaCookie,
     ];
 
     pub fn from_id(id: u32) -> Result<Self> {
@@ -147,6 +151,32 @@ impl Statement {
     }
 
     pub fn spec(self) -> Spec {
+        if self == Self::ReadDependency {
+            return Spec {
+                id: self as u32,
+                sql: READ_DEPENDENCY_SQL,
+                parameters: &[],
+                columns: &[
+                    Kind::Text,
+                    Kind::Integer,
+                    Kind::NullableBlob,
+                    Kind::Text,
+                    Kind::Integer,
+                ],
+                write: false,
+                maximum_blob_bytes: 32,
+            };
+        }
+        if self == Self::ReadSchemaCookie {
+            return Spec {
+                id: self as u32,
+                sql: READ_SCHEMA_COOKIE_SQL,
+                parameters: &[],
+                columns: &[Kind::Integer],
+                write: false,
+                maximum_blob_bytes: 0,
+            };
+        }
         if matches!(
             self,
             Self::AuthorityState
@@ -250,6 +280,15 @@ impl Statement {
         Ok(())
     }
 }
+
+/// Guarded point projection only. Callers must reject missing/suppressed data,
+/// invalid types, zero incarnation and nonpositive revision before trusting it.
+pub const READ_DEPENDENCY_SQL: &str = "SELECT typeof(incarnation),CASE WHEN typeof(incarnation)='blob' THEN CAST(length(incarnation) AS TEXT) ELSE '-1' END,CASE WHEN typeof(incarnation)='blob' AND length(incarnation)=32 THEN incarnation ELSE NULL END,typeof(revision),CASE WHEN typeof(revision)='integer' THEN CAST(revision AS TEXT) ELSE '0' END FROM metadata_read_dependency WHERE singleton=1";
+
+/// Qualified on pinned celld with transactional DDL/rollback. A cookie alone is
+/// not a connection-bound schema proof; only an admitted guard can use it.
+pub const READ_SCHEMA_COOKIE_SQL: &str =
+    "SELECT CAST(schema_version AS TEXT) FROM pragma_schema_version";
 
 /// Kept byte-identical to server-db's selection until the shared query layer lands.
 pub const HISTORICAL_NAME_SELECTION_SQL: &str = "SELECT e.dirent_id,e.version FROM kv_dirents e INDEXED BY kv_dirent_historical_name JOIN kv_directories d ON d.uid=e.uid AND d.directory_id=e.parent_id AND d.version=e.directory_version WHERE e.uid=?1 AND e.parent_id=?2 AND e.name_mac=?3 AND e.directory_version=CAST(?4 AS INTEGER) ORDER BY e.version DESC,e.dirent_id ASC LIMIT 1";

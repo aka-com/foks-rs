@@ -309,7 +309,7 @@ fn catalog_contract_limits_and_exact_integer_type_probe() {
         assert_eq!(PageStatement::from_id(statement as u32), Some(statement));
     }
     assert!(PageStatement::from_id(0).is_none());
-    assert!(PageStatement::from_id(9).is_none());
+    assert!(PageStatement::from_id(10).is_none());
     assert_eq!(
         PageStatement::ListInitial.spec().effective_rows().unwrap(),
         15
