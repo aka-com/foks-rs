@@ -189,49 +189,144 @@ fn ordered(request: &ListRequest, previous: Option<Position>, next: Position) ->
         (ListCursor::Initial, None) => true,
     }
 }
-/// Rechecks the opaque SQL-created credential, then assembles exact public bytes.
-/// Keep authentication, this call, and publication proof in the same transaction.
-/// This helper neither starts/commits a transaction nor makes a production guard.
-pub fn read_personal_list(
+trait Encoder {
+    type Output;
+    fn append(&mut self, entry: &KvDirent, small: Option<&KvSmallFileBox>) -> crate::Result<()>;
+    fn finish(self, final_page: bool) -> crate::Result<Self::Output>;
+}
+impl Encoder for ListEncoder {
+    type Output = Vec<u8>;
+    fn append(&mut self, entry: &KvDirent, small: Option<&KvSmallFileBox>) -> crate::Result<()> {
+        ListEncoder::append(self, entry, small)
+    }
+    fn finish(self, final_page: bool) -> crate::Result<Self::Output> {
+        ListEncoder::finish(self, final_page)
+    }
+}
+#[cfg(any(test, feature = "list-allocation-qualification"))]
+impl Encoder for crate::list_encoder::owned::OwnedListEncoder {
+    type Output = crate::list_encoder::owned::OwnedListBytes;
+    fn append(&mut self, entry: &KvDirent, small: Option<&KvSmallFileBox>) -> crate::Result<()> {
+        Self::append(self, entry, small)
+    }
+    fn finish(self, final_page: bool) -> crate::Result<Self::Output> {
+        Self::finish(self, final_page)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PageFault {
+    Unauthenticated,
+    Permission,
+    Missing,
+    UnsupportedProfile,
+    Corrupt,
+    BadArguments,
+    StalePreparation,
+    CachedObjectMissing,
+    Invalid(&'static str),
+    IntegerRange,
+    Conflict,
+    KernelPermission,
+    Quota,
+    Bounds,
+    Storage,
+    Expired,
+}
+impl From<PersonalError> for PageFault {
+    fn from(error: PersonalError) -> Self {
+        use crate::Error as K;
+        match error {
+            PersonalError::Unauthenticated => Self::Unauthenticated,
+            PersonalError::Permission => Self::Permission,
+            PersonalError::Missing => Self::Missing,
+            PersonalError::UnsupportedProfile => Self::UnsupportedProfile,
+            PersonalError::Corrupt => Self::Corrupt,
+            PersonalError::BadArguments => Self::BadArguments,
+            PersonalError::StalePreparation => Self::StalePreparation,
+            PersonalError::CachedObjectMissing => Self::CachedObjectMissing,
+            // No current page callee can produce a stale vector. Consume any
+            // future heap-bearing error while its page allowance is still held.
+            PersonalError::StaleCache(vector) => {
+                drop(vector);
+                Self::Storage
+            }
+            PersonalError::Kernel(error) => match error {
+                K::Invalid(message) => Self::Invalid(message),
+                K::IntegerRange => Self::IntegerRange,
+                K::Conflict => Self::Conflict,
+                K::Permission => Self::KernelPermission,
+                K::Quota => Self::Quota,
+                K::Bounds => Self::Bounds,
+                K::Storage => Self::Storage,
+                K::Expired => Self::Expired,
+            },
+        }
+    }
+}
+impl From<PageFault> for PersonalError {
+    fn from(error: PageFault) -> Self {
+        use crate::Error as K;
+        match error {
+            PageFault::Unauthenticated => Self::Unauthenticated,
+            PageFault::Permission => Self::Permission,
+            PageFault::Missing => Self::Missing,
+            PageFault::UnsupportedProfile => Self::UnsupportedProfile,
+            PageFault::Corrupt => Self::Corrupt,
+            PageFault::BadArguments => Self::BadArguments,
+            PageFault::StalePreparation => Self::StalePreparation,
+            PageFault::CachedObjectMissing => Self::CachedObjectMissing,
+            PageFault::Invalid(message) => K::Invalid(message).into(),
+            PageFault::IntegerRange => K::IntegerRange.into(),
+            PageFault::Conflict => K::Conflict.into(),
+            PageFault::KernelPermission => K::Permission.into(),
+            PageFault::Quota => K::Quota.into(),
+            PageFault::Bounds => K::Bounds.into(),
+            PageFault::Storage => K::Storage.into(),
+            PageFault::Expired => K::Expired.into(),
+        }
+    }
+}
+#[derive(Default)]
+struct PageWork {
+    active: std::cell::Cell<bool>,
+}
+struct PageScope<'a>(&'a std::cell::Cell<bool>);
+impl PageWork {
+    fn enter(&self) -> std::result::Result<PageScope<'_>, PageFault> {
+        if self.active.replace(true) {
+            return Err(PageFault::Storage);
+        }
+        Ok(PageScope(&self.active))
+    }
+}
+impl Drop for PageScope<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+#[derive(Clone, Copy)]
+struct PageProgress {
+    added: usize,
+    last: Option<Position>,
+    exhausted: bool,
+}
+
+fn process_page(
     sql: &mut impl Sql,
     credential: &CurrentCredential,
     request: &ListRequest,
-    now_micros: u64,
-    maximum_directory_bytes: usize,
-) -> Result<Vec<u8>> {
-    #[cfg(feature = "list-allocation-qualification")]
-    let _entry_phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Entry);
-    recheck_current_credential(sql, credential, now_micros)?;
-    require_personal_profile(sql, credential)?;
-    let key = {
-        #[cfg(feature = "list-allocation-qualification")]
-        let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Parent);
-        read_list_parent_key(
-            sql,
-            credential.uid(),
-            &request.parent,
-            maximum_directory_bytes,
-        )?
-    };
-    {
-        #[cfg(feature = "list-allocation-qualification")]
-        let _phase =
-            crate::allocation_trace::phase(crate::allocation_trace::Phase::ParentAuthorization);
-        require_key(
-            sql,
-            credential,
-            KeyRequirement {
-                key,
-                access: KeyAccess::Read,
-            },
-        )?;
-    }
-    let mut encoder = ListEncoder::new(request.count)?;
-    let mut count = 0;
-    let mut after = None;
-    loop {
-        let limit = (request.count - count)
-            .min(usize::from(P::ListInitial.spec().effective_rows()?).min(15));
+    mut after: Option<Position>,
+    remaining: usize,
+    encoder: &mut impl Encoder,
+    work: &mut PageWork,
+) -> std::result::Result<PageProgress, PageFault> {
+    // W1 only proves the lifetime boundary. No allowance or SQL/deadline counter
+    // is reset. All scratch still uses the original cumulative ambient hook.
+    let _scope = work.enter()?;
+    let result = (|| -> Result<PageProgress> {
+        let mut added = 0;
+        let limit = remaining.min(usize::from(P::ListInitial.spec().effective_rows()?).min(15));
         #[cfg(feature = "list-allocation-qualification")]
         let _page_phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Page);
         let (statement, p) = parameters(credential.uid(), request, after, limit)?;
@@ -294,7 +389,7 @@ pub fn read_personal_list(
             #[cfg(feature = "list-allocation-qualification")]
             let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Append);
             encoder.append(&row.entry, small)?;
-            count += 1;
+            added += 1;
         }
         if let Some(error) = failure {
             return Err(error);
@@ -305,10 +400,121 @@ pub fn read_personal_list(
         drop(page);
         #[cfg(feature = "list-allocation-qualification")]
         drop(_page_phase);
-        if count == request.count || rows < limit {
+        Ok(PageProgress {
+            added,
+            last: after,
+            exhausted: rows < limit,
+        })
+    })();
+    // Conversion consumes/drops any error payload before _scope can end.
+    result.map_err(PageFault::from)
+}
+
+/// Rechecks the opaque SQL-created credential, then assembles exact public bytes.
+/// Keep authentication, this call, and publication proof in the same transaction.
+/// This helper neither starts/commits a transaction nor makes a production guard.
+pub fn read_personal_list(
+    sql: &mut impl Sql,
+    credential: &CurrentCredential,
+    request: &ListRequest,
+    now_micros: u64,
+    maximum_directory_bytes: usize,
+) -> Result<Vec<u8>> {
+    read_with_encoder(
+        sql,
+        credential,
+        request,
+        now_micros,
+        maximum_directory_bytes,
+        ListEncoder::new,
+    )
+}
+
+#[cfg(any(test, feature = "list-allocation-qualification"))]
+pub(crate) fn read_personal_list_owned(
+    sql: &mut impl Sql,
+    credential: &CurrentCredential,
+    request: &ListRequest,
+    now_micros: u64,
+    maximum_directory_bytes: usize,
+    owner: std::sync::Arc<dyn crate::list_encoder::owned::ListRetainedOwner>,
+) -> Result<crate::list_encoder::owned::OwnedListBytes> {
+    if owner.failed() {
+        return Err(crate::Error::Bounds.into());
+    }
+    let output = read_with_encoder(
+        sql,
+        credential,
+        request,
+        now_micros,
+        maximum_directory_bytes,
+        |count| crate::list_encoder::owned::OwnedListEncoder::new(count, owner.clone()),
+    )?;
+    if owner.failed() {
+        drop(output);
+        return Err(crate::Error::Bounds.into());
+    }
+    Ok(output)
+}
+
+fn read_with_encoder<E: Encoder>(
+    sql: &mut impl Sql,
+    credential: &CurrentCredential,
+    request: &ListRequest,
+    now_micros: u64,
+    maximum_directory_bytes: usize,
+    make_encoder: impl FnOnce(usize) -> crate::Result<E>,
+) -> Result<E::Output> {
+    #[cfg(feature = "list-allocation-qualification")]
+    let _entry_phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Entry);
+    recheck_current_credential(sql, credential, now_micros)?;
+    require_personal_profile(sql, credential)?;
+    let key = {
+        #[cfg(feature = "list-allocation-qualification")]
+        let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Parent);
+        read_list_parent_key(
+            sql,
+            credential.uid(),
+            &request.parent,
+            maximum_directory_bytes,
+        )?
+    };
+    {
+        #[cfg(feature = "list-allocation-qualification")]
+        let _phase =
+            crate::allocation_trace::phase(crate::allocation_trace::Phase::ParentAuthorization);
+        require_key(
+            sql,
+            credential,
+            KeyRequirement {
+                key,
+                access: KeyAccess::Read,
+            },
+        )?;
+    }
+    let mut encoder = make_encoder(request.count)?;
+    let mut count = 0;
+    let mut after = None;
+    let mut work = PageWork::default();
+    loop {
+        let progress = process_page(
+            sql,
+            credential,
+            request,
+            after,
+            request.count - count,
+            &mut encoder,
+            &mut work,
+        )?;
+        count += progress.added;
+        after = progress.last;
+        if count == request.count || progress.exhausted {
             #[cfg(feature = "list-allocation-qualification")]
             let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Finish);
             return encoder.finish(count < request.count).map_err(Into::into);
         }
     }
 }
+
+#[cfg(test)]
+mod workspace_tests;

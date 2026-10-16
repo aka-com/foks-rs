@@ -154,6 +154,7 @@ struct State {
     maximum_page_scratch: u64,
     first_refusal: u64,
     allocator_failed: bool,
+    owner_failed: bool,
     overflow: bool,
 }
 impl Default for State {
@@ -168,6 +169,7 @@ impl Default for State {
             maximum_page_scratch: 0,
             first_refusal: 0,
             allocator_failed: false,
+            owner_failed: false,
             overflow: false,
         }
     }
@@ -175,6 +177,18 @@ impl Default for State {
 struct Recorder {
     state: Mutex<State>,
     fail_at: u64,
+}
+impl crate::list_encoder::owned::ListRetainedOwner for Recorder {
+    fn reserve_retained(&self, bytes: usize) -> bool {
+        self.record(bytes, Origin::Snowpack, false)
+    }
+    fn failed(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        state.owner_failed || state.first_refusal != 0 || state.overflow || state.allocator_failed
+    }
+    fn fail(&self) {
+        self.state.lock().unwrap().owner_failed = true;
+    }
 }
 impl Recorder {
     fn new(fail_at: u64) -> Self {
@@ -407,22 +421,23 @@ pub fn run_parsed(sql: &mut impl Sql, i: Invocation) -> crate::Result<Report> {
                 personal::authenticate_peer(&mut sql, &i.peer, i.now_micros)
                     .map_err(|e| outcome(&e))?
             };
-            let response = personal::read_personal_list(
+            let response = personal::read_personal_list_owned(
                 &mut sql,
                 &credential,
                 &i.request,
                 i.now_micros,
                 crate::directory::MAXIMUM_DIRECTORY_BYTES,
+                recorder.clone(),
             )
             .map_err(|e| outcome(&e))?;
             // Keep only fixed-size diagnostics before consuming the raw bytes.
             // They are published only after the entire framing operation succeeds.
             let response_length = response.len();
-            let response_digest: [u8; 32] = Sha256::digest(&response).into();
+            let response_digest: [u8; 32] = Sha256::digest(response.as_bytes()).into();
             let frame = if i.frame {
                 let _phase = phase(Phase::Frame);
                 Some(
-                    foks_rpc::encode_success_response_owned_at(response, i.rpc_sequence)
+                    crate::list_encoder::owned::frame_owned_list(response, i.rpc_sequence)
                         .map_err(frame_error)?,
                 )
             } else {
@@ -479,7 +494,7 @@ pub fn run_parsed(sql: &mut impl Sql, i: Invocation) -> crate::Result<Report> {
             report.list_sha256 = Some(digest_hex(response_digest));
             if let Some(frame) = frame {
                 report.frame_bytes = frame.len() as u64;
-                report.frame_sha256 = Some(hash(&frame));
+                report.frame_sha256 = Some(hash(frame.as_bytes()));
             }
         }
     }

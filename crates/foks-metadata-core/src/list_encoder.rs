@@ -9,6 +9,37 @@ pub const MAX_ENTRIES: usize = 4096;
 const MAX_DIRENT_BYTES: usize = 4096;
 const MAX_SMALL_BYTES: usize = 65536;
 
+#[cfg(any(test, feature = "list-allocation-qualification"))]
+pub(crate) mod owned;
+
+enum Retention {
+    Ambient,
+    #[cfg(any(test, feature = "list-allocation-qualification"))]
+    Owned(std::sync::Arc<dyn owned::ListRetainedOwner>),
+}
+impl Retention {
+    fn reserve(&self, bytes: usize) -> Result<()> {
+        match self {
+            Self::Ambient => charge(bytes),
+            #[cfg(any(test, feature = "list-allocation-qualification"))]
+            Self::Owned(owner) => {
+                if owner.failed() || !owner.reserve_retained(bytes) {
+                    owner.fail();
+                    Err(Error::Bounds)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+    fn fail(&self) {
+        #[cfg(any(test, feature = "list-allocation-qualification"))]
+        if let Self::Owned(owner) = self {
+            owner.fail();
+        }
+    }
+}
+
 /// Retains encoded bodies only. Capacity is at most twice the payload ceiling;
 /// finalization temporarily adds one exact-size output. Allocation admission
 /// charges every new allocation before it coexists with any old allocation.
@@ -19,6 +50,8 @@ pub struct ListEncoder {
     extended_count: usize,
     maximum_entries: usize,
     maximum_bytes: usize,
+    // Payload fields precede the retained owner. Ambient preserves the old API.
+    retention: Retention,
 }
 
 impl ListEncoder {
@@ -37,6 +70,7 @@ impl ListEncoder {
             extended_count: 0,
             maximum_entries,
             maximum_bytes,
+            retention: Retention::Ambient,
         })
     }
 
@@ -93,8 +127,18 @@ impl ListEncoder {
         if encoded_length(count, extended_count, entries_len, extended_len)? > self.maximum_bytes {
             return Err(Error::Bounds);
         }
-        grow(&mut self.entries, entries_len, self.maximum_bytes)?;
-        grow(&mut self.extended, extended_len, self.maximum_bytes)?;
+        grow(
+            &mut self.entries,
+            entries_len,
+            self.maximum_bytes,
+            &self.retention,
+        )?;
+        grow(
+            &mut self.extended,
+            extended_len,
+            self.maximum_bytes,
+            &self.retention,
+        )?;
         self.entries.extend_from_slice(&entry);
         if let (Some(small), Some(position)) = (small, position) {
             self.extended.push(0x92);
@@ -113,9 +157,10 @@ impl ListEncoder {
             self.entries.len(),
             self.extended.len(),
         )?;
-        charge(length)?;
+        self.retention.reserve(length)?;
         let mut output = Vec::new();
         output.try_reserve_exact(length).map_err(|_| {
+            self.retention.fail();
             #[cfg(feature = "list-allocation-qualification")]
             crate::allocation_trace::allocator_failed();
             crate::Error::Bounds
@@ -135,7 +180,7 @@ fn charge(bytes: usize) -> Result<()> {
     reserve_allocation(bytes).map_err(|_| Error::Bounds)
 }
 
-fn grow(buffer: &mut Vec<u8>, needed: usize, maximum: usize) -> Result<()> {
+fn grow(buffer: &mut Vec<u8>, needed: usize, maximum: usize, retention: &Retention) -> Result<()> {
     if needed <= buffer.capacity() {
         return Ok(());
     }
@@ -147,10 +192,11 @@ fn grow(buffer: &mut Vec<u8>, needed: usize, maximum: usize) -> Result<()> {
     // owns the old one. reserve_exact avoids unaccounted Vec geometric growth.
     #[cfg(feature = "list-allocation-qualification")]
     let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Growth);
-    charge(capacity)?;
+    retention.reserve(capacity)?;
     buffer
         .try_reserve_exact(capacity - buffer.len())
         .map_err(|_| {
+            retention.fail();
             #[cfg(feature = "list-allocation-qualification")]
             crate::allocation_trace::allocator_failed();
             crate::Error::Bounds

@@ -396,3 +396,42 @@ fn valid_parent_and_complete_list_frame_formulas_bound_real_codec_charges() {
     assert!(formula::frame(1, 4097, 0).is_err());
     assert!(formula::frame(1, 1, 2).is_err());
 }
+
+#[test]
+fn retained_owner_uses_original_cumulative_recorder_and_survives_output() {
+    use crate::list_encoder::owned::{ListRetainedOwner, OwnedListEncoder};
+    let recorder = Arc::new(Recorder::new(0));
+    let weak = Arc::downgrade(&recorder);
+    let raw = {
+        let _phase = phase(Phase::Finish);
+        OwnedListEncoder::new(0, recorder.clone())
+            .unwrap()
+            .finish(true)
+            .unwrap()
+    };
+    let initial = recorder.state.lock().unwrap().total;
+    assert_eq!(initial.attempts, 1);
+    assert_eq!(initial.admitted_bytes, raw.len() as u64);
+    assert_eq!(
+        recorder.state.lock().unwrap().phases[Phase::Finish as usize].attempts,
+        1
+    );
+    assert!(recorder.reserve_retained(10));
+    assert_eq!(
+        recorder.state.lock().unwrap().total.admitted_bytes,
+        initial.admitted_bytes + 10
+    );
+    drop(recorder);
+    assert!(weak.upgrade().is_some());
+    drop(raw);
+    assert!(weak.upgrade().is_none());
+    let recorder = Arc::new(Recorder::new(1));
+    assert!(OwnedListEncoder::new(0, recorder.clone())
+        .unwrap()
+        .finish(true)
+        .is_err());
+    assert!(recorder.failed());
+    let state = recorder.state.lock().unwrap();
+    assert_eq!(state.first_refusal, 1);
+    assert!(!state.allocator_failed);
+}
