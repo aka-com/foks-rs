@@ -757,6 +757,9 @@ mod tests {
         db.settle_chunk_publication(&token, true).unwrap();
         reference(&db, &[1; 32]);
         db.connection
+            .execute_batch(include_str!("../tests/fixtures/remove_kv_current.sql"))
+            .unwrap();
+        db.connection
             .execute_batch(include_str!("../tests/fixtures/remove_chunk_ledger.sql"))
             .unwrap();
         db.connection
@@ -816,6 +819,9 @@ mod tests {
         let token = db.reserve_chunk_object(&[1; 32], 10, &[1; 16], 1).unwrap();
         db.settle_chunk_publication(&token, true).unwrap();
         reference(&db, &[1; 32]);
+        db.connection
+            .execute_batch(include_str!("../tests/fixtures/remove_kv_current.sql"))
+            .unwrap();
         db.connection
             .execute_batch(include_str!("../tests/fixtures/remove_chunk_ledger.sql"))
             .unwrap();

@@ -1,3 +1,18 @@
+/// Current-name presence query shared by contract with the typed metadata catalog.
+/// Names are deliberately nonunique; exclude only the requested dirent itself.
+pub const KV_NAME_CONFLICT_SQL: &str = "SELECT '1' FROM kv_dirent_current
+WHERE uid = ?1 AND parent_id = ?2 AND dirent_id != ?3 AND name_mac = ?4 LIMIT 1";
+
+const KV_LIST_INITIAL_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
+JOIN kv_dirents d ON d.uid=c.uid AND d.parent_id=c.parent_id AND d.dirent_id=c.dirent_id AND d.version=c.version
+WHERE c.uid=?1 AND c.parent_id=?2 ORDER BY c.name_mac,c.dirent_id LIMIT ?3";
+const KV_LIST_MAC_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
+JOIN kv_dirents d ON d.uid=c.uid AND d.parent_id=c.parent_id AND d.dirent_id=c.dirent_id AND d.version=c.version
+WHERE c.uid=?1 AND c.parent_id=?2 AND c.name_mac>?3 ORDER BY c.name_mac,c.dirent_id LIMIT ?4";
+const KV_LIST_TIME_SQL: &str = "SELECT d.exact_dirent, c.node_id FROM kv_dirent_current c
+JOIN kv_dirents d ON d.uid=c.uid AND d.parent_id=c.parent_id AND d.dirent_id=c.dirent_id AND d.version=c.version
+WHERE c.uid=?1 AND c.parent_id=?2 AND c.creation_time>=?3 ORDER BY c.creation_time,c.dirent_id LIMIT ?4";
+
 use crate::allocation::RowAllocationExt as _;
 use rusqlite::{params, OptionalExtension as _, TransactionBehavior};
 
@@ -407,11 +422,7 @@ impl Database {
             if mutation.node_id[0] != 0 {
                 let conflicting_name = transaction
                     .query_row(
-                        "SELECT 1 FROM kv_dirent_heads h
-                         JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
-                           AND d.dirent_id = h.dirent_id AND d.version = h.version
-                         WHERE h.uid = ?1 AND h.parent_id = ?2 AND h.dirent_id != ?3
-                           AND d.name_mac = ?4 AND substr(d.node_id, 1, 1) != X'00'",
+                        KV_NAME_CONFLICT_SQL,
                         params![uid, mutation.parent, mutation.id, mutation.name_mac],
                         |_| Ok(()),
                     )
@@ -1044,37 +1055,9 @@ fn kv_list(
         return Err(Error::Invalid("KV list limit"));
     }
     let (query, mac, time) = match cursor {
-        None => (
-            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
-             JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
-               AND d.dirent_id = h.dirent_id AND d.version = h.version
-             WHERE h.uid = ?1 AND h.parent_id = ?2
-               AND substr(d.node_id, 1, 1) != X'00'
-             ORDER BY d.name_mac, d.dirent_id LIMIT ?3",
-            None,
-            None,
-        ),
-        Some(KvListCursor::Mac(mac)) => (
-            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
-             JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
-               AND d.dirent_id = h.dirent_id AND d.version = h.version
-             WHERE h.uid = ?1 AND h.parent_id = ?2
-               AND substr(d.node_id, 1, 1) != X'00' AND d.name_mac > ?3
-             ORDER BY d.name_mac, d.dirent_id LIMIT ?4",
-            Some(mac),
-            None,
-        ),
-        Some(KvListCursor::Time(time)) => (
-            "SELECT d.exact_dirent, d.node_id FROM kv_dirent_heads h
-         JOIN kv_dirents d ON d.uid = h.uid AND d.parent_id = h.parent_id
-           AND d.dirent_id = h.dirent_id AND d.version = h.version
-         WHERE h.uid = ?1 AND h.parent_id = ?2
-           AND substr(d.node_id, 1, 1) != X'00'
-           AND d.creation_time >= ?3
-         ORDER BY d.creation_time, d.dirent_id LIMIT ?4",
-            None,
-            Some(time),
-        ),
+        None => (KV_LIST_INITIAL_SQL, None, None),
+        Some(KvListCursor::Mac(mac)) => (KV_LIST_MAC_SQL, Some(mac), None),
+        Some(KvListCursor::Time(time)) => (KV_LIST_TIME_SQL, None, Some(time)),
     };
     let mut statement = connection.prepare(query)?;
     let limit = i64::try_from(limit).map_err(|_| Error::IntegerRange)?;
@@ -1629,3 +1612,7 @@ mod accounting_scaling_tests {
         assert_eq!(costs[1], costs[2]);
     }
 }
+
+#[cfg(test)]
+#[path = "kv_current_tests.rs"]
+mod current_tests;

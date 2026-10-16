@@ -21,7 +21,7 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + S
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_ROWS: usize = 10_000;
 const BASE_TABLES: &[&str] = &["kv_nodes", "kv_dirents", "kv_dirent_heads", "kv_locks"];
-const DERIVED_TABLES: &[&str] = &["kv_namespaces"];
+const DERIVED_TABLES: &[&str] = &["kv_namespaces", "kv_dirent_current"];
 
 fn invalid(message: &'static str) -> Box<dyn std::error::Error + Send + Sync> {
     std::io::Error::other(message).into()
@@ -525,6 +525,12 @@ impl Schema {
                 continue;
             }
             if DERIVED_TABLES.contains(&table.name.as_str()) {
+                if table.name == "kv_dirent_current" {
+                    // Replay only base mutations. The authority reconstructs this
+                    // projection through triggers and compares the FULL after hash;
+                    // accepting it as a direct write would bypass that check.
+                    continue;
+                }
                 // Only trigger-owned counters may change. Namespace ownership
                 // and party/host bindings are frozen in this proof.
                 let identity = |data: &TableRows| -> Result<BTreeSet<String>> {
@@ -672,6 +678,48 @@ mod tests {
             .execute_batch("CREATE VIEW unsupported_view AS SELECT 1;")
             .unwrap();
         assert!(Schema::export(&connection).is_err());
+    }
+
+    #[test]
+    fn current_projection_is_derived_and_never_a_delta_write() {
+        let (_directory, connection, schema) = fixture();
+        connection
+            .execute_batch(
+                "INSERT INTO kv_directories VALUES(zeroblob(33),zeroblob(16),1,3,0,1,0,X'01')",
+            )
+            .unwrap();
+        let before = schema.snapshot(&connection).unwrap();
+        connection.execute_batch("INSERT INTO kv_dirents VALUES(zeroblob(33),zeroblob(16),zeroblob(16),1,1,X'0300000000000000000000000000000000',zeroblob(32),1,X'01');
+            INSERT INTO kv_dirent_heads VALUES(zeroblob(33),zeroblob(16),zeroblob(16),1);").unwrap();
+        let after = schema.snapshot(&connection).unwrap();
+        let delta = schema.delta(&before, &after).unwrap();
+        assert_eq!(
+            delta
+                .changes
+                .iter()
+                .map(|c| c.table.as_str())
+                .collect::<Vec<_>>(),
+            vec!["kv_dirents", "kv_dirent_heads"]
+        );
+        assert_eq!(
+            after
+                .tables
+                .iter()
+                .find(|t| t.name == "kv_dirent_current")
+                .unwrap()
+                .rows
+                .len(),
+            1
+        );
+        connection
+            .execute("UPDATE kv_dirent_current SET creation_time=2", [])
+            .unwrap();
+        let tampered = schema.snapshot(&connection).unwrap();
+        let derived_only = schema.delta(&after, &tampered).unwrap();
+        assert!(derived_only.changes.is_empty());
+        // The Worker must reject this after-hash mismatch: no base mutations
+        // could reproduce it. Its actual SQL replay is tested in authority.test.mjs.
+        assert_ne!(derived_only.before_hash, derived_only.after_hash);
     }
 
     #[test]

@@ -88,7 +88,6 @@ pub(super) fn migrate(c: &Connection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[test]
     fn genuine_schema_52_migration_preserves_legacy_references_attempts_and_charges() {
         let dir = tempfile::tempdir().unwrap();
