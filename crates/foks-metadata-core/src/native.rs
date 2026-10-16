@@ -76,15 +76,18 @@ impl Sql for NativeSql<'_> {
                 .and_then(|n| n.checked_add(spec.maximum_row_bytes().ok()?))
                 .ok_or(Error::Bounds)?,
         )?;
-        let bindings: Vec<_> = parameters
-            .iter()
-            .map(|v| match v {
+        let mut bindings = Vec::with_capacity(parameters.len());
+        for value in parameters {
+            bindings.push(match value {
                 Value::Null => SqlValue::Null,
-                Value::Integer(n) => SqlValue::Text(n.to_string()),
+                Value::Integer(n) => SqlValue::Text(
+                    String::from_utf8(crate::scalar::Decimal::new(*n).bytes().to_vec())
+                        .map_err(|_| Error::Storage)?,
+                ),
                 Value::Text(s) => SqlValue::Text(s.clone()),
                 Value::Blob(b) => SqlValue::Blob(b.clone()),
-            })
-            .collect();
+            });
+        }
         let mut query = self
             .connection
             .prepare(spec.sql)
@@ -111,7 +114,7 @@ impl Sql for NativeSql<'_> {
                     (ValueRef::Text(text), PageKind::Integer) if text.len() <= 20 => {
                         let text = std::str::from_utf8(text).map_err(|_| Error::Bounds)?;
                         let n: i64 = text.parse().map_err(|_| Error::Bounds)?;
-                        if n.to_string() != text {
+                        if crate::scalar::Decimal::new(n).bytes() != text.as_bytes() {
                             return Err(Error::Bounds);
                         }
                         Cell::Integer(n)
@@ -159,5 +162,51 @@ impl Sql for NativeSql<'_> {
             .execute(statement.spec().sql, rusqlite::params_from_iter(bindings))
             .map_err(|_| Error::Storage)?;
         Ok(count as u64)
+    }
+}
+
+#[cfg(test)]
+mod page_decimal_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    struct Charges(Mutex<Vec<usize>>);
+    impl foks_snowpack::AllocationBudget for Charges {
+        fn reserve(&self, bytes: usize) -> bool {
+            self.0.lock().unwrap().push(bytes);
+            true
+        }
+    }
+    #[test]
+    fn page_decimal_extrema_preserve_bytes_and_original_charge_sequence() {
+        use crate::{page::Cell, page_catalog::PageStatement};
+        let mut connection = Connection::open_in_memory().unwrap();
+        let transaction = connection.transaction().unwrap();
+        let mut sql = NativeSql::new(&transaction).unwrap();
+        let spec = PageStatement::ProbeTypes.spec();
+        let row = spec.maximum_row_bytes().unwrap();
+        let first = 62
+            + 6 * std::mem::size_of::<SqlValue>()
+            + spec.columns.len() * (512 + 2 * std::mem::size_of::<Cell<'_>>())
+            + row;
+        for integer in [i64::MIN, -1, 0, 1, i64::MAX] {
+            let parameters = [
+                Value::Integer(1),
+                Value::Integer(integer),
+                Value::Blob(vec![]),
+                Value::Text("é".into()),
+                Value::Null,
+                Value::Integer(1),
+            ];
+            let charges = Arc::new(Charges(Mutex::new(Vec::with_capacity(2))));
+            let page = foks_snowpack::with_allocation_budget(charges.clone(), || {
+                sql.query_page(PageStatement::ProbeTypes, &parameters)
+            })
+            .unwrap();
+            assert!(
+                matches!(page.rows().next().unwrap().cells().nth(1), Some(Cell::Integer(value)) if value == integer)
+            );
+            assert_eq!(*charges.0.lock().unwrap(), [first, 24 + row]);
+        }
+        assert_eq!(sql.calls(), 5);
     }
 }

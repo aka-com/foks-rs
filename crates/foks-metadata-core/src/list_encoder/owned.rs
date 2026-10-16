@@ -6,6 +6,10 @@ use std::sync::Arc;
 
 pub(crate) trait ListRetainedOwner: Send + Sync {
     fn reserve_retained(&self, bytes: usize) -> bool;
+    /// One held page/control reservation, separate from cumulative retained work.
+    fn reserve_page_workspace(&self, _bytes: usize) -> bool {
+        false
+    }
     fn failed(&self) -> bool;
     fn fail(&self);
 }
@@ -18,6 +22,12 @@ impl OwnedListEncoder {
         let mut inner = ListEncoder::new(maximum_entries)?;
         inner.retention = Retention::Owned(owner);
         Ok(Self { inner })
+    }
+    pub(crate) fn owner(&self) -> Arc<dyn ListRetainedOwner> {
+        let Retention::Owned(owner) = &self.inner.retention else {
+            unreachable!()
+        };
+        owner.clone()
     }
     pub(crate) fn append(
         &mut self,

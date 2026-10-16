@@ -7,6 +7,8 @@ pub(crate) mod catalog;
 mod generations;
 mod list;
 #[cfg(feature = "list-allocation-qualification")]
+pub(crate) use list::allowance::{target_terms as page_allowance_terms, PageAllowanceTerms};
+#[cfg(feature = "list-allocation-qualification")]
 pub(crate) fn list_decoded_size() -> usize {
     std::mem::size_of::<list::Decoded>()
 }

@@ -189,8 +189,17 @@ fn ordered(request: &ListRequest, previous: Option<Position>, next: Position) ->
         (ListCursor::Initial, None) => true,
     }
 }
+#[cfg(any(test, feature = "list-allocation-qualification"))]
+pub(crate) mod allowance;
+
 trait Encoder {
     type Output;
+    #[cfg(any(test, feature = "list-allocation-qualification"))]
+    fn page_owner(
+        &self,
+    ) -> Option<std::sync::Arc<dyn crate::list_encoder::owned::ListRetainedOwner>> {
+        None
+    }
     fn append(&mut self, entry: &KvDirent, small: Option<&KvSmallFileBox>) -> crate::Result<()>;
     fn finish(self, final_page: bool) -> crate::Result<Self::Output>;
 }
@@ -206,6 +215,11 @@ impl Encoder for ListEncoder {
 #[cfg(any(test, feature = "list-allocation-qualification"))]
 impl Encoder for crate::list_encoder::owned::OwnedListEncoder {
     type Output = crate::list_encoder::owned::OwnedListBytes;
+    fn page_owner(
+        &self,
+    ) -> Option<std::sync::Arc<dyn crate::list_encoder::owned::ListRetainedOwner>> {
+        Some(self.owner())
+    }
     fn append(&mut self, entry: &KvDirent, small: Option<&KvSmallFileBox>) -> crate::Result<()> {
         Self::append(self, entry, small)
     }
@@ -290,11 +304,45 @@ impl From<PageFault> for PersonalError {
 #[derive(Default)]
 struct PageWork {
     active: std::cell::Cell<bool>,
+    #[cfg(any(test, feature = "list-allocation-qualification"))]
+    allowance: Option<std::sync::Arc<allowance::Budget>>,
 }
 struct PageScope<'a>(&'a std::cell::Cell<bool>);
 impl PageWork {
+    fn new(encoder: &impl Encoder) -> crate::Result<Self> {
+        #[cfg(any(test, feature = "list-allocation-qualification"))]
+        {
+            Ok(Self {
+                active: std::cell::Cell::new(false),
+                allowance: encoder
+                    .page_owner()
+                    .map(allowance::Budget::new)
+                    .transpose()?,
+            })
+        }
+        #[cfg(not(any(test, feature = "list-allocation-qualification")))]
+        {
+            let _ = encoder;
+            Ok(Self::default())
+        }
+    }
+    fn run(
+        &self,
+        f: impl FnOnce() -> std::result::Result<PageProgress, PageFault>,
+    ) -> std::result::Result<PageProgress, PageFault> {
+        let _scope = self.enter()?;
+        #[cfg(any(test, feature = "list-allocation-qualification"))]
+        if let Some(budget) = &self.allowance {
+            return budget.run(f);
+        }
+        f()
+    }
     fn enter(&self) -> std::result::Result<PageScope<'_>, PageFault> {
         if self.active.replace(true) {
+            #[cfg(any(test, feature = "list-allocation-qualification"))]
+            if let Some(budget) = &self.allowance {
+                budget.fail();
+            }
             return Err(PageFault::Storage);
         }
         Ok(PageScope(&self.active))
@@ -321,93 +369,94 @@ fn process_page(
     encoder: &mut impl Encoder,
     work: &mut PageWork,
 ) -> std::result::Result<PageProgress, PageFault> {
-    // W1 only proves the lifetime boundary. No allowance or SQL/deadline counter
-    // is reset. All scratch still uses the original cumulative ambient hook.
-    let _scope = work.enter()?;
-    let result = (|| -> Result<PageProgress> {
-        let mut added = 0;
-        let limit = remaining.min(usize::from(P::ListInitial.spec().effective_rows()?).min(15));
-        #[cfg(feature = "list-allocation-qualification")]
-        let _page_phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Page);
-        let (statement, p) = parameters(credential.uid(), request, after, limit)?;
-        let page = sql.query_page(statement, &p)?;
-        charge(limit * std::mem::size_of::<Decoded>())?;
-        let mut decoded = Vec::with_capacity(limit);
-        let mut failure = None;
-        let mut rows = 0;
-        for row in page.rows() {
+    // The public Ambient path retains its cumulative hook. The owned path
+    // installs one preheld page allowance; SQL/deadline/failure never reset.
+    work.run(|| {
+        let result = (|| -> Result<PageProgress> {
+            let mut added = 0;
+            let limit = remaining.min(usize::from(P::ListInitial.spec().effective_rows()?).min(15));
             #[cfg(feature = "list-allocation-qualification")]
-            let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Decode);
-            rows += 1;
-            if rows > limit {
-                return Err(PersonalError::Corrupt);
-            }
-            match decode(row, request.load_small) {
-                Ok((position, value)) if ordered(request, after, position) => {
-                    after = Some(position);
-                    decoded.push(value);
+            let _page_phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Page);
+            let (statement, p) = parameters(credential.uid(), request, after, limit)?;
+            let page = sql.query_page(statement, &p)?;
+            charge(limit * std::mem::size_of::<Decoded>())?;
+            let mut decoded = Vec::with_capacity(limit);
+            let mut failure = None;
+            let mut rows = 0;
+            for row in page.rows() {
+                #[cfg(feature = "list-allocation-qualification")]
+                let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Decode);
+                rows += 1;
+                if rows > limit {
+                    return Err(PersonalError::Corrupt);
                 }
-                Ok(_) => {
-                    failure = Some(PersonalError::Corrupt);
-                    break;
-                }
-                Err(error) => {
-                    failure = Some(error);
-                    break;
-                }
-            }
-        }
-        // Fixed page-local storage: no unbounded role cache and no key decisions
-        // carried beyond the owner-held SQL transaction.
-        let mut roles = [Role::NONE; 15];
-        let mut role_count = 0;
-        for row in &decoded {
-            if let Some(small) = &row.small {
-                if small.key.role != Role::NONE && small.key.role <= credential.role() {
-                    roles[role_count] = small.key.role;
-                    role_count += 1;
+                match decode(row, request.load_small) {
+                    Ok((position, value)) if ordered(request, after, position) => {
+                        after = Some(position);
+                        decoded.push(value);
+                    }
+                    Ok(_) => {
+                        failure = Some(PersonalError::Corrupt);
+                        break;
+                    }
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
                 }
             }
-        }
-        let mut generations = [None; 15];
-        for (index, batch) in roles[..role_count].chunks(7).enumerate() {
-            #[cfg(feature = "list-allocation-qualification")]
-            let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Roles);
-            let values = current_key_generations(sql, credential.uid(), batch)?;
-            generations[index * 7..index * 7 + values.len()].copy_from_slice(&values);
-        }
-        let mut role_index = 0;
-        for row in &decoded {
-            let small = row.small.as_ref().filter(|small| {
-                if small.key.role == Role::NONE || small.key.role > credential.role() {
-                    return false;
+            // Fixed page-local storage: no unbounded role cache and no key decisions
+            // carried beyond the owner-held SQL transaction.
+            let mut roles = [Role::NONE; 15];
+            let mut role_count = 0;
+            for row in &decoded {
+                if let Some(small) = &row.small {
+                    if small.key.role != Role::NONE && small.key.role <= credential.role() {
+                        roles[role_count] = small.key.role;
+                        role_count += 1;
+                    }
                 }
-                let current = generations[role_index];
-                role_index += 1;
-                small.key.generation > 0 && current.is_some_and(|g| small.key.generation <= g)
-            });
+            }
+            let mut generations = [None; 15];
+            for (index, batch) in roles[..role_count].chunks(7).enumerate() {
+                #[cfg(feature = "list-allocation-qualification")]
+                let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Roles);
+                let values = current_key_generations(sql, credential.uid(), batch)?;
+                generations[index * 7..index * 7 + values.len()].copy_from_slice(&values);
+            }
+            let mut role_index = 0;
+            for row in &decoded {
+                let small = row.small.as_ref().filter(|small| {
+                    if small.key.role == Role::NONE || small.key.role > credential.role() {
+                        return false;
+                    }
+                    let current = generations[role_index];
+                    role_index += 1;
+                    small.key.generation > 0 && current.is_some_and(|g| small.key.generation <= g)
+                });
+                #[cfg(feature = "list-allocation-qualification")]
+                let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Append);
+                encoder.append(&row.entry, small)?;
+                added += 1;
+            }
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            // Drop the single page and decoded schemas before the next SQL page or
+            // final encoder allocation; output buffers retain their own admission.
+            drop(decoded);
+            drop(page);
             #[cfg(feature = "list-allocation-qualification")]
-            let _phase = crate::allocation_trace::phase(crate::allocation_trace::Phase::Append);
-            encoder.append(&row.entry, small)?;
-            added += 1;
-        }
-        if let Some(error) = failure {
-            return Err(error);
-        }
-        // Drop the single page and decoded schemas before the next SQL page or
-        // final encoder allocation; output buffers retain their own admission.
-        drop(decoded);
-        drop(page);
-        #[cfg(feature = "list-allocation-qualification")]
-        drop(_page_phase);
-        Ok(PageProgress {
-            added,
-            last: after,
-            exhausted: rows < limit,
-        })
-    })();
-    // Conversion consumes/drops any error payload before _scope can end.
-    result.map_err(PageFault::from)
+            drop(_page_phase);
+            Ok(PageProgress {
+                added,
+                last: after,
+                exhausted: rows < limit,
+            })
+        })();
+        // Conversion consumes/drops any diagnostic before the page hook restores.
+        result.map_err(PageFault::from)
+    })
 }
 
 /// Rechecks the opaque SQL-created credential, then assembles exact public bytes.
@@ -495,7 +544,7 @@ fn read_with_encoder<E: Encoder>(
     let mut encoder = make_encoder(request.count)?;
     let mut count = 0;
     let mut after = None;
-    let mut work = PageWork::default();
+    let mut work = PageWork::new(&encoder)?;
     loop {
         let progress = process_page(
             sql,

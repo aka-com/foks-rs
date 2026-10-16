@@ -288,3 +288,74 @@ fn owned_entry_fails_before_sql_only_when_owner_failed() {
         assert_eq!(owner.failed(), failed);
     }
 }
+
+#[test]
+fn owned_page_latches_late_errors_after_preserving_role_query_precedence() {
+    use crate::list_encoder::owned::{ListRetainedOwner, OwnedListEncoder};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    struct Owner(AtomicBool);
+    impl ListRetainedOwner for Owner {
+        fn reserve_retained(&self, _: usize) -> bool {
+            true
+        }
+        fn reserve_page_workspace(&self, _: usize) -> bool {
+            true
+        }
+        fn failed(&self) -> bool {
+            self.0.load(Ordering::SeqCst)
+        }
+        fn fail(&self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    for (role_error, expected) in [(true, PageFault::Expired), (false, PageFault::Corrupt)] {
+        let mut sql = Mock {
+            pages: VecDeque::from([
+                (P::ListInitial, Ok(list_page(2, true, true))),
+                (
+                    P::RoleGenerations,
+                    if role_error {
+                        Err(crate::Error::Expired)
+                    } else {
+                        Ok(role_page())
+                    },
+                ),
+            ]),
+            calls: vec![],
+        };
+        let owner = Arc::new(Owner(AtomicBool::new(false)));
+        let mut encoder = OwnedListEncoder::new(15, owner.clone()).unwrap();
+        let mut work = PageWork::new(&encoder).unwrap();
+        let request = ListRequest::new([0; 16], ListCursor::Initial, 15, true);
+        let result = process_page(
+            &mut sql,
+            &credential(),
+            &request,
+            None,
+            15,
+            &mut encoder,
+            &mut work,
+        );
+        assert!(matches!(result,Err(error) if error == expected));
+        assert_eq!(sql.calls, [P::ListInitial, P::RoleGenerations]);
+        assert!(!work.active.get());
+        assert!(owner.failed());
+        let before = sql.calls.len();
+        assert!(matches!(
+            process_page(
+                &mut sql,
+                &credential(),
+                &request,
+                None,
+                15,
+                &mut encoder,
+                &mut work
+            ),
+            Err(PageFault::Bounds)
+        ));
+        assert_eq!(sql.calls.len(), before);
+    }
+}

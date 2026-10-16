@@ -254,6 +254,8 @@ fn maximum_diagnostic_shape_is_bounded_before_output_allocation() {
         page_scopes: u64::MAX,
         maximum_page_charge: u64::MAX,
         maximum_page_scratch: u64::MAX,
+        workspace_reservations: u64::MAX,
+        workspace_bytes: u64::MAX,
         response_bytes: u64::MAX,
         list_sha256: Some("f".repeat(64)),
         frame_bytes: u64::MAX,
