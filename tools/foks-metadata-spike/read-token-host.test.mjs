@@ -99,3 +99,37 @@ test('entropy source failure cannot keep the previous authority alive',t=>{
   const rejected=new Uint8Array(48);assert.throws(()=>h.installHostEntropy(rejected),/setup rejected/);
   assert.equal(h.tokenReady,false);
 });
+
+// This selector exists only in the already feature-gated fixture export. It
+// returns the digest, never a token and never proof against current SQL state.
+test('strict binding wire decoder has native/Wasm canonical and rejection parity',()=>{
+  const h=ready(),raw=readFileSync(new URL('binding.json',source),'utf8').trim();
+  const decode=exact=>h.runFixture(JSON.stringify({kind:'decode_binding',exact}));
+  const expected=readFileSync(new URL('binding.sha256',source),'utf8').trim();
+  assert.equal(Buffer.from(decode(raw)).toString('hex'),expected);
+  const replaceFirst=(input,before,after)=>{assert.ok(input.includes(before),`missing fixture field: ${before}`);return input.replace(before,after);};
+  const cursor=value=>{const found=raw.match(/"cursor":\{[^}]+\}/);assert.ok(found);return replaceFirst(raw,found[0],`"cursor":${value}`);};
+  for(const value of ['{"kind":"none"}',`{"kind":"mac","value":${JSON.stringify(Array(32).fill(7))}}`,'{"kind":"time","value":"9223372036854775807"}'])assert.equal(decode(cursor(value)).length,32);
+  for(const [prefix,field] of [
+    ['{','"count":"4096",'],['"fence":{','"epoch":"2",'],
+    ['"identity":{','"host":[],'],['"activation":{','"schema":"58",'],
+    ['"limits":{','"dirents":9000,'],['"dependency":{','"revision":"1",'],
+    ['"peer":{','"exact_der":[1],'],['"cursor":{','"kind":"time",'],
+    ['"cursor":{','"value":"1",'],
+  ]){
+    assert.throws(()=>decode(replaceFirst(raw,prefix,prefix+field)),/InvalidBinding/);
+    assert.throws(()=>decode(replaceFirst(raw,prefix,prefix+'"unknown":0,')),/InvalidBinding/);
+  }
+  for(const [before,after] of [
+    ['"count":"4096"','"count":"0"'],['"count":"4096"','"count":"4097"'],
+    ['"count":"4096"','"count":"04096"'],['"count":"4096"','"count":4096'],
+    ['"domain":"foks-metadata-list-binding-v2"','"domain":"other"'],
+    ['"route":"personal_list"','"route":"other"'],
+    ['"blob_bytes":16777216','"blob_bytes":4294967296'],
+    ['"dirent_bytes":4096','"dirent_bytes":18446744073709551615'],
+  ])assert.throws(()=>decode(replaceFirst(raw,before,after)),/InvalidBinding/);
+  for(const value of ['{"kind":{"none":null}}','{"kind":["none"]}','{"kind":null}','{"kind":0}','{"kind":"none","value":null}','{"kind":"mac"}','{"kind":"time","value":null}','{"kind":"time","value":"-1"}','{"kind":"time","value":"01"}','{"kind":"time","value":"9223372036854775808"}','{"kind":"time","value":{"kind":"time","value":"1"}}'])assert.throws(()=>decode(cursor(value)),/InvalidBinding/);
+  assert.equal(decode(replaceFirst(replaceFirst(raw,'"blob_bytes":16777216','"blob_bytes":4294967295'),'"namespace_bytes":9007199254740993','"namespace_bytes":18446744073709551615')).length,32);
+  assert.throws(()=>decode(raw+'{}'),/InvalidBinding/);
+  assert.equal(h.poisoned,false);assert.equal(Buffer.from(decode(raw)).toString('hex'),expected);
+});

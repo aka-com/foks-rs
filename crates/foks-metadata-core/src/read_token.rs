@@ -3,6 +3,8 @@
 //! Verification supplies provenance only. The caller must separately prove the
 //! current SQL credential, parent-key access, fence/revision and deadline before
 //! reading each page and before publishing any response.
+mod wire;
+
 use crate::{
     authority::{Fence, Number},
     personal::PeerCertificate,

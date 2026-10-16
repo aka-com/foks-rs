@@ -128,6 +128,9 @@ mod fixture {
     #[derive(Deserialize)]
     #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
     enum Request {
+        DecodeBinding {
+            exact: String,
+        },
         Issue {
             binding: Binding,
             role: Number,
@@ -158,6 +161,9 @@ mod fixture {
             let holder = holder.borrow();
             let authority = holder.as_ref().ok_or(Error::BundleLost)?;
             let result = match request {
+                Request::DecodeBinding { exact } => ListBinding::decode_wire(exact.as_bytes())?
+                    .digest()?
+                    .to_vec(),
                 Request::Issue {
                     binding,
                     role,
