@@ -397,7 +397,10 @@ mod tests {
         let (temp, db) = fixture();
         insert(&db, 0);
         db.connection
-            .execute_batch(include_str!("../tests/fixtures/remove_kv_current.sql"))
+            .execute_batch(concat!(
+                include_str!("../tests/fixtures/remove_kv_usage.sql"),
+                include_str!("../tests/fixtures/remove_kv_current.sql")
+            ))
             .unwrap();
         db.connection
             .execute_batch(include_str!("../tests/fixtures/remove_chunk_binding.sql"))
@@ -430,7 +433,10 @@ mod tests {
             .unwrap();
         db.activate_chunk_storage_binding(&original).unwrap();
         db.connection
-            .execute_batch(include_str!("../tests/fixtures/remove_kv_current.sql"))
+            .execute_batch(concat!(
+                include_str!("../tests/fixtures/remove_kv_usage.sql"),
+                include_str!("../tests/fixtures/remove_kv_current.sql")
+            ))
             .unwrap();
         db.connection
             .execute_batch(

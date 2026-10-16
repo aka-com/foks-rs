@@ -257,7 +257,10 @@ fn data(c: &Connection) -> Vec<(String, Vec<String>)> {
     tables
         .into_iter()
         .map(|table| {
-            let mut s = c.prepare(&format!("SELECT * FROM \"{table}\"")).unwrap();
+            let columns: Vec<String> = c.prepare("SELECT name FROM pragma_table_info(?1) WHERE name NOT LIKE 'usage_%' AND name!='ciphertext_bytes' ORDER BY cid").unwrap()
+                .query_map([table.as_str()],|r|r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+            let selected=columns.into_iter().map(|v|format!("\"{}\"",v.replace('"',"\"\""))).collect::<Vec<_>>().join(",");
+            let mut s=c.prepare(&format!("SELECT {selected} FROM \"{}\"",table.replace('"',"\"\""))).unwrap();
             let columns = s.column_count();
             let mut rows: Vec<String> = s
                 .query_map([], |r| {
@@ -275,8 +278,11 @@ fn data(c: &Connection) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 fn downgrade(c: &Connection) {
-    c.execute_batch(include_str!("../tests/fixtures/remove_kv_current.sql"))
-        .unwrap();
+    c.execute_batch(concat!(
+        include_str!("../tests/fixtures/remove_kv_usage.sql"),
+        include_str!("../tests/fixtures/remove_kv_current.sql")
+    ))
+    .unwrap();
     c.pragma_update(None, "user_version", 55).unwrap();
 }
 

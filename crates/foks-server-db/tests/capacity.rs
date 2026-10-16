@@ -43,10 +43,11 @@ fn initialized(config: foks_server_db::Config) -> (common::TestDatabase, [u8; 16
 fn namespace_byte_limit_accepts_minus_one_and_exact_but_rejects_plus_one() {
     // The initialized root consumes 18 exact bytes. Each case gets a fresh
     // database so the candidate mutation itself lands at limit - 1, limit,
-    // or limit + 1.
+    // or limit + 1. Encoded boxes have equal fixed overhead at these sizes.
     for (node_bytes, succeeds) in [(9, true), (10, true), (11, false)] {
         let config = foks_server_db::Config {
-            maximum_kv_namespace_bytes: 28,
+            maximum_kv_namespace_bytes: 18
+                + u64::try_from(common::small_box(&[0x41; 10]).len()).unwrap(),
             ..foks_server_db::Config::default()
         };
         let (mut test, _) = initialized(config);
@@ -54,7 +55,7 @@ fn namespace_byte_limit_accepts_minus_one_and_exact_but_rejects_plus_one() {
             uid: &UID,
             id: &[3; 17],
             node_type: 3,
-            exact: &vec![0x41; node_bytes],
+            exact: &common::small_box(&vec![0x41; node_bytes]),
         });
         assert_eq!(result.is_ok(), succeeds, "node bytes: {node_bytes}");
         if !succeeds {
@@ -67,7 +68,7 @@ fn namespace_byte_limit_accepts_minus_one_and_exact_but_rejects_plus_one() {
 fn namespace_object_and_node_limits_are_exact_and_atomic() {
     let config = foks_server_db::Config {
         maximum_kv_namespace_objects: 3,
-        maximum_kv_node_bytes: 4,
+        maximum_kv_node_bytes: common::small_box(&[0x41; 4]).len(),
         ..foks_server_db::Config::default()
     };
     let (mut test, _) = initialized(config);
@@ -76,7 +77,7 @@ fn namespace_object_and_node_limits_are_exact_and_atomic() {
             uid: &UID,
             id: &[3; 17],
             node_type: 3,
-            exact: &[0x41; 4],
+            exact: &common::small_box(&[0x41; 4]),
         })
         .unwrap();
     assert!(matches!(
@@ -84,14 +85,14 @@ fn namespace_object_and_node_limits_are_exact_and_atomic() {
             uid: &UID,
             id: &[4; 17],
             node_type: 4,
-            exact: &[0x42; 4],
+            exact: &common::small_box(&[0x42; 4]),
         }),
         Err(Error::QuotaExceeded)
     ));
     assert!(test.database.integrity_check().unwrap());
 
     let config = foks_server_db::Config {
-        maximum_kv_node_bytes: 4,
+        maximum_kv_node_bytes: common::small_box(&[0x41; 4]).len(),
         ..foks_server_db::Config::default()
     };
     let (mut test, _) = initialized(config);
@@ -100,7 +101,7 @@ fn namespace_object_and_node_limits_are_exact_and_atomic() {
             uid: &UID,
             id: &[3; 17],
             node_type: 3,
-            exact: &[0x43; 5],
+            exact: &common::small_box(&[0x43; 5]),
         }),
         Err(Error::Invalid("KV node mutation"))
     ));
@@ -142,7 +143,7 @@ fn namespace_shape_limits_match_client_traversal_limits() {
             uid: &UID,
             id: &node,
             node_type: 3,
-            exact: b"small-file-box",
+            exact: &common::small_box(b"small-file-box"),
         })
         .unwrap();
     test.database

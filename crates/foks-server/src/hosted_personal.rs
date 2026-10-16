@@ -69,3 +69,21 @@ pub fn read_point(
 ) -> Result<foks_metadata_core::wire::Reply, QualificationError> {
     authority::read_personal_point(sql, invocation).map_err(QualificationError::Personal)
 }
+
+/// Exact native Usage bytes/status for the public route's existing personal
+/// authority and snapshot path. This installs no hosted production route.
+pub fn native_usage(
+    certificate: &CertificateDer<'_>,
+    reader: &foks_server_db::ReadDatabase,
+    clock: &Arc<dyn foks_server_db::Clock>,
+) -> Result<Result<Vec<u8>, foks_rpc::RpcStatus>, QualificationError> {
+    let now = clock
+        .now_micros()
+        .map_err(crate::Error::from)
+        .map_err(QualificationError::Certificate)?;
+    let principal = crate::auth::Principal::authenticate(certificate, reader, now)
+        .map_err(QualificationError::Certificate)?;
+    Ok(crate::services::kv::qualify_personal_usage(
+        &principal, reader, clock,
+    ))
+}

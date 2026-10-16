@@ -152,3 +152,15 @@ fn commit_with_request_at_invite_and_passphrase(
         None => database.commit_identity(&mutation),
     }
 }
+
+pub fn small_box(ciphertext: &[u8]) -> Vec<u8> {
+    foks_proto::KvSmallFileBox {
+        key: foks_proto::RoleAndGeneration {
+            role: foks_proto::Role::OWNER,
+            generation: 1,
+        },
+        ciphertext: ciphertext.to_vec(),
+    }
+    .encode()
+    .unwrap()
+}

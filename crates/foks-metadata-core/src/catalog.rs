@@ -80,6 +80,7 @@ pub enum Statement {
     PersonalDirectory,
     PersonalSmallNode,
     HistoricalName,
+    PublicUsage,
 }
 
 #[derive(Serialize)]
@@ -93,7 +94,7 @@ pub struct Spec {
 }
 
 impl Statement {
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::NamespaceParty,
         Self::NamespaceEnsure,
         Self::Head,
@@ -135,6 +136,7 @@ impl Statement {
         Self::PersonalDirectory,
         Self::PersonalSmallNode,
         Self::HistoricalName,
+        Self::PublicUsage,
     ];
 
     pub fn from_id(id: u32) -> Result<Self> {
@@ -177,6 +179,7 @@ impl Statement {
                 | Self::PersonalRoot
                 | Self::PersonalDirectory
                 | Self::PersonalSmallNode
+                | Self::PublicUsage
         ) {
             return crate::personal::catalog::spec(self);
         }

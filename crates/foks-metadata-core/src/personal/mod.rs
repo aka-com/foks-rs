@@ -370,6 +370,8 @@ pub enum PersonalPoint {
     },
     /// Internal namespace charging counters, not the public KvUsage RPC.
     QuotaCounters {},
+    /// Public ciphertext/file/chunk semantics, encoded as the existing KvUsage.
+    PublicUsage {},
 }
 
 fn exact_row(row: Vec<V>) -> Result<(u64, Vec<u8>)> {
@@ -495,6 +497,33 @@ pub fn read_personal_point(
                 return Err(PersonalError::Corrupt);
             }
             return Ok(crate::wire::Reply { values });
+        }
+        PersonalPoint::PublicUsage {} => {
+            let values = sql
+                .query(S::PublicUsage, &[blob(credential.uid())])?
+                .unwrap_or_else(|| vec![V::Integer(0); 6]);
+            let [small_count, small_bytes, large_count, large_bytes, large_chunks, invalid] =
+                values.as_slice()
+            else {
+                return Err(PersonalError::Corrupt);
+            };
+            if unsigned(invalid)? != 0 {
+                return Err(PersonalError::Corrupt);
+            }
+            let usage = foks_proto::KvUsage {
+                small: foks_proto::KvUsageStats {
+                    number: unsigned(small_count)?,
+                    bytes: unsigned(small_bytes)?,
+                },
+                large: foks_proto::KvChunkedUsageStats {
+                    base: foks_proto::KvUsageStats {
+                        number: unsigned(large_count)?,
+                        bytes: unsigned(large_bytes)?,
+                    },
+                    chunks: unsigned(large_chunks)?,
+                },
+            };
+            foks_snowpack::encode(&usage.to_value()).map_err(|_| PersonalError::Corrupt)?
         }
     };
     if exact.len() > crate::MAX_BLOB_BYTES {

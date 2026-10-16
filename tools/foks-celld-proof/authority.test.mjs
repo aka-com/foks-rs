@@ -3,30 +3,97 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, statSync } from "node:fs";
 import { Authority, MAX_BYTES, hash, integer, typed, boundedJson } from "./authority.mjs";
+import {nodeDecoder} from "./node-decoder.mjs";
 
 const path=process.env.FOKS_PROOF_VECTORS;
 if (!path || statSync(path).size>MAX_BYTES) throw new Error("set FOKS_PROOF_VECTORS to native-generated vectors.json");
 const vectors=JSON.parse(readFileSync(path,"utf8"));
+const decoderPath=process.env.FOKS_PROOF_NODE_DECODER_WASM;
+if (!decoderPath || statSync(decoderPath).size>32*1024*1024) throw new Error("set FOKS_PROOF_NODE_DECODER_WASM to the reviewed Rust Wasm artifact");
+const decoderModule=new WebAssembly.Module(readFileSync(decoderPath));
 const owner="native_owner_00000001";
 const nextOwner="native_owner_00000002";
 const outputHash="b".repeat(64);
 
-function fixture() {
+function fixture(derive=nodeDecoder(decoderModule)) {
   const db=new DatabaseSync(":memory:");
+  const statements=[];
   const storage={
-    sql:{exec(sql,...bindings) { return db.prepare(sql).all(...bindings); }},
+    sql:{exec(sql,...bindings) { statements.push(sql); return db.prepare(sql).all(...bindings); }},
     transactionSync(operation) {
       db.exec("BEGIN IMMEDIATE");
       try { const value=operation(); db.exec("COMMIT"); return value; }
       catch(error) { db.exec("ROLLBACK"); throw error; }
     }
   };
-  const authority=new Authority(storage,vectors.schema);
+  const authority=new Authority(storage,vectors.schema,derive);
   authority.initialize({snapshot:vectors.before,host_id:vectors.host_id,key_bundle:"ZW5jcnlwdGVkLXRlc3Qtb25seQ=="});
   authority.claim({expected_epoch:"0",owner});
   const request={epoch:"1",owner,revision:"0",attempt:"mutation_attempt_0001",output_hash:outputHash,delta:vectors.delta};
-  return {db,authority,request};
+  statements.length=0;
+  return {db,authority,request,statements};
 }
+
+test("actual Rust decoder rejects forged/NULL/corrupt/oversized node derivatives before effects",()=>{
+  const columns=vectors.schema.tables.find(t=>t.name==="kv_nodes").columns;
+  const length=columns.findIndex(c=>c.name==="ciphertext_bytes");
+  const exact=columns.findIndex(c=>c.name==="exact_node");
+  assert.ok(length>=0 && exact>=0);
+  for (const mode of ["count","null","corrupt","oversized","later-invalid"]) {
+    const {db,authority,request,statements}=fixture();
+    try {
+      const forged=structuredClone(request);
+      let row=forged.delta.changes.find(c=>c.table==="kv_nodes").new;
+      if(mode==="count") row[length]={kind:"integer",value:(BigInt(row[length].value)+1n).toString()};
+      if(mode==="null") row[length]={kind:"null"};
+      if(mode==="corrupt") row[exact]={kind:"blob",value:"AA=="};
+      if(mode==="oversized") row[exact]={kind:"blob",value:Buffer.alloc(65537).toString("base64")};
+      if(mode==="later-invalid") {
+        row=structuredClone(row);
+        const id=columns.findIndex(c=>c.name==="node_id");
+        const bytes=Buffer.from(row[id].value,"base64");bytes[1]^=1;
+        row[id]={kind:"blob",value:bytes.toString("base64")};row[length]={kind:"null"};
+        forged.delta.changes.splice(1,0,{table:"kv_nodes",old:null,new:row});
+      }
+      assert.throws(()=>authority.apply(forged),mode);
+      assert.equal(statements.some(s=>/^(INSERT|UPDATE|DELETE)\b/.test(s)),false,mode);
+      assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.before);
+      assert.equal(authority.meta().revision,"0");
+      assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,0);
+    } finally {db.close();}
+  }
+});
+
+test("decoder failure aborts the whole replay without a receipt",()=>{
+  const {db,authority,request}=fixture(()=>{throw new WebAssembly.RuntimeError("injected decoder trap");});
+  try {
+    assert.throws(()=>authority.apply(request),/injected decoder trap/);
+    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.before);
+    assert.equal(authority.meta().revision,"0");
+    assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,0);
+  } finally {db.close();}
+});
+
+test("identical legacy NULL node is revalidated through exact bytes and trigger counters",()=>{
+  const {db,authority,request}=fixture();
+  try {
+    authority.apply(request);
+    const table=vectors.schema.tables.find(t=>t.name==="kv_nodes");
+    const selected=vectors.after.tables.find(t=>t.name==="kv_nodes").rows[0];
+    const nodeId=table.columns.findIndex(c=>c.name==="node_id");
+    db.prepare("UPDATE kv_nodes SET ciphertext_bytes=NULL WHERE node_id=?").run(Buffer.from(selected[nodeId].value,"base64"));
+    const before=authority.read({epoch:"1",owner}).snapshot;
+    const index=table.columns.findIndex(c=>c.name==="ciphertext_bytes");
+    const old=before.tables.find(t=>t.name==="kv_nodes").rows[0];
+    const next=vectors.after.tables.find(t=>t.name==="kv_nodes").rows[0];
+    assert.deepEqual(old[index],{kind:"null"});
+    const repair={...request,revision:"1",attempt:"revalidation_attempt",delta:{before_hash:hash(before),after_hash:hash(vectors.after),changes:[{table:"kv_nodes",old,new:next}]}};
+    authority.apply(repair);
+    assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
+    assert.equal(authority.meta().revision,"2");
+    assert.equal(db.prepare("SELECT usage_unvalidated_small_count AS n FROM kv_namespaces").get().n,0);
+  } finally {db.close();}
+});
 
 test("typed values preserve i64 boundaries and reject lossy or noncanonical inputs",()=>{
   for (const value of ["-9223372036854775808","9223372036854775807","9007199254740993"]) assert.equal(integer(value),value);
@@ -48,7 +115,8 @@ test("native schema and exact FOKS rows round trip through authoritative SQLite"
     assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
     assert.equal(db.prepare("SELECT CAST(creation_time AS TEXT) AS value FROM kv_dirents").get().value,"9007199254740993");
     // Trigger counters are compared against native SQL, never replayed twice.
-    assert.equal(db.prepare("SELECT accounted_objects AS n FROM kv_namespaces").get().n,4);
+    assert.equal(db.prepare("SELECT accounted_objects AS n FROM kv_namespaces").get().n,5);
+    assert.deepEqual(db.prepare("SELECT node_type FROM kv_nodes ORDER BY node_type").all().map(r=>r.node_type),[3,4]);
     assert.deepEqual(authority.apply(request),receipt);
     assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,1);
   } finally {db.close();}
@@ -79,6 +147,26 @@ test("current heads are rebuilt from native PutDirents and derived-only tamperin
     assert.throws(()=>authority.apply(derivedOnly));
     assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
     assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,1);
+  } finally {db.close();}
+});
+
+test("all semantic Usage counters remain derived and cannot change through a hash-only delta",()=>{
+  const {db,authority,request}=fixture();
+  try {
+    authority.apply(request);
+    const schema=vectors.schema.tables.find(t=>t.name==="kv_namespaces");
+    for(const name of ["usage_small_count","usage_small_bytes","usage_large_count","usage_large_bytes","usage_large_chunks","usage_unvalidated_small_count"]) {
+      const forged=structuredClone(vectors.after);
+      const table=forged.tables.find(t=>t.name==="kv_namespaces");
+      const index=schema.columns.findIndex(c=>c.name===name);
+      assert.ok(index>=0);
+      table.rows[0][index]={kind:"integer",value:(BigInt(table.rows[0][index].value)+1n).toString()};
+      const delta={before_hash:hash(vectors.after),after_hash:hash(forged),changes:[]};
+      assert.throws(()=>authority.apply({...request,revision:"1",attempt:"usage_forgery_attempt",delta}),name);
+      assert.deepEqual(authority.read({epoch:"1",owner}).snapshot,vectors.after);
+      assert.equal(authority.meta().revision,"1");
+      assert.equal(db.prepare("SELECT count(*) AS n FROM proof_receipts").get().n,1);
+    }
   } finally {db.close();}
 });
 

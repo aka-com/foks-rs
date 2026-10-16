@@ -757,7 +757,10 @@ mod tests {
         db.settle_chunk_publication(&token, true).unwrap();
         reference(&db, &[1; 32]);
         db.connection
-            .execute_batch(include_str!("../tests/fixtures/remove_kv_current.sql"))
+            .execute_batch(concat!(
+                include_str!("../tests/fixtures/remove_kv_usage.sql"),
+                include_str!("../tests/fixtures/remove_kv_current.sql")
+            ))
             .unwrap();
         db.connection
             .execute_batch(include_str!("../tests/fixtures/remove_chunk_ledger.sql"))
@@ -820,7 +823,10 @@ mod tests {
         db.settle_chunk_publication(&token, true).unwrap();
         reference(&db, &[1; 32]);
         db.connection
-            .execute_batch(include_str!("../tests/fixtures/remove_kv_current.sql"))
+            .execute_batch(concat!(
+                include_str!("../tests/fixtures/remove_kv_usage.sql"),
+                include_str!("../tests/fixtures/remove_kv_current.sql")
+            ))
             .unwrap();
         db.connection
             .execute_batch(include_str!("../tests/fixtures/remove_chunk_ledger.sql"))

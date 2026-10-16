@@ -269,15 +269,21 @@ impl Database {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<Vec<u8>> = transaction
+        let existing: Option<(Vec<u8>, Option<i64>)> = transaction
             .query_row(
-                "SELECT exact_node FROM kv_nodes WHERE uid = ?1 AND node_id = ?2",
+                "SELECT exact_node,ciphertext_bytes FROM kv_nodes WHERE uid = ?1 AND node_id = ?2",
                 params![mutation.uid, mutation.id],
-                |row| row.budgeted_get(0),
+                |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
             )
             .optional()?;
         match existing {
-            Some(exact) if exact == mutation.exact => Ok(()),
+            Some((exact, length)) if exact == mutation.exact => {
+                if length.is_none() {
+                    stamp_node_usage(&transaction, mutation)?;
+                    transaction.commit()?;
+                }
+                Ok(())
+            }
             Some(_) => Err(Error::KvConflict),
             None => {
                 ensure_kv_capacity(
@@ -297,6 +303,7 @@ impl Database {
                         mutation.exact
                     ],
                 )?;
+                stamp_node_usage(&transaction, mutation)?;
                 transaction.commit()?;
                 Ok(())
             }
@@ -1328,47 +1335,64 @@ fn kv_version_check(
     }))
 }
 
+/// Public ciphertext Usage, distinct from quota accounting. Canonical text
+/// integers share the exact SQL with the lossless native/Wasm catalog ABI.
+pub const KV_PUBLIC_USAGE_SQL: &str = "SELECT CAST(usage_small_count AS TEXT),CAST(usage_small_bytes AS TEXT),CAST(usage_large_count AS TEXT),CAST(usage_large_bytes AS TEXT),CAST(usage_large_chunks AS TEXT),CAST(usage_unvalidated_small_count AS TEXT) FROM kv_namespaces WHERE namespace_id=?1";
+
 fn kv_usage(connection: &rusqlite::Connection, uid: &[u8]) -> Result<foks_proto::KvUsage> {
-    let mut statement = connection.prepare(
-        "SELECT exact_node FROM kv_nodes
-         WHERE uid = ?1 AND node_type IN (3, 4)",
-    )?;
-    let rows = statement.query_map([uid], |row| row.budgeted_get::<_, Vec<u8>>(0))?;
-    let mut small_number = 0u64;
-    let mut small_bytes = 0u64;
-    for row in rows {
-        let exact = row?;
-        let boxed = foks_proto::KvSmallFileBox::decode(&exact)
-            .map_err(|_| Error::Invalid("stored KV small node"))?;
-        small_number = small_number.checked_add(1).ok_or(Error::IntegerRange)?;
-        small_bytes = small_bytes
-            .checked_add(u64::try_from(boxed.ciphertext.len()).map_err(|_| Error::IntegerRange)?)
-            .ok_or(Error::IntegerRange)?;
+    let values: Option<[String; 6]> = connection
+        .query_row(KV_PUBLIC_USAGE_SQL, [uid], |row| {
+            Ok([
+                row.budgeted_get(0)?,
+                row.budgeted_get(1)?,
+                row.budgeted_get(2)?,
+                row.budgeted_get(3)?,
+                row.budgeted_get(4)?,
+                row.budgeted_get(5)?,
+            ])
+        })
+        .optional()?;
+    let mut values_unsigned = [0u64; 6];
+    if let Some(values) = values {
+        for (out, value) in values_unsigned.iter_mut().zip(values) {
+            let signed = value
+                .parse::<i64>()
+                .map_err(|_| Error::Invalid("stored KV usage integer"))?;
+            if signed.to_string() != value {
+                return Err(Error::Invalid("stored KV usage integer"));
+            }
+            *out = crate::error::unsigned(signed)?;
+        }
     }
-    let large_number: i64 = connection.query_row(
-        "SELECT count(*) FROM kv_file_uploads WHERE uid = ?1",
-        [uid],
-        |row| row.budgeted_get(0),
-    )?;
-    let (large_chunks, large_bytes): (i64, i64) = connection.query_row(
-        "SELECT coalesce(sum(chunk_count), 0), coalesce(sum(chunk_bytes), 0)
-         FROM kv_file_uploads WHERE uid = ?1",
-        [uid],
-        |row| Ok((row.budgeted_get(0)?, row.budgeted_get(1)?)),
-    )?;
+    if values_unsigned[5] != 0 {
+        return Err(Error::Invalid("stored KV small node"));
+    }
     Ok(foks_proto::KvUsage {
         small: foks_proto::KvUsageStats {
-            number: small_number,
-            bytes: small_bytes,
+            number: values_unsigned[0],
+            bytes: values_unsigned[1],
         },
         large: foks_proto::KvChunkedUsageStats {
             base: foks_proto::KvUsageStats {
-                number: crate::error::unsigned(large_number)?,
-                bytes: crate::error::unsigned(large_bytes)?,
+                number: values_unsigned[2],
+                bytes: values_unsigned[3],
             },
-            chunks: crate::error::unsigned(large_chunks)?,
+            chunks: values_unsigned[4],
         },
     })
+}
+
+fn stamp_node_usage(
+    connection: &rusqlite::Connection,
+    mutation: &KvNodeMutation<'_>,
+) -> Result<()> {
+    let length = foks_proto::KvSmallFileBox::ciphertext_length(mutation.exact)
+        .map_err(|_| Error::Invalid("stored KV small node"))?;
+    if connection.execute("UPDATE kv_nodes SET ciphertext_bytes=?4 WHERE uid=?1 AND node_id=?2 AND exact_node=?3 AND ciphertext_bytes IS NULL",
+        params![mutation.uid,mutation.id,mutation.exact,sql_integer(length)?])? != 1 {
+        return Err(Error::Invalid("KV node usage stamp"));
+    }
+    Ok(())
 }
 
 fn kv_root(connection: &rusqlite::Connection, uid: &[u8]) -> Result<Option<StoredKvRoot>> {
@@ -1621,3 +1645,7 @@ mod current_tests;
 #[cfg(test)]
 #[path = "kv_historical_tests.rs"]
 mod historical_tests;
+
+#[cfg(test)]
+#[path = "kv_usage_tests.rs"]
+mod usage_tests;

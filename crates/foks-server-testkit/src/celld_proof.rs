@@ -547,6 +547,12 @@ impl Schema {
                                         "accounted_objects",
                                         "directory_count",
                                         "dirent_count",
+                                        "usage_small_count",
+                                        "usage_small_bytes",
+                                        "usage_large_count",
+                                        "usage_large_bytes",
+                                        "usage_large_chunks",
+                                        "usage_unvalidated_small_count",
                                     ]
                                     .contains(&c.name.as_str())
                                 })
@@ -637,7 +643,10 @@ mod tests {
     #[test]
     fn snapshot_rebuild_preserves_trigger_counts_and_exact_bytes() {
         let (directory, connection, schema) = fixture();
-        connection.execute_batch("INSERT INTO kv_nodes VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,X'000102ff');").unwrap();
+        // Deliberately malformed legacy state: snapshot import must preserve its
+        // NULL derivation/error sentinel exactly. Replay of a new node separately
+        // requires the shared decoder and never accepts this payload.
+        connection.execute_batch("INSERT INTO kv_nodes(uid,node_id,node_type,exact_node) VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,X'000102ff');").unwrap();
         let snapshot = schema.snapshot(&connection).unwrap();
         let destination = directory.path().join("projection.sqlite");
         schema.materialize(&snapshot, &destination).unwrap();
@@ -662,12 +671,34 @@ mod tests {
     fn delta_replays_only_base_rows_and_rejects_namespace_identity_or_schema_changes() {
         let (_directory, connection, schema) = fixture();
         let before = schema.snapshot(&connection).unwrap();
-        connection.execute_batch("INSERT INTO kv_nodes VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,X'000102ff');").unwrap();
+        connection.execute_batch("INSERT INTO kv_nodes(uid,node_id,node_type,exact_node) VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,X'000102ff');").unwrap();
         let after = schema.snapshot(&connection).unwrap();
         let delta = schema.delta(&before, &after).unwrap();
         assert_eq!(delta.changes.len(), 1);
         assert_eq!(delta.changes[0].table, "kv_nodes");
         assert_eq!(delta.after_hash, digest(&after).unwrap());
+        for name in [
+            "usage_small_count",
+            "usage_small_bytes",
+            "usage_large_count",
+            "usage_large_bytes",
+            "usage_large_chunks",
+            "usage_unvalidated_small_count",
+        ] {
+            connection
+                .execute(&format!("UPDATE kv_namespaces SET {name}={name}+1"), [])
+                .unwrap();
+            let forged = schema.snapshot(&connection).unwrap();
+            let delta = schema.delta(&after, &forged).unwrap();
+            assert!(delta.changes.is_empty(), "{name} cannot be a base write");
+            assert_ne!(
+                delta.before_hash, delta.after_hash,
+                "{name} remains in full hash"
+            );
+            connection
+                .execute(&format!("UPDATE kv_namespaces SET {name}={name}-1"), [])
+                .unwrap();
+        }
         connection
             .execute("UPDATE kv_namespaces SET host_id=?", [[7u8; 33].as_slice()])
             .unwrap();

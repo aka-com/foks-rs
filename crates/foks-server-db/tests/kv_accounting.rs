@@ -95,7 +95,10 @@ fn accounting_tracks_history_updates_rollback_and_cascades() {
         let tx = c.transaction().unwrap();
         match (random >> 40) % 3 {
             0 => {
-                tx.execute("INSERT INTO kv_nodes(uid,node_id,node_type,exact_node) VALUES(zeroblob(33),?1,3,?2) ON CONFLICT(uid,node_id) DO UPDATE SET exact_node=excluded.exact_node", params![id, vec![1_u8; (step % 31) + 1]]).unwrap();
+                let exact = vec![1_u8; (step % 31) + 1];
+                if tx.execute("UPDATE kv_nodes SET exact_node=?2,ciphertext_bytes=NULL WHERE uid=zeroblob(33) AND node_id=?1",params![id,exact]).unwrap()==0 {
+                    tx.execute("INSERT INTO kv_nodes(uid,node_id,node_type,exact_node) VALUES(zeroblob(33),?1,3,?2)",params![id,exact]).unwrap();
+                }
             }
             1 => {
                 tx.execute("DELETE FROM kv_nodes WHERE node_id=?1", [id])
@@ -195,7 +198,7 @@ fn independent_writers_serialize_quota_admission() {
             uid: &UID,
             id: &[3; 17],
             node_type: 3,
-            exact: b"one",
+            exact: &common::small_box(b"one"),
         })
     });
     barrier.wait();
@@ -203,7 +206,7 @@ fn independent_writers_serialize_quota_admission() {
         uid: &UID,
         id: &[4; 17],
         node_type: 4,
-        exact: b"two",
+        exact: &common::small_box(b"two"),
     });
     let b = handle.join().unwrap();
     assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
@@ -215,7 +218,7 @@ fn independent_writers_serialize_quota_admission() {
 fn pooled_opener_validates_initial_limits_and_rejects_replacement() {
     let test = common::TestDatabase::new();
     let c = Connection::open(&test.path).unwrap();
-    c.execute_batch("INSERT INTO kv_namespaces(namespace_id,party_kind,host_id) VALUES(zeroblob(33),1,zeroblob(33)); INSERT INTO kv_nodes VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,zeroblob(5));").unwrap();
+    c.execute_batch("INSERT INTO kv_namespaces(namespace_id,party_kind,host_id) VALUES(zeroblob(33),1,zeroblob(33)); INSERT INTO kv_nodes(uid,node_id,node_type,exact_node) VALUES(zeroblob(33),X'0300000000000000000000000000000000',3,zeroblob(5));").unwrap();
     let strict = Config {
         maximum_kv_node_bytes: 4,
         ..Config::default()

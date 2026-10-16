@@ -1,9 +1,11 @@
 import schema from "./generated-schema.json";
+import decoderModule from "./node-decoder.wasm";
+import { nodeDecoder } from "./node-decoder.mjs";
 import { Buffer } from "node:buffer";
 import { Authority, boundedJson, MAX_BYTES } from "./authority.mjs";
 
 export class FoksProof {
-  constructor(state) { this.state=state; this.authority=new Authority(state.storage,schema); this.busy=false; }
+  constructor(state) { this.state=state; this.authority=new Authority(state.storage,schema,nodeDecoder(decoderModule)); this.busy=false; }
   async fetch(request) {
     // Body parsing awaits I/O and otherwise permits overlapping cell events.
     // Bound one body/candidate per cell; admission failure carries no SQL value.

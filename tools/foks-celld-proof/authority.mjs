@@ -2,6 +2,7 @@
 // requests never supply DDL. Actual FOKS rows, constraints and triggers live here.
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { MAX_EXACT_NODE_BYTES } from "./node-decoder.mjs";
 
 export const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_ROWS = 10000;
@@ -92,7 +93,10 @@ export async function boundedJson(request) {
 }
 
 export class Authority {
-  constructor(storage, schema) {
+  #deriveNode;
+  constructor(storage, schema, deriveNode) {
+    if (typeof deriveNode !== "function") fail();
+    this.#deriveNode = deriveNode;
     this.storage = storage;
     fields(schema,["application_id","version","objects","tables"]);
     integer(schema.application_id); integer(schema.version);
@@ -261,12 +265,22 @@ export class Authority {
       if (this.sql("SELECT count(*) AS n FROM proof_receipts")[0].n >= MAX_RECEIPTS) fail();
       let previous = -1;
       const keys = new Set();
+      const prepared = [];
       for (const change of request.delta.changes) {
         fields(change,["table","old","new"]);
         const order = BASE.indexOf(change.table);
         const table = this.tables.get(change.table);
         if (order < previous || order < 0 || !table || (!change.old && !change.new) || (!change.new && change.table !== "kv_locks")) fail();
         previous = order;
+        if (change.table === "kv_nodes" && change.new) {
+          const exactIndex = table.columns.findIndex(c=>c.name==="exact_node");
+          const exact = change.new[exactIndex];
+          // Check encoded size before typed()/base64() makes a decoded copy.
+          if (exactIndex < 0 || exact?.kind !== "blob" || typeof exact.value !== "string" ||
+              exact.value.length > Math.ceil(MAX_EXACT_NODE_BYTES/3)*4) fail();
+          const decodedLength=exact.value.length/4*3-(exact.value.endsWith("==")?2:exact.value.endsWith("=")?1:0);
+          if(exact.value.length%4!==0 || decodedLength<1 || decodedLength>MAX_EXACT_NODE_BYTES) fail();
+        }
         const normalize = row => {
           if (row === null) return null;
           if (!Array.isArray(row) || row.length !== table.columns.length) fail();
@@ -278,15 +292,40 @@ export class Authority {
         if (!values.length || values.some(v=>v.kind==="null") || (old && next && JSON.stringify(key(old))!==JSON.stringify(key(next)))) fail();
         const encodedKey = `${change.table}:${JSON.stringify(values)}`;
         if (keys.has(encodedKey)) fail(); keys.add(encodedKey);
+        let nodeLength = null;
+        if (change.table === "kv_nodes" && next) {
+          const exactIndex = table.columns.findIndex(c=>c.name==="exact_node");
+          const lengthIndex = table.columns.findIndex(c=>c.name==="ciphertext_bytes");
+          if (exactIndex < 0 || lengthIndex < 0 || next[exactIndex].kind !== "blob" || next[lengthIndex].kind !== "integer") fail();
+          const exact = base64(next[exactIndex].value);
+          if (!exact.length || exact.length > MAX_EXACT_NODE_BYTES) fail();
+          const derived = integer(this.#deriveNode(exact));
+          if (BigInt(derived) < 0n || next[lengthIndex].value !== derived) fail();
+          nodeLength = {value:derived,index:lengthIndex,exactIndex};
+        }
+        prepared.push({change,table,old,next,nodeLength});
+      }
+      // Derive every candidate before the first SQL effect. The later stamp and
+      // every trigger/counter/receipt remain in this same transaction.
+      for (const {change,table,old,next,nodeLength} of prepared) {
         const name = identifier(change.table);
+        const written = nodeLength ? next.map((value,i)=>i===nodeLength.index ? {kind:"null"}:value) : next;
         if (!old) {
-          this.sql(`INSERT INTO ${name} VALUES (${next.map(placeholder).join(",")})`,...next.map(bind));
+          this.sql(`INSERT INTO ${name} VALUES (${written.map(placeholder).join(",")})`,...written.map(bind));
+          if (this.sql("SELECT changes() AS n")[0].n !== 1) fail();
         } else {
           const where = table.columns.map((c,i)=>`${identifier(c.name)} IS ${placeholder(old[i])}`).join(" AND ");
           if (next) {
-            const set = table.columns.map((c,i)=>`${identifier(c.name)}=${placeholder(next[i])}`).join(",");
-            this.sql(`UPDATE ${name} SET ${set} WHERE ${where}`,...next.map(bind),...old.map(bind));
+            const set = table.columns.map((c,i)=>`${identifier(c.name)}=${placeholder(written[i])}`).join(",");
+            this.sql(`UPDATE ${name} SET ${set} WHERE ${where}`,...written.map(bind),...old.map(bind));
           } else this.sql(`DELETE FROM ${name} WHERE ${where}`,...old.map(bind));
+          if (this.sql("SELECT changes() AS n")[0].n !== 1) fail();
+        }
+        if (nodeLength) {
+          const uidIndex=table.columns.findIndex(c=>c.name==="uid"), idIndex=table.columns.findIndex(c=>c.name==="node_id");
+          if (uidIndex<0 || idIndex<0) fail();
+          this.sql("UPDATE kv_nodes SET ciphertext_bytes=CAST(? AS INTEGER) WHERE uid=? AND node_id=? AND exact_node=? AND ciphertext_bytes IS NULL",
+            nodeLength.value,bind(next[uidIndex]),bind(next[idIndex]),bind(next[nodeLength.exactIndex]));
           if (this.sql("SELECT changes() AS n")[0].n !== 1) fail();
         }
       }
