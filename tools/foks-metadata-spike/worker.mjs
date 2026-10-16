@@ -1,26 +1,42 @@
 import module from './kernel.wasm';
 import catalog from './catalog.json' with {type:'json'};
 import fixture from './vectors.json' with {type:'json'};
+import pageArtifact from './page-catalog.json' with {type:'json'};
 import {Kernel,KernelError,PersonalError,sameData} from './host.mjs';
 import {executeDurably} from './durability.mjs';
 
 const quote=s=>'"'+s.replaceAll('"','""')+'"';
 const bytes=value=>value instanceof ArrayBuffer ? new Uint8Array(value):value;
-function seedBind(value) {
+const pageBytes=hex=>{
+  if(typeof hex!=='string'||hex.length>131072||hex.length%2||!/^[0-9a-f]+$/.test(hex))throw new Error('page fixture input');
+  return Uint8Array.from(hex.match(/../g),b=>parseInt(b,16));
+};
+const hexByte=Array.from({length:256},(_,b)=>b.toString(16).padStart(2,'0'));
+const pageHex=bytes=>{
+  // Fixture assertion encoding only; never create a million-element page tree.
+  const chunks=[];
+  for(let start=0;start<bytes.length;start+=4096){
+    const part=[];for(const b of bytes.subarray(start,start+4096))part.push(hexByte[b]);
+    chunks.push(part.join(''));
+  }
+  return chunks.join('');
+};
+function seedBind(value,maximum) {
   if(value==='null')return null;
   if('integer' in value)return value.integer;
   if('text' in value)return value.text;
-  if('blob' in value && value.blob.length<=65536)return Uint8Array.from(value.blob);
+  if('blob' in value && value.blob.length<=maximum)return Uint8Array.from(value.blob);
   throw new Error('fixture cell');
 }
 function seed(storage,vector) {
+  const fixtureMaximum=vector.page===true?65537:65536;
   storage.sql.exec('PRAGMA foreign_keys=ON');
   storage.transactionSync(()=>{
     storage.sql.exec('PRAGMA defer_foreign_keys=ON');
     for(const object of fixture.objects.filter(o=>o.kind==='table'))storage.sql.exec(object.sql);
     for(const table of vector.before)for(const row of table.rows) {
       const placeholders=row.map(v=>v!=='null'&&'integer' in v?'CAST(? AS INTEGER)':'?');
-      storage.sql.exec(`INSERT INTO ${quote(table.name)} VALUES(${placeholders.join(',')})`,...row.map(seedBind));
+      storage.sql.exec(`INSERT INTO ${quote(table.name)} VALUES(${placeholders.join(',')})`,...row.map(value=>seedBind(value,fixtureMaximum)));
     }
     for(const object of fixture.objects.filter(o=>o.kind!=='table'))storage.sql.exec(object.sql);
     if(!storage.sql.exec('PRAGMA foreign_key_check').raw().next().done)throw new Error('fixture foreign key');
@@ -29,11 +45,12 @@ function seed(storage,vector) {
   });
 }
 function snapshot(storage,vector) {
+  const fixtureMaximum=vector.page===true?65537:65536;
   // Full-state inspection is a test assertion only, never kernel execution.
   return vector.before.map(table=>{
     const expressions=table.columns.flatMap(name=>{
       const column=quote(name);
-      return [`typeof(${column})`,`CASE WHEN typeof(${column})='integer' THEN CAST(${column} AS TEXT) WHEN length(${column})<=65536 THEN ${column} ELSE NULL END`];
+      return [`typeof(${column})`,`CASE WHEN typeof(${column})='integer' THEN CAST(${column} AS TEXT) WHEN length(CAST(${column} AS BLOB))<=${fixtureMaximum} THEN ${column} ELSE NULL END`];
     });
     const rows=[];
     for(const row of storage.sql.exec(`SELECT ${expressions.join(',')} FROM ${quote(table.name)}`).raw()) {
@@ -60,12 +77,13 @@ export class FoksMetadata {
     if(!Number.isSafeInteger(index)||!fixture.vectors[index])return new Response('vector',{status:400});
     const vector=fixture.vectors[index],storage=this.state.storage;
     seed(storage,vector);await storage.sync();
-    const kernel=new Kernel(module,catalog,storage);
+    const kernel=new Kernel(module,catalog,storage,pageArtifact);
     const outputDeadline=Date.now()+1000;
     let reply=null,outcome='ok',message=null;
     try {
       const execute=()=>{
-        const reply=kernel.run(vector.command,{failAfter:vector.fail_after,trapAfter:vector.trap_after,failStatement:vector.fail_statement,trapStatement:vector.trap_statement,deadline:outputDeadline,authority:vector.authority===true,personal:vector.personal||false});
+        const controls={failAfter:vector.fail_after,trapAfter:vector.trap_after,failStatement:vector.fail_statement,trapStatement:vector.trap_statement,deadline:outputDeadline,authority:vector.authority===true,personal:vector.personal||false};
+        const reply=vector.page===true? pageHex(kernel.runPage(pageBytes(vector.command),controls)):kernel.run(vector.command,controls);
         if(vector.deferred_failure)storage.sql.exec('INSERT INTO m0_child VALUES(1)');
         return reply;
       };
@@ -79,7 +97,7 @@ export class FoksMetadata {
     const childEmpty=storage.sql.exec('SELECT count(*) AS n FROM m0_child').one().n===0;
     if((vector.authority===true||vector.personal) && Date.now()>=outputDeadline)throw new Error('authority output deadline expired');
     const passed=equal&&replyEqual&&sameData(outcome,vector.outcome)&&childEmpty;
-    return Response.json({name:vector.name,passed,equal,replyEqual,outcome,message,calls:kernel.calls,memory_bytes:kernel.instance.exports.memory.buffer.byteLength,schema_version:fixture.schema_version},{status:passed?200:500});
+    return Response.json({name:vector.name,passed,equal,replyEqual,outcome,message,calls:kernel.calls,memory_bytes:kernel.instance.exports.memory.buffer.byteLength,page_declared_working_peak_bytes:kernel.lastPageWorkingBytes??null,schema_version:fixture.schema_version},{status:passed?200:500});
   }
 }
 export default {async fetch(request,env) {

@@ -28,7 +28,10 @@ mod idempotency;
 mod identity;
 mod invites;
 mod kv;
-pub use kv::{KV_HISTORICAL_NAME_SELECTION_SQL, KV_NAME_CONFLICT_SQL, KV_PUBLIC_USAGE_SQL};
+pub use kv::{
+    KV_HISTORICAL_NAME_SELECTION_SQL, KV_LIST_INITIAL_SQL, KV_LIST_MAC_SQL, KV_LIST_TIME_SQL,
+    KV_NAME_CONFLICT_SQL, KV_PUBLIC_USAGE_SQL,
+};
 mod kv_objects;
 pub use kv_objects::{ExternalKvChunk, KvChunkKey, KvChunkPayload, StoredKvChunkObject};
 mod log_upload;

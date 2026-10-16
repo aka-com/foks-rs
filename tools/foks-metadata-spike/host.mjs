@@ -1,5 +1,6 @@
 // Private local qualification host. Catalog and module are deployment artifacts,
 // never supplied by a request. This does not implement production auth/fencing.
+import {activatePages,decodeParameters,PageWriter,PageWorkingBudget,validateSpec,HEADER,MAX_PAGE,MAX_PARAMETERS} from './page-codec.mjs';
 export const MAX_INPUT = 2 * 1024 * 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', {fatal:true});
@@ -37,10 +38,12 @@ function cell(value,kind) {
 }
 
 export class Kernel {
-  constructor(module,catalog,storage) {
+  constructor(module,catalog,storage,pageArtifact=null) {
     this.storage=storage;
     this.catalog=new Map(catalog.map(spec=>[spec.id,spec]));
-    this.instance=new WebAssembly.Instance(module,{foks:{sql:(...args)=>this.sql(...args),domain:(...args)=>this.domain(...args)}});
+    this.instance=new WebAssembly.Instance(module,{foks:{sql:(...args)=>this.sql(...args),domain:(...args)=>this.domain(...args),sql_page:(...args)=>this.sqlPage(...args)}});
+    this.pageSpec=pageArtifact===null?null:activatePages(this.instance,pageArtifact);
+    this.pageMode=false;this.poisoned=false;
     this.running=false;this.domainActive=false;
   }
   range(pointer,length,maximum) {
@@ -51,6 +54,63 @@ export class Kernel {
   admit() {
     if(++this.calls>2048)throw new KernelError('bounds');
     if(Date.now()>=this.deadline)throw new KernelError('expired');
+  }
+  sqlPage(id,pointer,length){
+    if(!this.running||!this.pageMode||this.domainActive||!this.pageSpec)throw new Error('page entry guard');
+    this.admit();
+    const spec=this.pageSpec(id);
+    // Reserve before copying bindings, allocating an encoder or advancing the
+    // cursor. Account UTF-16 strings, temporary UTF-8 encodings and containers.
+    // This declared bound is separate from Wasm memory and SQLite internals.
+    let release;
+    try {release=this.pageWorking.reserve(length*4+spec.maximum_bytes+validateSpec(spec).rowBytes*3+16*512);}
+    catch {throw new KernelError('bounds');}
+    try {
+      const encoded=new Uint8Array(this.range(pointer,length,MAX_PARAMETERS));
+      let decoded,writer;
+      try {decoded=decodeParameters(encoded,spec);writer=new PageWriter(spec,decoded.requested);}
+      catch {throw new KernelError('bounds');}
+      const cursor=this.storage.sql.exec(spec.sql,...decoded.values).raw();
+      for(let index=0;index<=decoded.requested;index++){
+        const row=cursor.next();if(row.done)break;
+        if(index===decoded.requested)throw new KernelError('bounds');
+        try{writer.push(row.value);}catch{throw new KernelError('bounds');}
+      }
+      if(this.failAfter===this.calls||this.failStatement===id)throw new Error('injected page host failure');
+      if(this.trapAfter===this.calls||this.trapStatement===id)this.instance.exports.trap();
+      const bytes=writer.finish();
+      const destination=this.instance.exports.page_response_alloc(bytes.length);
+      if(!destination)throw new KernelError('bounds');
+      this.range(destination,bytes.length,MAX_PAGE).set(bytes);
+    } finally {release();this.lastPageWorkingBytes=this.pageWorking.peak;}
+    return 0;
+  }
+  invokePageExport(name,...args){
+    // Allocation exports can trap while a RefCell is borrowed as well.
+    try {return this.instance.exports[name](...args);}
+    catch(error){this.poisoned=true;throw error;}
+  }
+  runPage(bytes,{deadline=Date.now()+1000,failAfter=0,trapAfter=0,failStatement=0,trapStatement=0,workingLimit=8*MAX_PAGE}={}){
+    if(this.poisoned)throw new Error('poisoned kernel instance');
+    if(this.running||!this.pageSpec)throw new Error('page activation/entry guard');
+    if(!(bytes instanceof Uint8Array)||bytes.length<HEADER||bytes.length>MAX_PARAMETERS)throw new KernelError('bounds');
+    this.pageWorking=new PageWorkingBudget(workingLimit);this.lastPageWorkingBytes=0;
+    this.running=true;this.pageMode=true;this.authority=false;this.calls=0;
+    this.deadline=deadline;this.failAfter=failAfter;this.trapAfter=trapAfter;this.failStatement=failStatement;this.trapStatement=trapStatement;
+    try{
+      if(Date.now()>=deadline)throw new KernelError('expired');
+      const pointer=this.invokePageExport('page_input_alloc',bytes.length);
+      if(!pointer)throw new KernelError('bounds');
+      this.range(pointer,bytes.length,MAX_PARAMETERS).set(bytes);
+      // An imported exception/trap skips Rust destructors. Never reuse this
+      // instance after an export throws; a normal returned error remains safe.
+      const status=this.invokePageExport('run_page');
+      const output=this.range(this.instance.exports.output_pointer(),this.instance.exports.output_length(),MAX_PAGE);
+      if(status!==0)throw new KernelError(decoder.decode(output));
+      if(Date.now()>=deadline)throw new KernelError('expired');
+      let release;try{release=this.pageWorking.reserve(output.length);}catch{throw new KernelError('bounds');}
+      try{return new Uint8Array(output);}finally{release();this.lastPageWorkingBytes=this.pageWorking.peak;}
+    }finally{this.pageMode=false;this.running=false;}
   }
   sql(id,pointer,length,write) {
     this.admit();
@@ -135,6 +195,7 @@ export class Kernel {
   // Only this outer entry resets controls. Domain reentry inherits all limits.
   // The caller must let all errors escape its transactionSync and await sync.
   run(command,{failAfter=0,trapAfter=0,failStatement=0,trapStatement=0,deadline=Date.now()+1000,authority=false,personal=false}={}) {
+    if(this.poisoned)throw new Error('poisoned kernel instance');
     if(this.running)throw new Error('outer entry guard');
     if(personal!==false&&personal!=='authority'&&personal!=='point')throw new Error('personal entry selector');
     if(personal&&authority)throw new Error('mixed entry selectors');

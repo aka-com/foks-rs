@@ -78,7 +78,7 @@ test("actual Wasm rejects corrupt and oversized input and remains usable after e
 test("rejected Wasm allocation clears prior request/output and pure export never imports SQL",()=>{
   let imports=0;
   const forbidden=()=>{imports++;throw new Error("unexpected import");};
-  const {exports:e}=new WebAssembly.Instance(module,{foks:{sql:forbidden,domain:forbidden}});
+  const {exports:e}=new WebAssembly.Instance(module,{foks:{sql:forbidden,domain:forbidden,sql_page:forbidden}});
   const exact=Buffer.from(cases[0].exact,"base64");
   const load=()=>{
     const pointer=e.small_box_input_alloc(exact.length);

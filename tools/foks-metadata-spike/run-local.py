@@ -7,10 +7,13 @@ from wasm_limits import memory_limits
 
 p=argparse.ArgumentParser()
 for name in ['celld','moto','esbuild','wasm','vectors','catalog','output']:p.add_argument('--'+name,type=pathlib.Path,required=True)
+p.add_argument('--page-catalog',type=pathlib.Path)
 a=p.parse_args()
 for item in [a.celld,a.moto,a.esbuild,a.wasm,a.vectors,a.catalog]:
     if not item.is_file():p.error('missing input '+str(item))
 if a.wasm.stat().st_size>32*1024*1024:p.error('wasm artifact bound')
+if a.page_catalog is not None and (not a.page_catalog.is_file() or a.page_catalog.stat().st_size>65536):p.error('page catalog artifact bound')
+if any(v.get('page') is True for v in json.loads(a.vectors.read_text())['vectors']) and a.page_catalog is None:p.error('page vectors require exact page catalog')
 declared_memory=memory_limits(a.wasm.read_bytes())
 a.output.mkdir(mode=0o700,exist_ok=False);root=a.output.resolve();source=pathlib.Path(__file__).resolve().parent
 children=[];logs=[];results=[];passed=False
@@ -32,8 +35,10 @@ try:
             time.sleep(.1)
     bucket='foks-metadata-spike';s3.create_bucket(Bucket=bucket)
     project=root/'worker';project.mkdir(mode=0o700)
-    for name in ['host.mjs','worker.mjs','durability.mjs']:shutil.copyfile(source/name,project/name)
+    for name in ['host.mjs','worker.mjs','durability.mjs','page-codec.mjs']:shutil.copyfile(source/name,project/name)
     for original,name in [(a.wasm,'kernel.wasm'),(a.vectors,'vectors.json'),(a.catalog,'catalog.json')]:shutil.copyfile(original,project/name)
+    if a.page_catalog is None:(project/'page-catalog.json').write_text('null')
+    else:shutil.copyfile(a.page_catalog,project/'page-catalog.json')
     token=secrets.token_urlsafe(32)
     control_token=secrets.token_urlsafe(32);frontend_token=secrets.token_urlsafe(32)
     config={'name':'foks-metadata-spike','main':'worker.mjs','compatibility_date':'2026-01-01','vars':{'M0_TOKEN':token,'CONTROL_TOKEN':control_token,'FRONTEND_TOKEN':frontend_token},'durable_objects':{'bindings':[{'name':'FOKS_M0','class_name':'FoksMetadata'}]},'migrations':[{'tag':'v1','new_sqlite_classes':['FoksMetadata']}]}
@@ -84,6 +89,6 @@ finally:
             try:child.wait(timeout=5)
             except subprocess.TimeoutExpired:child.kill();child.wait()
     for log in logs:log.close()
-    evidence={'passed':passed,'results':results,'wasm_memory_pages':declared_memory,'scope':'Private native/Wasm SQL qualification on actual initialized schema; per-vector seeded snapshots are fixture setup/assertions, not a persistent HTTP/native adapter; local emulator, not production FOKS authentication, hard deadlines or failover','sha256':{str(item):hashlib.sha256(item.read_bytes()).hexdigest() for item in [a.celld,a.wasm,a.vectors,a.catalog,source/'host.mjs',source/'worker.mjs',source/'durability.mjs',source/'wasm_limits.py',pathlib.Path(__file__)]}}
+    evidence={'passed':passed,'results':results,'wasm_memory_pages':declared_memory,'scope':'Private native/Wasm SQL qualification on actual initialized schema; per-vector seeded snapshots are fixture setup/assertions, not a persistent HTTP/native adapter; local emulator, not production FOKS authentication, hard deadlines or failover','sha256':{str(item):hashlib.sha256(item.read_bytes()).hexdigest() for item in [a.celld,a.wasm,a.vectors,a.catalog,source/'host.mjs',source/'worker.mjs',source/'durability.mjs',source/'page-codec.mjs',source/'wasm_limits.py',pathlib.Path(__file__),*([a.page_catalog] if a.page_catalog else [])]}}
     (root/'qualification.json').write_text(json.dumps(evidence,indent=2))
 raise SystemExit(0 if passed else 1)
