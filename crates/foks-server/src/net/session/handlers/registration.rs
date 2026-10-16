@@ -113,11 +113,11 @@ impl Operations for ServerData {
     }
 
     fn reserve_username(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::reserve_username(self, argument)
+        crate::services::signup::reserve_username(&self.identity_ports(), argument)
     }
 
     fn signup(&self, argument: &[u8]) -> Result<(), RpcStatus> {
-        ServerData::signup(self, argument)
+        crate::services::signup::signup(&self.identity_ports(), argument)
     }
 
     fn check_invite_code(&self, argument: &[u8]) -> Result<(), RpcStatus> {
@@ -126,7 +126,7 @@ impl Operations for ServerData {
     }
 
     fn client_certificate_chain(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::client_certificate_chain(self, argument)
+        crate::services::signup::client_certificate_chain(&self.identity_ports(), argument)
     }
 
     fn uid_lookup_challenge(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
@@ -207,6 +207,19 @@ impl Operations for ServerData {
             .map_err(|_| RpcStatus::TransactionRetry)?;
         crate::services::federation::load_remote_user_chain(&snapshot, &self.host()?, argument, now)
     }
+}
+
+/// Waits for the OIDC flow named by the argument to complete.
+pub(super) async fn poll_oauth2_session_response(
+    data: &ServerData,
+    call: RoutedCall,
+) -> Result<Vec<u8>, RpcStatus> {
+    let service = data.sso.as_ref().ok_or(RpcStatus::Unsupported)?;
+    let argument = foks_proto::PollOAuth2SessionArgument::decode(call.call.argument())
+        .map_err(|_| super::super::bad_arguments("invalid OIDC poll"))?;
+    let bytes = service.poll(argument).await?;
+    encode_success_response_at(&bytes, call.call.sequence())
+        .map_err(|error| crate::status::internal(error, "sso_poll"))
 }
 
 pub(super) fn response(

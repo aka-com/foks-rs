@@ -24,8 +24,10 @@ fn recipients(c: &Connection, a: &RealtimeActor, md: &RtChannelMetadata) -> Resu
     let mut scanned = 0;
     for row in rows {
         scanned += 1;
+        // Only mutations stamp recipients, inside their uncommitted
+        // transaction, so this is an admission refusal like the channel cap.
         if scanned > Limits::FANOUT_MEMBERS {
-            return Err(Error::Capacity("realtime team fanout"));
+            return Err(Error::QuotaExceeded);
         }
         let (uid, kind, visibility) = row?;
         let role = role(kind, visibility)?;

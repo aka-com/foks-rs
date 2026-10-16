@@ -1,12 +1,10 @@
 //! Conservative Merkle collection at exclusive checked-session admission.
+use crate::scan_limiter::ScanLimiter;
 use crate::*;
-use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
 
 // Large live histories can remain above the collection threshold indefinitely.
 // Bound repeat scanning without adding durable state or affecting correctness.
-static LAST_SCAN: OnceLock<Mutex<BTreeMap<[u8; 16], Instant>>> = OnceLock::new();
-const SCAN_INTERVAL: Duration = Duration::from_secs(60);
+static LAST_SCAN: ScanLimiter<[u8; 16]> = ScanLimiter::new();
 
 impl ClientCredentials {
     // Called only from outermost exclusive session entry, after durable native
@@ -23,13 +21,7 @@ impl ClientCredentials {
             return Ok(0);
         }
         let identity = hard.metadata()?.database_id;
-        let scans = LAST_SCAN.get_or_init(Mutex::default);
-        if scans
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&identity)
-            .is_some_and(|last| last.elapsed() < SCAN_INTERVAL)
-        {
+        if !LAST_SCAN.due(&identity) {
             return Ok(0);
         }
         // Includes protected-only preparations that have not acquired a journal
@@ -77,11 +69,7 @@ impl ClientCredentials {
             .into_iter()
             .collect::<Vec<_>>();
         let removed = hard.compact_merkle_roots(&pins)?;
-        let mut scans = scans.lock().unwrap_or_else(|e| e.into_inner());
-        if scans.len() >= 128 && !scans.contains_key(&identity) {
-            scans.pop_first();
-        }
-        scans.insert(identity, Instant::now());
+        LAST_SCAN.record(identity);
         Ok(removed)
     }
 }

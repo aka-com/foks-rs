@@ -556,14 +556,13 @@ async fn run_scheduled_profiles(
 /// This read takes no profile admission and no profile lock. It is a
 /// consistent SQLite read of one column: a value that changes while it is
 /// read costs at most one further pass, never a missed job, because the
-/// claim itself still happens under the scheduler lock.
+/// claim itself still happens under the scheduler lock. It opens the store
+/// without creating it, so a profile reset that removes the database during
+/// the read does not leave a new database behind outside the profile's locks.
 fn profile_next_run(hard_database: &Path) -> Option<u64> {
-    if !hard_database.exists() {
-        return None;
-    }
-    foks_client::FoksScheduler::new(hard_database, foks_client::SchedulerConfig::default())
+    foks_client_db::HardStateStore::open_existing(hard_database)
         .ok()?
-        .next_run_at()
+        .next_scheduled_run()
         .ok()?
 }
 
@@ -630,13 +629,7 @@ fn scheduled_slice_admission(
     profile: &str,
     now: u64,
 ) -> SliceAdmission {
-    let wide = match hard_database {
-        // Opening a store that does not exist would create one outside the
-        // profile's locks; a profile with no jobs has no wide job either.
-        Some(path) if !path.exists() => Some(false),
-        Some(path) => due_scheduled_job_reaches_other_profiles(path, now),
-        None => None,
-    };
+    let wide = hard_database.and_then(|path| due_scheduled_job_reaches_other_profiles(path, now));
     match wide {
         Some(false) => SliceAdmission::Profile(profile.to_owned()),
         Some(true) | None => SliceAdmission::SecurityRoot,
@@ -644,14 +637,19 @@ fn scheduled_slice_admission(
 }
 
 /// Whether the job a claim would take next can reach a second profile.
-/// `None` when the durable state could not be read.
+/// `None` when the durable state could not be read. A profile with no hard
+/// state has no jobs, so no wide job either.
 ///
 /// This read takes no profile admission and no profile lock, like the due-time
-/// read beside it.
+/// read beside it, and likewise never creates the store.
 fn due_scheduled_job_reaches_other_profiles(hard_database: &Path, now: u64) -> Option<bool> {
+    let store = match foks_client_db::HardStateStore::open_existing(hard_database) {
+        Ok(store) => store,
+        Err(foks_client_db::Error::StateMissing) => return Some(false),
+        Err(_) => return None,
+    };
     Some(
-        foks_client_db::HardStateStore::open(hard_database)
-            .ok()?
+        store
             .next_due_scheduled_job(now)
             .ok()?
             .is_some_and(|job| job.kind.reaches_other_profiles()),
@@ -2041,7 +2039,10 @@ fn dispatch_error_response(id: u64, error: &(dyn std::error::Error + 'static)) -
         }
         if matches!(
             candidate.downcast_ref::<foks_rpc::Error>(),
-            Some(foks_rpc::Error::RemoteStatus { code: 1069, .. })
+            Some(foks_rpc::Error::RemoteStatus {
+                code: foks_rpc::STATUS_OAUTH2_AUTH_ERROR,
+                ..
+            })
         ) {
             return Response::error(id, ErrorCode::ReauthenticationRequired, "Organization sign-in is required. Sign in again for this account, then review the interrupted operation before retrying.");
         }
@@ -8520,6 +8521,14 @@ mod tests {
             scheduled_slice_admission(Some(&later), "a", 5_999),
             SliceAdmission::Profile("a".into())
         );
+        // A profile with no hard state has no wide job, and the probe does
+        // not create the store outside the profile's locks.
+        let missing = root.join("missing.sqlite");
+        assert_eq!(
+            scheduled_slice_admission(Some(&missing), "a", 10_000),
+            SliceAdmission::Profile("a".into())
+        );
+        assert!(!missing.exists());
 
         let workers = Arc::new(Semaphore::new(1));
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();

@@ -95,8 +95,66 @@ pub enum Error {
     Hostname,
 }
 
+/// The text a server attached to a status, sanitized by
+/// [`sanitize_server_text`] and bounded to [`MAXIMUM_STATUS_DETAIL_BYTES`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct StatusDetail(Option<String>);
+
+/// The most bytes of server-supplied status text an error keeps.
+pub const MAXIMUM_STATUS_DETAIL_BYTES: usize = 256;
+
+/// How the detail of an `OAUTH2_ERROR` status classifies an SSO flow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OAuth2Outcome {
+    /// The person or the identity provider refused the authorization.
+    Denied,
+    /// The server could not reach the identity provider.
+    ProviderUnavailable,
+}
+
+/// Converts untrusted server text to display text. Invalid UTF-8 becomes
+/// U+FFFD; control characters, line and paragraph separators, and invisible
+/// formatting characters (the soft hyphen, the combining grapheme joiner,
+/// zero-width characters, bidirectional controls, the byte-order mark,
+/// interlinear annotation controls and tag characters) become spaces. The
+/// result keeps at most `maximum_characters` characters and `maximum_bytes`
+/// bytes without splitting a character, and has no leading or trailing
+/// whitespace.
+pub fn sanitize_server_text(
+    bytes: &[u8],
+    maximum_characters: usize,
+    maximum_bytes: usize,
+) -> String {
+    let mut text = String::new();
+    for character in String::from_utf8_lossy(bytes)
+        .chars()
+        .take(maximum_characters)
+    {
+        let character = if character.is_control()
+            || matches!(
+                character,
+                '\u{00ad}'
+                    | '\u{034f}'
+                    | '\u{061c}'
+                    | '\u{180e}'
+                    | '\u{200b}'..='\u{200f}'
+                    | '\u{2028}'..='\u{202e}'
+                    | '\u{2060}'..='\u{206f}'
+                    | '\u{feff}'
+                    | '\u{fff9}'..='\u{fffb}'
+                    | '\u{e0000}'..='\u{e007f}'
+            ) {
+            ' '
+        } else {
+            character
+        };
+        if text.len() + character.len_utf8() > maximum_bytes {
+            break;
+        }
+        text.push(character);
+    }
+    text.trim().to_owned()
+}
 
 /// A plain phrase for the FOKS status codes a person can provoke, so the
 /// message names the refusal rather than only its number. Codes without a
@@ -117,7 +175,7 @@ pub fn status_phrase(code: u64) -> Option<&'static str> {
         STATUS_KEX_BAD_SECRET => "the pairing phrase did not match",
         STATUS_EXPIRED_ERROR => "the request has expired",
         STATUS_RATE_LIMIT_ERROR => "the server is rate limiting requests; try again shortly",
-        STATUS_OVER_QUOTA_ERROR => "the account is over its storage quota",
+        STATUS_OVER_QUOTA_ERROR => "the server reached a configured quota or capacity limit",
         STATUS_TIMEOUT_ERROR => "the server timed out",
         STATUS_NOT_IMPLEMENTED => "the server does not support this operation",
         STATUS_GENERIC_NOT_FOUND_ERROR => "the server has no such record",
@@ -143,15 +201,42 @@ fn describe_status(code: u64, detail: &StatusDetail) -> String {
 }
 
 impl StatusDetail {
+    /// Sanitizes and bounds the text a server attached to a status. Text that
+    /// is empty after sanitizing is no detail.
+    pub(crate) fn from_server(bytes: &[u8]) -> Self {
+        let text = sanitize_server_text(
+            bytes,
+            MAXIMUM_STATUS_DETAIL_BYTES,
+            MAXIMUM_STATUS_DETAIL_BYTES,
+        );
+        Self((!text.is_empty()).then_some(text))
+    }
+
     pub fn detail(&self) -> Option<&str> {
         self.0.as_deref()
+    }
+
+    /// Classifies the detail of an `OAUTH2_ERROR` status. A server reports a
+    /// refused authorization as "authorization denied" or with the OAuth 2.0
+    /// `access_denied` error code inside its text, and an unreachable identity
+    /// provider as "provider unavailable". Other text has no classification.
+    pub fn oauth2_outcome(&self) -> Option<OAuth2Outcome> {
+        let detail = self.detail()?;
+        if detail == "authorization denied" || detail.contains("access_denied") {
+            Some(OAuth2Outcome::Denied)
+        } else if detail == "provider unavailable" {
+            Some(OAuth2Outcome::ProviderUnavailable)
+        } else {
+            None
+        }
     }
 }
 
 impl std::fmt::Display for StatusDetail {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Quoted, so a reader can tell the server's text from the client's.
         if let Some(detail) = &self.0 {
-            write!(formatter, ": {detail}")
+            write!(formatter, ": \"{detail}\"")
         } else {
             Ok(())
         }

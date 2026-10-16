@@ -103,7 +103,10 @@ impl RealtimeService {
         let result = writer.call_observed(Some((Arc::clone(&self.metrics), source)), move |db| {
             Ok(db.rt_reconcile_inbox(&actor, app, clock.now_micros()?)?)
         });
-        if matches!(&result, Err(crate::Error::WriterQueue)) {
+        if matches!(
+            &result,
+            Err(crate::Error::WriterQueue | crate::Error::DeadlineExceeded)
+        ) {
             self.metrics
                 .realtime
                 .source(source, |s| s.submission_failures += 1);
@@ -263,13 +266,16 @@ impl RealtimeService {
         }
     }
 }
-fn write_error(error: crate::Error) -> RpcStatus {
+pub(super) fn write_error(error: crate::Error) -> RpcStatus {
     match error {
         crate::Error::Database(e) => db_error(e),
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::unmapped(other, "realtime_write"),
     }
 }
 fn db_error(error: DbError) -> RpcStatus {
+    if let Some(status) = crate::status::storage(&error, "realtime_write") {
+        return status;
+    }
     match error {
         DbError::AuthorizationChanged => {
             RpcStatus::PermissionDenied("realtime access denied".into())
@@ -288,7 +294,7 @@ fn db_error(error: DbError) -> RpcStatus {
             RpcStatus::BadArguments("invalid realtime value".into())
         }
         DbError::Capacity(_) => RpcStatus::Realtime("realtime service limit exceeded".into()),
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::internal(other, "realtime_write"),
     }
 }
 
@@ -335,6 +341,20 @@ mod tests {
         );
         assert!(after_commit::<()>(Err(DbError::AuthorizationChanged.into()), &notifier).is_err());
         assert_eq!(*notifier.0.lock().unwrap(), vec![target]);
+    }
+
+    #[test]
+    fn admission_refusals_are_quota_and_read_bounds_stay_generic() {
+        // Clients record 1060 as a definite rejection; 12001 leaves a
+        // mutation uncertain and shrinks history read windows.
+        assert!(matches!(
+            write_error(DbError::QuotaExceeded.into()),
+            RpcStatus::QuotaExceeded
+        ));
+        assert!(matches!(
+            db_error(DbError::Capacity("realtime page")),
+            RpcStatus::Realtime(_)
+        ));
     }
 
     #[tokio::test]

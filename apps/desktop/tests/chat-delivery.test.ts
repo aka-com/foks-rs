@@ -142,7 +142,7 @@ test('tracked operations and outgoing messages share one state vocabulary', () =
 
 test('rejection codes read as reasons, and only Details names the status', () => {
   // The closed set of `definite_rejection` in foks-client.
-  for (const code of [1013, 1030, 12002, 12003, 12005, 12006])
+  for (const code of [1013, 1030, 1060, 12002, 12003, 12005, 12006])
     assert.match(rejectionStatusName(code) ?? '', /^STATUS_/);
   assert.equal(rejectionStatusName(12001), undefined);
   assert.equal(rejectionStatusName(null), undefined);
@@ -163,10 +163,18 @@ test('rejection codes read as reasons, and only Details names the status', () =>
     'Engineering already has a channel with that name.',
   );
   assert.equal(
+    rejectionReason(1060, 'create-channel', 'Engineering'),
+    'Engineering has reached the server’s limit on channels or members.',
+  );
+  assert.equal(
+    rejectionReason(1060, 'send-message', '#general'),
+    'The team has more members than the server delivers chat to.',
+  );
+  assert.equal(
     rejectionReason(4242, 'send-message'),
     'The server refused the message.',
   );
-  for (const code of [1013, 1030, 12002, 12003, 12005, 12006, 4242, null])
+  for (const code of [1013, 1030, 1060, 12002, 12003, 12005, 12006, 4242, null])
     for (const kind of ['send-message', 'create-channel'] as const)
       assert.doesNotMatch(rejectionReason(code, kind), /\d/);
 });

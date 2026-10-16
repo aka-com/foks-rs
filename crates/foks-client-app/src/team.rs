@@ -595,7 +595,7 @@ impl CheckedProfileSession<'_> {
             target_source_role: StoredTeamRole::from_role(plan.target_source_role),
             destination_role: StoredTeamRole::from_role(plan.destination_role),
             removal_key_commitment: plan.removal_key_commitment,
-            removal_key: *removal_key.as_bytes(),
+            removal_key: SecretArray::from_seed(&removal_key),
             expected_seqno: plan.expected_seqno,
             operation_id: plan.operation_id,
             active: false,
@@ -643,7 +643,7 @@ impl CheckedProfileSession<'_> {
                 "pending local team-member addition is missing",
             ))?;
         let plan = local_addition_plan(pending)?;
-        let removal_key = SecretSeed::new(pending.removal_key);
+        let removal_key = pending.removal_key.seed();
         // A durable resume replays the retained signed request and never
         // reads the prospective member, so only the other branch asks the
         // context loader for one.
@@ -886,7 +886,7 @@ impl CheckedProfileSession<'_> {
         let seeds = pending
             .rotations
             .iter()
-            .map(|rotation| SecretSeed::new(rotation.seed))
+            .map(|rotation| rotation.seed.seed())
             .collect::<Vec<_>>();
         let rotations = pending
             .rotations
@@ -1133,7 +1133,7 @@ impl CheckedProfileSession<'_> {
                 .zip(&seeds)
                 .map(|(role, seed)| StoredTeamPtkRotation {
                     role: StoredTeamRole::from_role(*role),
-                    seed: *seed.as_bytes(),
+                    seed: SecretArray::from_seed(seed),
                 })
                 .collect(),
         };
@@ -1787,12 +1787,12 @@ pub(super) struct StoredTeam {
     pub(super) kind: StoredTeamKind,
     pub(super) name: Option<String>,
     pub(super) team_id: Vec<u8>,
-    pub(super) member_min: [u8; 32],
-    pub(super) member: [u8; 32],
-    pub(super) admin: [u8; 32],
-    pub(super) owner: [u8; 32],
-    pub(super) removal_key: Option<[u8; 32]>,
-    pub(super) name_commitment: Option<[u8; 16]>,
+    pub(super) member_min: SecretArray<32>,
+    pub(super) member: SecretArray<32>,
+    pub(super) admin: SecretArray<32>,
+    pub(super) owner: SecretArray<32>,
+    pub(super) removal_key: Option<SecretArray<32>>,
+    pub(super) name_commitment: Option<SecretArray<16>>,
     pub(super) active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     creation: Option<StoredTeamCreation>,
@@ -1813,7 +1813,7 @@ pub(super) struct StoredLocalMembership {
     pub(super) target_source_role: StoredTeamRole,
     pub(super) destination_role: StoredTeamRole,
     pub(super) removal_key_commitment: [u8; 32],
-    pub(super) removal_key: [u8; 32],
+    pub(super) removal_key: SecretArray<32>,
     pub(super) expected_seqno: u64,
     pub(super) operation_id: [u8; 16],
     pub(super) active: bool,
@@ -1834,14 +1834,6 @@ pub(super) struct StoredTeamMemberEdit {
     pub(super) expected_seqno: u64,
     pub(super) operation_id: [u8; 16],
     pub(super) rotations: Vec<StoredTeamPtkRotation>,
-}
-
-impl Drop for StoredTeamMemberEdit {
-    fn drop(&mut self) {
-        for rotation in &mut self.rotations {
-            rotation.seed.zeroize();
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1867,14 +1859,6 @@ pub(super) struct StoredFederatedExpulsion {
     pub(super) rotations: Vec<StoredTeamPtkRotation>,
 }
 
-impl Drop for StoredFederatedExpulsion {
-    fn drop(&mut self) {
-        for rotation in &mut self.rotations {
-            rotation.seed.zeroize();
-        }
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct StoredFederatedMembership {
     pub(super) remote_profile: String,
@@ -1882,7 +1866,7 @@ pub(super) struct StoredFederatedMembership {
     pub(super) remote_host_id: Vec<u8>,
     pub(super) remote_team_id: Vec<u8>,
     pub(super) destination: crate::FederationDestinationRole,
-    pub(super) removal_key: [u8; 32],
+    pub(super) removal_key: SecretArray<32>,
     pub(super) operation_id: Option<[u8; 16]>,
     pub(super) active: bool,
 }
@@ -1953,7 +1937,7 @@ pub(super) struct StoredTeamRekeyChange {
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct StoredTeamPtkRotation {
     pub(super) role: StoredTeamRole,
-    pub(super) seed: [u8; 32],
+    pub(super) seed: SecretArray<32>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1970,14 +1954,6 @@ pub(super) struct StoredTeamRekey {
     pub(super) expected_seqno: u64,
     pub(super) changes: Vec<StoredTeamRekeyChange>,
     pub(super) rotations: Vec<StoredTeamPtkRotation>,
-}
-
-impl Drop for StoredTeamRekey {
-    fn drop(&mut self) {
-        for rotation in &mut self.rotations {
-            rotation.seed.zeroize();
-        }
-    }
 }
 
 impl StoredTeam {
@@ -2030,8 +2006,8 @@ impl StoredTeam {
         }
         let mut stored = Self::random(alias, account_alias, StoredTeamKind::Named)?;
         stored.name = Some(name.to_owned());
-        stored.removal_key = Some(random_array()?);
-        stored.name_commitment = Some(random_array()?);
+        stored.removal_key = Some(SecretArray::random()?);
+        stored.name_commitment = Some(SecretArray::random()?);
         stored.team_id = stored.named_secrets()?.team_id()?.into_bytes();
         Ok(stored)
     }
@@ -2058,10 +2034,10 @@ impl StoredTeam {
             kind,
             name: None,
             team_id: Vec::new(),
-            member_min: random_array()?,
-            member: random_array()?,
-            admin: random_array()?,
-            owner: random_array()?,
+            member_min: SecretArray::random()?,
+            member: SecretArray::random()?,
+            admin: SecretArray::random()?,
+            owner: SecretArray::random()?,
             removal_key: None,
             name_commitment: None,
             active: false,
@@ -2116,10 +2092,10 @@ impl StoredTeam {
             kind,
             name,
             team_id: authenticated.verified.team().as_bytes().to_vec(),
-            member_min: [0; 32],
-            member: [0; 32],
-            admin: [0; 32],
-            owner: [0; 32],
+            member_min: SecretArray::new([0; 32]),
+            member: SecretArray::new([0; 32]),
+            admin: SecretArray::new([0; 32]),
+            owner: SecretArray::new([0; 32]),
             removal_key: None,
             name_commitment: None,
             active: true,
@@ -2135,17 +2111,22 @@ impl StoredTeam {
             return Err(Error::InvalidAccount("team is not named"));
         }
         Ok(NamedTeamSecrets {
-            member_min: SecretSeed::new(self.member_min),
-            member: SecretSeed::new(self.member),
-            admin: SecretSeed::new(self.admin),
-            owner: SecretSeed::new(self.owner),
-            removal_key: SecretSeed::new(
-                self.removal_key
-                    .ok_or(Error::InvalidAccount("named team has no removal key"))?,
-            ),
-            team_name_commitment_key: self.name_commitment.ok_or(Error::InvalidAccount(
-                "named team has no name commitment key",
-            ))?,
+            member_min: self.member_min.seed(),
+            member: self.member.seed(),
+            admin: self.admin.seed(),
+            owner: self.owner.seed(),
+            removal_key: self
+                .removal_key
+                .as_ref()
+                .ok_or(Error::InvalidAccount("named team has no removal key"))?
+                .seed(),
+            team_name_commitment_key: *self
+                .name_commitment
+                .as_ref()
+                .ok_or(Error::InvalidAccount(
+                    "named team has no name commitment key",
+                ))?
+                .as_bytes(),
         })
     }
 
@@ -2154,28 +2135,11 @@ impl StoredTeam {
             return Err(Error::InvalidAccount("team is not ad-hoc"));
         }
         Ok(AdHocTeamSecrets {
-            member_min: SecretSeed::new(self.member_min),
-            member: SecretSeed::new(self.member),
-            admin: SecretSeed::new(self.admin),
-            owner: SecretSeed::new(self.owner),
+            member_min: self.member_min.seed(),
+            member: self.member.seed(),
+            admin: self.admin.seed(),
+            owner: self.owner.seed(),
         })
-    }
-}
-
-impl Drop for StoredTeam {
-    fn drop(&mut self) {
-        self.member_min.zeroize();
-        self.member.zeroize();
-        self.admin.zeroize();
-        self.owner.zeroize();
-        self.removal_key.zeroize();
-        self.name_commitment.zeroize();
-        for member in &mut self.federated_members {
-            member.removal_key.zeroize();
-        }
-        for member in &mut self.local_members {
-            member.removal_key.zeroize();
-        }
     }
 }
 
@@ -2209,7 +2173,7 @@ impl AccountVault<'_> {
 
     pub(super) fn put_team(&mut self, team: &StoredTeam) -> Result<()> {
         validate_stored_team(team, &team.alias)?;
-        let encoded = Zeroizing::new(serde_json::to_vec(team)?);
+        let encoded = encode_private_json(team)?;
         self.store.put(&team_key(&team.alias), &encoded)?;
         Ok(())
     }
@@ -2271,7 +2235,7 @@ impl AccountVault<'_> {
 
     pub(super) fn put_team_rekey(&mut self, pending: &StoredTeamRekey) -> Result<()> {
         validate_stored_team_rekey(pending, &pending.team_alias)?;
-        let encoded = Zeroizing::new(serde_json::to_vec(pending)?);
+        let encoded = encode_private_json(pending)?;
         self.store
             .put(&team_rekey_key(&pending.team_alias), &encoded)?;
         Ok(())
@@ -2297,7 +2261,7 @@ impl AccountVault<'_> {
 
     pub(super) fn put_team_member_edit(&mut self, edit: &StoredTeamMemberEdit) -> Result<()> {
         validate_stored_team_member_edit(edit, &edit.team_alias)?;
-        let encoded = Zeroizing::new(serde_json::to_vec(edit)?);
+        let encoded = encode_private_json(edit)?;
         self.store
             .put(&team_member_edit_key(&edit.team_alias), &encoded)?;
         Ok(())
@@ -2329,7 +2293,7 @@ impl AccountVault<'_> {
         intent: &StoredFederatedExpulsion,
     ) -> Result<()> {
         validate_stored_federated_expulsion(intent, &intent.local_team_alias)?;
-        let encoded = Zeroizing::new(serde_json::to_vec(intent)?);
+        let encoded = encode_private_json(intent)?;
         self.store.put(
             &federation_expulsion_key(&intent.local_team_alias),
             &encoded,
@@ -2393,7 +2357,7 @@ fn validate_stored_federated_expulsion(
     let mut seeds = std::collections::BTreeSet::new();
     for rotation in &intent.rotations {
         let role = rotation.role.role()?;
-        if prior.is_some_and(|old| old >= role) || !seeds.insert(rotation.seed) {
+        if prior.is_some_and(|old| old >= role) || !seeds.insert(rotation.seed.as_bytes()) {
             return Err(Error::InvalidAccount(
                 "pending federation expulsion PTKs are invalid",
             ));
@@ -2441,7 +2405,7 @@ fn validate_stored_team_member_edit(
     let mut seeds = std::collections::BTreeSet::new();
     for rotation in &edit.rotations {
         let role = rotation.role.role()?;
-        if prior.is_some_and(|old| old >= role) || !seeds.insert(rotation.seed) {
+        if prior.is_some_and(|old| old >= role) || !seeds.insert(rotation.seed.as_bytes()) {
             return Err(Error::InvalidAccount(
                 "pending team member edit PTKs are invalid",
             ));
@@ -2515,7 +2479,7 @@ fn validate_stored_team_rekey(pending: &StoredTeamRekey, expected_alias: &str) -
     let mut seeds = std::collections::BTreeSet::new();
     for rotation in &pending.rotations {
         let role = rotation.role.role()?;
-        if prior.is_some_and(|old| old >= role) || !seeds.insert(rotation.seed) {
+        if prior.is_some_and(|old| old >= role) || !seeds.insert(rotation.seed.as_bytes()) {
             return Err(Error::InvalidAccount("pending team rekey PTKs are invalid"));
         }
         prior = Some(role);
@@ -2563,10 +2527,10 @@ fn validate_stored_team(team: &StoredTeam, expected_alias: &str) -> Result<()> {
         };
         if !identity_is_valid
             || !team.active
-            || team.member_min != [0; 32]
-            || team.member != [0; 32]
-            || team.admin != [0; 32]
-            || team.owner != [0; 32]
+            || team.member_min.as_bytes() != &[0; 32]
+            || team.member.as_bytes() != &[0; 32]
+            || team.admin.as_bytes() != &[0; 32]
+            || team.owner.as_bytes() != &[0; 32]
             || team.removal_key.is_some()
             || team.name_commitment.is_some()
         {
@@ -2629,7 +2593,7 @@ fn validate_stored_team(team: &StoredTeam, expected_alias: &str) -> Result<()> {
             || member.expected_seqno < 2
             || member.target_source_role.role()? != Role::OWNER
             || member.destination_role.role()? == Role::NONE
-            || foks_crypto::team_removal_key_commitment(&SecretSeed::new(member.removal_key))?
+            || foks_crypto::team_removal_key_commitment(&member.removal_key.seed())?
                 != member.removal_key_commitment
         {
             return Err(Error::InvalidAccount(
@@ -2648,6 +2612,91 @@ mod tests {
     use super::*;
     use foks_keystore::EncryptedFileSecretStore;
     use foks_server_testkit::TestEnvironment;
+
+    use crate::secret_record::{assert_debug_redacted, assert_json_round_trip, json_bytes};
+
+    #[test]
+    fn team_vault_records_keep_their_json_and_redact_secrets() {
+        let secret = json_bytes(0xab, 32);
+        let role = r#"{"kind":1,"visibility":0}"#;
+        let rotations = format!(r#"[{{"role":{role},"seed":{secret}}}]"#);
+        let local_member = format!(
+            r#"{{"username":"bob","target_id":{id},"target_verify_key":{id},"target_generation":1,"target_source_role":{role},"destination_role":{role},"removal_key_commitment":{commitment},"removal_key":{secret},"expected_seqno":2,"operation_id":{operation},"active":true}}"#,
+            id = json_bytes(2, 33),
+            commitment = json_bytes(3, 32),
+            operation = json_bytes(4, 16),
+        );
+        let team: StoredTeam = assert_json_round_trip(&format!(
+            concat!(
+                r#"{{"version":1,"alias":"t","account_alias":"a","origin":"created-here","kind":"named","name":"team","team_id":{id},"#,
+                r#""member_min":{secret},"member":{secret},"admin":{secret},"owner":{secret},"removal_key":{secret},"name_commitment":{commitment},"active":true,"#,
+                r#""creation":{{"host_id":{id},"actor_id":{id},"device_id":{id},"phase":"complete"}},"#,
+                r#""federated_members":[{{"remote_profile":"r","remote_team_alias":"rt","remote_host_id":{id},"remote_team_id":{id},"destination":"owner","removal_key":{secret},"operation_id":null,"active":true}}],"#,
+                r#""local_members":[{local_member}],"#,
+                r#""invitation_members":[{{"request_id":"q","source_profile":"p","source_host":{id},"membership":{local_member}}}]}}"#,
+            ),
+            id = json_bytes(5, 33),
+            secret = secret,
+            commitment = json_bytes(0xab, 16),
+            local_member = local_member,
+        ));
+        assert_eq!(team.owner.as_bytes(), &[0xab; 32]);
+        assert_eq!(team.removal_key.as_ref().unwrap().as_bytes(), &[0xab; 32]);
+        assert_eq!(
+            team.name_commitment.as_ref().unwrap().as_bytes(),
+            &[0xab; 16]
+        );
+        assert_eq!(
+            team.federated_members[0].removal_key.as_bytes(),
+            &[0xab; 32]
+        );
+        assert_eq!(team.local_members[0].removal_key.as_bytes(), &[0xab; 32]);
+        assert_debug_redacted(&team);
+
+        let discovered: StoredTeam = assert_json_round_trip(&format!(
+            r#"{{"version":1,"alias":"t","account_alias":"a","origin":"discovered","kind":"ad-hoc","name":null,"team_id":{id},"member_min":{zero},"member":{zero},"admin":{zero},"owner":{zero},"removal_key":null,"name_commitment":null,"active":true,"federated_members":[],"local_members":[],"invitation_members":[]}}"#,
+            id = json_bytes(5, 33),
+            zero = json_bytes(0, 32),
+        ));
+        assert!(discovered.removal_key.is_none());
+
+        let rekey: StoredTeamRekey = assert_json_round_trip(&format!(
+            concat!(
+                r#"{{"version":1,"team_alias":"t","team_id":{id},"transport_uid":{id},"actor_uid":{id},"actor_source_role":{role},"actor_generation":1,"actor_device_id":{id},"operation_id":{operation},"expected_seqno":2,"#,
+                r#""changes":[{{"party":{id},"host":null,"source_role":{role},"destination_role":{role},"generation":1,"verify_key":{id},"hepk_fingerprint":{fingerprint}}}],"rotations":{rotations}}}"#,
+            ),
+            id = json_bytes(5, 33),
+            role = role,
+            operation = json_bytes(4, 16),
+            fingerprint = json_bytes(6, 32),
+            rotations = rotations,
+        ));
+        assert_eq!(rekey.rotations[0].seed.as_bytes(), &[0xab; 32]);
+        assert_debug_redacted(&rekey);
+
+        let edit: StoredTeamMemberEdit = assert_json_round_trip(&format!(
+            r#"{{"version":1,"team_alias":"t","team_id":{id},"actor_uid":{id},"actor_device_id":{id},"target_username":"bob","target_id":{id},"source_role":{role},"destination_role":{role},"removal_key_commitment":{commitment},"expected_seqno":2,"operation_id":{operation},"rotations":{rotations}}}"#,
+            id = json_bytes(5, 33),
+            role = role,
+            commitment = json_bytes(3, 32),
+            operation = json_bytes(4, 16),
+            rotations = rotations,
+        ));
+        assert_debug_redacted(&edit);
+
+        let expulsion: StoredFederatedExpulsion = assert_json_round_trip(&format!(
+            concat!(
+                r#"{{"version":1,"local_team_alias":"t","local_team_id":{id},"local_host_id":{id},"remote_profile":"r","remote_team_alias":"rt","remote_team_id":{id},"remote_host_id":{id},"#,
+                r#""source_role":{role},"destination_role":{role},"removal_key_commitment":{commitment},"actor_uid":{id},"actor_device_id":{id},"actor_source_role":{role},"actor_generation":1,"expected_seqno":2,"operation_id":{operation},"scheduler_job_id":{operation},"rotations":{rotations}}}"#,
+            ),
+            id = json_bytes(5, 33),
+            role = role,
+            commitment = json_bytes(3, 32),
+            operation = json_bytes(4, 16),
+            rotations = rotations,
+        ));
+        assert_debug_redacted(&expulsion);
+    }
 
     #[test]
     fn background_team_alias_namespace_cannot_be_user_owned() {
@@ -2685,7 +2734,7 @@ mod tests {
             }],
             rotations: vec![StoredTeamPtkRotation {
                 role: StoredTeamRole::from_role(Role::OWNER),
-                seed: [0x27; 32],
+                seed: SecretArray::new([0x27; 32]),
             }],
         };
         let encoded = serde_json::to_vec(&pending).unwrap();
@@ -2738,7 +2787,7 @@ mod tests {
             changes: vec![change(host_a.clone()), change(host_b)],
             rotations: vec![StoredTeamPtkRotation {
                 role: StoredTeamRole::from_role(Role::ADMIN),
-                seed: [0x3a; 32],
+                seed: SecretArray::new([0x3a; 32]),
             }],
         };
         validate_stored_team_rekey(&pending, "remote-team-rekey").unwrap();
@@ -3036,7 +3085,7 @@ mod tests {
                         .any(|member| member.username.as_deref() == Some("invitedmember")));
                     let stored = vault.team(&team.alias)?;
                     assert_eq!(stored.origin, StoredTeamOrigin::Discovered);
-                    assert_eq!(stored.member, [0; 32]);
+                    assert_eq!(stored.member.as_bytes(), &[0; 32]);
                 }
                 Ok::<_, crate::Error>(())
             })

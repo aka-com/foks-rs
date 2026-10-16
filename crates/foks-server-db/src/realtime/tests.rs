@@ -748,6 +748,56 @@ fn maximum_channel_metadata_can_accept_a_message_and_replay_ignores_precondition
     ));
 }
 #[test]
+fn channel_count_cap_refuses_as_quota_before_commit() {
+    let mut f = Fixture::new();
+    let create = |n: usize| {
+        let mut arg = f.create.clone();
+        arg.metadata.id.0[..8].copy_from_slice(&(n as u64).to_be_bytes());
+        arg.set_version = n as u64;
+        arg.metadata.updated_at = n as u64;
+        arg
+    };
+    for n in 1..=Limits::CHANNELS_PER_TEAM {
+        f.db.rt_create_channel(&f.owner, &create(n), 1000).unwrap();
+    }
+    assert!(matches!(
+        f.db.rt_create_channel(&f.owner, &create(Limits::CHANNELS_PER_TEAM + 1), 1000),
+        Err(Error::QuotaExceeded)
+    ));
+    assert_eq!(f.count("rt_channels"), Limits::CHANNELS_PER_TEAM as i64);
+    let version: i64 =
+        f.db.connection
+            .query_row("SELECT version FROM rt_channel_sets", [], |r| r.get(0))
+            .unwrap();
+    assert_eq!(version, Limits::CHANNELS_PER_TEAM as i64);
+}
+#[test]
+fn fanout_cap_refuses_mutations_as_quota_before_commit() {
+    let mut f = Fixture::new();
+    f.db.rt_create_channel(&f.owner, &f.create, 1000).unwrap();
+    let team = f.create.metadata.team.entity().as_bytes().to_vec();
+    // The fixture's owner and member plus these exceed the fanout bound by one.
+    for n in 0..Limits::FANOUT_MEMBERS - 1 {
+        let mut uid = id(ENTITY_USER, 0x40);
+        uid[1..9].copy_from_slice(&(n as u64).to_be_bytes());
+        f.db.connection.execute("INSERT INTO team_members(team_id,party_id,source_role_type,source_visibility,role_type,visibility,generation,verify_key,hepk_fingerprint) VALUES (?1,?2,3,0,1,0,1,zeroblob(33),zeroblob(32))",params![team,uid]).unwrap();
+    }
+    assert!(matches!(
+        f.db.rt_send(&f.owner, &f.send(2), 2000),
+        Err(Error::QuotaExceeded)
+    ));
+    assert_eq!(f.count("rt_messages"), 0);
+    let mut second = f.create.clone();
+    second.metadata.id = RtChannelId([2; 16]);
+    second.set_version = 2;
+    second.metadata.updated_at = 2;
+    assert!(matches!(
+        f.db.rt_create_channel(&f.owner, &second, 2000),
+        Err(Error::QuotaExceeded)
+    ));
+    assert_eq!(f.count("rt_channels"), 1);
+}
+#[test]
 fn concurrent_channel_creates_have_one_cas_winner() {
     let mut f = Fixture::new();
     f.db.rt_create_channel(&f.owner, &f.create, 100).unwrap();
@@ -1140,6 +1190,94 @@ fn response_byte_limits_fail_explicitly_without_truncating_history() {
             300
         )
         .is_err());
+}
+#[test]
+fn capacity_report_sums_stored_messages_per_team() {
+    let mut f = Fixture::new();
+    f.db.rt_create_channel(&f.owner, &f.create, 1_000_000)
+        .unwrap();
+    let first = f.send(2);
+    f.db.rt_send(&f.owner, &first, 1_001_000).unwrap();
+    let mut second = f.send(3);
+    second.send.expected_previous_sequence = 1;
+    second.send.metadata.previous_id = first.send.metadata.id;
+    second.send.metadata.previous_sequence = 1;
+    f.db.rt_send(&f.member, &second, 1_002_000).unwrap();
+    let bytes: i64 =
+        f.db.connection
+            .query_row(
+                "SELECT sum(length(envelope) + length(exact_message)) FROM rt_messages",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+    let reader = f.reader();
+    let report = reader.snapshot().unwrap().capacity_report(0).unwrap();
+    assert_eq!(
+        report.realtime_teams,
+        [crate::RealtimeTeamUsage {
+            team_id: id(ENTITY_NAMED_TEAM, 3),
+            bytes: u64::try_from(bytes).unwrap(),
+            messages: 2,
+        }]
+    );
+    assert_eq!(
+        report.usage(crate::CapacityResource::Teams).unwrap().used,
+        1
+    );
+}
+#[test]
+fn capacity_report_lists_the_teams_with_the_most_message_bytes_first() {
+    let f = Fixture::new();
+    // Eleven teams with one message each, written with foreign keys off: the
+    // report reads only the stored rows.
+    // The last two hold the same bytes, so the smaller team ID is listed
+    // first, and the team with the fewest bytes is not listed.
+    let fixture = rusqlite::Connection::open(&f.db.path).unwrap();
+    fixture.pragma_update(None, "foreign_keys", false).unwrap();
+    for tag in 20..=30_u8 {
+        fixture
+            .execute(
+                "INSERT INTO rt_channels(channel_id, short_id, team_id, app_id, metadata)
+                 VALUES (?1, ?2, ?3, 1, x'')",
+                rusqlite::params![
+                    [tag; 16].as_slice(),
+                    1000 + i64::from(tag),
+                    id(ENTITY_NAMED_TEAM, tag)
+                ],
+            )
+            .unwrap();
+        fixture
+            .execute(
+                "INSERT INTO rt_messages(message_id, channel_id, sequence, sender, envelope,
+                                         exact_message, insert_time)
+                 VALUES (?1, ?1, 1, x'00', zeroblob(?2), x'01', 0)",
+                rusqlite::params![[tag; 16].as_slice(), 100 * i64::from(tag.min(29))],
+            )
+            .unwrap();
+    }
+    drop(fixture);
+    let reader = ReadDatabase::open_pooled(&f.db.path, Config::default()).unwrap();
+    let report = reader.snapshot().unwrap().capacity_report(0).unwrap();
+    assert_eq!(
+        report
+            .realtime_teams
+            .iter()
+            .map(|team| (team.team_id[1], team.bytes, team.messages))
+            .collect::<Vec<_>>(),
+        [
+            (29, 2901, 1),
+            (30, 2901, 1),
+            (28, 2801, 1),
+            (27, 2701, 1),
+            (26, 2601, 1),
+            (25, 2501, 1),
+            (24, 2401, 1),
+            (23, 2301, 1),
+            (22, 2201, 1),
+            (21, 2101, 1),
+        ]
+    );
 }
 
 mod reconciliation;

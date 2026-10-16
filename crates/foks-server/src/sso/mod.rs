@@ -8,7 +8,7 @@ pub mod operator;
 mod payload;
 use crate::{keys::HostKeyProvider, Entropy, Error, Result, WriterHandle};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-pub(crate) use binding::status;
+pub(crate) use binding::{access_status, status};
 pub use config::{OidcOperatorConfig, OidcRolloutMode};
 use foks_oidc::{NetworkPolicy, Provider, ProviderClient, ProviderHttp};
 use foks_proto::{InitOAuth2SessionArgument, OAuth2SessionId};

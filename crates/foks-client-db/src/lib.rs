@@ -660,6 +660,8 @@ pub enum Error {
     InvalidSnapshot(&'static str),
     #[error("hard-state database path must not be a symbolic link")]
     SymlinkDatabase,
+    #[error("hard-state database does not exist or is not initialized")]
+    StateMissing,
     #[error("hard-state database has application id {found:#x}, expected {expected:#x}")]
     WrongApplicationId { found: i64, expected: i64 },
     #[error(
@@ -775,7 +777,13 @@ struct StoredHost {
     public_zone_bytes: Vec<u8>,
 }
 
-fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
+/// Reads a database file's application id and schema version without writing.
+///
+/// Returns `None` for an uninitialized file, one with no application id, no
+/// schema version and no schema objects, which [`initialize_or_verify`]
+/// initializes. Returns the schema version of a file carrying the FOKS
+/// application id, and [`Error::WrongApplicationId`] for any other file.
+fn hard_state_version(connection: &Connection) -> Result<Option<u32>> {
     let application_id: i64 =
         connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -785,12 +793,21 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
             [],
             |row| row.get(0),
         )?;
-        if object_count != 0 {
-            return Err(Error::WrongApplicationId {
-                found: application_id,
-                expected: APPLICATION_ID,
-            });
+        if object_count == 0 {
+            return Ok(None);
         }
+    }
+    if application_id != APPLICATION_ID {
+        return Err(Error::WrongApplicationId {
+            found: application_id,
+            expected: APPLICATION_ID,
+        });
+    }
+    Ok(Some(version))
+}
+
+fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
+    let Some(version) = hard_state_version(connection)? else {
         let mut database_id = [0u8; 16];
         getrandom::fill(&mut database_id).map_err(|_| Error::Randomness)?;
         let mut write_token = [0u8; 16];
@@ -808,36 +825,28 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
         return Ok(());
-    }
-    if application_id != APPLICATION_ID {
-        return Err(Error::WrongApplicationId {
-            found: application_id,
-            expected: APPLICATION_ID,
-        });
-    }
+    };
+    // Neither migration path compares the migrated sqlite_schema with a fresh
+    // database before setting user_version; inspect_existing does, and
+    // migration_tests compares every supported predecessor. A check here
+    // would refuse to open a field database whose schema differs from
+    // INITIAL in a way the store does not depend on, which today fails only
+    // at snapshot inspection.
     if version == 38 {
         merkle_checkpoint::migrate(connection)?;
         return Ok(());
     }
+    // Versions 39 and 40 differ from the current schema only in
+    // kv_adapter_clocks: version 40 renamed admission_floor (which version 38
+    // and 39 databases may carry) and version 41 added boot_id. Neither step
+    // changes a stored value, so both keep hard_state_revision and
+    // write_token, and the keyring rollback checkpoint still matches.
     if version == 39 || version == 40 {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: u32 =
             transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version == 39 || version == 40 {
-            let has_admission_floor: bool = transaction.query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM pragma_table_info('kv_adapter_clocks')
-                    WHERE name='admission_floor'
-                )",
-                [],
-                |row| row.get(0),
-            )?;
-            if has_admission_floor {
-                transaction.execute_batch(
-                    "ALTER TABLE kv_adapter_clocks
-                     RENAME COLUMN admission_floor TO validated_time_floor;",
-                )?;
-            }
+            rename_adapter_admission_floor(&transaction)?;
             add_adapter_boot_id(&transaction)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -849,6 +858,26 @@ fn initialize_or_verify(connection: &mut Connection) -> Result<()> {
             found: version,
             supported: SCHEMA_VERSION,
         });
+    }
+    Ok(())
+}
+
+/// Version 40 renamed kv_adapter_clocks.admission_floor to
+/// validated_time_floor. Version 38 and 39 databases may carry either name.
+fn rename_adapter_admission_floor(transaction: &Transaction<'_>) -> Result<()> {
+    let has_admission_floor: bool = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM pragma_table_info('kv_adapter_clocks')
+            WHERE name='admission_floor'
+        )",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_admission_floor {
+        transaction.execute_batch(
+            "ALTER TABLE kv_adapter_clocks
+             RENAME COLUMN admission_floor TO validated_time_floor;",
+        )?;
     }
     Ok(())
 }
@@ -4443,6 +4472,8 @@ mod tests {
 }
 
 mod inspection;
+#[cfg(test)]
+mod migration_tests;
 
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]

@@ -2,15 +2,16 @@
 
 use crate::backup::{BackupKey, BACKUP_SEED_BYTES};
 use crate::hybrid::{
-    derive_device_public, derive_hybrid_key, derive_shared_public, derive_yubi_public_material,
-    open_hybrid_box, open_puk_parcel, open_puk_parcel_for_role, open_puk_parcel_with,
-    open_puk_parcel_with_for_role, open_puk_seed_chain, open_shared_key_parcel_with,
-    open_shared_key_seed_chain, seal_initial_puk_box, seal_puk_seed_chain_box,
-    seal_shared_key_boxes, seal_software_puk_boxes, seal_software_puk_boxes_mixed,
-    seal_yubi_puk_boxes, yubi_mlkem_decapsulate, DevicePublicMaterial, HybridSecretDecapsulator,
+    derive_device_public, derive_hybrid_key, derive_key, derive_shared_public,
+    derive_yubi_public_material, open_hybrid_box, open_puk_parcel, open_puk_parcel_for_role,
+    open_puk_parcel_with, open_puk_parcel_with_for_role, open_puk_seed_chain,
+    open_shared_key_parcel_with, open_shared_key_seed_chain, open_team_shared_key_seed_chain,
+    seal_initial_puk_box, seal_puk_seed_chain_box, seal_shared_key_boxes, seal_software_puk_boxes,
+    seal_software_puk_boxes_mixed, seal_yubi_puk_boxes, shared_key_seed_plaintext,
+    yubi_mlkem_decapsulate, DevicePublicMaterial, HybridSecretDecapsulator,
     InitialPukBoxRandomness, PukBoxRandomness, SharedKeyBoxInput, SharedKeyDecapsulator,
     SoftwarePukBoxInput, SoftwarePukBoxSetRandomness, YubiDevice, YubiPublicMaterial,
-    YubiPukBoxInput, YubiPukBoxSetRandomness,
+    YubiPukBoxInput, YubiPukBoxRandomness, YubiPukBoxSetRandomness, YubiSubkeyBoxRandomness,
 };
 use crate::kv::{
     bind_kv_dirent, derive_kv_keys, open_kv_chunk, open_kv_dirent_name, seal_kv_chunk,
@@ -27,9 +28,9 @@ use crate::team::{
     make_remove_local_team_member_link, make_single_owner_adhoc_team,
     make_single_owner_adhoc_team_yubi, make_single_owner_named_team, make_team_removal_proof,
     open_team_remote_member_view_token, open_team_removal_key, open_team_removal_key_for_member,
-    seal_team_remote_member_view_token, team_removal_key_commitment, AdHocTeamInput,
-    AddLocalTeamMemberInput, ChangeTeamMemberInput, NamedTeamInput, RemoveLocalTeamMemberInput,
-    TeamPtkRotation, TeamRemovalKeyExpectation,
+    seal_team_remote_member_view_token, seal_team_removal_key, team_removal_key_commitment,
+    AdHocTeamInput, AddLocalTeamMemberInput, ChangeTeamMemberInput, NamedTeamInput,
+    RemoveLocalTeamMemberInput, TeamPtkRotation, TeamRemovalKeyExpectation,
 };
 use crate::user::{
     make_backup_provision_link, make_software_eldest_link, make_software_provision_link,
@@ -1842,6 +1843,106 @@ fn software_mutation_boxes_round_trip_and_preserve_history() {
 }
 
 #[test]
+fn seed_chain_boxes_accept_zero_padding_and_bind_the_receiver() {
+    let expected = UserLink::decode(&signup_fixture("eldest-link.snowp")).unwrap();
+    let opened = expected.decode_eldest().unwrap();
+    let boxed = SharedKeyBoxSet::decode(&signup_fixture("puk-box-set.snowp")).unwrap();
+    let shared = boxed.boxes.into_iter().next().unwrap();
+    let current_seed = SecretSeed::new([31; 32]);
+    let previous_seed = SecretSeed::new([32; 32]);
+    let editor = opened.uid.clone();
+    let mut other = opened.uid.as_bytes().to_vec();
+    *other.last_mut().unwrap() ^= 1;
+    let other = EntityId::from_bytes(other).unwrap();
+    let chain_box = |receiver: &EntityId, padding: &[u8]| {
+        let plaintext =
+            shared_key_seed_plaintext(receiver, &opened.host, 1, Role::OWNER, &previous_seed)
+                .unwrap();
+        let padded = Zeroizing::new([plaintext.as_slice(), padding].concat());
+        let key = derive_key(&current_seed, 2, None).unwrap();
+        let nonce = [33; 16];
+        foks_proto::SeedChainBox {
+            generation: 1,
+            role: Role::OWNER,
+            secret_box: SecretBox {
+                nonce,
+                ciphertext: seal_typed_secretbox(
+                    key.as_bytes(),
+                    SHARED_KEY_SEED_TYPE_ID,
+                    &nonce,
+                    &padded,
+                    false,
+                )
+                .unwrap(),
+            },
+        }
+    };
+    let parcel = |receiver: &EntityId, padding: &[u8]| PukParcel {
+        generation: 2,
+        role: Role::OWNER,
+        hybrid: shared.hybrid.clone(),
+        target: shared.target.entity.clone(),
+        target_host: shared.target.host.clone(),
+        target_role: shared.target.role,
+        target_generation: shared.target.generation,
+        sender: opened.uid.clone(),
+        box_id: boxed.box_id,
+        temp_dh_key: boxed.temp_dh_key.clone(),
+        seed_chain: vec![chain_box(receiver, padding)],
+    };
+    let current = || SharedKeySeed {
+        receiver: opened.uid.clone(),
+        host: opened.host.clone(),
+        generation: 2,
+        role: Role::OWNER,
+        seed: SecretSeed::new(*current_seed.as_bytes()),
+    };
+
+    let padded = parcel(&editor, &[0; 7]);
+    let history = open_shared_key_seed_chain(current(), &padded, &editor, &opened.host).unwrap();
+    assert_eq!(history[0].seed, previous_seed);
+    assert_eq!(history[1].seed, current_seed);
+    assert!(matches!(
+        open_shared_key_seed_chain(current(), &padded, &other, &opened.host),
+        Err(Error::PukBinding)
+    ));
+    // A team chain names the rotating editor, not the parcel recipient, so
+    // the team opener skips the receiver check that the PUK opener applies.
+    let team = parcel(&other, &[0; 7]);
+    let history = open_team_shared_key_seed_chain(current(), &team, &opened.host).unwrap();
+    assert_eq!(history[0].seed, previous_seed);
+    assert_eq!(history[0].receiver, other);
+    assert!(matches!(
+        open_shared_key_seed_chain(current(), &team, &editor, &opened.host),
+        Err(Error::PukBinding)
+    ));
+    assert!(matches!(
+        open_team_shared_key_seed_chain(current(), &team, &other),
+        Err(Error::PukBinding)
+    ));
+
+    let nonzero = parcel(&editor, &[0, 0, 1]);
+    for result in [
+        open_shared_key_seed_chain(current(), &nonzero, &editor, &opened.host),
+        open_team_shared_key_seed_chain(current(), &nonzero, &opened.host),
+    ] {
+        assert!(matches!(result, Err(Error::KvPadding)));
+    }
+}
+
+#[test]
+fn seed_chain_plaintexts_bypass_the_non_zeroizing_prefix_decoder() {
+    // The general prefix decoder copies the older seed into an ordinary
+    // `Value::Binary` that is dropped without erasure. The check covers
+    // hybrid.rs only, so it also requires the seed-chain decoder to stay there.
+    let hybrid = include_str!("hybrid.rs");
+    let general_prefix_decoder = ["decode_prefix", "("].concat();
+    assert!(!hybrid.contains(&general_prefix_decoder));
+    assert!(hybrid.contains("fn decode_padded_shared_key_seed("));
+    assert!(hybrid.contains("decode_prefix_sensitive(plaintext)"));
+}
+
+#[test]
 fn official_initial_signup_puk_box_opens() {
     let expected = UserLink::decode(&signup_fixture("eldest-link.snowp")).unwrap();
     let opened = expected.decode_eldest().unwrap();
@@ -2817,6 +2918,176 @@ fn backup_opens_the_official_enrollment_puk_box() {
     )
     .unwrap();
     assert_eq!(opened.seed, expected_seed);
+}
+
+fn box_randomness(kem_message: u8, nonce: u8) -> PukBoxRandomness {
+    PukBoxRandomness {
+        kem_message: [kem_message; 32],
+        nonce: [nonce; 16],
+    }
+}
+
+/// Seals two boxes to one receiver with distinct randomness, then with a
+/// repeated ML-KEM seed, then with a repeated nonce.
+fn assert_rejects_same_receiver_reuse<T>(seal: impl Fn([PukBoxRandomness; 2]) -> Result<T>) {
+    assert!(seal([box_randomness(1, 2), box_randomness(3, 4)]).is_ok());
+    assert!(matches!(
+        seal([box_randomness(1, 2), box_randomness(1, 4)]),
+        Err(Error::RandomnessReuse)
+    ));
+    assert!(matches!(
+        seal([box_randomness(1, 2), box_randomness(3, 2)]),
+        Err(Error::RandomnessReuse)
+    ));
+}
+
+#[test]
+fn box_set_sealing_rejects_reused_kem_messages_and_receiver_nonces() {
+    let host =
+        EntityId::from_bytes([vec![foks_proto::ENTITY_HOST], vec![0xb1; 32]].concat()).unwrap();
+    let sender_seed = SecretSeed::new([0xb2; 32]);
+    let sender = derive_device_public(&sender_seed).unwrap();
+    let receiver_a = derive_device_public(&SecretSeed::new([0xb3; 32])).unwrap();
+    let receiver_b = derive_device_public(&SecretSeed::new([0xb4; 32])).unwrap();
+    let puk_seed = SecretSeed::new([0xb5; 32]);
+    let next_puk_seed = SecretSeed::new([0xb6; 32]);
+    // Two PUK generations for one device is a legitimate set.
+    let same_receiver =
+        [(&puk_seed, 2), (&next_puk_seed, 3)].map(|(seed, generation)| SoftwarePukBoxInput {
+            seed,
+            generation,
+            role: Role::OWNER,
+            receiver: &receiver_a,
+        });
+    let two_receivers = [&receiver_a, &receiver_b].map(|receiver| SoftwarePukBoxInput {
+        seed: &puk_seed,
+        generation: 2,
+        role: Role::OWNER,
+        receiver,
+    });
+
+    assert_rejects_same_receiver_reuse(|randomness| {
+        seal_software_puk_boxes(&host, &sender_seed, [0xb7; 16], &same_receiver, &randomness)
+    });
+    assert_rejects_same_receiver_reuse(|randomness| {
+        seal_software_puk_boxes_mixed(
+            &host,
+            &sender_seed,
+            [0xb8; 16],
+            &same_receiver,
+            &randomness,
+            SoftwarePukBoxSetRandomness {
+                ephemeral_secret: [0xb9; 32],
+                time: 1_724_000_000_005,
+            },
+        )
+    });
+    let parent = MockYubi::new(0xba, 0xbb);
+    let yubi_inputs =
+        [(&puk_seed, 2), (&next_puk_seed, 3)].map(|(seed, generation)| YubiPukBoxInput {
+            seed,
+            generation,
+            role: Role::OWNER,
+            receiver: &receiver_a,
+        });
+    assert_rejects_same_receiver_reuse(|randomness| {
+        seal_yubi_puk_boxes(
+            &host,
+            &parent,
+            [0xbc; 16],
+            &yubi_inputs,
+            &randomness,
+            YubiPukBoxSetRandomness {
+                ephemeral_secret: [0xbd; 32],
+                time: 1_724_000_000_006,
+            },
+        )
+    });
+
+    // Distinct receivers derive distinct hybrid keys, so a shared nonce is
+    // accepted there; a shared ML-KEM seed is still rejected.
+    assert!(seal_software_puk_boxes(
+        &host,
+        &sender_seed,
+        [0xbe; 16],
+        &two_receivers,
+        &[box_randomness(1, 2), box_randomness(3, 2)],
+    )
+    .is_ok());
+    assert!(matches!(
+        seal_software_puk_boxes(
+            &host,
+            &sender_seed,
+            [0xbe; 16],
+            &two_receivers,
+            &[box_randomness(1, 2), box_randomness(1, 4)],
+        ),
+        Err(Error::RandomnessReuse)
+    ));
+
+    let team = EntityId::from_bytes([vec![foks_proto::ENTITY_NAMED_TEAM], vec![0xbf; 32]].concat())
+        .unwrap();
+    let member =
+        EntityId::from_bytes([vec![foks_proto::ENTITY_USER], vec![0xc0; 32]].concat()).unwrap();
+    let removal_key = SecretSeed::new([0xc1; 32]);
+    let seal_removal = |randomness| {
+        seal_team_removal_key(
+            &sender_seed,
+            &sender.hepk,
+            &receiver_a.hepk,
+            Role::ADMIN,
+            1,
+            &receiver_b.hepk,
+            Role::OWNER,
+            1,
+            &removal_key,
+            foks_proto::TeamRemovalKeyMetadata {
+                team: team.clone(),
+                host: host.clone(),
+                member: member.clone(),
+                member_host: host.clone(),
+                source_role: Role::OWNER,
+                destination_role: Role::OWNER,
+                team_sequence: 1,
+            },
+            randomness,
+        )
+    };
+    assert!(seal_removal([box_randomness(1, 2), box_randomness(3, 2)]).is_ok());
+    assert!(matches!(
+        seal_removal([box_randomness(1, 2), box_randomness(1, 4)]),
+        Err(Error::RandomnessReuse)
+    ));
+}
+
+#[test]
+fn box_randomness_generators_fill_secret_fields() {
+    let set = PukBoxRandomness::generate_many(2).unwrap();
+    assert_eq!(set.len(), 2);
+    assert_ne!(set[0].kem_message, set[1].kem_message);
+    // The set is allocated at its final size, so filling it never moves
+    // seeds out of a freed buffer.
+    assert_eq!(PukBoxRandomness::generate_many(9).unwrap().capacity(), 9);
+    assert_ne!(set[0].nonce, set[1].nonce);
+    let initial = InitialPukBoxRandomness::generate().unwrap();
+    assert_ne!(initial.box_id, [0; 16]);
+    assert_ne!(initial.kem_message, [0; 32]);
+    assert_ne!(initial.nonce, [0; 16]);
+    let subkey = YubiSubkeyBoxRandomness::generate().unwrap();
+    assert_ne!(subkey.kem_message, [0; 32]);
+    assert_ne!(subkey.nonce, [0; 16]);
+    let yubi_box = YubiPukBoxRandomness::generate(7).unwrap();
+    assert_eq!(yubi_box.time, 7);
+    assert_ne!(yubi_box.kem_message, [0; 32]);
+    let software_set = SoftwarePukBoxSetRandomness::generate(8).unwrap();
+    assert_eq!(software_set.time, 8);
+    for secret in [yubi_box.ephemeral_secret, software_set.ephemeral_secret] {
+        assert!(secret[0] < 0x80);
+        assert!(P256SecretKey::from_slice(&secret).is_ok());
+    }
+    let yubi_set = YubiPukBoxSetRandomness::generate(9).unwrap();
+    assert_eq!(yubi_set.time, 9);
+    assert_ne!(yubi_set.ephemeral_secret, [0; 32]);
 }
 
 #[test]

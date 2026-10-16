@@ -68,19 +68,19 @@ pub(super) fn report(alias: &str, purpose: foks_proto::SsoPurpose, p: SsoProgres
 fn apply_service_result<T>(report: &mut SsoReport, result: foks_client::Result<T>) {
     match result {
         Ok(_) => report.service_access = true,
-        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1069, .. })) => {
-            report.state = "reauthentication-required"
-        }
+        Err(foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
+            code: foks_rpc::STATUS_OAUTH2_AUTH_ERROR,
+            ..
+        })) => report.state = "reauthentication-required",
         Err(_) => report.state = "service-unavailable",
     }
 }
 fn pending_intent(p: &PendingSignup) -> Result<SsoIntent> {
-    let mut uid =
-        derive_shared_verify_key(&SecretSeed::new(p.puk_seed), ENTITY_PUK_VERIFY)?.into_bytes();
+    let mut uid = derive_shared_verify_key(&p.puk_seed.seed(), ENTITY_PUK_VERIFY)?.into_bytes();
     uid[0] = ENTITY_USER;
     Ok(SsoIntent {
         uid: EntityId::from_bytes(uid)?,
-        device: derive_device_public(&SecretSeed::new(p.device_seed))?.id,
+        device: derive_device_public(&p.device_seed.seed())?.id,
         purpose: foks_proto::SsoPurpose::Signup,
     })
 }
@@ -277,21 +277,19 @@ impl CheckedProfileSession<'_> {
                         "provider-unavailable"
                     }
                     foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
-                        code: 1069, ..
+                        code: foks_rpc::STATUS_OAUTH2_AUTH_ERROR,
+                        ..
                     }) => "reauthentication-required",
                     foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
-                        code: 1067,
+                        code: foks_rpc::STATUS_OAUTH2_ERROR,
                         detail,
-                    }) if detail.detail().is_some_and(|d| {
-                        d == "authorization denied" || d.contains("access_denied")
-                    }) =>
-                    {
-                        "denied"
-                    }
-                    foks_client::Error::Rpc(foks_rpc::Error::RemoteStatus {
-                        code: 1067,
-                        detail,
-                    }) if detail.detail() == Some("provider unavailable") => "provider-unavailable",
+                    }) => match detail.oauth2_outcome() {
+                        Some(foks_rpc::OAuth2Outcome::Denied) => "denied",
+                        Some(foks_rpc::OAuth2Outcome::ProviderUnavailable) => {
+                            "provider-unavailable"
+                        }
+                        None => return Err(e.into()),
+                    },
                     _ => return Err(e.into()),
                 };
                 let mut p = report(
@@ -377,7 +375,7 @@ impl CheckedProfileSession<'_> {
             let auth = self.client.authorize_sso_signup(
                 &host,
                 id,
-                SsoSigningKey::Software(&SecretSeed::new(pending.device_seed)),
+                SsoSigningKey::Software(&pending.device_seed.seed()),
                 http,
                 &mut protected,
             )?;

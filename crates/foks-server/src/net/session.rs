@@ -3,28 +3,18 @@ use std::sync::Arc;
 mod handlers;
 mod kex;
 
-use foks_proto::{
-    DecodedSignupArgument, EntityId, HistoricalMerkleRoots, InviteCode, MerkleExistsResponse,
-    MerkleLookupResponse, MerkleMultiLookupResponse, MerkleRoot, ProbeResponse, SignedBlob,
-    TreeRoot, UsernameReservation,
-};
-use foks_rpc::{
-    arguments::{
-        decode_merkle_check_key, decode_merkle_lookup, decode_merkle_multi_lookup,
-        decode_merkle_optional_host,
-    },
-    encode_status_response_at, RpcStatus,
-};
+use foks_proto::{EntityId, MerkleRoot};
+use foks_rpc::{encode_status_response_at, RpcStatus, STATUS_OK, STATUS_RATE_LIMIT_ERROR};
 use foks_snowpack::{decode, Value};
 use rustls::pki_types::CertificateDer;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
 
 use crate::auth::Principal;
-use crate::identity::validate_signup;
 use crate::keys::HostKeyProvider;
-use crate::merkle::decode_stored_root;
-use crate::rpc::{route_call, Listener, RouteError};
+use crate::rpc::{route_call, Listener, RouteError, RouteId, RouteSpec};
+use crate::services::merkle_query::{validate_host_argument_against, MerkleQueries};
+use crate::services::IdentityPorts;
 use crate::{Entropy, Result, SessionLimits, WriterHandle};
 
 #[derive(Clone)]
@@ -50,58 +40,19 @@ pub(crate) struct ServerData {
     metrics: Arc<crate::ServerMetrics>,
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     execution: Arc<Semaphore>,
-    realtime_polling: Arc<Semaphore>,
+    /// Realtime inbox poll database reads in progress. The number of polls is
+    /// bounded by the authenticated listener's connection limit, since the
+    /// route is served only there and each poll holds its connection; a hint
+    /// can wake all of them at once. Poll reads wait for one of these permits
+    /// before leasing a reader, so they hold at most half of the reader pool
+    /// (or its only reader) and leave the rest to ordinary requests.
+    realtime_poll_reads: Arc<Semaphore>,
+    /// Realtime inbox polls in progress per account UID.
+    account_realtime_polls: Arc<crate::rate_limit::KeyedLimit<Vec<u8>>>,
     request_memory: Arc<Semaphore>,
     kex_relay: Arc<kex::Relay>,
     realtime: crate::services::realtime::RealtimeService,
     waitlist_enabled: bool,
-}
-
-pub(crate) struct OwnedPassphraseMutation {
-    verify_key: Vec<u8>,
-    salt: [u8; 16],
-    generation: u64,
-    exact_skmwk_box: Vec<u8>,
-    exact_passphrase_box: Vec<u8>,
-    exact_puk_box: Option<Vec<u8>>,
-    puk_generation: Option<u64>,
-    puk_role: Option<foks_proto::Role>,
-    stretch_version: u64,
-}
-
-impl OwnedPassphraseMutation {
-    pub(crate) fn from_argument(argument: &foks_proto::PassphraseUpdateArgument) -> Result<Self> {
-        Ok(Self {
-            verify_key: argument.verify_key.as_bytes().to_vec(),
-            salt: argument.salt,
-            generation: argument.generation,
-            exact_skmwk_box: foks_snowpack::encode(&argument.skmwk_box.to_value())?,
-            exact_passphrase_box: argument.passphrase_box.encoded()?,
-            exact_puk_box: argument
-                .puk_box
-                .as_ref()
-                .map(foks_proto::PpePukBox::encoded)
-                .transpose()?,
-            puk_generation: argument.puk_box.as_ref().map(|boxed| boxed.puk_generation),
-            puk_role: argument.puk_box.as_ref().map(|boxed| boxed.puk_role),
-            stretch_version: argument.stretch_version.protocol_value(),
-        })
-    }
-
-    pub(crate) fn as_database(&self, now: u64) -> foks_server_db::PassphraseMutation<'_> {
-        foks_server_db::PassphraseMutation {
-            verify_key: &self.verify_key,
-            salt: &self.salt,
-            generation: self.generation,
-            exact_skmwk_box: &self.exact_skmwk_box,
-            exact_passphrase_box: &self.exact_passphrase_box,
-            exact_puk_box: self.exact_puk_box.as_deref(),
-            puk_generation: self.puk_generation,
-            puk_role: self.puk_role,
-            stretch_version: self.stretch_version,
-            now,
-        }
-    }
 }
 
 impl ServerData {
@@ -146,10 +97,12 @@ impl ServerData {
                 .read_database
                 .clone()
                 .map(|database| {
-                    crate::read_pool::ReadPool::new(
+                    let pool = crate::read_pool::ReadPool::new(
                         database,
                         config.limits.maximum_read_connections,
-                    )
+                    )?;
+                    config.metrics.reader_pool_opened(pool.open_connections()?);
+                    Ok::<_, crate::Error>(pool)
                 })
                 .transpose()?,
             writer: config.writer.clone(),
@@ -161,8 +114,11 @@ impl ServerData {
             metrics: Arc::clone(&config.metrics),
             rate_limiter,
             execution: Arc::new(Semaphore::new(config.limits.maximum_in_flight_requests)),
-            realtime_polling: Arc::new(Semaphore::new(
-                config.limits.maximum_in_flight_requests.min(32),
+            realtime_poll_reads: Arc::new(Semaphore::new(realtime_poll_read_permits(
+                config.limits.maximum_read_connections,
+            ))),
+            account_realtime_polls: Arc::new(crate::rate_limit::KeyedLimit::new(
+                config.limits.maximum_realtime_polls_per_account,
             )),
             request_memory: Arc::new(Semaphore::new(config.limits.maximum_request_memory_bytes)),
             kex_relay: Arc::new(kex::Relay::default()),
@@ -171,855 +127,41 @@ impl ServerData {
         })
     }
 
-    fn user_mutation(
-        &self,
-        argument: &[u8],
-        principal: &Principal,
-        provision: bool,
-    ) -> std::result::Result<(), RpcStatus> {
-        let decoded = if provision {
-            crate::identity::mutation::Argument::Provision(
-                foks_rpc::arguments::decode_provision_device(argument).map_err(bad_arguments)?,
-            )
-        } else {
-            crate::identity::mutation::Argument::Revoke(
-                foks_rpc::arguments::decode_revoke_device(argument).map_err(bad_arguments)?,
-            )
-        };
-        self.commit_user_mutation_argument(argument, principal, decoded)
-    }
-
-    fn commit_user_mutation_argument(
-        &self,
-        argument: &[u8],
-        principal: &Principal,
-        decoded: crate::identity::mutation::Argument,
-    ) -> std::result::Result<(), RpcStatus> {
-        const IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
-        let reader = self.read_database()?;
-        let exact_link = decoded.link().encoded().map_err(bad_arguments)?;
-        let submitted_change = decoded
-            .link()
-            .decode_group_change()
-            .map_err(bad_arguments)?;
-        let signed_root = submitted_change.root.clone();
-        let idempotency_key =
-            foks_crypto::prefixed_hash_signable(foks_proto::LINK_OUTER_TYPE_ID, &exact_link)
-                .map_err(bad_arguments)?;
-        let request_hash = foks_crypto::prefixed_hash(foks_proto::LINK_OUTER_TYPE_ID, argument);
-        let idempotency_now = self
-            .clock
-            .now_micros()
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        match reader.idempotency_record(&idempotency_key, &request_hash, idempotency_now) {
-            Ok(Some(idempotency_record)) if idempotency_record.response.is_empty() => return Ok(()),
-            Ok(Some(_)) => return Err(RpcStatus::TransactionRetry),
-            Ok(None) => {}
-            Err(foks_server_db::Error::OperationConflict) => {
-                return Err(bad_arguments("user mutation retry binding failed"));
-            }
-            Err(_) => return Err(RpcStatus::TransactionRetry),
-        }
-        let identity = reader
-            .identity_by_active_device(principal.device_id())
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or_else(permission_denied)?;
-        let uid = identity.uid;
-        let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
-        let keys = Arc::clone(self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?);
-        let clock = Arc::clone(&self.clock);
-        let host = self.host().map_err(|_| RpcStatus::TransactionRetry)?;
-        let hostchain_tail = self.hostchain_tail.clone();
-        let signer = identity.device_id.clone();
-        let result = writer.call(move |database| {
-            let now = clock.now_micros()?;
-            let idempotency_expires_at = now
-                .checked_add(IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS)
-                .ok_or(crate::Error::Signup(
-                    "user mutation idempotency_record expiry",
-                ))?;
-            let authority = database
-                .user_authority(&uid)?
-                .ok_or(crate::Error::Signup("user mutation authority missing"))?;
-            if mutation_cites_superseded_user_head(database, &authority, &host, &submitted_change)?
-            {
-                return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
-            }
-            let cited_root = require_cited_root(database, &signed_root)?;
-            let command = crate::identity::mutation::validate(
-                &authority,
-                &host,
-                &signer,
-                decoded,
-                signed_root,
-            )?;
-            let authoritative_root = database
-                .current_root()?
-                .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
-            if cited_root.epoch > authoritative_root.epoch {
-                return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
-            }
-            if now / 1_000 < decode_stored_root(&authoritative_root)?.time {
-                return Err(crate::Error::Signup("system clock moved backwards"));
-            }
-            let chain_key = foks_merkle_store::chain_key(
-                0,
-                &EntityId::from_bytes(command.uid.clone())?,
-                command.sequence,
-                Some(&authority.next_tree_location),
-            )?;
-            let mut leaves = vec![(chain_key, command.link_hash)];
-            if let Some(name) = &command.username {
-                leaves.push((
-                    foks_merkle_store::username_key(
-                        &name.normalized_name,
-                        &host,
-                        name.name_sequence,
-                    )?,
-                    foks_merkle_store::username_leaf(&EntityId::from_bytes(command.uid.clone())?)?,
-                ));
-            }
-            let settings_location = command
-                .user_settings
-                .as_ref()
-                .map(|settings| {
-                    let state = database
-                        .generic_chain(&command.uid, foks_proto::CHAIN_TYPE_USER_SETTINGS)?
-                        .ok_or(crate::Error::Signup("user-settings subchain seed missing"))?;
-                    let location = if settings.sequence == 1 {
-                        foks_crypto::subchain_tree_location(
-                            &state.location_seed,
-                            foks_proto::CHAIN_TYPE_USER_SETTINGS,
-                        )?
-                    } else {
-                        let index = usize::try_from(settings.sequence.saturating_sub(2))
-                            .map_err(|_| crate::Error::Signup("settings sequence overflow"))?;
-                        state
-                            .links
-                            .get(index)
-                            .filter(|link| link.sequence.saturating_add(1) == settings.sequence)
-                            .map(|link| link.next_tree_location)
-                            .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?
-                    };
-                    let key = foks_merkle_store::chain_key(
-                        foks_proto::CHAIN_TYPE_USER_SETTINGS,
-                        &EntityId::from_bytes(command.uid.clone())?,
-                        settings.sequence,
-                        Some(&location),
-                    )?;
-                    leaves.push((key, settings.link_hash));
-                    Ok::<_, crate::Error>(location)
-                })
-                .transpose()?;
-            let crate::merkle::PreparedPublication {
-                merkle_commit,
-                root_epoch,
-                root_hash,
-                exact_root,
-                exact_signed_root,
-                back_pointers,
-            } = crate::merkle::prepare_publication(
-                database,
-                &authoritative_root,
-                &leaves,
-                hostchain_tail,
-                now,
-                keys.as_ref(),
-            )?;
-            let added = command.added.as_ref().map(|added| {
-                let (role_type, visibility) = crate::identity::mutation::role_parts(added.role);
-                foks_server_db::AddedCredential {
-                    device_id: &added.device_id,
-                    self_token: &added.self_token,
-                    hepk_fingerprint: &added.hepk_fingerprint,
-                    exact_hepk: &added.exact_hepk,
-                    exact_name: &added.exact_name,
-                    role_type,
-                    visibility,
-                    subkey_id: added.subkey_id.as_deref(),
-                    exact_subkey_box: added.exact_subkey_box.as_deref(),
-                    yubi_pq_hint: added.yubi_pq_hint.as_ref().map(|(slot, id)| (*slot, id)),
-                }
-            });
-            let shared_keys = command
-                .shared_keys
-                .iter()
-                .map(|key| {
-                    let (role_type, visibility) = crate::identity::mutation::role_parts(key.role);
-                    foks_server_db::SharedKeyMutation {
-                        role_type,
-                        visibility,
-                        generation: key.generation,
-                        verify_key: &key.verify_key,
-                        exact_hepk: &key.exact_hepk,
-                    }
-                })
-                .collect::<Vec<_>>();
-            let parcels = command
-                .parcels
-                .iter()
-                .map(|parcel| {
-                    let (role_type, visibility) =
-                        crate::identity::mutation::role_parts(parcel.role);
-                    foks_server_db::ParcelMutation {
-                        device_id: &parcel.device_id,
-                        sender_id: &command.signer,
-                        role_type,
-                        visibility,
-                        generation: parcel.generation,
-                        exact_parcel: &parcel.exact,
-                    }
-                })
-                .collect::<Vec<_>>();
-            // Keep exact seed-box bytes alive for the duration of the commit.
-            let exact_seed_chain = command
-                .seed_chain
-                .iter()
-                .map(foks_proto::SeedChainBox::encoded)
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            let seed_chain = command
-                .seed_chain
-                .iter()
-                .zip(&exact_seed_chain)
-                .map(|(boxed, exact)| {
-                    let (role_type, visibility) = crate::identity::mutation::role_parts(boxed.role);
-                    foks_server_db::SeedChainMutation {
-                        role_type,
-                        visibility,
-                        generation: boxed.generation,
-                        exact_box: exact,
-                    }
-                })
-                .collect::<Vec<_>>();
-            let passphrase = command
-                .passphrase
-                .as_ref()
-                .map(|argument| {
-                    let current =
-                        database
-                            .passphrase(&command.uid)?
-                            .ok_or(crate::Error::Database(
-                                foks_server_db::Error::PassphraseNotFound,
-                            ))?;
-                    let mut owned = OwnedPassphraseMutation::from_argument(argument)?;
-                    owned.salt = current.salt;
-                    Ok::<_, crate::Error>(owned)
-                })
-                .transpose()?;
-            let user_settings = command
-                .user_settings
-                .as_ref()
-                .zip(settings_location.as_ref())
-                .map(
-                    |(settings, current_tree_location)| foks_server_db::GenericLinkMutation {
-                        entity_id: &command.uid,
-                        chain_type: foks_proto::CHAIN_TYPE_USER_SETTINGS,
-                        signer_credential_id: &settings.signer,
-                        sequence: settings.sequence,
-                        previous: settings.previous.as_ref(),
-                        link_root_epoch: settings.root.epoch,
-                        link_root_hash: &settings.root.hash,
-                        current_tree_location,
-                        next_tree_location: &settings.next_tree_location,
-                        link_hash: &settings.link_hash,
-                        exact_link: &settings.exact_link,
-                        passphrase_info: Some(foks_server_db::GenericPassphraseInfo {
-                            generation: settings.info.generation,
-                            salt: settings.info.salt.as_ref(),
-                            stretch_version: settings.info.stretch_version,
-                        }),
-                    },
-                );
-            if command.link_hash != idempotency_key {
-                return Err(crate::Error::Signup("user mutation link hash changed"));
-            }
-            database.commit_user_mutation(&foks_server_db::UserMutation {
-                username: command.username.as_ref(),
-                uid: &command.uid,
-                signer_device_id: &command.signer,
-                expected_sequence: command.sequence,
-                expected_tail_hash: &command.expected_tail_hash,
-                link_hash: &command.link_hash,
-                exact_link: &command.exact_link,
-                current_tree_location: &authority.next_tree_location,
-                next_tree_location: &command.next_tree_location,
-                added_credential: added,
-                revoked_device_id: command.revoked.as_deref(),
-                shared_keys: &shared_keys,
-                parcels: &parcels,
-                seed_chain: &seed_chain,
-                passphrase: passphrase
-                    .as_ref()
-                    .map(|passphrase| passphrase.as_database(now)),
-                user_settings,
-                cited_root_epoch: cited_root.epoch,
-                expected_root_epoch: authoritative_root.epoch,
-                expected_root_hash: &authoritative_root.root_hash,
-                merkle_commit: &merkle_commit,
-                merkle_leaves: &leaves,
-                root_epoch,
-                root_hash: &root_hash,
-                exact_root: &exact_root,
-                exact_signed_root: &exact_signed_root,
-                back_pointers: &back_pointers,
-                idempotency_key: &idempotency_key,
-                request_hash: &request_hash,
-                response: &[],
-                now,
-                idempotency_expires_at,
-            })?;
-            Ok(())
-        });
-        match result {
-            Err(crate::Error::Database(foks_server_db::Error::Reservation)) => {
-                Err(bad_arguments("invalid rename reservation"))
-            }
-            Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
-                Err(RpcStatus::NameInUse)
-            }
-            Ok(()) => Ok(()),
-            Err(crate::Error::Database(foks_server_db::Error::StaleRoot)) => Err(
-                RpcStatus::RevokeRace("user chain or Merkle root changed".to_owned()),
-            ),
-            Err(crate::Error::Database(foks_server_db::Error::QuotaExceeded)) => {
-                Err(RpcStatus::QuotaExceeded)
-            }
-            Err(crate::Error::Database(foks_server_db::Error::OperationConflict)) => {
-                Err(bad_arguments("user mutation retry binding failed"))
-            }
-            Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
-            Err(error) => Err(crate::error::mutation_failure_status(&error)
-                .unwrap_or_else(|| bad_arguments("user mutation validation failed"))),
-        }
-    }
-
-    fn reserve_username(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
-        const RESERVATION_LIFETIME_MICROSECONDS: u64 = 10 * 60 * 1_000_000;
-        let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
-            return Err(bad_arguments(
-                "username reservation argument is not a struct",
-            ));
-        };
-        let [Value::Text(name)] = fields.as_slice() else {
-            return Err(bad_arguments(
-                "username reservation argument has the wrong shape",
-            ));
-        };
-        let normalized = foks_verify::normalize_username(name)
-            .filter(|normalized| normalized == name)
-            .ok_or_else(|| bad_arguments("username is not normalized"))?;
-        let mut token = [0; 17];
-        self.entropy
-            .fill(&mut token)
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        let now = self
-            .clock
-            .now_micros()
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        // The reservation is replayed over the Go `lib.Time` wire type, whose
-        // millisecond precision must round-trip exactly into the database.
-        let expires_at_millis = (now / 1_000)
-            .checked_add(RESERVATION_LIFETIME_MICROSECONDS / 1_000)
-            .ok_or(RpcStatus::TransactionRetry)?;
-        let expires_at = expires_at_millis
-            .checked_mul(1_000)
-            .ok_or(RpcStatus::TransactionRetry)?;
-        let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
-        let result = writer.call_with_current_time(
-            Arc::clone(&self.clock),
-            move |database, current_time| {
-                database.reserve_name(&normalized, &token, 1, current_time, expires_at)?;
-                Ok(())
-            },
-        );
-        match result {
-            Ok(()) => UsernameReservation {
-                token,
-                sequence: 1,
-                expires_at: expires_at_millis,
-            }
-            .encoded()
-            .map_err(|_| RpcStatus::TransactionRetry),
-            Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
-                Err(RpcStatus::NameInUse)
-            }
-            Err(error) => Err(crate::error::mutation_failure_status(&error)
-                .unwrap_or(RpcStatus::TransactionRetry)),
-        }
-    }
-
-    fn signup(&self, argument: &[u8]) -> std::result::Result<(), RpcStatus> {
-        const IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
-        const SIGNUP_REQUEST_HASH_TYPE_ID: u64 = 0x8f4b_8ab7_464f_4b53;
-
-        let request = DecodedSignupArgument::decode(argument).map_err(bad_arguments)?;
-        let (invite_hash, invite_kind) = match &request.invite_code {
-            InviteCode::Empty => (None, None),
-            InviteCode::Standard(_) | InviteCode::MultiUse(_) => (
-                Some(crate::services::registration::invite_fingerprint(
-                    &request.invite_code,
-                )?),
-                Some(crate::services::registration::invite_kind(
-                    &request.invite_code,
-                )?),
-            ),
-            _ => return Err(RpcStatus::BadInvite),
-        };
-        let idempotency_key = request.self_token;
-        let request_hash = foks_crypto::prefixed_hash(SIGNUP_REQUEST_HASH_TYPE_ID, argument);
-        let reader = self.read_database()?;
-        let idempotency_now = self
-            .clock
-            .now_micros()
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        match reader.idempotency_record(&idempotency_key, &request_hash, idempotency_now) {
-            Ok(Some(idempotency_record)) if idempotency_record.response.is_empty() => return Ok(()),
-            Ok(Some(_)) => return Err(RpcStatus::TransactionRetry),
-            Ok(None) => {}
-            Err(foks_server_db::Error::OperationConflict) => {
-                return Err(bad_arguments("signup retry binding failed"));
-            }
-            Err(_) => return Err(RpcStatus::TransactionRetry),
-        }
-        let signed_root = request.link.decode_eldest().map_err(bad_arguments)?.root;
-        let cited = reader
-            .root_at(signed_root.epoch)
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or(RpcStatus::StaleRoot)?;
-        let cited_root = validated_root(&cited)?;
-        if cited.root_hash != signed_root.hash {
-            return Err(RpcStatus::StaleRoot);
-        }
-        let host = EntityId::from_bytes(self.host_id.clone()).map_err(bad_arguments)?;
-        let validated = validate_signup(&request, &host, &cited_root, cited.root_hash)
-            .map_err(|_| bad_arguments("software signup validation failed"))?;
-        let sso_binding = match &self.sso {
-            Some(service) => Some(
-                service
-                    .prepare_signup(
-                        &request.sso,
-                        &validated.uid,
-                        &validated.device_id,
-                        &request.username_utf8,
-                        &request.email,
-                        &request.reservation,
-                    )
-                    .map_err(crate::sso::status)?,
-            ),
-            None if request.sso == foks_proto::RegSsoArgs::None => None,
-            None => return Err(RpcStatus::OAuth2("OIDC is not configured".into())),
-        };
-        let passphrase = request
-            .passphrase
-            .as_ref()
-            .map(OwnedPassphraseMutation::from_argument)
-            .transpose()
-            .map_err(|_| bad_arguments("invalid signup passphrase material"))?;
-        let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
-        let keys = self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?;
-        let keys = Arc::clone(keys);
-        let clock = Arc::clone(&self.clock);
-        let hostchain_tail = self.hostchain_tail.clone();
-        let reservation = request.reservation;
-        // lib.Time is milliseconds on the Go wire, while the database stores
-        // reservation deadlines in microseconds alongside its clock values.
-        let reservation_expires_at = reservation
-            .expires_at
-            .checked_mul(1_000)
-            .ok_or_else(|| bad_arguments("reservation expiry overflows server clock units"))?;
-        let result = writer.call(move |database| {
-            let now = clock.now_micros()?;
-            let idempotency_expires_at = now
-                .checked_add(IDEMPOTENCY_RECORD_LIFETIME_MICROSECONDS)
-                .ok_or(crate::Error::Signup("idempotency_record expiry overflow"))?;
-            let authoritative = database
-                .current_root()?
-                .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
-            let cited = require_cited_root(database, &signed_root)?;
-            if cited.epoch > authoritative.epoch {
-                return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
-            }
-            let authoritative_root = decode_stored_root(&authoritative)?;
-            if now / 1_000 < authoritative_root.time {
-                return Err(crate::Error::Signup("system clock moved backwards"));
-            }
-            let crate::merkle::PreparedPublication {
-                merkle_commit,
-                root_epoch,
-                root_hash,
-                exact_root,
-                exact_signed_root,
-                back_pointers,
-            } = crate::merkle::prepare_publication(
-                database,
-                &authoritative,
-                &validated.leaves,
-                hostchain_tail,
-                now,
-                keys.as_ref(),
-            )?;
-            let mutation = foks_server_db::IdentityMutation {
-                normalized_name: &validated.normalized_name,
-                reservation_token: &reservation.token,
-                reservation_sequence: reservation.sequence,
-                reservation_expires_at,
-                username_utf8: &validated.username_utf8,
-                username_commitment_key: &validated.username_commitment_key,
-                uid: validated.uid.as_bytes(),
-                device_id: validated.device_id.as_bytes(),
-                device_hepk_fingerprint: &validated.device_hepk_fingerprint,
-                self_token: &request.self_token,
-                exact_device_hepk: &validated.exact_device_hepk,
-                exact_device_name: &validated.exact_device_name,
-                subkey_id: validated.subkey_id.as_ref().map(EntityId::as_bytes),
-                exact_subkey_box: validated.exact_subkey_box.as_deref(),
-                yubi_pq_hint: validated
-                    .yubi_pq_hint
-                    .as_ref()
-                    .map(|(slot, id)| (*slot, id)),
-                link_hash: &validated.link_hash,
-                exact_link: &validated.exact_link,
-                tree_location: &validated.next_tree_location,
-                subchain_tree_location_seed: &validated.subchain_tree_location_seed,
-                shared_role_type: foks_proto::Role::OWNER.protocol_value(),
-                shared_visibility: 0,
-                shared_generation: 1,
-                shared_verify_key: validated.puk_verify_key.as_bytes(),
-                exact_shared_hepk: &validated.exact_puk_hepk,
-                exact_parcel: &validated.exact_parcel,
-                expected_root_hash: Some(authoritative.root_hash),
-                merkle_commit: &merkle_commit,
-                merkle_leaves: &validated.leaves,
-                root_epoch,
-                root_hash: &root_hash,
-                exact_root: &exact_root,
-                exact_signed_root: &exact_signed_root,
-                back_pointers: &back_pointers,
-                idempotency_key: &idempotency_key,
-                request_hash: &request_hash,
-                response: &[],
-                invite: match (&invite_hash, invite_kind) {
-                    (Some(hash), Some(kind)) => foks_server_db::InviteConsumption::Code {
-                        code_hash: hash,
-                        kind,
-                    },
-                    (None, None) => foks_server_db::InviteConsumption::Empty,
-                    _ => return Err(crate::Error::Signup("invalid invite binding")),
-                },
-                passphrase: passphrase
-                    .as_ref()
-                    .map(|passphrase| passphrase.as_database(now)),
-                now,
-                idempotency_expires_at,
-            };
-            database.commit_identity_with_sso(&mutation, sso_binding.as_ref())?;
-            Ok(())
-        });
-        match result {
-            Err(crate::Error::Database(foks_server_db::Error::Duplicate(
-                "SSO provider identity",
-            ))) => Err(RpcStatus::OAuth2(
-                "provider identity is already linked to another account".into(),
-            )),
-            Ok(()) => Ok(()),
-            Err(crate::Error::Database(foks_server_db::Error::NameInUse)) => {
-                Err(RpcStatus::NameInUse)
-            }
-            Err(crate::Error::Database(foks_server_db::Error::StaleRoot)) => {
-                Err(RpcStatus::StaleRoot)
-            }
-            Err(crate::Error::Database(foks_server_db::Error::BadInvite)) => {
-                Err(RpcStatus::BadInvite)
-            }
-            Err(crate::Error::Database(
-                foks_server_db::Error::Reservation | foks_server_db::Error::OperationConflict,
-            )) => Err(bad_arguments("signup reservation or retry binding failed")),
-            Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
-            Err(error) => Err(crate::error::mutation_failure_status(&error)
-                .unwrap_or(RpcStatus::TransactionRetry)),
-        }
-    }
-
-    fn client_certificate_chain(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
-        const CERTIFICATE_LIFETIME_MICROSECONDS: u64 = 7 * 24 * 60 * 60 * 1_000_000;
-        const RENEWAL_WINDOW_MICROSECONDS: u64 = 24 * 60 * 60 * 1_000_000;
-        const CLOCK_SKEW_MICROSECONDS: u64 = 5 * 60 * 1_000_000;
-
-        let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
-            return Err(bad_arguments("certificate argument is not a struct"));
-        };
-        let [Value::Binary(uid), Value::Binary(device_id)] = fields.as_slice() else {
-            return Err(bad_arguments("certificate argument has the wrong shape"));
-        };
-        let uid = EntityId::from_bytes(uid.clone())
-            .and_then(|uid| uid.require_type(foks_proto::ENTITY_USER))
-            .map_err(bad_arguments)?;
-        let device = EntityId::from_bytes(device_id.clone()).map_err(bad_arguments)?;
-        if !matches!(
-            device.entity_type(),
-            foks_proto::ENTITY_DEVICE
-                | foks_proto::ENTITY_BACKUP_KEY
-                | foks_proto::ENTITY_SUBKEY
-                | foks_proto::ENTITY_BOT_TOKEN_KEY
-        ) {
-            return Err(bad_arguments("unsupported certificate credential kind"));
-        }
-        if let Some(sso) = &self.sso {
-            sso.ensure_access(uid.as_bytes(), device.as_bytes())
-                .map_err(|e| RpcStatus::OAuth2Auth(Box::new(crate::sso::status(e))))?;
-        }
-        let writer = self.writer.as_ref().ok_or(RpcStatus::Unsupported)?;
-        let keys = Arc::clone(self.key_provider.as_ref().ok_or(RpcStatus::Unsupported)?);
-        let clock = Arc::clone(&self.clock);
-        let entropy = Arc::clone(&self.entropy);
-        let canonical_name = self.canonical_name.clone();
-        let result = writer.call(move |database| {
-            let Some(owner) =
-                database.active_credential_owner(uid.as_bytes(), device.as_bytes())?
-            else {
-                return Ok(None);
-            };
-            let now = clock.now_micros()?;
-            database.sso_require_access(uid.as_bytes(), now / 1000)?;
-            if let Some(certificate) =
-                database.certificate_for_device(uid.as_bytes(), device.as_bytes())?
-            {
-                let renewal_at = now
-                    .checked_add(RENEWAL_WINDOW_MICROSECONDS)
-                    .ok_or(crate::Error::Signup("certificate renewal overflow"))?;
-                if certificate.not_before <= now && certificate.not_after > renewal_at {
-                    return Ok(Some(certificate.exact_certificate));
-                }
-            }
-            let not_before = now.saturating_sub(CLOCK_SKEW_MICROSECONDS);
-            let not_after = now
-                .checked_add(CERTIFICATE_LIFETIME_MICROSECONDS)
-                .ok_or(crate::Error::Signup("certificate expiry overflow"))?;
-            let mut serial = [0; 20];
-            entropy.fill(&mut serial)?;
-            serial[0] &= 0x7f;
-            if serial.iter().all(|byte| *byte == 0) {
-                serial[19] = 1;
-            }
-            let public_key: [u8; 32] = device.as_bytes()[1..]
-                .try_into()
-                .map_err(|_| crate::Error::Signup("device public key width"))?;
-            let certificate = crate::pki::issue_bounded_device_certificate(
-                keys.as_ref(),
-                &canonical_name,
-                public_key,
-                &serial,
-                not_before,
-                not_after,
-            )?;
-            database.record_certificate(
-                &serial,
-                uid.as_bytes(),
-                &owner,
-                device.as_bytes(),
-                not_before,
-                not_after,
-                &certificate,
-            )?;
-            Ok(Some(certificate))
-        });
-        match result {
-            Ok(Some(certificate)) => {
-                foks_snowpack::encode(&Value::Array(vec![Value::Binary(certificate)]))
-                    .map_err(|_| RpcStatus::TransactionRetry)
-            }
-            Ok(None) => Err(RpcStatus::NotFound("active device not found".to_owned())),
-            Err(crate::Error::WriterQueue) => Err(RpcStatus::RateLimited),
-            Err(_) => Err(RpcStatus::TransactionRetry),
-        }
-    }
-
     fn read_database(&self) -> std::result::Result<crate::read_pool::ReadLease, RpcStatus> {
         let pool = self.read_database.as_ref().ok_or(RpcStatus::Unsupported)?;
-        match pool.checkout() {
-            Ok(database) => Ok(database),
-            Err(crate::Error::ReaderPool) => {
-                self.metrics.request_rate_limited();
-                Err(RpcStatus::RateLimited)
-            }
-            Err(_) => Err(RpcStatus::TransactionRetry),
-        }
+        pool.lease(&self.metrics)
     }
 
     fn host(&self) -> std::result::Result<EntityId, RpcStatus> {
         EntityId::from_bytes(self.host_id.clone()).map_err(bad_arguments)
     }
 
-    /// getCurrentRoot @2 returns the bare unsigned MerkleRoot, matching the
-    /// v0.1.9 wire contract. The authenticated advance path must instead use
-    /// getCurrentRootSigned @5 (below) so it can verify the signature.
-    fn current_root(&self) -> std::result::Result<Vec<u8>, RpcStatus> {
-        if self.read_database.is_none() {
-            let signed =
-                SignedBlob::decode(&self.current_root).map_err(|_| RpcStatus::TransactionRetry)?;
-            return Ok(signed.inner);
+    /// The state that signup, username reservation, certificate issuance and
+    /// user-chain mutations read. It carries this request's writer, which an
+    /// authenticated request has already scoped to its principal.
+    fn identity_ports(&self) -> IdentityPorts<'_> {
+        IdentityPorts {
+            host_id: &self.host_id,
+            canonical_name: &self.canonical_name,
+            read_database: self.read_database.as_ref(),
+            metrics: &self.metrics,
+            writer: self.writer.as_ref(),
+            key_provider: self.key_provider.as_ref(),
+            sso: self.sso.as_ref(),
+            clock: &self.clock,
+            entropy: &self.entropy,
+            hostchain_tail: &self.hostchain_tail,
         }
-        let root = self.validated_current_root()?;
-        Ok(root.exact_root)
     }
 
-    /// getCurrentRootSigned @5 returns the delegated Merkle-signer SignedBlob so
-    /// the client can authenticate the current root before accepting it.
-    fn current_root_signed(&self) -> std::result::Result<Vec<u8>, RpcStatus> {
-        if self.read_database.is_none() {
-            return Ok(self.current_root.clone());
+    fn merkle_queries(&self) -> MerkleQueries<'_> {
+        MerkleQueries {
+            host_id: &self.host_id,
+            read_database: self.read_database.as_ref(),
+            metrics: &self.metrics,
+            current_root: &self.current_root,
+            probe_response: &self.probe_response,
         }
-        let root = self.validated_current_root()?;
-        Ok(root.exact_signed_root)
-    }
-
-    fn validated_current_root(
-        &self,
-    ) -> std::result::Result<foks_server_db::RootSnapshot, RpcStatus> {
-        let database = self.read_database()?;
-        let root = database
-            .current_root()
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or_else(|| RpcStatus::NotFound("Merkle root not found".to_owned()))?;
-        validated_root(&root)?;
-        let signed =
-            SignedBlob::decode(&root.exact_signed_root).map_err(|_| RpcStatus::TransactionRetry)?;
-        if signed.inner != root.exact_root {
-            return Err(RpcStatus::TransactionRetry);
-        }
-        Ok(root)
-    }
-
-    fn current_probe_response(&self) -> std::result::Result<Vec<u8>, RpcStatus> {
-        if self.read_database.is_none() {
-            return Ok(self.probe_response.to_vec());
-        }
-        let database = self.read_database()?;
-        let root = database
-            .current_root()
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or_else(|| RpcStatus::NotFound("Merkle root not found".to_owned()))?;
-        validated_root(&root)?;
-        let signed =
-            SignedBlob::decode(&root.exact_signed_root).map_err(|_| RpcStatus::TransactionRetry)?;
-        if signed.inner != root.exact_root {
-            return Err(RpcStatus::TransactionRetry);
-        }
-        let mut probe =
-            ProbeResponse::decode(&self.probe_response).map_err(|_| RpcStatus::TransactionRetry)?;
-        probe.merkle_root = signed;
-        probe.encoded().map_err(|_| RpcStatus::TransactionRetry)
-    }
-
-    fn historical_roots(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
-        let (full_epochs, hash_epochs) = decode_historical_roots_argument(argument, &self.host_id)?;
-        if self.read_database.is_none() {
-            return Err(RpcStatus::Unsupported);
-        }
-        let database = self.read_database()?;
-        let snapshot = database
-            .snapshot()
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        let full = snapshot
-            .roots_at(&full_epochs)
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or_else(|| RpcStatus::NotFound("Merkle root not found".to_owned()))?;
-        let hashes = snapshot
-            .roots_at(&hash_epochs)
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or_else(|| RpcStatus::NotFound("Merkle root not found".to_owned()))?;
-        for root in &hashes {
-            validated_root(root)?;
-        }
-        HistoricalMerkleRoots {
-            roots: full
-                .iter()
-                .map(validated_root)
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-            hashes: hashes.into_iter().map(|root| root.root_hash).collect(),
-        }
-        .encoded()
-        .map_err(|_| RpcStatus::TransactionRetry)
-    }
-
-    fn merkle_lookup(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
-        let argument = decode_merkle_lookup(argument).map_err(bad_arguments)?;
-        self.validate_optional_host(argument.host.as_ref())?;
-        let database = self.read_database()?;
-        let snapshot = database
-            .snapshot()
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        let root = select_merkle_lookup_root(&snapshot, argument.signed, argument.root)?;
-        let path = foks_merkle_store::proof(&snapshot.node_reader(), root.root_node, argument.key)
-            .map_err(map_merkle_proof_error)?;
-        MerkleLookupResponse {
-            root: validated_root(&root)?,
-            path,
-        }
-        .encoded()
-        .map_err(|_| RpcStatus::TransactionRetry)
-    }
-
-    fn merkle_multi_lookup(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
-        let argument = decode_merkle_multi_lookup(argument).map_err(bad_arguments)?;
-        self.validate_optional_host(argument.host.as_ref())?;
-        let database = self.read_database()?;
-        let snapshot = database
-            .snapshot()
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        let root = select_merkle_lookup_root(&snapshot, argument.signed, argument.root)?;
-        let reader = snapshot.node_reader();
-        let paths = argument
-            .keys
-            .into_iter()
-            .map(|key| {
-                foks_merkle_store::proof(&reader, root.root_node, key)
-                    .map_err(map_merkle_proof_error)
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        MerkleMultiLookupResponse {
-            root: validated_root(&root)?,
-            paths,
-        }
-        .encoded()
-        .map_err(|_| RpcStatus::TransactionRetry)
-    }
-
-    fn current_root_hash(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
-        let host = decode_merkle_optional_host(argument).map_err(bad_arguments)?;
-        self.validate_optional_host(host.as_ref())?;
-        let root = self
-            .read_database()?
-            .current_root()
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or(RpcStatus::MerkleNoRoot)?;
-        validated_root(&root)?;
-        TreeRoot {
-            epoch: root.epoch,
-            hash: root.root_hash,
-        }
-        .encoded()
-        .map_err(|_| RpcStatus::TransactionRetry)
-    }
-
-    fn merkle_check_key_exists(&self, argument: &[u8]) -> std::result::Result<Vec<u8>, RpcStatus> {
-        let argument = decode_merkle_check_key(argument).map_err(bad_arguments)?;
-        self.validate_optional_host(argument.host.as_ref())?;
-        let database = self.read_database()?;
-        let snapshot = database
-            .snapshot()
-            .map_err(|_| RpcStatus::TransactionRetry)?;
-        let epoch = snapshot
-            .merkle_leaf_epoch(&argument.key)
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .ok_or(RpcStatus::MerkleLeafNotFound)?;
-        MerkleExistsResponse {
-            epoch,
-            // Root publication and signing are one atomic standalone commit.
-            signed: true,
-        }
-        .encoded()
-        .map_err(|_| RpcStatus::TransactionRetry)
     }
 
     fn validate_host_argument(&self, argument: &[u8]) -> std::result::Result<(), RpcStatus> {
@@ -1031,16 +173,6 @@ impl ServerData {
         argument: &[u8],
     ) -> std::result::Result<(), RpcStatus> {
         validate_host_argument_against(argument, &self.host_id, true)
-    }
-
-    fn validate_optional_host(
-        &self,
-        host: Option<&EntityId>,
-    ) -> std::result::Result<(), RpcStatus> {
-        if host.is_some_and(|host| host.as_bytes() != self.host_id) {
-            return Err(RpcStatus::NotFound("host not found".to_owned()));
-        }
-        Ok(())
     }
 
     /// Answers a public Beacon lookup for this host's advertised endpoint. The
@@ -1081,188 +213,6 @@ impl ServerData {
             _ => Err(bad_arguments("probe HostID has the wrong shape")),
         }
     }
-}
-
-fn select_merkle_lookup_root(
-    snapshot: &foks_server_db::ReadSnapshot<'_>,
-    signed: bool,
-    epoch: Option<u64>,
-) -> std::result::Result<foks_server_db::RootSnapshot, RpcStatus> {
-    if epoch.is_some_and(|epoch| i64::try_from(epoch).is_err()) {
-        return Err(RpcStatus::MerkleNoRoot);
-    }
-    let root = match epoch {
-        Some(epoch) => snapshot
-            .roots_at(&[epoch])
-            .map_err(|_| RpcStatus::TransactionRetry)?
-            .and_then(|mut roots| roots.pop()),
-        None => snapshot
-            .current_root()
-            .map_err(|_| RpcStatus::TransactionRetry)?,
-    }
-    .ok_or(RpcStatus::MerkleNoRoot)?;
-    validated_root(&root)?;
-    if signed {
-        let signed =
-            SignedBlob::decode(&root.exact_signed_root).map_err(|_| RpcStatus::TransactionRetry)?;
-        if signed.inner != root.exact_root {
-            return Err(RpcStatus::TransactionRetry);
-        }
-    }
-    Ok(root)
-}
-
-fn map_merkle_proof_error(error: foks_merkle_store::Error) -> RpcStatus {
-    match error {
-        // Storage access can be transient. Every other proof failure means
-        // that the selected authenticated root cannot be traversed as a
-        // valid content-addressed tree and is the Go MERKLE_VERIFY_ERROR.
-        foks_merkle_store::Error::Storage(_) => RpcStatus::TransactionRetry,
-        _ => RpcStatus::MerkleVerify("Merkle proof verification failed".to_owned()),
-    }
-}
-
-fn validate_host_argument_against(
-    argument: &[u8],
-    expected_host: &[u8],
-    allow_omitted: bool,
-) -> std::result::Result<(), RpcStatus> {
-    let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
-        return Err(bad_arguments("host argument is not a struct"));
-    };
-    let [host] = fields.as_slice() else {
-        return Err(bad_arguments("host argument has the wrong shape"));
-    };
-    if allow_omitted && matches!(host, Value::Null) {
-        return Ok(());
-    }
-    validate_host_value_against(host, expected_host)
-}
-
-fn validate_host_value_against(
-    host: &Value,
-    expected_host: &[u8],
-) -> std::result::Result<(), RpcStatus> {
-    let Value::Binary(host) = host else {
-        return Err(bad_arguments("host argument is not binary"));
-    };
-    if host.len() != 33 || host.first() != Some(&foks_proto::ENTITY_HOST) {
-        return Err(bad_arguments("host argument is not a HostID"));
-    }
-    if host.as_slice() != expected_host {
-        return Err(RpcStatus::NotFound("host not found".to_owned()));
-    }
-    Ok(())
-}
-
-fn validate_optional_host_value_against(
-    host: &Value,
-    expected_host: &[u8],
-) -> std::result::Result<(), RpcStatus> {
-    if matches!(host, Value::Null) {
-        return Ok(());
-    }
-    validate_host_value_against(host, expected_host)
-}
-
-fn decode_historical_roots_argument(
-    argument: &[u8],
-    expected_host: &[u8],
-) -> std::result::Result<(Vec<u64>, Vec<u64>), RpcStatus> {
-    let Value::Array(fields) = decode(argument).map_err(bad_arguments)? else {
-        return Err(bad_arguments("historical roots argument is not a struct"));
-    };
-    let [host, full_epochs, hash_epochs] = fields.as_slice() else {
-        return Err(bad_arguments(
-            "historical roots argument has the wrong shape",
-        ));
-    };
-    validate_optional_host_value_against(host, expected_host)?;
-    Ok((decode_epochs(full_epochs)?, decode_epochs(hash_epochs)?))
-}
-
-fn validated_root(
-    root: &foks_server_db::RootSnapshot,
-) -> std::result::Result<MerkleRoot, RpcStatus> {
-    decode_stored_root(root).map_err(|_| RpcStatus::TransactionRetry)
-}
-
-fn require_cited_root(
-    database: &foks_server_db::Database,
-    cited: &TreeRoot,
-) -> Result<foks_server_db::RootSnapshot> {
-    let root = database
-        .root_at(cited.epoch)?
-        .ok_or(crate::Error::Database(foks_server_db::Error::StaleRoot))?;
-    decode_stored_root(&root)?;
-    if root.root_hash != cited.hash {
-        return Err(crate::Error::Database(foks_server_db::Error::StaleRoot));
-    }
-    Ok(root)
-}
-
-fn mutation_cites_superseded_user_head(
-    database: &foks_server_db::Database,
-    authority: &foks_server_db::UserAuthoritySnapshot,
-    host: &EntityId,
-    change: &foks_proto::UserGroupChange,
-) -> Result<bool> {
-    if change.uid.as_bytes() != authority.uid
-        || &change.host != host
-        || change.seqno > authority.chain_sequence
-    {
-        return Ok(false);
-    }
-    let Some(previous_sequence) = change.seqno.checked_sub(1) else {
-        return Ok(false);
-    };
-    if change.previous.is_none() {
-        return Ok(false);
-    }
-    let chain = database
-        .user_chain(&authority.uid)?
-        .ok_or(crate::Error::Signup("user mutation chain missing"))?;
-    let Some(historical_head) = chain
-        .links
-        .iter()
-        .find(|link| link.sequence == previous_sequence)
-    else {
-        return Ok(false);
-    };
-    change_cites_historical_user_head(authority, host, change, historical_head)
-}
-
-fn change_cites_historical_user_head(
-    authority: &foks_server_db::UserAuthoritySnapshot,
-    host: &EntityId,
-    change: &foks_proto::UserGroupChange,
-    historical_head: &foks_server_db::UserChainLinkSnapshot,
-) -> Result<bool> {
-    let historical_hash = foks_crypto::prefixed_hash_signable(
-        foks_proto::LINK_OUTER_TYPE_ID,
-        &historical_head.exact_link,
-    )?;
-    Ok(change.uid.as_bytes() == authority.uid
-        && &change.host == host
-        && change.seqno <= authority.chain_sequence
-        && historical_head.sequence.checked_add(1) == Some(change.seqno)
-        && change.previous == Some(historical_hash))
-}
-
-fn decode_epochs(value: &Value) -> std::result::Result<Vec<u64>, RpcStatus> {
-    let values = match value {
-        Value::Null => return Ok(Vec::new()),
-        Value::Array(values) if values.len() <= 64 => values,
-        Value::Array(_) => return Err(bad_arguments("too many historical root epochs")),
-        _ => return Err(bad_arguments("historical root epochs are not a list")),
-    };
-    values
-        .iter()
-        .map(|value| match value {
-            Value::Unsigned(epoch) => Ok(*epoch),
-            _ => Err(bad_arguments("historical root epoch is not unsigned")),
-        })
-        .collect()
 }
 
 pub(crate) async fn serve(
@@ -1324,10 +274,14 @@ pub(crate) async fn serve(
             service_data.metrics.request_started();
             let _request_timer =
                 crate::ServerMetrics::request_timer(Arc::clone(&service_data.metrics));
-            service_data.metrics.request_rate_limited();
+            service_data
+                .metrics
+                .request_rate_limited(crate::AdmissionRejection::RequestRate);
             let response = encode_status_response_at(&RpcStatus::RateLimited, 0)?;
             write_response(&mut stream, &response, limits.io_timeout).await?;
-            service_data.metrics.response_completed();
+            service_data
+                .metrics
+                .response_completed(crate::metrics::UNROUTED, STATUS_RATE_LIMIT_ERROR);
             return Ok(());
         }
         let read = tokio::select! {
@@ -1378,146 +332,37 @@ pub(crate) async fn serve(
         let data = Arc::clone(service_data);
         let certificate = peer_certificate.clone();
         let routed = route_call(call, listener);
-        let kex_receive = matches!(
-            &routed,
-            Ok(call) if call.route.id == crate::rpc::RouteId::KexReceive
-        );
-        let realtime_poll = matches!(
-            &routed,
-            Ok(call) if call.route.id == crate::rpc::RouteId::RealTimeRtPollInbox
-        );
-        let sso_poll = matches!(&routed,Ok(call) if call.route.id==crate::rpc::RouteId::RegPollOAuth2SessionCompletion);
-        let outcome = if sso_poll {
-            let _request_memory = request_memory;
-            let call = match routed {
-                Ok(call) => call,
-                Err(_) => unreachable!("recognized OIDC poll"),
-            };
-            let route = Some(call.route);
-            let result = async {
-                let service = data.sso.as_ref().ok_or(RpcStatus::Unsupported)?;
-                let arg = foks_proto::PollOAuth2SessionArgument::decode(call.call.argument())
-                    .map_err(|_| bad_arguments("invalid OIDC poll"))?;
-                let bytes = service.poll(arg).await?;
-                foks_rpc::encode_success_response_at(&bytes, sequence)
-                    .map_err(|_| RpcStatus::TransactionRetry)
-            };
-            let response = tokio::select! {
-                result=result=>match result {Ok(bytes)=>bytes,Err(status)=>encode_status_response_at(&status,sequence)?},
-                _=stream.get_ref().0.readable()=>return Ok(()),
-                _=stop.changed()=>break,
-            };
-            RequestOutcome {
-                response,
-                route,
-                disconnect_before_response: false,
+        let family = routed
+            .as_ref()
+            .map_or(crate::metrics::UNROUTED, |call| call.route.protocol);
+        // The end of a bounded handler's execution budget. It is taken just
+        // before the execution timeout below starts, so it is no later than
+        // the instant at which the session stops waiting and closes the
+        // connection. The request's writer skips a write that it has not
+        // started by then. SSO access refreshes use their own writer handle
+        // without this deadline; see `WriterHandle::with_deadline`.
+        let deadline = std::time::Instant::now().checked_add(limits.request_timeout);
+        let outcome = match routed {
+            Ok(call) if call.route.id == RouteId::RegPollOAuth2SessionCompletion => {
+                let poll = service_data.long_poll(call.route, sequence, request_memory);
+                let handler = handlers::sso_poll_response(service_data.as_ref(), call);
+                poll.run(stream.get_ref().0.readable(), &mut stop, handler)
+                    .await?
             }
-        } else if kex_receive {
-            // Go-compatible KEX receives can remain open for up to an hour.
-            // Await the relay directly rather than occupying a blocking worker;
-            // the listener's active-connection semaphore remains the bound.
-            let _request_memory = request_memory;
-            let _handler_timer =
-                crate::ServerMetrics::handler_timer(Arc::clone(&service_data.metrics));
-            let call = match routed {
-                Ok(call) => call,
-                Err(_) => unreachable!("KEX receive was recognized above"),
-            };
-            let route = Some(call.route);
-            if service_data.should_disconnect(
-                crate::SessionFaultPoint::BeforeDurableMutation,
-                call.route.protocol,
-                call.route.method,
-            ) {
-                RequestOutcome {
-                    response: Vec::new(),
-                    route,
-                    disconnect_before_response: true,
-                }
-            } else {
-                let response = tokio::select! {
-                    result = handlers::kex_receive_response(service_data.as_ref(), call) => {
-                        match result {
-                            Ok(response) => response,
-                            Err(status) => encode_status_response_at(&status, sequence)?,
-                        }
-                    }
-                    // Snowpack is request/response serial. Readability while
-                    // this response is pending is therefore either a client
-                    // cancellation/control frame or socket shutdown. Closing
-                    // promptly drops the relay future and active-connection
-                    // permit instead of retaining an abandoned Go long poll.
-                    result = stream.get_ref().0.readable() => {
-                        let _ = result;
-                        return Ok(());
-                    }
-                    result = stop.changed() => {
-                        let _ = result;
-                        break;
-                    }
-                };
-                RequestOutcome {
-                    response,
-                    route,
-                    disconnect_before_response: false,
-                }
+            Ok(call) if call.route.id == RouteId::KexReceive => {
+                let poll = service_data.long_poll(call.route, sequence, request_memory);
+                let handler = handlers::kex_receive_response(service_data.as_ref(), call);
+                poll.run(stream.get_ref().0.readable(), &mut stop, handler)
+                    .await?
             }
-        } else if realtime_poll {
-            let _request_memory = request_memory;
-            let call = match routed {
-                Ok(call) => call,
-                Err(_) => unreachable!("realtime poll was recognized above"),
-            };
-            let route = Some(call.route);
-            if service_data.should_disconnect(
-                crate::SessionFaultPoint::BeforeDurableMutation,
-                call.route.protocol,
-                call.route.method,
-            ) {
-                RequestOutcome {
-                    response: Vec::new(),
-                    route,
-                    disconnect_before_response: true,
-                }
-            } else {
-                let response = match service_data.realtime_polling.clone().try_acquire_owned() {
-                    Ok(poll_permit) => {
-                        let _poll_permit = poll_permit;
-                        if let Some(certificate) = certificate {
-                            tokio::select! {
-                                result = handlers::realtime_poll_response(
-                                    service_data.as_ref(),
-                                    call,
-                                    certificate,
-                                ) => {
-                                    match result {
-                                        Ok(response) => response,
-                                        Err(status) => encode_status_response_at(&status, sequence)?,
-                                    }
-                                }
-                                result = stream.get_ref().0.readable() => {
-                                    let _ = result;
-                                    return Ok(());
-                                }
-                                result = stop.changed() => {
-                                    let _ = result;
-                                    break;
-                                }
-                            }
-                        } else {
-                            encode_status_response_at(&permission_denied(), sequence)?
-                        }
-                    }
-                    Err(_) => encode_status_response_at(&RpcStatus::RateLimited, sequence)?,
-                };
-                RequestOutcome {
-                    response,
-                    route,
-                    disconnect_before_response: false,
-                }
+            Ok(call) if call.route.id == RouteId::RealTimeRtPollInbox => {
+                let poll = service_data.long_poll(call.route, sequence, request_memory);
+                let handler =
+                    handlers::realtime_poll_response(service_data.as_ref(), call, certificate);
+                poll.run(stream.get_ref().0.readable(), &mut stop, handler)
+                    .await?
             }
-        } else {
-            match execute_bounded(
+            routed => match execute_bounded(
                 Arc::clone(&service_data.execution),
                 limits.request_timeout,
                 &mut stop,
@@ -1536,8 +381,10 @@ pub(crate) async fn serve(
                         let database = match data.read_database() {
                             Ok(database) => database,
                             Err(status) => {
+                                let (response, status) = encode_result(Err(status), sequence)?;
                                 return Ok(RequestOutcome {
-                                    response: encode_status_response_at(&status, sequence)?,
+                                    response,
+                                    status,
                                     route: None,
                                     disconnect_before_response: false,
                                 });
@@ -1548,7 +395,7 @@ pub(crate) async fn serve(
                         None
                     };
                     let mut route = None;
-                    let response = match routed {
+                    let result = match routed {
                         Ok(call) => {
                             let protocol = call.route.protocol;
                             let method = call.route.method;
@@ -1560,12 +407,19 @@ pub(crate) async fn serve(
                             ) {
                                 return Ok(RequestOutcome {
                                     response: Vec::new(),
+                                    status: STATUS_OK,
                                     route,
                                     disconnect_before_response: true,
                                 });
                             }
                             let mut request_data = data.as_ref().clone();
                             request_data.peer_ip = Some(peer_ip);
+                            if let Some(deadline) = deadline {
+                                request_data.writer = request_data
+                                    .writer
+                                    .as_ref()
+                                    .map(|w| w.with_deadline(deadline));
+                            }
                             let authorization = if !call.route.supported {
                                 Err(RpcStatus::Unsupported)
                             } else if let Some(principal) = principal.as_ref() {
@@ -1581,23 +435,21 @@ pub(crate) async fn serve(
                             } else {
                                 Ok(())
                             };
-                            match authorization.and_then(|()| {
+                            authorization.and_then(|()| {
                                 handlers::response(&request_data, call, principal.as_ref())
-                            }) {
-                                Ok(response) => response,
-                                Err(status) => encode_status_response_at(&status, sequence)?,
-                            }
+                            })
                         }
-                        Err(RouteError::RequestTooLarge { .. }) => encode_status_response_at(
-                            &RpcStatus::BadArguments("request exceeds the method limit".to_owned()),
-                            sequence,
-                        )?,
+                        Err(RouteError::RequestTooLarge { .. }) => Err(RpcStatus::BadArguments(
+                            "request exceeds the method limit".to_owned(),
+                        )),
                         Err(RouteError::Unknown { .. } | RouteError::WrongListener) => {
-                            encode_status_response_at(&RpcStatus::Unsupported, sequence)?
+                            Err(RpcStatus::Unsupported)
                         }
                     };
+                    let (response, status) = encode_result(result, sequence)?;
                     Ok(RequestOutcome {
                         response,
+                        status,
                         route,
                         disconnect_before_response: false,
                     })
@@ -1605,12 +457,16 @@ pub(crate) async fn serve(
             )
             .await?
             {
-                BoundedExecution::Completed(outcome) => outcome?,
+                BoundedExecution::Completed(outcome) => Some(outcome?),
                 BoundedExecution::Saturated => {
-                    service_data.metrics.request_rate_limited();
+                    service_data
+                        .metrics
+                        .request_rate_limited(crate::AdmissionRejection::RequestHandlers);
                     let response = encode_status_response_at(&RpcStatus::RateLimited, sequence)?;
                     write_response(&mut stream, &response, limits.io_timeout).await?;
-                    service_data.metrics.response_completed();
+                    service_data
+                        .metrics
+                        .response_completed(family, STATUS_RATE_LIMIT_ERROR);
                     return Ok(());
                 }
                 BoundedExecution::TimedOut => {
@@ -1622,12 +478,18 @@ pub(crate) async fn serve(
                     )));
                 }
                 BoundedExecution::Stopped => break,
-            }
+            },
+        };
+        // A long poll ends without an outcome when the peer becomes readable
+        // or the server stops; either way the connection closes unanswered.
+        let Some(outcome) = outcome else {
+            break;
         };
         if outcome.disconnect_before_response {
             return Ok(());
         }
         let response = outcome.response;
+        let status = outcome.status;
         let route = outcome.route;
         if let Some(route) = route {
             let protocol = route.protocol;
@@ -1658,15 +520,29 @@ pub(crate) async fn serve(
             result = write_response(&mut stream, &response, limits.io_timeout) => result,
         };
         write?;
-        service_data.metrics.response_completed();
+        service_data.metrics.response_completed(family, status);
     }
     Ok(())
 }
 
 struct RequestOutcome {
     response: Vec<u8>,
+    /// The wire status code that `response` carries, `STATUS_OK` for a success.
+    status: u64,
     route: Option<&'static crate::rpc::RouteSpec>,
     disconnect_before_response: bool,
+}
+
+/// Encodes a handler result and returns the response frame with the wire
+/// status code it carries.
+fn encode_result(
+    result: std::result::Result<Vec<u8>, RpcStatus>,
+    sequence: u64,
+) -> Result<(Vec<u8>, u64)> {
+    match result {
+        Ok(response) => Ok((response, STATUS_OK)),
+        Err(status) => Ok((encode_status_response_at(&status, sequence)?, status.code())),
+    }
 }
 
 enum BoundedExecution<T> {
@@ -1704,6 +580,78 @@ where
                 Err(_) => Ok(BoundedExecution::TimedOut),
             }
         }
+    }
+}
+
+/// One long-poll request: the SSO completion poll, a KEX receive or a
+/// realtime inbox poll. A Go-compatible long poll can remain open for a long
+/// time, so it is awaited on the connection task rather than a blocking worker;
+/// the listener's active-connection semaphore bounds how many run at once.
+struct LongPoll<'a> {
+    metrics: &'a Arc<crate::ServerMetrics>,
+    faults: Option<&'a crate::SessionFaults>,
+    route: &'static RouteSpec,
+    sequence: u64,
+    /// The decoded request stays reserved until the poll answers.
+    request_memory: OwnedSemaphorePermit,
+}
+
+impl LongPoll<'_> {
+    /// Applies the request fault check and handler timer that bounded
+    /// requests get, then awaits `handler`. Returns `None` when the
+    /// connection should close without a response: `peer_readable` completed
+    /// or the server is stopping.
+    async fn run<P, H>(
+        self,
+        peer_readable: P,
+        stop: &mut watch::Receiver<bool>,
+        handler: H,
+    ) -> Result<Option<RequestOutcome>>
+    where
+        P: std::future::Future,
+        H: std::future::Future<Output = std::result::Result<Vec<u8>, RpcStatus>>,
+    {
+        let _request_memory = self.request_memory;
+        let _handler_timer = crate::ServerMetrics::handler_timer(Arc::clone(self.metrics));
+        let route = self.route;
+        if self.faults.is_some_and(|faults| {
+            faults.disconnect(
+                crate::SessionFaultPoint::BeforeDurableMutation,
+                route.protocol,
+                route.method,
+            )
+        }) {
+            return Ok(Some(RequestOutcome {
+                response: Vec::new(),
+                status: STATUS_OK,
+                route: Some(route),
+                disconnect_before_response: true,
+            }));
+        }
+        // A finished handler wins over peer readability that became ready at
+        // the same time. A concurrent stop is not consumed here, so the write
+        // in `serve` can still close the connection without the response.
+        let result = tokio::select! {
+            biased;
+            result = handler => result,
+            // Snowpack is request/response serial. Readability while this
+            // response is pending is therefore either a client
+            // cancellation/control frame or socket shutdown. Closing promptly
+            // drops the handler future, which releases relay waiters and poll
+            // permits instead of retaining an abandoned Go long poll.
+            _ = peer_readable => return Ok(None),
+            result = stop.changed() => {
+                let _ = result;
+                return Ok(None);
+            }
+        };
+        let (response, status) = encode_result(result, self.sequence)?;
+        Ok(Some(RequestOutcome {
+            response,
+            status,
+            route: Some(route),
+            disconnect_before_response: false,
+        }))
     }
 }
 
@@ -1818,6 +766,21 @@ fn timeout_error(message: &'static str) -> std::io::Error {
 }
 
 impl ServerData {
+    fn long_poll(
+        &self,
+        route: &'static RouteSpec,
+        sequence: u64,
+        request_memory: OwnedSemaphorePermit,
+    ) -> LongPoll<'_> {
+        LongPoll {
+            metrics: &self.metrics,
+            faults: self.session_faults.as_deref(),
+            route,
+            sequence,
+            request_memory,
+        }
+    }
+
     fn should_disconnect(
         &self,
         point: crate::SessionFaultPoint,
@@ -1840,6 +803,11 @@ fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
         message.truncate(end);
     }
     RpcStatus::BadArguments(message)
+}
+
+/// Half of the reader pool, and at least one reader.
+fn realtime_poll_read_permits(maximum_read_connections: usize) -> usize {
+    (maximum_read_connections / 2).max(1)
 }
 
 fn permission_denied() -> RpcStatus {
@@ -1876,7 +844,7 @@ impl ServerData {
             )))
         })?;
         sso.ensure_access(principal.uid(), principal.device_id())
-            .map_err(|e| RpcStatus::OAuth2Auth(Box::new(crate::sso::status(e))))
+            .map_err(crate::sso::access_status)
     }
 }
 
@@ -1884,142 +852,129 @@ impl ServerData {
 mod tests {
     use super::*;
 
-    #[test]
-    fn merkle_integrity_failures_are_not_laundered_as_retries() {
-        assert_eq!(
-            map_merkle_proof_error(foks_merkle_store::Error::HashMismatch),
-            RpcStatus::MerkleVerify("Merkle proof verification failed".to_owned())
-        );
-        assert_eq!(
-            map_merkle_proof_error(foks_merkle_store::Error::MissingNode([0x41; 32])),
-            RpcStatus::MerkleVerify("Merkle proof verification failed".to_owned())
-        );
-        assert_eq!(
-            map_merkle_proof_error(foks_merkle_store::Error::EmptyTree),
-            RpcStatus::MerkleVerify("Merkle proof verification failed".to_owned())
-        );
-        assert_eq!(
-            map_merkle_proof_error(foks_merkle_store::Error::Storage("busy".to_owned())),
-            RpcStatus::TransactionRetry
-        );
+    const LONG_POLL_ROUTES: [RouteId; 3] = [
+        RouteId::RegPollOAuth2SessionCompletion,
+        RouteId::KexReceive,
+        RouteId::RealTimeRtPollInbox,
+    ];
+
+    fn route_spec(id: RouteId) -> &'static RouteSpec {
+        crate::rpc::ROUTES
+            .iter()
+            .find(|route| route.id == id)
+            .unwrap()
     }
 
-    #[test]
-    fn only_an_exact_historical_user_head_is_a_retryable_race() {
-        let uid = EntityId::from_bytes(
-            std::iter::once(foks_proto::ENTITY_USER)
-                .chain([0x31; 32])
-                .collect(),
-        )
-        .unwrap();
-        let host = EntityId::from_bytes(
-            std::iter::once(foks_proto::ENTITY_HOST)
-                .chain([0x41; 32])
-                .collect(),
-        )
-        .unwrap();
-        let historical = foks_server_db::UserChainLinkSnapshot {
-            sequence: 2,
-            exact_link: vec![0x91, 0x01],
-            root_epoch: 2,
-            next_tree_location: [0x51; 32],
-        };
-        let historical_hash = foks_crypto::prefixed_hash_signable(
-            foks_proto::LINK_OUTER_TYPE_ID,
-            &historical.exact_link,
-        )
-        .unwrap();
-        let authority = foks_server_db::UserAuthoritySnapshot {
-            uid: uid.as_bytes().to_vec(),
-            chain_sequence: 3,
-            chain_tail_hash: [0x61; 32],
-            next_tree_location: [0x71; 32],
-            current_root_epoch: 3,
-            current_root_hash: [0x81; 32],
-            devices: Vec::new(),
-            shared_keys: Vec::new(),
-            stale_shared_key_roles: Vec::new(),
-        };
-        let mut change = foks_proto::UserGroupChange {
-            seqno: 3,
-            previous: Some(historical_hash),
-            root: TreeRoot {
-                epoch: 2,
-                hash: [0x91; 32],
-            },
-            time: 1,
-            next_location_commitment: [0xa1; 32],
-            uid,
-            host: host.clone(),
-            signer: EntityId::from_bytes(
-                std::iter::once(foks_proto::ENTITY_DEVICE)
-                    .chain([0xb1; 32])
-                    .collect(),
-            )
-            .unwrap(),
-            changes: Vec::new(),
-            shared_keys: Vec::new(),
-            metadata: Vec::new(),
-        };
-
-        assert!(
-            change_cites_historical_user_head(&authority, &host, &change, &historical).unwrap()
-        );
-        change.previous = Some([0xc1; 32]);
-        assert!(
-            !change_cites_historical_user_head(&authority, &host, &change, &historical).unwrap()
-        );
-        change.previous = Some(historical_hash);
-        change.seqno = 4;
-        assert!(
-            !change_cites_historical_user_head(&authority, &host, &change, &historical).unwrap()
-        );
+    fn long_poll<'a>(
+        metrics: &'a Arc<crate::ServerMetrics>,
+        faults: &'a crate::SessionFaults,
+        memory: &Arc<Semaphore>,
+        id: RouteId,
+    ) -> LongPoll<'a> {
+        LongPoll {
+            metrics,
+            faults: Some(faults),
+            route: route_spec(id),
+            sequence: 7,
+            request_memory: Arc::clone(memory).try_acquire_owned().unwrap(),
+        }
     }
 
-    #[test]
-    fn merkle_query_hosts_may_be_omitted_but_vhost_selection_remains_strict() {
-        let mut host = vec![0x41; 33];
-        host[0] = foks_proto::ENTITY_HOST;
-        let omitted = foks_snowpack::encode(&Value::Array(vec![Value::Null])).unwrap();
-        let explicit =
-            foks_snowpack::encode(&Value::Array(vec![Value::Binary(host.clone())])).unwrap();
-        let mut other_host = host.clone();
-        other_host[1] ^= 1;
-        let mismatched =
-            foks_snowpack::encode(&Value::Array(vec![Value::Binary(other_host.clone())])).unwrap();
+    #[tokio::test(flavor = "current_thread")]
+    async fn long_poll_run_honors_an_armed_fault_for_each_long_poll_route() {
+        for id in LONG_POLL_ROUTES {
+            let metrics = Arc::new(crate::ServerMetrics::default());
+            let faults = crate::SessionFaults::default();
+            let memory = Arc::new(Semaphore::new(1));
+            let route = route_spec(id);
+            faults.arm(
+                crate::SessionFaultPoint::BeforeDurableMutation,
+                route.protocol,
+                route.method,
+            );
+            let (_stop, mut stop) = watch::channel(false);
+            let polled = std::cell::Cell::new(false);
+            let outcome = long_poll(&metrics, &faults, &memory, id)
+                .run(std::future::pending::<()>(), &mut stop, async {
+                    polled.set(true);
+                    Ok(Vec::new())
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(outcome.disconnect_before_response, "{id:?}");
+            assert_eq!(outcome.route.map(|route| route.id), Some(id));
+            assert!(!polled.get(), "{id:?}");
+            assert_eq!(faults.hits(), 1, "{id:?}");
+            assert_eq!(metrics.snapshot().handler_duration_observations, 1);
+            assert_eq!(memory.available_permits(), 1);
+        }
+    }
 
-        validate_host_argument_against(&omitted, &host, true).unwrap();
-        validate_host_argument_against(&explicit, &host, true).unwrap();
-        validate_host_argument_against(&explicit, &host, false).unwrap();
-        validate_optional_host_value_against(&Value::Null, &host).unwrap();
-        validate_optional_host_value_against(&Value::Binary(host.clone()), &host).unwrap();
-        let omitted_historical = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
-                "../foks-snowpack/tests/fixtures/foks-v0.1.9/user/merkle-historical-roots-omitted-host-request.frame",
-            ),
+    #[tokio::test(flavor = "current_thread")]
+    async fn long_poll_results_are_encoded_and_timed() {
+        let metrics = Arc::new(crate::ServerMetrics::default());
+        let faults = crate::SessionFaults::default();
+        let memory = Arc::new(Semaphore::new(1));
+        let (_stop, mut stop) = watch::channel(false);
+
+        let response = foks_rpc::encode_success_response_at(&[0x91, 0x01], 7).unwrap();
+        let outcome = long_poll(
+            &metrics,
+            &faults,
+            &memory,
+            RouteId::RegPollOAuth2SessionCompletion,
         )
+        .run(std::future::pending::<()>(), &mut stop, async {
+            Ok(response.clone())
+        })
+        .await
+        .unwrap()
         .unwrap();
-        let call = foks_rpc::read_call(
-            &mut std::io::Cursor::new(omitted_historical),
-            foks_rpc::DEFAULT_MAX_FRAME_LENGTH,
-        )
-        .unwrap();
+        assert!(!outcome.disconnect_before_response);
+        assert_eq!(outcome.response, response);
+        assert_eq!(outcome.status, STATUS_OK);
+
+        let outcome = long_poll(&metrics, &faults, &memory, RouteId::RealTimeRtPollInbox)
+            .run(std::future::pending::<()>(), &mut stop, async {
+                Err(RpcStatus::RateLimited)
+            })
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            decode_historical_roots_argument(call.argument(), &host).unwrap(),
-            (vec![996], vec![997, 996, 994, 992])
+            outcome.response,
+            encode_status_response_at(&RpcStatus::RateLimited, 7).unwrap()
         );
-        assert!(matches!(
-            validate_host_argument_against(&mismatched, &host, true),
-            Err(RpcStatus::NotFound(_))
-        ));
-        assert!(matches!(
-            validate_optional_host_value_against(&Value::Binary(other_host), &host),
-            Err(RpcStatus::NotFound(_))
-        ));
-        assert!(matches!(
-            validate_host_argument_against(&omitted, &host, false),
-            Err(RpcStatus::BadArguments(_))
-        ));
+        assert_eq!(outcome.status, RpcStatus::RateLimited.code());
+        assert_eq!(metrics.snapshot().handler_duration_observations, 2);
+        assert_eq!(faults.hits(), 0);
+        assert_eq!(memory.available_permits(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn long_polls_close_unanswered_when_the_peer_is_readable_or_the_server_stops() {
+        let metrics = Arc::new(crate::ServerMetrics::default());
+        let faults = crate::SessionFaults::default();
+        let memory = Arc::new(Semaphore::new(1));
+        let (stop_sender, mut stop) = watch::channel(false);
+        let pending = std::future::pending::<std::result::Result<Vec<u8>, RpcStatus>>;
+
+        let outcome = long_poll(&metrics, &faults, &memory, RouteId::KexReceive)
+            .run(std::future::ready(()), &mut stop, pending())
+            .await
+            .unwrap();
+        assert!(outcome.is_none());
+        assert_eq!(memory.available_permits(), 1);
+
+        stop_sender.send(true).unwrap();
+        let outcome = long_poll(&metrics, &faults, &memory, RouteId::RealTimeRtPollInbox)
+            .run(std::future::pending::<()>(), &mut stop, pending())
+            .await
+            .unwrap();
+        assert!(outcome.is_none());
+        assert_eq!(memory.available_permits(), 1);
+        assert_eq!(metrics.snapshot().handler_duration_observations, 2);
     }
 
     #[tokio::test(flavor = "current_thread")]

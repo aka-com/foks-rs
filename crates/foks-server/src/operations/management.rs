@@ -3,14 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::fatal::{CoreThread, FatalSignal};
-use crate::{Error, Result, ServerMetrics, WriterHandle};
+use crate::{Error, ReadDatabaseConfig, Result, ServerMetrics, WriterHandle};
+
+mod sso_sample;
 
 const MAXIMUM_REQUEST_BYTES: usize = 8 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
@@ -30,14 +32,19 @@ struct ManagementState {
     writer: WriterHandle,
     readiness_in_flight: Arc<AtomicBool>,
     database_path: PathBuf,
+    /// Fixed for the process lifetime, so scrapes export them without a
+    /// database read.
+    capacity_limits: Vec<(foks_server_db::CapacityResource, u64)>,
     metrics: Arc<ServerMetrics>,
+    sso: sso_sample::SsoSampler,
 }
 
 impl ManagementServer {
     pub(crate) fn start(
         address: SocketAddr,
         writer: WriterHandle,
-        database_path: PathBuf,
+        database: ReadDatabaseConfig,
+        oidc_configured: bool,
         metrics: Arc<ServerMetrics>,
         service_live: Arc<AtomicBool>,
         fatal: FatalSignal,
@@ -49,6 +56,11 @@ impl ManagementServer {
         let ready = Arc::new(AtomicBool::new(false));
         let thread_ready = Arc::clone(&ready);
         let (stop, receiver) = watch::channel(false);
+        let database_path = database.path.clone();
+        let capacity_limits = foks_server_db::CapacityResource::ALL
+            .map(|resource| (resource, resource.limit(&database.database)))
+            .to_vec();
+        let sso = sso_sample::SsoSampler::new(oidc_configured.then_some(database));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .thread_name("foks-server-management")
             .enable_all()
@@ -66,7 +78,9 @@ impl ManagementServer {
                     writer,
                     readiness_in_flight: Arc::new(AtomicBool::new(false)),
                     database_path,
+                    capacity_limits,
                     metrics,
+                    sso,
                 },
                 receiver,
             ));
@@ -209,11 +223,20 @@ async fn handle(
                 response(503, "text/plain", "not ready\n".to_owned())
             }
         }
-        Some(b"GET /metrics HTTP/1.1") => response(
-            200,
-            "text/plain; version=0.0.4",
-            prometheus(&state.metrics, &state.writer, &state.database_path),
-        ),
+        Some(b"GET /metrics HTTP/1.1") => {
+            let sso = state.sso.sample(&state.metrics, Instant::now()).await;
+            response(
+                200,
+                "text/plain; version=0.0.4",
+                prometheus(
+                    &state.metrics,
+                    &state.writer,
+                    &state.database_path,
+                    &state.capacity_limits,
+                    sso.as_ref(),
+                ),
+            )
+        }
         Some(line) if !line.starts_with(b"GET ") => {
             response(405, "text/plain", "method not allowed\n".to_owned())
         }
@@ -259,7 +282,7 @@ async fn readiness(
     {
         return false;
     }
-    let guard = ReadinessFlight(in_flight);
+    let guard = InFlight(in_flight);
     matches!(
         tokio::time::timeout(
             Duration::from_secs(1),
@@ -273,9 +296,9 @@ async fn readiness(
     )
 }
 
-struct ReadinessFlight(Arc<AtomicBool>);
+struct InFlight(Arc<AtomicBool>);
 
-impl Drop for ReadinessFlight {
+impl Drop for InFlight {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
@@ -296,7 +319,13 @@ fn response(status: u16, content_type: &str, body: String) -> Vec<u8> {
     .into_bytes()
 }
 
-fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Path) -> String {
+fn prometheus(
+    metrics: &ServerMetrics,
+    writer: &WriterHandle,
+    database_path: &Path,
+    capacity_limits: &[(foks_server_db::CapacityResource, u64)],
+    sso: Option<&foks_server_db::SsoRolloutStatus>,
+) -> String {
     let (database_bytes, wal_bytes) = match storage_bytes(database_path) {
         Ok(storage) => storage,
         Err(()) => {
@@ -304,6 +333,7 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
             (0, 0)
         }
     };
+    let outcomes = metrics.request_outcomes();
     let metrics = metrics.snapshot();
     let writer = writer.metrics();
     let mut output = format!(
@@ -336,6 +366,8 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
             "foks_writer_accepted_total {}\n",
             "# TYPE foks_writer_rejected_total counter\n",
             "foks_writer_rejected_total {}\n",
+            "# TYPE foks_writer_expired_total counter\n",
+            "foks_writer_expired_total {}\n",
             "# TYPE foks_writer_pending gauge\n",
             "foks_writer_pending {}\n",
             "# TYPE foks_writer_queue_wait_seconds summary\n",
@@ -403,6 +435,7 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
         seconds(metrics.handler_duration_microseconds_max),
         writer.accepted,
         writer.rejected,
+        writer.expired,
         writer.pending,
         writer.queue_wait_observations,
         seconds(writer.queue_wait_microseconds_total),
@@ -449,9 +482,22 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
                 "foks_admin_reclaimed_records_total",
                 metrics.admin_reclaimed_records,
             ),
+            (
+                "foks_oidc_sample_failures_total",
+                metrics.oidc_sample_failures,
+            ),
+            (
+                "foks_reader_pool_exhausted_total",
+                metrics.reader_pool_exhausted,
+            ),
         ] {
             let _ = writeln!(output, "# TYPE {name} counter\n{name} {value}");
         }
+        let _ = writeln!(
+            output,
+            "# TYPE foks_reader_pool_open gauge\nfoks_reader_pool_open {}",
+            metrics.reader_pool_open
+        );
         let _ = writeln!(output, "# TYPE foks_accept_errors_total counter");
         for kind in crate::AcceptErrorKind::ALL {
             let _ = writeln!(
@@ -461,52 +507,101 @@ fn prometheus(metrics: &ServerMetrics, writer: &WriterHandle, database_path: &Pa
                 metrics.accept_errors[kind as usize]
             );
         }
+        let _ = writeln!(output, "# TYPE foks_admission_rejected_total counter");
+        for reason in crate::AdmissionRejection::ALL {
+            let _ = writeln!(
+                output,
+                "foks_admission_rejected_total{{reason=\"{}\"}} {}",
+                reason.label(),
+                metrics.admission_rejections[reason as usize]
+            );
+        }
     }
+    request_prometheus(
+        &mut output,
+        &outcomes,
+        &crate::diagnostics::operational::request_failures(),
+    );
     expiry_prometheus(&mut output, &metrics.expiry);
     checkpoint_prometheus(&mut output, &metrics.checkpoint);
     realtime_prometheus(&mut output, &metrics.realtime);
-    // Independent read snapshot; metrics never enqueue a policy mutation.
-    let sample = (|| -> crate::Result<Option<foks_server_db::SsoRolloutStatus>> {
-        let db = foks_server_db::ReadDatabase::open(database_path, Default::default())?;
-        let Some(host) = db.host_bootstrap()? else {
-            return Ok(None);
-        };
-        let host = host
-            .host_id
-            .as_slice()
-            .try_into()
-            .map_err(|_| crate::Error::Config("invalid host ID"))?;
-        let snapshot = db.snapshot()?;
-        Ok(snapshot.sso_rollout_status(host)?)
-    })();
-    if let Ok(Some(s)) = sample {
-        use std::fmt::Write as _;
-        for (name, value) in [
-            ("foks_oidc_rollout_mode", s.policy.mode as u64 + 1),
-            (
-                "foks_oidc_provider_blocked",
-                u64::from(s.policy.blocked_reason.is_some()),
-            ),
-            (
-                "foks_oidc_authorization_epoch",
-                s.policy.authorization_epoch,
-            ),
-            ("foks_oidc_cohort_accounts", s.cohort),
-            ("foks_oidc_cohort_linked", s.linked),
-            ("foks_oidc_cohort_unlinked", s.unlinked),
-            (
-                "foks_oidc_cohort_locked_out",
-                if s.policy.mode == foks_server_db::SsoRolloutMode::Enforced {
-                    s.unlinked
-                } else {
-                    0
-                },
-            ),
-        ] {
-            let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
-        }
-    }
+    capacity_prometheus(&mut output, capacity_limits);
+    sso_prometheus(&mut output, sso);
     output
+}
+
+/// Writes the configured limit of each resource that `foks-server usage`
+/// reports. Alerting compares `database_bytes` with `foks_database_bytes`; the
+/// other quantities are counted only by that command, which scans tables a
+/// scrape does not read.
+fn capacity_prometheus(output: &mut String, limits: &[(foks_server_db::CapacityResource, u64)]) {
+    use std::fmt::Write as _;
+    let _ = writeln!(output, "# TYPE foks_capacity_limit gauge");
+    for (resource, limit) in limits {
+        let _ = writeln!(
+            output,
+            "foks_capacity_limit{{resource=\"{}\"}} {limit}",
+            resource.label()
+        );
+    }
+}
+
+/// Writes written responses by route family and wire status code, and the
+/// server faults that handlers reported as a transaction retry by handler site
+/// and reason code. Every label value is a fixed name from the server.
+fn request_prometheus(
+    output: &mut String,
+    outcomes: &[(&'static str, u64, u64)],
+    failures: &[(&'static str, &'static str, u64)],
+) {
+    use std::fmt::Write as _;
+    let _ = writeln!(output, "# TYPE foks_requests_total counter");
+    for (family, status, count) in outcomes {
+        let _ = writeln!(
+            output,
+            "foks_requests_total{{family=\"{family}\",status=\"{status}\"}} {count}"
+        );
+    }
+    let _ = writeln!(output, "# TYPE foks_request_internal_errors_total counter");
+    for (site, reason, count) in failures {
+        let _ = writeln!(
+            output,
+            "foks_request_internal_errors_total{{site=\"{site}\",reason=\"{reason}\"}} {count}"
+        );
+    }
+}
+
+/// Writes the OIDC rollout gauges. They are omitted when OIDC is not
+/// configured, the host has no rollout policy, or no sample is available.
+fn sso_prometheus(output: &mut String, sso: Option<&foks_server_db::SsoRolloutStatus>) {
+    use std::fmt::Write as _;
+    let Some(s) = sso else {
+        return;
+    };
+    for (name, value) in [
+        ("foks_oidc_rollout_mode", s.policy.mode as u64 + 1),
+        (
+            "foks_oidc_provider_blocked",
+            u64::from(s.policy.blocked_reason.is_some()),
+        ),
+        (
+            "foks_oidc_authorization_epoch",
+            s.policy.authorization_epoch,
+        ),
+        ("foks_oidc_cohort_accounts", s.cohort),
+        ("foks_oidc_cohort_linked", s.linked),
+        ("foks_oidc_cohort_unlinked", s.unlinked),
+        (
+            "foks_oidc_cohort_locked_out",
+            if s.policy.mode == foks_server_db::SsoRolloutMode::Enforced {
+                s.unlinked
+            } else {
+                0
+            },
+        ),
+    ] {
+        let _ = writeln!(output, "# TYPE {name} gauge\n{name} {value}");
+    }
 }
 
 fn expiry_prometheus(output: &mut String, expiry: &crate::ExpiryMetricsSnapshot) {
@@ -602,13 +697,7 @@ fn seconds(microseconds: u64) -> f64 {
 
 fn storage_bytes(database_path: &Path) -> std::result::Result<(u64, u64), ()> {
     let database_bytes = std::fs::metadata(database_path).map_err(|_| ())?.len();
-    let mut wal_path = database_path.as_os_str().to_os_string();
-    wal_path.push("-wal");
-    let wal_bytes = match std::fs::metadata(PathBuf::from(wal_path)) {
-        Ok(metadata) => metadata.len(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(_) => return Err(()),
-    };
+    let wal_bytes = crate::installation::wal_bytes(database_path).map_err(|_| ())?;
     Ok((database_bytes, wal_bytes))
 }
 
@@ -649,6 +738,95 @@ mod tests {
         }
         assert!(text.contains("# TYPE foks_expiry_deleted_rows_total counter\n"));
         assert!(text.contains("# TYPE foks_expiry_empty_passes_total counter\n"));
+    }
+
+    #[test]
+    fn request_outcomes_and_internal_errors_have_fixed_labels() {
+        let mut text = String::new();
+        request_prometheus(
+            &mut text,
+            &[("KvStore", 0, 3), ("unrouted", 1012, 1)],
+            &[("kv_write", "busy", 2)],
+        );
+        assert_eq!(
+            text,
+            concat!(
+                "# TYPE foks_requests_total counter\n",
+                "foks_requests_total{family=\"KvStore\",status=\"0\"} 3\n",
+                "foks_requests_total{family=\"unrouted\",status=\"1012\"} 1\n",
+                "# TYPE foks_request_internal_errors_total counter\n",
+                "foks_request_internal_errors_total{site=\"kv_write\",reason=\"busy\"} 2\n",
+            )
+        );
+    }
+
+    #[test]
+    fn sso_gauges_are_written_only_for_a_sample() {
+        let mut text = String::new();
+        sso_prometheus(&mut text, None);
+        assert!(text.is_empty());
+
+        let status = foks_server_db::SsoRolloutStatus {
+            policy: foks_server_db::SsoPolicy {
+                host: [1; 33],
+                rollout_id: [2; 16],
+                config_hash: [3; 32],
+                issuer: "https://issuer.example".to_owned(),
+                mode: foks_server_db::SsoRolloutMode::Enforced,
+                blocked_reason: None,
+                revision: 4,
+                authorization_epoch: 5,
+            },
+            cohort: 9,
+            linked: 7,
+            unlinked: 2,
+        };
+        sso_prometheus(&mut text, Some(&status));
+        assert_eq!(
+            text,
+            concat!(
+                "# TYPE foks_oidc_rollout_mode gauge\nfoks_oidc_rollout_mode 2\n",
+                "# TYPE foks_oidc_provider_blocked gauge\nfoks_oidc_provider_blocked 0\n",
+                "# TYPE foks_oidc_authorization_epoch gauge\nfoks_oidc_authorization_epoch 5\n",
+                "# TYPE foks_oidc_cohort_accounts gauge\nfoks_oidc_cohort_accounts 9\n",
+                "# TYPE foks_oidc_cohort_linked gauge\nfoks_oidc_cohort_linked 7\n",
+                "# TYPE foks_oidc_cohort_unlinked gauge\nfoks_oidc_cohort_unlinked 2\n",
+                "# TYPE foks_oidc_cohort_locked_out gauge\nfoks_oidc_cohort_locked_out 2\n",
+            )
+        );
+    }
+
+    #[test]
+    fn capacity_limits_have_fixed_labels_and_configured_values() {
+        let config = foks_server_db::Config {
+            maximum_database_bytes: 1 << 30,
+            maximum_waitlist_entries: 25,
+            ..foks_server_db::Config::default()
+        };
+        let limits = foks_server_db::CapacityResource::ALL
+            .map(|resource| (resource, resource.limit(&config)))
+            .to_vec();
+        let mut text = String::new();
+        capacity_prometheus(&mut text, &limits);
+        assert_eq!(
+            text,
+            concat!(
+                "# TYPE foks_capacity_limit gauge\n",
+                "foks_capacity_limit{resource=\"merkle_epoch\"} 65535\n",
+                "foks_capacity_limit{resource=\"teams\"} 4096\n",
+                "foks_capacity_limit{resource=\"team_name_reservations\"} 4096\n",
+                "foks_capacity_limit{resource=\"invitation_certificates\"} 65536\n",
+                "foks_capacity_limit{resource=\"local_join_requests\"} 1000000\n",
+                "foks_capacity_limit{resource=\"remote_join_requests\"} 65536\n",
+                "foks_capacity_limit{resource=\"local_view_permissions\"} 1000000\n",
+                "foks_capacity_limit{resource=\"waitlist_entries\"} 25\n",
+                "foks_capacity_limit{resource=\"database_bytes\"} 1073741824\n",
+                "foks_capacity_limit{resource=\"kv_namespace_bytes\"} 17179869184\n",
+                "foks_capacity_limit{resource=\"kv_namespace_objects\"} 1000000\n",
+                "foks_capacity_limit{resource=\"kv_namespace_directories\"} 4096\n",
+                "foks_capacity_limit{resource=\"kv_namespace_dirents\"} 100000\n",
+            )
+        );
     }
 
     #[test]

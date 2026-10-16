@@ -98,6 +98,34 @@ fn unsigned(input: &mut &[u8]) -> Result<u64> {
     }
 }
 
+/// The merkle_heads table as version 39 defined it, with evidence kind 4
+/// (`LocalCheckpoint`). [`migrate`] creates exactly this text instead of
+/// reading the definition from `INITIAL`, so a later change to the table in
+/// `INITIAL` cannot change what the version 38 step builds; such a change
+/// needs a step of its own. While the table is unchanged this text must equal
+/// the `INITIAL` statement, because snapshot inspection compares schema text,
+/// and a test checks that.
+pub(super) const MERKLE_HEADS_V39: &str = r#"CREATE TABLE merkle_heads (
+    host_id BLOB PRIMARY KEY REFERENCES hosts(host_id) ON DELETE CASCADE,
+    epoch INTEGER NOT NULL CHECK (epoch >= 0),
+    root_hash BLOB NOT NULL CHECK (length(root_hash) = 32),
+    evidence_kind INTEGER NOT NULL CHECK (evidence_kind IN (1, 2, 3, 4)),
+    anchor_epoch INTEGER CHECK (anchor_epoch IS NULL OR anchor_epoch >= 0),
+    evidence_bytes BLOB NOT NULL CHECK (length(evidence_bytes) > 0),
+    FOREIGN KEY (host_id, epoch) REFERENCES merkle_roots(host_id, epoch)
+) STRICT, WITHOUT ROWID;"#;
+
+/// Migrates a version 38 database to the current version in one IMMEDIATE
+/// transaction. Version 38 stored legacy evidence spines in merkle_heads;
+/// each head is verified and rewritten as a `LocalCheckpoint`. The
+/// kv_adapter_clocks changes of versions 40 (the admission_floor rename) and
+/// 41 (boot_id) follow in the same transaction.
+///
+/// This step changes stored Merkle evidence, which host restore reads, so it
+/// increments hard_state_revision and rerolls write_token (the reinserted
+/// rows also fire the revision triggers). The in-process restore cache then
+/// misses, and the keyring rollback checkpoint sees a higher revision with a
+/// new token, which reconciliation accepts as a forward write.
 pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Another opener may have upgraded while this connection waited for the writer.
@@ -147,36 +175,19 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<()> {
         .map_err(|_| invalid())?;
         converted.push((host_id, epoch, hash, encode_evidence(&evidence)?.2));
     }
-    // No table references merkle_heads. Recreate it with the new CHECK constraint
-    // using the exact canonical schema (snapshot inspection compares SQL text).
+    // No table references merkle_heads. Recreate it with the new CHECK constraint.
     transaction.execute_batch("DROP TABLE merkle_heads")?;
-    let definition = SCHEMA
-        .split("CREATE TABLE merkle_heads (")
-        .nth(1)
-        .ok_or_else(invalid)?;
-    let definition = definition.split_once(';').ok_or_else(invalid)?.0;
-    transaction.execute_batch(&format!("CREATE TABLE merkle_heads ({definition};"))?;
+    transaction.execute_batch(MERKLE_HEADS_V39)?;
     install_table_revision_triggers(&transaction, "merkle_heads")?;
     for (host_id, epoch, hash, bytes) in converted {
         transaction.execute(
-            "INSERT INTO merkle_heads VALUES (?1, ?2, ?3, 4, NULL, ?4)",
+            "INSERT INTO merkle_heads
+                 (host_id, epoch, root_hash, evidence_kind, anchor_epoch, evidence_bytes)
+             VALUES (?1, ?2, ?3, 4, NULL, ?4)",
             params![host_id, epoch, hash, bytes],
         )?;
     }
-    let has_admission_floor: bool = transaction.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM pragma_table_info('kv_adapter_clocks')
-            WHERE name='admission_floor'
-        )",
-        [],
-        |row| row.get(0),
-    )?;
-    if has_admission_floor {
-        transaction.execute_batch(
-            "ALTER TABLE kv_adapter_clocks
-             RENAME COLUMN admission_floor TO validated_time_floor;",
-        )?;
-    }
+    super::rename_adapter_admission_floor(&transaction)?;
     super::add_adapter_boot_id(&transaction)?;
     transaction.execute("UPDATE hard_state_metadata SET hard_state_revision=hard_state_revision+1, write_token=randomblob(16) WHERE singleton=1", [])?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -274,24 +285,15 @@ mod tests {
                 params![i64::try_from(root.epoch() - 1).unwrap(), bytes],
             )
             .unwrap();
-        // Recreate the actual v38 table/constraint and its canonical triggers.
         let tx = store.write_transaction().unwrap();
-        tx.execute_batch(
-            "CREATE TEMP TABLE saved_heads AS SELECT * FROM merkle_heads; DROP TABLE merkle_heads;",
-        )
-        .unwrap();
-        let old = SCHEMA.replace("IN (1, 2, 3, 4)", "IN (1, 2, 3)");
-        let def = old
-            .split("CREATE TABLE merkle_heads (")
-            .nth(1)
-            .unwrap()
-            .split_once(';')
-            .unwrap()
-            .0;
-        tx.execute_batch(&format!("CREATE TABLE merkle_heads ({def};"))
-            .unwrap();
-        install_table_revision_triggers(&tx, "merkle_heads").unwrap();
-        tx.execute_batch("INSERT INTO merkle_heads SELECT * FROM saved_heads; DROP TABLE saved_heads; PRAGMA user_version=38;").unwrap();
+        crate::migration_tests::rebuild_predecessor(
+            &tx,
+            crate::migration_tests::Predecessor {
+                version: 38,
+                admission_floor: true,
+                boot_id: false,
+            },
+        );
         tx.commit().unwrap();
         store
     }

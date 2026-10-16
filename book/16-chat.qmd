@@ -34,7 +34,10 @@ name and optional description, a pair of roles (the minimum role to read
 and the minimum role to write), a summary of the last message, timestamps,
 a tier, and an `unreadable` flag. The name and description are typed secretboxes with
 random nonces under purpose-specific keys derived from the team's PTK, so
-the server does not learn what a channel is called. A team may have at most 256 channels.
+the server does not learn what a channel is called. A team may have at most 256 channels;
+the server refuses the next creation with status 1060 (`STATUS_OVER_QUOTA_ERROR`) before
+committing it, and refuses a send or creation the same way when the team has more than 1,024
+direct membership rows, counted before the channel's read role is applied.
 
 Chat keys are derived from the same PTK seed as the KV keys of
 [Chapter 14](14-kv-store.qmd), one branch over:
@@ -281,7 +284,8 @@ inbox version is the only source of truth. A poll runs as follows:
 | Default poll wait | 25 s |
 | Maximum poll wait | 55 s |
 | Fallback re-check interval | 1 s |
-| Concurrent polls per server | at most 32, and never more than the in-flight request limit |
+| Concurrent polls | 8 per account; in total, at most the authenticated listener's 256 connections |
+| Concurrent poll state reads | 16, half of the 32-connection reader pool; further reads wait |
 | Client-requested poll length | 55,000 ms |
 | Agent socket timeout for a poll | 60 s |
 
@@ -314,7 +318,12 @@ request bytes in the protected store, so that the client's external
 rollback checkpoint ([Chapter 19](19-agent.qmd)) is published before any
 network delivery. The row moves through `Prepared`, `Uncertain`, and one of
 `Confirmed`, `Rejected` or `Cancelled`, with SQL checks tying a receipt to
-`Confirmed` and a rejection code to `Rejected`.
+`Confirmed` and a rejection code to `Rejected`. Only statuses that a
+server returns before committing mark an operation `Rejected`: permission
+(1013), bad arguments (1030), over quota (1060), channel exists (12002),
+race (12003), not found (12005) and message order (12006). Any other
+failure, including the generic realtime status 12001 and transaction retry
+(1014), leaves it `Uncertain`.
 
 Attempt never resubmits an uncertain operation automatically. Before
 delivery it re-validates that the pending message is still encrypted under

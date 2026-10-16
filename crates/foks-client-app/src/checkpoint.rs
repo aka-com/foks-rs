@@ -73,7 +73,7 @@ impl NativeManifestStore {
         {
             return Err(Error::InvalidConfig("native client manifest is invalid"));
         }
-        let bytes = Zeroizing::new(serde_json::to_vec(self)?);
+        let bytes = encode_private_json(self)?;
         if bytes.len() > MAXIMUM_NATIVE_MANIFEST_BYTES {
             return Err(Error::InvalidConfig("native client manifest is too large"));
         }
@@ -692,8 +692,9 @@ impl ClientCredentials {
                     .contains_key(&crate::portability::readiness::key(&session.profile.name)?))
             })?;
         Ok(native
-            || foks_client_db::HardStateStore::open(&session.paths.hard_database)?
-                .requires_import_verification()?)
+            || crate::portability::readiness::hard_state_requires_verification(
+                &session.paths.hard_database,
+            )?)
     }
 
     pub(crate) fn with_import_session<T>(
@@ -740,6 +741,7 @@ impl ClientCredentials {
         // outermost sessions hold exclusive profile/database locks. Optional
         // local maintenance must not prevent the user's operation on deferral.
         let _ = self.compact_session_merkle_roots(&checked);
+        let _ = crate::soft_maintenance::compact_soft_large_file_stages(&checked);
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);
@@ -939,6 +941,7 @@ impl ClientCredentials {
         // outermost sessions hold exclusive profile/database locks. Optional
         // local maintenance must not prevent the user's operation on deferral.
         let _ = self.compact_session_merkle_roots(&checked);
+        let _ = crate::soft_maintenance::compact_soft_large_file_stages(&checked);
         let held = HeldCheckedProfile::enter(key);
         let result = operation(&checked);
         drop(held);
@@ -2838,6 +2841,31 @@ mod admission_tests {
             })
             .unwrap();
         (temporary, root)
+    }
+
+    #[test]
+    fn import_gate_read_after_reset_does_not_recreate_hard_state() {
+        let (_temporary, root) = one_profile_state();
+        let credentials = ClientCredentials::open(&root).unwrap();
+        let registry = ProfileRegistry::open(&root).unwrap();
+        let session = ProfileSession::open(&registry, "a").unwrap();
+        let database = &session.paths.hard_database;
+        credentials
+            .with_checked_session(&session, |_| Ok::<_, Error>(()))
+            .unwrap();
+        assert!(hard_state_artifacts_exist(database).unwrap());
+        credentials.reset_hard_state(&session).unwrap();
+        assert!(!hard_state_artifacts_exist(database).unwrap());
+
+        // The agent's overview and SSO handlers read the gate outside any
+        // checked session; only exclusive admission may create hard state.
+        assert!(!credentials.requires_import_verification(&session).unwrap());
+        assert!(!hard_state_artifacts_exist(database).unwrap());
+
+        credentials
+            .with_checked_session(&session, |_| Ok::<_, Error>(()))
+            .unwrap();
+        assert!(hard_state_artifacts_exist(database).unwrap());
     }
 
     #[test]

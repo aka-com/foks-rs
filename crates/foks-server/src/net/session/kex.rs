@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -7,20 +7,37 @@ use foks_proto::{
 };
 use foks_rpc::RpcStatus;
 
+use crate::rate_limit::SourceKey;
+
 const MAX_MESSAGES: usize = 4096;
 const MAX_RELAY_BYTES: usize = 32 * 1024 * 1024;
+/// One source's share of the relay: a sixteenth of each global bound, so that
+/// one client cannot fill the relay and refuse pairing for every other user.
+const MAX_SOURCE_MESSAGES: usize = MAX_MESSAGES / 16;
+const MAX_SOURCE_BYTES: usize = MAX_RELAY_BYTES / 16;
 const MESSAGE_LIFETIME: Duration = Duration::from_secs(2 * 60 * 60);
 pub(super) const MAX_BLOCKING_WAIT: Duration = Duration::from_secs(60 * 60);
 
 struct Queued {
     inserted: Instant,
     encoded_bytes: usize,
+    /// The sender's source, or `None` for an exempt (loopback) peer.
+    source: Option<SourceKey>,
     message: KexWrapperMessage,
 }
 
 #[derive(Default)]
 struct State {
     messages: VecDeque<Queued>,
+    encoded_bytes: usize,
+    /// Queued messages and encoded bytes per source, for every source with a
+    /// queued message.
+    sources: HashMap<SourceKey, Usage>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Usage {
+    messages: usize,
     encoded_bytes: usize,
 }
 
@@ -31,7 +48,9 @@ pub(super) struct Relay {
 }
 
 impl Relay {
-    pub(super) fn send(&self, encoded: &[u8]) -> Result<(), RpcStatus> {
+    /// Queues a signed pairing packet. `source` is the sender's source, or
+    /// `None` when the peer is exempt from per-source limits.
+    pub(super) fn send(&self, encoded: &[u8], source: Option<SourceKey>) -> Result<(), RpcStatus> {
         let argument = KexSendArgument::decode(encoded).map_err(bad_arguments)?;
         require_device(&argument.message.sender)?;
         foks_crypto::verify_kex_wrapper(&argument.message, &argument.signature)
@@ -61,10 +80,22 @@ impl Relay {
             // the new send just as an ordinary bounded store would.
             return Err(RpcStatus::RateLimited);
         }
+        if let Some(source) = source {
+            let usage = state.sources.get(&source).copied().unwrap_or_default();
+            if usage.messages == MAX_SOURCE_MESSAGES
+                || usage.encoded_bytes + encoded_bytes > MAX_SOURCE_BYTES
+            {
+                return Err(RpcStatus::RateLimited);
+            }
+            let usage = state.sources.entry(source).or_default();
+            usage.messages += 1;
+            usage.encoded_bytes += encoded_bytes;
+        }
         state.encoded_bytes += encoded_bytes;
         state.messages.push_back(Queued {
             inserted: Instant::now(),
             encoded_bytes,
+            source,
             message: argument.message,
         });
         self.changed.notify_waiters();
@@ -115,17 +146,30 @@ impl Relay {
 }
 
 fn cleanup(state: &mut State, now: Instant) {
+    let State {
+        messages,
+        encoded_bytes,
+        sources,
+    } = state;
     let mut retained_bytes = 0usize;
-    state.messages.retain(|queued| {
+    messages.retain(|queued| {
         let retained = now
             .checked_duration_since(queued.inserted)
             .is_some_and(|age| age <= MESSAGE_LIFETIME);
         if retained {
             retained_bytes = retained_bytes.saturating_add(queued.encoded_bytes);
+        } else if let Some(source) = queued.source {
+            if let Some(usage) = sources.get_mut(&source) {
+                usage.messages = usage.messages.saturating_sub(1);
+                usage.encoded_bytes = usage.encoded_bytes.saturating_sub(queued.encoded_bytes);
+                if usage.messages == 0 {
+                    sources.remove(&source);
+                }
+            }
         }
         retained
     });
-    state.encoded_bytes = retained_bytes;
+    *encoded_bytes = retained_bytes;
 }
 
 fn require_device(entity: &foks_proto::EntityId) -> Result<(), RpcStatus> {
@@ -192,7 +236,7 @@ mod tests {
             tokio::spawn(async move { relay.receive(&encoded).await.unwrap() })
         };
         tokio::time::sleep(Duration::from_millis(25)).await;
-        relay.send(&send.encoded().unwrap()).unwrap();
+        relay.send(&send.encoded().unwrap(), None).unwrap();
         assert_eq!(waiting.await.unwrap(), send.message);
         assert_eq!(
             relay.receive(&receive.encoded().unwrap()).await.unwrap(),
@@ -206,7 +250,7 @@ mod tests {
         let (mut send, _) = packet();
         send.message.sequence += 1;
         assert!(matches!(
-            relay.send(&send.encoded().unwrap()),
+            relay.send(&send.encoded().unwrap(), None),
             Err(RpcStatus::BadArguments(_))
         ));
     }
@@ -215,12 +259,12 @@ mod tests {
     fn conflicting_retransmissions_are_idempotent_and_retain_the_first_packet() {
         let relay = Relay::default();
         let (send, _) = packet();
-        relay.send(&send.encoded().unwrap()).unwrap();
+        relay.send(&send.encoded().unwrap(), None).unwrap();
         let mut conflict = send.clone();
         conflict.message.payload.ciphertext[0] ^= 1;
         conflict.signature =
             foks_crypto::sign_kex_wrapper(&SecretSeed::new([0x31; 32]), &conflict.message).unwrap();
-        relay.send(&conflict.encoded().unwrap()).unwrap();
+        relay.send(&conflict.encoded().unwrap(), None).unwrap();
         assert_eq!(
             relay.state.lock().unwrap().messages[0].message,
             send.message
@@ -238,6 +282,7 @@ mod tests {
                 .map(|_| Queued {
                     inserted: Instant::now(),
                     encoded_bytes,
+                    source: None,
                     message: send.message.clone(),
                 })
                 .collect();
@@ -248,9 +293,69 @@ mod tests {
         next.signature =
             foks_crypto::sign_kex_wrapper(&SecretSeed::new([0x31; 32]), &next.message).unwrap();
         assert!(matches!(
-            relay.send(&next.encoded().unwrap()),
+            relay.send(&next.encoded().unwrap(), None),
             Err(RpcStatus::RateLimited)
         ));
         assert_eq!(relay.state.lock().unwrap().messages.len(), MAX_MESSAGES);
+    }
+
+    fn resigned(mut send: KexSendArgument, sequence: u64) -> KexSendArgument {
+        send.message.sequence = sequence;
+        send.signature =
+            foks_crypto::sign_kex_wrapper(&SecretSeed::new([0x31; 32]), &send.message).unwrap();
+        send
+    }
+
+    #[test]
+    fn one_source_holds_at_most_its_share_until_its_packets_expire() {
+        let relay = Relay::default();
+        let (send, _) = packet();
+        let config = crate::RateLimitConfig::default();
+        let source = config.source("192.0.2.1".parse().unwrap());
+        // The same /64 is the same source.
+        let same_prefix = config.source("2001:db8::1".parse().unwrap());
+        let other_address = config.source("2001:db8::2".parse().unwrap());
+        assert_eq!(same_prefix, other_address);
+        let other = config.source("198.51.100.1".parse().unwrap());
+        for sequence in 0..MAX_SOURCE_MESSAGES as u64 {
+            let next = resigned(send.clone(), sequence);
+            relay.send(&next.encoded().unwrap(), Some(source)).unwrap();
+        }
+        let over = resigned(send.clone(), MAX_SOURCE_MESSAGES as u64);
+        assert!(matches!(
+            relay.send(&over.encoded().unwrap(), Some(source)),
+            Err(RpcStatus::RateLimited)
+        ));
+        // Other sources and exempt peers keep their capacity.
+        relay.send(&over.encoded().unwrap(), Some(other)).unwrap();
+        let exempt = resigned(send.clone(), MAX_SOURCE_MESSAGES as u64 + 1);
+        relay.send(&exempt.encoded().unwrap(), None).unwrap();
+        // Expired packets release the source's share.
+        {
+            let mut state = relay.state.lock().unwrap();
+            cleanup(
+                &mut state,
+                Instant::now() + MESSAGE_LIFETIME + Duration::from_secs(1),
+            );
+            assert!(state.messages.is_empty());
+            assert!(state.sources.is_empty());
+        }
+        let after = resigned(send, MAX_SOURCE_MESSAGES as u64 + 2);
+        relay.send(&after.encoded().unwrap(), Some(source)).unwrap();
+    }
+
+    #[test]
+    fn one_source_cannot_queue_more_than_its_share_of_bytes() {
+        let relay = Relay::default();
+        let (mut send, _) = packet();
+        send.message.payload.ciphertext = vec![0x71; MAX_SOURCE_BYTES];
+        let send = resigned(send, 2);
+        let source = crate::RateLimitConfig::default().source("192.0.2.1".parse().unwrap());
+        assert!(matches!(
+            relay.send(&send.encoded().unwrap(), Some(source)),
+            Err(RpcStatus::RateLimited)
+        ));
+        assert!(relay.state.lock().unwrap().sources.is_empty());
+        relay.send(&send.encoded().unwrap(), None).unwrap();
     }
 }

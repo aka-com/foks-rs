@@ -206,7 +206,11 @@ device entity, before queueing the packet, and it keeps only the first packet
 for each (session, sender, sequence) slot. Any device key satisfies the relay,
 so the signature attributes a packet to a key rather than excluding
 strangers; a packet from a party that does not know the secret-box key simply
-fails to open and is discarded by the receiver.
+fails to open and is discarded by the receiver. Because anyone can send, the
+relay's capacity is bounded and shared: it holds at most 4,096 packets or
+32 MiB for up to two hours, and one source (an IPv4 address or an IPv6 /64)
+at most a sixteenth of either, so one client cannot fill the relay and
+block pairing for everyone else.
 
 The provisionee's checks on the `PleaseSign` link are the heart of the
 protocol. It decodes the proposed chain link and requires that it names

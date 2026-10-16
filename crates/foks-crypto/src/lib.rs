@@ -74,6 +74,8 @@ pub enum Error {
     Realtime,
     #[error("OS randomness is unavailable")]
     Entropy,
+    #[error("hybrid box randomness repeats an ML-KEM seed or a receiver nonce")]
+    RandomnessReuse,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

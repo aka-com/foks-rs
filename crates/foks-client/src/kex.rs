@@ -339,10 +339,7 @@ impl FoksClient {
                 role: private_puk.role,
                 receiver: &new_device,
             }],
-            &[PukBoxRandomness {
-                kem_message: random_bytes()?,
-                nonce: random_bytes()?,
-            }],
+            &[PukBoxRandomness::generate()?],
         )?;
         let mut self_token: [u8; foks_proto::KEX_PERMISSION_TOKEN_BYTES] = random_bytes()?;
         self_token[0] = 54;
@@ -699,14 +696,16 @@ impl FoksClient {
                 &request,
             ) {
                 Ok(response) => break response,
-                Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1014, .. }))
-                    if !requested_wait.is_zero() && Instant::now() < deadline =>
-                {
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                    code: foks_rpc::STATUS_TX_RETRY_ERROR,
+                    ..
+                })) if !requested_wait.is_zero() && Instant::now() < deadline => {
                     continue;
                 }
-                Err(Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1014, .. }))
-                    if !requested_wait.is_zero() =>
-                {
+                Err(Error::Rpc(foks_rpc::Error::RemoteStatus {
+                    code: foks_rpc::STATUS_TX_RETRY_ERROR,
+                    ..
+                })) if !requested_wait.is_zero() => {
                     return Err(Error::DeadlineExceeded);
                 }
                 Err(error) => return Err(error),

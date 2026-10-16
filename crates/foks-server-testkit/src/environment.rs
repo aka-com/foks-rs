@@ -58,6 +58,7 @@ impl TestEnvironment {
                 request_burst: 2,
                 requests_per_second: 1,
                 maximum_tracked_ips: 16,
+                ..foks_server::RateLimitConfig::default()
             }
         } else {
             foks_server::RateLimitConfig::default()
@@ -548,7 +549,12 @@ pub enum TestProfile {
     SmallCapacity,
     SmallTeamCapacity,
     SmallFederationCapacity,
+    /// Caps the database file at `TINY_DATABASE_BYTES`, so that ordinary
+    /// writes reach SQLite's `max_page_count` ceiling.
+    TinyDatabase,
     QueuePressure,
+    /// Stops waiting for a request handler after `SHORT_REQUEST_TIMEOUT`.
+    ShortRequestTimeout,
     TightIo,
     ProductionBenchmark,
     RealtimePollCapacity,
@@ -560,6 +566,13 @@ pub enum TestProfile {
 }
 
 pub const WAITLIST_TEST_ENTRIES: u64 = 4;
+
+/// Request execution timeout of `TestProfile::ShortRequestTimeout`.
+pub const SHORT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Database ceiling of `TestProfile::TinyDatabase`, about 1 MiB above the
+/// size of a new host with one account.
+const TINY_DATABASE_BYTES: u64 = 3 * 1024 * 1024;
 
 impl TestProfile {
     fn configuration(self) -> (foks_server_db::Config, foks_server::SessionLimits, usize) {
@@ -593,12 +606,17 @@ impl TestProfile {
                 maximum_active_remote_team_view_permissions: 3,
                 ..foks_server_db::Config::default()
             },
+            Self::TinyDatabase => foks_server_db::Config {
+                maximum_database_bytes: TINY_DATABASE_BYTES,
+                ..foks_server_db::Config::default()
+            },
             Self::Waitlist => foks_server_db::Config {
                 maximum_waitlist_entries: WAITLIST_TEST_ENTRIES,
                 ..foks_server_db::Config::default()
             },
             Self::Default
             | Self::QueuePressure
+            | Self::ShortRequestTimeout
             | Self::TightIo
             | Self::ProductionBenchmark
             | Self::RealtimePollCapacity
@@ -612,11 +630,17 @@ impl TestProfile {
             } else {
                 foks_server::SessionLimits::default().maximum_read_connections
             },
-            // Isolate poll admission from the independently bounded writer/read pools.
+            // As many handler permits as poll slots below, so the capacity
+            // test shows that polls holding every slot occupy no handler permit.
             maximum_in_flight_requests: if matches!(self, Self::RealtimePollCapacity) {
                 4
             } else {
                 foks_server::SessionLimits::default().maximum_in_flight_requests
+            },
+            maximum_realtime_polls_per_account: if matches!(self, Self::RealtimePollCapacity) {
+                4
+            } else {
+                foks_server::SessionLimits::default().maximum_realtime_polls_per_account
             },
             // TightIo intentionally uses one runtime worker: listener boundary
             // tests then prove a slow persistent session cannot occupy it.
@@ -642,6 +666,11 @@ impl TestProfile {
                 std::time::Duration::from_secs(5)
             } else {
                 foks_server::SessionLimits::default().io_timeout
+            },
+            request_timeout: if matches!(self, Self::ShortRequestTimeout) {
+                SHORT_REQUEST_TIMEOUT
+            } else {
+                foks_server::SessionLimits::default().request_timeout
             },
             ..foks_server::SessionLimits::default()
         };

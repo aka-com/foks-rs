@@ -37,10 +37,22 @@ Every repository uses the same immediate-write transaction layer; the split
 does not create independent connections or weaken atomic
 host/Merkle/user/team acceptance.
 
+`HardStateStore::open` creates and initializes the database when the file is
+absent, assigning a new database id. Exclusive admission of a pristine profile
+relies on this, and code inside a checked session uses it after admission has
+created the file. Reads that can run outside the profile lock, such as the
+import gate check and the agent's scheduler probes, use
+`HardStateStore::open_existing`. It returns `StateMissing` for an absent or
+uninitialized file and rejects a file without the FOKS application id, in
+each case without writing to the filesystem, so a read after a profile reset
+does not recreate the database before the next exclusive admission.
+
 The separate soft-state schema stores complete verified KV roots,
 directories, dirent versions, and content projections. It reconstructs durable
 FOKS path-version vectors for cache checks, atomically replaces and prunes
 stale directory subtrees, and stages large-file plaintext in bounded chunk
 rows. Incomplete stages are invisible and normally reclaimed by the store that
 created them; an explicit exclusive-maintenance call reclaims stages left by a
-process crash. Completed files are read through a streaming writer API.
+process crash. foks-client-app makes that call, rate-limited, at outermost
+exclusive checked-session entry, where the profile operation lock excludes
+every other download. Completed files are read through a streaming writer API.

@@ -69,7 +69,7 @@ impl CheckedProfileSession<'_> {
         let (host_id, user_id) = self.data_identity(alias, vault)?;
         let host = entity_id_from_hex(&host_id)?;
         let user = entity_id_from_hex(&user_id)?;
-        let bytes = Zeroizing::new(serde_json::to_vec(&spec)?);
+        let bytes = encode_private_json(&spec)?;
         let hash = prefixed_hash(INTENT_HASH, &bytes);
         let mut hard = HardStateStore::open(&self.paths.hard_database)?;
         if let Some(existing) = hard.adapter_submission(handle)? {

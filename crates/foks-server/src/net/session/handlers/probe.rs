@@ -24,7 +24,7 @@ impl Operations for ServerData {
     }
 
     fn current_probe_response(&self) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::current_probe_response(self)
+        self.merkle_queries().current_probe_response()
     }
 
     fn validate_host_argument(&self, argument: &[u8]) -> Result<(), RpcStatus> {
@@ -36,31 +36,31 @@ impl Operations for ServerData {
     }
 
     fn current_root(&self) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::current_root(self)
+        self.merkle_queries().current_root()
     }
 
     fn current_root_signed(&self) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::current_root_signed(self)
+        self.merkle_queries().current_root_signed()
     }
 
     fn historical_roots(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::historical_roots(self, argument)
+        self.merkle_queries().historical_roots(argument)
     }
 
     fn merkle_lookup(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::merkle_lookup(self, argument)
+        self.merkle_queries().merkle_lookup(argument)
     }
 
     fn merkle_multi_lookup(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::merkle_multi_lookup(self, argument)
+        self.merkle_queries().merkle_multi_lookup(argument)
     }
 
     fn current_root_hash(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::current_root_hash(self, argument)
+        self.merkle_queries().current_root_hash(argument)
     }
 
     fn merkle_check_key_exists(&self, argument: &[u8]) -> Result<Vec<u8>, RpcStatus> {
-        ServerData::merkle_check_key_exists(self, argument)
+        self.merkle_queries().merkle_check_key_exists(argument)
     }
 }
 
@@ -142,13 +142,21 @@ mod tests {
         fn validate_host_argument(&self, argument: &[u8]) -> Result<(), RpcStatus> {
             self.strict_host_validations
                 .set(self.strict_host_validations.get() + 1);
-            super::super::super::validate_host_argument_against(argument, &expected_host(), false)
+            crate::services::merkle_query::validate_host_argument_against(
+                argument,
+                &expected_host(),
+                false,
+            )
         }
 
         fn validate_optional_host_argument(&self, argument: &[u8]) -> Result<(), RpcStatus> {
             self.optional_host_validations
                 .set(self.optional_host_validations.get() + 1);
-            super::super::super::validate_host_argument_against(argument, &expected_host(), true)
+            crate::services::merkle_query::validate_host_argument_against(
+                argument,
+                &expected_host(),
+                true,
+            )
         }
 
         fn current_root(&self) -> Result<Vec<u8>, RpcStatus> {

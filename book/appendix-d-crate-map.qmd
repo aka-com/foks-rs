@@ -54,10 +54,59 @@ in September 2026, and are given only to convey relative size.
 `foks-snowpack` → `foks-proto` → `foks-crypto` → `foks-verify` →
 `foks-client-db` → `foks-client` → `foks-client-app` → `foks-agent`, with
 `foks-client` also depending directly on `foks-merkle-store` and `foks-rpc`
-(both built on `foks-proto`), and with `foks-agent-proto` and
-`foks-agent-client` as the seam on which `foks-cli`, `foks-mcp`,
-`foks-desktop`, and the Tauri app sit. The server chain is `foks-server` →
-`foks-server-db` → {`foks-merkle-store`, `foks-crypto`}, and `foks-server`
-also uses `foks-rpc` and `foks-verify`. The default
+(both built on `foks-proto`). `foks-agent-proto` and `foks-agent-client` are
+the seam between the agent and its front ends: `foks-mcp` uses only the seam
+and the foundation crates, and `foks-desktop` adds `foks-client` for its
+device-name rules. `foks-cli` and the Tauri app also link `foks-client-app`,
+`foks-keystore` and `foks-yubi` directly (see below). The server chain is
+`foks-server` → `foks-server-db` → {`foks-merkle-store`, `foks-crypto`}, and
+`foks-server` also uses `foks-rpc` and `foks-verify`. The default
 `cargo test` members are the seven core crates: `client-db`, `crypto`,
 `proto`, `snowpack`, `verify`, `client`, and `rpc`.
+
+## Layer rules
+
+`tools/crate-layers.toml` assigns every workspace package to a layer and
+lists which layers each may depend on through normal and build dependencies.
+`scripts/check-crate-layers.py` reads `cargo metadata` and enforces it; the
+client and server gates (`tools/foks-client/check.sh`,
+`tools/foks-server/check.sh`) and the Linux desktop CI job run it.
+
+| Layer | Crates | May depend on |
+|---|---|---|
+| core | `snowpack`, `proto`, `crypto`, `verify`, `merkle-store`, `protocol-metadata`, `compat-artifact` | core |
+| network | `rpc`, `oidc` | core |
+| device | `keystore`, `yubi` | core |
+| agent-protocol | `agent-proto` | core |
+| client | `client-db`, `client`, `client-app`, `go-interop` | core, network, device, agent-protocol |
+| agent | `agent` | core, network, device, agent-protocol, client |
+| agent-client | `agent-client` | core, agent-protocol |
+| front-end | `cli`, `mcp`, `desktop`, `desktop-app` | core, agent-protocol, agent-client |
+| server | `server-db`, `server` | core, network |
+| test-support | `server-testkit` (test-only) | all of the above |
+
+Server crates therefore never depend on client, device or agent crates. Front
+ends never depend directly on `foks-rpc` or `foks-oidc`; outside the
+exceptions below, they reach FOKS servers and identity providers through the
+agent. No package reaches `foks-server-testkit` through a production
+dependency, directly or transitively. Dev-dependencies are not layer-checked,
+but every path dependency must be a workspace package.
+
+Edges that cross these rules are listed as exceptions, each with the source
+files that may use the dependency; a use in any other file fails the check.
+
+- `foks-cli` → `foks-client-app`, `foks-keystore`, `foks-yubi`. `foks-rs`
+  remains a direct client: `init`, `profile`, `account`, `kv`, `jobs`,
+  `device`, `recovery`, `passphrase`, `team` and `yubi` open
+  `ClientCredentials` and `ProfileSession` in-process, and `state` calls the
+  `foks-client-app` portability functions directly, including
+  `verify_imported_profile` for `state verify-online`. The account admin,
+  bot, rename and sync commands, team invitations, `mcp`, `sso` and
+  `retention` use the agent. The integration tests seed state through
+  `foks-client-app` before starting an agent.
+- `foks-desktop-app` → `foks-client-app`, `foks-keystore`, `foks-yubi`.
+  Offline maintenance with the agent stopped (state export, import,
+  relocation, import verification, reset of unreadable state, the state
+  leases and readiness checks), described in
+  [Chapter 20](20-desktop.qmd), and stateless input validators.
+- `foks-desktop` → `foks-client`: `fix_device_name` and `DEVICE_NAME_RULES`.

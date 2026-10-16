@@ -2,8 +2,8 @@
 
 use crate::hybrid::{
     derive_device_public, derive_key, derive_shared_public, hepk_fingerprint, open_hybrid_box,
-    seal_hybrid_payload, HybridSecretDecapsulator, PukBoxRandomness, SharedPublicMaterial,
-    YubiDevice,
+    require_distinct_kem_messages, seal_hybrid_payload, HybridSecretDecapsulator, PukBoxRandomness,
+    SharedPublicMaterial, YubiDevice,
 };
 use crate::primitives::{
     commitment, open_typed_secretbox, prefixed_hash_signable, seal_typed_secretbox,
@@ -1047,7 +1047,7 @@ pub fn make_team_removal_proof(
 
 /// Boxes one team-removal key both to the team's admin PTK and to the member's
 /// PUK/PTK. The same authenticated metadata is included in each independent
-/// hybrid box.
+/// hybrid box; the two boxes must not share a `kem_message`.
 #[allow(clippy::too_many_arguments)]
 pub fn seal_team_removal_key(
     sender_seed: &SecretSeed,
@@ -1065,6 +1065,7 @@ pub fn seal_team_removal_key(
     if team_receiver_generation == 0 || member_receiver_generation == 0 {
         return Err(Error::NamedTeamMaterial);
     }
+    require_distinct_kem_messages(&randomness)?;
     let metadata_bytes = metadata.encoded()?;
     let mut payload = Zeroizing::new(Vec::with_capacity(35 + metadata_bytes.len()));
     payload.extend_from_slice(&[0x92, 0xc4, 32]);

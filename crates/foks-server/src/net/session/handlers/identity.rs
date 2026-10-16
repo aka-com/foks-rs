@@ -57,9 +57,30 @@ fn denied() -> RpcStatus {
 }
 fn status(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::Database(foks_server_db::Error::Capacity(_)) | crate::Error::WriterQueue => {
+        crate::Error::Database(foks_server_db::Error::Capacity(_)) => RpcStatus::RateLimited,
+        other => crate::status::shared(&other, "identity_proof").unwrap_or_else(denied),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::status::contract::{assert_shared_classes, wrapped_sso};
+
+    #[test]
+    fn storage_failures_are_not_reported_as_failed_proofs() {
+        assert_shared_classes("identity", wrapped_sso, status);
+        assert_eq!(
+            status(crate::Error::Database(foks_server_db::Error::Capacity(
+                "identity challenges"
+            ))),
             RpcStatus::RateLimited
-        }
-        _ => denied(),
+        );
+        assert_eq!(
+            status(crate::Error::Database(foks_server_db::Error::Invalid(
+                "identity proof"
+            ))),
+            denied()
+        );
     }
 }

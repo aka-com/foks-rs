@@ -12,6 +12,8 @@ pub use chat_intent::{LegacyChatIntent, LocalChatIntent, LocalChatIntentStore};
 pub use pending_chat::{PendingChatBinding, PendingChatStore};
 mod adapter_maintenance;
 mod merkle_maintenance;
+mod scan_limiter;
+mod soft_maintenance;
 pub use adapter_maintenance::{AdapterMaintenanceCursor, AdapterMaintenanceReport};
 mod auth_cache;
 pub use auth_cache::{
@@ -58,6 +60,7 @@ use foks_proto::{
     EntityId, InviteCode, KvNodeId, KvNodeType, Role, SecretSeed, ENTITY_PUK_VERIFY, ENTITY_USER,
 };
 use rustls::pki_types::CertificateDer;
+use secret_record::{encode_private_json, SecretArray};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
@@ -257,6 +260,7 @@ pub use chat::{chat_submission, ChatChannelInput, ChatMessageInput};
 mod checkpoint;
 mod kv;
 mod registry;
+mod secret_record;
 mod team;
 
 pub use account::{

@@ -136,7 +136,12 @@ fn creation_reopens_each_durable_boundary_without_changing_identity_or_root() {
                     );
                     Ok((
                         team.team_id.clone(),
-                        [team.member_min, team.member, team.admin, team.owner],
+                        [
+                            *team.member_min.as_bytes(),
+                            *team.member.as_bytes(),
+                            *team.admin.as_bytes(),
+                            *team.owner.as_bytes(),
+                        ],
                     ))
                 })
                 .unwrap();
@@ -151,7 +156,12 @@ fn creation_reopens_each_durable_boundary_without_changing_identity_or_root() {
                     let team = v.team(&alias)?;
                     assert!(team.active);
                     assert_eq!(
-                        [team.member_min, team.member, team.admin, team.owner],
+                        [
+                            *team.member_min.as_bytes(),
+                            *team.member.as_bytes(),
+                            *team.admin.as_bytes(),
+                            *team.owner.as_bytes(),
+                        ],
                         original_secrets
                     );
                     assert_eq!(

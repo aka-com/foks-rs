@@ -128,10 +128,10 @@ pub(crate) fn dispatch(
             file_upload_chunk(argument, principal, writer, &authority)
         }
         RouteId::KvStorePutSmallFileOrSymlink => {
-            put_small_file_or_symlink(argument, principal, reader, writer, &authority)
+            put_small_file_or_symlink(argument, principal, writer, &authority)
         }
         RouteId::KvStorePut => put(argument, principal, reader, writer, &authority),
-        RouteId::KvStorePutRoot => put_root(argument, principal, reader, writer, &authority),
+        RouteId::KvStorePutRoot => put_root(argument, principal, writer, &authority),
         RouteId::KvStoreLockAcquire => {
             lock_acquire(argument, principal, reader, writer, &authority)
         }
@@ -293,7 +293,6 @@ fn mkdir(
     }
     let (key_role, key_visibility) = role_parts(directory.key.role);
     let uid = authority.party.clone();
-    let error_uid = uid.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
@@ -316,14 +315,13 @@ fn mkdir(
             )?;
             Ok(())
         })
-        .map_err(|error| map_write_error(error, reader, &error_uid))?;
+        .map_err(map_write_error)?;
     Ok(Response::Void)
 }
 
 fn put_root(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
@@ -340,7 +338,6 @@ fn put_root(
     }
     let (key_role, key_visibility) = role_parts(root.key.role);
     let uid = authority.party.clone();
-    let error_uid = uid.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
@@ -364,7 +361,7 @@ fn put_root(
             })?;
             Ok(())
         })
-        .map_err(|error| map_write_error(error, reader, &error_uid))?;
+        .map_err(map_write_error)?;
     Ok(Response::Void)
 }
 
@@ -453,7 +450,6 @@ fn put_file_chunk(
 fn put_small_file_or_symlink(
     argument: &[u8],
     principal: &Principal,
-    reader: &foks_server_db::ReadDatabase,
     writer: &WriterHandle,
     authority: &KvAuthority,
 ) -> Result<Response, RpcStatus> {
@@ -474,7 +470,6 @@ fn put_small_file_or_symlink(
         return Err(bad_arguments("KV node uses an unsupported content key"));
     }
     let uid = authority.party.clone();
-    let error_uid = uid.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
@@ -490,7 +485,7 @@ fn put_small_file_or_symlink(
             })?;
             Ok(())
         })
-        .map_err(|error| map_write_error(error, reader, &error_uid))?;
+        .map_err(map_write_error)?;
     Ok(Response::Void)
 }
 
@@ -534,7 +529,6 @@ fn put(
         require_directory_write_access(reader, authority, &dirent.parent)?;
     }
     let uid = authority.party.clone();
-    let error_uid = uid.clone();
     let device = principal.device_id().to_vec();
     let write_authority = authority.clone();
     writer
@@ -578,7 +572,7 @@ fn put(
             )?;
             Ok(())
         })
-        .map_err(|error| map_write_error(error, reader, &error_uid))?;
+        .map_err(map_write_error)?;
     Ok(Response::Void)
 }
 
@@ -1205,16 +1199,8 @@ fn role_parts(role: foks_proto::Role) -> (u64, i64) {
     )
 }
 
-fn map_write_error(
-    error: crate::Error,
-    _reader: &foks_server_db::ReadDatabase,
-    _uid: &[u8],
-) -> RpcStatus {
-    if matches!(&error, crate::Error::Database(error) if error.is_quota()) {
-        return RpcStatus::QuotaExceeded;
-    }
+pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::AuthorizationChanged => permission_denied(),
         crate::Error::Database(foks_server_db::Error::KvConflict) => {
             RpcStatus::KvRace("KV mutation lost a version race".to_owned())
         }
@@ -1222,40 +1208,29 @@ fn map_write_error(
             operation: 2,
             resource: 1,
         },
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::unmapped(other, "kv_write"),
     }
 }
 
-fn map_upload_error(error: crate::Error) -> RpcStatus {
-    if matches!(&error, crate::Error::Database(error) if error.is_quota()) {
-        return RpcStatus::QuotaExceeded;
-    }
+pub(super) fn map_upload_error(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::AuthorizationChanged => permission_denied(),
         crate::Error::Database(foks_server_db::Error::KvConflict) => RpcStatus::KvNoEnt,
         crate::Error::Database(
             foks_server_db::Error::Invalid(_) | foks_server_db::Error::IntegerRange,
         ) => bad_arguments("invalid KV upload transition"),
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::unmapped(other, "kv_upload"),
     }
 }
 
-fn map_lock_error(error: crate::Error) -> RpcStatus {
-    if matches!(&error, crate::Error::Database(error) if error.is_quota()) {
-        return RpcStatus::QuotaExceeded;
-    }
+pub(super) fn map_lock_error(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::AuthorizationChanged => permission_denied(),
         crate::Error::Database(foks_server_db::Error::KvLocked) => RpcStatus::Locked,
         crate::Error::Database(foks_server_db::Error::KvLockTimeout) => RpcStatus::LockTimeout,
         crate::Error::Database(foks_server_db::Error::KvConflict) => RpcStatus::KvNoEnt,
         crate::Error::Database(
             foks_server_db::Error::Invalid(_) | foks_server_db::Error::IntegerRange,
         ) => bad_arguments("invalid KV lock transition"),
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::unmapped(other, "kv_lock"),
     }
 }
 

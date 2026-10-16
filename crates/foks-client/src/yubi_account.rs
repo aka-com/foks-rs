@@ -144,19 +144,12 @@ impl FoksClient {
             host.host_id(),
             parent,
             &secrets.puk_seed,
-            InitialPukBoxRandomness {
-                box_id: random_bytes()?,
-                kem_message: random_bytes()?,
-                nonce: random_bytes()?,
-            },
+            InitialPukBoxRandomness::generate()?,
         )?;
         let subkey_box = seal_yubi_subkey_box(
             parent,
             &secrets.subkey_seed,
-            YubiSubkeyBoxRandomness {
-                kem_message: random_bytes()?,
-                nonce: random_bytes()?,
-            },
+            YubiSubkeyBoxRandomness::generate()?,
         )?;
         let passphrase = request
             .passphrase
@@ -529,7 +522,12 @@ impl FoksClient {
         for attempt in 0..40 {
             match self.authenticate_yubi_and_pin(host, credential) {
                 Ok(outcome) => return Ok(outcome),
-                Err(error @ Error::Rpc(foks_rpc::Error::RemoteStatus { code: 1020, .. })) => {
+                Err(
+                    error @ Error::Rpc(foks_rpc::Error::RemoteStatus {
+                        code: foks_rpc::STATUS_NOT_IMPLEMENTED,
+                        ..
+                    }),
+                ) => {
                     return Err(error);
                 }
                 Err(error) => last_error = Some(error),

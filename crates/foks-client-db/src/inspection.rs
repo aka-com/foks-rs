@@ -141,14 +141,14 @@ pub(crate) fn open_existing(
     inspect_sidecars(path)?;
     Ok(connection)
 }
-#[derive(Eq, PartialEq)]
-struct SchemaObject {
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SchemaObject {
     kind: String,
     name: String,
     table: String,
     sql: Option<String>,
 }
-fn schema(c: &Connection) -> Result<Vec<SchemaObject>> {
+pub(crate) fn schema(c: &Connection) -> Result<Vec<SchemaObject>> {
     let (count, total, name): (i64, i64, i64) = c.query_row(
         "SELECT count(*),coalesce(sum(length(sql)),0),coalesce(max(length(name)),0) FROM sqlite_schema", [],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;

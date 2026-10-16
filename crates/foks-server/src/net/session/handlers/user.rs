@@ -103,7 +103,7 @@ impl Operations for ServerData {
     ) -> Result<Vec<u8>, RpcStatus> {
         let database = self.read_database()?;
         crate::services::user::authorize_database(&database, principal)?;
-        self.reserve_username(argument)
+        crate::services::signup::reserve_username(&self.identity_ports(), argument)
     }
     fn get_tree_location(
         &self,
@@ -164,21 +164,13 @@ impl Operations for ServerData {
                     )?;
                     Ok(())
                 })
-                .map_err(|e| match e {
-                    crate::Error::Database(foks_server_db::Error::StaleRoot) => {
-                        RpcStatus::RevokeRace("username changed concurrently".into())
-                    }
-                    crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
-                        permission_denied()
-                    }
-                    other => crate::error::mutation_failure_status(&other)
-                        .unwrap_or(RpcStatus::TransactionRetry),
-                })
+                .map_err(map_display_rename_error)
         } else {
             let full = arg.full.ok_or_else(|| {
                 super::super::bad_arguments("normalized rename requires full update")
             })?;
-            self.commit_user_mutation_argument(
+            crate::services::user_mutation::commit(
+                &self.identity_ports(),
                 argument,
                 principal,
                 crate::identity::mutation::Argument::Rename(arg.username, full),
@@ -249,12 +241,22 @@ impl Operations for ServerData {
     }
 
     fn provision_device(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
-        self.user_mutation(argument, principal, true)
+        crate::services::user_mutation::provision_or_revoke(
+            &self.identity_ports(),
+            argument,
+            principal,
+            true,
+        )
     }
 
     fn revoke_device(&self, argument: &[u8], principal: &Principal) -> Result<(), RpcStatus> {
         principal.require_ordinary_device()?;
-        self.user_mutation(argument, principal, false)
+        crate::services::user_mutation::provision_or_revoke(
+            &self.identity_ports(),
+            argument,
+            principal,
+            false,
+        )
     }
 
     fn host_config(&self, principal: &Principal) -> Result<Vec<u8>, RpcStatus> {
@@ -303,7 +305,7 @@ impl Operations for ServerData {
         let link = decoded.user_settings_link.clone().ok_or_else(|| {
             RpcStatus::BadArguments("passphrase update omitted UserSettings link".to_owned())
         })?;
-        let owned = super::super::OwnedPassphraseMutation::from_argument(&decoded)
+        let owned = crate::services::passphrase::OwnedPassphraseMutation::from_argument(&decoded)
             .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
         crate::services::generic::commit(
             link,
@@ -328,7 +330,7 @@ impl Operations for ServerData {
         let link = decoded.user_settings_link.clone().ok_or_else(|| {
             RpcStatus::BadArguments("passphrase update omitted UserSettings link".to_owned())
         })?;
-        let owned = super::super::OwnedPassphraseMutation::from_argument(&decoded)
+        let owned = crate::services::passphrase::OwnedPassphraseMutation::from_argument(&decoded)
             .map_err(|_| RpcStatus::BadArguments("invalid passphrase boxes".to_owned()))?;
         crate::services::generic::commit(
             link,
@@ -571,5 +573,32 @@ pub(super) fn response(
         )
         .map_err(|_| RpcStatus::Unsupported),
         _ => Err(RpcStatus::Unsupported),
+    }
+}
+
+fn map_display_rename_error(error: crate::Error) -> RpcStatus {
+    match error {
+        crate::Error::Database(foks_server_db::Error::StaleRoot) => {
+            RpcStatus::RevokeRace("username changed concurrently".into())
+        }
+        crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
+        other => crate::status::unmapped(other, "display_rename"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::status::contract::{assert_shared_classes, wrapped_sso};
+
+    #[test]
+    fn display_rename_reports_shared_failure_classes() {
+        assert_shared_classes("display rename", wrapped_sso, map_display_rename_error);
+        assert_eq!(
+            map_display_rename_error(crate::Error::Database(
+                foks_server_db::Error::AuthorizationChanged
+            )),
+            permission_denied()
+        );
     }
 }

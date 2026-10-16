@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Parser as _;
+use foks_server::installation::LimitsConfig;
 use foks_server::keys::{read_root_key_file, read_secret_file};
-use foks_server::{RunningStandaloneServer, SessionLimits, StandaloneConfig};
+use foks_server::{RateLimitConfig, RunningStandaloneServer, StandaloneConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
@@ -33,11 +34,26 @@ enum Command {
     ConfigCheck {
         #[arg(long)]
         config: PathBuf,
+        /// Prints the configuration that serve-config would run, including
+        /// the defaults of omitted keys and tables, as TOML on standard
+        /// output; the check report then goes to standard error.
+        #[arg(long)]
+        print_effective: bool,
     },
     /// Reports offline database/bootstrap/integrity status.
     Status {
         #[arg(long)]
         config: PathBuf,
+    },
+    /// Reports stored usage against the permanent and storage limits, the
+    /// largest KV namespaces and the teams with the most realtime message
+    /// bytes. Reads a snapshot, so the server may be running.
+    Usage {
+        #[arg(long)]
+        config: PathBuf,
+        /// Prints one JSON object instead of `key=value` lines.
+        #[arg(long)]
+        json: bool,
     },
     /// Writes a pinned-client import bundle after the server has bootstrapped.
     ClientBootstrap {
@@ -304,30 +320,36 @@ struct ServeArguments {
     management_address: SocketAddr,
     #[arg(long, default_value_t = 60)]
     ttl_seconds: i64,
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = LimitsConfig::default().worker_threads)]
     worker_threads: usize,
-    #[arg(long, default_value_t = 32)]
+    #[arg(long, default_value_t = LimitsConfig::default().maximum_read_connections)]
     maximum_read_connections: usize,
-    #[arg(long, default_value_t = 256)]
+    #[arg(long, default_value_t = LimitsConfig::default().maximum_active_connections)]
     maximum_active_connections: usize,
-    #[arg(long, default_value_t = 32)]
+    #[arg(long, default_value_t = LimitsConfig::default().maximum_pending_connections)]
     maximum_pending_connections: usize,
-    #[arg(long, default_value_t = 64)]
+    #[arg(long, default_value_t = LimitsConfig::default().maximum_in_flight_requests)]
     maximum_in_flight_requests: usize,
-    #[arg(long, default_value_t = 30)]
+    #[arg(long, default_value_t = LimitsConfig::default().maximum_realtime_polls_per_account)]
+    maximum_realtime_polls_per_account: usize,
+    #[arg(long, default_value_t = LimitsConfig::default().request_timeout_seconds)]
     request_timeout_seconds: u64,
-    #[arg(long, default_value_t = 64)]
+    #[arg(long, default_value_t = LimitsConfig::default().maximum_pending_writes)]
     maximum_pending_writes: usize,
-    #[arg(long, default_value_t = 512)]
+    #[arg(long, default_value_t = RateLimitConfig::default().connection_burst)]
     connection_rate_burst: u32,
-    #[arg(long, default_value_t = 256)]
+    #[arg(long, default_value_t = RateLimitConfig::default().connections_per_second)]
     connections_per_second: u32,
-    #[arg(long, default_value_t = 2_000)]
+    #[arg(long, default_value_t = RateLimitConfig::default().request_burst)]
     request_rate_burst: u32,
-    #[arg(long, default_value_t = 1_000)]
+    #[arg(long, default_value_t = RateLimitConfig::default().requests_per_second)]
     requests_per_second: u32,
-    #[arg(long, default_value_t = 4_096)]
+    #[arg(long, default_value_t = RateLimitConfig::default().maximum_tracked_ips)]
     maximum_rate_limit_ips: usize,
+    #[arg(long, default_value_t = RateLimitConfig::default().ipv6_source_prefix)]
+    ipv6_source_prefix: u8,
+    #[arg(long, default_value_t = RateLimitConfig::default().maximum_connections_per_source)]
+    maximum_connections_per_source: usize,
     #[arg(long)]
     automatic_backup_directory: Option<PathBuf>,
     #[arg(long, default_value_t = 86_400)]
@@ -341,6 +363,9 @@ struct ServeArguments {
     maximum_waitlist_entries: u64,
     #[arg(long, default_value_t = foks_server::waitlist::WaitlistConfig::default().retention_days)]
     waitlist_retention_days: u64,
+    /// Database limits; `serve-config` sets them from the `[storage]` table.
+    #[arg(skip)]
+    database_limits: foks_server_db::Config,
 }
 
 #[derive(clap::Args)]
@@ -353,6 +378,11 @@ struct BackupArguments {
     root_key_file: PathBuf,
     #[arg(long)]
     destination: PathBuf,
+    /// server.toml whose `[storage]` and `[waitlist]` tables set the database
+    /// limits. Without it the compiled defaults apply, including the 64 GiB
+    /// `maximum_database_bytes`.
+    #[arg(long)]
+    config: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -363,6 +393,11 @@ struct RestoreArguments {
     database: PathBuf,
     #[arg(long)]
     key_directory: PathBuf,
+    /// server.toml whose `[storage]` and `[waitlist]` tables set the database
+    /// limits. Without it the compiled defaults apply, including the 64 GiB
+    /// `maximum_database_bytes`.
+    #[arg(long)]
+    config: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -387,13 +422,29 @@ struct CompleteHostKeyRotationArguments {
     observed_addition_seqno: u64,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    match Arguments::parse().command {
+fn main() -> std::process::ExitCode {
+    // Report through Display: the Debug form of a decoding error embeds the
+    // whole server.toml.
+    match run(Arguments::parse().command) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
         Command::Init(arguments) => initialize(arguments),
         Command::Serve(arguments) => serve(*arguments),
         Command::ServeConfig { config } => serve_config(config),
-        Command::ConfigCheck { config } => config_check(config),
+        Command::ConfigCheck {
+            config,
+            print_effective,
+        } => config_check(config, print_effective),
         Command::Status { config } => status(config),
+        Command::Usage { config, json } => usage(config, json),
         Command::ClientBootstrap { config, output } => client_bootstrap(config, output),
         Command::Backup(arguments) => backup(arguments),
         Command::Restore(arguments) => restore(arguments),
@@ -427,7 +478,7 @@ fn invite_command(command: InviteCommand) -> Result<(), Box<dyn std::error::Erro
             let issued = match arguments.multiuse_code {
                 Some(code) => foks_server::invites::issue_multiuse_invite(
                     &config.database,
-                    foks_server_db::Config::default(),
+                    config.database_config(),
                     &code,
                     arguments.max_uses,
                     expires_at,
@@ -436,7 +487,7 @@ fn invite_command(command: InviteCommand) -> Result<(), Box<dyn std::error::Erro
                 None if arguments.max_uses.is_none() => {
                     foks_server::invites::issue_standard_invite(
                         &config.database,
-                        foks_server_db::Config::default(),
+                        config.database_config(),
                         expires_at,
                         now,
                     )?
@@ -451,7 +502,7 @@ fn invite_command(command: InviteCommand) -> Result<(), Box<dyn std::error::Erro
             foks_server::installation::validate_artifacts(&config)?;
             if !foks_server::invites::disable_invite(
                 &config.database,
-                foks_server_db::Config::default(),
+                config.database_config(),
                 &code,
                 now,
             )? {
@@ -463,10 +514,9 @@ fn invite_command(command: InviteCommand) -> Result<(), Box<dyn std::error::Erro
         InviteCommand::List { config } => {
             let config = foks_server::installation::load_config(config)?;
             foks_server::installation::validate_artifacts(&config)?;
-            for invite in foks_server::invites::list_invites(
-                &config.database,
-                foks_server_db::Config::default(),
-            )? {
+            for invite in
+                foks_server::invites::list_invites(&config.database, config.database_config())?
+            {
                 println!(
                     "id={} kind={:?} active={} uses={}/{} expires_at={}",
                     encode_hex(&invite.invite_id),
@@ -492,7 +542,7 @@ fn invite_command(command: InviteCommand) -> Result<(), Box<dyn std::error::Erro
             };
             foks_server::invites::set_invite_regime(
                 &config.database,
-                foks_server_db::Config::default(),
+                config.database_config(),
                 regime,
             )?;
             println!("signup invite policy set to {regime:?}");
@@ -530,6 +580,9 @@ fn initialize(arguments: InitArguments) -> Result<(), Box<dyn std::error::Error>
 fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config = foks_server::installation::load_config(path)?;
     foks_server::installation::validate_artifacts(&config)?;
+    let database_limits = config.database_config();
+    let limits = config.limits;
+    let rate_limits = config.rate_limits;
     serve(ServeArguments {
         oidc: config.oidc,
         web_admin: config.web_admin,
@@ -544,57 +597,76 @@ fn serve_config(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         public_address: config.public_address,
         authenticated_address: config.authenticated_address,
         management_address: config.management_address,
+        // The first start signs this TTL into the stored probe response, and
+        // later starts refuse a different value, so it is not a setting.
         ttl_seconds: 60,
-        worker_threads: 4,
-        maximum_read_connections: 32,
-        maximum_active_connections: 256,
-        maximum_pending_connections: 32,
-        maximum_in_flight_requests: 64,
-        request_timeout_seconds: 30,
-        maximum_pending_writes: 64,
-        connection_rate_burst: 512,
-        connections_per_second: 256,
-        request_rate_burst: 2_000,
-        requests_per_second: 1_000,
-        maximum_rate_limit_ips: 4_096,
+        worker_threads: limits.worker_threads,
+        maximum_read_connections: limits.maximum_read_connections,
+        maximum_active_connections: limits.maximum_active_connections,
+        maximum_pending_connections: limits.maximum_pending_connections,
+        maximum_in_flight_requests: limits.maximum_in_flight_requests,
+        maximum_realtime_polls_per_account: limits.maximum_realtime_polls_per_account,
+        request_timeout_seconds: limits.request_timeout_seconds,
+        maximum_pending_writes: limits.maximum_pending_writes,
+        connection_rate_burst: rate_limits.connection_burst,
+        connections_per_second: rate_limits.connections_per_second,
+        request_rate_burst: rate_limits.request_burst,
+        requests_per_second: rate_limits.requests_per_second,
+        maximum_rate_limit_ips: rate_limits.maximum_tracked_ips,
+        ipv6_source_prefix: rate_limits.ipv6_source_prefix,
+        maximum_connections_per_source: rate_limits.maximum_connections_per_source,
         automatic_backup_directory: Some(config.backup_directory),
         automatic_backup_interval_seconds: config.backup_interval_seconds,
         automatic_backup_retain: config.backup_retain,
         enable_waitlist: config.waitlist.enabled,
         maximum_waitlist_entries: config.waitlist.maximum_entries,
         waitlist_retention_days: config.waitlist.retention_days,
+        database_limits,
     })
 }
 
-fn config_check(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn config_check(path: PathBuf, print_effective: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // With --print-effective, standard output carries only the TOML, so that
+    // a redirect produces a loadable server.toml; the report goes to stderr.
+    let report = |line: &str| {
+        if print_effective {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    };
     let config = foks_server::installation::load_config(path)?;
     foks_server::installation::validate_artifacts(&config)?;
     if let Some(admin) = &config.web_admin {
         match std::net::TcpListener::bind(admin.listen) {
             Ok(listener) => {
                 drop(listener);
-                println!("admin_listener_bind=available");
+                report("admin_listener_bind=available");
             }
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-                println!("admin_listener_bind=busy (stop the running service before rebinding)")
+                report("admin_listener_bind=busy (stop the running service before rebinding)")
             }
             Err(error) => return Err(error.into()),
         }
         if config.database.exists() {
-            let count = foks_server_db::ReadDatabase::open(&config.database, Default::default())?
-                .admin_operator_count()?;
-            println!("admin_active_operators={count}");
+            let count =
+                foks_server_db::ReadDatabase::open(&config.database, config.database_config())?
+                    .admin_operator_count()?;
+            report(&format!("admin_active_operators={count}"));
             if count == 0 {
-                println!("No host operator configured; only self-session pages are available.");
+                report("No host operator configured; only self-session pages are available.");
             }
         }
     }
-    println!("FOKS server configuration and artifacts are valid");
+    report("FOKS server configuration and artifacts are valid");
     if let Some(oidc) = &config.oidc {
-        println!(
+        report(&format!(
             "configured_provider_hash={}",
             encode_hex(&oidc.configured_fingerprint()?)
-        );
+        ));
+    }
+    if print_effective {
+        print!("{}", toml::to_string_pretty(&config)?);
     }
     Ok(())
 }
@@ -613,6 +685,27 @@ fn status(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             .integrity_ok
             .map_or("not-run".to_owned(), |value| value.to_string()),
     );
+    Ok(())
+}
+
+fn usage(path: PathBuf, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // load_config validates the configuration. The report reads only the
+    // database, so unlike `config-check` it does not read the key, TLS or OIDC
+    // files.
+    let config = foks_server::installation::load_config(path)?;
+    let report = foks_server::usage::usage_report(
+        &config.database,
+        config.database_config(),
+        now_microseconds()?,
+    )?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&foks_server::usage::report_json(&report))?
+        );
+    } else {
+        print!("{}", foks_server::usage::report_text(&report));
+    }
     Ok(())
 }
 
@@ -639,15 +732,18 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
     // A second registration, read only after a core thread exit, so that a
     // stop request during that shutdown is never absorbed.
     let shutdown_signals = Signals::new([SIGINT, SIGTERM])?;
-    let limits = SessionLimits {
+    // The same mapping that server.toml validation applies to `[limits]`.
+    let limits = LimitsConfig {
         worker_threads: arguments.worker_threads,
         maximum_read_connections: arguments.maximum_read_connections,
         maximum_active_connections: arguments.maximum_active_connections,
         maximum_pending_connections: arguments.maximum_pending_connections,
         maximum_in_flight_requests: arguments.maximum_in_flight_requests,
-        request_timeout: Duration::from_secs(arguments.request_timeout_seconds),
-        ..SessionLimits::default()
-    };
+        maximum_realtime_polls_per_account: arguments.maximum_realtime_polls_per_account,
+        request_timeout_seconds: arguments.request_timeout_seconds,
+        maximum_pending_writes: arguments.maximum_pending_writes,
+    }
+    .session_limits();
     match foks_server::raise_descriptor_limit(&limits) {
         Ok(limit) if !limit.sufficient() => eprintln!(
             "FOKS server warning: the descriptor limit {} is below the {} descriptors the \
@@ -675,7 +771,7 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
         authenticated_address: arguments.authenticated_address,
         management_address: arguments.management_address,
         probe_tls,
-        database: waitlist.database_config(foks_server_db::Config::default()),
+        database: waitlist.database_config(arguments.database_limits),
         limits,
         rate_limits: foks_server::RateLimitConfig {
             connection_burst: arguments.connection_rate_burst,
@@ -683,6 +779,8 @@ fn serve(arguments: ServeArguments) -> Result<(), Box<dyn std::error::Error>> {
             request_burst: arguments.request_rate_burst,
             requests_per_second: arguments.requests_per_second,
             maximum_tracked_ips: arguments.maximum_rate_limit_ips,
+            ipv6_source_prefix: arguments.ipv6_source_prefix,
+            maximum_connections_per_source: arguments.maximum_connections_per_source,
         },
         backup: arguments
             .automatic_backup_directory
@@ -769,12 +867,26 @@ fn backup(arguments: BackupArguments) -> Result<(), Box<dyn std::error::Error>> 
         arguments.key_directory,
         *root_key,
         arguments.destination,
-        foks_server_db::Config::default(),
+        backup_database_limits(arguments.config)?,
     )?;
     Ok(())
 }
 
+/// Database limits for `backup` and `restore`. Their paths come from flags;
+/// an optional server.toml supplies only the limits, so that a database that
+/// a raised `[storage]` ceiling let grow past the compiled one can still be
+/// backed up and restored.
+fn backup_database_limits(
+    config: Option<PathBuf>,
+) -> Result<foks_server_db::Config, Box<dyn std::error::Error>> {
+    Ok(match config {
+        Some(path) => foks_server::installation::load_config(path)?.database_config(),
+        None => foks_server_db::Config::default(),
+    })
+}
+
 fn restore(arguments: RestoreArguments) -> Result<(), Box<dyn std::error::Error>> {
+    let database_limits = backup_database_limits(arguments.config)?;
     foks_server::restore_backup(
         &foks_server::BackupArtifacts {
             database: arguments.backup_directory.join("foks-server.sqlite"),
@@ -783,7 +895,7 @@ fn restore(arguments: RestoreArguments) -> Result<(), Box<dyn std::error::Error>
         },
         arguments.database,
         arguments.key_directory,
-        foks_server_db::Config::default(),
+        database_limits,
     )?;
     Ok(())
 }
@@ -809,8 +921,7 @@ fn rotate_host_key(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error
         &config.key_directory,
         *root_key,
     )?;
-    let mut database =
-        foks_server_db::Database::open(&config.database, foks_server_db::Config::default())?;
+    let mut database = foks_server_db::Database::open(&config.database, config.database_config())?;
     let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
     let state = foks_server::host::begin_host_key_rotation(&mut database, &provider, now)?;
     print_host_rotation(&state);
@@ -828,8 +939,7 @@ fn complete_host_key_rotation(
         &config.key_directory,
         *root_key,
     )?;
-    let mut database =
-        foks_server_db::Database::open(&config.database, foks_server_db::Config::default())?;
+    let mut database = foks_server_db::Database::open(&config.database, config.database_config())?;
     let now = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
     let state = foks_server::host::complete_host_key_rotation(
         &mut database,
@@ -870,10 +980,8 @@ fn print_host_rotation(state: &foks_server::host::HostKeyRotationState) {
 fn rotate_capability_key(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config = foks_server::installation::load_config(config_path)?;
     foks_server::installation::validate_artifacts(&config)?;
-    let mut database = foks_server_db::Database::open_existing(
-        &config.database,
-        foks_server_db::Config::default(),
-    )?;
+    let mut database =
+        foks_server_db::Database::open_existing(&config.database, config.database_config())?;
     let root_key = read_root_key_file(&config.root_key_file)?;
     let provider = foks_server::keys::DirectoryKeyProvider::open_for_rotation(
         &config.key_directory,
@@ -888,10 +996,8 @@ fn rotate_capability_key(config_path: PathBuf) -> Result<(), Box<dyn std::error:
 fn retire_capability_keys(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let config = foks_server::installation::load_config(config_path)?;
     foks_server::installation::validate_artifacts(&config)?;
-    let mut database = foks_server_db::Database::open_existing(
-        &config.database,
-        foks_server_db::Config::default(),
-    )?;
+    let mut database =
+        foks_server_db::Database::open_existing(&config.database, config.database_config())?;
     let root_key = read_root_key_file(&config.root_key_file)?;
     let provider = foks_server::keys::DirectoryKeyProvider::open_for_rotation(
         &config.key_directory,
@@ -1075,10 +1181,8 @@ fn waitlist_command(command: WaitlistCommand) -> Result<(), Box<dyn std::error::
         WaitlistCommand::List { config } => {
             let config = foks_server::installation::load_config(config)?;
             foks_server::installation::validate_artifacts(&config)?;
-            let entries = foks_server::waitlist::list_entries(
-                &config.database,
-                foks_server_db::Config::default(),
-            )?;
+            let entries =
+                foks_server::waitlist::list_entries(&config.database, config.database_config())?;
             if entries.is_empty() {
                 println!("No waitlist entries.");
             }
@@ -1096,7 +1200,7 @@ fn waitlist_command(command: WaitlistCommand) -> Result<(), Box<dyn std::error::
             foks_server::installation::validate_artifacts(&config)?;
             let count = foks_server::waitlist::export_entries(
                 &config.database,
-                foks_server_db::Config::default(),
+                config.database_config(),
                 &output,
             )?;
             println!("exported {count} waitlist entries to {}", output.display());
@@ -1116,7 +1220,7 @@ fn waitlist_command(command: WaitlistCommand) -> Result<(), Box<dyn std::error::
             };
             let deleted = foks_server::waitlist::purge_entries(
                 &config.database,
-                foks_server_db::Config::default(),
+                config.database_config(),
                 selection,
             )?;
             println!("deleted {deleted} waitlist entries");

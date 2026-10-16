@@ -89,6 +89,16 @@ direct dependencies, so a new one blocks release builds until the crate is
 replaced or the advisory is listed. The fuzz check allows two lints because the
 ignore and skip entries for root-only crates are unused in the fuzz graph.
 
+Dependencies between workspace crates follow the layers in
+`tools/crate-layers.toml`, described in Appendix D of the book. The client and
+server gates run the check, so both gates need Python 3.11 or newer (for
+`tomllib`); run it and its tests directly with:
+
+```sh
+python3 scripts/check-crate-layers.py
+python3 -m unittest discover -s scripts -p 'test_check_crate_layers.py'
+```
+
 - The complete desktop and release workflow and platform prerequisites are documented in
   [`apps/desktop/src-tauri/README.md`](apps/desktop/src-tauri/README.md).
 - Protocol and server validation live under [`tools/foks-server/`](tools/foks-server/)

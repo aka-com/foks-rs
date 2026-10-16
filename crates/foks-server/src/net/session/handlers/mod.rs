@@ -163,12 +163,23 @@ pub(super) async fn kex_receive_response(
     kex::receive_response(data, call).await
 }
 
+/// Answers an inbox poll while holding, once the certificate is
+/// authenticated, one of its account's `maximum_realtime_polls_per_account`
+/// slots. A poll without a free slot is rate limited.
 pub(super) async fn realtime_poll_response(
     data: &ServerData,
     call: RoutedCall,
-    certificate: Vec<u8>,
+    certificate: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, RpcStatus> {
+    let certificate = certificate.ok_or_else(super::permission_denied)?;
     realtime::poll_response(data, call, certificate).await
+}
+
+pub(super) async fn sso_poll_response(
+    data: &ServerData,
+    call: RoutedCall,
+) -> Result<Vec<u8>, RpcStatus> {
+    registration::poll_oauth2_session_response(data, call).await
 }
 
 #[cfg(test)]

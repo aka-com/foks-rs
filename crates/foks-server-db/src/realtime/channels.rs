@@ -107,8 +107,10 @@ impl Database {
             params![md.team.entity().as_bytes()],
             |r| r.get(0),
         )?;
+        // An admission refusal before commit: QuotaExceeded maps to 1060,
+        // which clients record as a definite rejection.
         if count >= Limits::CHANNELS_PER_TEAM as i64 {
-            return Err(Error::Capacity("realtime channels"));
+            return Err(Error::QuotaExceeded);
         }
         tx.execute("INSERT INTO rt_channel_sets(team_id,app_id,version,mtime) VALUES (?1,1,?2,?3)
             ON CONFLICT(team_id,app_id) DO UPDATE SET version=excluded.version,mtime=excluded.mtime",params![md.team.entity().as_bytes(),next,sql_integer(md.mtime)?])?;

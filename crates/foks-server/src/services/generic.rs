@@ -9,7 +9,8 @@ use foks_rpc::RpcStatus;
 use crate::auth::Principal;
 use crate::keys::HostKeyProvider;
 use crate::merkle::decode_stored_root as decode_root;
-use crate::{net::session::OwnedPassphraseMutation, WriterHandle};
+use crate::services::passphrase::OwnedPassphraseMutation;
+use crate::WriterHandle;
 
 pub(crate) enum PassphraseCompanion {
     Set(OwnedPassphraseMutation),
@@ -300,7 +301,8 @@ pub(crate) fn load_for_entity(
     if start == 0 || start > maximum_start {
         return Err(bad_arguments("generic-chain start is out of range"));
     }
-    let start_index = usize::try_from(start - 1).map_err(internal)?;
+    let start_index =
+        usize::try_from(start - 1).map_err(|_| crate::status::invariant("generic"))?;
     let selected = &chain.links[start_index..];
     let exact_links = selected
         .iter()
@@ -382,10 +384,10 @@ fn stored_role(role_type: u64, visibility: i64) -> Result<Role, RpcStatus> {
     match role_type {
         1 => i16::try_from(visibility)
             .map(Role::member)
-            .map_err(internal),
+            .map_err(|_| internal(foks_server_db::Error::Invalid("stored role"))),
         2 if visibility == 0 => Ok(Role::ADMIN),
         3 if visibility == 0 => Ok(Role::OWNER),
-        _ => Err(RpcStatus::TransactionRetry),
+        _ => Err(internal(foks_server_db::Error::Invalid("stored role"))),
     }
 }
 
@@ -422,16 +424,14 @@ fn decode_root_status(root: &foks_server_db::RootSnapshot) -> Result<MerkleRoot,
     decode_root(root).map_err(internal)
 }
 
-fn map_write_error(error: crate::Error) -> RpcStatus {
-    if let Some(status) = crate::error::mutation_failure_status(&error) {
+pub(super) fn map_write_error(error: crate::Error) -> RpcStatus {
+    if let Some(status) = crate::status::shared(&error, "generic_write") {
         return status;
     }
     match error {
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
         crate::Error::Database(foks_server_db::Error::InvitationAlreadyPending) => {
             RpcStatus::TeamInviteAlreadyAccepted
         }
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
         crate::Error::Database(foks_server_db::Error::StaleRoot) => RpcStatus::StaleRoot,
         crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
         crate::Error::Database(foks_server_db::Error::PassphraseNotFound) => {
@@ -452,6 +452,6 @@ fn bad_arguments(_: impl std::fmt::Display) -> RpcStatus {
     RpcStatus::BadArguments("invalid generic-chain request".to_owned())
 }
 
-fn internal(_: impl std::fmt::Display) -> RpcStatus {
-    RpcStatus::TransactionRetry
+fn internal(error: impl Into<crate::Error>) -> RpcStatus {
+    crate::status::internal(error, "generic")
 }

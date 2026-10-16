@@ -7,9 +7,55 @@ pub use realtime::{FanoutMetricsSnapshot, RealtimeMetricsSnapshot, ReconcileMetr
 pub use checkpoint::CheckpointMetricsSnapshot;
 pub(crate) use checkpoint::BUCKET_MICROS as CHECKPOINT_BUCKET_MICROS;
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
+
+/// The `family` label of a response written before the request was routed:
+/// a per-address rate-limit refusal, an unknown method, a method on the wrong
+/// listener or an argument over the method limit.
+pub(crate) const UNROUTED: &str = "unrouted";
+
+/// A refused connection or request, labeled `reason` in
+/// `foks_admission_rejected_total`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdmissionRejection {
+    /// The source's connection token bucket was empty.
+    ConnectionRate,
+    /// The source already held its maximum connections on the listener.
+    SourceConnections,
+    /// The listener's queue of accepted connections was full.
+    AdmissionQueue,
+    /// The source's request token bucket was empty.
+    RequestRate,
+    /// Every blocking request handler permit was in use.
+    RequestHandlers,
+    /// The account already held its maximum realtime inbox polls.
+    AccountRealtimePolls,
+}
+
+impl AdmissionRejection {
+    pub const ALL: [Self; 6] = [
+        Self::ConnectionRate,
+        Self::SourceConnections,
+        Self::AdmissionQueue,
+        Self::RequestRate,
+        Self::RequestHandlers,
+        Self::AccountRealtimePolls,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ConnectionRate => "connection_rate",
+            Self::SourceConnections => "source_connections",
+            Self::AdmissionQueue => "admission_queue",
+            Self::RequestRate => "request_rate",
+            Self::RequestHandlers => "request_handlers",
+            Self::AccountRealtimePolls => "account_realtime_polls",
+        }
+    }
+}
 
 #[derive(Default)]
 struct DurationMetric {
@@ -61,6 +107,8 @@ pub struct ServerMetricsSnapshot {
     pub active_realtime_polls: u64,
     pub rate_limited_connections: u64,
     pub rate_limited_requests: u64,
+    pub reader_pool_exhausted: u64,
+    pub reader_pool_open: u64,
     pub request_duration_observations: u64,
     pub request_duration_microseconds_total: u64,
     pub request_duration_microseconds_max: u64,
@@ -75,6 +123,7 @@ pub struct ServerMetricsSnapshot {
     pub backup_duration_microseconds_total: u64,
     pub backup_duration_microseconds_max: u64,
     pub storage_sample_failures: u64,
+    pub oidc_sample_failures: u64,
     pub maintenance_attempts: u64,
     pub maintenance_successes: u64,
     pub maintenance_failures: u64,
@@ -87,6 +136,9 @@ pub struct ServerMetricsSnapshot {
     /// Transient accept() failures across all listeners, indexed by
     /// `AcceptErrorKind` discriminant.
     pub accept_errors: [u64; crate::AcceptErrorKind::ALL.len()],
+    /// Refused connections and requests, indexed by `AdmissionRejection`
+    /// discriminant.
+    pub admission_rejections: [u64; AdmissionRejection::ALL.len()],
 }
 
 #[derive(Default)]
@@ -106,6 +158,10 @@ pub struct ServerMetrics {
     active_realtime_polls: AtomicU64,
     rate_limited_connections: AtomicU64,
     rate_limited_requests: AtomicU64,
+    reader_pool_exhausted: AtomicU64,
+    reader_pool_open: AtomicU64,
+    /// Written responses keyed by route family and wire status code.
+    request_outcomes: Mutex<BTreeMap<(&'static str, u64), u64>>,
     request_duration: DurationMetric,
     handler_duration: DurationMetric,
     backup_attempts: AtomicU64,
@@ -114,6 +170,7 @@ pub struct ServerMetrics {
     last_backup_success_unixtime: AtomicU64,
     backup_duration: DurationMetric,
     storage_sample_failures: AtomicU64,
+    oidc_sample_failures: AtomicU64,
     maintenance_attempts: AtomicU64,
     maintenance_successes: AtomicU64,
     maintenance_failures: AtomicU64,
@@ -124,6 +181,7 @@ pub struct ServerMetrics {
     reclaimed_upload_bytes: AtomicU64,
     upload_cleanup_deferred_passes: AtomicU64,
     accept_errors: [AtomicU64; crate::AcceptErrorKind::ALL.len()],
+    admission_rejections: [AtomicU64; AdmissionRejection::ALL.len()],
 }
 
 impl ServerMetrics {
@@ -173,6 +231,8 @@ impl ServerMetrics {
             active_realtime_polls: self.active_realtime_polls.load(Ordering::Relaxed),
             rate_limited_connections: self.rate_limited_connections.load(Ordering::Relaxed),
             rate_limited_requests: self.rate_limited_requests.load(Ordering::Relaxed),
+            reader_pool_exhausted: self.reader_pool_exhausted.load(Ordering::Relaxed),
+            reader_pool_open: self.reader_pool_open.load(Ordering::Relaxed),
             request_duration_observations: request_duration.observations,
             request_duration_microseconds_total: request_duration.microseconds_total,
             request_duration_microseconds_max: request_duration.microseconds_max,
@@ -187,6 +247,7 @@ impl ServerMetrics {
             backup_duration_microseconds_total: backup_duration.microseconds_total,
             backup_duration_microseconds_max: backup_duration.microseconds_max,
             storage_sample_failures: self.storage_sample_failures.load(Ordering::Relaxed),
+            oidc_sample_failures: self.oidc_sample_failures.load(Ordering::Relaxed),
             maintenance_attempts: self.maintenance_attempts.load(Ordering::Relaxed),
             maintenance_successes: self.maintenance_successes.load(Ordering::Relaxed),
             maintenance_failures: self.maintenance_failures.load(Ordering::Relaxed),
@@ -204,6 +265,10 @@ impl ServerMetrics {
                 .load(Ordering::Relaxed),
             accept_errors: self
                 .accept_errors
+                .each_ref()
+                .map(|count| count.load(Ordering::Relaxed)),
+            admission_rejections: self
+                .admission_rejections
                 .each_ref()
                 .map(|count| count.load(Ordering::Relaxed)),
         }
@@ -227,16 +292,42 @@ impl ServerMetrics {
         }
     }
 
-    pub(crate) fn response_completed(&self) {
+    /// Counts a written response. `family` is the route's protocol name, or
+    /// [`UNROUTED`] for a request answered without a route, and `status` is
+    /// the wire status code, `STATUS_OK` for a success.
+    pub(crate) fn response_completed(&self, family: &'static str, status: u64) {
         self.responses_completed.fetch_add(1, Ordering::Relaxed);
+        let mut outcomes = self
+            .request_outcomes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *outcomes.entry((family, status)).or_default() += 1;
+    }
+
+    /// Returns the written responses as `(family, status, count)`, ordered by
+    /// family and status code.
+    pub(crate) fn request_outcomes(&self) -> Vec<(&'static str, u64, u64)> {
+        self.request_outcomes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(&(family, status), &count)| (family, status, count))
+            .collect()
     }
 
     pub(crate) fn connection_accepted(&self) {
         self.connections_accepted.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Counts a connection refused because the listener's admission queue
+    /// was full.
     pub(crate) fn connection_rejected(&self) {
         self.connections_rejected.fetch_add(1, Ordering::Relaxed);
+        self.admission_rejected(AdmissionRejection::AdmissionQueue);
+    }
+
+    pub(crate) fn admission_rejected(&self, reason: AdmissionRejection) {
+        self.admission_rejections[reason as usize].fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn connection_opened(&self) {
@@ -261,10 +352,28 @@ impl ServerMetrics {
     pub(crate) fn connection_rate_limited(&self) {
         self.rate_limited_connections
             .fetch_add(1, Ordering::Relaxed);
+        self.admission_rejected(AdmissionRejection::ConnectionRate);
     }
 
-    pub(crate) fn request_rate_limited(&self) {
+    /// Counts a request refused by the source's request token bucket
+    /// (`RequestRate`) or by saturated handler permits (`RequestHandlers`).
+    pub(crate) fn request_rate_limited(&self, reason: AdmissionRejection) {
         self.rate_limited_requests.fetch_add(1, Ordering::Relaxed);
+        self.admission_rejected(reason);
+    }
+
+    /// Counts a request refused because every pooled read connection was in
+    /// use. This is separate from the per-address token bucket.
+    pub(crate) fn reader_pool_exhausted(&self) {
+        self.reader_pool_exhausted.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records that the request reader pool holds `open` connections. The
+    /// pool never closes a connection it opened, so the gauge keeps the
+    /// largest count reported, whatever order concurrent leases report in.
+    pub(crate) fn reader_pool_opened(&self, open: usize) {
+        let open = u64::try_from(open).unwrap_or(u64::MAX);
+        self.reader_pool_open.fetch_max(open, Ordering::Relaxed);
     }
 
     pub(crate) fn backup_attempted(&self) {
@@ -326,6 +435,10 @@ impl ServerMetrics {
     pub(crate) fn storage_sample_failed(&self) {
         self.storage_sample_failures.fetch_add(1, Ordering::Relaxed);
     }
+
+    pub(crate) fn oidc_sample_failed(&self) {
+        self.oidc_sample_failures.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 pub(crate) struct RealtimePollGuard {
@@ -363,5 +476,32 @@ impl Drop for HandlerTimer {
         self.metrics
             .handler_duration
             .observe(self.started.elapsed());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn responses_are_counted_by_family_and_status() {
+        let metrics = ServerMetrics::default();
+        metrics.response_completed("KvStore", foks_rpc::STATUS_OK);
+        metrics.response_completed("KvStore", foks_rpc::STATUS_OK);
+        metrics.response_completed("KvStore", foks_rpc::STATUS_TX_RETRY_ERROR);
+        metrics.response_completed(UNROUTED, foks_rpc::STATUS_RATE_LIMIT_ERROR);
+        metrics.reader_pool_exhausted();
+        assert_eq!(
+            metrics.request_outcomes(),
+            [
+                ("KvStore", foks_rpc::STATUS_OK, 2),
+                ("KvStore", foks_rpc::STATUS_TX_RETRY_ERROR, 1),
+                (UNROUTED, foks_rpc::STATUS_RATE_LIMIT_ERROR, 1),
+            ]
+        );
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.responses_completed, 4);
+        assert_eq!(snapshot.reader_pool_exhausted, 1);
+        assert_eq!(snapshot.rate_limited_requests, 0);
     }
 }

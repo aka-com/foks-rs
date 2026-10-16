@@ -50,7 +50,10 @@ with that trade.
 The Rust server sets its writer connection to WAL mode with `synchronous =
 FULL` (every commit is flushed to stable storage before it is acknowledged),
 `foreign_keys = ON`, `trusted_schema = OFF`, and a hard page-count ceiling
-so that a full disk produces a clean quota error rather than corruption.
+so that a full disk produces a clean quota error rather than corruption. A
+write that reaches the ceiling fails with `SQLITE_FULL`, and every route that
+writes reports it to the client as status 1060 (over quota). This includes the
+SSO access-token refresh that runs before an authenticated request.
 
 | Writer connection pragma | Value |
 |---|---|
@@ -84,6 +87,7 @@ property of one actor.
    +-------------------------+
    | writer thread           |   one OS thread, one RW connection
    |   recv job              |
+   |   skip if past deadline |   (the request already timed out)
    |   re-check credential   |   (active_credential_owner, sso_require_access)
    |   sample clock          |
    |   run closure in txn    |
@@ -124,6 +128,22 @@ reads the clock inside the closure, not at enqueue time, so timestamps stay
 monotone with the total order the writer imposes. A test pins this: a job
 queued behind a slow one records a time after the slow one finished.
 
+**A job whose request has timed out is skipped.** An RPC session waits at
+most the request execution timeout (30 s) for its handler, then closes the
+connection without a response, and the client treats the outcome as
+ambiguous. The handler's writer handle carries that deadline. If the writer
+reaches a queued job at or after it, the job is answered with
+`DeadlineExceeded` without opening a transaction and is counted in
+`foks_writer_expired_total`. A job submitted after the deadline is refused
+the same way before it enters the queue, so it does not take a queue slot from
+a request that is still waiting. The client already has to allow for the write
+having happened or not, so skipping a job that never started is safe, and
+under overload it keeps the writer on requests that are still waiting. A job
+that has started runs to completion; SQLite work is not cancelled midway.
+The SSO access refresh that request authorization can trigger carries no
+deadline: it commits a claim, calls the provider and must then commit the
+rotated refresh token.
+
 Queue wait and execution time are measured per job into counters that the
 metrics endpoint exposes, so an operator can see the queue filling before
 callers see rejections.
@@ -151,10 +171,19 @@ registry of inodes.
 
 Network reads go through read-only connections opened with
 `SQLITE_OPEN_READ_ONLY | NO_MUTEX | NOFOLLOW`. Each validates the
-application ID and schema version before use. The pool is a vector of idle
-connections behind a mutex; it opens connections lazily up to a maximum
-(default 32) and, when exhausted, returns `Error::ReaderPool` rather than
-waiting. A lease returns its connection to the pool on drop.
+application ID and schema version before use. Pooled connections, the
+administration readers and the metrics reader use
+`ReadDatabase::open_pooled`, which skips the KV-tree capacity check that
+`ReadDatabase::open` runs. That check reads every row of the KV head, node
+and dirent tables; the writer already ran it when it opened the database
+at startup. Offline commands and backup and restore verification keep the
+full check. The pool is a vector of idle connections behind a mutex; it
+opens connections lazily up to a maximum (default 32) and, when exhausted,
+returns `Error::ReaderPool` rather than waiting. The request is answered
+with status 1012 and counted in `foks_reader_pool_exhausted_total`, apart
+from the per-address rate limit. A lease returns its connection to the pool
+on drop; the pool never closes a connection it opened, and the
+`foks_reader_pool_open` gauge reports how many it holds.
 
 A `ReadSnapshot` wraps a read transaction on one of these connections and
 is the unit of consistency: every query inside it sees the same WAL state.
@@ -174,11 +203,13 @@ mechanism differs by resource.
 | Reader pool | 32 connections | `Error::ReaderPool`; status 1012 |
 | Listener admission queue | 32 pending connections | `try_send` fails; connection dropped |
 | Active sessions per listener | 256 | accept loop waits for a permit |
+| Connections per source per listener | 32, loopback exempt | connection dropped |
 | Request handlers (shared) | 64 blocking permits | `try_acquire_owned` fails; status 1012 |
-| Long-poll handlers | min(64, 32) = 32 permits | as above |
+| Realtime inbox polls | 8 per account; 256 in total (the authenticated listener's sessions) | status 1012 |
+| Realtime poll state reads | 16 readers (half the reader pool) | reads wait for a permit |
 | Request memory | 64 MiB, 2 × frame length reserved per frame | frames wait for permits |
 | Frame size | 16 MiB | rejected before allocation |
-| Request execution timeout | 30 s | connection closed |
+| Request execution timeout | 30 s | connection closed; a write still queued is skipped |
 | I/O timeout | 15 s | connection closed |
 
 Handlers run on blocking threads under a semaphore, and they acquire their
@@ -198,7 +229,7 @@ exhausting memory.
 
 ### Token buckets
 
-Per-IP rate limiting uses the *token bucket*, a standard algorithm from
+Per-source rate limiting uses the *token bucket*, a standard algorithm from
 network traffic shaping. A bucket holds up to B tokens and is refilled at a
 rate of r tokens per second. Each admitted event removes one token; an
 event arriving when the bucket is empty is refused. The parameter B sets
@@ -209,16 +240,32 @@ remains.
 
 | Bucket | Burst (B) | Rate (r) |
 |---|---|---|
-| Connections per IP | 512 | 256 per second |
-| Framed requests per IP | 2,000 | 1,000 per second |
+| Connections per source | 512 | 256 per second |
+| Framed requests per source | 2,000 | 1,000 per second |
 
-The subtlety is memory. A naive per-IP map grows without bound when an
+A source is an IPv4 address or an IPv6 /64 prefix (the prefix length is
+configurable). An IPv6 host is usually assigned a whole /64 and can pick
+any address in it, so a bucket per full IPv6 address would give one host
+2^64 buckets.
+
+The subtlety is memory. A naive per-source map grows without bound when an
 attacker cycles source addresses. The server keeps its buckets in a
-least-recently-used cache capped at 4,096 addresses; when a new address
+least-recently-used cache capped at 4,096 sources; when a new source
 arrives at capacity, the bucket used longest ago is evicted. An evicted
-address that returns gets a full bucket, which is a small leniency in
+source that returns gets a full bucket, which is a small leniency in
 exchange for a hard memory bound. A request that exceeds its bucket gets
 status 1012 and the connection is closed.
+
+Token buckets limit the rate of new work, not how much a source holds at
+once. A source within its connection burst could otherwise open every
+active-session slot and keep each one with a long poll. Each listener
+therefore also counts the connections a source holds, from acceptance
+until the session ends, and closes a new connection beyond 32. Loopback
+peers are exempt, since behind a local TCP proxy every client would appear
+as one loopback source. Realtime inbox polls are limited in the same way per
+account rather than per source: one account holds at most 8, so it cannot
+take every poll slot from other users. Every refusal is counted in
+`foks_admission_rejected_total` with a `reason` label.
 
 ## Schema versioning and single-transaction upgrades
 

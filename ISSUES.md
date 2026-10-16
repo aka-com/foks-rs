@@ -136,21 +136,6 @@ Required resolution:
 - Add distributed-source flood tests and prove that authenticated administrators
   can still list and decide existing requests at capacity.
 
-## Stage 6 — Realtime fanout and configurable team capacity
-
-**Priority: lower.** Realtime mutations refuse to proceed after scanning more than
-1,024 direct membership rows. The default server team-member limit is 64, but the
-configurable `maximum_team_members` setting has no upper-bound relationship to the
-fixed realtime fanout limit. Raising team capacity above 1,024 can therefore make
-channel creation and message sending fail for that team.
-
-Required resolution:
-
-- Reject incompatible server configuration, derive realtime fanout from the team
-  limit, or implement bounded/paged fanout with atomic delivery semantics.
-- Add a configuration relationship test and an operator-facing error before a team
-  crosses the usable chat boundary.
-
 ## Deferred extended-chat prerequisite
 
 The extension capability method uses a locally selected method position rather

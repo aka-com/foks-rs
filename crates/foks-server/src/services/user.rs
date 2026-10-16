@@ -286,34 +286,26 @@ pub(crate) fn authorize_database(
     Ok(())
 }
 
-fn map_yubi_write_error(error: crate::Error) -> RpcStatus {
+pub(super) fn map_yubi_write_error(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::AuthorizationChanged
-        | crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
-            permission_denied()
-        }
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        crate::Error::Database(foks_server_db::Error::QuotaExceeded) => RpcStatus::QuotaExceeded,
+        crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
         crate::Error::Database(foks_server_db::Error::Invalid(message)) => bad_arguments(message),
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::unmapped(other, "yubi_write"),
     }
 }
 
 fn map_yubi_database_error(error: foks_server_db::Error) -> RpcStatus {
     match error {
         foks_server_db::Error::AuthorizationChanged => permission_denied(),
-        _ => RpcStatus::TransactionRetry,
+        other => crate::status::storage(&other, "yubi_database")
+            .unwrap_or_else(|| crate::status::internal(other, "yubi_database")),
     }
 }
 
-fn map_device_nag_write_error(error: crate::Error) -> RpcStatus {
+pub(super) fn map_device_nag_write_error(error: crate::Error) -> RpcStatus {
     match error {
-        crate::Error::AuthorizationChanged
-        | crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => {
-            permission_denied()
-        }
-        crate::Error::WriterQueue => RpcStatus::RateLimited,
-        _ => RpcStatus::TransactionRetry,
+        crate::Error::Database(foks_server_db::Error::AuthorizationChanged) => permission_denied(),
+        other => crate::status::unmapped(other, "device_nag_write"),
     }
 }
 
@@ -695,7 +687,7 @@ fn validate_root(root: &foks_server_db::RootSnapshot) -> Result<(), RpcStatus> {
     Ok(())
 }
 
-fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
+pub(super) fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
     let mut message = error.to_string();
     if message.len() > 160 {
         let mut end = 160;
@@ -707,6 +699,6 @@ fn bad_arguments(error: impl std::fmt::Display) -> RpcStatus {
     RpcStatus::BadArguments(message)
 }
 
-fn permission_denied() -> RpcStatus {
+pub(super) fn permission_denied() -> RpcStatus {
     RpcStatus::PermissionDenied("active device does not authorize this request".to_owned())
 }
