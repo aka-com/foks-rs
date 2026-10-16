@@ -18,6 +18,7 @@ pub use chunk_ledger::{inventory_chunk_store, ChunkCapacityConfig};
 pub mod chunks;
 mod config;
 mod diagnostics;
+mod deadline;
 mod entropy;
 mod error;
 mod fault;

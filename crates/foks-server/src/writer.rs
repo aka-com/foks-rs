@@ -17,6 +17,7 @@ struct Call<F, T> {
     operation: F,
     response: SyncSender<Result<T>>,
     queued_at: Instant,
+    deadline: Option<crate::deadline::Deadline>,
     timing: Arc<WriterTiming>,
     reconciliation: Option<(
         Arc<crate::ServerMetrics>,
@@ -37,17 +38,21 @@ where
             operation,
             response,
             queued_at,
+            deadline,
             timing,
             reconciliation,
         } = *self;
         let queue_wait = queued_at.elapsed();
         timing.observe_queue_wait(queue_wait);
         let started = Instant::now();
-        let result = if let Some(resources) = resources.as_ref() {
-            resources.sync(|| operation(database))
-        } else {
-            operation(database)
-        };
+        let result = crate::deadline::scope(deadline, || {
+            crate::deadline::check()?;
+            if let Some(resources) = resources.as_ref() {
+                resources.sync(|| operation(database))
+            } else {
+                operation(database)
+            }
+        });
         let execution = started.elapsed();
         timing.observe_execution(execution);
         if let Some((metrics, source)) = reconciliation {
@@ -244,9 +249,12 @@ impl WriterHandle {
             queue: Arc::clone(&self.queue),
             authorization: None,
         };
-        accounting.call(move |db| {
-            db.settle_chunk_publication(&token, success)?;
-            Ok(())
+        // This is completion of already admitted work, not a new mutation.
+        crate::deadline::scope(None, || {
+            accounting.call(move |db| {
+                db.settle_chunk_publication(&token, success)?;
+                Ok(())
+            })
         })
     }
     pub(crate) fn confirm_chunk_presence(
@@ -257,9 +265,11 @@ impl WriterHandle {
             queue: Arc::clone(&self.queue),
             authorization: None,
         };
-        accounting.call(move |db| {
-            db.confirm_chunk_presence(&token)?;
-            Ok(())
+        crate::deadline::scope(None, || {
+            accounting.call(move |db| {
+                db.confirm_chunk_presence(&token)?;
+                Ok(())
+            })
         })
     }
 
@@ -299,6 +309,8 @@ impl WriterHandle {
         F: FnOnce(&mut Database) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
+        crate::deadline::check()?;
+        let deadline = crate::deadline::current();
         let authorization = self.authorization.clone();
         let operation = move |database: &mut Database| {
             if let Some(auth) = authorization {
@@ -328,6 +340,7 @@ impl WriterHandle {
         if !*accepting {
             return Err(Error::WriterQueue);
         }
+        crate::deadline::check()?;
         self.queue.pending.fetch_add(1, Ordering::AcqRel);
         if self
             .queue
@@ -337,6 +350,7 @@ impl WriterHandle {
                 operation,
                 response,
                 queued_at: Instant::now(),
+                deadline,
                 timing: Arc::clone(&self.queue.timing),
                 reconciliation,
             })))
@@ -479,6 +493,67 @@ impl std::ops::DerefMut for GuardedDatabase<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expired_queued_task_cannot_mutate_but_cleanup_can_complete() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut db = Database::open(temporary.path().join("db"), Default::default()).unwrap();
+        let deadline = crate::deadline::Deadline::after(std::time::Duration::ZERO).unwrap();
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let executed = Arc::clone(&ran);
+        let (response, receiver) = mpsc::sync_channel(1);
+        // Inject a task at the dequeue boundary with an already consumed budget;
+        // no sleeps or scheduler timing are needed to exercise the real worker.
+        let task = Call {
+            operation: move |_: &mut Database| {
+                executed.store(true, Ordering::Release);
+                Ok(())
+            },
+            response,
+            queued_at: Instant::now(),
+            deadline: Some(deadline),
+            timing: Arc::new(WriterTiming::default()),
+            reconciliation: None,
+            resources: None,
+        };
+        Box::new(task).run(&mut db);
+        assert!(matches!(receiver.recv().unwrap(), Err(Error::Io(e))
+            if e.kind() == std::io::ErrorKind::TimedOut));
+        assert!(!ran.load(Ordering::Acquire));
+        let writer_path = temporary.path().join("writer");
+        let mut accounting_db = Database::open(&writer_path, Default::default()).unwrap();
+        let connection = rusqlite::Connection::open(&writer_path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO host_metadata VALUES(1,?1,'test',X'',X'')",
+                [[4u8; 33].as_slice()],
+            )
+            .unwrap();
+        drop(connection);
+        let binding = accounting_db
+            .prepare_chunk_storage_binding(&[5; 16], "test", false)
+            .unwrap();
+        accounting_db
+            .activate_chunk_storage_binding(&binding)
+            .unwrap();
+        accounting_db.confirm_empty_chunk_inventory().unwrap();
+        let token = accounting_db
+            .reserve_chunk_object(&[1; 32], 10, &[2; 16], 1)
+            .unwrap();
+        drop(accounting_db);
+        let writer = Writer::start(writer_path, Default::default(), 2).unwrap();
+        crate::deadline::scope(Some(deadline), || {
+            assert!(writer.call(|_| Ok(())).is_err());
+            writer
+                .handle()
+                .settle_chunk_publication(token, true)
+                .unwrap();
+            assert!(crate::deadline::check().is_err());
+        });
+        let usage = writer.call(|db| Ok(db.chunk_physical_usage()?)).unwrap();
+        assert_eq!(usage.present_bytes, 10);
+        assert_eq!(usage.unresolved_attempts, 0);
+    }
 
     #[test]
     fn schema_upgrade_waits_for_exclusive_writer_ownership() {
