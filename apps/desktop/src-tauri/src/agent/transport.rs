@@ -75,6 +75,18 @@ impl AgentError {
             ErrorCode::SubmissionActiveFull => ("submission-active-full", false),
             ErrorCode::SubmissionIdentityConflict => ("submission-identity-conflict", false),
             ErrorCode::SubmissionFuture => ("submission-future", false),
+            // Upload admission requires reconciliation, capacity cleanup, or
+            // explicit clock repair. Replaying automatically must not consume
+            // the source again or replace a generation-bound upload identity.
+            ErrorCode::UploadExpired => ("upload-expired", false),
+            ErrorCode::UploadIdentityConflict => ("upload-identity-conflict", false),
+            ErrorCode::UploadGenerationMismatch => ("upload-generation-mismatch", false),
+            ErrorCode::UploadLegacyReadOnly => ("upload-legacy-read-only", false),
+            ErrorCode::UploadPendingFull => ("upload-pending-full", false),
+            ErrorCode::UploadRetentionFull => ("upload-retention-full", false),
+            ErrorCode::UploadSpoolFull => ("upload-spool-full", false),
+            ErrorCode::UploadClockUntrusted => ("upload-clock-untrusted", false),
+            ErrorCode::UploadFuture => ("upload-future", false),
             ErrorCode::WebAdminUnsupported => ("web-admin-unsupported", false),
             ErrorCode::WebAdminExpired => ("web-admin-expired", true),
             ErrorCode::WebAdminWrongAccount => ("web-admin-wrong-account", false),

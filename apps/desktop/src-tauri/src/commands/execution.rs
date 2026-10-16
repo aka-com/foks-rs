@@ -101,9 +101,11 @@ pub(super) fn execute_kv_mutation(
                 .map_err(|error| map_mutation_error(error, kind))?;
         }
         KvAccountMutation::Stream {
-            header,
+            mut header,
             mut content,
         } => {
+            foks_desktop::ensure_upload_identity(transport, &mut header)
+                .map_err(|error| map_mutation_error(error, kind))?;
             let mut reader = std::io::Cursor::new(content.as_mut_slice());
             transport
                 .put_kv_stream(header, &mut reader)

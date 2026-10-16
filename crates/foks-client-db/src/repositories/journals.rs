@@ -94,6 +94,9 @@ impl HardStateStore {
                 completion
             ],
         )?;
+        // Upload cleanup must also own ancillary children created after the
+        // immutable upload manifest bound this adapter parent.
+        transaction.execute("INSERT INTO kv_upload_children(upload_id,child_id) SELECT operation_id,?2 FROM kv_uploads WHERE adapter_parent=?1",params![parent_id.as_slice(),operation.operation_id])?;
         transaction.commit()?;
         Ok(())
     }

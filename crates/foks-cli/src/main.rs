@@ -113,6 +113,9 @@ enum ProfileCommand {
         name: String,
         #[arg(long)]
         confirm_delete: bool,
+        /// Recover an interrupted publication or erase local state even when credentials are unreadable.
+        #[arg(long, requires = "confirm_delete")]
+        best_effort: bool,
     },
     /// Applies a signed compatibility lease or drift revocation artifact.
     ApplyCompatibilityArtifact {
@@ -885,6 +888,7 @@ fn profile_command(
         ProfileCommand::ResetHardState {
             name,
             confirm_delete,
+            best_effort,
         } => {
             if !confirm_delete {
                 return Err(
@@ -894,11 +898,23 @@ fn profile_command(
             }
             let credentials = ClientCredentials::open(state_dir)?;
             let session = ProfileSession::open(&registry, &name)?;
-            credentials.reset_hard_state(&session)?;
+            let retained = if best_effort {
+                let preview = credentials.describe_reset_state_best_effort(&session)?;
+                credentials
+                    .reset_hard_state_best_effort_if_matches(&session, preview.state_digest())?
+                    .credential_records_retained
+            } else {
+                credentials.reset_hard_state(&session)?;
+                None
+            };
+            let message = match &retained {
+                Some(reason) => format!("local profile state deleted; unreadable credential records were retained: {reason}. Repair credentials before using this state root"),
+                None => "external checkpoint and local profile state deleted; probe the profile again before use".to_owned(),
+            };
             output(
                 json,
-                &serde_json::json!({ "profile": name, "hard_state_reset": true }),
-                "external checkpoint and hard-state database deleted; probe the profile again before use",
+                &serde_json::json!({ "profile": name, "hard_state_reset": true, "credential_records_retained": retained }),
+                &message,
             )
         }
         ProfileCommand::ApplyCompatibilityArtifact { name, artifact } => {
@@ -1192,11 +1208,16 @@ fn kv_command(
             mkdir_p,
         } => {
             let session = ProfileSession::open(&registry, &profile)?;
+            retention::preflight(state_dir, &session);
             with_vault(state_dir, &session, |session, vault, master| {
-                let id = foks_client_app::new_kv_upload_id()?;
+                let id = foks_client_app::new_kv_upload_id(session.kv_upload_issuance(
+                    &account_alias,
+                    None,
+                    vault,
+                )?)?;
                 let mut file = File::open(input)?;
                 let report = if file.metadata()?.len() > 2040 {
-                    eprintln!("Upload recovery handle: {}", hex(&id));
+                    eprintln!("Upload recovery handle: {id}");
                     session.put_kv_file_identified(
                         &account_alias,
                         &path,
@@ -2550,9 +2571,96 @@ fn output(
     Ok(())
 }
 
+fn parse_upload_id(
+    input: &str,
+) -> Result<foks_agent_proto::UploadHandle, Box<dyn std::error::Error>> {
+    Ok(input.parse()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn best_effort_reset_is_explicit_and_preserves_exact_default() {
+        assert!(Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-reset-test",
+            "profile",
+            "reset-hard-state",
+            "local",
+            "--best-effort",
+        ])
+        .is_err());
+        let parsed = Arguments::try_parse_from([
+            "foks-rs",
+            "--state-dir",
+            "/tmp/foks-reset-test",
+            "profile",
+            "reset-hard-state",
+            "local",
+            "--best-effort",
+            "--confirm-delete",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.command,
+            Command::Profile(ProfileCommand::ResetHardState {
+                best_effort: true,
+                confirm_delete: true,
+                ..
+            })
+        ));
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("state");
+        initialize(&state, false, CredentialBackend::PrivateFile).unwrap();
+        let credentials = ClientCredentials::open(&state).unwrap();
+        let mut registry = ProfileRegistry::open(&state).unwrap();
+        registry
+            .add(foks_client_app::Profile {
+                name: "local".into(),
+                label: None,
+                probe: "foks.app".into(),
+                protocol: foks_client_app::ProtocolPolicy::V019,
+                trust: foks_client_app::TrustRoot::WebPki,
+            })
+            .unwrap();
+        let session = ProfileSession::open(&registry, "local").unwrap();
+        credentials
+            .with_checked_session(&session, |_| Ok::<_, foks_client_app::Error>(()))
+            .unwrap();
+        drop(session);
+        drop(registry);
+        drop(credentials);
+        std::fs::write(state.join("master.key"), b"short").unwrap();
+        let database = state.join("profiles/local/hard.sqlite3");
+        for (confirm_delete, best_effort) in [(true, false), (false, true)] {
+            assert!(profile_command(
+                &state,
+                true,
+                ProfileCommand::ResetHardState {
+                    name: "local".into(),
+                    confirm_delete,
+                    best_effort,
+                }
+            )
+            .is_err());
+            assert!(database.exists());
+        }
+        profile_command(
+            &state,
+            true,
+            ProfileCommand::ResetHardState {
+                name: "local".into(),
+                confirm_delete: true,
+                best_effort: true,
+            },
+        )
+        .unwrap();
+        assert!(!database.exists());
+        assert!(state.join("checkpoint-authority/authority-v1.fks").exists());
+    }
 
     #[test]
     fn init_and_profile_commands_use_only_the_explicit_state_root() {
@@ -2855,15 +2963,4 @@ mod tests {
         assert_eq!(MemberAccessArgument::Restricted.visibility(), -0x4000);
         assert_eq!(MemberAccessArgument::Standard.visibility(), 0);
     }
-}
-
-fn parse_upload_id(input: &str) -> Result<[u8; 16], Box<dyn std::error::Error>> {
-    if input.len() != 32 {
-        return Err("upload handle must have 32 hexadecimal characters".into());
-    }
-    let mut id = [0; 16];
-    for (out, pair) in id.iter_mut().zip(input.as_bytes().chunks_exact(2)) {
-        *out = u8::from_str_radix(std::str::from_utf8(pair)?, 16)?;
-    }
-    Ok(id)
 }

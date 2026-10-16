@@ -32,6 +32,12 @@ pub trait ProtectedMutationStore {
         Ok(false)
     }
 
+    /// Persist prior removals before a durable cleanup cursor advances.
+    /// In-memory stores and stores whose remove already commits durably need no extra work.
+    fn sync(&mut self) -> std::result::Result<(), ProtectedStoreError> {
+        Ok(())
+    }
+
     fn put_if_absent(
         &mut self,
         key: &[u8],

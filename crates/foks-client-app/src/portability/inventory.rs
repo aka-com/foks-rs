@@ -529,12 +529,19 @@ impl StateSnapshot {
                         }
                     }
                     "credentials" | "mutations" if initialized => {
+                        let mutations = name == "mutations";
                         let allowed = if name == "credentials" {
                             &vault
                         } else {
                             &protected
                         };
                         for (name, path) in files::entries(&path)? {
+                            if mutations && name == foks_client::EncryptedFileMutationStore::WRITE_GENERATION_FILENAME {
+                                if files::regular(&path)?.len() != 16 { return Err(Error::StatePathChanged); }
+                                // Process-local sweep cursors are not exported; import
+                                // rekey creates a fresh generation before its writes.
+                                continue;
+                            }
                             if !allowed.contains(&name) {
                                 return Err(Error::InvalidConfig("unattributed record blocks portability; complete owning retention cleanup"));
                             }

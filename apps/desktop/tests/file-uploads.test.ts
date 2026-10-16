@@ -19,7 +19,12 @@ test('durable upload progress preserves a stable handle without source paths', (
   assert.equal(
     decodeFileUploads({
       uploads: [upload],
-      capacity: { max_reserved_bytes: 268435456, max_pending: 16 },
+      capacity: {
+        max_reserved_bytes: 268435456,
+        max_pending: 16,
+        max_receipts: 8192,
+        max_receipt_bytes: 16777216,
+      },
     }).uploads.length,
     1,
   );
@@ -33,4 +38,29 @@ test('upload bridge rejects malformed identity and impossible progress', () => {
     { reserved_bytes: -1 },
   ])
     assert.throws(() => decodeFileUpload({ ...upload, ...changed }));
+});
+
+test('generation-bound handles and bounded summary pages preserve cursor identity', () => {
+  const id = `u1-${'ab'.repeat(16)}-0000000067000000-${'cd'.repeat(16)}`;
+  assert.equal(decodeFileUpload({ ...upload, upload_id: id }).uploadId, id);
+  const capacity = {
+    max_reserved_bytes: 268435456,
+    max_pending: 16,
+    max_receipts: 8192,
+    max_receipt_bytes: 16777216,
+  };
+  const page = decodeFileUploads({
+    uploads: [upload],
+    next: Array(32).fill(7),
+    capacity,
+  });
+  assert.deepEqual(page.next, Array(32).fill(7));
+  assert.equal(page.capacity.maxReceipts, 8192);
+  assert.throws(() =>
+    decodeFileUploads({ uploads: Array(129).fill(upload), capacity }),
+  );
+  assert.throws(() => decodeFileUploads({ uploads: [], next: [1], capacity }));
+  assert.throws(() =>
+    decodeFileUpload({ ...upload, upload_id: id.toUpperCase() }),
+  );
 });

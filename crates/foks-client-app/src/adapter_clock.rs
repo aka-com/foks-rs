@@ -1,10 +1,8 @@
 //! Narrow injectable wall/monotonic clock for adapter admission and retention.
 use crate::{Error, Result};
 use foks_client_db::AdapterTimeSample;
-use std::{
-    sync::OnceLock,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub trait AdapterClock: Send + Sync {
     fn sample(&self) -> Result<AdapterTimeSample>;
@@ -14,24 +12,8 @@ pub trait AdapterClock: Send + Sync {
 pub struct SystemAdapterClock;
 impl AdapterClock for SystemAdapterClock {
     fn sample(&self) -> Result<AdapterTimeSample> {
-        static PROCESS: OnceLock<Option<([u8; 16], Instant)>> = OnceLock::new();
-        let (process_id, started) = PROCESS
-            .get_or_init(|| {
-                let mut id = [0; 16];
-                getrandom::fill(&mut id).ok()?;
-                Some((id, Instant::now()))
-            })
-            .as_ref()
-            .ok_or(Error::Randomness)?;
-        let wall_seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| Error::ClientDatabase(foks_client_db::Error::AdapterClockUntrusted))?
-            .as_secs();
-        Ok(AdapterTimeSample {
-            process_id: *process_id,
-            wall_seconds,
-            monotonic_seconds: started.elapsed().as_secs(),
-        })
+        // One process/monotonic origin is shared with direct client upload calls.
+        foks_client::upload_time_sample().map_err(Error::from)
     }
 }
 

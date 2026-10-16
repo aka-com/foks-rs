@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-pub const PROTOCOL_VERSION: u32 = 35;
+pub const PROTOCOL_VERSION: u32 = 36;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -380,7 +380,7 @@ pub struct KvChunkResult {
 pub struct KvUploadHeader {
     /// Caller allocated before source streaming; retries resume this durable operation.
     #[serde(default)]
-    pub upload_id: Option<[u8; 16]>,
+    pub upload_id: Option<foks_proto::UploadHandle>,
     #[serde(default)]
     pub adapter: Option<crate::data::DataSubmission>,
     pub store: KvStoreRef,
@@ -392,6 +392,33 @@ pub struct KvUploadHeader {
     /// Creates intermediate parent directories along the path if they do not exist.
     #[serde(default)]
     pub mkdir_p: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KvUploadIntent {
+    pub path: String,
+    pub total_length: u64,
+    pub read_role: KvRole,
+    pub write_role: KvRole,
+    pub precondition: KvPrecondition,
+    pub mkdir_p: bool,
+}
+impl From<&KvUploadHeader> for KvUploadIntent {
+    fn from(header: &KvUploadHeader) -> Self {
+        Self {
+            path: header.path.clone(),
+            total_length: header.total_length,
+            read_role: header.read_role,
+            write_role: header.write_role,
+            precondition: header.precondition,
+            mkdir_p: header.mkdir_p,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KvUploadIssuance {
+    pub database_id: [u8; 16],
+    pub issued_at: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -938,20 +965,26 @@ pub enum Operation {
         #[serde(default)]
         mkdir_p: bool,
     },
+    KvUploadIssuance {
+        store: KvStoreRef,
+    },
     PrepareKvUpload {
         store: KvStoreRef,
-        upload_id: [u8; 16],
+        upload_id: foks_proto::UploadHandle,
+        intent: KvUploadIntent,
     },
     ListKvUploads {
         store: KvStoreRef,
+        #[serde(default)]
+        after: Option<[u8; 32]>,
     },
     ResumeKvUpload {
         store: KvStoreRef,
-        upload_id: [u8; 16],
+        upload_id: foks_proto::UploadHandle,
     },
     CancelKvUpload {
         store: KvStoreRef,
-        upload_id: [u8; 16],
+        upload_id: foks_proto::UploadHandle,
     },
     PutKvStream {
         header: KvUploadHeader,
@@ -1193,6 +1226,7 @@ impl Operation {
             Self::ReadKv { .. } => "ReadKv",
             Self::ReadKvChunk { .. } => "ReadKvChunk",
             Self::PutKv { .. } => "PutKv",
+            Self::KvUploadIssuance { .. } => "KvUploadIssuance",
             Self::PrepareKvUpload { .. } => "PrepareKvUpload",
             Self::ListKvUploads { .. } => "ListKvUploads",
             Self::ResumeKvUpload { .. } => "ResumeKvUpload",
@@ -1958,12 +1992,18 @@ impl std::fmt::Debug for Operation {
                 .field("precondition", precondition)
                 .field("mkdir_p", mkdir_p)
                 .finish(),
-            Self::PrepareKvUpload { store, upload_id } => formatter
+            Self::KvUploadIssuance { store } => formatter
+                .debug_struct("KvUploadIssuance")
+                .field("store", store)
+                .finish(),
+            Self::PrepareKvUpload {
+                store, upload_id, ..
+            } => formatter
                 .debug_struct("PrepareKvUpload")
                 .field("store", store)
                 .field("upload_id", upload_id)
                 .finish(),
-            Self::ListKvUploads { store } => formatter
+            Self::ListKvUploads { store, .. } => formatter
                 .debug_struct("ListKvUploads")
                 .field("store", store)
                 .finish(),
@@ -2418,6 +2458,15 @@ pub enum ErrorCode {
     SubmissionActiveFull,
     SubmissionIdentityConflict,
     SubmissionFuture,
+    UploadExpired,
+    UploadIdentityConflict,
+    UploadGenerationMismatch,
+    UploadLegacyReadOnly,
+    UploadPendingFull,
+    UploadRetentionFull,
+    UploadSpoolFull,
+    UploadClockUntrusted,
+    UploadFuture,
 
     WebAdminUnsupported,
     WebAdminExpired,

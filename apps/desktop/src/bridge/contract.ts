@@ -200,7 +200,10 @@ export interface Bridge {
   editTextItem(request: EditTextRequest): Promise<MutationResponse>;
   moveItem(request: MoveItemRequest): Promise<MutationResponse>;
   removeItem(request: RemoveItemRequest): Promise<MutationResponse>;
-  listFileUploads(storeId: StoreRef): Promise<FileUploads>;
+  listFileUploads(
+    storeId: StoreRef,
+    after?: number[] | null,
+  ): Promise<FileUploads>;
   resumeFileUpload(storeId: StoreRef, uploadId: string): Promise<FileUpload>;
   cancelFileUpload(storeId: StoreRef, uploadId: string): Promise<FileUpload>;
   importDroppedFile(

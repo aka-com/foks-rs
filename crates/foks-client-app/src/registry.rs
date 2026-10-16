@@ -1367,6 +1367,38 @@ pub(super) fn profile_publication_marker(session: &ProfileSession) -> PathBuf {
     session.paths.directory.join(PROFILE_PUBLICATION_MARKER)
 }
 
+/// Inspect a registered legacy publication without opening or migrating its
+/// database. The root maintenance lease excludes concurrent publishers.
+pub(super) fn legacy_publication_digest(
+    root: &Path,
+    profile: &Profile,
+) -> Result<Option<[u8; 32]>> {
+    profile.validate()?;
+    let directory = root.join("profiles").join(&profile.name);
+    let metadata = match fs::symlink_metadata(&directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || directory.canonicalize()? != directory
+    {
+        return Err(Error::InvalidConfig("profile publication path is unsafe"));
+    }
+    let Some((marker, digest)) =
+        read_profile_publication_marker(&directory.join(PROFILE_PUBLICATION_MARKER))?
+    else {
+        return Ok(None);
+    };
+    if marker.profile != *profile || marker.checkpoint.profile != profile.name {
+        return Err(Error::InvalidConfig(
+            "profile publication registry binding changed",
+        ));
+    }
+    Ok(Some(digest))
+}
+
 pub(super) fn profile_publication_is_pending(session: &ProfileSession) -> Result<bool> {
     read_profile_publication_marker(&session.paths.directory.join(PROFILE_PUBLICATION_MARKER))
         .map(|marker| marker.is_some())

@@ -499,7 +499,13 @@ fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     ))?;
     let response = match call {
         BackendCall::Operation(operation) => client.call(operation)?,
-        BackendCall::Upload { header, mut source } => client.put_kv_stream(header, &mut source)?,
+        BackendCall::Upload {
+            mut header,
+            mut source,
+        } => {
+            foks_desktop::ensure_upload_identity(&client, &mut header)?;
+            client.put_kv_stream(header, &mut source)?
+        }
     };
     match response.result {
         ResponseResult::Success { value } => {

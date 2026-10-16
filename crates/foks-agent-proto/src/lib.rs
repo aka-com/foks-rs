@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-pub use foks_proto::MAXIMUM_DEVICE_NAME_BYTES;
+pub use foks_proto::{UploadHandle, MAXIMUM_DEVICE_NAME_BYTES};
 
 pub mod account;
 pub mod admin;
@@ -24,11 +24,12 @@ pub use message::{
     CompatibilityStatus, CredentialBackend, DeviceSummary, ErrorCode, ErrorFields, FederationRole,
     GoProfileCandidate, GoProfileDiscovery, KnownStoreSummary, KvChunkResult, KvEntryMetadata,
     KvPage, KvPrecondition, KvReadResult, KvRole, KvStoreRef, KvUploadFrame, KvUploadHeader,
-    KvUploadPayload, Operation, PendingOperationKind, PendingOperationSummary, ProfileOverview,
-    ProfileProtocol, ProfileTrust, Request, ResetArtifactKind, ResetArtifactSummary,
-    ResetStatePreview, Response, ResponseResult, ResponseTiming, SecretString,
-    ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary, TeamKind, TeamRole, TeamStoreRef,
-    TeamSummary, TimerStatus, YubiFederationUnlockInput, YubiRetryConfiguration, PROTOCOL_VERSION,
+    KvUploadIntent, KvUploadIssuance, KvUploadPayload, Operation, PendingOperationKind,
+    PendingOperationSummary, ProfileOverview, ProfileProtocol, ProfileTrust, Request,
+    ResetArtifactKind, ResetArtifactSummary, ResetStatePreview, Response, ResponseResult,
+    ResponseTiming, SecretString, ServerStatusSnapshot, StoredHostStatus, TeamDetailsSummary,
+    TeamKind, TeamRole, TeamStoreRef, TeamSummary, TimerStatus, YubiFederationUnlockInput,
+    YubiRetryConfiguration, PROTOCOL_VERSION,
 };
 
 #[cfg(test)]
@@ -37,7 +38,7 @@ mod tests {
 
     #[test]
     fn selected_reads_require_identity_and_reject_pre_identity_ipc() {
-        assert_eq!(PROTOCOL_VERSION, 35);
+        assert_eq!(PROTOCOL_VERSION, 36);
         for operation in [
             Operation::ReadKv {
                 store: KvStoreRef::Account(AccountStoreRef {
@@ -705,7 +706,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_a_local_v29_mutation_with_no_initial_trust_inputs() {
-        assert_eq!(PROTOCOL_VERSION, 35);
+        assert_eq!(PROTOCOL_VERSION, 36);
         let operation = Operation::ReconcileProfile {
             profile: "saved".into(),
         };
@@ -722,7 +723,7 @@ mod tests {
 
     #[test]
     fn submit_message_is_a_local_v29_mutation() {
-        assert_eq!(PROTOCOL_VERSION, 35);
+        assert_eq!(PROTOCOL_VERSION, 36);
         let request = Request::new(
             20,
             Operation::Chat {

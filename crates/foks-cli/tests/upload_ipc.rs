@@ -112,7 +112,16 @@ fn resident_agent_upload_intent_survives_early_disconnect_and_finishes_without_s
             Err(std::io::Error::other("source lost before first byte"))
         }
     }
-    let lost = [41; 16];
+    let context: foks_agent_proto::KvUploadIssuance = serde_json::from_value(success(
+        client
+            .call(Operation::KvUploadIssuance {
+                store: store.clone(),
+            })
+            .unwrap(),
+    ))
+    .unwrap();
+    let lost =
+        foks_agent_proto::UploadHandle::new(context.database_id, context.issued_at, [41; 16]);
     assert!(client
         .put_kv_stream(header(lost), &mut Disconnected)
         .is_err());
@@ -120,11 +129,12 @@ fn resident_agent_upload_intent_survives_early_disconnect_and_finishes_without_s
         client
             .call(Operation::ListKvUploads {
                 store: store.clone(),
+                after: None,
             })
             .unwrap(),
     );
     let row = &inventory["uploads"][0];
-    assert_eq!(row["upload_id"], "29".repeat(16));
+    assert_eq!(row["upload_id"], lost.to_string());
     assert_eq!(row["state"], "needs-source");
     let cancelled = success(
         client
@@ -135,7 +145,8 @@ fn resident_agent_upload_intent_survives_early_disconnect_and_finishes_without_s
             .unwrap(),
     );
     assert_eq!(cancelled["state"], "cancelled");
-    let completed = [42; 16];
+    let completed =
+        foks_agent_proto::UploadHandle::new(context.database_id, context.issued_at, [42; 16]);
     success(
         client
             .put_kv_stream(header(completed), &mut std::io::Cursor::new(vec![7; 3000]))
@@ -150,7 +161,7 @@ fn resident_agent_upload_intent_survives_early_disconnect_and_finishes_without_s
             .unwrap(),
     );
     assert_eq!(receipt["state"], "completed");
-    assert_eq!(receipt["reserved_bytes"], 0);
+    assert!(receipt["reserved_bytes"].as_u64().unwrap() > 0);
     let repeated = success(
         client
             .call(Operation::ResumeKvUpload {

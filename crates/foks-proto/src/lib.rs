@@ -98,6 +98,7 @@ mod role;
 mod service;
 mod sso;
 mod submission;
+mod upload;
 mod yubi;
 
 pub use chat_context::*;
@@ -118,6 +119,7 @@ pub use role::*;
 pub use service::*;
 pub use sso::*;
 pub use submission::{InvalidSubmissionHandle, SubmissionHandle};
+pub use upload::{InvalidUploadHandle, UploadHandle};
 pub use yubi::*;
 
 pub(crate) use codec::{

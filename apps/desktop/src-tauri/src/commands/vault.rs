@@ -867,10 +867,9 @@ pub(super) fn upload_file(
     source: &Path,
     kind: MutationKind,
 ) -> Result<(), AgentError> {
-    foks_desktop::ensure_upload_identity(&mut header).map_err(invalid_request)?;
-    let upload_id = header
-        .upload_id
-        .map(|id| id.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    foks_desktop::ensure_upload_identity(transport, &mut header)
+        .map_err(AgentError::from_desktop)?;
+    let upload_id = header.upload_id.map(|id| id.to_string());
     let (file, total_length) = open_regular_file(source)?;
     header.total_length = total_length;
     let mut reader = SourceReader {
@@ -1674,20 +1673,9 @@ pub async fn pick_and_replace_file(
     apply_file_upload(&state, header, source, MutationKind::Guarded).await
 }
 
-fn parse_upload_identity(text: &str) -> Result<[u8; 16], AgentError> {
-    if text.len() != 32
-        || !text
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err(invalid_request("Invalid upload handle."));
-    }
-    let mut id = [0; 16];
-    for (i, byte) in id.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16)
-            .map_err(|_| invalid_request("Invalid upload handle."))?;
-    }
-    Ok(id)
+fn parse_upload_identity(text: &str) -> Result<foks_agent_proto::UploadHandle, AgentError> {
+    text.parse()
+        .map_err(|_| invalid_request("Invalid upload handle."))
 }
 #[tauri::command]
 pub async fn list_file_uploads(
@@ -1695,6 +1683,7 @@ pub async fn list_file_uploads(
     webview: tauri::Webview,
     state: State<'_, AppState>,
     store_id: String,
+    after: Option<[u8; 32]>,
 ) -> Result<serde_json::Value, AgentError> {
     let unlocked = crate::applock::unlocked_generation(&app)?;
     require_main_window(&webview)?;
@@ -1705,6 +1694,7 @@ pub async fn list_file_uploads(
         transport
             .call(Operation::ListKvUploads {
                 store: protocol_store(&store),
+                after,
             })
             .map_err(AgentError::from_desktop)
     })

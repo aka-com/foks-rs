@@ -4088,7 +4088,7 @@ mod tests {
             edit_kv_file_mutation(&item, vec![0; MAXIMUM_INLINE_KV_BYTES + 1]).unwrap(),
             KvAccountMutation::Stream {
                 header: KvUploadHeader {
-                    upload_id: Some(_),
+                    upload_id: None,
                     adapter: None,
                     precondition: KvPrecondition::ExactEntry { version: 7, .. },
                     read_role: KvRole::Member { visibility: -1 },
@@ -4108,7 +4108,7 @@ mod tests {
         assert!(matches!(
             create_kv_file_upload(&account, "/large", 84 * 1024 * 1024).unwrap(),
             KvUploadHeader {
-                upload_id: Some(_),
+                upload_id: None,
                 adapter: None,
                 total_length: 88_080_384,
                 read_role: KvRole::Owner,
@@ -5115,19 +5115,31 @@ mod chat_transport_tests {
     }
 }
 
-fn new_upload_id(length: u64) -> Result<Option<[u8; 16]>, &'static str> {
-    if length <= 2040 {
-        return Ok(None);
-    }
-    let mut id = [0; 16];
-    getrandom::fill(&mut id).map_err(|_| "upload identity randomness unavailable")?;
-    Ok(Some(id))
+fn new_upload_id(_length: u64) -> Result<Option<foks_agent_proto::UploadHandle>, &'static str> {
+    // Issuance requires the profile's checked hard-state generation, obtained by
+    // ensure_upload_identity immediately before using the source.
+    Ok(None)
 }
 
-/// Allocate a stable local handle before opening a file or sending its stream.
-pub fn ensure_upload_identity(header: &mut KvUploadHeader) -> Result<(), &'static str> {
-    if header.upload_id.is_none() {
-        header.upload_id = new_upload_id(2041)?;
+/// Allocate and retain the complete handle before registration or source reads.
+pub fn ensure_upload_identity(
+    transport: &dyn AgentTransport,
+    header: &mut KvUploadHeader,
+) -> Result<(), AgentError> {
+    if header.upload_id.is_none() && header.adapter.is_none() {
+        let value = transport.call(Operation::KvUploadIssuance {
+            store: header.store.clone(),
+        })?;
+        let context: foks_agent_proto::KvUploadIssuance = serde_json::from_value(value)
+            .map_err(|_| AgentError::Transport("invalid upload issuance context".into()))?;
+        let mut random = [0; 16];
+        getrandom::fill(&mut random)
+            .map_err(|_| AgentError::Transport("upload randomness unavailable".into()))?;
+        header.upload_id = Some(foks_agent_proto::UploadHandle::new(
+            context.database_id,
+            context.issued_at,
+            random,
+        ));
     }
     Ok(())
 }

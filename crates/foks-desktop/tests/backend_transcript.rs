@@ -410,11 +410,22 @@ fn capture_upload(arguments: Vec<OsString>) -> (Output, UploadTranscript) {
     let server = std::thread::spawn(move || {
         let mut stream = accept_bounded(&listener);
         let mut request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+        if matches!(request.operation, Operation::KvUploadIssuance { .. }) {
+            stream
+                .write_all(
+                    &foks_agent_proto::encode(&Response::success(
+                        request.id,
+                        serde_json::json!({"database_id":vec![1;16],"issued_at":1}),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            drop(stream);
+            stream = accept_bounded(&listener);
+            request = foks_agent_proto::decode_request(&read_frame(&mut stream)).unwrap();
+        }
         if let Operation::PrepareKvUpload { upload_id, .. } = &request.operation {
-            let id = upload_id
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>();
+            let id = upload_id.to_string();
             stream
                 .write_all(
                     &foks_agent_proto::encode(&Response::success(
@@ -555,7 +566,7 @@ fn replacement_file_stream_is_bound_to_the_inspected_version_and_roles() {
         transcript.request.operation,
         Operation::PutKvStream {
             header: foks_agent_proto::KvUploadHeader {
-                upload_id: None,
+                upload_id: Some(id),
                 adapter: None,
                 total_length: 16,
                 read_role: KvRole::Member { visibility: -16384 },
@@ -564,7 +575,7 @@ fn replacement_file_stream_is_bound_to_the_inspected_version_and_roles() {
                 mkdir_p: false,
                 ..
             }
-        }
+        } if id.database_id() == Some([1; 16]) && id.issued_at() == Some(1)
     ));
     assert_eq!(transcript.total, 16);
     assert_eq!(transcript.chunks, 1);
