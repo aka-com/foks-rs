@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Bounded real-celld M0 equivalence gate; no production/AZ/fencing claim."""
+import argparse,hashlib,json,os,pathlib,secrets,shutil,socket,subprocess,time,urllib.request,urllib.error
+import boto3
+from botocore.config import Config
+from wasm_limits import memory_limits
+
+p=argparse.ArgumentParser()
+for name in ['celld','moto','esbuild','wasm','vectors','catalog','output']:p.add_argument('--'+name,type=pathlib.Path,required=True)
+a=p.parse_args()
+for item in [a.celld,a.moto,a.esbuild,a.wasm,a.vectors,a.catalog]:
+    if not item.is_file():p.error('missing input '+str(item))
+if a.wasm.stat().st_size>32*1024*1024:p.error('wasm artifact bound')
+declared_memory=memory_limits(a.wasm.read_bytes())
+a.output.mkdir(mode=0o700,exist_ok=False);root=a.output.resolve();source=pathlib.Path(__file__).resolve().parent
+children=[];logs=[];results=[];passed=False
+env={'PATH':os.environ.get('PATH','/usr/bin:/bin'),'TMPDIR':str(root),'AWS_ACCESS_KEY_ID':'local-m0','AWS_SECRET_ACCESS_KEY':'local-m0-dummy-secret','AWS_DEFAULT_REGION':'us-east-1','AWS_REGION':'us-east-1','AWS_CONFIG_FILE':'/dev/null','AWS_SHARED_CREDENTIALS_FILE':'/dev/null','AWS_EC2_METADATA_DISABLED':'true','CELLD_OTEL':'0','NO_COLOR':'1'}
+def port():
+    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
+def start(command,name,extra=None):
+    log=(root/(name+'.log')).open('x');logs.append(log)
+    child=subprocess.Popen(command,cwd=root,env=dict(env,**(extra or {})),stdout=log,stderr=subprocess.STDOUT);children.append(child);return child
+try:
+    endpoint='http://127.0.0.1:'+str(port())
+    moto=start([str(a.moto.resolve()),'-H','127.0.0.1','-p',endpoint.rsplit(':',1)[1]],'moto')
+    s3=boto3.client('s3',endpoint_url=endpoint,region_name='us-east-1',aws_access_key_id=env['AWS_ACCESS_KEY_ID'],aws_secret_access_key=env['AWS_SECRET_ACCESS_KEY'],config=Config(retries={'max_attempts':0},connect_timeout=1,read_timeout=2))
+    until=time.monotonic()+20
+    while True:
+        try:s3.list_buckets();break
+        except Exception:
+            if moto.poll() is not None or time.monotonic()>until:raise
+            time.sleep(.1)
+    bucket='foks-metadata-spike';s3.create_bucket(Bucket=bucket)
+    project=root/'worker';project.mkdir(mode=0o700)
+    for name in ['host.mjs','worker.mjs']:shutil.copyfile(source/name,project/name)
+    for original,name in [(a.wasm,'kernel.wasm'),(a.vectors,'vectors.json'),(a.catalog,'catalog.json')]:shutil.copyfile(original,project/name)
+    token=secrets.token_urlsafe(32)
+    config={'name':'foks-metadata-spike','main':'worker.mjs','compatibility_date':'2026-01-01','vars':{'M0_TOKEN':token},'durable_objects':{'bindings':[{'name':'FOKS_M0','class_name':'FoksMetadata'}]},'migrations':[{'tag':'v1','new_sqlite_classes':['FoksMetadata']}]}
+    (project/'wrangler.jsonc').write_text(json.dumps(config));(project/'wrangler.jsonc').chmod(0o600)
+    common=['--bucket','s3://'+bucket,'--endpoint',endpoint,'--region','us-east-1']
+    deployment=subprocess.run([str(a.celld.resolve()),'deploy',str(project)]+common,cwd=root,env=dict(env,CELLD_ESBUILD=str(a.esbuild.resolve())),capture_output=True,text=True,timeout=45)
+    (root/'deploy.log').write_text((deployment.stdout+deployment.stderr).replace(token,'[redacted]'))
+    if deployment.returncode:raise RuntimeError('deployment failed')
+    public,internal=port(),port();watch=root/'node';watch.mkdir()
+    node=start([str(a.celld.resolve())]+common+['--listen',f'127.0.0.1:{public}','--internal-listen',f'127.0.0.1:{internal}','--advertise',f'127.0.0.1:{internal}'],'celld',{'CELLD_NODE':'metadata-m0','CELLD_WATCH':str(watch),'CELLD_READY_FLEET_GATE_MS':'0','CELLD_DURABILITY':'bucket','CELLD_MAX_RESIDENT_CELLS':'32','CELLD_V8_HEAP_LIMIT_MB':'64','CELLD_TOKIO_THREADS':'2'})
+    until=time.monotonic()+30
+    while True:
+        try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{public}/.well-known/celld/health',timeout=1) as response:json.load(response)
+            break
+        except (OSError,ValueError):
+            if node.poll() is not None or time.monotonic()>until:raise
+            time.sleep(.1)
+    vectors=json.loads(a.vectors.read_text())['vectors']
+    for index,vector in enumerate(vectors):
+        request=urllib.request.Request(f'http://127.0.0.1:{public}/{index}',data=b'',headers={'authorization':'Bearer '+token})
+        began=time.monotonic()
+        try:response=urllib.request.urlopen(request,timeout=15)
+        except urllib.error.HTTPError as error:response=error
+        with response:
+            body=response.read(65537)
+            if len(body)>65536:raise RuntimeError('result size')
+            result=json.loads(body)
+        result['elapsed_seconds']=time.monotonic()-began;results.append(result)
+        (root/'results.json').write_text(json.dumps(results,indent=2))
+        print(json.dumps(result),flush=True)
+    passed=all(r.get('passed') is True for r in results) and len(results)==len(vectors)
+finally:
+    for child in reversed(children):
+        if child.poll() is None:
+            child.terminate()
+            try:child.wait(timeout=5)
+            except subprocess.TimeoutExpired:child.kill();child.wait()
+    for log in logs:log.close()
+    evidence={'passed':passed,'results':results,'wasm_memory_pages':declared_memory,'scope':'M0 native/Wasm transaction boundary on actual initialized schema; local emulator; not production authorization, fencing or failover','sha256':{str(item):hashlib.sha256(item.read_bytes()).hexdigest() for item in [a.celld,a.wasm,a.vectors,a.catalog,source/'host.mjs',source/'worker.mjs',source/'wasm_limits.py',pathlib.Path(__file__)]}}
+    (root/'qualification.json').write_text(json.dumps(evidence,indent=2))
+raise SystemExit(0 if passed else 1)
