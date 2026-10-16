@@ -41,7 +41,7 @@ import type { MutationFailureHandler } from '../data/mutation-recovery';
 import type { Server, StoreRef, TeamStore, AgentSnapshot } from '../model';
 import { PageHeader } from '../shell/page-header';
 import { AccountMark } from '../components/account-mark';
-import { ProfileKeys } from './profile-keys';
+import { ProfileKeys } from '../features/devices';
 import { GroupMark } from '../components/group-mark';
 import { matchesShortcut } from '../shortcuts';
 import { AddServerSheet } from './servers/add-server-sheet';

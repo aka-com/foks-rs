@@ -13,7 +13,7 @@ import {
   tokenKind,
   tokenLabel,
   tokenProblem,
-} from '../src/recovery-phrase';
+} from '../src/features/devices/recovery-phrase';
 import {
   RECOVERY_SNOOZE_DAYS,
   RECOVERY_TEST_INTERVAL_DAYS,

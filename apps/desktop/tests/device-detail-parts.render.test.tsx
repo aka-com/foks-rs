@@ -1,6 +1,6 @@
 /**
  * The parts of a key's own page under Devices, rendered from their own
- * modules under screens/devices: the type word, the phrase-test chip and the
+ * modules under features/devices: the type word, the phrase-test chip and the
  * card operations a security key's page offers.
  */
 
@@ -44,13 +44,13 @@ async function personalAccount(): Promise<AccountStore> {
 }
 
 test('a card enrollment is called a security key, and other kinds keep their name', async () => {
-  const { kindLabel } = await import('../src/screens/devices/device-labels');
+  const { kindLabel } = await import('../src/features/devices/device-labels');
   assert.equal(kindLabel('Enrollment'), 'Security key');
   assert.equal(kindLabel('Recovery phrase'), 'Recovery phrase');
 });
 
 test('the phrase-test chip says when a phrase was never tested and when it last was', async () => {
-  const { TestedChip } = await import('../src/screens/devices/device-labels');
+  const { TestedChip } = await import('../src/features/devices/device-labels');
   const { testedDate } = await import('../src/recovery-phrase-tests');
   const never = await render(
     createElement(TestedChip, { status: { state: 'never', snoozed: false } }),
@@ -66,7 +66,7 @@ test('the phrase-test chip says when a phrase was never tested and when it last 
 
 test('card operations act on their own enrollment and say why a step does not apply', async () => {
   const { CardOperations } =
-    await import('../src/screens/devices/card-operations');
+    await import('../src/features/devices/card-operations');
   const store = await personalAccount();
   const asked: [string, string][] = [];
   const enrollment: YubiEnrollment = {

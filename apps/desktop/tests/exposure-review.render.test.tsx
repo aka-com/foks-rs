@@ -368,7 +368,8 @@ test('lowering a role lists only the items the new role no longer admits', async
 
 /** Devices for the personal account, with the Remove device sheet open. */
 async function removeDeviceSheet(snapshot: AgentSnapshot) {
-  const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const { DevicesScreen } =
+    await import('../src/features/devices/devices-screen');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const TestShell = await loadTestShell();
   const device = snapshot.devices[1]?.id_hex.replace(/^02/, '04');

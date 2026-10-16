@@ -231,6 +231,42 @@ test('no layer names a module in a folder layers.json forbids it', async () => {
   assert.deepEqual(problems, []);
 });
 
+test('a feature is named from outside it only by its folder, except by the composition root', async () => {
+  // eslint.config.mjs matches the same rule against static import
+  // specifiers. A feature's index.ts is what the other features, the shell and
+  // the remaining screens may use; src/app/ loads the screens themselves,
+  // several by dynamic import into chunks of their own.
+  const app = fileURLToPath(new URL('../', import.meta.url));
+  const features = join(app, layering.features.path);
+  const composer = join(app, layering.features.composer) + sep;
+  const files = await sources(root);
+  const known = new Set(files);
+  const featureOf = (file: string) =>
+    file.startsWith(features + sep)
+      ? file.slice(features.length + 1).split(sep)[0]
+      : undefined;
+  const problems: string[] = [];
+  for (const file of files) {
+    if (file.startsWith(composer)) continue;
+    for (const specifier of await references(file)) {
+      const target = resolveSpecifier(file, specifier, known);
+      const feature = target && featureOf(target);
+      if (!target || !feature) continue;
+      const index = join(features, feature, 'index.ts');
+      if (featureOf(file) === feature) {
+        if (target === index)
+          problems.push(
+            `${relative(app, file)} imports its own feature's index.ts`,
+          );
+      } else if (target !== index)
+        problems.push(
+          `${relative(app, file)} imports ${relative(app, target)}: ${layering.features.description}`,
+        );
+    }
+  }
+  assert.deepEqual(problems, []);
+});
+
 test('metadata resource services do not call secret-bearing or mutation bridge APIs', async () => {
   const files = await sources(join(root, 'resources'));
   const forbidden = new Set([
@@ -459,7 +495,7 @@ test('screen and shell model modules load without React or a view module', async
   // unit-tested in node and read without the views around them.
   const models = [
     'shell/sync-summary.ts',
-    'screens/devices/credential-actions.ts',
+    'features/devices/credential-actions.ts',
     'model/group-model.ts',
     'screens/servers/server-model.ts',
     'screens/files/write-workflow-model.ts',

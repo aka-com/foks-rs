@@ -41,10 +41,10 @@ const AWAY: Location = { kind: 'files' };
 
 async function harness() {
   const sheets = {
-    ...(await import('../src/screens/devices/sheets/pair-sheet')),
-    ...(await import('../src/screens/devices/sheets/passphrase-sheet')),
-    ...(await import('../src/screens/devices/sheets/phrase-sheet')),
-    ...(await import('../src/screens/devices/sheets/revoke-sheet')),
+    ...(await import('../src/features/devices/sheets/pair-sheet')),
+    ...(await import('../src/features/devices/sheets/passphrase-sheet')),
+    ...(await import('../src/features/devices/sheets/phrase-sheet')),
+    ...(await import('../src/features/devices/sheets/revoke-sheet')),
   };
   const locations = await import('../src/location');
   const guards = await import('../src/navigation-guard');
@@ -394,7 +394,8 @@ test('a revocation already sent refuses the move', async () => {
 
 test('the two default routes are canonicalized without asking the guards', async () => {
   const h = await harness();
-  const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const { DevicesScreen } =
+    await import('../src/features/devices/devices-screen');
   const { AccountSection } = await import('../src/screens/account-section');
   const { FIXTURE } = await import('../src/mock/fixture');
   const snapshot: AgentSnapshot = FIXTURE;
@@ -440,7 +441,8 @@ test('the two default routes are canonicalized without asking the guards', async
 
 test('Devices and Account wait for account inventory instead of showing a missing account', async () => {
   const h = await harness();
-  const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const { DevicesScreen } =
+    await import('../src/features/devices/devices-screen');
   const { AccountSection } = await import('../src/screens/account-section');
   const { FIXTURE } = await import('../src/mock/fixture');
   const snapshot: AgentSnapshot = {

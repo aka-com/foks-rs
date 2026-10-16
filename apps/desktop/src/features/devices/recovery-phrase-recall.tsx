@@ -7,14 +7,14 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Icon } from '../components';
+import { Icon } from '../../components';
 import {
   normalizeToken,
   recallMatches,
   tokenKind,
   tokenLabel,
-} from '../recovery-phrase';
-import { useConcealOnInactive } from '../use-conceal-on-inactive';
+} from './recovery-phrase';
+import { useConcealOnInactive } from '../../use-conceal-on-inactive';
 
 export interface RecallCheckProps {
   /** The phrase as generated, held in memory until it is committed. */

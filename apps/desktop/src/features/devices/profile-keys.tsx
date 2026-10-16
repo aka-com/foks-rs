@@ -1,13 +1,13 @@
-import { useDeviceQueries, metadataFreshness } from '../data/device-cache';
-import { FreshnessCaption } from '../components/metadata-status';
-import { useMetadataQuery } from '../data/query-hooks';
+import { useDeviceQueries, metadataFreshness } from '../../data/device-cache';
+import { FreshnessCaption } from '../../components/metadata-status';
+import { useMetadataQuery } from '../../data/query-hooks';
 import { useState } from 'react';
-import type { Bridge } from '../bridge';
-import { Button, Inset, InsetRow, SectionLabel } from '../components';
-import { useWorkflowAccess } from '../workflow-context';
-import type { AgentSnapshot, Server } from '../model';
-import { YubiActionSheet } from './devices/sheets/yubi-action-sheet';
-import type { SimpleYubiAction } from './devices/credential-actions';
+import type { Bridge } from '../../bridge';
+import { Button, Inset, InsetRow, SectionLabel } from '../../components';
+import { useWorkflowAccess } from '../../workflow-context';
+import type { AgentSnapshot, Server } from '../../model';
+import { YubiActionSheet } from './sheets/yubi-action-sheet';
+import type { SimpleYubiAction } from './credential-actions';
 
 export function ProfileKeys({
   snapshot,

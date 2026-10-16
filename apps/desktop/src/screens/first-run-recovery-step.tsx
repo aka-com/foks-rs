@@ -9,9 +9,8 @@ import {
   SheetDialog,
 } from '../components';
 import type { FirstRunCheckpoint, FirstRunStateName } from '../first-run-state';
-import { recallPositions } from '../recovery-phrase';
+import { RecallCheck, recallPositions } from '../features/devices';
 import { Pane, Foot } from './first-run-view';
-import { RecallCheck } from './recovery-phrase-recall';
 interface Props {
   state: 'protect' | 'phrase';
   checkpoint: FirstRunCheckpoint;

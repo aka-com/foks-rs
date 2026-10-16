@@ -10,7 +10,7 @@
  * account's backup keys.
  */
 
-import { BIP39_ENGLISH } from './bip39-english';
+import { BIP39_ENGLISH } from '../../bip39-english';
 
 export const RECOVERY_PHRASE_TOKENS = 17;
 export const RECOVERY_NUMBER_LIMIT = 8192;

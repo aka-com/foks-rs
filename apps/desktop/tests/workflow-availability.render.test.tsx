@@ -206,7 +206,8 @@ test('shared metadata preflight keeps its root snapshot source after a view leav
 });
 
 test('device rendering never scans hardware or prompts for credentials', async () => {
-  const { DevicesScreen } = await import('../src/screens/devices-screen');
+  const { DevicesScreen } =
+    await import('../src/features/devices/devices-screen');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const current = await fixture();

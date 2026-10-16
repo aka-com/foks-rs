@@ -16,11 +16,11 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   ReactNode,
 } from 'react';
-import type { BackupEnrollment, RecoveryPhraseCheck } from '../bridge';
-import { normalizeCommandError } from '../bridge';
-import { Button, Chip, Icon, SheetDialog } from '../components';
-import type { AccountStore } from '../model';
-import { useSheetGuard } from '../navigation-guard';
+import type { BackupEnrollment, RecoveryPhraseCheck } from '../../bridge';
+import { normalizeCommandError } from '../../bridge';
+import { Button, Chip, Icon, SheetDialog } from '../../components';
+import type { AccountStore } from '../../model';
+import { useSheetGuard } from '../../navigation-guard';
 import {
   RECOVERY_PHRASE_TOKENS,
   TOKEN_PROBLEM_TEXT,
@@ -32,10 +32,10 @@ import {
   tokenKind,
   tokenLabel,
   tokenProblem,
-} from '../recovery-phrase';
-import { recordRecoveryPhraseTest } from '../recovery-phrase-tests';
-import { useShellServices } from '../shell-services';
-import { useConcealOnInactive } from '../use-conceal-on-inactive';
+} from './recovery-phrase';
+import { recordRecoveryPhraseTest } from '../../recovery-phrase-tests';
+import { useShellServices } from '../../shell-services';
+import { useConcealOnInactive } from '../../use-conceal-on-inactive';
 
 const EMPTY: readonly string[] = Array.from(
   { length: RECOVERY_PHRASE_TOKENS },

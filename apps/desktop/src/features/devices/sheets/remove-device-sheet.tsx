@@ -17,7 +17,10 @@ import {
   exposureOrder,
   withExposureReview,
 } from '../../../exposure-review';
-import { ExposureSummary, unstoredReview } from '../../exposure-review';
+import {
+  ExposureSummary,
+  unstoredReview,
+} from '../../../screens/exposure-review';
 import { useToast } from '../../../../kit/toasts';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
 

@@ -6,15 +6,15 @@ import type { useWorkflowAccess } from '../src/workflow-context';
 import {
   queuedDeviceWork,
   runDeviceMutation,
-} from '../src/screens/devices/operation-controller';
-import { refreshConnectedCards } from '../src/screens/devices/hardware-controller';
-import { credentialCommand } from '../src/screens/devices/credential-workflow';
-import { removeDevice } from '../src/screens/devices/revocation-workflow';
+} from '../src/features/devices/operation-controller';
+import { refreshConnectedCards } from '../src/features/devices/hardware-controller';
+import { credentialCommand } from '../src/features/devices/credential-workflow';
+import { removeDevice } from '../src/features/devices/revocation-workflow';
 import {
   enrollmentSlot,
   provisionEnrollmentCommand,
   validEnrollmentAttempts,
-} from '../src/screens/devices/enrollment-workflow';
+} from '../src/features/devices/enrollment-workflow';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

@@ -1,4 +1,9 @@
 {
+  "features": {
+    "path": "src/features",
+    "composer": "src/app",
+    "description": "A module outside a feature folder in src/features/ names the feature only by its folder, which resolves to its index.ts; only the composition root in src/app/ imports a feature's modules directly."
+  },
   "layers": [
     {
       "name": "kit",
@@ -17,6 +22,7 @@
         "src/components",
         "src/data",
         "src/diagnostics",
+        "src/features",
         "src/mock",
         "src/navigation",
         "src/platform",
@@ -34,6 +40,7 @@
         "src/app",
         "src/chat",
         "src/components",
+        "src/features",
         "src/mock",
         "src/screens",
         "src/shell"
@@ -55,6 +62,7 @@
         "src/app",
         "src/chat",
         "src/components",
+        "src/features",
         "src/mock",
         "src/screens",
         "src/shell"
@@ -62,15 +70,28 @@
     },
     {
       "name": "mock",
-      "description": "The mock bridge and fixture depend on no view, shell or application module.",
+      "description": "The mock bridge and fixture depend on no feature, view, shell or application module.",
       "paths": ["src/mock"],
-      "forbid": ["src/app", "src/components", "src/screens", "src/shell"]
+      "forbid": [
+        "src/app",
+        "src/components",
+        "src/features",
+        "src/screens",
+        "src/shell"
+      ]
     },
     {
       "name": "components",
-      "description": "Shared components depend on no screen, chat, shell, application or mock module.",
+      "description": "Shared components depend on no feature, screen, chat, shell, application or mock module.",
       "paths": ["src/components"],
-      "forbid": ["src/app", "src/chat", "src/mock", "src/screens", "src/shell"]
+      "forbid": [
+        "src/app",
+        "src/chat",
+        "src/features",
+        "src/mock",
+        "src/screens",
+        "src/shell"
+      ]
     },
     {
       "name": "shell",
@@ -80,8 +101,8 @@
     },
     {
       "name": "features",
-      "description": "Screens and chat depend on no application or mock module.",
-      "paths": ["src/chat", "src/screens"],
+      "description": "Feature folders, the remaining screens and chat depend on no application or mock module.",
+      "paths": ["src/chat", "src/features", "src/screens"],
       "forbid": ["src/app", "src/mock"]
     },
     {

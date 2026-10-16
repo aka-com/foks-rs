@@ -1,5 +1,5 @@
 // @ts-check
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import js from '@eslint/js';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
@@ -10,10 +10,16 @@ import reactHooks from 'eslint-plugin-react-hooks';
  * folders may not import from the folders it forbids. A relative specifier is
  * matched when the forbidden folder follows its leading `../` segments, so
  * `../../screens/x` from src/data/ is reported and `../chat-contract` is not.
- * apps/desktop/tests/module-boundaries.test.ts checks the same table against
- * resolved paths, type positions included.
+ * Its `features` entry names the folder whose subfolders are features: a
+ * module outside a feature, other than in the composition root, names the
+ * feature by its folder alone, so the import resolves to the feature's
+ * index.ts. apps/desktop/tests/module-boundaries.test.ts checks the same
+ * table against resolved paths, type positions included.
  *
- * @type {{ layers: { description: string, paths: string[], forbid: string[], except?: string[] }[] }}
+ * @type {{
+ *   features: { path: string, composer: string, description: string },
+ *   layers: { description: string, paths: string[], forbid: string[], except?: string[] }[],
+ * }}
  */
 const desktopLayers = JSON.parse(
   readFileSync(new URL('./apps/desktop/layers.json', import.meta.url), 'utf8'),
@@ -22,8 +28,43 @@ const desktopLayers = JSON.parse(
 /** @param {string} text */
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** @param {(typeof desktopLayers.layers)[number]} layer */
-function desktopLayerRule(layer) {
+const featuresPath = desktopLayers.features.path;
+const featuresName = escapeRegExp(featuresPath.split('/').pop() ?? '');
+
+/**
+ * Each folder under the features folder, as its path segments below it; the
+ * first segment is the feature.
+ *
+ * @returns {string[][]}
+ */
+function featureFolders() {
+  /** @type {string[][]} */
+  const found = [];
+  /** @param {string[]} segments */
+  const visit = (segments) => {
+    const url = new URL(
+      ['./apps/desktop', featuresPath, ...segments, ''].join('/'),
+      import.meta.url,
+    );
+    if (!existsSync(url)) return;
+    for (const entry of readdirSync(url, { withFileTypes: true }))
+      if (entry.isDirectory()) {
+        found.push([...segments, entry.name]);
+        visit([...segments, entry.name]);
+      }
+  };
+  visit([]);
+  return found;
+}
+
+/**
+ * The patterns that keep a layer's folders out of the folders it forbids, and
+ * out of any feature's own modules unless the layer is the composition root
+ * or forbids the features folder outright.
+ *
+ * @param {(typeof desktopLayers.layers)[number]} layer
+ */
+function desktopLayerPatterns(layer) {
   const folders = layer.forbid.map((path) => {
     const allowed = (layer.except ?? [])
       .filter((file) => file.startsWith(`${path}/`))
@@ -35,23 +76,81 @@ function desktopLayerRule(layer) {
       ? `${name}(/(?!(${allowed.join('|')})$)|$)`
       : `${name}(/|$)`;
   });
+  const patterns = [
+    {
+      regex: `^(\\.\\./)+(${folders.join('|')})`,
+      message: layer.description,
+    },
+  ];
+  if (
+    !layer.paths.includes(desktopLayers.features.composer) &&
+    !layer.forbid.includes(featuresPath)
+  )
+    patterns.push({
+      regex: `^(\\.\\./)+${featuresName}/[^/]+/`,
+      message: desktopLayers.features.description,
+    });
+  return patterns;
+}
+
+/** @param {(typeof desktopLayers.layers)[number]} layer */
+function desktopLayerRule(layer) {
   return {
     files: layer.paths.map((path) => `apps/desktop/${path}/**/*.{ts,tsx}`),
     rules: {
       'no-restricted-imports': [
         'error',
+        { patterns: desktopLayerPatterns(layer) },
+      ],
+    },
+  };
+}
+
+/**
+ * The rules for the modules directly in one folder under the features folder:
+ * its layer's patterns, which a later block would otherwise replace, and one
+ * that reports a path into another feature's modules. The pattern counts the
+ * folder's depth, so `../files/store-access` from a feature's top folder is
+ * reported, `../files` is not, and a subfolder that shares a feature's name
+ * is not mistaken for it.
+ *
+ * @param {string[]} segments
+ * @param {string[]} features
+ */
+function desktopFeatureRule(segments, features) {
+  const layerPatterns = desktopLayers.layers
+    .filter((layer) => layer.paths.includes(featuresPath))
+    .flatMap(desktopLayerPatterns);
+  const others = features
+    .filter((feature) => feature !== segments[0])
+    .map(escapeRegExp);
+  return {
+    files: [`apps/desktop/${featuresPath}/${segments.join('/')}/*.{ts,tsx}`],
+    rules: {
+      'no-restricted-imports': [
+        'error',
         {
           patterns: [
-            {
-              regex: `^(\\.\\./)+(${folders.join('|')})`,
-              message: layer.description,
-            },
+            ...layerPatterns,
+            ...(others.length > 0
+              ? [
+                  {
+                    regex: `^(\\.\\./){${segments.length}}(${others.join('|')})/`,
+                    message: desktopLayers.features.description,
+                  },
+                ]
+              : []),
           ],
         },
       ],
     },
   };
 }
+
+const desktopFeatureFolders = featureFolders();
+const desktopFeatures = desktopFeatureFolders
+  .filter((segments) => segments.length === 1)
+  .map(([feature]) => feature);
 
 export default tseslint.config(
   {
@@ -150,4 +249,25 @@ export default tseslint.config(
     },
   },
   ...desktopLayers.layers.map(desktopLayerRule),
+  {
+    // The modules at the root of src/ belong to no layer, and reach a feature
+    // only through its index.ts.
+    files: ['apps/desktop/src/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: `^\\./${featuresName}/[^/]+/`,
+              message: desktopLayers.features.description,
+            },
+          ],
+        },
+      ],
+    },
+  },
+  ...desktopFeatureFolders.map((segments) =>
+    desktopFeatureRule(segments, desktopFeatures),
+  ),
 );

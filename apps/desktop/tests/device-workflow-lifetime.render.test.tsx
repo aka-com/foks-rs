@@ -9,7 +9,7 @@ test('Strict Mode cannot revive device workflow completions from its first setup
   const ui = await import('@testing-library/react');
   try {
     const { useDeviceOperation } =
-      await import('../src/screens/devices/use-device-operation');
+      await import('../src/features/devices/use-device-operation');
     const { ToastProvider, ToastController } = await import('../kit/toasts');
     const captures: (() => boolean)[] = [];
     function Probe() {

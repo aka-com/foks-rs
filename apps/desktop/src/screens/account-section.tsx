@@ -58,9 +58,11 @@ import { PageHeader } from '../shell/page-header';
 import { AccountMark } from '../components/account-mark';
 import { GoProfileConnectSheet } from './go-profile-connect';
 import { canRetry, unroutedNotices } from './unrouted-notices';
-import { EnrollSheet } from './devices/sheets/enroll-sheet';
-import { PassphraseSheet } from './devices/sheets/passphrase-sheet';
-import { RecoverSheet } from './devices/sheets/recover-sheet';
+import {
+  EnrollSheet,
+  PassphraseSheet,
+  RecoverSheet,
+} from '../features/devices';
 import { AccountPanel } from './settings/account-panel';
 import type { AccountSheet } from './settings/account-panel';
 import { AccountActions } from './settings/account-actions';

@@ -13,19 +13,19 @@
  * recovery phrase and keeps the enrollment name the agent stores.
  */
 
-import { inventoryReadiness } from '../model';
-import { CollectionStatus } from '../components/collection-status';
-import { useDeviceMetadata } from '../data/device-cache';
-import { synchronizeApplied } from '../data/operation-outcome';
-import { refreshConnectedCards } from './devices/hardware-controller';
-import { useDeviceOperation } from './devices/use-device-operation';
-import { useWorkflowAccess } from '../workflow-context';
+import { inventoryReadiness } from '../../model';
+import { CollectionStatus } from '../../components/collection-status';
+import { useDeviceMetadata } from '../../data/device-cache';
+import { synchronizeApplied } from '../../data/operation-outcome';
+import { refreshConnectedCards } from './hardware-controller';
+import { useDeviceOperation } from './use-device-operation';
+import { useWorkflowAccess } from '../../workflow-context';
 import {
   workflowAvailability,
   workflowMessage,
-} from '../model/workflow-availability';
-import { FreshnessCaption } from '../components/metadata-status';
-import { useTabSheetState } from '../navigation-guard';
+} from '../../model/workflow-availability';
+import { FreshnessCaption } from '../../components/metadata-status';
+import { useTabSheetState } from '../../navigation-guard';
 import {
   useCallback,
   useEffect,
@@ -34,12 +34,12 @@ import {
   useSyncExternalStore,
 } from 'react';
 import type { ReactNode } from 'react';
-import { useToast } from '../../kit/toasts';
+import { useToast } from '../../../kit/toasts';
 import type {
   AccountDevice,
   BackupEnrollment,
   YubiEnrollment,
-} from '../bridge';
+} from '../../bridge';
 import {
   Band,
   Button,
@@ -49,38 +49,41 @@ import {
   InsetRow,
   Notice,
   SectionLabel,
-} from '../components';
-import type { StoreRef, DeviceLabel, Item } from '../model';
-import { accountStores, plural, usernameOf } from '../model';
+} from '../../components';
+import type { StoreRef, DeviceLabel, Item } from '../../model';
+import { accountStores, plural, usernameOf } from '../../model';
 import type {
   DevicesSheetIntent,
   Location,
   NavigateOptions,
-} from '../location';
-import { PageHeader } from '../shell/page-header';
-import { useShellServices, useShellSnapshot } from '../shell-services';
-import { AddDeviceSheet } from './devices/sheets/add-device-sheet';
-import { EnrollSheet } from './devices/sheets/enroll-sheet';
-import { PairSheet } from './devices/sheets/pair-sheet';
-import { PhraseSheet } from './devices/sheets/phrase-sheet';
-import { ProvisionSheet } from './devices/sheets/provision-sheet';
-import { RemoveDeviceSheet } from './devices/sheets/remove-device-sheet';
-import { RevokeBackupSheet } from './devices/sheets/revoke-backup-sheet';
-import { RevokeSheet } from './devices/sheets/revoke-sheet';
-import { YubiActionSheet } from './devices/sheets/yubi-action-sheet';
-import type { SimpleYubiAction } from './devices/credential-actions';
+} from '../../location';
+import { PageHeader } from '../../shell/page-header';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
+import { AddDeviceSheet } from './sheets/add-device-sheet';
+import { EnrollSheet } from './sheets/enroll-sheet';
+import { PairSheet } from './sheets/pair-sheet';
+import { PhraseSheet } from './sheets/phrase-sheet';
+import { ProvisionSheet } from './sheets/provision-sheet';
+import { RemoveDeviceSheet } from './sheets/remove-device-sheet';
+import { RevokeBackupSheet } from './sheets/revoke-backup-sheet';
+import { RevokeSheet } from './sheets/revoke-sheet';
+import { YubiActionSheet } from './sheets/yubi-action-sheet';
+import type { SimpleYubiAction } from './credential-actions';
 import {
   deviceAt,
   deviceEntries,
   enrollmentForDevice,
   deviceIsCard,
-} from '../data/device-model';
-import type { DeviceEntry } from '../data/device-model';
-import { UnavailableAccount } from './settings/unavailable-account';
-import { deviceAlertRegistry } from '../data/device-alert';
+} from '../../data/device-model';
+import type { DeviceEntry } from '../../data/device-model';
+import { UnavailableAccount } from '../../screens/settings/unavailable-account';
+import { deviceAlertRegistry } from '../../data/device-alert';
 import { RecoveryPhraseTestSheet } from './recovery-phrase-test-sheet';
-import { useExposureReviews } from '../exposure-review';
-import { ExposureReviewBands, ExposureReviewSheet } from './exposure-review';
+import { useExposureReviews } from '../../exposure-review';
+import {
+  ExposureReviewBands,
+  ExposureReviewSheet,
+} from '../../screens/exposure-review';
 import {
   RECOVERY_TEST_INTERVAL_DAYS,
   recoveryPhraseTestDue,
@@ -89,10 +92,10 @@ import {
   snoozeRecoveryPhraseReminder,
   subscribeRecoveryPhraseTests,
   testedDate,
-} from '../recovery-phrase-tests';
-import type { RecoveryPhraseTestStatus } from '../recovery-phrase-tests';
-import { kindLabel, TestedChip } from './devices/device-labels';
-import { DeviceDetail } from './devices/device-detail';
+} from '../../recovery-phrase-tests';
+import type { RecoveryPhraseTestStatus } from '../../recovery-phrase-tests';
+import { kindLabel, TestedChip } from './device-labels';
+import { DeviceDetail } from './device-detail';
 
 type Sheet =
   | 'add'
