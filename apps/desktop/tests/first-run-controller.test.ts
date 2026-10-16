@@ -4,7 +4,7 @@ import { FIXTURE } from '../src/mock/fixture';
 import {
   authoritativeSetupFacts,
   resolveSetupEntry,
-} from '../src/first-run-controller';
+} from '../src/features/first-run/first-run-controller';
 import { initialFirstRun, transitionFirstRun } from '../src/first-run-state';
 const profile = {
   profile: 'personal',

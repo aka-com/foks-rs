@@ -10,7 +10,7 @@ import { createElement } from 'react';
 
 import type { Bridge } from '../src/bridge';
 import type { FirstRunCheckpoint } from '../src/first-run-state';
-import type { FirstRunExperienceProps } from '../src/screens/first-run-screen';
+import type { FirstRunExperienceProps } from '../src/features/first-run/first-run-screen';
 import type { GuardVerdict, Location } from '../src/location';
 import { installDom } from './lib/dom-harness';
 
@@ -34,7 +34,7 @@ test.afterEach(() => {
 const AWAY: Location = { kind: 'all' };
 
 async function harness() {
-  const screen = await import('../src/screens/first-run-screen');
+  const screen = await import('../src/features/first-run/first-run-screen');
   const locations = await import('../src/location');
   const guards = await import('../src/navigation-guard');
   const state = await import('../src/first-run-state');

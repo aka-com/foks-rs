@@ -6,11 +6,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { protectionNavigationPolicy } from '../src/screens/first-run/session-transitions';
+import { protectionNavigationPolicy } from '../src/features/first-run/session-transitions';
 import {
   holdsSetupSecret,
   useSetupSecrets,
-} from '../src/screens/first-run/use-setup-secrets';
+} from '../src/features/first-run/use-setup-secrets';
 import { installDom } from './lib/dom-harness';
 
 installDom({ timers: true, act: true });

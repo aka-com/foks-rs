@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { Bridge } from '../src/bridge';
-import type { FirstRunExperienceProps } from '../src/screens/first-run-screen';
+import type { FirstRunExperienceProps } from '../src/features/first-run/first-run-screen';
 import type { FirstRunCheckpoint } from '../src/first-run-state';
 import { installDom } from './lib/dom-harness';
 
@@ -71,7 +71,7 @@ function deferred<T>() {
 
 async function harness() {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { FIXTURE } = await import('../src/mock/fixture');
@@ -1108,7 +1108,7 @@ test('the development bridge supplies matching identity facts after pending setu
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { loadSnapshot } = await import('../src/bridge');
   const { resolveProvisionedIdentity } =
-    await import('../src/first-run-identity');
+    await import('../src/features/first-run/first-run-identity');
   const pending = h.transitionFirstRun(
     { ...h.checkpoint, state: 'account', account: undefined },
     {

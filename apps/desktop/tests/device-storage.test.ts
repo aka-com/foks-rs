@@ -18,8 +18,9 @@ installDom({ url: 'http://localhost/' });
 const storage = await import('../src/platform/device-storage');
 const labels =
   await import('../src/features/teams/invitations/invitation-labels');
-const recovery = await import('../src/first-run-recovery');
-const operations = await import('../src/first-run-operations');
+const recovery = await import('../src/features/first-run/first-run-recovery');
+const operations =
+  await import('../src/features/first-run/first-run-operations');
 const firstRun = await import('../src/first-run-state');
 const lists = await import('../src/recent-favorites');
 const reviews = await import('../src/features/teams/exposure-review-model');

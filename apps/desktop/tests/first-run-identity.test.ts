@@ -4,8 +4,8 @@ import { FIXTURE } from '../src/mock/fixture';
 import {
   resolveProvisionedIdentity,
   provisionedIdentityProblem,
-} from '../src/first-run-identity';
-import { identityRetryDelay } from '../src/screens/first-run/use-account-identity';
+} from '../src/features/first-run/first-run-identity';
+import { identityRetryDelay } from '../src/features/first-run/use-account-identity';
 import {
   initialFirstRun,
   transitionFirstRun,

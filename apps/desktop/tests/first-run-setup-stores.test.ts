@@ -6,7 +6,7 @@ import {
   initialFirstRun,
   type FirstRunCheckpoint,
 } from '../src/first-run-state';
-import { setupStores } from '../src/screens/first-run/setup-stores';
+import { setupStores } from '../src/features/first-run/setup-stores';
 
 const household = FIXTURE.stores.find(
   (store): store is TeamStore =>

@@ -5,7 +5,7 @@ import {
   protectionNavigationPolicy,
   selectedSigninMethod,
   setupNavigationEvent,
-} from '../src/screens/first-run/session-transitions';
+} from '../src/features/first-run/session-transitions';
 
 test('back from an uncommitted recovery phrase drops its draft but preserves passphrase input', () => {
   assert.deepEqual(

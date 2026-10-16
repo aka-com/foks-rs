@@ -8,9 +8,9 @@ installDom({ url: 'http://localhost/' });
 // These modules reach src/data/roster-staleness.ts through the bridge, and it
 // reads `window` when it is evaluated.
 const { retainSetup, retainedSetups } =
-  await import('../src/first-run-recovery');
+  await import('../src/features/first-run/first-run-recovery');
 const { executeProvisioning, provisioningInFlight } =
-  await import('../src/first-run-operations');
+  await import('../src/features/first-run/first-run-operations');
 const {
   initialFirstRun,
   decodeFirstRunCheckpoint,

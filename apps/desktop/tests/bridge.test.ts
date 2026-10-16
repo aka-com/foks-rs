@@ -1989,7 +1989,7 @@ test('loadSnapshot makes a single catalog call and does not leak fixture data in
   assert.equal(snapshot.servers[0].chain, checkedHost.chain);
   assert.equal(snapshot.servers[0].epoch, checkedHost.epoch);
   const { resolveProvisionedIdentity, provisionedIdentityProblem } =
-    await import('../src/first-run-identity');
+    await import('../src/features/first-run/first-run-identity');
   const { initialFirstRun } = await import('../src/first-run-state');
   const pending = {
     ...initialFirstRun('own', 'identity-pending'),

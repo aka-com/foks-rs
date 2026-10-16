@@ -9,7 +9,7 @@
    settings rules were in the components layer. The team rules, which shared
    that layer with the settings rules, now outrank them by layer order; no
    settings rule and team rule set different values on the same element. */
-@import '../screens/first-run.css' layer(features.first-run);
+@import '../features/first-run/first-run.css' layer(features.first-run);
 @import '../features/settings/settings.css' layer(features.settings);
 @import '../features/files/files.css' layer(features.files);
 @import '../screens/chat.css' layer(features.chat);

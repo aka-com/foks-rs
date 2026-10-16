@@ -281,7 +281,7 @@ test('joining choices continue without a next-steps module', async () => {
 
 test('discovers Go CLI profile in StrictMode and passes profile credentials to server check', async () => {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -345,7 +345,7 @@ test('discovers Go CLI profile in StrictMode and passes profile credentials to s
 
 test('the start fork selects nested CLI accounts with row actions', async () => {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -532,7 +532,7 @@ test('disables account selection and dialog dismissal while server verification 
 
 test('first-run waits for shared readiness and never initializes itself', async () => {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -574,7 +574,7 @@ test('first-run waits for shared readiness and never initializes itself', async 
 
 test('first-run exposes shared agent recovery without discarding its current step', async () => {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -608,7 +608,7 @@ test('first-run exposes shared agent recovery without discarding its current ste
 
 test('native-shaped account creation is not rewound by the pre-mutation inventory', async () => {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -722,7 +722,7 @@ test('native-shaped account creation is not rewound by the pre-mutation inventor
 
 test('first-run account navigation, server edits, and connection errors stay scoped', async () => {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -904,7 +904,7 @@ test('first-run account navigation, server edits, and connection errors stay sco
 
 test('personal recovery puts backup first and completes without creating a group', async () => {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -953,7 +953,7 @@ test('personal recovery puts backup first and completes without creating a group
 
 test('resumed sign-in step rediscovers the CLI profile for the verified server', async () => {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -1054,7 +1054,7 @@ test('resumed sign-in step rediscovers the CLI profile for the verified server',
 
 test('identity loading waits out a native mutation instead of failing setup', async (t) => {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -1066,7 +1066,7 @@ test('identity loading waits out a native mutation instead of failing setup', as
     FIRST_RUN_CHECKPOINT_KEY,
   } = await import('../src/first-run-state');
   const { identityRetryDelay } =
-    await import('../src/screens/first-run/use-account-identity');
+    await import('../src/features/first-run/use-account-identity');
   const profile = {
     profile: 'setup-foks-app-4430',
     acceptance: 'inserted' as const,

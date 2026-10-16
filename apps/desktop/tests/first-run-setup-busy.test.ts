@@ -4,7 +4,7 @@ import {
   setupBusy,
   setupLeaveBlocked,
   setupMutating,
-} from '../src/screens/first-run/setup-busy';
+} from '../src/features/first-run/setup-busy';
 
 const IDLE = {
   account: false,

@@ -45,7 +45,9 @@ export function deferredScreen<P extends object>(
 }
 
 const firstRun = deferredScreen('FirstRunExperience', () =>
-  import('../screens/first-run-screen').then((m) => m.FirstRunExperience),
+  import('../features/first-run/first-run-screen').then(
+    (m) => m.FirstRunExperience,
+  ),
 );
 const chatTab = deferredScreen('ChatTab', () =>
   import('../screens/chat-tab').then((m) => m.ChatTab),

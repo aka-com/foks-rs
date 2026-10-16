@@ -10,7 +10,10 @@ const TOKENS = new URL('../kit/tokens.css', import.meta.url);
 const STYLE_ENTRY = new URL('../src/styles/index.css', import.meta.url);
 const SHELL = new URL('../src/styles/shell.css', import.meta.url);
 const COMPONENTS = new URL('../src/styles/app.css', import.meta.url);
-const FIRST_RUN = new URL('../src/screens/first-run.css', import.meta.url);
+const FIRST_RUN = new URL(
+  '../src/features/first-run/first-run.css',
+  import.meta.url,
+);
 const SETTINGS = new URL(
   '../src/features/settings/settings.css',
   import.meta.url,
@@ -247,7 +250,7 @@ test('first-run rules live in the first-run sheet, below the other features', as
   assert.equal(
     /\.(?:first-run-main|local-[\w-]+|setup-[\w-]+)\b/.test(components),
     false,
-    'app.css holds a first-run rule; it belongs in screens/first-run.css',
+    'app.css holds a first-run rule; it belongs in features/first-run/first-run.css',
   );
   await assertFeatureClasses(FIRST_RUN, FIRST_RUN_ONLY_CLASSES);
   // The first-run rules were in the components layer, under every feature's

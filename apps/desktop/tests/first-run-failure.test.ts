@@ -5,7 +5,7 @@ import {
   classifyFirstRunFailure,
   presentFirstRunFailure,
   reconcileFirstRunFailure,
-} from '../src/first-run-failure';
+} from '../src/features/first-run/first-run-failure';
 
 test('first-run uncertainty classification honors the structured flag', () => {
   const failure = classifyFirstRunFailure('server-check', {

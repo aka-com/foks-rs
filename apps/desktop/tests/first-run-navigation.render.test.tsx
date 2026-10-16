@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { Bridge } from '../src/bridge';
-import type { FirstRunExperienceProps } from '../src/screens/first-run-screen';
+import type { FirstRunExperienceProps } from '../src/features/first-run/first-run-screen';
 import type { FirstRunCheckpoint } from '../src/first-run-state';
 import { installDom } from './lib/dom-harness';
 
@@ -42,7 +42,7 @@ function restartSetup(view: ReturnType<typeof ui.render>): void {
 
 async function harness() {
   const { FirstRunExperience } =
-    await import('../src/screens/first-run-screen');
+    await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
@@ -327,7 +327,7 @@ test('entry without prerequisites and changed navigation resolve to valid steps'
 test('restarting setup is confirmed first and then drops retained attempts', async () => {
   const h = await harness();
   const { retainSetup, retainedSetups } =
-    await import('../src/first-run-recovery');
+    await import('../src/features/first-run/first-run-recovery');
   const pending = h.transitionFirstRun(
     { ...h.checkpoint, account: undefined, state: 'account' },
     { type: 'account-provisioned', alias: 'personal', deviceName: 'Device' },
@@ -517,7 +517,8 @@ test('restart during identity loading ignores the old read when it completes', a
 
 test('a retained attempt on the same target is reconciled instead of creating again', async () => {
   const h = await harness();
-  const { retainSetup } = await import('../src/first-run-recovery');
+  const { retainSetup } =
+    await import('../src/features/first-run/first-run-recovery');
   retainSetup({
     ...h.checkpoint,
     account: undefined,

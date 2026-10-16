@@ -11,12 +11,12 @@ import {
   initialFirstRun,
   type FirstRunCheckpoint,
 } from '../src/first-run-state';
-import { runServerCheck } from '../src/screens/first-run/use-server-workflow';
-import { runTeamDiscovery } from '../src/screens/first-run/use-team-discovery';
+import { runServerCheck } from '../src/features/first-run/use-server-workflow';
+import { runTeamDiscovery } from '../src/features/first-run/use-team-discovery';
 import {
   captureSetupWorkflow,
   releaseSetupWorkflow,
-} from '../src/screens/first-run/workflow-ownership';
+} from '../src/features/first-run/workflow-ownership';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

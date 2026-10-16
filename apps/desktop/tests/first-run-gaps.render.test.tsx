@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import type { Bridge } from '../src/bridge';
-import type { FirstRunExperienceProps } from '../src/screens/first-run-screen';
+import type { FirstRunExperienceProps } from '../src/features/first-run/first-run-screen';
 import type { FirstRunCheckpoint } from '../src/first-run-state';
 import type { Location } from '../src/location';
 import { installDom } from './lib/dom-harness';
@@ -26,7 +26,7 @@ function never<T>(): Promise<T> {
 }
 
 async function harness() {
-  const screen = await import('../src/screens/first-run-screen');
+  const screen = await import('../src/features/first-run/first-run-screen');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');

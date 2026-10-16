@@ -19,7 +19,7 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 
 async function load() {
-  const steps = await import('../src/screens/first-run/steps');
+  const steps = await import('../src/features/first-run/steps');
   const state = await import('../src/first-run-state');
   return { ...steps, ...state };
 }

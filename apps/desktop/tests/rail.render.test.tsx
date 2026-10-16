@@ -341,7 +341,8 @@ for (const agent of ['ready', 'starting', 'stopped', 'locked'] as const) {
 }
 
 test('both setup rails omit the connection footer while keeping setup actions', async () => {
-  const { SetupSidebar } = await import('../src/screens/first-run-view');
+  const { SetupSidebar } =
+    await import('../src/features/first-run/first-run-view');
   const { initialFirstRun } = await import('../src/first-run-state');
   for (const managedLocal of [false, true]) {
     const view = ui.render(
@@ -359,7 +360,8 @@ test('both setup rails omit the connection footer while keeping setup actions', 
 });
 
 test('setup omits Restart until leaving the first step', async () => {
-  const { SetupSidebar } = await import('../src/screens/first-run-view');
+  const { SetupSidebar } =
+    await import('../src/features/first-run/first-run-view');
   const { initialFirstRun } = await import('../src/first-run-state');
   const onRestart = () => {};
   const view = ui.render(

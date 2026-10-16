@@ -20,7 +20,7 @@ import { DeviceCacheContext } from '../data/device-cache';
 import {
   FIRST_RUN_PROGRESS_EVENT,
   storedFirstRunCheckpoint,
-} from '../first-run-operations';
+} from '../features/first-run/first-run-operations';
 import {
   completedFirstRunSteps,
   firstRunNextStep,
