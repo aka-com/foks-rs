@@ -5,8 +5,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DropRegistry } from '../src/file-drop';
-import type { DropZone } from '../src/file-drop';
+import { DropRegistry } from '../src/features/files/file-drop';
+import type { DropZone } from '../src/features/files/file-drop';
 
 /** A zone recording what it was asked to handle. */
 function zone(): DropZone & { hovers: boolean[]; drops: string[][] } {

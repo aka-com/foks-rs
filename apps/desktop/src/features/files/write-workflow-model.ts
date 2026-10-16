@@ -24,7 +24,7 @@ import type {
   LoginFieldName,
   StoreRef,
 } from '../../model';
-import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from '../item-roles';
+import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from './item-roles';
 
 export type NewKind = Exclude<ItemKind, 'Folder'>;
 

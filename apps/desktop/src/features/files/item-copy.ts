@@ -5,12 +5,12 @@
  * here for the same reason.
  */
 
-import type { ToastController } from '../../kit/toasts';
-import { kindOf } from '../model';
-import type { Item } from '../model';
-import { normalizeCommandError } from '../bridge';
-import type { Bridge, ClipboardCopyResponse, ItemField } from '../bridge';
-import { itemRefOf, rememberRecent } from '../recent-favorites';
+import type { ToastController } from '../../../kit/toasts';
+import { kindOf } from '../../model';
+import type { Item } from '../../model';
+import { normalizeCommandError } from '../../bridge';
+import type { Bridge, ClipboardCopyResponse, ItemField } from '../../bridge';
+import { itemRefOf, rememberRecent } from '../../recent-favorites';
 
 /** A copy an item offers, labelled for its button and menu item. */
 export interface CopyAction {

@@ -11,7 +11,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   ReactNode,
 } from 'react';
-import { Band, Button, Icon } from '../components';
+import { Band, Button, Icon } from '../../components';
 import {
   fmtSize,
   formatRole,
@@ -20,10 +20,10 @@ import {
   trashEntries,
   trashEntryLabel,
   trashUnavailable,
-} from '../model';
-import type { AgentSnapshot, Store, TrashEntry } from '../model';
-import type { Bridge } from '../bridge';
-import { matchesShortcut } from '../shortcuts';
+} from '../../model';
+import type { AgentSnapshot, Store, TrashEntry } from '../../model';
+import type { Bridge } from '../../bridge';
+import { matchesShortcut } from '../../shortcuts';
 import { gridFocusTarget, rovingKey } from './files-keyboard';
 import { itemActionProblem } from './store-access';
 import { useTrashOrigins } from './trash-origins';

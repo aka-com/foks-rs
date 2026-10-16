@@ -2,7 +2,7 @@ import {
   readStorage,
   STORAGE_KEYS,
   writeStorage,
-} from './platform/device-storage';
+} from '../../platform/device-storage';
 
 /** A display preference only: browsing scope and selection remain in LocationStore. */
 export type FilesView = 'list' | 'grid';

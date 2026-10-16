@@ -11,8 +11,8 @@
  * (shown when viewing multiple stores), and Size.
  */
 
-import { itemsReadiness } from '../model';
-import { CollectionStatus } from '../components/collection-status';
+import { itemsReadiness } from '../../model';
+import { CollectionStatus } from '../../components/collection-status';
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type {
   FocusEvent as ReactFocusEvent,
@@ -21,12 +21,16 @@ import type {
   ReactNode,
   RefObject,
 } from 'react';
-import { useToast } from '../../kit/toasts';
-import { anyDialogOpen, ContextMenu, Menu } from '../../kit/overlay-primitives';
-import { useDismissedOnboardingTip } from '../onboarding-tips';
-import { virtualListWindow } from '../../kit/virtual-list';
-import { rememberFilesView, storedFilesView } from '../files-view-pref';
-import type { FilesView } from '../files-view-pref';
+import { useToast } from '../../../kit/toasts';
+import {
+  anyDialogOpen,
+  ContextMenu,
+  Menu,
+} from '../../../kit/overlay-primitives';
+import { useDismissedOnboardingTip } from '../../onboarding-tips';
+import { virtualListWindow } from '../../../kit/virtual-list';
+import { rememberFilesView, storedFilesView } from './files-view-pref';
+import type { FilesView } from './files-view-pref';
 import {
   FILES_CARD_GAP,
   FILES_CARD_HEIGHT,
@@ -51,9 +55,9 @@ import {
   SegmentedControl,
   StoreMark,
   usePaneResize,
-} from '../components';
-import { PageHeader } from '../shell/page-header';
-import { useShellServices, useShellSnapshot } from '../shell-services';
+} from '../../components';
+import { PageHeader } from '../../shell/page-header';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
 import {
   KINDS,
   KIND_LIST,
@@ -74,8 +78,8 @@ import {
   storeReadable,
   TRASH_ROOT,
   trashEntries,
-} from '../model';
-import type { Item, Store, TrashEntry } from '../model';
+} from '../../model';
+import type { Item, Store, TrashEntry } from '../../model';
 import { TrashView } from './trash-view';
 import type {
   KindFilter,
@@ -83,11 +87,11 @@ import type {
   LocationState,
   SortKey,
   SortDirection,
-} from '../location';
-import type { ItemField } from '../bridge';
+} from '../../location';
+import type { ItemField } from '../../bridge';
 import { writeBlockReason } from './store-choice';
-import { exportedPasswords } from './files/sheets/export-passwords-sheet';
-import type { NewKind } from './files/write-workflow-model';
+import { exportedPasswords } from './sheets/export-passwords-sheet';
+import type { NewKind } from './write-workflow-model';
 import { copyAndAnnounce } from './item-copy';
 import {
   ALL_ITEMS,
@@ -96,8 +100,8 @@ import {
   folderSelection,
   folderTree,
   scopedItems,
-} from '../model/scope';
-import type { FolderNode } from '../model/scope';
+} from '../../model/scope';
+import type { FolderNode } from '../../model/scope';
 import {
   NO_ROWS,
   allRows,
@@ -109,19 +113,19 @@ import {
   toggleRow,
 } from './item-moves';
 import type { DropVerdict, MultiSelection } from './item-moves';
-import { matchesShortcut, shortcutLabel } from '../shortcuts';
-import { manageReason } from '../model/group-model';
+import { matchesShortcut, shortcutLabel } from '../../shortcuts';
+import { manageReason } from '../../model/group-model';
 import {
   itemActionProblem,
   StoreAccessTakeover,
   storeAccessBands,
 } from './store-access';
-import { FolderRow, folderNavKey, ListHeader, Row } from './files/list-rows';
-import type { Columns, RowNav } from './files/list-rows';
-import { TreeRow } from './files/folder-tree';
-import type { StoreTree } from './files/folder-tree';
-import { VaultDropZone } from './files/vault-drop-zone';
-import type { DropTarget, DropUpload } from './files/vault-drop-zone';
+import { FolderRow, folderNavKey, ListHeader, Row } from './list-rows';
+import type { Columns, RowNav } from './list-rows';
+import { TreeRow } from './folder-tree';
+import type { StoreTree } from './folder-tree';
+import { VaultDropZone } from './vault-drop-zone';
+import type { DropTarget, DropUpload } from './vault-drop-zone';
 
 /* --------------------------------------------------------------- pieces -- */
 

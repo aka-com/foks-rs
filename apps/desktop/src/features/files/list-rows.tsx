@@ -24,12 +24,12 @@ import {
 import type { Item, AgentSnapshot } from '../../model';
 import type { SortKey, SortDirection } from '../../location';
 import type { ItemField } from '../../bridge';
-import { copyActions } from '../item-copy';
+import { copyActions } from './item-copy';
 import { whereOf } from '../../model/scope';
-import { copyProblem, itemCount, rowKey } from '../item-moves';
+import { copyProblem, itemCount, rowKey } from './item-moves';
 import { matchesShortcut } from '../../shortcuts';
 import type { KeyPress } from '../../shortcuts';
-import { itemActionProblem } from '../store-access';
+import { itemActionProblem } from './store-access';
 
 /** The table's column set: Location is drawn only while rows span stores. */
 export interface Columns {

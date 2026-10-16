@@ -55,7 +55,7 @@ import {
   recoveryPhraseTests,
   subscribeRecoveryPhraseTests,
 } from '../recovery-phrase-tests';
-import { DetailsPanel } from '../screens/details-panel';
+import { DetailsPanel } from '../features/files/details-panel';
 import { unroutedNotices } from '../screens/unrouted-notices';
 import {
   ALL_ITEMS,
@@ -63,9 +63,12 @@ import {
   folderSelection,
   listsItems,
 } from '../model/scope';
-import { copyAndAnnounce, openWebsiteAndAnnounce } from '../screens/item-copy';
-import { exportedPasswords } from '../screens/files/sheets/export-passwords-sheet';
-import { itemActionProblem } from '../screens/store-access';
+import {
+  copyAndAnnounce,
+  openWebsiteAndAnnounce,
+} from '../features/files/item-copy';
+import { exportedPasswords } from '../features/files/sheets/export-passwords-sheet';
+import { itemActionProblem } from '../features/files/store-access';
 import {
   teamRequestsBadge,
   usePendingMembershipCounts,
@@ -74,8 +77,8 @@ import {
 import {
   initialWriteWorkflow,
   type WriteWorkflow,
-} from '../screens/files/write-workflow-model';
-import { writeBlockReason } from '../screens/store-choice';
+} from '../features/files/write-workflow-model';
+import { writeBlockReason } from '../features/files/store-choice';
 import { useSearchShortcut } from '../shell/search-palette';
 import { ShortcutSheet, useShortcutSheetKey } from '../shell/shortcut-sheet';
 import { matchesShortcut, shortcutLabel } from '../shortcuts';

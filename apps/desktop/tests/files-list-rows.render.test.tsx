@@ -1,6 +1,6 @@
 /**
  * The Files list's column header and subfolder row rendered from their own
- * module under screens/files, without the screen around them: which column
+ * module under features/files, without the screen around them: which column
  * states the sort, the order a header click asks for, and how a subfolder row
  * sits in the grid.
  */
@@ -27,7 +27,7 @@ test.before(async () => {
 test.afterEach(() => ui.cleanup());
 
 test('within one vault the Name header states a sort by location, and a click reverses it', async () => {
-  const { ListHeader } = await import('../src/screens/files/list-rows');
+  const { ListHeader } = await import('../src/features/files/list-rows');
   const asked: [SortKey, SortDirection][] = [];
   const rendered = ui.render(
     createElement(ListHeader, {
@@ -52,7 +52,7 @@ test('within one vault the Name header states a sort by location, and a click re
 });
 
 test('a subfolder row is a grid row with one cell per column, and Enter opens it', async () => {
-  const { FolderRow } = await import('../src/screens/files/list-rows');
+  const { FolderRow } = await import('../src/features/files/list-rows');
   let opened = 0;
   const rendered = ui.render(
     createElement(FolderRow, {

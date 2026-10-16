@@ -10,7 +10,7 @@ import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
 import { Icon } from '../../components';
 import { displayPathComponent, isTrashPath } from '../../model';
 import type { AgentSnapshot, Item } from '../../model';
-import { within } from '../item-moves';
+import { within } from './item-moves';
 import { folderTree } from '../../model/scope';
 import type { FolderNode } from '../../model/scope';
 

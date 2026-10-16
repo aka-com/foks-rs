@@ -14,7 +14,7 @@ import {
   COPY_LABELS,
   copyActions,
   copyAndAnnounce,
-} from '../src/screens/item-copy';
+} from '../src/features/files/item-copy';
 
 function itemAt(path: string): Item {
   const item = FIXTURE.items.find((candidate) => candidate.path === path);

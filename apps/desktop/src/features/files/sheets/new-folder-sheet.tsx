@@ -21,8 +21,8 @@ import {
   useSheetGuard,
   useTabSheetState,
 } from '../../../navigation-guard';
-import { newFolderRoles } from '../../item-roles';
-import { writeBlockReason } from '../../store-choice';
+import { newFolderRoles } from '../item-roles';
+import { writeBlockReason } from '../store-choice';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
 import { namedPath } from '../write-workflow-model';
 import type { WriteWorkflow } from '../write-workflow-model';

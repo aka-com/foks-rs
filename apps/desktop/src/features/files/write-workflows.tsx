@@ -1,24 +1,24 @@
 /**
  * The write overlay: the sheet each write workflow opens. The sheets are in
- * `files/sheets/`, one per file; the workflow type is in
- * `files/write-workflow-model.ts`.
+ * `sheets/`, one per file; the workflow type is in
+ * `write-workflow-model.ts`.
  */
 
-import { MoveSheet } from './files/sheets/move-item-sheet';
-import { BulkProgressSheet } from './files/sheets/bulk-progress-sheet';
+import { MoveSheet } from './sheets/move-item-sheet';
+import { BulkProgressSheet } from './sheets/bulk-progress-sheet';
 import type { ReactNode } from 'react';
-import type { Item } from '../model';
-import { CopyItemSheet } from './files/sheets/copy-item-sheet';
-import { ImportPasswordsSheet } from './files/sheets/import-passwords-sheet';
-import { ExportPasswordsSheet } from './files/sheets/export-passwords-sheet';
-import type { WriteWorkflow } from './files/write-workflow-model';
-import { NewSheet } from './files/sheets/new-item-sheet';
-import { NewFolderSheet } from './files/sheets/new-folder-sheet';
-import { ExistsSheet } from './files/sheets/exists-sheet';
-import { ConflictSheet } from './files/sheets/conflict-sheet';
-import { DeleteSheet } from './files/sheets/delete-sheet';
-import { RestoreConflictSheet } from './files/sheets/restore-conflict-sheet';
-import { EmptyTrashSheet } from './files/sheets/empty-trash-sheet';
+import type { Item } from '../../model';
+import { CopyItemSheet } from './sheets/copy-item-sheet';
+import { ImportPasswordsSheet } from './sheets/import-passwords-sheet';
+import { ExportPasswordsSheet } from './sheets/export-passwords-sheet';
+import type { WriteWorkflow } from './write-workflow-model';
+import { NewSheet } from './sheets/new-item-sheet';
+import { NewFolderSheet } from './sheets/new-folder-sheet';
+import { ExistsSheet } from './sheets/exists-sheet';
+import { ConflictSheet } from './sheets/conflict-sheet';
+import { DeleteSheet } from './sheets/delete-sheet';
+import { RestoreConflictSheet } from './sheets/restore-conflict-sheet';
+import { EmptyTrashSheet } from './sheets/empty-trash-sheet';
 
 export function WriteOverlay({
   workflow,

@@ -1,8 +1,8 @@
-import { virtualListWindow } from '../../kit/virtual-list';
+import { virtualListWindow } from '../../../kit/virtual-list';
 import type {
   VirtualListInput,
   VirtualListWindow,
-} from '../../kit/virtual-list';
+} from '../../../kit/virtual-list';
 
 /** Keep these dimensions aligned with the card rules in files.css. */
 export const FILES_CARD_WIDTH = 160;

@@ -5,8 +5,11 @@ import {
   FILES_CARD_HEIGHT,
   FILES_CARD_HEIGHT_WITH_LOCATION,
   FILES_CARD_GAP,
-} from '../src/screens/files-grid';
-import { storedFilesView, rememberFilesView } from '../src/files-view-pref';
+} from '../src/features/files/files-grid';
+import {
+  storedFilesView,
+  rememberFilesView,
+} from '../src/features/files/files-view-pref';
 import { installDom } from './lib/dom-harness';
 
 const viewport = { listTop: 0, scrollTop: 0, viewport: 400, overscan: 1 };

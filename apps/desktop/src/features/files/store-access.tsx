@@ -1,7 +1,7 @@
 /** Full-page error and recovery view displayed when a store cannot be accessed. */
 
 import type { ReactNode } from 'react';
-import { Band, Button, Notice } from '../components';
+import { Band, Button, Notice } from '../../components';
 import {
   serverDisplayLabelForStore as displayServerName,
   canChangeItem,
@@ -9,14 +9,14 @@ import {
   storeOf,
   serverOf,
   storeDescriptionState,
-} from '../model';
+} from '../../model';
 import type {
   Item,
   Store,
   StoreDescriptionState,
   AgentSnapshot,
   StoreOperation,
-} from '../model';
+} from '../../model';
 
 export function itemActionProblem(
   snapshot: AgentSnapshot,

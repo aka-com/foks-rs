@@ -1,5 +1,5 @@
-import type { KvRoleInput } from '../bridge';
-import type { Store } from '../model';
+import type { KvRoleInput } from '../../bridge';
+import type { Store } from '../../model';
 
 /** Group items default to team-readable content that only admins can change. */
 export const DEFAULT_READ_ROLE: KvRoleInput = 'Member:0';

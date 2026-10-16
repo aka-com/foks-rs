@@ -10,8 +10,8 @@ import {
   RadioCard,
   RadioGroup,
   SectionLabel,
-} from '../components';
-import type { CardOption } from '../components';
+} from '../../components';
+import type { CardOption } from '../../components';
 import {
   canCreateInStore,
   leaseLapsed,
@@ -22,9 +22,9 @@ import {
   serverDisplayLabelForStore,
   serverLeaseUnavailable,
   storeDescription,
-} from '../model';
-import type { AgentSnapshot, Item, RoleWire, Store } from '../model';
-import type { KvRoleInput } from '../bridge';
+} from '../../model';
+import type { AgentSnapshot, Item, RoleWire, Store } from '../../model';
+import type { KvRoleInput } from '../../bridge';
 
 /**
  * Formats a store option for a vault selector. A team's detail names its

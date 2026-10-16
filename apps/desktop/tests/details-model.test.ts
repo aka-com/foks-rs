@@ -14,7 +14,7 @@ import {
   loginEditLines,
   loginRows,
   readOnce,
-} from '../src/screens/details-model';
+} from '../src/features/files/details-model';
 
 test('an unread login lists its three fields, each without a value', () => {
   assert.deepEqual(loginRows(null), [

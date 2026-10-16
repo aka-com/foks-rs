@@ -1,6 +1,6 @@
 /**
  * The write overlay's sheets rendered from their own modules under
- * screens/files/sheets, without the application around them: what each
+ * features/files/sheets, without the application around them: what each
  * answers when the reader tries to leave, and what the delete sheet calls
  * its item.
  */
@@ -11,7 +11,7 @@ import { createElement } from 'react';
 import type { ReactNode } from 'react';
 
 import type { GuardVerdict, Location, LocationStore } from '../src/location';
-import type { WriteWorkflow } from '../src/screens/files/write-workflow-model';
+import type { WriteWorkflow } from '../src/features/files/write-workflow-model';
 import { installDom } from './lib/dom-harness';
 import { loadTestShell } from './lib/test-shell';
 
@@ -34,10 +34,10 @@ const AWAY: Location = { kind: 'files' };
 
 async function harness() {
   const sheets = {
-    ...(await import('../src/screens/files/sheets/new-folder-sheet')),
-    ...(await import('../src/screens/files/sheets/exists-sheet')),
-    ...(await import('../src/screens/files/sheets/delete-sheet')),
-    ...(await import('../src/screens/files/sheets/conflict-sheet')),
+    ...(await import('../src/features/files/sheets/new-folder-sheet')),
+    ...(await import('../src/features/files/sheets/exists-sheet')),
+    ...(await import('../src/features/files/sheets/delete-sheet')),
+    ...(await import('../src/features/files/sheets/conflict-sheet')),
   };
   const locations = await import('../src/location');
   const guards = await import('../src/navigation-guard');

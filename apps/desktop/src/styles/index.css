@@ -11,7 +11,7 @@
    settings rule and team rule set different values on the same element. */
 @import '../screens/first-run.css' layer(features.first-run);
 @import '../screens/settings.css' layer(features.settings);
-@import '../screens/files.css' layer(features.files);
+@import '../features/files/files.css' layer(features.files);
 @import '../screens/chat.css' layer(features.chat);
 @import '../screens/chat-picker.css' layer(features.chat);
 /* teams.css precedes team-info.css in their sublayer, so the team details

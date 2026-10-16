@@ -5,8 +5,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Bridge } from '../bridge';
-import { originPath, type Item, type TrashEntry } from '../model';
+import type { Bridge } from '../../bridge';
+import { originPath, type Item, type TrashEntry } from '../../model';
 
 function originKey(origin: Item): string {
   return `${origin.store}|${origin.direntId}|${origin.version}`;

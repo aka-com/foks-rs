@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useToast } from '../../kit/toasts';
+import { useToast } from '../../../kit/toasts';
 import type { ReactNode } from 'react';
 import {
   Button,
@@ -24,8 +24,8 @@ import {
   SectionLabel,
   SheetDialog,
   StoreMark,
-} from '../components';
-import type { FilterKind } from '../components';
+} from '../../components';
+import type { FilterKind } from '../../components';
 import {
   displayPath,
   fieldLineText,
@@ -43,24 +43,24 @@ import {
   storeHues,
   storeNavigationOrder,
   storeOf,
-} from '../model';
-import type { Item } from '../model';
-import type { NavigationGuard, Selection } from '../location';
-import { useNavigationGuard } from '../navigation-guard';
-import { normalizeCommandError } from '../bridge';
-import type { ItemField, ItemRequest } from '../bridge';
-import { useFileDrop } from '../file-drop';
+} from '../../model';
+import type { Item } from '../../model';
+import type { NavigationGuard, Selection } from '../../location';
+import { useNavigationGuard } from '../../navigation-guard';
+import { normalizeCommandError } from '../../bridge';
+import type { ItemField, ItemRequest } from '../../bridge';
+import { useFileDrop } from './file-drop';
 import { COPY_LABELS, copyAndAnnounce } from './item-copy';
 import {
   isFavorite,
   itemRefOf,
   toggleFavorite,
   useRecentFavorites,
-} from '../recent-favorites';
+} from '../../recent-favorites';
 import { itemActionProblem } from './store-access';
 import { copyProblem } from './item-moves';
-import { useConcealOnInactive } from '../use-conceal-on-inactive';
-import { useShellServices, useShellSnapshot } from '../shell-services';
+import { useConcealOnInactive } from '../../use-conceal-on-inactive';
+import { useShellServices, useShellSnapshot } from '../../shell-services';
 import { editorBound, useItemSecrets } from './item-secrets';
 import {
   assertExactRead,
@@ -98,7 +98,7 @@ export interface DetailsPanelProps {
   accessGeneration?: number;
   /** Unique unlocked-shell identity preventing reads from crossing lock cycles. */
   accessSession?: object;
-  accessTicket?: import('../data/access-lifetime').AccessTicket;
+  accessTicket?: import('../../data/access-lifetime').AccessTicket;
   resumeDraft?: {
     store: string;
     path: string;

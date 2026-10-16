@@ -22,7 +22,7 @@ test.afterEach(() => {
 });
 
 async function mount(accessNow?: () => number) {
-  const { ItemsScreen } = await import('../src/screens/items-screen');
+  const { ItemsScreen } = await import('../src/features/files/items-screen');
   const { FIXTURE } = await import('../src/mock/fixture');
   const { mockBridge } = await import('../src/mock/mock-bridge');
   const { LocationStore, INITIAL_STATE } = await import('../src/location');

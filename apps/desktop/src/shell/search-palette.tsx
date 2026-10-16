@@ -45,8 +45,8 @@ import {
   shortcutLabel,
 } from '../shortcuts';
 import { GroupMark } from '../components/group-mark';
-import { copyActions, opensWebsite } from '../screens/item-copy';
-import type { CopyAction } from '../screens/item-copy';
+import { copyActions, opensWebsite } from '../features/files';
+import type { CopyAction } from '../features/files';
 import type { ItemField } from '../bridge';
 import {
   isFavorite,

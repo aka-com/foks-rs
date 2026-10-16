@@ -7,7 +7,7 @@
  * screen, so the movement rules are testable without a DOM.
  */
 
-import type { FolderNode } from '../model/scope';
+import type { FolderNode } from '../../model/scope';
 
 export interface GridPosition {
   /** The focused entry's position in list order. */

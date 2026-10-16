@@ -8,10 +8,10 @@
  * Copy to vault does that instead, as a new item written by the host.
  */
 
-import { normalizeCommandError } from '../bridge';
-import { displayPath, isTrashPath, nameOf } from '../model';
-import type { AgentSnapshot, Item } from '../model';
-import { failureOutcome } from '../data/operation-outcome';
+import { normalizeCommandError } from '../../bridge';
+import { displayPath, isTrashPath, nameOf } from '../../model';
+import type { AgentSnapshot, Item } from '../../model';
+import { failureOutcome } from '../../data/operation-outcome';
 
 /* ---------------------------------------------------------------- paths -- */
 

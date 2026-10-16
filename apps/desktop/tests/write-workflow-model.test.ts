@@ -12,7 +12,7 @@ import { FIXTURE } from '../src/mock/fixture';
 import {
   DEFAULT_READ_ROLE,
   DEFAULT_WRITE_ROLE,
-} from '../src/screens/item-roles';
+} from '../src/features/files/item-roles';
 import {
   conflictDraftWorkflow,
   droppedFileDraft,
@@ -20,7 +20,7 @@ import {
   initialWriteWorkflow,
   namedPath,
   workflowForError,
-} from '../src/screens/files/write-workflow-model';
+} from '../src/features/files/write-workflow-model';
 
 const PATH = '/logins/github.com';
 

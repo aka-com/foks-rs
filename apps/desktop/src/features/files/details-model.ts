@@ -11,9 +11,9 @@ import {
   loginField,
   loginFieldOf,
   loginLines,
-} from '../model';
-import type { LoginFieldName } from '../model';
-import type { Bridge, ItemRequest, ReadItemResponse } from '../bridge';
+} from '../../model';
+import type { LoginFieldName } from '../../model';
+import type { Bridge, ItemRequest, ReadItemResponse } from '../../bridge';
 
 const FIELD_LABELS: ReadonlyMap<string, string> = new Map([
   ['user', 'User name'],

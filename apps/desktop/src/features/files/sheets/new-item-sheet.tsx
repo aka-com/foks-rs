@@ -39,10 +39,10 @@ import {
   useSheetGuard,
   useTabSheetState,
 } from '../../../navigation-guard';
-import { useFileDrop } from '../../../file-drop';
+import { useFileDrop } from '../file-drop';
 import { useToast } from '../../../../kit/toasts';
-import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from '../../item-roles';
-import { AccessBlock, storeOption, writeBlockReason } from '../../store-choice';
+import { DEFAULT_READ_ROLE, DEFAULT_WRITE_ROLE } from '../item-roles';
+import { AccessBlock, storeOption, writeBlockReason } from '../store-choice';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
 import { PATH_HINT, fileDropPath, namedPath } from '../write-workflow-model';
 import type { NewKind, WriteWorkflow } from '../write-workflow-model';

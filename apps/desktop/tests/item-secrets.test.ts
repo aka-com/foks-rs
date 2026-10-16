@@ -17,8 +17,11 @@ import {
   editorBound,
   itemSecrets,
   plaintextOf,
-} from '../src/screens/item-secrets';
-import type { ItemSecrets, SecretsAction } from '../src/screens/item-secrets';
+} from '../src/features/files/item-secrets';
+import type {
+  ItemSecrets,
+  SecretsAction,
+} from '../src/features/files/item-secrets';
 
 const ITEM = FIXTURE.items.find((item) => item.kind === 'Secret')!;
 const KEY = `${ITEM.store}|${ITEM.path}|${ITEM.version}`;

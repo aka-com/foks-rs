@@ -7,7 +7,7 @@ import { nameOf, parseTrashName, storeOf } from '../../../model';
 import type { Item } from '../../../model';
 import { normalizeCommandError } from '../../../bridge';
 import { useSheetGuard } from '../../../navigation-guard';
-import { itemActionProblem } from '../../store-access';
+import { itemActionProblem } from '../store-access';
 import { useShellServices, useShellSnapshot } from '../../../shell-services';
 import type { WriteWorkflow } from '../write-workflow-model';
 

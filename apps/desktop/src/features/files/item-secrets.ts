@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { RefObject } from 'react';
-import type { Item } from '../model';
+import type { Item } from '../../model';
 
 /** One item version's Show state, keyed by `store|path|version`. */
 export type ReadState =

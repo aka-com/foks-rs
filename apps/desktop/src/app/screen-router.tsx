@@ -5,12 +5,12 @@ import type { LocationStore } from '../location';
 import { storeOf } from '../model';
 import type { DeviceLabel, Item } from '../model';
 import { markProfileRostersStale } from '../data/roster-staleness';
-import { ItemsScreen } from '../screens/items-screen';
-import type { DropUpload } from '../screens/files/vault-drop-zone';
+import { ItemsScreen } from '../features/files/items-screen';
+import type { DropUpload } from '../features/files/vault-drop-zone';
 import { PlaceholderScreen } from '../features/teams/placeholder-screen';
 import { listsItems } from '../model/scope';
 import { useShellServices, useShellSnapshot } from '../shell-services';
-import type { WriteWorkflow } from '../screens/files/write-workflow-model';
+import type { WriteWorkflow } from '../features/files/write-workflow-model';
 import {
   ChatTab,
   DevicesScreen,

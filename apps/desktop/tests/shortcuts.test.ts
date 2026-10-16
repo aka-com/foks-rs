@@ -23,7 +23,7 @@ import {
   gridFocusTarget,
   treeEntries,
   treeKeyAction,
-} from '../src/screens/files-keyboard';
+} from '../src/features/files/files-keyboard';
 import type { FolderNode } from '../src/model/scope';
 
 function press(key: string, modifiers: Partial<KeyPress> = {}): KeyPress {

@@ -22,8 +22,8 @@ import {
   type TrashEntry,
 } from '../model';
 import type { MutationFailureHandler } from '../data/mutation-recovery';
-import { itemActionProblem } from '../screens/store-access';
-import type { WriteWorkflow } from '../screens/files/write-workflow-model';
+import { itemActionProblem } from '../features/files/store-access';
+import type { WriteWorkflow } from '../features/files/write-workflow-model';
 import { matchesShortcut, typingTarget } from '../shortcuts';
 import { storedTrashAutoEmpty } from '../trash-auto-empty';
 

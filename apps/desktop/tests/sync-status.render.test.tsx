@@ -490,7 +490,8 @@ for (const location of [
 }
 
 test('an unavailable team retains its settings action in the takeover band', async () => {
-  const { StoreAccessTakeover } = await import('../src/screens/store-access');
+  const { StoreAccessTakeover } =
+    await import('../src/features/files/store-access');
   const team = FIXTURE.stores.find((store) => store.kind === 'team');
   assert.ok(team && team.kind === 'team');
   let opened = 0;

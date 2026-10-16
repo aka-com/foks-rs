@@ -43,7 +43,7 @@ import {
   previewTime,
 } from '../../chat/presentation';
 import type { Location } from '../../location';
-import { accessCopy } from '../../screens/store-access';
+import { accessCopy } from '../files';
 
 /** The items the catalog holds for one store. */
 export function itemCountOf(snapshot: AgentSnapshot, store: TeamStore): number {

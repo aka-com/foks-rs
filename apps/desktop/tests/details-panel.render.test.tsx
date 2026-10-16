@@ -6,7 +6,7 @@ import type { Bridge, ReadItemResponse } from '../src/bridge';
 import type { GuardVerdict, LocationStore } from '../src/location';
 import type { Item } from '../src/model';
 import type { AgentSnapshot } from '../src/model/types';
-import type { DetailsPanelProps } from '../src/screens/details-panel';
+import type { DetailsPanelProps } from '../src/features/files/details-panel';
 import { installDom } from './lib/dom-harness';
 import { loadTestShell, type TestShellProps } from './lib/test-shell';
 
@@ -27,7 +27,7 @@ async function setup(
   /** Present when the panel is mounted under a store's guard registry. */
   store?: LocationStore,
 ) {
-  const { DetailsPanel } = await import('../src/screens/details-panel');
+  const { DetailsPanel } = await import('../src/features/files/details-panel');
   const { NavigationGuardProvider } = await import('../src/navigation-guard');
   const { ToastProvider, ToastController } = await import('../kit/toasts');
   const { OverlayProvider } = await import('../kit/overlay-primitives');
@@ -271,7 +271,8 @@ test('an already-open Delete permanently sheet disables its action when access i
     undefined,
     (item) => item.path === '/logins/github.com',
   );
-  const { WriteOverlay } = await import('../src/screens/write-workflows');
+  const { WriteOverlay } =
+    await import('../src/features/files/write-workflows');
   const TestShell = await loadTestShell();
   const { OverlayProvider } = await import('../kit/overlay-primitives');
   const { ToastProvider, ToastController } = await import('../kit/toasts');

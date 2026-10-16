@@ -24,7 +24,7 @@ const firstRun = await import('../src/first-run-state');
 const lists = await import('../src/recent-favorites');
 const reviews = await import('../src/features/teams/exposure-review-model');
 const { rememberFilesView, storedFilesView } =
-  await import('../src/files-view-pref');
+  await import('../src/features/files/files-view-pref');
 
 const { STORAGE_KEYS, purgeProfiles } = storage;
 

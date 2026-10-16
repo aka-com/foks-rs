@@ -5,11 +5,11 @@
  * with `shortcutLabel`, and the shortcut sheet lists the registry, so a
  * shortcut's keys are written once. The entries for moving focus in the
  * Files list, the Trash list and the folder tree describe the keys
- * `screens/files-keyboard.ts` maps; their tests check that each listed key
- * moves focus. The chat entries describe the keys the Chat tab's own
- * handlers take; the channel and message steps match through the registry,
- * and the composer's formatting keys and Find, which take ⌘ on macOS and
- * Ctrl elsewhere rather than either, are listed per platform.
+ * `features/files/files-keyboard.ts` maps; their tests check that each
+ * listed key moves focus. The chat entries describe the keys the Chat
+ * tab's own handlers take; the channel and message steps match through the
+ * registry, and the composer's formatting keys and Find, which take ⌘ on
+ * macOS and Ctrl elsewhere rather than either, are listed per platform.
  */
 
 /** Where a shortcut applies, in the order the sheet lists the groups. */

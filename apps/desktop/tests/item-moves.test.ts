@@ -24,8 +24,8 @@ import {
   selectedRows,
   toggleRow,
   validFolderPath,
-} from '../src/screens/item-moves';
-import type { BulkAction, BulkRow } from '../src/screens/item-moves';
+} from '../src/features/files/item-moves';
+import type { BulkAction, BulkRow } from '../src/features/files/item-moves';
 
 const STORE = 'acct:personal';
 

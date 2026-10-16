@@ -6,7 +6,7 @@ import {
   rovingKey,
   treeEntries,
   treeKeyAction,
-} from '../src/screens/files-keyboard';
+} from '../src/features/files/files-keyboard';
 import type { FolderNode } from '../src/model/scope';
 
 test('list keys move one row, a page, or to either end', () => {

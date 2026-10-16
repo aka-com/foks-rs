@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import type { Bridge } from './bridge';
+import type { Bridge } from '../../bridge';
 
 /** A registered drop zone. Only the active zone is called. */
 export interface DropZone {

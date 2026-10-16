@@ -61,7 +61,7 @@ import {
 } from './group-tabs';
 import { GroupMark } from '../../components/group-mark';
 import { manageReason } from '../../model/group-model';
-import { StoreAccessTakeover } from '../../screens/store-access';
+import { StoreAccessTakeover } from '../files';
 import { useToast } from '../../../kit/toasts';
 import { useExposureReviews } from './exposure-review-model';
 import { ExposureReviewBands, ExposureReviewSheet } from './exposure-review';
