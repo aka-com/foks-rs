@@ -7,12 +7,15 @@ import unittest
 from unittest.mock import patch
 
 import check_graph as c
+from test_prepare_runtime import a2_fixture, historical_pins
 
 
-def fixture():
-    pins = c.preparation.load_pins()
+def fixture(mode="identity", profile=c.preparation.A1):
+    pins = historical_pins()
+    if profile == c.preparation.A2:
+        pins.update(format=2, profile=profile)
     names = {
-        c.FIXTURE: ("0.0.0", []), "celld": ("0.6.2", []),
+        c.FIXTURE: ("0.0.0", [] if mode == "identity" else ["lifecycle"]), "celld": ("0.6.2", [] if mode == "identity" else ["foks-guarded-qualification"]),
         "foks-hosted-transport": ("0.4.0", ["qualification"]),
         "foks-metadata-core": ("0.4.0", ["owned-list"]),
         "tokio": ("1.53.1", ["full"]),
@@ -26,6 +29,8 @@ def fixture():
     metadata = {"version": 1, "packages": packages, "workspace_members": [c.FIXTURE], "resolve": {"root": c.FIXTURE, "nodes": nodes}}
     for child in ("celld", "foks-hosted-transport", "foks-metadata-core"):
         edge(metadata, c.FIXTURE, child)
+    if mode == "lifecycle":
+        edge(metadata, c.FIXTURE, "tokio")
     for child in ("v8", "rusqlite", "sqlite-vec", "tokio"):
         edge(metadata, "celld", child)
     edge(metadata, "rusqlite", "libsqlite3-sys")
@@ -148,13 +153,13 @@ class GraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             (path / "evidence.json").write_text(json.dumps({"format": 1, "target": "other", "profile": "a1-library-identity"}))
-            with self.assertRaisesRegex(ValueError, "target/profile"):
+            with patch.object(c.preparation, "load_pins", return_value=historical_pins()), self.assertRaisesRegex(ValueError, "target/profile"):
                 c.verify(path)
 
     def test_saved_evidence_requires_every_native_tool_input(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
-            pins = c.preparation.load_pins()
+            pins = historical_pins()
             toolchain = path / "toolchain"
             environment = {"A1_FIXTURE_ENVIRONMENT": "fixed"}
             native_paths = tuple(str(path / name) for name in ("native-cc", "native-ld"))
@@ -169,7 +174,7 @@ class GraphTests(unittest.TestCase):
                     "exit_code": 0, "reason": "completed", "cleanup_established": True,
                     **{stream + "_sha256": c.preparation.file_hash(path / (name + "." + stream)) for stream in ("stdout", "stderr")},
                 }
-            with patch.object(c.preparation, "controlled_environment", return_value=(toolchain, environment)), patch.object(c.preparation, "config_inputs", return_value={}), patch.object(c.preparation, "network_command", side_effect=lambda argv: list(map(str, argv))), patch.object(c.preparation, "native_tool_paths", return_value=native_paths), patch.object(c, "graph_report") as graph:
+            with patch.object(c.preparation, "load_pins", return_value=pins), patch.object(c.preparation, "controlled_environment", return_value=(toolchain, environment)), patch.object(c.preparation, "config_inputs", return_value={}), patch.object(c.preparation, "network_command", side_effect=lambda argv: list(map(str, argv))), patch.object(c.preparation, "native_tool_paths", return_value=native_paths), patch.object(c, "graph_report") as graph:
                 evidence = {
                     "format": 1, "target": c.TARGET, "profile": pins["profile"],
                     "manifest": str(c.ROOT / "Cargo.toml"), "cwd": str(c.ROOT),
@@ -194,6 +199,137 @@ class GraphTests(unittest.TestCase):
             run.assert_not_called()
 
 
+class ModeTests(unittest.TestCase):
+    def test_a2_modes_require_exact_harness_celld_and_direct_tokio_edges(self):
+        for mode in ("identity", "lifecycle"):
+            metadata, pins = fixture(mode, c.preparation.A2)
+            report = c.graph_report(metadata, pins, mode)
+            self.assertEqual(report["mode"], mode)
+            self.assertEqual(report["profile"], c.preparation.A2)
+            for package, feature in ((c.FIXTURE, "tokio"), ("celld", "unreviewed"), ("foks-metadata-core", "native"), ("foks-hosted-transport", "test-support")):
+                altered = copy.deepcopy(metadata)
+                next(node for node in altered["resolve"]["nodes"] if node["id"] == package)["features"].append(feature)
+                with self.subTest(mode=mode, package=package), self.assertRaisesRegex(ValueError, "features"):
+                    c.graph_report(altered, pins, mode)
+            with self.assertRaisesRegex(ValueError, "features"):
+                c.graph_report(metadata, pins, "lifecycle" if mode == "identity" else "identity")
+            root = next(node for node in metadata["resolve"]["nodes"] if node["id"] == c.FIXTURE)
+            if mode == "identity":
+                edge(metadata, c.FIXTURE, "tokio")
+            else:
+                root["deps"] = [dependency for dependency in root["deps"] if dependency["pkg"] != "tokio"]
+            with self.assertRaisesRegex(ValueError, "direct optional Tokio"):
+                c.graph_report(metadata, pins, mode)
+
+    def test_a2_requires_one_exact_tokio_version_and_registry_source(self):
+        for mutation in ("version", "source", "duplicate"):
+            metadata, pins = fixture("lifecycle", c.preparation.A2)
+            tokio = next(package for package in metadata["packages"] if package["id"] == "tokio")
+            if mutation == "version":
+                tokio["version"] = "1.53.2"
+            elif mutation == "source":
+                tokio["source"] = None
+            else:
+                identity = add_package(metadata, "tokio", version="1.53.1", identity="second-tokio")
+                edge(metadata, c.FIXTURE, identity)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                c.graph_report(metadata, pins, "lifecycle")
+
+    def test_a1_cannot_select_lifecycle_and_unknown_mode_cannot_fall_back(self):
+        metadata, pins = fixture()
+        for mode in ("lifecycle", "unknown", "", None):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "mode"):
+                c.graph_report(metadata, pins, mode)
+
+    def test_metadata_and_tree_commands_bind_selected_target_and_mode(self):
+        root, toolchain = Path("/fixture"), Path("/toolchain")
+        for mode in ("identity", "lifecycle"):
+            _, pins = fixture(mode, c.preparation.A2)
+            with patch.object(c.preparation, "load_pins", return_value=pins), patch.object(c.preparation, "network_command", side_effect=lambda argv: list(map(str, argv))):
+                commands = c.commands(root, toolchain, mode)
+            for name, argv in commands.items():
+                self.assertIn("--locked", argv)
+                self.assertIn("--offline", argv)
+                self.assertIn("--no-default-features", argv)
+                target = "--filter-platform" if name == "metadata" else "--target"
+                self.assertEqual(argv[argv.index(target) + 1], c.TARGET)
+                self.assertEqual("--features" in argv, mode == "lifecycle")
+                if mode == "lifecycle":
+                    self.assertEqual(argv[argv.index("--features") + 1], "lifecycle")
+
+    def test_a2_saved_evidence_cannot_omit_or_relabel_mode(self):
+        for mode, recorded in (("identity", None), ("identity", "lifecycle"), ("lifecycle", None), ("lifecycle", "identity")):
+            with self.subTest(mode=mode, recorded=recorded), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                _, pins = fixture(mode, c.preparation.A2)
+                evidence = {"format": 1, "target": c.TARGET, "profile": c.preparation.A2, "manifest": str(c.ROOT / "Cargo.toml"), "cwd": str(c.ROOT)}
+                if recorded is not None:
+                    evidence["mode"] = recorded
+                (path / "evidence.json").write_text(json.dumps(evidence))
+                with patch.object(c.preparation, "load_pins", return_value=pins), patch.object(c.preparation, "controlled_environment") as environment, self.assertRaisesRegex(ValueError, "evidence mode"):
+                    c.verify(path, mode=mode)
+                environment.assert_not_called()
+
+    def test_a1_implicit_identity_evidence_remains_historical_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            evidence = {"format": 1, "target": c.TARGET, "profile": c.preparation.A1, "manifest": str(c.ROOT / "Cargo.toml"), "cwd": str(c.ROOT)}
+            (path / "evidence.json").write_text(json.dumps(evidence))
+            with patch.object(c.preparation, "load_pins", return_value=historical_pins()), patch.object(c.preparation, "controlled_environment", side_effect=ValueError("reached actual environment validation")) as environment:
+                with self.assertRaisesRegex(ValueError, "reached actual environment"):
+                    c.verify(path)
+                environment.assert_called_once_with(c.ROOT)
+            evidence["mode"] = "lifecycle"
+            (path / "evidence.json").write_text(json.dumps(evidence))
+            with patch.object(c.preparation, "load_pins", return_value=historical_pins()), self.assertRaisesRegex(ValueError, "evidence mode"):
+                c.verify(path)
+
+    def test_a2_both_modes_bind_outer_lifecycle_sources_and_full_postimage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            root = repo / "tools/foks-celld-guarded"
+            root.parent.mkdir()
+            pins, archive, _, _, _ = a2_fixture(root)
+            c.preparation.prepare(archive, root)
+            for name in c.source_paths(pins):
+                path = root / name
+                if not path.exists():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(("reviewed " + name + "\n").encode())
+            (repo / "Cargo.toml").write_bytes(b"reviewed workspace\n")
+            baseline = repo / pins["foks_additional_versions"]["baseline_lock"]
+            baseline.parent.mkdir(parents=True, exist_ok=True)
+            baseline.write_bytes(b"reviewed baseline lock\n")
+            for name in ("foks-metadata-core", "foks-hosted-transport"):
+                path = repo / "crates" / name / "Cargo.toml"
+                path.parent.mkdir(parents=True)
+                path.write_bytes(b"reviewed native-disabled crate\n")
+                path.with_name("lib.rs").write_bytes(b"reviewed source\n")
+            inventories = []
+            for mode in ("identity", "lifecycle"):
+                metadata, graph_pins = fixture(mode, c.preparation.A2)
+                for package in metadata["packages"]:
+                    if package["source"] is None:
+                        package["manifest_path"] = str(root / "Cargo.toml" if package["name"] == c.FIXTURE else root / "runtime/source/crates/celld/Cargo.toml" if package["name"] == "celld" else repo / "crates" / package["name"] / "Cargo.toml")
+                reached = {package["id"] for package in c.graph_report(metadata, graph_pins, mode)["packages"]}
+                with patch.object(c.preparation, "config_inputs", return_value={}):
+                    candidates = c.candidate_inputs(root)
+                    selected = c.selected_inputs(metadata, reached, root)
+                self.assertTrue(all(candidates.get(path) == checksum for path, checksum in selected.items()))
+                for name in c.A2_SOURCE_PATHS:
+                    self.assertIn(str(root / name), selected)
+                for path in (root / "runtime/source").rglob("*"):
+                    if path.is_file():
+                        self.assertIn(str(path), selected)
+                inventories.append(selected)
+            self.assertEqual(inventories[0], inventories[1])
+            changed = root / "tests/lifecycle.rs"
+            changed.write_bytes(b"changed integration oracle\n")
+            with patch.object(c.preparation, "config_inputs", return_value={}):
+                current = c.selected_inputs(metadata, reached, root)
+            self.assertNotEqual(current[str(changed)], inventories[0][str(changed)])
+
+
 def write_lock(path, packages):
     lines = ["version = 3", ""]
     for package in packages:
@@ -210,8 +346,8 @@ def lock_fixture(parent):
     root = parent / "tools/foks-celld-guarded"
     root.mkdir(parents=True)
     (root / "patches").mkdir()
-    (root / "patches/series.json").write_bytes((c.ROOT / "patches/series.json").read_bytes())
-    pins = c.preparation.load_pins()
+    (root / "patches/series.json").write_bytes(b'{"format":1,"patches":[]}\n')
+    pins = historical_pins()
     old = {"name": "sha2", "version": "0.10.9", "source": c.preparation.CRATES_IO, "checksum": "a" * 64}
     new = next(copy.deepcopy(item) for item in pins["foks_additional_versions"]["allowed"] if item["name"] == "sha2")
     engines = [{"name": name, "source": c.preparation.CRATES_IO, **expected} for name, expected in pins["registry_engines"].items()]

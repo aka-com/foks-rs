@@ -1,6 +1,6 @@
 {
-  "format": 1,
-  "profile": "a1-library-identity",
+  "format": 2,
+  "profile": "a2-physical-lifetimes",
   "target": "aarch64-apple-darwin",
   "foks_baseline": "cc7777864c1eb1752e28425d9f6f5dcf2d15b352",
   "upstream": {
@@ -19,7 +19,7 @@
     "inventory_sha256": "8ea2a3ea73908bd1780b90e6701d636e29cf340e9b8a0b09e53bcc99a6cb28b0",
     "cargo_lock_sha256": "d6a17422788aa910ba76bed9cf59ac15767f93fe107ebdb336954d0e9efe052b"
   },
-  "patch_series_sha256": "2cae2b737e3b22ea5c69cb1b7284d4a9810f83d169d550ad73898af77e275e66",
+  "patch_series_sha256": "bf15b77b32416914a1d96426aa58fc65d1b436e0645c73dcc11ad91f6e9c0ea6",
   "toolchain": {
     "channel": "1.95.0",
     "host": "aarch64-apple-darwin",
@@ -87,7 +87,8 @@
     "minimum_free_bytes": 6442450944,
     "free_floor_bytes": 2147483648,
     "maximum_target_bytes": 4294967296,
-    "maximum_command_log_bytes": 134217728
+    "maximum_command_log_bytes": 134217728,
+    "admission": "remaining-target-allowance"
   },
   "cargo_config_sha256": [
     "f727a8aca8728ea53823d61cf4e797ec2cb716bab5b3c1c67d7c7d8ead8df347"
@@ -151,5 +152,20 @@
         "checksum": "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
       }
     ]
+  },
+  "qualification": {
+    "base_commit": "8e31944080e03651caaa3512169fe468f8375342",
+    "program": {
+      "js": {
+        "bytes": 1734,
+        "sha256": "6f81c5275a0d4b7e6bab2136153b7a42e018b7c4c005d412dd513a472e4b1497"
+      },
+      "wasm": {
+        "bytes": 161,
+        "sha256": "132f90ed059cd55eccfa9f1e48deac799adde38e30d8ec5f3540ef0ca3d96727"
+      }
+    },
+    "execution_slots": 2,
+    "wasm_bytes_per_slot": 67108864
   }
 }

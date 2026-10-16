@@ -1,4 +1,114 @@
 {
-  "format": 1,
-  "patches": []
+  "format": 2,
+  "profile": "a2-physical-lifetimes",
+  "base_commit": "8e31944080e03651caaa3512169fe468f8375342",
+  "patches": [
+    {
+      "path": "patches/0001-guarded-physical-lifetimes.patch",
+      "bytes": 85466,
+      "sha256": "4c03df0fe29ff3224cc60ce87c1340ce37cd5e8b679978ed2da5eb52ecbbce7f",
+      "files": [
+        {
+          "path": "crates/celld/Cargo.toml",
+          "mode": "100644",
+          "before": {
+            "bytes": 2384,
+            "sha256": "f09c37b96e516a0440abcca1e221c6b3282b9fbe318c6df55ea5d6fd274f6838",
+            "git_sha1": "98c9ac95730e64b7e615f215358cce7b08378b4d"
+          },
+          "after": {
+            "bytes": 2428,
+            "sha256": "c7b5d9e587246597df23533847658909b36dc11d4a2abf760e2696dddd73b003",
+            "git_sha1": "9f936d612ef97fc077aac7f9139e01097e57e82d"
+          }
+        },
+        {
+          "path": "crates/celld/lib.rs",
+          "mode": "100644",
+          "before": {
+            "bytes": 9494,
+            "sha256": "03f15b0bca2d88f37d34a48616463f63ed0b97abf331e1556f3de9ee792aea94",
+            "git_sha1": "c3ecb1e06457290f84eb1503bc15cf56968287f7"
+          },
+          "after": {
+            "bytes": 9915,
+            "sha256": "db58e884db6167539100cd33b444f05e96413bbab0051d935bdd12544ad017eb",
+            "git_sha1": "1f140fe9dea88b4c1e0bae387c3cfb3702b2a90c"
+          }
+        },
+        {
+          "path": "crates/celld/pool.rs",
+          "mode": "100644",
+          "before": {
+            "bytes": 37178,
+            "sha256": "db6c210d5b5528d3ff715aa8f851cc7fb2f5203656e700476dcbe48543eb48ca",
+            "git_sha1": "18a8f98a12d7fa5dc2f17e70a95e5c231c6e2ce7"
+          },
+          "after": {
+            "bytes": 39070,
+            "sha256": "3551fc9c7a60c99c508e6129a5d700ee490a21ed214c3d22d29452ca7ad404c7",
+            "git_sha1": "2cc343250eae07368039eddec110a241a44876e5"
+          }
+        },
+        {
+          "path": "crates/celld/runtime.rs",
+          "mode": "100644",
+          "before": {
+            "bytes": 139873,
+            "sha256": "8ee9d4a8cdf1ef55a9a8b88f213d00aaccb0eaf15b0d13a9f28ed88abeeb0611",
+            "git_sha1": "74941d5e7fa94e2a3509327e6801f1103ca6b80f"
+          },
+          "after": {
+            "bytes": 140373,
+            "sha256": "a42e75d8bc5e9920c70d943df17b60c0205d6d9bc93cab2997eebe547f333403",
+            "git_sha1": "3bf5ec0639be9c8dd2917e064e82aee272554519"
+          }
+        },
+        {
+          "path": "crates/celld/js.rs",
+          "mode": "100644",
+          "before": {
+            "bytes": 506808,
+            "sha256": "21ab0205e4cdef01d4963834e655bbad2ddb1ffbcc30f9256fb069fc4bc1564e",
+            "git_sha1": "ec40b415338f0642e6e3fb83d35e0175a587accf"
+          },
+          "after": {
+            "bytes": 506970,
+            "sha256": "0cf2c09accfce13887773e077c884cf78e9bf3d072cd30b4db19e7a450173241",
+            "git_sha1": "241d2cf45ef53cadf2f003fba3a826fe12dc3bdd"
+          }
+        },
+        {
+          "path": "crates/celld/js/guarded.rs",
+          "mode": "100644",
+          "before": null,
+          "after": {
+            "bytes": 10118,
+            "sha256": "ac4323b80e29df2b7bb820f8ffaf692ea40e19ba14a6a73156707c165f8485d6",
+            "git_sha1": "455df31038f7187b2ed84ad9dda00150d6f9ac32"
+          }
+        },
+        {
+          "path": "crates/celld/guarded_execution.rs",
+          "mode": "100644",
+          "before": null,
+          "after": {
+            "bytes": 30682,
+            "sha256": "a476d8c34ae6f26a83b1858877865f8a4370b03bce57ce4efedf6a088e2d8f0b",
+            "git_sha1": "cea0941795c0428420587868c3a1c28fe255533b"
+          }
+        },
+        {
+          "path": "crates/celld/guarded_execution/qualification.rs",
+          "mode": "100644",
+          "before": null,
+          "after": {
+            "bytes": 37458,
+            "sha256": "a392f86d53bcc2f08d72547c125181939b51e1dc019888078559e51d7806412a",
+            "git_sha1": "88364522a8850f145a1fc5153d36f6bdb5d013f0"
+          }
+        }
+      ]
+    }
+  ]
 }

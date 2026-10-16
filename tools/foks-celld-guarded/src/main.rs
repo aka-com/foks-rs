@@ -1,4 +1,5 @@
-//! A1 links the actual libraries; it grants no tenant or runtime readiness.
+//! Pinned native identity and a closed physical-lifetime qualification fixture.
+//! Neither command grants tenant readiness or qualifies a hosted deployment.
 use foks_hosted_transport::memory::{self, PoolLimits, Pools, Request};
 use foks_metadata_core::owned_list::ListRetainedOwner;
 use sha2::{Digest, Sha256};
@@ -9,16 +10,53 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 const INPUT: &str = include_str!("../runtime.lock.json");
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[cfg(feature = "lifecycle")]
+mod lifecycle;
+
+enum Command {
+    Identity,
+    #[cfg(feature = "lifecycle")]
+    Lifecycle(celld::LifecycleScenario),
+}
+
+fn command() -> Result<Command, Box<dyn Error>> {
     let mut arguments = std::env::args_os().skip(1);
-    if arguments.next().as_deref() != Some(std::ffi::OsStr::new("identity"))
-        || arguments.next().is_some()
-    {
-        return Err("usage: foks-celld-guarded identity".into());
+    match arguments.next().as_deref().and_then(std::ffi::OsStr::to_str) {
+        Some("identity") if arguments.next().is_none() => Ok(Command::Identity),
+        #[cfg(feature = "lifecycle")]
+        Some("lifecycle") => {
+            let name = arguments.next().ok_or("missing lifecycle scenario")?;
+            let scenario = name
+                .to_str()
+                .and_then(celld::LifecycleScenario::from_name)
+                .ok_or("unknown lifecycle scenario")?;
+            if arguments.next().is_some() {
+                return Err("unexpected lifecycle argument".into());
+            }
+            Ok(Command::Lifecycle(scenario))
+        }
+        _ => Err("usage: foks-celld-guarded identity (or, with its feature, lifecycle <name>)".into()),
     }
-    // The same upstream initialization entry point, before any isolate worker.
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    // Reject unknown commands before V8 or host runtime initialization.
+    let command = command()?;
     celld::runtime::init_v8();
+    match command {
+        Command::Identity => identity(),
+        #[cfg(feature = "lifecycle")]
+        Command::Lifecycle(scenario) => lifecycle::run(scenario, INPUT),
+    }
+}
+
+fn identity() -> Result<(), Box<dyn Error>> {
     let pins: serde_json::Value = serde_json::from_str(INPUT)?;
+    let claim = match pins["profile"].as_str() {
+        Some("a1-library-identity") => "a1-library-identity-only",
+        Some("a2-physical-lifetimes") => "a2-library-identity-only",
+        _ => return Err("unsupported identity input profile".into()),
+    };
     let connection = rusqlite::Connection::open_in_memory()?;
     let (sqlite_version, sqlite_source_id): (String, String) =
         connection.query_row("SELECT sqlite_version(), sqlite_source_id()", [], |row| {
@@ -61,7 +99,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let report = serde_json::json!({
         "format": 1,
-        "claim": "a1-library-identity-only",
+        "claim": claim,
         "input_sha256": format!("{:x}", Sha256::digest(INPUT.as_bytes())),
         // These are embedded recipe pins; the external receipt checks the
         // compiler actually used and binds the executable hash, not this label.

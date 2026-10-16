@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Target-bound A1 engine and SQLite-free FOKS subclosure qualification.
+"""Target/mode-bound engine and SQLite-free FOKS subclosure qualification.
 
 collect is an explicit, locked/offline Cargo operation after source/lock review.
 verify only reads saved evidence and current inputs; it never resolves a graph.
@@ -20,6 +20,7 @@ TARGET = "aarch64-apple-darwin"
 FORBIDDEN = {"foks-server", "foks-server-db", "foks-server-testkit"}
 SQLITE = {"rusqlite", "libsqlite3-sys", "sqlite-vec"}
 SOURCE_PATHS = (".gitignore", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "runtime.lock.json", "upstream-tree.json", "prepare-runtime.py", "test_prepare_runtime.py", "check_graph.py", "test_check_graph.py", "patches/series.json", "src/main.rs")
+A2_SOURCE_PATHS = ("src/lifecycle.rs", "tests/lifecycle.rs", preparation.PATCH_PATH)
 
 
 def fail(message):
@@ -30,8 +31,9 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def commands(root, toolchain):
-    shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features"]
+def commands(root, toolchain, mode="identity"):
+    features = preparation.selected_mode(preparation.load_pins(root), mode)
+    shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", *features]
     cargo = str(toolchain / "bin/cargo")
     return {
         "metadata": preparation.network_command([cargo, "metadata", *shared, "--format-version", "1", "--filter-platform", TARGET]),
@@ -39,9 +41,10 @@ def commands(root, toolchain):
     }
 
 
-def graph_report(metadata, pins):
-    if pins.get("target") != TARGET or pins.get("profile") != "a1-library-identity":
+def graph_report(metadata, pins, mode="identity"):
+    if pins.get("target") != TARGET or pins.get("profile") not in (preparation.A1, preparation.A2):
         fail("missing or unexpected target/profile")
+    preparation.selected_mode(pins, mode)
     if not isinstance(metadata, dict) or metadata.get("version") != 1:
         fail("unsupported metadata format")
     resolve = metadata.get("resolve")
@@ -129,8 +132,8 @@ def graph_report(metadata, pins):
             fail("unexpected engine/package version: " + name)
         return identity
 
-    exact(FIXTURE, [])
-    exact("celld", [], pins["upstream"]["version"])
+    exact(FIXTURE, [] if mode == "identity" else ["lifecycle"])
+    exact("celld", [] if mode == "identity" else ["foks-guarded-qualification"], pins["upstream"]["version"])
     core = exact("foks-metadata-core", ["owned-list"])
     transport = exact("foks-hosted-transport", ["qualification"])
     exact("v8", pins["v8"]["features"], pins["v8"]["version"])
@@ -149,8 +152,15 @@ def graph_report(metadata, pins):
             fail("SQLite/native dependency in FOKS transport/core subclosure")
     if "tokio" not in {packages[identity]["name"] for identity in fokscore}:
         fail("missing actual transport runtime dependency")
+    if pins["profile"] == preparation.A2:
+        tokio = exact("tokio", version="1.53.1")
+        if packages[tokio]["source"] != preparation.CRATES_IO:
+            fail("Tokio is not the pinned registry source")
+        direct_tokio = any(dependency["pkg"] == tokio and any(kind["kind"] in (None, "build") for kind in dependency["dep_kinds"]) for dependency in nodes[root]["deps"])
+        if direct_tokio != (mode == "lifecycle"):
+            fail("direct optional Tokio edge does not match selected mode")
     inventory = [{"id": identity, "name": packages[identity]["name"], "version": packages[identity]["version"], "source": packages[identity]["source"], "features": sorted(nodes[identity]["features"])} for identity in sorted(reached)]
-    return {"format": 1, "target": TARGET, "profile": pins["profile"], "packages": inventory, "foks_subclosure": sorted(fokscore)}
+    return {"format": 1, "target": TARGET, "profile": pins["profile"], "mode": mode, "packages": inventory, "foks_subclosure": sorted(fokscore)}
 
 
 def regular_files(directory):
@@ -165,8 +175,9 @@ def regular_files(directory):
 def candidate_inputs(root):
     """Snapshot before Cargo; the selected local subset must already be bound."""
     repo = root.parents[1]
-    paths = {repo / "Cargo.toml", *(root / name for name in SOURCE_PATHS)}
-    paths.add(repo / preparation.load_pins(root)["foks_additional_versions"]["baseline_lock"])
+    pins = preparation.load_pins(root)
+    paths = {repo / "Cargo.toml", *(root / name for name in source_paths(pins))}
+    paths.add(repo / pins["foks_additional_versions"]["baseline_lock"])
     for directory in (repo / "crates").iterdir():
         if directory.is_dir() and (directory / "Cargo.toml").is_file():
             paths.update(regular_files(directory))
@@ -175,10 +186,15 @@ def candidate_inputs(root):
     return {str(path): preparation.file_hash(path) for path in sorted(paths)}
 
 
+def source_paths(pins):
+    return SOURCE_PATHS + (A2_SOURCE_PATHS if pins["profile"] == preparation.A2 else ())
+
+
 def selected_inputs(metadata, reached, root):
     repo = root.parents[1]
-    paths = {repo / "Cargo.toml", *(root / name for name in SOURCE_PATHS), root / "runtime/source/Cargo.toml", root / "runtime/source/Cargo.lock"}
-    paths.add(repo / preparation.load_pins(root)["foks_additional_versions"]["baseline_lock"])
+    pins = preparation.load_pins(root)
+    paths = {repo / "Cargo.toml", *(root / name for name in source_paths(pins)), root / "runtime/source/Cargo.toml", root / "runtime/source/Cargo.lock"}
+    paths.add(repo / pins["foks_additional_versions"]["baseline_lock"])
     for package in metadata["packages"]:
         if package["id"] not in reached or package["source"] is not None:
             continue
@@ -198,14 +214,20 @@ def selected_inputs(metadata, reached, root):
     return {str(path): preparation.file_hash(path) for path in sorted(paths)}
 
 
-def verify(directory, root=ROOT):
+def verify(directory, root=ROOT, mode="identity"):
     directory = Path(directory).resolve()
     evidence = preparation.read_json(directory / "evidence.json", 16 * 1024 * 1024)
     pins = preparation.load_pins(root)
+    preparation.selected_mode(pins, mode)
     if evidence.get("format") != 1 or evidence.get("target") != TARGET or evidence.get("profile") != pins["profile"] or evidence.get("manifest") != str(root / "Cargo.toml") or evidence.get("cwd") != str(root):
         fail("evidence target/profile/working-directory mismatch")
+    # Historical A1 identity evidence predates explicit modes. A2 may never
+    # inherit that implicit default, nor may either profile cross modes.
+    recorded_mode = evidence.get("mode", "identity" if pins["profile"] == preparation.A1 else None)
+    if recorded_mode != mode:
+        fail("evidence mode mismatch")
     toolchain, environment = preparation.controlled_environment(root)
-    selected_commands = commands(root, toolchain)
+    selected_commands = commands(root, toolchain, mode)
     captured = evidence.get("commands")
     if not isinstance(captured, dict) or set(captured) != set(selected_commands):
         fail("missing command provenance")
@@ -234,7 +256,7 @@ def verify(directory, root=ROOT):
     if any(preparation.file_hash(path) != expected for path, expected in tools["native_tools"].items()):
         fail("native compiler/linker/SDK inputs changed")
     metadata = preparation.read_json(directory / "metadata.stdout", 32 * 1024 * 1024)
-    report = graph_report(metadata, pins)
+    report = graph_report(metadata, pins, mode)
     reached = {package["id"] for package in report["packages"]}
     current = selected_inputs(metadata, reached, root)
     if evidence.get("inputs") != current:
@@ -256,23 +278,24 @@ def verify(directory, root=ROOT):
     return report
 
 
-def collect(directory, root=ROOT):
+def collect(directory, root=ROOT, mode="identity"):
     directory = Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=False)
     pins = preparation.load_pins(root)
+    preparation.selected_mode(pins, mode)
     source = preparation.verify_source(root)
     lock_delta = preparation.compare_locks(root)
     toolchain, environment = preparation.controlled_environment(root)
     before = candidate_inputs(root)
-    evidence = {"format": 1, "target": TARGET, "profile": pins["profile"], "manifest": str(root / "Cargo.toml"), "cwd": str(root), "source": source, "lock_delta": lock_delta, "commands": {}}
+    evidence = {"format": 1, "target": TARGET, "profile": pins["profile"], "mode": mode, "manifest": str(root / "Cargo.toml"), "cwd": str(root), "source": source, "lock_delta": lock_delta, "commands": {}}
     with preparation.BuildSlot(root) as slot:
         try:
             evidence["tools"] = preparation.tool_identity(root, directory, slot, environment, toolchain)
-            for name, argv in commands(root, toolchain).items():
+            for name, argv in commands(root, toolchain, mode).items():
                 evidence["commands"][name] = preparation.run_owned(argv, root, environment, directory, name, slot, 120)
                 preparation.write_json(directory / "evidence.json", evidence)
             metadata = preparation.read_json(directory / "metadata.stdout", 32 * 1024 * 1024)
-            report = graph_report(metadata, pins)
+            report = graph_report(metadata, pins, mode)
             reached = {package["id"] for package in report["packages"]}
             current = selected_inputs(metadata, reached, root)
             if any(before.get(path) != value for path, value in current.items()):
@@ -282,7 +305,7 @@ def collect(directory, root=ROOT):
             evidence["registry_inputs"] = preparation.registry_inputs(metadata, reached, root)
         finally:
             preparation.write_json(directory / "evidence.json", evidence)
-    report = verify(directory, root)
+    report = verify(directory, root, mode)
     preparation.write_json(directory / "report.json", report)
     return report
 
@@ -291,10 +314,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="operation", required=True)
     for name in ("collect", "verify"):
-        sub.add_parser(name).add_argument("directory", type=Path)
+        operation = sub.add_parser(name)
+        operation.add_argument("directory", type=Path)
+        operation.add_argument("--mode", choices=("identity", "lifecycle"), default="identity")
     args = parser.parse_args()
     try:
-        report = collect(args.directory) if args.operation == "collect" else verify(args.directory)
+        report = collect(args.directory, mode=args.mode) if args.operation == "collect" else verify(args.directory, mode=args.mode)
         print(json.dumps(report, indent=2))
     except (ValueError, OSError, TypeError, KeyError) as error:
         print(str(error), file=sys.stderr)

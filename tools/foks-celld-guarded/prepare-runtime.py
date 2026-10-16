@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Prepare and qualify pinned A1 inputs; no command downloads or resolves dependencies.
+"""Prepare and qualify pinned A1/A2 inputs; no command downloads dependencies.
 
-verify/prepare accept the reviewed local celld archive. assets accepts the two
-reviewed local V8 assets. graph collection and build are explicit later actions,
-after source/lock review, and share one fail-closed process-group build slot.
+verify checks only the original upstream archive. prepare also applies the closed
+A2 patch in private staging. assets accepts the two reviewed local V8 assets.
+Graph collection and build are explicit later actions after source/lock review,
+and share one fail-closed process-group build slot.
 """
 import argparse
 import contextlib
@@ -27,6 +28,19 @@ ROOT = Path(__file__).resolve().parent
 TARGET = "aarch64-apple-darwin"
 CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 CHUNK = 64 * 1024
+A1 = "a1-library-identity"
+A2 = "a2-physical-lifetimes"
+A2_BASE = "8e31944080e03651caaa3512169fe468f8375342"
+PATCH_PATH = "patches/0001-guarded-physical-lifetimes.patch"
+PATCH_PATHS = (
+    "crates/celld/Cargo.toml", "crates/celld/lib.rs", "crates/celld/pool.rs",
+    "crates/celld/runtime.rs", "crates/celld/js.rs", "crates/celld/js/guarded.rs",
+    "crates/celld/guarded_execution.rs", "crates/celld/guarded_execution/qualification.rs",
+)
+PATCH_ADDITIONS = frozenset(PATCH_PATHS[-3:])
+MAXIMUM_PATCH = 1024 * 1024
+MAXIMUM_POSTIMAGE = 512 * 1024
+MAXIMUM_POSTIMAGES = 2 * 1024 * 1024
 
 
 def fail(message):
@@ -49,7 +63,14 @@ def read_json(path, maximum=2 * 1024 * 1024):
     path = Path(path)
     if not path.is_file() or path.is_symlink() or path.stat().st_size > maximum:
         fail("invalid or oversized JSON input: " + str(path))
-    return json.loads(path.read_text())
+    def unique_fields(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                fail("duplicate JSON field: " + key)
+            value[key] = item
+        return value
+    return json.loads(path.read_text(), object_pairs_hook=unique_fields)
 
 
 def write_json(path, value):
@@ -85,15 +106,88 @@ def relative_name(value):
 
 def load_pins(root=ROOT):
     pins = read_json(root / "runtime.lock.json")
-    if pins.get("format") != 1 or pins.get("profile") != "a1-library-identity" or pins.get("target") != TARGET:
+    if not isinstance(pins, dict) or (pins.get("format"), pins.get("profile")) not in ((1, A1), (2, A2)) or type(pins.get("format")) is not int or pins.get("target") != TARGET:
         fail("unsupported input profile")
     expected = {"format", "profile", "target", "foks_baseline", "upstream", "patch_series_sha256", "toolchain", "v8", "registry_engines", "build", "cargo_config_sha256", "sdk", "foks_additional_versions"}
+    if pins["profile"] == A2:
+        expected.add("qualification")
     if set(pins) != expected:
         fail("unrecognized input-record field")
-    series = root / "patches/series.json"
-    if file_hash(series) != pins["patch_series_sha256"] or read_json(series) != {"format": 1, "patches": []}:
-        fail("A1 requires the exact empty patch series")
+    if pins["profile"] == A2:
+        qualification = pins["qualification"]
+        if not isinstance(qualification, dict) or set(qualification) != {"base_commit", "program", "execution_slots", "wasm_bytes_per_slot"} or qualification["base_commit"] != A2_BASE:
+            fail("invalid A2 qualification identity")
+        if type(qualification["execution_slots"]) is not int or qualification["execution_slots"] != 2 or type(qualification["wasm_bytes_per_slot"]) is not int or qualification["wasm_bytes_per_slot"] != 64 * 1024 * 1024:
+            fail("invalid A2 physical capacity")
+        program = qualification["program"]
+        if not isinstance(program, dict) or set(program) != {"js", "wasm"}:
+            fail("invalid A2 program inventory")
+        for value in program.values():
+            validate_image(value, git=False, positive=True)
+        if pins["build"].get("admission") != "remaining-target-allowance":
+            fail("invalid A2 build admission policy")
+        for name, value in (("minimum_free_bytes", 6 * 1024**3), ("free_floor_bytes", 2 * 1024**3), ("maximum_target_bytes", 4 * 1024**3)):
+            if type(pins["build"].get(name)) is not int or pins["build"][name] != value:
+                fail("A2 build allowance changed")
+    elif "admission" in pins["build"]:
+        fail("A1 build admission policy changed")
+    patch_series(root, pins)
     return pins
+
+
+def validate_image(value, git=True, positive=False):
+    keys = {"bytes", "sha256", "git_sha1"} if git else {"bytes", "sha256"}
+    if not isinstance(value, dict) or set(value) != keys or type(value.get("bytes")) is not int or not (int(positive) <= value["bytes"] <= MAXIMUM_POSTIMAGE):
+        fail("invalid image size/fields")
+    hashes = (("sha256", 64), ("git_sha1", 40)) if git else (("sha256", 64),)
+    for name, length in hashes:
+        if not isinstance(value[name], str) or not re.fullmatch(r"[0-9a-f]{" + str(length) + "}", value[name]):
+            fail("invalid image hash")
+
+
+def patch_series(root, pins):
+    path = root / "patches/series.json"
+    series = read_json(path)
+    if file_hash(path) != pins["patch_series_sha256"]:
+        fail("patch series hash mismatch")
+    if pins["profile"] == A1:
+        if series != {"format": 1, "patches": []} or type(series.get("format")) is not int:
+            fail("A1 requires the exact empty patch series")
+        return series
+    if not isinstance(series, dict) or set(series) != {"format", "profile", "base_commit", "patches"} or type(series["format"]) is not int or series["format"] != 2 or series["profile"] != A2 or series["base_commit"] != A2_BASE:
+        fail("invalid A2 patch series identity")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 1:
+        fail("A2 requires exactly one patch")
+    selected = patches[0]
+    if not isinstance(selected, dict) or set(selected) != {"path", "bytes", "sha256", "files"} or selected["path"] != PATCH_PATH or type(selected["bytes"]) is not int or not 0 < selected["bytes"] <= MAXIMUM_PATCH or not isinstance(selected["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", selected["sha256"]):
+        fail("invalid A2 patch envelope")
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(PATCH_PATHS):
+        fail("invalid A2 patch file roster")
+    seen = set()
+    total = 0
+    for entry in files:
+        if not isinstance(entry, dict) or set(entry) != {"path", "mode", "before", "after"} or entry.get("path") not in PATCH_PATHS or entry["path"] in seen or entry["mode"] != "100644":
+            fail("invalid A2 patch path/mode")
+        seen.add(entry["path"])
+        if entry["path"] in PATCH_ADDITIONS:
+            if entry["before"] is not None:
+                fail("addition must have no preimage")
+        else:
+            validate_image(entry["before"])
+        validate_image(entry["after"])
+        total += entry["after"]["bytes"]
+    if total > MAXIMUM_POSTIMAGES:
+        fail("A2 patch postimages exceed allowance")
+    checked_file(root / PATCH_PATH, selected)
+    return series
+
+
+def selected_mode(pins, mode):
+    if mode not in ("identity", "lifecycle") or (mode == "lifecycle" and pins["profile"] != A2):
+        fail("unsupported graph/build mode for input profile")
+    return [] if mode == "identity" else ["--features", "lifecycle"]
 
 
 def inventory(root, pins):
@@ -139,6 +233,152 @@ def inventory(root, pins):
         if actual != expected:
             fail("inventory Git tree mismatch")
     return entries
+
+
+def image_identity(data):
+    return {"bytes": len(data), "sha256": digest(data), "git_sha1": hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()}
+
+
+def parse_patch(root, pins, upstream):
+    """A closed diff grammar; no context search, offset guessing or external tool."""
+    if pins["profile"] == A1:
+        return []
+    selected = patch_series(root, pins)["patches"][0]
+    data = checked_file(root / PATCH_PATH, selected).read_bytes()
+    if len(data) != selected["bytes"] or digest(data) != selected["sha256"]:
+        fail("patch changed while reading")
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        fail("patch is not UTF-8")
+    if not data.endswith(b"\n") or b"\r" in data:
+        fail("patch requires LF and terminal newline")
+    # Split on LF alone; Unicode line separators are ordinary source bytes.
+    lines = [line + b"\n" for line in data[:-1].split(b"\n")]
+    cursor = 0
+    parsed = []
+    for entry in selected["files"]:
+        path = entry["path"]
+        original = upstream.get(path)
+        if entry["before"] is None:
+            if original is not None:
+                fail("patch addition already exists upstream")
+            before_header = b"--- /dev/null\n"
+        else:
+            if original is None or original["type"] != "blob" or original["mode"] != entry["mode"] or original["size"] != entry["before"]["bytes"] or original["sha"] != entry["before"]["git_sha1"]:
+                fail("patch preimage does not identify the immutable upstream blob")
+            before_header = ("--- a/" + path + "\n").encode()
+        if lines[cursor:cursor + 2] != [before_header, ("+++ b/" + path + "\n").encode()]:
+            fail("patch file headers/order mismatch")
+        cursor += 2
+        hunks = []
+        while cursor < len(lines) and lines[cursor].startswith(b"@@"):
+            match = re.fullmatch(rb"@@ -([0-9]+),([0-9]+) \+([0-9]+),([0-9]+) @@\n", lines[cursor])
+            if match is None:
+                fail("invalid explicit patch hunk header")
+            old_start, old_count, new_start, new_count = map(int, match.groups())
+            if (old_count and old_start == 0) or (new_count and new_start == 0):
+                fail("invalid nonempty patch hunk origin")
+            old_index = old_start - bool(old_count)
+            new_index = new_start - bool(new_count)
+            cursor += 1
+            before, after = [], []
+            while len(before) < old_count or len(after) < new_count:
+                if cursor >= len(lines) or lines[cursor][:1] not in (b" ", b"-", b"+"):
+                    fail("truncated or unsupported patch hunk body")
+                line = lines[cursor]
+                cursor += 1
+                if line[:1] in (b" ", b"-"):
+                    before.append(line[1:])
+                if line[:1] in (b" ", b"+"):
+                    after.append(line[1:])
+                if len(before) > old_count or len(after) > new_count:
+                    fail("patch hunk line counts mismatch")
+            if not old_count and not new_count:
+                fail("empty patch hunk")
+            hunks.append((old_index, new_index, before, after))
+        if not hunks:
+            fail("patch file has no hunks")
+        parsed.append((entry, hunks))
+    if cursor != len(lines):
+        fail("unused or unsupported trailing patch content")
+    return parsed
+
+
+def transform_image(data, hunks, reverse=False):
+    """Apply only the stated line positions, preserving every gap and tail."""
+    if data and not data.endswith(b"\n"):
+        fail("patched source requires a terminal newline")
+    lines = [] if not data else [line + b"\n" for line in data[:-1].split(b"\n")]
+    result = []
+    cursor = 0
+    for old_index, new_index, before, after in hunks:
+        if reverse:
+            old_index, new_index, before, after = new_index, old_index, after, before
+        if old_index < cursor or old_index > len(lines):
+            fail("patch hunk overlaps or exceeds source")
+        gap = old_index - cursor
+        if new_index != len(result) + gap:
+            fail("patch hunk output offset mismatch")
+        result.extend(lines[cursor:old_index])
+        if lines[old_index:old_index + len(before)] != before:
+            fail("patch context/removal mismatch")
+        result.extend(after)
+        cursor = old_index + len(before)
+    result.extend(lines[cursor:])
+    return b"".join(result)
+
+
+def postimage_inventory(upstream, patches):
+    expected = {name: dict(entry) for name, entry in upstream.items()}
+    for entry, _ in patches:
+        name = entry["path"]
+        expected[name] = {"path": name, "mode": entry["mode"], "type": "blob", "size": entry["after"]["bytes"], "sha": entry["after"]["git_sha1"]}
+        parent = name.rpartition("/")[0]
+        while parent:
+            if parent in expected:
+                if expected[parent]["type"] != "tree":
+                    fail("patch parent is an upstream file")
+            elif name in PATCH_ADDITIONS:
+                expected[parent] = {"path": parent, "mode": "040000", "type": "tree"}
+            else:
+                fail("patch changes an absent parent")
+            parent = parent.rpartition("/")[0]
+    return expected
+
+
+def source_manifest(root, pins, files, prepared):
+    value = {"format": 1, "input_sha256": file_hash(root / "runtime.lock.json"), "archive_sha256": pins["upstream"]["archive_sha256"], "tree": pins["upstream"]["tree"], "patch_series_sha256": pins["patch_series_sha256"], "files": sorted(files, key=lambda item: item["path"])}
+    if pins["profile"] == A2:
+        value.update(format=2, profile=A2, kind="patched-source" if prepared else "upstream-archive-only")
+    return value
+
+
+def apply_patch_set(staging, patches):
+    # Validate every complete preimage/postimage before writing any changed file.
+    # A failed write still remains in the disposable private staging directory.
+    outputs = []
+    for entry, hunks in patches:
+        path = staging / entry["path"]
+        before = b"" if entry["before"] is None else path.read_bytes()
+        if entry["before"] is not None and image_identity(before) != entry["before"]:
+            fail("patch full preimage mismatch")
+        after = transform_image(before, hunks)
+        if image_identity(after) != entry["after"]:
+            fail("patch full postimage mismatch")
+        outputs.append((path, after, entry["before"] is None))
+    for path, after, addition in outputs:
+        missing = []
+        parent = path.parent
+        while not parent.exists():
+            missing.append(parent)
+            parent = parent.parent
+        path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        for parent in missing:
+            parent.chmod(0o755)
+        with path.open("xb" if addition else "wb") as stream:
+            stream.write(after)
+        path.chmod(0o644)
 
 
 def inspect_archive(archive, root=ROOT, destination=None):
@@ -208,7 +448,7 @@ def inspect_archive(archive, root=ROOT, destination=None):
     # Detect a replacement or edit during inspection rather than binding a newer
     # input path to earlier parsed bytes.
     checked_file(archive, {"bytes": upstream["archive_bytes"], "sha256": upstream["archive_sha256"]})
-    return {"format": 1, "input_sha256": file_hash(root / "runtime.lock.json"), "archive_sha256": upstream["archive_sha256"], "tree": upstream["tree"], "patch_series_sha256": pins["patch_series_sha256"], "files": sorted(manifest, key=lambda item: item["path"])}
+    return source_manifest(root, pins, manifest, prepared=False)
 
 
 def runtime_directory(root=ROOT):
@@ -221,17 +461,15 @@ def runtime_directory(root=ROOT):
     return path
 
 
-def verify_source(root=ROOT):
-    pins = load_pins(root)
-    expected = inventory(root, pins)
-    runtime = runtime_directory(root)
-    source = runtime / "source"
-    recorded = read_json(runtime / "source-manifest.json")
+def inspect_source_tree(source, root, pins, expected, patches):
     if source.is_symlink() or not source.is_dir():
         fail("missing regular prepared source directory")
     seen = set()
     files = []
-    for parent, directories, names in os.walk(source, followlinks=False):
+    changed = {entry["path"]: (entry, hunks) for entry, hunks in patches}
+    def walk_error(error):
+        raise error
+    for parent, directories, names in os.walk(source, followlinks=False, onerror=walk_error):
         for leaf in [*directories, *names]:
             path = Path(parent) / leaf
             name = path.relative_to(source).as_posix()
@@ -255,12 +493,37 @@ def verify_source(root=ROOT):
                     sha.update(chunk)
             if git_hash.hexdigest() != entry["sha"]:
                 fail("altered prepared file contents")
-            files.append({"path": name, "mode": entry["mode"], "bytes": entry["size"], "sha256": sha.hexdigest(), "git_sha1": entry["sha"]})
-    actual = {"format": 1, "input_sha256": file_hash(root / "runtime.lock.json"), "archive_sha256": pins["upstream"]["archive_sha256"], "tree": pins["upstream"]["tree"], "patch_series_sha256": pins["patch_series_sha256"], "files": sorted(files, key=lambda item: item["path"])}
-    if seen != set(expected) or recorded != actual:
-        fail("prepared source manifest mismatch")
+            identity = {"bytes": entry["size"], "sha256": sha.hexdigest(), "git_sha1": entry["sha"]}
+            if name in changed:
+                change, hunks = changed[name]
+                if identity != change["after"]:
+                    fail("prepared patch postimage mismatch")
+                after = path.read_bytes()
+                if image_identity(after) != identity:
+                    fail("prepared patch changed while reading")
+                before = transform_image(after, hunks, reverse=True)
+                if (change["before"] is None and before) or (change["before"] is not None and image_identity(before) != change["before"]):
+                    fail("prepared patch does not reconstruct its upstream preimage")
+                if transform_image(before, hunks) != after:
+                    fail("prepared patch roundtrip mismatch")
+            files.append({"path": name, "mode": entry["mode"], **identity})
+    if seen != set(expected):
+        fail("prepared source roster mismatch")
     if file_hash(source / "Cargo.lock") != pins["upstream"]["cargo_lock_sha256"]:
         fail("upstream lockfile changed")
+    return source_manifest(root, pins, files, prepared=True)
+
+
+def verify_source(root=ROOT):
+    pins = load_pins(root)
+    upstream = inventory(root, pins)
+    patches = parse_patch(root, pins, upstream)
+    expected = postimage_inventory(upstream, patches)
+    runtime = runtime_directory(root)
+    recorded = read_json(runtime / "source-manifest.json")
+    actual = inspect_source_tree(runtime / "source", root, pins, expected, patches)
+    if recorded != actual:
+        fail("prepared source manifest mismatch")
     return actual
 
 
@@ -273,7 +536,17 @@ def prepare(archive, root=ROOT):
         fail("orphan prepared manifest requires inspection")
     staging = Path(tempfile.mkdtemp(prefix="source-staging-", dir=runtime))
     try:
-        manifest = inspect_archive(archive, root, staging)
+        original = inspect_archive(archive, root, staging)
+        pins = load_pins(root)
+        if file_hash(root / "runtime.lock.json") != original["input_sha256"]:
+            fail("input changed during archive preparation")
+        upstream = inventory(root, pins)
+        patches = parse_patch(root, pins, upstream)
+        expected = postimage_inventory(upstream, patches)
+        apply_patch_set(staging, patches)
+        manifest = inspect_source_tree(staging, root, pins, expected, patches)
+        if manifest["input_sha256"] != original["input_sha256"]:
+            fail("input changed during patch preparation")
         # The caller-created staging root remains private. Only its validated
         # children receive normalized Git executable-bit permissions.
         os.rename(staging, destination)
@@ -561,6 +834,8 @@ def directory_bytes(path):
         return 0
     if stat.S_ISLNK(root_status.st_mode):
         fail("symlink at measured build target")
+    if not stat.S_ISDIR(root_status.st_mode):
+        fail("measured build target is not a directory")
 
     def walk_error(error):
         # Cargo can remove an enumerated directory while this live scan runs.
@@ -580,6 +855,8 @@ def directory_bytes(path):
                 fail("symlink in measured build target")
             if stat.S_ISREG(status.st_mode):
                 total += status.st_size
+            elif not stat.S_ISDIR(status.st_mode):
+                fail("special file in measured build target")
     return total
 
 
@@ -588,9 +865,17 @@ def disk_status(root=ROOT):
 
 
 def resource_refusal(root, initial=False):
-    pins = load_pins(root)["build"]
+    inputs = load_pins(root)
+    pins = inputs["build"]
     measured = disk_status(root)
+    if not isinstance(measured, dict) or set(measured) != {"free_bytes", "target_bytes"} or any(type(value) is not int or value < 0 for value in measured.values()):
+        fail("unknown build resource observation")
+    if inputs["profile"] == A2 and measured["target_bytes"] > pins["maximum_target_bytes"]:
+        return "target working allowance exceeded", measured
     floor = pins["minimum_free_bytes"] if initial else pins["free_floor_bytes"]
+    if initial and inputs["profile"] == A2:
+        floor = pins["free_floor_bytes"] + max(0, pins["maximum_target_bytes"] - measured["target_bytes"])
+        measured = {**measured, "required_free_bytes": floor}
     if measured["free_bytes"] < floor:
         return "free-space admission refusal", measured
     if measured["target_bytes"] > pins["maximum_target_bytes"]:
@@ -831,12 +1116,27 @@ def tool_identity(root, directory, slot, environment, toolchain):
     return result
 
 
-def build(graph_directory, root=ROOT):
+def build_commands(root, toolchain, pins, mode="identity"):
+    features = selected_mode(pins, mode)
+    shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", *features, "-j", "2", "--target", TARGET]
+    binary = ["--bin", "foks-celld-guarded"]
+    cargo = toolchain / "bin/cargo"
+    commands = {
+        "build": network_command([cargo, "build", *shared, *binary]),
+        "clippy": network_command([cargo, "clippy", *shared, *(["--all-targets"] if mode == "lifecycle" else binary), "--", "-D", "warnings"]),
+    }
+    if mode == "lifecycle":
+        commands["lifecycle"] = network_command([cargo, "test", *shared, "--test", "lifecycle", "--", "--test-threads=1", "--nocapture"])
+    return commands
+
+
+def build(graph_directory, root=ROOT, mode="identity"):
     import check_graph
     pins = load_pins(root)
+    selected_mode(pins, mode)
     source = verify_source(root)
     assets = verify_assets(root)
-    graph = check_graph.verify(graph_directory, root)
+    graph = check_graph.verify(graph_directory, root, mode)
     refusal, measured = resource_refusal(root, initial=True)
     if refusal:
         fail(refusal + ": " + json.dumps(measured))
@@ -844,28 +1144,37 @@ def build(graph_directory, root=ROOT):
     evidence_root = runtime_directory(root) / "evidence"
     evidence_root.mkdir(exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix="build-", dir=evidence_root))
-    receipt = {"format": 1, "claim": "a1-library-identity-only", "status": "incomplete", "source": source, "assets": assets, "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured}
+    identity_claim = "a1-library-identity-only" if pins["profile"] == A1 else "a2-library-identity-only"
+    receipt = {"format": 1, "profile": pins["profile"], "mode": mode, "claim": identity_claim if mode == "identity" else "a2-physical-lifetimes-local-fixture", "status": "incomplete", "source": source, "assets": assets, "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured}
+    if pins["profile"] == A2:
+        receipt["qualification"] = pins["qualification"]
     write_json(directory / "receipt.json", receipt)
     with BuildSlot(root) as slot:
         try:
             receipt["tools"] = tool_identity(root, directory, slot, environment, toolchain)
-            cargo = toolchain / "bin/cargo"
-            shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "-j", "2", "--target", TARGET, "--bin", "foks-celld-guarded"]
-            for name, arguments in (("build", ["build", *shared]), ("clippy", ["clippy", *shared, "--", "-D", "warnings"])):
-                receipt[name] = run_owned(network_command([cargo, *arguments]), root, environment, directory, name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
+            commands = build_commands(root, toolchain, pins, mode)
+            for name in ("build", "clippy"):
+                receipt[name] = run_owned(commands[name], root, environment, directory, name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
             binary = root / "runtime/target" / TARGET / "debug/foks-celld-guarded"
             receipt["binary_sha256"] = file_hash(binary)
             receipt["identity"] = run_owned(network_command([binary, "identity"]), root, environment, directory, "identity", slot, pins["build"]["identity_timeout_seconds"], lambda: resource_refusal(root))
             if file_hash(binary) != receipt["binary_sha256"]:
                 fail("binary changed during identity probe")
             identity = read_json(directory / "identity.stdout", 64 * 1024)
-            if identity.get("claim") != "a1-library-identity-only" or identity.get("input_sha256") != file_hash(root / "runtime.lock.json") or identity.get("actual_shared_request_exercised") is not True:
+            if identity.get("claim") != identity_claim or identity.get("input_sha256") != file_hash(root / "runtime.lock.json") or identity.get("actual_shared_request_exercised") is not True:
                 fail("identity output is not bound to the actual probe")
             if not identity.get("v8_engine") or not identity.get("sqlite_source_id") or not identity.get("sqlite_version"):
                 fail("missing actual engine identity")
+            if mode == "lifecycle":
+                # The reviewed integration target owns/drains closed child
+                # scenarios and validates their bounded, input-bound reports.
+                # Children inherit this group; a parent exit is never cleanup.
+                receipt["lifecycle"] = run_owned(commands["lifecycle"], root, environment, directory, "lifecycle", slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
+                if file_hash(binary) != receipt["binary_sha256"]:
+                    fail("binary changed during lifecycle qualification")
             # Bind the source/config/registry inputs both before and after the
             # commands; a successful compiler exit cannot bless changed inputs.
-            if verify_source(root) != source or verify_assets(root) != assets or check_graph.verify(graph_directory, root) != graph:
+            if verify_source(root) != source or verify_assets(root) != assets or check_graph.verify(graph_directory, root, mode) != graph:
                 fail("build inputs changed during qualification")
             if config_inputs(root) != receipt["tools"]["cargo_configs"]:
                 fail("Cargo configuration changed during build")
@@ -888,13 +1197,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="operation", required=True)
     for name in ("verify", "prepare"):
-        sub.add_parser(name).add_argument("archive", type=Path)
+        help_text = "validate only the immutable upstream archive" if name == "verify" else "validate archive and publish the reviewed prepared postimage"
+        sub.add_parser(name, help=help_text).add_argument("archive", type=Path)
     assets = sub.add_parser("assets")
     assets.add_argument("archive", type=Path)
     assets.add_argument("binding", type=Path)
     sub.add_parser("verify-source")
     sub.add_parser("verify-assets")
-    sub.add_parser("build").add_argument("graph_directory", type=Path)
+    build_parser = sub.add_parser("build")
+    build_parser.add_argument("graph_directory", type=Path)
+    build_parser.add_argument("--mode", choices=("identity", "lifecycle"), default="identity")
     args = parser.parse_args()
     try:
         if args.operation == "verify":
@@ -908,7 +1220,7 @@ def main():
         elif args.operation == "verify-assets":
             report = verify_assets()
         else:
-            report = build(args.graph_directory)
+            report = build(args.graph_directory, mode=args.mode)
         print(json.dumps(report, indent=2))
     except (ValueError, OSError, TypeError, KeyError, EOFError, tarfile.TarError) as error:
         print(str(error), file=sys.stderr)
