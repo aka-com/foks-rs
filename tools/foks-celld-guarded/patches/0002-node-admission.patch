@@ -1,0 +1,3781 @@
+--- a/crates/celld/Cargo.toml
++++ b/crates/celld/Cargo.toml
+@@ -8,6 +8,7 @@
+ 
+ [features]
+ foks-guarded-qualification = []
++foks-guarded-node-qualification = ["foks-guarded-qualification", "dep:foks-hosted-transport", "dep:foks-metadata-core"]
+ 
+ [lib]
+ path = "lib.rs"
+@@ -24,6 +25,8 @@
+ disallowed_macros = "forbid"
+ 
+ [dependencies]
++foks-hosted-transport = { path = "../../../../../../crates/foks-hosted-transport", optional = true, default-features = false, features = ["qualification"] }
++foks-metadata-core = { path = "../../../../../../crates/foks-metadata-core", optional = true, default-features = false, features = ["owned-list"] }
+ async-trait.workspace = true
+ chrono.workspace = true
+ aes.workspace = true
+@@ -95,5 +98,3 @@
+ libc.workspace = true
+ nix.workspace = true
+ 
+-[dev-dependencies]
+-lz4_flex.workspace = true
+--- a/crates/celld/actor.rs
++++ b/crates/celld/actor.rs
+@@ -652,6 +652,16 @@
+     reply: oneshot::Sender<AdoptedCell>,
+ }
+ 
++#[cfg(all(test, feature = "foks-guarded-node-qualification"))]
++impl HandoffAcceptWaiter {
++    pub(crate) fn for_guarded_refusal_test(reply: oneshot::Sender<AdoptedCell>) -> Self {
++        Self {
++            released_epoch: 1,
++            reply,
++        }
++    }
++}
++
+ // Read only by the orphaned `worker_route`, and removed with the rest of the
+ // landing-cell machinery when that goes.
+ #[allow(dead_code)]
+@@ -2666,6 +2676,33 @@
+         match input {
+             ActorInput::Message(message) => self.handle_message(message, out),
+             ActorInput::Completed(completed) => {
++                #[cfg(feature = "foks-guarded-node-qualification")]
++                let completed = {
++                    let mut completed = completed;
++                    match &completed.event {
++                        Event::LocalCellsRead { result: Ok(cells) }
++                            if cells.iter().any(|cell| {
++                                crate::guarded_execution::node::ordinary_scope_refusal(&cell.id)
++                                    .is_some()
++                            }) =>
++                        {
++                            // A failed scan alone clears the core's resume flags.
++                            // Keep a separate sticky failure so that cannot be
++                            // mistaken for a qualified guarded startup.
++                            crate::guarded_execution::node::fail_policy();
++                            completed.event = Event::LocalCellsRead {
++                                result: Err(Failure::Definite),
++                            };
++                        }
++                        Event::LocalCellsRead { result: Err(_) } => {
++                            // Preserve the actual error. This helper is a no-op
++                            // when no guarded foundation policy is installed.
++                            crate::guarded_execution::node::fail_policy();
++                        }
++                        _ => {}
++                    }
++                    completed
++                };
+                 let route_cell = completed.timing.as_ref().map(|timing| timing.cell.clone());
+                 if let Some(timing) = completed.timing {
+                     self.record_effect_timing(timing);
+@@ -2700,6 +2737,14 @@
+             }
+             Message::Request { reply, .. } if self.preserving => {
+                 let _ = reply.send(Err(RequestError::NodeFenced));
++            }
++            #[cfg(feature = "foks-guarded-node-qualification")]
++            Message::Request { cell, reply, .. }
++                if crate::guarded_execution::node::ordinary_scope_refusal(&cell).is_some() =>
++            {
++                // Refuse all five ordinary modes before pending/route maps or
++                // a core request. Dropping a handoff waiter claims no adoption.
++                let _ = reply.send(Err(RequestError::NodeUnavailable));
+             }
+             Message::Request {
+                 request,
+@@ -2959,6 +3004,9 @@
+                     out,
+                 );
+             }
++            #[cfg(feature = "foks-guarded-node-qualification")]
++            Message::MaintainWake { cell } | Message::WakeHint { cell, .. }
++                if crate::guarded_execution::node::ordinary_scope_refusal(&cell).is_some() => {}
+             Message::MaintainWake { cell } => {
+                 if let Some(host) = &self.host {
+                     let alarm = host.with_alarm(&cell, |alarm, _| alarm);
+@@ -3633,6 +3681,14 @@
+                 }
+             }
+             Effect::Restore { op, cell, spec } => {
++                #[cfg(feature = "foks-guarded-node-qualification")]
++                if crate::guarded_execution::node::ordinary_scope_refusal(&cell).is_some() {
++                    immediate.push_back(Event::RestoreCompleted {
++                        op,
++                        result: Err(Failure::Definite),
++                    });
++                    return;
++                }
+                 self.route_effect_started(&cell);
+                 if let Some(runtime) = self.host.clone() {
+                     let timing_cell = cell.clone();
+@@ -3669,6 +3725,16 @@
+                 }
+             }
+             Effect::StartRuntime { op, cell, epoch } => {
++                #[cfg(feature = "foks-guarded-node-qualification")]
++                if crate::guarded_execution::node::ordinary_scope_refusal(&cell).is_some() {
++                    immediate.push_back(Event::RuntimeStarted {
++                        op,
++                        isolate: None,
++                        generation: 0,
++                        result: Err(Failure::Definite),
++                    });
++                    return;
++                }
+                 self.route_effect_started(&cell);
+                 if let Some(runtime) = self.host.clone() {
+                     let fresh = self
+@@ -3718,6 +3784,14 @@
+                 }
+             }
+             Effect::Publish { op, cell, epoch } => {
++                #[cfg(feature = "foks-guarded-node-qualification")]
++                if crate::guarded_execution::node::ordinary_scope_refusal(&cell).is_some() {
++                    immediate.push_back(Event::Published {
++                        op,
++                        result: Err(Failure::Definite),
++                    });
++                    return;
++                }
+                 self.route_effect_started(&cell);
+                 let publish_started = crate::asyncrt::mono_ms();
+                 self.publishes += 1;
+@@ -4350,3 +4424,245 @@
+ 
+ #[cfg(all(test, celld_internal_tests))]
+ include!(env!("CELLD_INTERNAL_ACTOR_OBSERVERS"));
++
++// Called only by the one foundation test that owns the once-only policy.
++// This exercises admission before native effects; it proves no startup lease.
++#[cfg(all(test, feature = "foks-guarded-node-qualification"))]
++pub(crate) fn assert_guarded_refusal_inventory_for_test() {
++    use crate::guarded_execution::node;
++    use crate::js::guarded_node as program;
++
++    fn no_work(out: &StepOutput) {
++        assert!(out.effects_is_empty());
++        assert!(out.timers.is_empty());
++    }
++
++    fn no_routes(actor: &Actor, timer_slots: usize) {
++        assert!(actor.pending.is_empty());
++        assert!(actor.request_cells.is_empty());
++        assert!(actor.handoff_accepts.is_empty());
++        assert!(actor.route_timings.is_empty());
++        assert!(actor.published.is_empty());
++        assert_eq!(actor.publishes, 0);
++        assert_eq!(actor.stops, 0);
++        assert_eq!(actor.timer_slots.armed.len(), timer_slots);
++        assert_eq!(actor.state.occupied(), 0);
++        assert_eq!(actor.state.activation_backlog(), 0);
++        assert!(actor.state.phase_census().is_empty());
++        actor
++            .state
++            .validate()
++            .expect("refusal preserves core indexes");
++    }
++
++    assert!(node::policy_installed());
++    assert_eq!(node::ordinary_script_refusal(program::PRIMARY), None);
++    let runtime = tokio::runtime::Builder::new_current_thread()
++        .enable_all()
++        .build()
++        .expect("local actor fixture runtime");
++    // Bind the sole real test runtime once; no other foundation test uses
++    // the process asynchronous domain after this actor fixture ends.
++    crate::asyncrt::set_host_handle(runtime.handle().clone());
++    runtime.block_on(async {
++        let (fence, _fenced) = mpsc::unbounded_channel();
++        let mut actor = Actor::from_environment(
++            AdmissionLimits {
++                resident: 2,
++                activations: 1,
++                #[cfg(celld_internal_tests)]
++                evictions: 1,
++                releases: 1,
++                placement_weight: 1,
++            },
++            false,
++            fence,
++            None,
++            None,
++            ActorIdentity {
++                node: "b1".to_string(),
++                advertise: "http://127.0.0.1:1".to_string(),
++                region: "local".to_string(),
++            },
++            None,
++        )
++        .await
++        .expect("canonical in-memory Actor constructor");
++        actor.store_load_sample(crate::host_services::HostMetricsSample::default());
++        let mut startup = StepOutput::default();
++        actor.start(&mut startup);
++        // The queued lease future is never polled; no successful startup or
++        // authority is invented for this admission-boundary fixture.
++        assert!(!startup.effects_is_empty());
++        drop(startup);
++        assert!(!actor.state.node_authoritative());
++        let timer_slots = actor.timer_slots.armed.len();
++        no_routes(&actor, timer_slots);
++
++        let scopes = [
++            format!("{}:{}", program::CLASS, program::TENANT_IDS[0]),
++            format!("{}:unknown", program::CLASS),
++            format!("{}:{}:facet", program::CLASS, program::TENANT_IDS[1]),
++            "UnlistedClass:unknown".to_string(),
++        ];
++        for (scope_index, scope) in scopes.iter().enumerate() {
++            for mode in 0..5 {
++                let request = 100 + (scope_index * 5 + mode) as u64;
++                let (reply, mut received) = oneshot::channel();
++                let (adopted, mut adoption) = oneshot::channel();
++                let handoff_accept = if mode == 2 {
++                    Some(HandoffAcceptWaiter::for_guarded_refusal_test(adopted))
++                } else {
++                    drop(adopted);
++                    None
++                };
++                let mut out = StepOutput::default();
++                actor.step(
++                    ActorInput::Message(Message::Request {
++                        request,
++                        cell: scope.clone(),
++                        capacity_handoff: mode == 1,
++                        handoff_accept,
++                        resident_work: match mode {
++                            3 => Some(ResidentWork::WebSocket(42)),
++                            4 => Some(ResidentWork::OutputGate),
++                            _ => None,
++                        },
++                        reply,
++                    }),
++                    &mut out,
++                );
++                assert!(matches!(
++                    received.try_recv(),
++                    Ok(Err(RequestError::NodeUnavailable))
++                ));
++                assert!(matches!(
++                    adoption.try_recv(),
++                    Err(oneshot::error::TryRecvError::Closed)
++                ));
++                assert!(actor.state.request_inactive(request));
++                assert!(actor.state.phase(scope).is_none());
++                no_work(&out);
++                no_routes(&actor, timer_slots);
++            }
++            for message in [
++                Message::MaintainWake {
++                    cell: scope.clone(),
++                },
++                Message::WakeHint {
++                    cell: scope.clone(),
++                    entry_ms: 1,
++                    scope: celld_logic::WakeHintScope::Fleet,
++                },
++                Message::WakeHint {
++                    cell: scope.clone(),
++                    entry_ms: 1,
++                    scope: celld_logic::WakeHintScope::Owned,
++                },
++            ] {
++                let mut out = StepOutput::default();
++                actor.step(ActorInput::Message(message), &mut out);
++                no_work(&out);
++                no_routes(&actor, timer_slots);
++            }
++            let operations = [
++                Effect::Restore {
++                    op: 901,
++                    cell: scope.clone(),
++                    spec: celld_logic::RestoreSpec {
++                        epoch: 1,
++                        fresh: false,
++                        took_over: false,
++                        resume_local: true,
++                        prior: None,
++                    },
++                },
++                Effect::StartRuntime {
++                    op: 902,
++                    cell: scope.clone(),
++                    epoch: 1,
++                },
++                Effect::Publish {
++                    op: 903,
++                    cell: scope.clone(),
++                    epoch: 1,
++                },
++            ];
++            for (index, effect) in operations.into_iter().enumerate() {
++                let mut out = StepOutput::default();
++                let mut immediate = VecDeque::new();
++                actor.execute(effect, &mut immediate, &mut out);
++                let expected = match index {
++                    0 => Event::RestoreCompleted {
++                        op: 901,
++                        result: Err(Failure::Definite),
++                    },
++                    1 => Event::RuntimeStarted {
++                        op: 902,
++                        isolate: None,
++                        generation: 0,
++                        result: Err(Failure::Definite),
++                    },
++                    _ => Event::Published {
++                        op: 903,
++                        result: Err(Failure::Definite),
++                    },
++                };
++                assert_eq!(immediate, VecDeque::from([expected]));
++                no_work(&out);
++                no_routes(&actor, timer_slots);
++            }
++        }
++        let mut out = StepOutput::default();
++        actor.step(
++            ActorInput::Message(Message::GenerationChanged {
++                generation: 2,
++                max_age_ms: 1000,
++                eager_classes: vec![program::CLASS.to_string()],
++            }),
++            &mut out,
++        );
++        assert_eq!(actor.state.current_generation(), 2);
++        no_work(&out);
++        no_routes(&actor, timer_slots);
++
++        let mut out = StepOutput::default();
++        actor.step(
++            ActorInput::Completed(CompletedEffect::plain(Event::LocalCellsRead {
++                result: Ok(Vec::new()),
++            })),
++            &mut out,
++        );
++        no_work(&out);
++        assert_eq!(node::ordinary_script_refusal(program::PRIMARY), None);
++        // This first scan refusal demonstrates the healthy -> failed latch.
++        // Subsequent cases exercise sticky refusal, not a fresh process fault.
++        for result in [
++            Ok(vec![celld_logic::LocalCell {
++                id: scopes[0].clone(),
++                epoch: 1,
++                live: true,
++            }]),
++            Ok(vec![celld_logic::LocalCell {
++                id: scopes[3].clone(),
++                epoch: 1,
++                live: true,
++            }]),
++            Err(Failure::Ambiguous),
++            Err(Failure::Definite),
++        ] {
++            let mut out = StepOutput::default();
++            actor.step(
++                ActorInput::Completed(CompletedEffect::plain(Event::LocalCellsRead { result })),
++                &mut out,
++            );
++            no_work(&out);
++            no_routes(&actor, timer_slots);
++            assert_eq!(
++                node::ordinary_script_refusal(program::PRIMARY),
++                Some(node::Refusal::Cancelled)
++            );
++        }
++        assert!(!actor.state.node_authoritative());
++    });
++}
+--- a/crates/celld/actor/effects.rs
++++ b/crates/celld/actor/effects.rs
+@@ -209,7 +209,10 @@
+         self.effects.drain(..).map(EffectJob::into_future).collect()
+     }
+ 
+-    #[cfg(celld_internal_tests)]
++    #[cfg(any(
++        celld_internal_tests,
++        all(test, feature = "foks-guarded-node-qualification")
++    ))]
+     pub fn effects_is_empty(&self) -> bool {
+         self.effects.is_empty()
+     }
+--- a/crates/celld/generation.rs
++++ b/crates/celld/generation.rs
+@@ -466,6 +466,8 @@
+         options: GenerationOptions,
+     ) -> anyhow::Result<Self> {
+         let GenerationOptions { node, region } = options;
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        let guarded = crate::guarded_execution::node::preflight(&graph, &node)?;
+         let DeploymentGraph { primary, cohosted } = graph;
+         crate::runtime::init_engine();
+ 
+@@ -549,6 +551,10 @@
+         // bindings and runtime construction follow the same path for all scripts.
+         for (index, deployment) in std::iter::once(primary).chain(cohosted).enumerate() {
+             let is_primary = index == 0;
++            #[cfg(feature = "foks-guarded-node-qualification")]
++            if let Some(validated) = &guarded {
++                validated.classify(index, &deployment)?;
++            }
+             let crate::fleet::LoadedDeployment {
+                 options,
+                 script_name: script,
+@@ -567,23 +573,33 @@
+                 assets.insert(script.clone(), resolver);
+             }
+             let classes = options.do_classes.clone();
+-            let config = Arc::new(
+-                WorkerConfig::new(options)
+-                    .with_services(services)
+-                    .with_asset_binding(asset_binding)
+-                    .with_loaders(loader_bindings)
+-                    .with_queue_consumers(queue_catalog.clone())
+-                    .with_crons(if is_primary { crons } else { Vec::new() })
+-                    .with_containers(containers)
+-                    .with_generation(id),
+-            );
+-            let pool = crate::runtime::StatelessRuntime::start(
+-                config.clone(),
+-                node.clone(),
+-                region.clone(),
+-            )?;
+-            if service_pools.insert(script.clone(), pool).is_some() {
+-                return Err(anyhow!("duplicate co-hosted Worker script {script}"));
++            let config = WorkerConfig::new(options)
++                .with_services(services)
++                .with_asset_binding(asset_binding)
++                .with_loaders(loader_bindings)
++                .with_queue_consumers(queue_catalog.clone())
++                .with_crons(if is_primary { crons } else { Vec::new() })
++                .with_containers(containers)
++                .with_generation(id);
++            #[cfg(feature = "foks-guarded-node-qualification")]
++            let config = match &guarded {
++                Some(validated) => crate::js::guarded_node::mark_validated(config, validated)?,
++                None => config,
++            };
++            let config = Arc::new(config);
++            #[cfg(feature = "foks-guarded-node-qualification")]
++            let can_warm = crate::js::guarded_node::can_warm(&config);
++            #[cfg(not(feature = "foks-guarded-node-qualification"))]
++            let can_warm = true;
++            if can_warm {
++                let pool = crate::runtime::StatelessRuntime::start(
++                    config.clone(),
++                    node.clone(),
++                    region.clone(),
++                )?;
++                if service_pools.insert(script.clone(), pool).is_some() {
++                    return Err(anyhow!("duplicate co-hosted Worker script {script}"));
++                }
+             }
+             for class in classes {
+                 register_cell_class(&mut cell_configs, class, config.clone(), &|class| {
+@@ -605,6 +621,16 @@
+         let stateless = service_pools[&primary_script].clone();
+         let cell_isolates: HashMap<String, Arc<crate::pool::Pool>> = cell_configs
+             .values()
++            .filter(|_config| {
++                #[cfg(feature = "foks-guarded-node-qualification")]
++                {
++                    crate::js::guarded_node::can_warm(_config)
++                }
++                #[cfg(not(feature = "foks-guarded-node-qualification"))]
++                {
++                    true
++                }
++            })
+             .map(|config| {
+                 (
+                     config.script_name.clone(),
+--- a/crates/celld/guarded_execution.rs
++++ b/crates/celld/guarded_execution.rs
+@@ -969,3 +969,7 @@
+     job.set(Task::Driver(tokio::spawn(future)));
+     Ok(job)
+ }
++
++#[cfg(feature = "foks-guarded-node-qualification")]
++#[path = "guarded_node.rs"]
++pub(crate) mod node;
+--- /dev/null
++++ b/crates/celld/guarded_node.rs
+@@ -0,0 +1,375 @@
++//! Closed foundation. Installation is not readiness or permission to execute.
++use crate::fleet::LoadedDeployment;
++use crate::generation::DeploymentGraph;
++use crate::js::guarded_node as program;
++use sha2::{Digest, Sha256};
++use std::sync::{
++    atomic::{AtomicBool, Ordering},
++    Arc, OnceLock,
++};
++
++#[path = "guarded_node/control.rs"]
++mod control;
++#[cfg(test)]
++#[path = "guarded_node/tests.rs"]
++mod tests;
++
++static INSTALL_STARTED: AtomicBool = AtomicBool::new(false);
++static INSTALLED: OnceLock<Arc<GuardedNode>> = OnceLock::new();
++
++/// Fixed admission reasons. An error grants no owner or runtime capability.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum Refusal {
++    Capacity,
++    Busy,
++    Contended,
++    Expired,
++    Cancelled,
++    Failed,
++    Bounds,
++    Invalid,
++    Exhausted,
++    NotReady,
++}
++
++impl std::fmt::Display for Refusal {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str(match self {
++            Self::Capacity => "guarded capacity exhausted",
++            Self::Busy => "guarded owner occupied",
++            Self::Contended => "guarded control contended",
++            Self::Expired => "guarded original deadline expired",
++            Self::Cancelled => "guarded operation cancelled",
++            Self::Failed => "guarded original owner failed",
++            Self::Bounds => "guarded bound exceeded",
++            Self::Invalid => "guarded closed profile refused",
++            Self::Exhausted => "guarded counter exhausted",
++            Self::NotReady => "guarded execution is unavailable",
++        })
++    }
++}
++impl std::error::Error for Refusal {}
++
++pub struct GuardedNode {
++    policy: DescriptorPolicy,
++    // Bootstrap-owned pools and the process registry are dropped before owner.
++    factory: control::OwnerFactory,
++    owner: control::OriginalOwner,
++}
++
++impl GuardedNode {
++    /// Once-only foundation installation. No Action, bucket or Ready exists.
++    pub fn install() -> Result<Arc<Self>, Refusal> {
++        if INSTALL_STARTED.swap(true, Ordering::AcqRel) {
++            return Err(Refusal::Busy);
++        }
++        let factory = control::OwnerFactory::new()?;
++        let owner = factory.try_owner(control::OwnerRole::Process, None)?;
++        let admitted = control::arc_bytes::<Self>().and_then(|bytes| owner.charge(bytes));
++        if let Err(error) = admitted {
++            drop(factory);
++            let _held = owner.retire_unstarted();
++            return Err(error);
++        }
++        let node = Arc::new(Self {
++            policy: DescriptorPolicy::new(),
++            factory,
++            owner,
++        });
++        // A failed installation remains a tombstone. An uninstalled policy is
++        // ordinary only when installation has never been attempted.
++        if INSTALLED.set(node.clone()).is_err() {
++            node.stop_admission();
++            return Err(Refusal::Busy);
++        }
++        Ok(node)
++    }
++
++    pub fn stop_admission(&self) {
++        self.owner.fail();
++    }
++
++    /// Scalar observations of native foundation storage, not physical leases.
++    pub fn foundation(&self) -> Result<FoundationObservation, Refusal> {
++        let control = self.owner.observation()?;
++        Ok(FoundationObservation {
++            claim: "b1-foundation-only",
++            layouts: Self::layouts()?,
++            role_caps: control.role_caps,
++            role_counts: control.role_counts,
++            debt: control.debt,
++            occupied_owners: control.occupied_owners,
++            occupied_headers: control.occupied_headers,
++            header_bytes: control.header_bytes,
++            summaries: control.summaries,
++            cleanup_tasks_used: control.cleanup_tasks_used,
++            cleanup_controls_used: control.cleanup_controls_used,
++            original_stamp_present: control.original_stamp_present,
++            program: self.policy.program,
++            tenant_ids: program::TENANT_IDS,
++            // Reading this real factory verifies the observation is attached to
++            // the same bounded process registry, not a separate model counter.
++            factory_installed: self.factory.process_installed(),
++            ready: false,
++        })
++    }
++
++    pub fn layouts() -> Result<FoundationLayouts, Refusal> {
++        let native = control::layouts()?;
++        let node_arc_bytes = control::arc_bytes::<Self>()?;
++        if native
++            .iter()
++            .any(|(size, align)| *size > 64 * 1024 || *align > 16)
++            || node_arc_bytes > 64 * 1024
++        {
++            return Err(Refusal::Bounds);
++        }
++        Ok(FoundationLayouts {
++            native,
++            node_arc_bytes,
++            cleanup_reserve: control::CLEANUP_BYTES,
++            weak_limit: control::SUMMARY_LIMIT + 2,
++        })
++    }
++}
++
++#[derive(Clone, Copy, Debug)]
++pub struct FoundationLayouts {
++    /// Request Arc, control Arc, registry Arc, factory, owner, header, cleanup,
++    /// observation. Nested/stack sizes are nonadditive observations.
++    pub native: [(usize, usize); 8],
++    pub node_arc_bytes: usize,
++    pub cleanup_reserve: usize,
++    pub weak_limit: usize,
++}
++
++#[derive(Clone, Copy, Debug)]
++pub struct FoundationObservation {
++    pub claim: &'static str,
++    pub layouts: FoundationLayouts,
++    pub role_caps: [usize; 3],
++    pub role_counts: [usize; 3],
++    pub debt: usize,
++    pub occupied_owners: usize,
++    pub occupied_headers: usize,
++    pub header_bytes: usize,
++    pub summaries: usize,
++    pub cleanup_tasks_used: u32,
++    pub cleanup_controls_used: u32,
++    pub original_stamp_present: bool,
++    pub program: [([u8; 32], usize); 5],
++    pub tenant_ids: [&'static str; 3],
++    pub factory_installed: bool,
++    pub ready: bool,
++}
++
++pub(crate) fn policy_installed() -> bool {
++    INSTALL_STARTED.load(Ordering::Acquire)
++}
++
++pub(crate) fn ordinary_scope_refusal(scope: &str) -> Option<Refusal> {
++    if !policy_installed() {
++        return None;
++    }
++    // This closed deployment has no other cell classes. Every ordinary cell
++    // route refuses, including unknown IDs and facet suffixes of its class.
++    Some(if DescriptorPolicy::is_guarded_scope(scope) {
++        Refusal::NotReady
++    } else {
++        Refusal::Invalid
++    })
++}
++
++pub(crate) fn ordinary_script_refusal(script: &str) -> Option<Refusal> {
++    if !policy_installed() {
++        return None;
++    }
++    let Some(node) = INSTALLED.get() else {
++        return Some(Refusal::NotReady);
++    };
++    if let Err(error) = node.owner.check() {
++        return Some(error);
++    }
++    if DescriptorPolicy::is_guarded_script(script) {
++        Some(Refusal::NotReady)
++    } else if script != program::PRIMARY {
++        Some(Refusal::Invalid)
++    } else {
++        None
++    }
++}
++
++pub(crate) fn fail_policy() {
++    if let Some(node) = INSTALLED.get() {
++        node.owner.fail();
++    }
++}
++
++pub(crate) fn preflight(
++    graph: &DeploymentGraph,
++    node: &str,
++) -> Result<Option<ValidatedGraph>, Refusal> {
++    if !policy_installed() {
++        return Ok(None);
++    }
++    let installed = INSTALLED.get().ok_or(Refusal::NotReady)?;
++    installed.owner.check()?;
++    installed.policy.validate_graph(graph, node).map(Some)
++}
++
++pub(crate) struct DescriptorPolicy {
++    program: [([u8; 32], usize); 5],
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum ScriptClass {
++    OrdinaryPrimary,
++    Guarded,
++}
++
++pub(crate) struct ValidatedGraph {
++    node_sha256: [u8; 32],
++    descriptor_sha256: [u8; 32],
++}
++
++impl DescriptorPolicy {
++    fn new() -> Self {
++        Self {
++            program: program::identities(),
++        }
++    }
++
++    pub(crate) fn is_guarded_scope(scope: &str) -> bool {
++        scope == program::CLASS
++            || scope
++                .strip_prefix(program::CLASS)
++                .is_some_and(|suffix| suffix.starts_with(':'))
++    }
++
++    pub(crate) fn is_guarded_script(script: &str) -> bool {
++        script == program::FIXTURE
++    }
++
++    pub(crate) fn validate_graph(
++        &self,
++        graph: &DeploymentGraph,
++        expected_node: &str,
++    ) -> Result<ValidatedGraph, Refusal> {
++        if expected_node.is_empty() || expected_node.len() > 256 || graph.cohosted.len() != 1 {
++            return Err(Refusal::Invalid);
++        }
++        validate_loaded(&graph.primary, ScriptClass::OrdinaryPrimary, expected_node)?;
++        validate_loaded(&graph.cohosted[0], ScriptClass::Guarded, expected_node)?;
++        let node_sha256 = Sha256::digest(expected_node.as_bytes()).into();
++        let mut digest = Sha256::new();
++        digest.update(b"foks-celld-node-descriptor-b1\0");
++        for (hash, bytes) in self.program {
++            digest.update(hash);
++            digest.update((bytes as u64).to_le_bytes());
++        }
++        digest.update(node_sha256);
++        digest.update(program::PRIMARY_PREFIX.as_bytes());
++        digest.update(program::FIXTURE_PREFIX.as_bytes());
++        for tenant in program::TENANT_IDS {
++            digest.update(tenant.as_bytes());
++        }
++        Ok(ValidatedGraph {
++            node_sha256,
++            descriptor_sha256: digest.finalize().into(),
++        })
++    }
++}
++
++impl ValidatedGraph {
++    pub(crate) fn check_node(&self, node: &str) -> Result<(), Refusal> {
++        if node.is_empty()
++            || node.len() > 256
++            || <[u8; 32]>::from(Sha256::digest(node.as_bytes())) != self.node_sha256
++        {
++            return Err(Refusal::Invalid);
++        }
++        Ok(())
++    }
++
++    pub(crate) fn classify(
++        &self,
++        index: usize,
++        loaded: &LoadedDeployment,
++    ) -> Result<ScriptClass, Refusal> {
++        self.check_node(&loaded.options.node)?;
++        let class = program::class_for(index)?;
++        validate_loaded(loaded, class, &loaded.options.node)?;
++        Ok(class)
++    }
++
++    pub(crate) fn digest(&self) -> [u8; 32] {
++        self.descriptor_sha256
++    }
++}
++
++fn validate_loaded(
++    loaded: &LoadedDeployment,
++    class: ScriptClass,
++    node: &str,
++) -> Result<(), Refusal> {
++    let guarded = class == ScriptClass::Guarded;
++    let (script, source, version, prefix) = if guarded {
++        (
++            program::FIXTURE,
++            program::FIXTURE_JS,
++            program::FIXTURE_VERSION,
++            program::FIXTURE_PREFIX,
++        )
++    } else {
++        (
++            program::PRIMARY,
++            program::PRIMARY_JS,
++            program::PRIMARY_VERSION,
++            program::PRIMARY_PREFIX,
++        )
++    };
++    let options = &loaded.options;
++    if loaded.script_name != script
++        || options.script_name != script
++        || options.src != source
++        || loaded.version != version
++        || loaded.prefix != prefix
++        || options.node != node
++        || !program::compat_matches(options.compat)
++        || !options.modules.is_empty()
++        || !options.r2_bindings.is_empty()
++        || !options.d1_bindings.is_empty()
++        || !options.kv_bindings.is_empty()
++        || !options.queue_bindings.is_empty()
++        || !options.queue_consumers.is_empty()
++        || !options.workflow_bindings.is_empty()
++        || !options.vars.is_empty()
++        || loaded.asset_binding.is_some()
++        || !loaded.loader_bindings.is_empty()
++        || loaded.assets.is_some()
++        || !loaded.crons.is_empty()
++        || !loaded.containers.is_empty()
++        || loaded.fence_image.is_some()
++    {
++        return Err(Refusal::Invalid);
++    }
++    if guarded {
++        if options.do_classes.as_slice() != [program::CLASS]
++            || options.bindings.len() != 1
++            || options.bindings[0].0 != "OBJECTS"
++            || options.bindings[0].1 != program::CLASS
++            || !loaded.services.is_empty()
++        {
++            return Err(Refusal::Invalid);
++        }
++    } else if !options.do_classes.is_empty()
++        || !options.bindings.is_empty()
++        || loaded.services.len() != 1
++        || loaded.services[0].0 != "GUARDED"
++        || loaded.services[0].1 != program::FIXTURE
++        || loaded.services[0].2.is_some()
++    {
++        return Err(Refusal::Invalid);
++    }
++    Ok(())
++}
+--- /dev/null
++++ b/crates/celld/guarded_node/control.rs
+@@ -0,0 +1,817 @@
++//! Native ownership only. No task, Worker, activity or physical-capacity lease
++//! can be created or returned by this foundation module.
++use std::mem::{align_of, size_of};
++use std::sync::{
++    atomic::{AtomicBool, AtomicUsize, Ordering},
++    Arc, Mutex, Weak,
++};
++use std::time::{Duration, Instant};
++
++use foks_hosted_transport::memory::{PoolLimits, Pools, Request};
++use foks_metadata_core::owned_list::ListRetainedOwner;
++use tokio::sync::Semaphore;
++
++use super::Refusal;
++
++pub(super) const MIB: usize = 1024 * 1024;
++pub(super) const CLEANUP_BYTES: usize = 8 * 24 * 1024 + 4 * 2 * 1024;
++pub(super) const SUMMARY_LIMIT: usize = 64;
++pub(super) const HEADER_LIMIT: usize = 4;
++// A0 classifies <=4096-byte input as eligible for its small fallback pool.
++// These private native owners always use the primary pool, independently of
++// the current role caps; no actual 4097-byte input allocation is made.
++const NON_SMALL_CLASSIFICATION: usize = 4097;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum OwnerRole {
++    Process,
++    Invocation,
++    Control,
++}
++
++const ROLES: [(OwnerRole, usize); 3] = [
++    (OwnerRole::Process, 1),
++    (OwnerRole::Invocation, 2),
++    (OwnerRole::Control, 1),
++];
++
++impl OwnerRole {
++    fn index(self) -> usize {
++        match self {
++            Self::Process => 0,
++            Self::Invocation => 1,
++            Self::Control => 2,
++        }
++    }
++
++    pub(super) fn cap(self) -> usize {
++        match self {
++            Self::Process => MIB,
++            Self::Invocation => 8 * MIB,
++            Self::Control => 64 * 1024,
++        }
++    }
++}
++
++#[derive(Clone, Copy, Debug)]
++pub(super) struct AcceptedStamp {
++    accepted_at: Instant,
++    deadline: Instant,
++}
++
++impl AcceptedStamp {
++    #[cfg(test)]
++    pub(super) fn capture() -> Result<Self, Refusal> {
++        Self::at(Instant::now())
++    }
++
++    #[cfg(test)]
++    pub(super) fn at(accepted_at: Instant) -> Result<Self, Refusal> {
++        Ok(Self {
++            accepted_at,
++            deadline: accepted_at
++                .checked_add(Duration::from_secs(15))
++                .ok_or(Refusal::Bounds)?,
++        })
++    }
++
++    fn control_deadline(self) -> Result<Instant, Refusal> {
++        Ok(self.deadline.min(
++            self.accepted_at
++                .checked_add(Duration::from_secs(1))
++                .ok_or(Refusal::Bounds)?,
++        ))
++    }
++}
++
++// This is the pinned Arc header convention used by A0's admitted_request.
++// Requested payload/layout accounting excludes allocator/runtime overhead.
++#[repr(C)]
++struct ArcAllocation<T> {
++    strong: AtomicUsize,
++    weak: AtomicUsize,
++    value: T,
++}
++
++pub(super) fn arc_bytes<T>() -> Result<usize, Refusal> {
++    if align_of::<ArcAllocation<T>>() > 16 {
++        return Err(Refusal::Bounds);
++    }
++    Ok(size_of::<ArcAllocation<T>>())
++}
++
++pub(super) fn request_bytes() -> Result<usize, Refusal> {
++    let bytes = arc_bytes::<Request>()?;
++    if bytes > 4096 {
++        return Err(Refusal::Bounds);
++    }
++    Ok(bytes)
++}
++
++#[derive(Default)]
++struct CleanupCredits {
++    used_tasks: u8,
++    used_controls: u8,
++}
++
++#[cfg(test)]
++#[derive(Clone, Copy)]
++pub(super) enum CleanupKind {
++    Task(u8),
++    Control(u8),
++}
++
++#[cfg(test)]
++pub(super) struct Credit {
++    pub(super) bytes: usize,
++}
++
++impl CleanupCredits {
++    #[cfg(test)]
++    fn consume_closed(&mut self, kind: CleanupKind) -> Result<Credit, Refusal> {
++        let (mask, index, maximum, bytes) = match kind {
++            CleanupKind::Task(index) => (&mut self.used_tasks, index, 8, 24 * 1024),
++            CleanupKind::Control(index) => (&mut self.used_controls, index, 4, 2 * 1024),
++        };
++        if index >= maximum || *mask & (1 << index) != 0 {
++            return Err(Refusal::Exhausted);
++        }
++        *mask |= 1 << index;
++        Ok(Credit { bytes })
++    }
++}
++
++// The Request is last: its charge outlives all concrete control fields. The
++// process registry separately retains the base Request until explicit retire.
++struct Control {
++    role: OwnerRole,
++    stamp: Option<AcceptedStamp>,
++    deadline: Option<Instant>,
++    debt: AtomicUsize,
++    cancelled: AtomicBool,
++    cleanup: Mutex<CleanupCredits>,
++    // Same real process Request, not a fresh allowance or registry back edge.
++    process_request: Option<Arc<Request>>,
++    request: Arc<Request>,
++}
++
++impl Control {
++    fn check(&self) -> Result<(), Refusal> {
++        if self
++            .process_request
++            .as_ref()
++            .is_some_and(|process| process.failed())
++        {
++            self.request.fail();
++            return Err(Refusal::Failed);
++        }
++        if self.request.failed() {
++            return Err(Refusal::Failed);
++        }
++        if self.cancelled.load(Ordering::Acquire) {
++            return Err(Refusal::Cancelled);
++        }
++        if self
++            .deadline
++            .is_some_and(|deadline| Instant::now() >= deadline)
++        {
++            self.request.fail();
++            return Err(Refusal::Expired);
++        }
++        Ok(())
++    }
++
++    fn charge(&self, bytes: usize) -> Result<(), Refusal> {
++        self.check()?;
++        self.debt
++            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |debt| {
++                debt.checked_add(bytes)
++                    .filter(|total| *total <= self.role.cap())
++            })
++            .map_err(|_| {
++                self.request.fail();
++                Refusal::Bounds
++            })?;
++        if !self.request.reserve_retained(bytes) {
++            self.request.fail();
++            return Err(Refusal::Capacity);
++        }
++        self.check()
++    }
++}
++
++#[derive(Default)]
++struct HeaderCell {
++    // Socket ownership is reserved in the containing record now. B1 never
++    // accepts or constructs a socket; B3 supplies the real admission caller.
++    _socket: Option<tokio::net::TcpStream>,
++    stamp: Option<AcceptedStamp>,
++    bytes: [u8; 17],
++}
++
++#[derive(Default)]
++struct OwnerCell {
++    generation: u64,
++    request: Option<Arc<Request>>,
++}
++
++struct RegistryState {
++    headers: [HeaderCell; HEADER_LIMIT],
++    summaries: [Option<Weak<Request>>; SUMMARY_LIMIT],
++    summary_count: usize,
++    control_witness: Option<Weak<Request>>,
++    process_witness: Option<Weak<Request>>,
++    cells: [OwnerCell; 3],
++    // Last: charged registry/header/Weak payloads die before the process owner.
++    process: Option<Arc<Request>>,
++}
++
++struct Registry {
++    stopped: AtomicBool,
++    state: Mutex<RegistryState>,
++}
++
++#[derive(Default)]
++struct FactoryState {
++    registry: Option<Arc<Registry>>,
++    process_attempted: bool,
++}
++
++pub(super) struct OwnerFactory {
++    state: Mutex<FactoryState>,
++    roles: [Arc<Semaphore>; 3],
++    pools: Arc<Pools>,
++}
++
++impl OwnerFactory {
++    pub(super) fn new() -> Result<Self, Refusal> {
++        let limits =
++            PoolLimits::new(8 * MIB, 64 * MIB, 256 * 1024, 4).map_err(|_| Refusal::Bounds)?;
++        // Only Pools/role-semaphore bootstrap is excluded before a real owner
++        // can exist. Registry, control, header and witness storage is not.
++        Ok(Self {
++            state: Mutex::new(FactoryState::default()),
++            roles: ROLES.map(|(_, capacity)| Arc::new(Semaphore::new(capacity))),
++            pools: Pools::new(limits),
++        })
++    }
++
++    pub(super) fn process_installed(&self) -> bool {
++        self.state
++            .try_lock()
++            .is_ok_and(|state| state.registry.is_some())
++    }
++
++    pub(super) fn try_owner(
++        &self,
++        role: OwnerRole,
++        stamp: Option<AcceptedStamp>,
++    ) -> Result<OriginalOwner, Refusal> {
++        self.try_owner_inner(
++            role,
++            stamp,
++            #[cfg(test)]
++            None,
++        )
++    }
++
++    fn try_owner_inner(
++        &self,
++        role: OwnerRole,
++        stamp: Option<AcceptedStamp>,
++        #[cfg(test)] before_commit: Option<&dyn Fn()>,
++    ) -> Result<OriginalOwner, Refusal> {
++        let mut factory = self.state.try_lock().map_err(|_| Refusal::Contended)?;
++        let deadline = match (role, stamp) {
++            (OwnerRole::Process, None) => None,
++            (OwnerRole::Invocation, Some(value)) => Some(value.deadline),
++            (OwnerRole::Control, Some(value)) => Some(value.control_deadline()?),
++            _ => return Err(Refusal::Invalid),
++        };
++        if deadline.is_some_and(|limit| Instant::now() >= limit) {
++            return Err(Refusal::Expired);
++        }
++        if role == OwnerRole::Process {
++            if factory.process_attempted {
++                return Err(Refusal::Busy);
++            }
++            factory.process_attempted = true;
++            let permit = self.roles[role.index()]
++                .clone()
++                .try_acquire_owned()
++                .map_err(|_| Refusal::Capacity)?;
++            let request = self
++                .pools
++                .admitted_request(Some(permit))
++                .map_err(|_| Refusal::Capacity)?;
++            request.classify_input(NON_SMALL_CLASSIFICATION);
++            let witness_bytes = request_bytes()?
++                .checked_mul(SUMMARY_LIMIT + 2)
++                .ok_or(Refusal::Bounds)?;
++            let additional = arc_bytes::<Control>()?
++                .checked_add(arc_bytes::<Registry>()?)
++                .and_then(|value| value.checked_add(witness_bytes))
++                .ok_or(Refusal::Bounds)?;
++            let debt = request_bytes()?
++                .checked_add(additional)
++                .ok_or(Refusal::Bounds)?;
++            if debt > role.cap() || !request.reserve_retained(additional) {
++                request.fail();
++                return Err(Refusal::Capacity);
++            }
++            let control = Arc::new(Control {
++                role,
++                stamp,
++                deadline,
++                debt: AtomicUsize::new(debt),
++                cancelled: AtomicBool::new(false),
++                cleanup: Mutex::new(CleanupCredits::default()),
++                process_request: None,
++                request: request.clone(),
++            });
++            let registry = Arc::new(Registry {
++                stopped: AtomicBool::new(false),
++                state: Mutex::new(RegistryState {
++                    headers: std::array::from_fn(|_| HeaderCell::default()),
++                    summaries: std::array::from_fn(|_| None),
++                    summary_count: 0,
++                    control_witness: None,
++                    process_witness: Some(Arc::downgrade(&request)),
++                    cells: std::array::from_fn(|_| OwnerCell::default()),
++                    process: Some(request),
++                }),
++            });
++            factory.registry = Some(registry.clone());
++            return Ok(OriginalOwner {
++                control,
++                registry,
++                slot: None,
++                generation: 1,
++            });
++        }
++        let registry = factory.registry.as_ref().ok_or(Refusal::NotReady)?.clone();
++        let mut state = registry.state.try_lock().map_err(|_| Refusal::Contended)?;
++        if registry.stopped.load(Ordering::Acquire) {
++            return Err(Refusal::Cancelled);
++        }
++        if state
++            .process
++            .as_ref()
++            .is_none_or(|request| request.failed())
++        {
++            return Err(Refusal::Failed);
++        }
++        if role == OwnerRole::Invocation && state.summary_count == SUMMARY_LIMIT {
++            return Err(Refusal::Exhausted);
++        }
++        let slot = match role {
++            OwnerRole::Invocation => (0..2).find(|index| state.cells[*index].request.is_none()),
++            OwnerRole::Control => state.cells[2].request.is_none().then_some(2),
++            OwnerRole::Process => return Err(Refusal::Invalid),
++        }
++        .ok_or(Refusal::Busy)?;
++        let generation = state.cells[slot]
++            .generation
++            .checked_add(1)
++            .ok_or(Refusal::Exhausted)?;
++        let permit = self.roles[role.index()]
++            .clone()
++            .try_acquire_owned()
++            .map_err(|_| Refusal::Capacity)?;
++        let request = self
++            .pools
++            .admitted_request(Some(permit))
++            .map_err(|_| Refusal::Capacity)?;
++        request.classify_input(NON_SMALL_CLASSIFICATION);
++        let additional = arc_bytes::<Control>()?
++            .checked_add(if role == OwnerRole::Invocation {
++                CLEANUP_BYTES
++            } else {
++                0
++            })
++            .ok_or(Refusal::Bounds)?;
++        let debt = request_bytes()?
++            .checked_add(additional)
++            .ok_or(Refusal::Bounds)?;
++        if debt > role.cap() || !request.reserve_retained(additional) {
++            request.fail();
++            return Err(Refusal::Capacity);
++        }
++        let control = Arc::new(Control {
++            role,
++            stamp,
++            deadline,
++            debt: AtomicUsize::new(debt),
++            cancelled: AtomicBool::new(false),
++            cleanup: Mutex::new(CleanupCredits::default()),
++            process_request: state.process.as_ref().cloned(),
++            request: request.clone(),
++        });
++        #[cfg(test)]
++        if let Some(before_commit) = before_commit {
++            before_commit();
++        }
++        // Admission linearizes at this final check. A stop racing after it
++        // may precede the caller receiving this value, but the value is then
++        // invalid: every check/charge observes the same process failure and
++        // stopped latch. No publication permission is created here.
++        if registry.stopped.load(Ordering::Acquire) {
++            request.fail();
++            return Err(Refusal::Cancelled);
++        }
++        control.check()?;
++        if role == OwnerRole::Invocation {
++            let index = state.summary_count;
++            state.summaries[index] = Some(Arc::downgrade(&request));
++            state.summary_count += 1;
++        } else {
++            drop(state.control_witness.take());
++            state.control_witness = Some(Arc::downgrade(&request));
++        }
++        state.cells[slot] = OwnerCell {
++            generation,
++            request: Some(request),
++        };
++        drop(state);
++        Ok(OriginalOwner {
++            control,
++            registry,
++            slot: Some(slot),
++            generation,
++        })
++    }
++}
++
++pub(super) struct OriginalOwner {
++    // Future concrete resource aggregates must be declared before this control.
++    control: Arc<Control>,
++    registry: Arc<Registry>,
++    slot: Option<usize>,
++    generation: u64,
++}
++
++pub(super) struct HeldOwner {
++    _owner: Option<OriginalOwner>,
++    _registry: Option<Arc<Registry>>,
++    _request: Option<Arc<Request>>,
++}
++
++impl HeldOwner {
++    fn owner(owner: OriginalOwner) -> Self {
++        Self {
++            _owner: Some(owner),
++            _registry: None,
++            _request: None,
++        }
++    }
++}
++
++impl OriginalOwner {
++    pub(super) fn charge(&self, bytes: usize) -> Result<(), Refusal> {
++        self.check()?;
++        self.control.charge(bytes)?;
++        self.check()
++    }
++
++    pub(super) fn check(&self) -> Result<(), Refusal> {
++        if self.registry.stopped.load(Ordering::Acquire) {
++            self.control.request.fail();
++            return Err(Refusal::Cancelled);
++        }
++        self.control.check()
++    }
++
++    pub(super) fn cancel(&self) {
++        self.control.cancelled.store(true, Ordering::Release);
++        if self.control.role == OwnerRole::Process {
++            self.registry.stopped.store(true, Ordering::Release);
++        }
++    }
++
++    pub(super) fn fail(&self) {
++        self.control.request.fail();
++        self.cancel();
++    }
++
++    #[cfg(test)]
++    pub(super) fn same_owner(&self, other: &Self) -> bool {
++        Arc::ptr_eq(&self.control.request, &other.control.request)
++    }
++
++    pub(super) fn retire_unstarted(self) -> Result<(), HeldOwner> {
++        // This API never releases native/runtime resources. They do not exist
++        // for these owners; B2 needs its separately proved retirement path.
++        if Arc::strong_count(&self.control) != 1 {
++            return Err(HeldOwner::owner(self));
++        }
++        let Some(slot) = self.slot else {
++            // A construction failure drops the factory and all concrete
++            // foundation payloads first. No other registry user may remain.
++            if Arc::strong_count(&self.registry) != 1 {
++                return Err(HeldOwner::owner(self));
++            }
++            return self.retire_process();
++        };
++        let registry = self.registry.clone();
++        let mut state = match registry.state.try_lock() {
++            Ok(state) => state,
++            Err(_) => return Err(HeldOwner::owner(self)),
++        };
++        let cell = &state.cells[slot];
++        if cell.generation != self.generation
++            || cell
++                .request
++                .as_ref()
++                .is_none_or(|held| !Arc::ptr_eq(held, &self.control.request))
++        {
++            self.fail();
++            return Err(HeldOwner::owner(self));
++        }
++        let Self {
++            control,
++            registry: original_registry,
++            ..
++        } = self;
++        let control = match Arc::try_unwrap(control) {
++            Ok(control) => control,
++            Err(control) => {
++                return Err(HeldOwner::owner(Self {
++                    control,
++                    registry: original_registry,
++                    slot: Some(slot),
++                    generation: cell.generation,
++                }))
++            }
++        };
++        // All control/credit payloads die before attempting the final Request.
++        drop(control);
++        let held = state.cells[slot]
++            .request
++            .take()
++            .expect("validated owner cell");
++        match Arc::try_unwrap(held) {
++            Ok(request) => {
++                drop(request); // actual Request and role permit, while guarded
++                drop(state);
++                drop(original_registry);
++                Ok(())
++            }
++            Err(held) => {
++                state.cells[slot].request = Some(held);
++                drop(state);
++                Err(HeldOwner {
++                    _owner: None,
++                    _registry: Some(original_registry),
++                    _request: None,
++                })
++            }
++        }
++    }
++
++    fn retire_process(self) -> Result<(), HeldOwner> {
++        let Self {
++            control, registry, ..
++        } = self;
++        let registry = match Arc::try_unwrap(registry) {
++            Ok(registry) => registry,
++            Err(registry) => {
++                return Err(HeldOwner::owner(Self {
++                    control,
++                    registry,
++                    slot: None,
++                    generation: 1,
++                }))
++            }
++        };
++        let mut state = match registry.state.try_lock() {
++            Ok(state) => state,
++            Err(_) => {
++                return Err(HeldOwner {
++                    _owner: None,
++                    _registry: None,
++                    _request: Some(control.request.clone()),
++                })
++            }
++        };
++        if state.cells.iter().any(|cell| cell.request.is_some())
++            || state
++                .headers
++                .iter()
++                .any(|cell| cell.stamp.is_some() || cell._socket.is_some())
++        {
++            return Err(HeldOwner {
++                _owner: None,
++                _registry: None,
++                _request: Some(control.request.clone()),
++            });
++        }
++        // The unique registry allocation is already gone; dispose its concrete
++        // witnesses and controls before the final process Request, under lock.
++        state.summaries = std::array::from_fn(|_| None);
++        state.control_witness = None;
++        state.process_witness = None;
++        drop(control);
++        let held = state.process.take().expect("unique process owner");
++        match Arc::try_unwrap(held) {
++            Ok(request) => {
++                drop(request);
++                Ok(())
++            }
++            Err(request) => Err(HeldOwner {
++                _owner: None,
++                _registry: None,
++                _request: Some(request),
++            }),
++        }
++    }
++
++    pub(super) fn observation(&self) -> Result<ControlObservation, Refusal> {
++        let state = self
++            .registry
++            .state
++            .try_lock()
++            .map_err(|_| Refusal::Contended)?;
++        let cleanup = self
++            .control
++            .cleanup
++            .try_lock()
++            .map_err(|_| Refusal::Contended)?;
++        Ok(ControlObservation {
++            role_caps: ROLES.map(|(role, _)| role.cap()),
++            role_counts: ROLES.map(|(_, count)| count),
++            debt: self.control.debt.load(Ordering::Acquire),
++            occupied_owners: usize::from(state.process.is_some())
++                + state
++                    .cells
++                    .iter()
++                    .filter(|cell| cell.request.is_some())
++                    .count(),
++            occupied_headers: state
++                .headers
++                .iter()
++                .filter(|cell| cell.stamp.is_some())
++                .count(),
++            header_bytes: state.headers.iter().map(|cell| cell.bytes.len()).sum(),
++            summaries: state.summary_count,
++            cleanup_tasks_used: cleanup.used_tasks.count_ones(),
++            cleanup_controls_used: cleanup.used_controls.count_ones(),
++            original_stamp_present: self.control.stamp.is_some(),
++        })
++    }
++}
++
++#[derive(Clone, Copy, Debug)]
++pub(crate) struct ControlObservation {
++    pub role_caps: [usize; 3],
++    pub role_counts: [usize; 3],
++    pub debt: usize,
++    pub occupied_owners: usize,
++    pub occupied_headers: usize,
++    pub header_bytes: usize,
++    pub summaries: usize,
++    pub cleanup_tasks_used: u32,
++    pub cleanup_controls_used: u32,
++    pub original_stamp_present: bool,
++}
++
++pub(super) fn layouts() -> Result<[(usize, usize); 8], Refusal> {
++    Ok([
++        (request_bytes()?, align_of::<ArcAllocation<Request>>()),
++        (
++            arc_bytes::<Control>()?,
++            align_of::<ArcAllocation<Control>>(),
++        ),
++        (
++            arc_bytes::<Registry>()?,
++            align_of::<ArcAllocation<Registry>>(),
++        ),
++        (size_of::<OwnerFactory>(), align_of::<OwnerFactory>()),
++        (size_of::<OriginalOwner>(), align_of::<OriginalOwner>()),
++        (size_of::<HeaderCell>(), align_of::<HeaderCell>()),
++        (size_of::<CleanupCredits>(), align_of::<CleanupCredits>()),
++        (
++            size_of::<ControlObservation>(),
++            align_of::<ControlObservation>(),
++        ),
++    ])
++}
++
++#[cfg(test)]
++pub(super) mod component {
++    use super::*;
++
++    pub(in crate::guarded_execution::node) fn arc_layout<T>() -> (usize, usize) {
++        (
++            size_of::<ArcAllocation<T>>(),
++            align_of::<ArcAllocation<T>>(),
++        )
++    }
++
++    pub(in crate::guarded_execution::node) fn try_owner_before_commit(
++        factory: &OwnerFactory,
++        stamp: AcceptedStamp,
++        before_commit: &dyn Fn(),
++    ) -> Result<OriginalOwner, Refusal> {
++        factory.try_owner_inner(OwnerRole::Invocation, Some(stamp), Some(before_commit))
++    }
++
++    pub(in crate::guarded_execution::node) fn role_available(
++        factory: &OwnerFactory,
++        role: OwnerRole,
++    ) -> usize {
++        factory.roles[role.index()].available_permits()
++    }
++
++    pub(in crate::guarded_execution::node) fn request(owner: &OriginalOwner) -> Arc<Request> {
++        owner.control.request.clone()
++    }
++
++    pub(in crate::guarded_execution::node) fn debt(owner: &OriginalOwner) -> usize {
++        owner.control.debt.load(Ordering::Acquire)
++    }
++
++    pub(in crate::guarded_execution::node) fn stamp(
++        owner: &OriginalOwner,
++    ) -> Option<(Instant, Instant)> {
++        owner
++            .control
++            .stamp
++            .map(|value| (value.accepted_at, owner.control.deadline.expect("stamped")))
++    }
++
++    pub(in crate::guarded_execution::node) fn cleanup(
++        owner: &OriginalOwner,
++        kind: CleanupKind,
++    ) -> Result<Credit, Refusal> {
++        if owner.control.role != OwnerRole::Invocation {
++            owner.fail();
++            return Err(Refusal::Invalid);
++        }
++        let result = owner
++            .control
++            .cleanup
++            .try_lock()
++            .map_err(|_| Refusal::Contended)?
++            .consume_closed(kind);
++        if result.is_err() {
++            owner.fail();
++        }
++        result
++    }
++
++    pub(in crate::guarded_execution::node) fn acquire_header(
++        owner: &OriginalOwner,
++        stamp: AcceptedStamp,
++    ) -> Result<usize, Refusal> {
++        owner.check()?;
++        let mut state = owner
++            .registry
++            .state
++            .try_lock()
++            .map_err(|_| Refusal::Contended)?;
++        let (index, cell) = state
++            .headers
++            .iter_mut()
++            .enumerate()
++            .find(|(_, cell)| cell.stamp.is_none())
++            .ok_or(Refusal::Busy)?;
++        cell.stamp = Some(stamp);
++        Ok(index)
++    }
++
++    pub(in crate::guarded_execution::node) fn take_header(
++        owner: &OriginalOwner,
++        index: usize,
++    ) -> Result<AcceptedStamp, Refusal> {
++        let mut state = owner
++            .registry
++            .state
++            .try_lock()
++            .map_err(|_| Refusal::Contended)?;
++        state
++            .headers
++            .get_mut(index)
++            .ok_or(Refusal::Invalid)?
++            .stamp
++            .take()
++            .ok_or(Refusal::Invalid)
++    }
++
++    pub(in crate::guarded_execution::node) fn exact_generation(
++        ids: &[u64],
++        expected: u64,
++    ) -> Option<usize> {
++        (expected != 0)
++            .then(|| ids.iter().position(|id| *id == expected))
++            .flatten()
++    }
++
++    pub(in crate::guarded_execution::node) fn next_generation(
++        current: u64,
++    ) -> Result<u64, Refusal> {
++        current
++            .checked_add(1)
++            .filter(|next| *next != 0)
++            .ok_or(Refusal::Exhausted)
++    }
++}
+--- /dev/null
++++ b/crates/celld/guarded_node/tests.rs
+@@ -0,0 +1,1457 @@
++//! Foundation components only: no Ready, guarded Worker, socket or native
++//! execution lease is constructed. The focused runner executes these serially.
++use super::control::{
++    self, component, AcceptedStamp, CleanupKind, OriginalOwner, OwnerFactory, OwnerRole,
++};
++use super::*;
++use celld_logic::{
++    on_event, CasOutcome, Channel, Config, Effect, Event, Phase, RequestError, Route, State,
++};
++use foks_metadata_core::owned_list::ListRetainedOwner;
++use std::sync::{
++    atomic::{AtomicBool, Ordering},
++    Arc, OnceLock,
++};
++use std::time::{Duration, Instant};
++
++fn fixture_factory() -> (OwnerFactory, OriginalOwner) {
++    let factory = OwnerFactory::new().expect("fixed pool geometry");
++    let process = factory
++        .try_owner(OwnerRole::Process, None)
++        .expect("process owner");
++    (factory, process)
++}
++
++fn child(factory: &OwnerFactory, role: OwnerRole) -> OriginalOwner {
++    factory
++        .try_owner(role, Some(AcceptedStamp::capture().unwrap()))
++        .expect("child owner")
++}
++
++fn retire(owner: OriginalOwner) {
++    assert!(owner.retire_unstarted().is_ok());
++}
++
++fn retire_factory(factory: OwnerFactory, process: OriginalOwner) {
++    drop(factory);
++    retire(process);
++}
++
++fn installed() -> &'static Arc<GuardedNode> {
++    static VALUE: OnceLock<Arc<GuardedNode>> = OnceLock::new();
++    VALUE.get_or_init(|| GuardedNode::install().expect("single real process installation"))
++}
++
++#[test]
++fn b1_role_geometry_counts_process_owner() {
++    let (factory, process) = fixture_factory();
++    assert!(matches!(
++        factory.try_owner(OwnerRole::Process, None),
++        Err(Refusal::Busy)
++    ));
++    let first = child(&factory, OwnerRole::Invocation);
++    let second = child(&factory, OwnerRole::Invocation);
++    let control = child(&factory, OwnerRole::Control);
++    let observed = process.observation().unwrap();
++    assert_eq!(observed.role_counts, [1, 2, 1]);
++    assert_eq!(observed.occupied_owners, 4);
++    assert!(matches!(
++        factory.try_owner(
++            OwnerRole::Invocation,
++            Some(AcceptedStamp::capture().unwrap())
++        ),
++        Err(Refusal::Busy)
++    ));
++    assert!(matches!(
++        factory.try_owner(OwnerRole::Control, Some(AcceptedStamp::capture().unwrap())),
++        Err(Refusal::Busy)
++    ));
++    retire(control);
++    retire(second);
++    retire(first);
++    assert_eq!(process.observation().unwrap().occupied_owners, 1);
++    process.cancel();
++    assert!(matches!(
++        factory.try_owner(OwnerRole::Control, Some(AcceptedStamp::capture().unwrap())),
++        Err(Refusal::Cancelled)
++    ));
++    retire_factory(factory, process);
++
++    let (factory, process) = fixture_factory();
++    let existing = child(&factory, OwnerRole::Invocation);
++    let existing_request = component::request(&existing);
++    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
++    let (resume_tx, resume_rx) = std::sync::mpsc::sync_channel(1);
++    std::thread::scope(|scope| {
++        let borrowed = &factory;
++        let paused = scope.spawn(move || {
++            component::try_owner_before_commit(borrowed, AcceptedStamp::capture().unwrap(), &|| {
++                ready_tx.try_send(()).unwrap();
++                resume_rx
++                    .recv_timeout(Duration::from_secs(5))
++                    .expect("bounded resume handshake");
++            })
++        });
++        let ready = ready_rx.recv_timeout(Duration::from_secs(5));
++        process.fail(); // completes without waiting for the held admission lock
++        let invalid =
++            existing.check().is_err() && existing_request.failed() && existing.charge(0).is_err();
++        let resumed = resume_tx.try_send(());
++        let result = paused.join();
++        assert!(ready.is_ok() && resumed.is_ok() && invalid);
++        assert!(matches!(result.unwrap(), Err(Refusal::Cancelled)));
++    });
++    assert_eq!(
++        component::role_available(&factory, OwnerRole::Invocation),
++        1
++    );
++    assert_eq!(process.observation().unwrap().summaries, 1);
++    assert_eq!(process.observation().unwrap().occupied_owners, 2);
++    drop(existing_request);
++    retire(existing);
++    retire_factory(factory, process);
++}
++
++#[test]
++fn b1_last_strong_and_registry_retirement_hold_role() {
++    let (factory, process) = fixture_factory();
++    let first = child(&factory, OwnerRole::Invocation);
++    let second = child(&factory, OwnerRole::Invocation);
++    let extra = component::request(&first);
++    let weak = Arc::downgrade(&extra);
++    let held = match first.retire_unstarted() {
++        Err(held) => held,
++        Ok(()) => panic!("alias was retired"),
++    };
++    assert!(weak.upgrade().is_some());
++    assert!(matches!(
++        factory.try_owner(
++            OwnerRole::Invocation,
++            Some(AcceptedStamp::capture().unwrap())
++        ),
++        Err(Refusal::Busy)
++    ));
++    drop(extra);
++    // Dropping an unexpected alias is not an acknowledgement to reuse the
++    // registry cell. The failed retirement remains conservatively held.
++    assert!(weak.upgrade().is_some());
++    assert!(matches!(
++        factory.try_owner(
++            OwnerRole::Invocation,
++            Some(AcceptedStamp::capture().unwrap())
++        ),
++        Err(Refusal::Busy)
++    ));
++    retire(second);
++    let replacement = child(&factory, OwnerRole::Invocation);
++    retire(replacement);
++    drop(held);
++    drop(factory);
++    drop(process);
++    assert!(weak.upgrade().is_none());
++    // This Weak can still retain Arc backing; no allocator-free claim is made.
++    drop(weak);
++}
++
++#[test]
++fn b1_control_headroom_survives_full_invocation_debt() {
++    let (factory, process) = fixture_factory();
++    let first = child(&factory, OwnerRole::Invocation);
++    let second = child(&factory, OwnerRole::Invocation);
++    for owner in [&first, &second] {
++        owner
++            .charge(OwnerRole::Invocation.cap() - component::debt(owner))
++            .unwrap();
++        assert_eq!(component::debt(owner), 8 * control::MIB);
++        assert_eq!(owner.charge(1), Err(Refusal::Bounds));
++        assert_eq!(owner.check(), Err(Refusal::Failed));
++    }
++    // Both failed invocations retain their full debts and role cells. The
++    // separately reserved control lane must still admit and use its cap.
++    let control = child(&factory, OwnerRole::Control);
++    control
++        .charge(OwnerRole::Control.cap() - component::debt(&control))
++        .unwrap();
++    assert_eq!(process.observation().unwrap().occupied_owners, 4);
++    retire(control);
++    retire(first);
++    retire(second);
++    retire_factory(factory, process);
++
++    // Direct A0 reservations deliberately bypass the private debt cap only
++    // inside this component test, to force actual primary-pool exhaustion.
++    let (factory, process) = fixture_factory();
++    let request = component::request(&process);
++    let available_minus_1024 = 48 * control::MIB - component::debt(&process) - 1024;
++    assert!(request.reserve_retained(available_minus_1024));
++    assert!(
++        !request.reserve_retained(2048),
++        "the 16-MiB small pool must not be a fallback"
++    );
++    assert!(request.failed());
++    drop(request);
++    retire_factory(factory, process);
++}
++
++#[test]
++fn b1_control_lane_busy_does_not_consume_cleanup() {
++    let (factory, process) = fixture_factory();
++    let invocation = child(&factory, OwnerRole::Invocation);
++    let control = child(&factory, OwnerRole::Control);
++    assert!(matches!(
++        factory.try_owner(OwnerRole::Control, Some(AcceptedStamp::capture().unwrap())),
++        Err(Refusal::Busy)
++    ));
++    let before = component::debt(&invocation);
++    invocation.cancel();
++    let mut bytes = 0;
++    for index in 0..8 {
++        bytes += component::cleanup(&invocation, CleanupKind::Task(index))
++            .unwrap()
++            .bytes;
++    }
++    for index in 0..4 {
++        bytes += component::cleanup(&invocation, CleanupKind::Control(index))
++            .unwrap()
++            .bytes;
++    }
++    assert_eq!(bytes, control::CLEANUP_BYTES);
++    assert_eq!(component::debt(&invocation), before);
++    assert!(matches!(
++        component::cleanup(&invocation, CleanupKind::Task(0)),
++        Err(Refusal::Exhausted)
++    ));
++    retire(control);
++    retire(invocation);
++    retire_factory(factory, process);
++}
++
++#[test]
++fn b1_header_cells_are_process_owned_and_bounded() {
++    let (factory, process) = fixture_factory();
++    let debt = component::debt(&process);
++    let stamp = AcceptedStamp::capture().unwrap();
++    let cells: Vec<_> = (0..4)
++        .map(|_| component::acquire_header(&process, stamp).unwrap())
++        .collect();
++    let observed = process.observation().unwrap();
++    assert_eq!(observed.occupied_headers, 4);
++    assert_eq!(observed.occupied_owners, 1);
++    assert_eq!(observed.header_bytes, 4 * 17);
++    assert_eq!(component::debt(&process), debt);
++    assert!(matches!(
++        component::acquire_header(&process, stamp),
++        Err(Refusal::Busy)
++    ));
++    for index in cells {
++        component::take_header(&process, index).unwrap();
++    }
++    // A refused/incomplete header does not create a child Request or consume
++    // the reserved control role. No actual socket is fabricated in B1.
++    let owner = child(&factory, OwnerRole::Control);
++    retire(owner);
++    retire_factory(factory, process);
++}
++
++#[test]
++fn b1_original_stamp_never_renews() {
++    let (factory, process) = fixture_factory();
++    let accepted = Instant::now();
++    let stamp = AcceptedStamp::at(accepted).unwrap();
++    let invocation = factory
++        .try_owner(OwnerRole::Invocation, Some(stamp))
++        .unwrap();
++    let control = factory.try_owner(OwnerRole::Control, Some(stamp)).unwrap();
++    assert_eq!(
++        component::stamp(&invocation),
++        Some((accepted, accepted + Duration::from_secs(15)))
++    );
++    assert_eq!(
++        component::stamp(&control),
++        Some((accepted, accepted + Duration::from_secs(1)))
++    );
++    assert!(invocation.same_owner(&invocation));
++    assert!(!invocation.same_owner(&control));
++    retire(control);
++    retire(invocation);
++    let expired = AcceptedStamp::at(accepted - Duration::from_secs(16)).unwrap();
++    assert!(matches!(
++        factory.try_owner(OwnerRole::Invocation, Some(expired)),
++        Err(Refusal::Expired)
++    ));
++    assert!(matches!(
++        factory.try_owner(OwnerRole::Control, Some(expired)),
++        Err(Refusal::Expired)
++    ));
++    assert_eq!(process.observation().unwrap().occupied_owners, 1);
++    retire_factory(factory, process);
++}
++
++#[test]
++fn b1_debt_failure_sticky_and_cleanup_one_use() {
++    let (factory, process) = fixture_factory();
++    let invocation = child(&factory, OwnerRole::Invocation);
++    let initial = component::debt(&invocation);
++    assert_eq!(invocation.charge(usize::MAX), Err(Refusal::Bounds));
++    assert_eq!(invocation.check(), Err(Refusal::Failed));
++    assert_eq!(invocation.charge(0), Err(Refusal::Failed));
++    assert_eq!(component::debt(&invocation), initial);
++    assert_eq!(
++        component::cleanup(&invocation, CleanupKind::Task(7))
++            .unwrap()
++            .bytes,
++        24 * 1024
++    );
++    assert!(matches!(
++        component::cleanup(&invocation, CleanupKind::Task(7)),
++        Err(Refusal::Exhausted)
++    ));
++    assert!(matches!(
++        component::cleanup(&invocation, CleanupKind::Control(4)),
++        Err(Refusal::Exhausted)
++    ));
++    assert_eq!(
++        component::cleanup(&invocation, CleanupKind::Control(3))
++            .unwrap()
++            .bytes,
++        2 * 1024
++    );
++    retire(invocation);
++    retire_factory(factory, process);
++}
++
++#[test]
++fn b1_owner_construction_and_payload_drop_order() {
++    struct Payload {
++        request: std::sync::Weak<foks_hosted_transport::memory::Request>,
++        dropped: Arc<AtomicBool>,
++    }
++    impl Drop for Payload {
++        fn drop(&mut self) {
++            assert!(
++                self.request.upgrade().is_some(),
++                "payload outlived its original Request"
++            );
++            self.dropped.store(true, Ordering::Release);
++        }
++    }
++    let (factory, process) = fixture_factory();
++    let invocation = child(&factory, OwnerRole::Invocation);
++    invocation.charge(std::mem::size_of::<Payload>()).unwrap();
++    let request = component::request(&invocation);
++    let weak = Arc::downgrade(&request);
++    let dropped = Arc::new(AtomicBool::new(false));
++    let payload = Box::new(Payload {
++        request: weak.clone(),
++        dropped: dropped.clone(),
++    });
++    drop(request);
++    drop(payload);
++    assert!(dropped.load(Ordering::Acquire));
++    assert!(weak.upgrade().is_some());
++    retire(invocation);
++    assert!(weak.upgrade().is_none());
++    let replacement = child(&factory, OwnerRole::Invocation);
++    retire(replacement);
++    // An owned, unstarted payload unwinds before the private retirement call.
++    // This fixture proves foundation Request ordering, not Worker disposal.
++    struct Prepared {
++        payload: Option<Box<Payload>>,
++        owner: Option<OriginalOwner>,
++    }
++    impl Drop for Prepared {
++        fn drop(&mut self) {
++            drop(self.payload.take());
++            retire(self.owner.take().expect("unstarted original owner"));
++        }
++    }
++    let invocation = child(&factory, OwnerRole::Invocation);
++    invocation.charge(std::mem::size_of::<Payload>()).unwrap();
++    let unwind_weak = Arc::downgrade(&component::request(&invocation));
++    let unwind_dropped = Arc::new(AtomicBool::new(false));
++    let prepared = Prepared {
++        payload: Some(Box::new(Payload {
++            request: unwind_weak.clone(),
++            dropped: unwind_dropped.clone(),
++        })),
++        owner: Some(invocation),
++    };
++    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
++        let _unstarted = prepared;
++        panic!("deliberate unstarted fixture unwind");
++    }));
++    assert!(panicked.is_err());
++    assert!(unwind_dropped.load(Ordering::Acquire));
++    assert!(unwind_weak.upgrade().is_none());
++    assert_eq!(
++        component::role_available(&factory, OwnerRole::Invocation),
++        2
++    );
++    assert!(matches!(
++        factory.try_owner(OwnerRole::Process, Some(AcceptedStamp::capture().unwrap())),
++        Err(Refusal::Invalid)
++    ));
++    let process_weak = Arc::downgrade(&component::request(&process));
++    retire_factory(factory, process);
++    assert!(
++        process_weak.upgrade().is_none(),
++        "local fixture leaked a process-reference cycle"
++    );
++
++    // Saturate actual A0 primary permits before child construction. Refusal
++    // returns its role permit and publishes neither Control nor a Weak/cell.
++    let (factory, process) = fixture_factory();
++    let request = component::request(&process);
++    assert!(request.reserve_retained(48 * control::MIB - component::debt(&process)));
++    assert!(matches!(
++        factory.try_owner(
++            OwnerRole::Invocation,
++            Some(AcceptedStamp::capture().unwrap())
++        ),
++        Err(Refusal::Capacity)
++    ));
++    assert_eq!(
++        component::role_available(&factory, OwnerRole::Invocation),
++        2
++    );
++    assert_eq!(process.observation().unwrap().summaries, 0);
++    assert_eq!(process.observation().unwrap().occupied_owners, 1);
++    drop(request);
++    retire_factory(factory, process);
++}
++
++#[test]
++fn b1_layout_and_role_ledger() {
++    let layout = GuardedNode::layouts().unwrap();
++    let node_layout = component::arc_layout::<GuardedNode>();
++    assert_eq!(node_layout.0, layout.node_arc_bytes);
++    assert!(node_layout.1 <= 16);
++    assert_eq!(layout.cleanup_reserve, 200 * 1024);
++    assert_eq!(layout.weak_limit, 66);
++    assert!(layout
++        .native
++        .iter()
++        .all(|(bytes, align)| *bytes > 0 && *bytes <= 64 * 1024 && *align <= 16));
++    assert!(layout.node_arc_bytes <= 64 * 1024);
++    let (factory, process) = fixture_factory();
++    let observed = process.observation().unwrap();
++    assert_eq!(
++        observed.role_caps,
++        [control::MIB, 8 * control::MIB, 64 * 1024]
++    );
++    assert_eq!(
++        observed.debt,
++        layout.native[0].0 + layout.native[1].0 + layout.native[2].0 + 66 * layout.native[0].0
++    );
++    assert!(
++        observed
++            .role_caps
++            .iter()
++            .zip(observed.role_counts)
++            .map(|(cap, count)| cap * count)
++            .sum::<usize>()
++            < 48 * control::MIB
++    );
++    // Each completed invocation leaves one separately precharged Weak backing
++    // witness. Exhaustion does not forget a witness or reuse a request ID.
++    for _ in 0..64 {
++        retire(child(&factory, OwnerRole::Invocation));
++    }
++    assert_eq!(process.observation().unwrap().summaries, 64);
++    assert!(matches!(
++        factory.try_owner(
++            OwnerRole::Invocation,
++            Some(AcceptedStamp::capture().unwrap())
++        ),
++        Err(Refusal::Exhausted)
++    ));
++    retire(child(&factory, OwnerRole::Control));
++    retire_factory(factory, process);
++
++    // Record actual compiled layouts after all assertions and fixture cleanup.
++    // Direct stderr writes bypass libtest's success-output capture without
++    // changing the exact 21-test stdout/serial-command contract. Nested/stack
++    // observations are nonadditive and do not describe allocator or RSS cost.
++    let names = [
++        "request_arc",
++        "control_arc",
++        "registry_arc",
++        "owner_factory",
++        "original_owner",
++        "header_cell",
++        "cleanup_credits",
++        "control_observation",
++    ];
++    let mut layouts = serde_json::Map::new();
++    for (name, (bytes, alignment)) in names
++        .into_iter()
++        .zip(layout.native)
++        .chain(std::iter::once(("node_arc", node_layout)))
++    {
++        layouts.insert(
++            name.into(),
++            serde_json::json!({"bytes": bytes, "alignment": alignment}),
++        );
++    }
++    let record = serde_json::json!({
++        "format": 1,
++        "claim": "b1-native-layouts-only",
++        "arc_convention": "repr-c-two-atomic-usize",
++        "layouts": layouts,
++        "role_caps": observed.role_caps,
++        "role_counts": observed.role_counts,
++        "initial_process_debt": observed.debt,
++        "cleanup_reserve": layout.cleanup_reserve,
++        "weak_limit": layout.weak_limit,
++    });
++    let mut line = b"FOKS_B1_LAYOUT ".to_vec();
++    serde_json::to_writer(&mut line, &record).expect("serialize compiled layouts");
++    line.push(b'\n');
++    assert!(line.len() <= 4096);
++    let mut stderr = std::io::stderr().lock();
++    std::io::Write::write_all(&mut stderr, &line).expect("record compiled layouts");
++    std::io::Write::flush(&mut stderr).expect("flush compiled layouts");
++}
++
++fn deployment(guarded: bool) -> LoadedDeployment {
++    let (script, src, version, prefix) = if guarded {
++        (
++            program::FIXTURE,
++            program::FIXTURE_JS,
++            program::FIXTURE_VERSION,
++            program::FIXTURE_PREFIX,
++        )
++    } else {
++        (
++            program::PRIMARY,
++            program::PRIMARY_JS,
++            program::PRIMARY_VERSION,
++            program::PRIMARY_PREFIX,
++        )
++    };
++    LoadedDeployment {
++        options: crate::js::WorkerConfigOptions {
++            src: src.into(),
++            script_name: script.into(),
++            node: "b1-node".into(),
++            do_classes: if guarded {
++                vec![program::CLASS.into()]
++            } else {
++                vec![]
++            },
++            bindings: if guarded {
++                vec![("OBJECTS".into(), program::CLASS.into())]
++            } else {
++                vec![]
++            },
++            r2_bindings: vec![],
++            d1_bindings: vec![],
++            kv_bindings: vec![],
++            queue_bindings: vec![],
++            queue_consumers: vec![],
++            workflow_bindings: vec![],
++            vars: vec![],
++            modules: vec![],
++            compat: crate::js::Compat {
++                delete_all_deletes_alarm: false,
++                js_rpc: false,
++                fetcher_get_put_delete: false,
++                sqlite_vec: false,
++                websocket_standard_binary_type: false,
++                queue_json_messages: true,
++            },
++        },
++        script_name: script.into(),
++        version: version.into(),
++        prefix: prefix.into(),
++        asset_binding: None,
++        loader_bindings: vec![],
++        assets: None,
++        services: if guarded {
++            vec![]
++        } else {
++            vec![("GUARDED".into(), program::FIXTURE.into(), None)]
++        },
++        crons: vec![],
++        containers: vec![],
++        fence_image: None,
++    }
++}
++
++fn graph() -> DeploymentGraph {
++    DeploymentGraph {
++        primary: deployment(false),
++        cohosted: vec![deployment(true)],
++    }
++}
++
++fn config(loaded: LoadedDeployment) -> crate::js::WorkerConfig {
++    crate::js::WorkerConfig::new(loaded.options)
++        .with_services(loaded.services)
++        .with_asset_binding(loaded.asset_binding)
++        .with_loaders(loaded.loader_bindings)
++        .with_crons(loaded.crons)
++        .with_containers(loaded.containers)
++        .with_generation(1)
++}
++
++#[test]
++fn b1_descriptor_accepts_exact_projection() {
++    let policy = DescriptorPolicy::new();
++    let graph = graph();
++    let validated = policy.validate_graph(&graph, "b1-node").unwrap();
++    assert_eq!(
++        validated.classify(0, &graph.primary).unwrap(),
++        ScriptClass::OrdinaryPrimary
++    );
++    assert_eq!(
++        validated.classify(1, &graph.cohosted[0]).unwrap(),
++        ScriptClass::Guarded
++    );
++    assert!(validated.classify(2, &graph.cohosted[0]).is_err());
++    assert!(validated.check_node("another-node").is_err());
++    assert_ne!(validated.digest(), [0; 32]);
++    let primary = program::mark_validated(config(deployment(false)), &validated).unwrap();
++    let fixture = program::mark_validated(config(deployment(true)), &validated).unwrap();
++    assert!(program::can_warm(&primary));
++    assert!(!program::can_warm(&fixture));
++    for (source, metadata, version) in [
++        (
++            program::PRIMARY_JS,
++            program::PRIMARY_METADATA,
++            program::PRIMARY_VERSION,
++        ),
++        (
++            program::FIXTURE_JS,
++            program::FIXTURE_METADATA,
++            program::FIXTURE_VERSION,
++        ),
++    ] {
++        let mut hash = Sha256::new();
++        hash.update(b"index.js\0");
++        hash.update(source.as_bytes());
++        hash.update(metadata.as_bytes());
++        let hex = format!("{:x}", hash.finalize());
++        assert_eq!(&hex[..16], version);
++    }
++    assert_eq!(program::TENANT_IDS.map(str::len), [64; 3]);
++    assert!(program::TENANT_IDS.iter().all(|id| id
++        .bytes()
++        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())));
++}
++
++#[test]
++fn b1_descriptor_rejects_each_extra_capability() {
++    type Mutation = fn(&mut LoadedDeployment);
++    let mutations: &[Mutation] = &[
++        |d| d.options.src.push(' '),
++        |d| d.version.push('0'),
++        |d| d.prefix.push('/'),
++        |d| d.options.script_name.push('x'),
++        |d| d.script_name.push('x'),
++        |d| d.options.node.push('x'),
++        |d| d.options.do_classes.push("Extra".into()),
++        |d| d.options.bindings.push(("EXTRA".into(), "Extra".into())),
++        |d| d.options.r2_bindings.push(("R2".into(), "bucket".into())),
++        |d| d.options.d1_bindings.push(("DB".into(), "id".into())),
++        |d| d.options.kv_bindings.push(("KV".into(), "id".into())),
++        |d| {
++            d.options.queue_bindings.push(crate::js::QueueBinding {
++                environment: "Q".into(),
++                queue: "q".into(),
++                delivery_delay: 0,
++            })
++        },
++        |d| {
++            d.options
++                .queue_consumers
++                .push(crate::protocol::QueueConsumerConfig {
++                    queue: "q".into(),
++                    max_batch_size: 1,
++                    max_batch_timeout: 1,
++                    max_retries: 0,
++                    dead_letter_queue: None,
++                    max_concurrency: None,
++                    retry_delay: None,
++                })
++        },
++        |d| {
++            d.options
++                .workflow_bindings
++                .push(crate::js::WorkflowBinding {
++                    environment: "W".into(),
++                    workflow: "w".into(),
++                    class: "W".into(),
++                })
++        },
++        |d| d.options.vars.push(("X".into(), "x".into())),
++        |d| {
++            d.options.modules.push((
++                "extra.js".into(),
++                crate::js::ModuleSource::EsModule("export{}".into()),
++            ))
++        },
++        |d| d.asset_binding = Some("ASSETS".into()),
++        |d| d.loader_bindings.push("LOAD".into()),
++        |d| d.services.push(("EXTRA".into(), "extra".into(), None)),
++        |d| d.crons.push("* * * * *".into()),
++        |d| {
++            d.containers.push(crate::container::ContainerSpec {
++                class_name: "C".into(),
++                image: "x".into(),
++                instance_type: None,
++                max_instances: None,
++                runtime: None,
++            })
++        },
++        |d| d.fence_image = Some("image".into()),
++        |d| d.options.compat.delete_all_deletes_alarm = true,
++        |d| d.options.compat.js_rpc = true,
++        |d| d.options.compat.fetcher_get_put_delete = true,
++        |d| d.options.compat.sqlite_vec = true,
++        |d| d.options.compat.websocket_standard_binary_type = true,
++        |d| d.options.compat.queue_json_messages = false,
++    ];
++    let policy = DescriptorPolicy::new();
++    for (index, mutate) in mutations.iter().enumerate() {
++        for guarded in [false, true] {
++            let mut graph = graph();
++            mutate(if guarded {
++                &mut graph.cohosted[0]
++            } else {
++                &mut graph.primary
++            });
++            assert!(
++                policy.validate_graph(&graph, "b1-node").is_err(),
++                "mutation {index}, guarded {guarded}"
++            );
++        }
++    }
++    let mut extra = graph();
++    extra.cohosted.push(deployment(true));
++    assert!(policy.validate_graph(&extra, "b1-node").is_err());
++    assert!(policy.validate_graph(&graph(), "").is_err());
++}
++
++#[test]
++fn b1_boot_reload_share_construction_selection() {
++    // Construction selection is shared by actual boot/reload. The actual
++    // malformed Generation::build calls run in test14's one installed-policy
++    // interval, before its irreversible startup-failure checks.
++    for _generation in [1, 2] {
++        let policy = DescriptorPolicy::new();
++        let validated = policy.validate_graph(&graph(), "b1-node").unwrap();
++        let primary = program::mark_validated(config(deployment(false)), &validated).unwrap();
++        let fixture = program::mark_validated(config(deployment(true)), &validated).unwrap();
++        assert!(program::can_warm(&primary));
++        assert!(!program::can_warm(&fixture));
++        let mut invalid = graph();
++        invalid.cohosted[0].crons.push("* * * * *".into());
++        assert!(policy.validate_graph(&invalid, "b1-node").is_err());
++    }
++    let source = include_str!("../generation.rs");
++    assert!(
++        source.find("node::preflight").unwrap()
++            < source.find("crate::runtime::init_engine();").unwrap()
++    );
++    assert_eq!(source.matches("guarded_node::can_warm").count(), 2);
++}
++
++#[test]
++fn b1_marked_worker_refuses_before_engine_use() {
++    let validated = DescriptorPolicy::new()
++        .validate_graph(&graph(), "b1-node")
++        .unwrap();
++    let marked = program::mark_validated(config(deployment(true)), &validated).unwrap();
++    let error = crate::js::Worker::load_config(Arc::new(marked))
++        .err()
++        .expect("marked construction refused");
++    assert_eq!(error.downcast_ref::<Refusal>(), Some(&Refusal::NotReady));
++    let marked = program::mark_validated(config(deployment(true)), &validated).unwrap();
++    let result = crate::runtime::StatelessRuntime::start(
++        Arc::new(marked),
++        Arc::from("b1-node"),
++        Arc::from("test"),
++    );
++    assert_eq!(
++        result.err().unwrap().downcast_ref::<Refusal>(),
++        Some(&Refusal::NotReady)
++    );
++    let marked_primary = program::mark_validated(config(deployment(false)), &validated).unwrap();
++    let mutated = marked_primary.with_crons(vec!["* * * * *".into()]);
++    assert_eq!(
++        program::ordinary_load_allowed(&mutated),
++        Err(Refusal::Invalid)
++    );
++    let marked_primary = program::mark_validated(config(deployment(false)), &validated).unwrap();
++    let mutated = marked_primary.with_services(vec![("ESCAPE".into(), "extra".into(), None)]);
++    assert_eq!(
++        program::ordinary_load_allowed(&mutated),
++        Err(Refusal::Invalid)
++    );
++}
++
++#[test]
++fn b1_generic_refusal_inventory() {
++    installed();
++    for generation in [1, 2] {
++        let mut invalid = graph();
++        invalid.cohosted[0].crons.push("* * * * *".into());
++        let result = crate::generation::Generation::build(
++            generation,
++            invalid,
++            crate::generation::GenerationOptions {
++                node: "b1-node".into(),
++                region: "test".into(),
++            },
++        );
++        assert_eq!(
++            result
++                .err()
++                .expect("pre-engine projection refusal")
++                .downcast_ref::<Refusal>(),
++            Some(&Refusal::Invalid)
++        );
++    }
++    let validated = preflight(&graph(), "b1-node").unwrap().unwrap();
++    let primary = program::mark_validated(config(deployment(false)), &validated).unwrap();
++    assert!(program::ordinary_load_allowed(&primary).is_ok());
++    assert_eq!(
++        program::ordinary_load_allowed(&config(deployment(false))),
++        Err(Refusal::Invalid)
++    );
++    for scope in [
++        program::CLASS.to_string(),
++        format!("{}:{}", program::CLASS, program::TENANT_IDS[0]),
++        format!("{}:unknown", program::CLASS),
++        format!("{}:{}:facet", program::CLASS, program::TENANT_IDS[1]),
++        "Other:cell".into(),
++    ] {
++        assert!(ordinary_scope_refusal(&scope).is_some());
++    }
++    assert_eq!(
++        ordinary_script_refusal(program::FIXTURE),
++        Some(Refusal::NotReady)
++    );
++    assert_eq!(ordinary_script_refusal("unknown"), Some(Refusal::Invalid));
++    assert_eq!(ordinary_script_refusal(program::PRIMARY), None);
++    // These are source-bound coverage assertions, not an imitation runtime or
++    // an assertion that a predicate test exercised every real frontend.
++    fn entry_body<'a>(source: &'a str, method: &str) -> &'a str {
++        let signature = format!("fn {method}");
++        let start = source
++            .match_indices(&signature)
++            .find(|(offset, _)| {
++                matches!(
++                    source.as_bytes().get(*offset + signature.len()).copied(),
++                    Some(b'(' | b'<')
++                )
++            })
++            .map(|(offset, _)| offset)
++            .expect("exact method identifier");
++        let tail = &source[start..];
++        &tail[tail.find('{').expect("method body") + 1..]
++    }
++    assert!(
++        entry_body("fn rpc_service() { script } fn rpc() { cell }", "rpc").starts_with(" cell")
++    );
++    assert!(entry_body(
++        "fn cell_eventual() { other } fn cell_event<T>() { event }",
++        "cell_event"
++    )
++    .starts_with(" event"));
++    let source = include_str!("../runtime.rs");
++    for method in [
++        "fetch_worker_on_cell",
++        "restore_cell",
++        "start_cell",
++        "publish_cell",
++        "fetch_cell",
++        "fire_alarm",
++        "ws_open",
++        "rpc",
++        "ws_message",
++        "ws_closed",
++        "cell_isolate",
++        "admit_cell_request",
++        "cell_event",
++    ] {
++        let body = entry_body(source, method);
++        let guard = body.find("refuse_ordinary_cell").unwrap();
++        assert!(guard < 120, "entry refusal is not first: {method}");
++    }
++    for method in [
++        "facet_ws_open",
++        "facet_ws_message",
++        "facet_ws_closed",
++        "facet_event",
++    ] {
++        let body = entry_body(source, method);
++        let scope_guard = if method == "facet_event" {
++            "refuse_ordinary_cell(scope)"
++        } else {
++            "refuse_ordinary_cell(&scope)"
++        };
++        assert!(body.find(scope_guard).unwrap() < 120);
++        assert!(body.find("refuse_ordinary_cell(&facet.root)").unwrap() < 220);
++    }
++    for (method, guard) in [
++        ("fetch_service", "refuse_ordinary_script(&call.script)"),
++        ("rpc_service", "refuse_ordinary_script(script)"),
++        ("queue_service", "refuse_ordinary_script(script)"),
++    ] {
++        let body = entry_body(source, method);
++        assert!(body.find(guard).unwrap() < 120);
++    }
++    // This helper steps the real actor with no host and never drains queued
++    // futures. Its final scan-refusal checks irreversibly fail this installation;
++    // no other test requires a healthy process-global policy.
++    crate::actor::assert_guarded_refusal_inventory_for_test();
++    assert!(preflight(&graph(), "b1-node").is_err());
++    assert!(installed()
++        .factory
++        .try_owner(OwnerRole::Control, Some(AcceptedStamp::capture().unwrap()))
++        .is_err());
++}
++
++#[test]
++fn b1_exact_generation_never_falls_back() {
++    assert_eq!(component::exact_generation(&[1, 4, 7], 0), None);
++    assert_eq!(component::exact_generation(&[1, 4, 7], 3), None);
++    assert_eq!(component::exact_generation(&[1, 4, 7], 4), Some(1));
++    assert_eq!(component::exact_generation(&[], 1), None);
++    assert_eq!(component::next_generation(0), Ok(1));
++    assert_eq!(
++        component::next_generation(u64::MAX),
++        Err(Refusal::Exhausted)
++    );
++    // Pure selection only. The production Arc/lock wrapper and nested pool
++    // draining observation are deliberately deferred until the B2 caller exists.
++}
++
++fn model_config(require_node_lease: bool) -> Config {
++    Config {
++        max_resident: 8,
++        max_activations: 1,
++        max_evictions: 1,
++        max_releases: 1,
++        max_outbound_websockets: 8,
++        ownership_on_evict: celld_logic::OwnershipOnEvict::Release,
++        require_node_lease,
++        peer_protocol: 1,
++        operation_deadline_ms: Some(1_000),
++        owner_log_recovery_backoff_ms: 1_000,
++        owner_log_recovery_attempts: 2,
++        alarm_resident_ms: 1_000,
++        idle_evict_ms: None,
++        pressure: Default::default(),
++    }
++}
++
++fn operation(effects: &[Effect], select: fn(&Effect) -> Option<u64>) -> u64 {
++    effects
++        .iter()
++        .find_map(select)
++        .expect("expected exact core effect")
++}
++
++fn activate(state: &mut State, id: &str, request: u64, generation: u64) -> u64 {
++    let effects = on_event(
++        state,
++        Event::Request {
++            request,
++            cell: id.into(),
++        },
++    );
++    let op = operation(&effects, |e| {
++        if let Effect::ReadOwner { op, .. } = e {
++            Some(*op)
++        } else {
++            None
++        }
++    });
++    let effects = on_event(
++        state,
++        Event::OwnerRead {
++            op,
++            now_ms: 0,
++            result: Ok(None),
++        },
++    );
++    let op = operation(&effects, |e| {
++        if let Effect::CasOwner { op, .. } = e {
++            Some(*op)
++        } else {
++            None
++        }
++    });
++    let effects = on_event(
++        state,
++        Event::OwnerCasCompleted {
++            op,
++            result: Ok(CasOutcome::Applied),
++        },
++    );
++    let op = operation(&effects, |e| {
++        if let Effect::Restore { op, .. } = e {
++            Some(*op)
++        } else {
++            None
++        }
++    });
++    let effects = on_event(
++        state,
++        Event::RestoreCompleted {
++            op,
++            result: Ok(celld_logic::RestoreOutcome {
++                restored: false,
++                alarm: None,
++            }),
++        },
++    );
++    let op = operation(&effects, |e| {
++        if let Effect::StartRuntime { op, .. } = e {
++            Some(*op)
++        } else {
++            None
++        }
++    });
++    let effects = on_event(
++        state,
++        Event::RuntimeStarted {
++            op,
++            isolate: Some(celld_logic::isolate::HeapId::new(request)),
++            generation,
++            result: Ok(()),
++        },
++    );
++    let op = operation(&effects, |e| {
++        if let Effect::Publish { op, .. } = e {
++            Some(*op)
++        } else {
++            None
++        }
++    });
++    let effects = on_event(state, Event::Published { op, result: Ok(()) });
++    assert!(effects.contains(&Effect::Complete {
++        request,
++        result: Ok(Route::Local)
++    }));
++    assert!(!state.request_inactive(request));
++    state.validate().unwrap();
++    match state.phase(id).unwrap() {
++        Phase::Resident { epoch } => *epoch,
++        phase => panic!("unexpected {phase:?}"),
++    }
++}
++
++fn resident() -> (State, String, u64) {
++    let mut state = State::new("node", model_config(false));
++    on_event(
++        &mut state,
++        Event::GenerationChanged {
++            generation: 1,
++            now_mono_ms: 0,
++            max_age_ms: 1_000,
++            eager_classes: vec![],
++        },
++    );
++    let id = format!("{}:{}", program::CLASS, program::TENANT_IDS[0]);
++    let epoch = activate(&mut state, &id, 1, 1);
++    (state, id, epoch)
++}
++
++fn resident_gate(
++    state: &mut State,
++    request: u64,
++    parent: u64,
++    cell: &str,
++    epoch: u64,
++    generation: u64,
++    now: u64,
++) -> Vec<Effect> {
++    on_event(
++        state,
++        Event::ResidentGateRequestAt {
++            request,
++            parent,
++            cell: cell.into(),
++            epoch,
++            generation,
++            now_mono_ms: now,
++        },
++    )
++}
++
++fn assert_refused(effects: &[Effect], request: u64) {
++    assert!(
++        matches!(effects, [Effect::Complete { request:actual,result:Err(RequestError::NodeUnavailable | RequestError::NodeFenced) }] if *actual==request)
++    );
++}
++
++fn hold_output(state: &mut State, request: u64, epoch: u64) -> u64 {
++    let effects = on_event(
++        state,
++        Event::Output {
++            request,
++            channel: Channel::Response,
++            position: Some(1),
++            observed: None,
++            epoch: Some(epoch),
++        },
++    );
++    operation(&effects, |effect| {
++        if let Effect::AwaitDurable { op, .. } = effect {
++            Some(*op)
++        } else {
++            None
++        }
++    })
++}
++
++#[test]
++fn b1_resident_gate_accepts_exact_parent() {
++    let (mut state, id, epoch) = resident();
++    let effects = resident_gate(&mut state, 2, 1, &id, epoch, 1, 10);
++    assert_eq!(
++        effects,
++        vec![Effect::Complete {
++            request: 2,
++            result: Ok(Route::Local)
++        }]
++    );
++    assert!(!state.request_inactive(1));
++    assert!(!state.request_inactive(2));
++    assert_eq!(state.cell_generation(&id), Some(1));
++    on_event(&mut state, Event::ActivityFinished { request: 2 });
++    assert!(state.request_inactive(2));
++    assert!(!state.request_inactive(1));
++    state.validate().unwrap();
++}
++
++#[test]
++fn b1_resident_gate_refuses_binding_matrix() {
++    for case in 0..11 {
++        let (mut state, id, epoch) = resident();
++        let (mut parent, mut target, mut target_epoch, mut generation) = (1, id.clone(), epoch, 1);
++        match case {
++            0 => parent = 999,
++            1 => target.push('x'),
++            2 => target_epoch += 1,
++            3 => generation = 0,
++            4 => generation = 2,
++            5 => {
++                on_event(&mut state, Event::ActivityFinished { request: 1 });
++            }
++            6 => {
++                resident_gate(&mut state, 3, 1, &id, epoch, 1, 1);
++                parent = 3;
++            }
++            7 => {
++                on_event(&mut state, Event::NodeFenced);
++            }
++            8 => {
++                on_event(&mut state, Event::ReleaseAll);
++            }
++            9 => {
++                on_event(
++                    &mut state,
++                    Event::GenerationChanged {
++                        generation: 2,
++                        now_mono_ms: 1,
++                        max_age_ms: 0,
++                        eager_classes: vec![],
++                    },
++                );
++            }
++            10 => {
++                let _pending_proof = hold_output(&mut state, 1, epoch);
++                on_event(&mut state, Event::ActivityFinished { request: 1 });
++                assert!(
++                    !state.request_inactive(1),
++                    "processed finish retains the output pin"
++                );
++            }
++            _ => unreachable!(),
++        }
++        let before = state.phase(&id).cloned();
++        assert_refused(
++            &resident_gate(&mut state, 2, parent, &target, target_epoch, generation, 10),
++            2,
++        );
++        assert!(state.request_inactive(2));
++        assert_eq!(state.phase(&id).cloned(), before);
++        state.validate().unwrap();
++    }
++    let mut unavailable = State::new("node", model_config(true));
++    assert_refused(&resident_gate(&mut unavailable, 2, 1, "absent", 1, 1, 0), 2);
++    assert_eq!(unavailable.phase("absent"), None);
++    // An actual acquired lease may expire while the parent remains resident.
++    let mut state = State::new("node", model_config(true));
++    let effects = on_event(
++        &mut state,
++        Event::StartNodeLease {
++            now_ms: 100,
++            now_mono_ms: 100,
++            spec: celld_logic::NodeLeaseSpec {
++                addr: "127.0.0.1:1".into(),
++                peer_protocol: 1,
++                generation: "process".into(),
++                resume_generation: None,
++                ttl_ms: 1_000,
++            },
++        },
++    );
++    let op = operation(&effects, |e| {
++        if let Effect::ReadSelfNodeLease { op } = e {
++            Some(*op)
++        } else {
++            None
++        }
++    });
++    let effects = on_event(
++        &mut state,
++        Event::SelfNodeLeaseRead {
++            op,
++            now_ms: 100,
++            now_mono_ms: 100,
++            result: Ok(None),
++        },
++    );
++    let op = operation(&effects, |e| {
++        if let Effect::CasNodeLease { op, .. } = e {
++            Some(*op)
++        } else {
++            None
++        }
++    });
++    on_event(
++        &mut state,
++        Event::NodeLeaseCasCompleted {
++            op,
++            now_mono_ms: 100,
++            result: Ok(celld_logic::LeaseCasOutcome::Applied {
++                etag: "lease".into(),
++            }),
++            stamped_log_state: None,
++        },
++    );
++    let epoch = activate(&mut state, "lease-cell", 1, 1);
++    assert_refused(
++        &resident_gate(&mut state, 2, 1, "lease-cell", epoch, 1, 1_100),
++        2,
++    );
++    assert!(!state.request_inactive(1));
++    state.validate().unwrap();
++}
++
++#[test]
++fn b1_resident_gate_duplicate_is_inert() {
++    let (mut state, id, epoch) = resident();
++    resident_gate(&mut state, 2, 1, &id, epoch, 1, 10);
++    // One real in-flight cold operation and one queued activation ensure this
++    // event cannot accidentally run the ordinary event tail's pumps/timers.
++    on_event(
++        &mut state,
++        Event::Request {
++            request: 90,
++            cell: "unrelated-live".into(),
++        },
++    );
++    on_event(
++        &mut state,
++        Event::Request {
++            request: 91,
++            cell: "unrelated-queued".into(),
++        },
++    );
++    let phase = state.phase("unrelated-live").cloned();
++    let queued = state.activation_waiting();
++    let census = state.phase_census();
++    for (request, parent) in [(2, 1), (1, 1), (90, 1)] {
++        assert!(resident_gate(&mut state, request, parent, &id, epoch, 1, 2_000).is_empty());
++        assert_eq!(state.phase("unrelated-live").cloned(), phase);
++        assert_eq!(state.activation_waiting(), queued);
++        assert_eq!(state.phase_census(), census);
++    }
++    assert_refused(
++        &resident_gate(&mut state, 92, 999, &id, epoch, 1, 2_000),
++        92,
++    );
++    assert_eq!(state.activation_waiting(), queued);
++    assert_eq!(state.phase_census(), census);
++    // Duplicate identity still advances the normal monotonic clock. A later
++    // untimed cold operation receives its deadline from that retained clock.
++    let (mut clock_state, id, epoch) = resident();
++    assert!(resident_gate(&mut clock_state, 1, 1, &id, epoch, 1, 2_000).is_empty());
++    let effects = on_event(
++        &mut clock_state,
++        Event::Request {
++            request: 99,
++            cell: "clock-proof".into(),
++        },
++    );
++    assert!(effects.iter().any(|e| matches!(
++        e,
++        Effect::ScheduleTimer {
++            timer: celld_logic::Timer::OperationDeadline { .. },
++            at_mono_ms: 3_000
++        }
++    )));
++    state.validate().unwrap();
++    clock_state.validate().unwrap();
++}
++
++#[test]
++fn b1_soft_swap_gate_and_ordinary_gate_regression() {
++    let (mut state, id, epoch) = resident();
++    on_event(
++        &mut state,
++        Event::GenerationChanged {
++            generation: 2,
++            now_mono_ms: 10,
++            max_age_ms: 1_000,
++            eager_classes: vec![],
++        },
++    );
++    assert_eq!(
++        resident_gate(&mut state, 2, 1, &id, epoch, 1, 11),
++        vec![Effect::Complete {
++            request: 2,
++            result: Ok(Route::Local)
++        }]
++    );
++    let effects = on_event(
++        &mut state,
++        Event::GateRequestAt {
++            request: 3,
++            cell: id.clone(),
++            now_mono_ms: 12,
++        },
++    );
++    assert!(effects.contains(&Effect::Complete {
++        request: 3,
++        result: Ok(Route::Local)
++    }));
++    assert_eq!(state.cell_generation(&id), Some(1));
++    // Existing ordinary gate semantics still fall back to a cold activation.
++    let mut cold = State::new("node", model_config(false));
++    let effects = on_event(
++        &mut cold,
++        Event::GateRequestAt {
++            request: 4,
++            cell: "cold".into(),
++            now_mono_ms: 1,
++        },
++    );
++    assert!(effects
++        .iter()
++        .any(|e| matches!(e,Effect::ReadOwner{cell,..} if cell=="cold")));
++    assert!(!cold.request_inactive(4));
++    on_event(&mut state, Event::ActivityFinished { request: 2 });
++    on_event(&mut state, Event::ActivityFinished { request: 3 });
++    let effects = on_event(&mut state, Event::ActivityFinished { request: 1 });
++    assert!(effects
++        .iter()
++        .any(|e| matches!(e, Effect::StopRuntime { .. })));
++    state.validate().unwrap();
++    cold.validate().unwrap();
++}
++
++#[test]
++fn b1_inactive_observation_is_not_processed_finish() {
++    let (mut state, id, epoch) = resident();
++    assert!(state.request_inactive(999)); // unknown is not a processed acknowledgement
++    on_event(
++        &mut state,
++        Event::Request {
++            request: 2,
++            cell: id.clone(),
++        },
++    );
++    let proof = hold_output(&mut state, 1, epoch);
++    on_event(
++        &mut state,
++        Event::Output {
++            request: 2,
++            channel: Channel::Response,
++            position: None,
++            observed: Some(1),
++            epoch: Some(epoch),
++        },
++    );
++    for request in [1, 2] {
++        on_event(&mut state, Event::ActivityFinished { request });
++        assert!(
++            !state.request_inactive(request),
++            "held owner/follower is still pinned"
++        );
++    }
++    let effects = on_event(
++        &mut state,
++        Event::DurableReached {
++            op: proof,
++            result: Ok(1),
++            source: celld_logic::ProofSource::Fleet,
++        },
++    );
++    for request in [1, 2] {
++        assert!(effects.contains(&Effect::Release {
++            request,
++            channel: Channel::Response,
++            result: Ok(())
++        }));
++        assert!(state.request_inactive(request));
++    }
++    on_event(
++        &mut state,
++        Event::Request {
++            request: 99,
++            cell: "pending".into(),
++        },
++    );
++    assert!(!state.request_inactive(99));
++    on_event(&mut state, Event::Cancel { request: 99 });
++    assert!(state.request_inactive(99));
++    state.validate().unwrap();
++}
++
++#[test]
++fn b1_foundation_has_no_ready_or_action() {
++    // A local component avoids changing or resetting the actual process-wide
++    // installation used by test14. This is not a serving/readiness constructor.
++    let (factory, owner) = fixture_factory();
++    owner
++        .charge(control::arc_bytes::<GuardedNode>().unwrap())
++        .unwrap();
++    let local = GuardedNode {
++        policy: DescriptorPolicy::new(),
++        factory,
++        owner,
++    };
++    let observation = local.foundation().unwrap();
++    assert_eq!(observation.claim, "b1-foundation-only");
++    assert!(!observation.ready);
++    assert!(observation.factory_installed);
++    assert_eq!(observation.occupied_owners, 1);
++    assert_eq!(observation.program, program::identities());
++    assert_eq!(observation.tenant_ids, program::TENANT_IDS);
++    local.stop_admission();
++    assert!(local
++        .factory
++        .try_owner(
++            OwnerRole::Invocation,
++            Some(AcceptedStamp::capture().unwrap())
++        )
++        .is_err());
++    let GuardedNode {
++        policy: _,
++        factory,
++        owner,
++    } = local;
++    retire_factory(factory, owner);
++    // CLI Action itself is deliberately unchanged; actual binary probes are a
++    // separate root-run qualification after source and graph review.
++    let cli = include_str!("../main/cli.rs");
++    assert!(!cli.contains("foks-guarded-node-qualification"));
++}
+--- a/crates/celld/js.rs
++++ b/crates/celld/js.rs
+@@ -1876,6 +1876,8 @@
+ }
+ 
+ pub struct WorkerConfig {
++    #[cfg(feature = "foks-guarded-node-qualification")]
++    guarded_node: Option<guarded_node::GuardedConfigMarker>,
+     src: String,
+     /// The canonical module name for `src`. Dynamic Workers preserve the
+     /// caller's `mainModule` path so relative imports use its directory.
+@@ -2044,6 +2046,8 @@
+             })
+             .collect();
+         Self {
++            #[cfg(feature = "foks-guarded-node-qualification")]
++            guarded_node: None,
+             src,
+             main_module_name: ENTRY_MODULE_NAME.to_string(),
+             script_name,
+@@ -5805,6 +5809,8 @@
+     }
+ 
+     pub fn load_config(config: Arc<WorkerConfig>) -> Result<Worker> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        guarded_node::ordinary_load_allowed(&config)?;
+         let src = config.src.as_str();
+         let script_name = config.script_name.as_str();
+         let do_classes = config.do_classes.as_slice();
+@@ -12685,3 +12691,6 @@
+ 
+ #[cfg(feature = "foks-guarded-qualification")]
+ pub(crate) mod guarded;
++
++#[cfg(feature = "foks-guarded-node-qualification")]
++pub(crate) mod guarded_node;
+--- /dev/null
++++ b/crates/celld/js/guarded_node.rs
+@@ -0,0 +1,179 @@
++//! Exact closed node program/configuration; no caller supplies native code.
++use super::*;
++use crate::guarded_execution::node::{self, Refusal, ScriptClass, ValidatedGraph};
++use sha2::{Digest, Sha256};
++
++pub(crate) const PRIMARY: &str = "foks-guarded-node-primary";
++pub(crate) const FIXTURE: &str = "foks-guarded-node-fixture";
++pub(crate) const CLASS: &str = "FoksGuardedNodeFixture";
++pub(crate) const TENANT_IDS: [&str; 3] = [
++    "1111111111111111111111111111111111111111111111111111111111111111",
++    "2222222222222222222222222222222222222222222222222222222222222222",
++    "3333333333333333333333333333333333333333333333333333333333333333",
++];
++pub(crate) const PRIMARY_VERSION: &str = "b19584ba0ac8c37f";
++pub(crate) const FIXTURE_VERSION: &str = "1fdd2523a443ea95";
++pub(crate) const PRIMARY_PREFIX: &str = "deploy/foks-guarded-node-primary/b19584ba0ac8c37f";
++pub(crate) const FIXTURE_PREFIX: &str = "deploy/foks-guarded-node-fixture/1fdd2523a443ea95";
++pub(crate) const PRIMARY_JS: &str = r#"export default { fetch(request, env) { return env.GUARDED.fetch(request); } };
++"#;
++pub(crate) const FIXTURE_JS: &str = r#"const moduleBytes = new Uint8Array([0,97,115,109,1,0,0,0,1,15,3,96,2,127,127,0,96,1,127,1,127,96,0,1,127,3,5,4,0,1,2,2,5,6,1,1,128,8,128,8,7,58,5,6,109,101,109,111,114,121,2,0,10,119,114,105,116,101,95,112,97,103,101,0,0,9,114,101,97,100,95,112,97,103,101,0,1,9,103,114,111,119,95,122,101,114,111,0,2,8,103,114,111,119,95,111,110,101,0,3,10,59,4,22,0,32,0,65,128,8,79,4,64,0,11,32,0,65,16,116,32,1,54,2,0,11,20,0,32,0,65,128,8,79,4,64,0,11,32,0,65,16,116,40,2,0,11,6,0,65,0,64,0,11,6,0,65,1,64,0,11]);
++export class FoksGuardedNodeFixture {
++  constructor(ctx) { this.ctx = ctx; }
++  async fetch(request) {
++    const instance = new WebAssembly.Instance(new WebAssembly.Module(moduleBytes));
++    const memory = instance.exports.memory;
++    const view = new Uint8Array(memory.buffer);
++    let fresh = view[view.length - 1] === 0;
++    for (let page = 0; page < 1024; page++) fresh = fresh && instance.exports.read_page(page) === 0;
++    view.fill(90);
++    globalThis.__foksGuardedNode = { memory, exports: instance.exports };
++    const sql = this.ctx.storage.sql;
++    sql.exec('CREATE TABLE IF NOT EXISTS foks_guarded_node (id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL CHECK(value BETWEEN 0 AND 128))');
++    sql.exec('INSERT OR IGNORE INTO foks_guarded_node VALUES (1,0)');
++    sql.exec('UPDATE foks_guarded_node SET value=value+1 WHERE id=1');
++    const value = sql.exec('SELECT value FROM foks_guarded_node WHERE id=1').one().value;
++    await this.ctx.storage.sync();
++    if (new URL(request.url).pathname === '/throw') throw new Error('closed guarded node failure');
++    const bytes = new Uint8Array(12);
++    const result = new DataView(bytes.buffer);
++    result.setUint32(0, value, true);
++    result.setUint32(4, fresh ? 1 : 0, true);
++    result.setUint32(8, view.length, true);
++    return new Response(bytes);
++  }
++}
++export default { fetch() { throw new Error('closed guarded cell only'); } };
++"#;
++pub(crate) const PRIMARY_METADATA: &str = r#"{"bindings":[{"name":"GUARDED","service":"foks-guarded-node-fixture","type":"service"}],"compatibility_date":"2026-01-01","main_module":"index.js"}"#;
++pub(crate) const FIXTURE_METADATA: &str = r#"{"bindings":[{"class_name":"FoksGuardedNodeFixture","name":"OBJECTS","type":"durable_object_namespace"}],"compatibility_date":"2026-01-01","main_module":"index.js"}"#;
++
++pub(crate) const WASM: &[u8] = super::guarded::WASM;
++
++pub(crate) fn compat_matches(value: Compat) -> bool {
++    !value.delete_all_deletes_alarm
++        && !value.js_rpc
++        && !value.fetcher_get_put_delete
++        && !value.sqlite_vec
++        && !value.websocket_standard_binary_type
++        && value.queue_json_messages
++}
++
++pub(crate) struct GuardedConfigMarker {
++    class: ScriptClass,
++    _descriptor_sha256: [u8; 32],
++}
++
++pub(crate) fn mark_validated(
++    mut config: WorkerConfig,
++    validated: &ValidatedGraph,
++) -> std::result::Result<WorkerConfig, Refusal> {
++    validated.check_node(&config.node)?;
++    let class = validate_config_projection(&config)?;
++    config.guarded_node = Some(GuardedConfigMarker {
++        class,
++        _descriptor_sha256: validated.digest(),
++    });
++    Ok(config)
++}
++
++// WorkerConfig builders consume and return their value. Rechecking this
++// borrowed projection at ordinary load prevents a retained private marker from
++// authorizing capabilities added by a later with_* builder.
++fn validate_config_projection(config: &WorkerConfig) -> std::result::Result<ScriptClass, Refusal> {
++    let guarded = config.script_name == FIXTURE;
++    let source = if guarded { FIXTURE_JS } else { PRIMARY_JS };
++    if (!guarded && config.script_name != PRIMARY)
++        || config.src != source
++        || config.origin != WorkerOrigin::Deployment
++        || !compat_matches(config.compat)
++        || !config.modules.is_empty()
++        || !config.r2_bindings.is_empty()
++        || !config.d1_bindings.is_empty()
++        || !config.kv_bindings.is_empty()
++        || !config.queue_bindings.is_empty()
++        || !config.queue_consumers.is_empty()
++        || !config.workflow_bindings.is_empty()
++        || !config.vars.is_empty()
++        || config.asset_binding.is_some()
++        || !config.loader_bindings.is_empty()
++        || config.loader_env.is_some()
++        || config.resource_limits.is_some()
++        || config.tail_reporting
++        || !matches!(&config.egress, EgressPolicy::Allow)
++        || config.main_module_name != ENTRY_MODULE_NAME
++        || config.declares_queue_consumer
++        || !config.crons.is_empty()
++        || !config.containers.is_empty()
++    {
++        return Err(Refusal::Invalid);
++    }
++    if guarded {
++        if config.do_classes.as_slice() != [CLASS]
++            || config.bindings.len() != 1
++            || config.bindings[0].0 != "OBJECTS"
++            || config.bindings[0].1 != CLASS
++            || !config.services.is_empty()
++        {
++            return Err(Refusal::Invalid);
++        }
++    } else if !config.do_classes.is_empty()
++        || !config.bindings.is_empty()
++        || config.services.len() != 1
++        || config.services[0].0 != "GUARDED"
++        || config.services[0].1 != FIXTURE
++        || config.services[0].2.is_some()
++    {
++        return Err(Refusal::Invalid);
++    }
++    Ok(if guarded {
++        ScriptClass::Guarded
++    } else {
++        ScriptClass::OrdinaryPrimary
++    })
++}
++
++pub(crate) fn ordinary_load_allowed(config: &WorkerConfig) -> std::result::Result<(), Refusal> {
++    match &config.guarded_node {
++        Some(marker) if marker.class == ScriptClass::Guarded => return Err(Refusal::NotReady),
++        Some(marker) => {
++            if marker.class != ScriptClass::OrdinaryPrimary
++                || validate_config_projection(config)? != ScriptClass::OrdinaryPrimary
++            {
++                return Err(Refusal::Invalid);
++            }
++        }
++        None if node::policy_installed() => return Err(Refusal::Invalid),
++        None => {}
++    }
++    if let Some(error) = node::ordinary_script_refusal(&config.script_name) {
++        return Err(error);
++    }
++    Ok(())
++}
++
++pub(crate) fn can_warm(config: &WorkerConfig) -> bool {
++    config
++        .guarded_node
++        .as_ref()
++        .is_none_or(|marker| marker.class == ScriptClass::OrdinaryPrimary)
++}
++
++pub(crate) fn class_for(index: usize) -> std::result::Result<ScriptClass, Refusal> {
++    match index {
++        0 => Ok(ScriptClass::OrdinaryPrimary),
++        1 => Ok(ScriptClass::Guarded),
++        _ => Err(Refusal::Invalid),
++    }
++}
++
++pub(crate) fn identities() -> [([u8; 32], usize); 5] {
++    [
++        PRIMARY_JS.as_bytes(),
++        FIXTURE_JS.as_bytes(),
++        WASM,
++        PRIMARY_METADATA.as_bytes(),
++        FIXTURE_METADATA.as_bytes(),
++    ]
++    .map(|bytes| (Sha256::digest(bytes).into(), bytes.len()))
++}
+--- a/crates/celld/lib.rs
++++ b/crates/celld/lib.rs
+@@ -320,3 +320,10 @@
+     lifecycle_layouts, qualify_lifecycle, LifecycleFailure, LifecycleInput, LifecycleLayouts,
+     LifecycleProcessOwner, LifecycleProgram, LifecycleReport, LifecycleScenario,
+ };
++
++#[cfg(feature = "foks-guarded-node-qualification")]
++pub use guarded_execution::node::{
++    FoundationLayouts as GuardedFoundationLayouts,
++    FoundationObservation as GuardedFoundationObservation, GuardedNode,
++    Refusal as GuardedNodeRefusal,
++};
+--- a/crates/celld/runtime.rs
++++ b/crates/celld/runtime.rs
+@@ -949,6 +949,9 @@
+         request: RuntimeFetch,
+         inline_activity: crate::CellActivityGuard,
+     ) -> anyhow::Result<HttpResponse> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(&cell)?;
++
+         let RuntimeFetch {
+             url,
+             method,
+@@ -1007,6 +1010,9 @@
+     /// Call a service binding. `generation` is the caller's, so the target
+     /// comes from the deployment graph the caller was built with.
+     pub async fn fetch_service(&self, call: ServiceFetch) -> anyhow::Result<HttpResponse> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_script(&call.script)?;
++
+         let ServiceFetch {
+             generation,
+             script,
+@@ -1041,6 +1047,9 @@
+         props: Vec<u8>,
+         operation: crate::WorkerRpcOperation,
+     ) -> anyhow::Result<Vec<u8>> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_script(script)?;
++
+         let generation = self.generation_by_id(generation);
+         generation
+             .service(script)
+@@ -1056,6 +1065,9 @@
+         script: &str,
+         batch: js::QueueBatch,
+     ) -> anyhow::Result<js::QueueDispatchResult> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_script(script)?;
++
+         let generation = self.generation_by_id(generation);
+         generation
+             .service(script)
+@@ -1069,6 +1081,9 @@
+         cell: &str,
+         spec: &celld_logic::RestoreSpec,
+     ) -> anyhow::Result<celld_logic::RestoreOutcome> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(cell)?;
++
+         let path = self.db_path(cell, spec.epoch);
+         self.facets.register(cell, spec);
+         if let Some(replication) = &self.replication {
+@@ -1133,6 +1148,11 @@
+         &self,
+         cells: &[celld_logic::PresenceCell],
+     ) -> anyhow::Result<usize> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        for cell in cells {
++            refuse_ordinary_cell(&cell.id)?;
++        }
++
+         let replication = self
+             .replication
+             .as_ref()
+@@ -1246,6 +1266,9 @@
+         epoch: u64,
+         fresh: bool,
+     ) -> anyhow::Result<(celld_logic::isolate::HeapId, GenerationId)> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(&cell)?;
++
+         let db_path = self.db_path(&cell, epoch);
+         let class = cell
+             .split_once(':')
+@@ -1360,6 +1383,9 @@
+ 
+     /// Make the exact started generation visible to request dispatch.
+     pub fn publish_cell(&self, cell: &str, epoch: u64) -> anyhow::Result<()> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(cell)?;
++
+         let mut cells = self.cells.lock().expect("cell registry poisoned");
+         if cells
+             .starting
+@@ -1544,6 +1570,9 @@
+         request: RuntimeFetch,
+         cancel: Option<tokio::sync::oneshot::Receiver<()>>,
+     ) -> anyhow::Result<HttpResponse> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(&cell)?;
++
+         let RuntimeFetch {
+             url,
+             method,
+@@ -1686,6 +1715,9 @@
+         cell: String,
+         scheduled_ms: i64,
+     ) -> anyhow::Result<(celld_logic::wake::AlarmSnapshot, bool, Option<u64>)> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(&cell)?;
++
+         let request_id = js::next_request_id();
+         let cancel = self
+             .alarm_requests
+@@ -1785,6 +1817,9 @@
+         ws_id: u64,
+         protocol: String,
+     ) -> anyhow::Result<Option<u64>> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(&cell)?;
++
+         let (reply, receive) = tokio::sync::oneshot::channel();
+         let job = CellJob::WsOpen {
+             scope: cell.clone(),
+@@ -1807,6 +1842,12 @@
+         ws_id: u64,
+         protocol: String,
+     ) -> anyhow::Result<()> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        {
++            refuse_ordinary_cell(&scope)?;
++            refuse_ordinary_cell(&facet.root)?;
++        }
++
+         let (reply, receive) = tokio::sync::oneshot::channel();
+         let job = CellJob::WsOpen {
+             scope: scope.clone(),
+@@ -1834,6 +1875,9 @@
+         args: js::RpcData,
+         request_id: Option<js::RequestId>,
+     ) -> anyhow::Result<js::RpcOutcome> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(&cell)?;
++
+         let (reply, receive) = tokio::sync::oneshot::channel();
+         let job = CellJob::Rpc {
+             request_id,
+@@ -1854,6 +1898,9 @@
+         data: js::WsIn,
+         started: tokio::sync::oneshot::Sender<()>,
+     ) -> anyhow::Result<js::WsDispatch> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(&cell)?;
++
+         let (reply, receive) = tokio::sync::oneshot::channel();
+         let job = CellJob::WsMessage {
+             scope: cell.clone(),
+@@ -1882,6 +1929,9 @@
+         reason: String,
+         was_clean: bool,
+     ) -> anyhow::Result<Option<u64>> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(&cell)?;
++
+         let (reply, receive) = tokio::sync::oneshot::channel();
+         let job = CellJob::WsClosed {
+             scope: cell.clone(),
+@@ -1910,6 +1960,12 @@
+         data: js::WsIn,
+         started: tokio::sync::oneshot::Sender<()>,
+     ) -> anyhow::Result<js::WsDispatch> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        {
++            refuse_ordinary_cell(&scope)?;
++            refuse_ordinary_cell(&facet.root)?;
++        }
++
+         let (reply, receive) = tokio::sync::oneshot::channel();
+         let job = CellJob::WsMessage {
+             scope: scope.clone(),
+@@ -1948,6 +2004,12 @@
+         reason: String,
+         was_clean: bool,
+     ) -> anyhow::Result<()> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        {
++            refuse_ordinary_cell(&scope)?;
++            refuse_ordinary_cell(&facet.root)?;
++        }
++
+         let (reply, receive) = tokio::sync::oneshot::channel();
+         let job = CellJob::WsClosed {
+             scope: scope.clone(),
+@@ -1983,6 +2045,12 @@
+         receive: tokio::sync::oneshot::Receiver<anyhow::Result<T>>,
+         dropped: &'static str,
+     ) -> anyhow::Result<T> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        {
++            refuse_ordinary_cell(scope)?;
++            refuse_ordinary_cell(&facet.root)?;
++        }
++
+         let isolate = match js::recorded_facet_slot(&facet.root, facet.epoch, scope) {
+             Some(slot) => slot.affiliate(),
+             None => self.cell_isolate(&facet.root)?,
+@@ -1993,6 +2061,9 @@
+ 
+     /// The isolate a published cell's events run in.
+     fn cell_isolate(&self, cell: &str) -> anyhow::Result<crate::pool::Affiliation> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(cell)?;
++
+         // The affiliation is taken UNDER the registry lock, while the
+         // cell's Residency provably pins the slot, and it is held by the
+         // driver for the event's entire async lifetime — including while
+@@ -2015,6 +2086,9 @@
+     /// let a caller run work that the target did not admit or release the
+     /// admission before the event's asynchronous lifetime ended.
+     fn admit_cell_request(&self, cell: &str) -> anyhow::Result<Option<AdmittedCellRequest>> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(cell)?;
++
+         let cells = self.cells.lock().expect("cell registry poisoned");
+         let handle = cells
+             .published
+@@ -2053,6 +2127,9 @@
+         receive: tokio::sync::oneshot::Receiver<anyhow::Result<T>>,
+         dropped: &'static str,
+     ) -> anyhow::Result<T> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        refuse_ordinary_cell(cell)?;
++
+         let isolate = self.cell_isolate(cell)?;
+         run_cell_event(
+             isolate,
+@@ -2728,6 +2805,8 @@
+         node: Arc<str>,
+         region: Arc<str>,
+     ) -> anyhow::Result<Self> {
++        #[cfg(feature = "foks-guarded-node-qualification")]
++        js::guarded_node::ordinary_load_allowed(&config)?;
+         let build = {
+             let config = config.clone();
+             move || Worker::load_config(config.clone())
+@@ -3620,3 +3699,21 @@
+         handle.spawn(crate::container::prewarm());
+     }
+ }
++
++// Rejected ordinary calls keep their existing anyhow carrier. It contains one
++// fixed Refusal, not a guarded owner, copied configuration, task or queue.
++#[cfg(feature = "foks-guarded-node-qualification")]
++fn refuse_ordinary_cell(scope: &str) -> anyhow::Result<()> {
++    if let Some(error) = crate::guarded_execution::node::ordinary_scope_refusal(scope) {
++        return Err(error.into());
++    }
++    Ok(())
++}
++
++#[cfg(feature = "foks-guarded-node-qualification")]
++fn refuse_ordinary_script(script: &str) -> anyhow::Result<()> {
++    if let Some(error) = crate::guarded_execution::node::ordinary_script_refusal(script) {
++        return Err(error.into());
++    }
++    Ok(())
++}
+--- a/crates/logic/lib.rs
++++ b/crates/logic/lib.rs
+@@ -1750,6 +1750,20 @@
+             })
+     }
+ 
++    /// Whether this request is absent from every pending, activity and output
++    /// pin index. This observation alone does not acknowledge ActivityFinished:
++    /// an unknown request is also inactive. Adapters need both facts.
++    pub fn request_inactive(&self, request: RequestId) -> bool {
++        !self.request_cells.contains_key(&request)
++            && !self.active_requests.contains_key(&request)
++            && !self.admitted_gates.contains(&request)
++            && !self.gate_pinned.contains(&request)
++            && !self.barriers.values().any(|barrier| {
++                matches!(&barrier.owner, GateOwner::Output(held) if held.request == request)
++                    || barrier.followers.iter().any(|held| held.request == request)
++            })
++    }
++
+     /// Record `request` as active on `cell`, keeping the `active_cells`
+     /// reverse index in step with `active_requests`. Every insert into
+     /// `active_requests` goes through here so the two never disagree.
+@@ -3618,6 +3632,50 @@
+         }
+     }
+ 
++    fn resident_gate_request(
++        &mut self,
++        request: RequestId,
++        parent: RequestId,
++        id: CellId,
++        epoch: Epoch,
++        generation: u64,
++        effects: &mut Vec<Effect>,
++    ) {
++        // A repeated identity must not settle somebody else's existing request.
++        // The entry point has already retained the normal monotonic clock step.
++        if request == parent || !self.request_inactive(request) {
++            return;
++        }
++        let admitted = self.node_authoritative()
++            && !self.fenced
++            && !self.draining
++            && generation != 0
++            && self.active_requests.get(&parent) == Some(&id)
++            && !self.admitted_gates.contains(&parent)
++            // A processed finish can retain an output-only pin in active_requests.
++            // It is no longer running work and cannot originate another gate.
++            && !self.gate_pinned.contains(&parent)
++            && self.cells.get(&id).is_some_and(|cell| {
++                matches!(cell.phase, Phase::Resident { epoch: current } if current == epoch)
++                    && cell.generation == generation
++                    && !cell.swap_cancelled
++            });
++        if admitted {
++            self.complete_request(&id, request, Ok(Route::Local), effects);
++            self.admitted_gates.insert(request);
++            *self.admitted_gate_cells.entry(id).or_insert(0) += 1;
++        } else {
++            effects.push(Effect::Complete {
++                request,
++                result: Err(if self.fenced {
++                    RequestError::NodeFenced
++                } else {
++                    RequestError::NodeUnavailable
++                }),
++            });
++        }
++    }
++
+     fn request_authorized(&mut self, request: RequestId, id: CellId, effects: &mut Vec<Effect>) {
+         let mut cell = self.cells.remove(&id).unwrap_or_default();
+         match &cell.phase {
+@@ -6711,6 +6769,7 @@
+         | Event::HandoffRequestAt { now_mono_ms, .. }
+         | Event::WebSocketRequestAt { now_mono_ms, .. }
+         | Event::GateRequestAt { now_mono_ms, .. }
++        | Event::ResidentGateRequestAt { now_mono_ms, .. }
+         | Event::OutputAt { now_mono_ms, .. }
+         | Event::WakeHintAt { now_mono_ms, .. }
+         | Event::TimerFired { now_mono_ms, .. }
+@@ -6798,6 +6857,22 @@
+         } => state.websocket_request(request, cell, websocket, &mut effects),
+         Event::GateRequestAt { request, cell, .. } => {
+             state.gate_request(request, cell, &mut effects)
++        }
++        Event::ResidentGateRequestAt {
++            request,
++            parent,
++            cell,
++            epoch,
++            generation,
++            ..
++        } => {
++            state.resident_gate_request(request, parent, cell, epoch, generation, &mut effects);
++            // This admission event has no activation fallback. In particular a
++            // duplicate or refusal cannot pump unrelated queued activations.
++            if cfg!(debug_assertions) {
++                state.validate().expect("state invariant");
++            }
++            return effects;
+         }
+         Event::WorkerRequest { request } => state.worker_request(request, &mut effects),
+         Event::BeginPreserve => state.begin_preserve(&mut effects),
+--- a/crates/logic/types.rs
++++ b/crates/logic/types.rs
+@@ -609,6 +609,17 @@
+         cell: CellId,
+         now_mono_ms: u64,
+     },
++    /// An auxiliary gate for one exact already-running parent. This private
++    /// integration event cannot restore, queue, acquire ownership or fall back
++    /// to an ordinary request. It is not a network protocol message.
++    ResidentGateRequestAt {
++        request: RequestId,
++        parent: RequestId,
++        cell: CellId,
++        epoch: Epoch,
++        generation: u64,
++        now_mono_ms: u64,
++    },
+     /// Reserve an idle resident isolate for a top-level Worker request. The
+     /// shell falls back to the stateless pool when no resident is available;
+     /// choosing and pinning a resident is lifecycle policy and therefore

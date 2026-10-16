@@ -56,6 +56,59 @@ PATCH_ADDITIONS = frozenset(PATCH_PATHS[-3:])
 MAXIMUM_PATCH = 1024 * 1024
 MAXIMUM_POSTIMAGE = 512 * 1024
 MAXIMUM_POSTIMAGES = 2 * 1024 * 1024
+FOUNDATION = "node-foundation"
+FOUNDATION_BASE = "fee8db31ae8df590e32bc02f8c8de815d9f7ecea"
+FOUNDATION_PROFILE = "runtime-node.lock.json"
+FOUNDATION_SERIES = "patches/node-series.json"
+FOUNDATION_PATCH = "patches/0002-node-admission.patch"
+FOUNDATION_MANIFEST = "runtime/evidence/accepted-a3a/prepared-inputs/source-manifest.json"
+FOUNDATION_PATHS = tuple(sorted((
+    "crates/celld/Cargo.toml", "crates/celld/lib.rs", "crates/celld/guarded_execution.rs",
+    "crates/celld/guarded_node.rs", "crates/celld/guarded_node/control.rs", "crates/celld/guarded_node/tests.rs",
+    "crates/celld/generation.rs", "crates/celld/actor.rs", "crates/celld/actor/effects.rs", "crates/celld/runtime.rs",
+    "crates/celld/js.rs", "crates/celld/js/guarded_node.rs", "crates/logic/types.rs", "crates/logic/lib.rs",
+)))
+FOUNDATION_ADDITIONS = frozenset(("crates/celld/guarded_node.rs", "crates/celld/guarded_node/control.rs", "crates/celld/guarded_node/tests.rs", "crates/celld/js/guarded_node.rs"))
+FOUNDATION_BASE_IMAGES = {
+    "runtime_lock": ("runtime.lock.json", "4e94be5e3a8f86007bcdc9c0814ce2fa6dfb043d612d006a20e47b490df67b49"),
+    "patch_series": ("patches/series.json", "bf15b77b32416914a1d96426aa58fc65d1b436e0645c73dcc11ad91f6e9c0ea6"),
+    "node_profile": ("node.lock.json", NODE_PROFILE_SHA256),
+    "source_manifest": (FOUNDATION_MANIFEST, "0b618d7be50b44d5a8eeecbbab851ef0e3c3c9b2de64c5e33afbc6f9259489c5"),
+}
+FOUNDATION_LOCK_BEFORE = "6d838801444d99b44acf0b8ef6872c80e24929660557ec4dc0a39a704c6dcb0d"
+FOUNDATION_EDGES = ["foks-hosted-transport", "foks-metadata-core"]
+FOUNDATION_MODES = {
+    "node-foundation-default": {"root_features": [], "celld_features": [], "celld_foks_edges": [], "direct_root_tokio": False},
+    "node-foundation": {"root_features": ["node-qualification"], "celld_features": ["foks-guarded-node-qualification", "foks-guarded-qualification"], "celld_foks_edges": FOUNDATION_EDGES, "direct_root_tokio": False},
+    "node-foundation-lifecycle": {"root_features": ["lifecycle"], "celld_features": ["foks-guarded-qualification"], "celld_foks_edges": [], "direct_root_tokio": True},
+}
+FOUNDATION_TEST_PREFIX = "guarded_execution::node::tests::b1_"
+FOUNDATION_TESTS = [FOUNDATION_TEST_PREFIX + name for name in (
+    "role_geometry_counts_process_owner", "last_strong_and_registry_retirement_hold_role",
+    "control_headroom_survives_full_invocation_debt", "control_lane_busy_does_not_consume_cleanup",
+    "header_cells_are_process_owned_and_bounded", "original_stamp_never_renews",
+    "debt_failure_sticky_and_cleanup_one_use", "owner_construction_and_payload_drop_order",
+    "layout_and_role_ledger", "descriptor_accepts_exact_projection",
+    "descriptor_rejects_each_extra_capability", "boot_reload_share_construction_selection",
+    "marked_worker_refuses_before_engine_use", "generic_refusal_inventory",
+    "exact_generation_never_falls_back", "resident_gate_accepts_exact_parent",
+    "resident_gate_refuses_binding_matrix", "resident_gate_duplicate_is_inert",
+    "soft_swap_gate_and_ordinary_gate_regression", "inactive_observation_is_not_processed_finish",
+    "foundation_has_no_ready_or_action",
+)]
+FOUNDATION_EXCLUSIONS = ["guarded-readiness", "guarded-action", "same-process-serving", "host-az-recovery", "whole-node-retirement"]
+# Pinned main/cli.rs print_help with DEFAULT_SHUTDOWN_TOTAL_MS=40000 and
+# cli_output::Output::help's final newline. A prefix is not a help oracle.
+FOUNDATION_HELP_IMAGE = (7752, "421243bdfe4c6f4e89834852eadd8becb82a1b3931f4d29fd80b5f9da4f6c4f9")
+FOUNDATION_JEMALLOC_WARNING = b"<jemalloc>: option background_thread currently supports pthread only\n"
+FOUNDATION_MEMORY_WARNING = re.compile(
+    rb"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z  WARN celld::memory: "
+    rb"the allocator will not run a background thread, so freed pages return only when a thread allocates again "
+    rb"error=`name` or `mib` specifies an unknown/invalid value\.\n"
+)
+MAXIMUM_FOUNDATION_PATCH = 512 * 1024
+MAXIMUM_FOUNDATION_SERIES = 1536 * 1024
+MAXIMUM_FOUNDATION_SOURCE = 8 * 1024 * 1024
 
 
 def fail(message):
@@ -119,7 +172,13 @@ def relative_name(value):
     return value
 
 
-def load_pins(root=ROOT):
+def load_pins(root=ROOT, stage=None):
+    if stage is not None:
+        if stage != FOUNDATION:
+            fail("unsupported source stage")
+        base = load_pins(root)
+        profile = load_foundation(root, base)
+        return {**base, "profile": FOUNDATION, "foundation": profile}
     pins = read_json(root / "runtime.lock.json")
     if not isinstance(pins, dict) or (pins.get("format"), pins.get("profile")) not in ((1, A1), (2, A2)) or type(pins.get("format")) is not int or pins.get("target") != TARGET:
         fail("unsupported input profile")
@@ -161,6 +220,8 @@ def validate_image(value, git=True, positive=False):
 
 
 def patch_series(root, pins):
+    if pins["profile"] == FOUNDATION:
+        return foundation_series(root, pins["foundation"])
     path = root / "patches/series.json"
     series = read_json(path)
     if file_hash(path) != pins["patch_series_sha256"]:
@@ -200,9 +261,128 @@ def patch_series(root, pins):
 
 
 def selected_mode(pins, mode):
+    if pins["profile"] == FOUNDATION:
+        if mode not in FOUNDATION_MODES:
+            fail("unsupported graph/build mode for foundation profile")
+        features = FOUNDATION_MODES[mode]["root_features"]
+        return ["--features", "foks-celld-guarded/" + features[0]] if features else []
     if mode not in ("identity", "lifecycle", "node-baseline") or (mode != "identity" and pins["profile"] != A2):
         fail("unsupported graph/build mode for input profile")
     return ["--features", "lifecycle"] if mode == "lifecycle" else []
+
+
+def stage_for_mode(mode):
+    if mode in FOUNDATION_MODES:
+        return FOUNDATION
+    if mode not in ("identity", "lifecycle", "node-baseline"):
+        fail("unsupported graph/build mode")
+    return None
+
+
+def foundation_image(value, path, maximum=2 * 1024 * 1024):
+    closed_fields(value, ("path", "bytes", "sha256"), "foundation image")
+    if value["path"] != path or type(value["bytes"]) is not int or not 0 < value["bytes"] <= maximum or not isinstance(value["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["sha256"]):
+        fail("invalid foundation image identity")
+
+
+def exact_json(actual, expected, label):
+    # JSON equality must not confuse booleans with numeric fields.
+    if json.dumps(actual, sort_keys=True, separators=(",", ":"), allow_nan=False) != json.dumps(expected, sort_keys=True, separators=(",", ":"), allow_nan=False):
+        fail(label + " mismatch")
+
+
+def load_foundation(root, base):
+    profile = read_json(root / FOUNDATION_PROFILE)
+    closed_fields(profile, ("format", "profile", "target", "accepted_a2_commit", "accepted_a3a_commit", "base", "pins", "node_series", "cargo_lock", "qualification"), "foundation profile")
+    if type(profile["format"]) is not int or profile["format"] != 1 or profile["profile"] != FOUNDATION or profile["target"] != TARGET or profile["accepted_a2_commit"] != NODE_BASE or profile["accepted_a3a_commit"] != FOUNDATION_BASE or base["profile"] != A2:
+        fail("invalid foundation profile identity")
+    closed_fields(profile["base"], FOUNDATION_BASE_IMAGES, "foundation base")
+    for name, (path, checksum) in FOUNDATION_BASE_IMAGES.items():
+        entry = profile["base"][name]
+        foundation_image(entry, path)
+        if entry["sha256"] != checksum:
+            fail("foundation accepted base changed")
+        checked_file(root / path, entry)
+    exact_json(profile["pins"], base, "foundation inherited pins")
+    foundation_image(profile["node_series"], FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    lock = profile["cargo_lock"]
+    closed_fields(lock, ("before", "expected", "added_edges"), "foundation lock")
+    for side in ("before", "expected"):
+        foundation_image(lock[side], "Cargo.lock")
+    if lock["before"]["sha256"] != FOUNDATION_LOCK_BEFORE or lock["before"] == lock["expected"]:
+        fail("foundation lock preimage/postimage identity changed")
+    exact_json(lock["added_edges"], [{"from": "celld", "to": name} for name in FOUNDATION_EDGES], "foundation lock edges")
+    actual_lock = {"path": "Cargo.lock", "bytes": (root / "Cargo.lock").stat().st_size, "sha256": file_hash(root / "Cargo.lock")}
+    if actual_lock not in (lock["before"], lock["expected"]):
+        fail("foundation lock is neither reviewed preimage nor postimage")
+    checked_file(root / "Cargo.lock", actual_lock)
+    qualification = profile["qualification"]
+    closed_fields(qualification, ("claim", "source_roster", "tree", "program", "deployments", "tests", "modes", "not_qualified"), "foundation qualification")
+    if qualification["claim"] != "b1-foundation-only" or qualification["source_roster"] != list(FOUNDATION_PATHS) or qualification["not_qualified"] != FOUNDATION_EXCLUSIONS:
+        fail("foundation scope changed")
+    tree = qualification["tree"]
+    closed_fields(tree, ("files", "payload_bytes", "inventory_sha256"), "foundation tree")
+    if type(tree["files"]) is not int or tree["files"] != base["upstream"]["files"] + len(PATCH_ADDITIONS | FOUNDATION_ADDITIONS) or type(tree["payload_bytes"]) is not int or not 0 < tree["payload_bytes"] <= MAXIMUM_FOUNDATION_SOURCE or not isinstance(tree["inventory_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", tree["inventory_sha256"]):
+        fail("invalid foundation tree envelope")
+    closed_fields(qualification["program"], ("primary_js", "fixture_js", "wasm", "primary_metadata", "fixture_metadata"), "foundation program")
+    for image in qualification["program"].values():
+        validate_image(image, git=False, positive=True)
+    exact_json(qualification["program"]["wasm"], base["qualification"]["program"]["wasm"], "foundation unchanged Wasm")
+    closed_fields(qualification["deployments"], ("primary", "fixture"), "foundation deployments")
+    for name, entry in qualification["deployments"].items():
+        closed_fields(entry, ("version", "prefix"), "foundation deployment")
+        if not isinstance(entry["version"], str) or not re.fullmatch(r"[0-9a-f]{16}", entry["version"]) or entry["prefix"] != "deploy/foks-guarded-node-" + name + "/" + entry["version"]:
+            fail("invalid foundation deployment identity")
+    exact_json(qualification["tests"], {"prefix": FOUNDATION_TEST_PREFIX, "names": FOUNDATION_TESTS, "threads": 1}, "foundation test inventory")
+    exact_json(qualification["modes"], FOUNDATION_MODES, "foundation modes")
+    foundation_series(root, profile)
+    return profile
+
+
+def foundation_series(root, profile):
+    checked_file(root / FOUNDATION_SERIES, profile["node_series"])
+    series = read_json(root / FOUNDATION_SERIES, MAXIMUM_FOUNDATION_SERIES)
+    closed_fields(series, ("format", "profile", "accepted_a2_commit", "accepted_a3a_commit", "base_series", "patches"), "foundation patch series")
+    if type(series["format"]) is not int or series["format"] != 1 or series["profile"] != FOUNDATION or series["accepted_a2_commit"] != NODE_BASE or series["accepted_a3a_commit"] != FOUNDATION_BASE:
+        fail("invalid foundation series identity")
+    exact_json(series["base_series"], profile["base"]["patch_series"], "foundation base series")
+    patches = series["patches"]
+    if not isinstance(patches, list) or len(patches) != 2:
+        fail("foundation requires exactly two patches")
+    exact_json(patches[0], patch_series(root, profile["pins"])["patches"][0], "foundation first patch")
+    for selected in patches:
+        if not isinstance(selected, dict) or type(selected.get("bytes")) is not int or not 0 < selected["bytes"] <= MAXIMUM_FOUNDATION_PATCH:
+            fail("foundation patch allowance exceeded")
+    selected = patches[1]
+    closed_fields(selected, ("path", "bytes", "sha256", "files"), "foundation second patch")
+    if selected["path"] != FOUNDATION_PATCH or not isinstance(selected["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", selected["sha256"]):
+        fail("invalid foundation patch identity")
+    files = selected["files"]
+    if not isinstance(files, list) or len(files) != len(FOUNDATION_PATHS):
+        fail("invalid foundation patch roster")
+    seen = []
+    for entry in files:
+        closed_fields(entry, ("path", "mode", "before", "after"), "foundation patch file")
+        if entry["path"] not in FOUNDATION_PATHS or entry["path"] in seen or entry["mode"] != "100644":
+            fail("invalid foundation patch path/mode")
+        seen.append(entry["path"])
+        if entry["path"] in FOUNDATION_ADDITIONS:
+            if entry["before"] is not None:
+                fail("foundation addition has a preimage")
+        else:
+            validate_image(entry["before"])
+        validate_image(entry["after"])
+    if seen != list(FOUNDATION_PATHS):
+        fail("foundation patch roster is not sorted")
+    checked_file(root / FOUNDATION_PATCH, selected)
+    return series
+
+
+def foundation_lock(root, pins):
+    """Preparation can precede lock materialization; graph/build cannot."""
+    if pins["profile"] == FOUNDATION:
+        return checked_file(root / "Cargo.lock", pins["foundation"]["cargo_lock"]["expected"])
+    return root / "Cargo.lock"
 
 
 def inventory(root, pins):
@@ -258,8 +438,22 @@ def parse_patch(root, pins, upstream):
     """A closed diff grammar; no context search, offset guessing or external tool."""
     if pins["profile"] == A1:
         return []
-    selected = patch_series(root, pins)["patches"][0]
-    data = checked_file(root / PATCH_PATH, selected).read_bytes()
+    parsed = []
+    current = upstream
+    for selected in patch_series(root, pins)["patches"]:
+        changes = parse_one_patch(root, selected, current)
+        parsed.extend(changes)
+        current = postimage_inventory(current, changes)
+    if pins["profile"] == FOUNDATION:
+        files = [row for row in current.values() if row["type"] == "blob"]
+        tree = pins["foundation"]["qualification"]["tree"]
+        if len(files) != tree["files"] or sum(row["size"] for row in files) != tree["payload_bytes"]:
+            fail("foundation reconstructed source payload envelope mismatch")
+    return parsed
+
+
+def parse_one_patch(root, selected, upstream):
+    data = checked_file(root / selected["path"], selected).read_bytes()
     if len(data) != selected["bytes"] or digest(data) != selected["sha256"]:
         fail("patch changed while reading")
     try:
@@ -277,11 +471,11 @@ def parse_patch(root, pins, upstream):
         original = upstream.get(path)
         if entry["before"] is None:
             if original is not None:
-                fail("patch addition already exists upstream")
+                fail("patch addition already exists at this stage")
             before_header = b"--- /dev/null\n"
         else:
             if original is None or original["type"] != "blob" or original["mode"] != entry["mode"] or original["size"] != entry["before"]["bytes"] or original["sha"] != entry["before"]["git_sha1"]:
-                fail("patch preimage does not identify the immutable upstream blob")
+                fail("patch preimage does not identify the immutable preceding blob")
             before_header = ("--- a/" + path + "\n").encode()
         if lines[cursor:cursor + 2] != [before_header, ("+++ b/" + path + "\n").encode()]:
             fail("patch file headers/order mismatch")
@@ -354,7 +548,7 @@ def postimage_inventory(upstream, patches):
             if parent in expected:
                 if expected[parent]["type"] != "tree":
                     fail("patch parent is an upstream file")
-            elif name in PATCH_ADDITIONS:
+            elif entry["before"] is None:
                 expected[parent] = {"path": parent, "mode": "040000", "type": "tree"}
             else:
                 fail("patch changes an absent parent")
@@ -366,23 +560,36 @@ def source_manifest(root, pins, files, prepared):
     value = {"format": 1, "input_sha256": file_hash(root / "runtime.lock.json"), "archive_sha256": pins["upstream"]["archive_sha256"], "tree": pins["upstream"]["tree"], "patch_series_sha256": pins["patch_series_sha256"], "files": sorted(files, key=lambda item: item["path"])}
     if pins["profile"] == A2:
         value.update(format=2, profile=A2, kind="patched-source" if prepared else "upstream-archive-only")
+    elif pins["profile"] == FOUNDATION:
+        value.update(format=3, profile=FOUNDATION, kind="patched-source" if prepared else "upstream-archive-only", input_sha256=file_hash(root / FOUNDATION_PROFILE), base_input_sha256=file_hash(root / "runtime.lock.json"), patch_series_sha256=pins["foundation"]["node_series"]["sha256"])
+        if prepared:
+            actual = {"files": len(value["files"]), "payload_bytes": sum(row["bytes"] for row in value["files"]), "inventory_sha256": digest(json.dumps(value["files"], sort_keys=True, separators=(",", ":")).encode())}
+            if actual != pins["foundation"]["qualification"]["tree"]:
+                fail("foundation full source inventory mismatch")
     return value
 
 
 def apply_patch_set(staging, patches):
     # Validate every complete preimage/postimage before writing any changed file.
     # A failed write still remains in the disposable private staging directory.
-    outputs = []
+    outputs = {}
+    additions = set()
     for entry, hunks in patches:
         path = staging / entry["path"]
-        before = b"" if entry["before"] is None else path.read_bytes()
+        if entry["before"] is None:
+            if path in outputs or path.exists() or path.is_symlink():
+                fail("patch addition already exists while applying")
+            before = b""
+            additions.add(path)
+        else:
+            before = outputs[path] if path in outputs else path.read_bytes()
         if entry["before"] is not None and image_identity(before) != entry["before"]:
             fail("patch full preimage mismatch")
         after = transform_image(before, hunks)
         if image_identity(after) != entry["after"]:
             fail("patch full postimage mismatch")
-        outputs.append((path, after, entry["before"] is None))
-    for path, after, addition in outputs:
+        outputs[path] = after
+    for path, after in outputs.items():
         missing = []
         parent = path.parent
         while not parent.exists():
@@ -391,13 +598,13 @@ def apply_patch_set(staging, patches):
         path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
         for parent in missing:
             parent.chmod(0o755)
-        with path.open("xb" if addition else "wb") as stream:
+        with path.open("xb" if path in additions else "wb") as stream:
             stream.write(after)
         path.chmod(0o644)
 
 
-def inspect_archive(archive, root=ROOT, destination=None):
-    pins = load_pins(root)
+def inspect_archive(archive, root=ROOT, destination=None, stage=None):
+    pins = load_pins(root, stage)
     upstream = pins["upstream"]
     expected = inventory(root, pins)
     checked_file(archive, {"bytes": upstream["archive_bytes"], "sha256": upstream["archive_sha256"]})
@@ -481,7 +688,9 @@ def inspect_source_tree(source, root, pins, expected, patches):
         fail("missing regular prepared source directory")
     seen = set()
     files = []
-    changed = {entry["path"]: (entry, hunks) for entry, hunks in patches}
+    changed = {}
+    for entry, hunks in patches:
+        changed.setdefault(entry["path"], []).append((entry, hunks))
     def walk_error(error):
         raise error
     for parent, directories, names in os.walk(source, followlinks=False, onerror=walk_error):
@@ -510,17 +719,20 @@ def inspect_source_tree(source, root, pins, expected, patches):
                 fail("altered prepared file contents")
             identity = {"bytes": entry["size"], "sha256": sha.hexdigest(), "git_sha1": entry["sha"]}
             if name in changed:
-                change, hunks = changed[name]
-                if identity != change["after"]:
+                if identity != changed[name][-1][0]["after"]:
                     fail("prepared patch postimage mismatch")
                 after = path.read_bytes()
                 if image_identity(after) != identity:
                     fail("prepared patch changed while reading")
-                before = transform_image(after, hunks, reverse=True)
-                if (change["before"] is None and before) or (change["before"] is not None and image_identity(before) != change["before"]):
-                    fail("prepared patch does not reconstruct its upstream preimage")
-                if transform_image(before, hunks) != after:
-                    fail("prepared patch roundtrip mismatch")
+                for change, hunks in reversed(changed[name]):
+                    if image_identity(after) != change["after"]:
+                        fail("prepared patch intermediate postimage mismatch")
+                    before = transform_image(after, hunks, reverse=True)
+                    if (change["before"] is None and before) or (change["before"] is not None and image_identity(before) != change["before"]):
+                        fail("prepared patch does not reconstruct its upstream preimage")
+                    if transform_image(before, hunks) != after:
+                        fail("prepared patch roundtrip mismatch")
+                    after = before
             files.append({"path": name, "mode": entry["mode"], **identity})
     if seen != set(expected):
         fail("prepared source roster mismatch")
@@ -529,8 +741,8 @@ def inspect_source_tree(source, root, pins, expected, patches):
     return source_manifest(root, pins, files, prepared=True)
 
 
-def verify_source(root=ROOT):
-    pins = load_pins(root)
+def verify_source(root=ROOT, stage=None):
+    pins = load_pins(root, stage)
     upstream = inventory(root, pins)
     patches = parse_patch(root, pins, upstream)
     expected = postimage_inventory(upstream, patches)
@@ -542,18 +754,18 @@ def verify_source(root=ROOT):
     return actual
 
 
-def prepare(archive, root=ROOT):
+def prepare(archive, root=ROOT, stage=None):
     runtime = runtime_directory(root)
     destination = runtime / "source"
     if destination.exists() or destination.is_symlink():
-        return verify_source(root)
+        return verify_source(root, stage)
     if (runtime / "source-manifest.json").exists():
         fail("orphan prepared manifest requires inspection")
     staging = Path(tempfile.mkdtemp(prefix="source-staging-", dir=runtime))
     try:
-        original = inspect_archive(archive, root, staging)
-        pins = load_pins(root)
-        if file_hash(root / "runtime.lock.json") != original["input_sha256"]:
+        original = inspect_archive(archive, root, staging, stage)
+        pins = load_pins(root, stage)
+        if file_hash(root / (FOUNDATION_PROFILE if stage == FOUNDATION else "runtime.lock.json")) != original["input_sha256"]:
             fail("input changed during archive preparation")
         upstream = inventory(root, pins)
         patches = parse_patch(root, pins, upstream)
@@ -569,7 +781,7 @@ def prepare(archive, root=ROOT):
     finally:
         if staging.exists():
             shutil.rmtree(staging)
-    return verify_source(root)
+    return verify_source(root, stage)
 
 
 def expanded_archive(archive, maximum, output=None):
@@ -590,7 +802,15 @@ def expanded_archive(archive, maximum, output=None):
     return {"bytes": length, "sha256": result.hexdigest()}
 
 
-def prepare_assets(archive, binding, root=ROOT):
+def prepare_assets(archive, binding, root=ROOT, stage=None):
+    if stage is not None:
+        pins = load_pins(root, stage)
+        base = prepare_assets(archive, binding, root)
+        expected = foundation_assets(root, pins, base)
+        path = runtime_directory(root) / "assets-node-foundation.json"
+        if not path.exists() and not path.is_symlink():
+            write_json(path, expected)
+        return verify_assets(root, stage)
     pins = load_pins(root)
     v8 = pins["v8"]
     checked_file(archive, v8["archive"])
@@ -616,7 +836,16 @@ def prepare_assets(archive, binding, root=ROOT):
     return verify_assets(root)
 
 
-def verify_assets(root=ROOT):
+def foundation_assets(root, pins, base):
+    return {"format": 1, "profile": FOUNDATION, "input_sha256": file_hash(root / FOUNDATION_PROFILE), "patch_series_sha256": pins["foundation"]["node_series"]["sha256"], "base_receipt_sha256": file_hash(root / "runtime/artifacts/assets.json"), "assets": base}
+
+
+def verify_assets(root=ROOT, stage=None):
+    if stage is not None:
+        pins = load_pins(root, stage)
+        expected = foundation_assets(root, pins, verify_assets(root))
+        exact_json(read_json(root / "runtime/assets-node-foundation.json"), expected, "foundation native asset receipt")
+        return expected
     pins = load_pins(root)
     v8 = pins["v8"]
     directory = root / "runtime/artifacts"
@@ -729,11 +958,21 @@ def compare_locks(root=ROOT):
     return {"retained": encode(before_registry.keys() & after_registry.keys()), "removed_unreachable_candidates": encode(before_registry.keys() - after_registry.keys()), "added": encode(added)}
 
 
-def upstream_edges(metadata, reached, root=ROOT):
+def upstream_edges(metadata, reached, root=ROOT, mode="identity"):
     """An allowed FOKS duplicate never replaces a selected upstream dependency."""
     before = lock_inventory(root / "runtime/source/Cargo.lock")
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+    allowed = set()
+    if stage_for_mode(mode) == FOUNDATION:
+        pins = load_pins(root, FOUNDATION)
+        selected_mode(pins, mode)
+        foundation_lock(root, pins)
+        # The graph's independent declaration validator also checks optional
+        # features/renames. This exception never applies to an unrelated local
+        # edge, package, mode, registry identity or upstream dependency.
+        for name in FOUNDATION_MODES[mode]["celld_foks_edges"]:
+            allowed.add((name, "0.4.0", None))
     checked = []
     for identity in sorted(reached):
         package = packages[identity]
@@ -754,7 +993,11 @@ def upstream_edges(metadata, reached, root=ROOT):
                 continue
             target = packages[dependency["pkg"]]
             actual = (target["name"], target["version"], target["source"])
-            if actual not in expected:
+            added = actual in allowed and key == ("celld", "0.6.2", None)
+            if added:
+                if package["manifest_path"] != str(root / "runtime/source/crates/celld/Cargo.toml") or target["manifest_path"] != str(root.parents[1] / "crates" / target["name"] / "Cargo.toml") or dependency["dep_kinds"] != [{"kind": None, "target": None}]:
+                    fail("foundation added edge is not the exact local normal dependency")
+            if actual not in expected and not added:
                 fail("selected upstream dependency replaced or extended: " + package["name"] + " -> " + target["name"])
             checked.append({"from": identity, "to": dependency["pkg"]})
     return checked
@@ -996,13 +1239,17 @@ def finish_group(process, known, events, term_grace, kill_grace):
     return False, observe_children(group, known)
 
 
-def run_owned(argv, cwd, environment, directory, name, slot, timeout, monitor=None, term_grace=3, kill_grace=3, maximum_log_bytes=128 * 1024 * 1024):
+def run_owned(argv, cwd, environment, directory, name, slot, timeout, monitor=None, term_grace=3, kill_grace=3, maximum_log_bytes=128 * 1024 * 1024, expected_exit_code=0):
     """One process group, direct argv, bounded wait and durable failure evidence."""
     directory = Path(directory)
     if type(maximum_log_bytes) is not int or not 0 < maximum_log_bytes <= 128 * 1024 * 1024:
         fail("invalid command log allowance")
+    if type(expected_exit_code) is not int or expected_exit_code not in (0, 1):
+        fail("invalid expected command exit code")
     directory.mkdir(parents=True, exist_ok=True)
     record = {"argv": [str(arg) for arg in argv], "cwd": str(cwd), "timeout_seconds": timeout, "events": [], "cleanup_established": False}
+    if expected_exit_code:
+        record["expected_exit_code"] = expected_exit_code
     process = None
     known = set()
     cancellation = []
@@ -1044,7 +1291,7 @@ def run_owned(argv, cwd, environment, directory, name, slot, timeout, monitor=No
                 status = process.poll()
                 if status is not None:
                     if not group_alive(process.pid):
-                        record["reason"] = "completed" if status == 0 else "command failed"
+                        record["reason"] = "completed" if status == expected_exit_code else "command failed"
                         break
                     if parent_done_at is None:
                         parent_done_at = time.monotonic()
@@ -1602,7 +1849,7 @@ def verify_node_artifact(stdout_path, graph, root=ROOT):
                 fail("unclassified compiler message")
             if message.get("reason") == "compiler-artifact" and message.get("executable") is not None:
                 actual = message.get("target", {})
-                if message.get("package_id") != target["package_id"] or message.get("features") != [] or message.get("executable") != str(expected_path) or any(actual.get(key) != target[key] for key in ("name", "kind", "crate_types", "src_path")) or message.get("profile", {}).get("test") is not False:
+                if message.get("package_id") != target["package_id"] or message.get("features") != target["features"] or message.get("executable") != str(expected_path) or any(actual.get(key) != target[key] for key in ("name", "kind", "crate_types", "src_path")) or message.get("profile", {}).get("test") is not False:
                     fail("unexpected executable compiler artifact")
                 artifacts.append(message)
             elif message.get("reason") == "build-finished":
@@ -1617,7 +1864,7 @@ def verify_node_artifact(stdout_path, graph, root=ROOT):
     image, _ = stable_fixture_file(expected_path, 4 * 1024**3)
     if not image["bytes"] or image["mode"] & 0o111 == 0:
         fail("celld artifact is not executable")
-    return {"path": str(expected_path), "bytes": image["bytes"], "sha256": image["sha256"], "artifact": {**target, "features": []}}
+    return {"path": str(expected_path), "bytes": image["bytes"], "sha256": image["sha256"], "artifact": target.copy()}
 
 
 def verify_node_report(path, profile, binary, ports, node_lock_hash):
@@ -1802,8 +2049,8 @@ def tool_identity(root, directory, slot, environment, toolchain):
 
 def build_commands(root, toolchain, pins, mode="identity"):
     features = selected_mode(pins, mode)
-    if mode == "node-baseline":
-        shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", "--bin", "celld", "-j", "2", "--target", TARGET]
+    if mode == "node-baseline" or mode in ("node-foundation-default", "node-foundation"):
+        shared = ["--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", *features, "--bin", "celld", "-j", "2", "--target", TARGET]
         cargo = toolchain / "bin/cargo"
         return {
             "build": network_command([cargo, "build", *shared, "--message-format=json-render-diagnostics"]),
@@ -1814,14 +2061,239 @@ def build_commands(root, toolchain, pins, mode="identity"):
     cargo = toolchain / "bin/cargo"
     commands = {
         "build": network_command([cargo, "build", *shared, *binary]),
-        "clippy": network_command([cargo, "clippy", *shared, *(["--all-targets"] if mode == "lifecycle" else binary), "--", "-D", "warnings"]),
+        "clippy": network_command([cargo, "clippy", *shared, *(["--all-targets"] if mode in ("lifecycle", "node-foundation-lifecycle") else binary), "--", "-D", "warnings"]),
     }
-    if mode == "lifecycle":
+    if mode in ("lifecycle", "node-foundation-lifecycle"):
         commands["lifecycle"] = network_command([cargo, "test", *shared, "--test", "lifecycle", "--", "--test-threads=1", "--nocapture"])
     return commands
 
 
+def foundation_test_commands(root, toolchain, pins):
+    selected_mode(pins, "node-foundation")
+    shared = [toolchain / "bin/cargo", "test", "--locked", "--offline", "--manifest-path", str(root / "Cargo.toml"), "--no-default-features", "--package", "foks-celld-guarded", "--package", "celld@0.6.2", "--features", "foks-celld-guarded/node-qualification", "--lib", "-j", "2", "--target", TARGET, FOUNDATION_TEST_PREFIX, "--"]
+    return {"list": network_command([*shared, "--list"]), "run": network_command([*shared, "--test-threads=1"])}
+
+
+def foundation_test_output(path, listing):
+    path = Path(path)
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
+        fail("invalid foundation test output")
+    lines = [line for line in path.read_text().splitlines() if line]
+    names, totals = [], []
+    for line in lines:
+        if listing and line.endswith(": test"):
+            names.append(line[:-6])
+        elif listing and line == "21 tests, 0 benchmarks":
+            totals.append(line)
+        elif not listing and line.startswith("test ") and line.endswith(" ... ok"):
+            names.append(line[5:-7])
+        elif not listing and line == "running 21 tests":
+            totals.append(line)
+        elif not listing and re.fullmatch(r"test result: ok\. 21 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in [0-9]+\.[0-9]+s", line):
+            totals.append(line)
+        else:
+            fail("unexpected foundation test output")
+    if sorted(names) != sorted(FOUNDATION_TESTS) or len(names) != 21 or len(totals) != (1 if listing else 2):
+        fail("foundation tests missing, duplicated, ignored or incomplete")
+    return names
+
+
+def foundation_layout_output(path, expected_stderr_sha256):
+    """Bind one compiled-layout record to the unchanged owned-command stderr."""
+    if not isinstance(expected_stderr_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_stderr_sha256):
+        fail("invalid foundation layout stderr hash")
+    path = Path(path)
+    maximum = 1024 * 1024
+    try:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode) or not 0 <= before.st_size <= maximum:
+            fail("invalid or oversized foundation layout stderr")
+        identity = fixture_stat_identity(before)
+        # NONBLOCK prevents a replaced special file from blocking before the
+        # descriptor check; regular-file reads retain their ordinary semantics.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            if fixture_stat_identity(os.fstat(stream.fileno())) != identity:
+                fail("foundation layout stderr replaced before read")
+            raw = stream.read(maximum + 1)
+            if fixture_stat_identity(os.fstat(stream.fileno())) != identity:
+                fail("foundation layout stderr changed during read")
+        if len(raw) != before.st_size or len(raw) > maximum or fixture_stat_identity(path.lstat()) != identity:
+            fail("foundation layout stderr replaced or resized")
+    except OSError as error:
+        fail("cannot read foundation layout stderr: " + str(error))
+    if digest(raw) != expected_stderr_sha256:
+        fail("foundation layout stderr differs from owned command")
+
+    prefix = b"FOKS_B1_LAYOUT "
+    lines = raw.split(b"\n")
+    records = []
+    for index, line in enumerate(lines):
+        if b"FOKS_B1_LAYOUT" not in line:
+            continue
+        if index == len(lines) - 1 or not line.startswith(prefix) or b"\r" in line or len(line) + 1 > 4096:
+            fail("invalid foundation layout record framing")
+        records.append(line + b"\n")
+    if len(records) != 1:
+        fail("foundation layout record missing or duplicated")
+    raw_record = records[0]
+
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                fail("duplicate foundation layout JSON field: " + key)
+            value[key] = item
+        return value
+
+    def refuse_number(_):
+        fail("foundation layout numbers must be finite integers")
+
+    record = json.loads(raw_record[len(prefix):-1].decode("utf-8"), object_pairs_hook=unique, parse_float=refuse_number, parse_constant=refuse_number)
+    fixed = {"format": 1, "claim": "b1-native-layouts-only", "arc_convention": "repr-c-two-atomic-usize", "role_caps": [1024 * 1024, 8 * 1024 * 1024, 64 * 1024], "role_counts": [1, 2, 1], "cleanup_reserve": 200 * 1024, "weak_limit": 66}
+    closed_fields(record, (*fixed, "layouts", "initial_process_debt"), "foundation layout record")
+    exact_json({name: record[name] for name in fixed}, fixed, "foundation layout contract")
+    layout_names = ("request_arc", "control_arc", "registry_arc", "owner_factory", "original_owner", "header_cell", "cleanup_credits", "control_observation", "node_arc")
+    layouts = record["layouts"]
+    closed_fields(layouts, layout_names, "foundation native layouts")
+    for name in layout_names:
+        value = layouts[name]
+        closed_fields(value, ("bytes", "alignment"), "foundation native layout")
+        size, alignment = value["bytes"], value["alignment"]
+        if type(size) is not int or not 0 < size <= 64 * 1024 or type(alignment) is not int or not 0 < alignment <= 16 or alignment & (alignment - 1) or size % alignment:
+            fail("invalid foundation native layout size or alignment")
+    if layouts["request_arc"]["bytes"] > 4096:
+        fail("foundation Request Arc layout exceeds allowance")
+    debt = 67 * layouts["request_arc"]["bytes"] + layouts["control_arc"]["bytes"] + layouts["registry_arc"]["bytes"]
+    if type(record["initial_process_debt"]) is not int or record["initial_process_debt"] != debt:
+        fail("foundation initial process debt differs from measured layouts")
+    return {"record": record, "raw_record_bytes": len(raw_record), "raw_record_sha256": digest(raw_record)}
+
+
+def foundation_probe_output(directory, name):
+    if name not in ("version", "help", "invalid-option"):
+        fail("unknown foundation binary probe")
+    outputs = {}
+    for stream in ("stdout", "stderr"):
+        path = directory / (name + "." + stream)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
+            fail("foundation probe output allowance exceeded")
+        outputs[stream] = path.read_bytes()
+        if len(outputs[stream]) > 65536:
+            fail("foundation probe output allowance exceeded")
+    out, err = outputs["stdout"], outputs["stderr"]
+    warnings = []
+    # Jemalloc's background_thread_boot0 can emit this exact stderr line at
+    # allocator initialization, before even the invalid-option parse error.
+    if err.startswith(FOUNDATION_JEMALLOC_WARNING):
+        warnings.append({"id": "jemalloc-background-thread-unsupported", "stream": "stderr", "line": 1, "text": FOUNDATION_JEMALLOC_WARNING.decode("ascii").removesuffix("\n")})
+        err = err[len(FOUNDATION_JEMALLOC_WARNING):]
+    if name != "invalid-option":
+        # main parses Action before installing tracing and calling
+        # memory::tune_allocator. Its single warning is therefore impossible
+        # for a parse refusal. For help/version, the lossy asynchronous writer
+        # may omit or reorder this complete line relative to the CLI answer.
+        # Recognize only the pinned message and default microsecond timestamp;
+        # never strip arbitrary log lines, whitespace, or partial messages.
+        lines, memory_warnings = [], 0
+        for number, line in enumerate(out.splitlines(keepends=True), 1):
+            if FOUNDATION_MEMORY_WARNING.fullmatch(line):
+                memory_warnings += 1
+                warnings.append({"id": "celld-allocator-background-thread-unavailable", "stream": "stdout", "line": number, "text": line.decode("ascii").removesuffix("\n")})
+            else:
+                lines.append(line)
+        if memory_warnings > 1:
+            fail("duplicate foundation allocator warning")
+        out = b"".join(lines)
+    if name == "version":
+        accepted = out == b"celld 0.6.2 (debug)\n" and not err
+    elif name == "help":
+        accepted = (len(out), digest(out)) == FOUNDATION_HELP_IMAGE and not err
+    else:
+        accepted = not out and err == b"Error: unknown command or option: --foks-guarded-node-qualification; run `celld --help` for usage\n"
+    if not accepted:
+        fail("foundation binary probe outcome mismatch: " + name)
+    # Raw files are untouched; these hashes/lengths refer to them, not to the
+    # temporary exact-warning projection used by the outcome comparison.
+    return {"stdout_bytes": len(outputs["stdout"]), "stdout_sha256": digest(outputs["stdout"]), "stderr_bytes": len(outputs["stderr"]), "stderr_sha256": digest(outputs["stderr"]), "recognized_warnings": warnings}
+
+
+def build_foundation(graph_directory, root, mode):
+    import check_graph
+    pins = load_pins(root, FOUNDATION)
+    selected_mode(pins, mode)
+    foundation_lock(root, pins)
+    source, assets = verify_source(root, FOUNDATION), verify_assets(root, FOUNDATION)
+    graph = check_graph.verify(graph_directory, root, mode)
+    refusal, measured = resource_refusal(root, initial=True)
+    if refusal:
+        fail(refusal + ": " + json.dumps(measured))
+    toolchain, environment = controlled_environment(root)
+    evidence_root = runtime_directory(root) / "evidence"
+    evidence_root.mkdir(exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix="foundation-", dir=evidence_root))
+    claims = {"node-foundation-default": "b1-default-bin-regression", "node-foundation": "b1-foundation-component-only", "node-foundation-lifecycle": "b1-a2-lifecycle-regression"}
+    receipt = {"format": 1, "profile": FOUNDATION, "mode": mode, "claim": claims[mode], "status": "incomplete", "source": source, "assets": assets, "profile_sha256": file_hash(root / FOUNDATION_PROFILE), "series_sha256": pins["foundation"]["node_series"]["sha256"], "cargo_lock_sha256": file_hash(root / "Cargo.lock"), "graph_directory": str(Path(graph_directory).resolve()), "graph_sha256": digest(json.dumps(graph, sort_keys=True).encode()), "initial_resources": measured, "not_qualified": FOUNDATION_EXCLUSIONS}
+    write_json(directory / "receipt.json", receipt)
+    with BuildSlot(root) as slot:
+        try:
+            receipt["tools"] = tool_identity(root, directory, slot, environment, toolchain)
+            commands = build_commands(root, toolchain, pins, mode)
+            for name in ("build", "clippy"):
+                receipt[name] = run_owned(commands[name], root, environment, directory, name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
+            if mode == "node-foundation-lifecycle":
+                binary = root / "runtime/target" / TARGET / "debug/foks-celld-guarded"
+                image, _ = stable_fixture_file(binary, 4 * 1024**3)
+                if not image["bytes"] or not image["mode"] & 0o111:
+                    fail("foundation lifecycle artifact is not executable")
+                receipt["binary"] = {"path": str(binary), "bytes": image["bytes"], "sha256": image["sha256"]}
+                receipt["identity"] = run_owned(network_command([binary, "identity"]), root, environment, directory, "identity", slot, pins["build"]["identity_timeout_seconds"], lambda: resource_refusal(root))
+                identity = read_json(directory / "identity.stdout", 65536)
+                if identity.get("claim") != "a2-library-identity-only" or identity.get("input_sha256") != file_hash(root / "runtime.lock.json") or identity.get("actual_shared_request_exercised") is not True or any(not identity.get(field) for field in ("v8_engine", "sqlite_source_id", "sqlite_version")):
+                    fail("foundation lifecycle identity does not match unchanged A2 recipe")
+                receipt["identity_output"] = identity
+                receipt["lifecycle"] = run_owned(commands["lifecycle"], root, environment, directory, "lifecycle", slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
+            else:
+                receipt["binary"] = verify_node_artifact(directory / "build.stdout", graph, root)
+                binary = Path(receipt["binary"]["path"])
+                receipt["probes"] = {}
+                for name, flag in (("version", "--version"), ("help", "--help"), ("invalid-option", "--foks-guarded-node-qualification")):
+                    checked_file(binary, receipt["binary"])
+                    command = run_owned(network_command([binary, flag]), root, environment, directory, name, slot, 15, lambda: resource_refusal(root), maximum_log_bytes=65536, expected_exit_code=1 if name == "invalid-option" else 0)
+                    receipt["probes"][name] = {"command": command, "output": foundation_probe_output(directory, name)}
+                    checked_file(binary, receipt["binary"])
+                if mode == "node-foundation":
+                    focused = {"prefix": FOUNDATION_TEST_PREFIX, "names": FOUNDATION_TESTS, "threads": 1}
+                    receipt["focused_tests"] = focused
+                    for name, argv in foundation_test_commands(root, toolchain, pins).items():
+                        focused[name] = run_owned(argv, root, environment, directory, "tests-" + name, slot, pins["build"]["timeout_seconds"], lambda: resource_refusal(root))
+                        foundation_test_output(directory / ("tests-" + name + ".stdout"), name == "list")
+                        if name == "run":
+                            focused["layouts"] = foundation_layout_output(directory / "tests-run.stderr", focused[name]["stderr_sha256"])
+            checked_file(binary, receipt["binary"])
+            if verify_source(root, FOUNDATION) != source or verify_assets(root, FOUNDATION) != assets or check_graph.verify(graph_directory, root, mode) != graph:
+                fail("foundation qualification inputs changed")
+            if config_inputs(root) != receipt["tools"]["cargo_configs"] or any(file_hash(path) != expected for path, expected in receipt["tools"]["native_tools"].items()):
+                fail("foundation native tools/configuration changed")
+            controlled_environment(root)
+            refusal, _ = resource_refusal(root)
+            if refusal:
+                fail(refusal)
+            checked_file(binary, receipt["binary"])
+            receipt["status"] = "passed"
+        except BaseException as error:
+            receipt["error"] = str(error)
+            receipt["status"] = "failed" if slot.clean else "cleanup uncertain"
+            raise
+        finally:
+            receipt["final_resources"] = disk_status(root)
+            write_json(directory / "receipt.json", receipt)
+    return {"directory": str(directory), "receipt_sha256": file_hash(directory / "receipt.json"), "status": receipt["status"]}
+
+
 def build(graph_directory, root=ROOT, mode="identity"):
+    if stage_for_mode(mode) == FOUNDATION:
+        return build_foundation(graph_directory, root, mode)
     if mode == "node-baseline":
         return build_node(graph_directory, root)
     import check_graph
@@ -1891,27 +2363,30 @@ def main():
     sub = parser.add_subparsers(dest="operation", required=True)
     for name in ("verify", "prepare"):
         help_text = "validate only the immutable upstream archive" if name == "verify" else "validate archive and publish the reviewed prepared postimage"
-        sub.add_parser(name, help=help_text).add_argument("archive", type=Path)
+        operation = sub.add_parser(name, help=help_text)
+        operation.add_argument("archive", type=Path)
+        operation.add_argument("--stage", choices=(FOUNDATION,))
     assets = sub.add_parser("assets")
     assets.add_argument("archive", type=Path)
     assets.add_argument("binding", type=Path)
-    sub.add_parser("verify-source")
-    sub.add_parser("verify-assets")
+    assets.add_argument("--stage", choices=(FOUNDATION,))
+    sub.add_parser("verify-source").add_argument("--stage", choices=(FOUNDATION,))
+    sub.add_parser("verify-assets").add_argument("--stage", choices=(FOUNDATION,))
     build_parser = sub.add_parser("build")
     build_parser.add_argument("graph_directory", type=Path)
-    build_parser.add_argument("--mode", choices=("identity", "lifecycle", "node-baseline"), default="identity")
+    build_parser.add_argument("--mode", choices=("identity", "lifecycle", "node-baseline", *FOUNDATION_MODES), default="identity")
     args = parser.parse_args()
     try:
         if args.operation == "verify":
-            report = inspect_archive(args.archive)
+            report = inspect_archive(args.archive, stage=args.stage)
         elif args.operation == "prepare":
-            report = prepare(args.archive)
+            report = prepare(args.archive, stage=args.stage)
         elif args.operation == "assets":
-            report = prepare_assets(args.archive, args.binding)
+            report = prepare_assets(args.archive, args.binding, stage=args.stage)
         elif args.operation == "verify-source":
-            report = verify_source()
+            report = verify_source(stage=args.stage)
         elif args.operation == "verify-assets":
-            report = verify_assets()
+            report = verify_assets(stage=args.stage)
         else:
             report = build(args.graph_directory, mode=args.mode)
         print(json.dumps(report, indent=2))

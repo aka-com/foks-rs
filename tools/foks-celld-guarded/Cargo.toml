@@ -15,6 +15,7 @@ rust-version = "1.95"
 publish = false
 
 [features]
+node-qualification = ["celld/foks-guarded-node-qualification"]
 lifecycle = ["dep:tokio", "celld/foks-guarded-qualification"]
 
 [dependencies]

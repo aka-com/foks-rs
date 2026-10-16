@@ -100,12 +100,13 @@ def repin_patch(root, pins, series, data):
     save_pins(root, pins)
 
 
-def a2_fixture(root):
+def a2_fixture(root, additional_contents=None):
     contents = {
         "Cargo.toml": b'[workspace]\nmembers = ["crates/celld"]\n',
         "Cargo.lock": b"version = 3\n", "unchanged.txt": b"unchanged upstream\n",
     }
     contents.update({name: ("before " + name + "\nshared\nlast\n").encode() for name in p.PATCH_PATHS if name not in p.PATCH_ADDITIONS})
+    contents.update(additional_contents or {})
     pins, archive, members = fixture(root, contents)
     pins.update(format=2, profile=p.A2, qualification={
         "base_commit": p.A2_BASE,
@@ -126,6 +127,80 @@ def a2_fixture(root):
     data = b"".join(patches)
     repin_patch(root, pins, series, data)
     return pins, archive, series, data, contents
+
+
+def foundation_file(root, name):
+    path = root / name
+    return {"path": name, "bytes": path.stat().st_size, "sha256": p.file_hash(path)}
+
+
+def foundation_celld_manifest():
+    return b'''[package]
+name = "celld"
+version = "0.6.2"
+[features]
+foks-guarded-qualification = []
+foks-guarded-node-qualification = ["foks-guarded-qualification", "dep:foks-hosted-transport", "dep:foks-metadata-core"]
+[dependencies]
+foks-hosted-transport = { path = "../../../../../../crates/foks-hosted-transport", optional = true, default-features = false, features = ["qualification"] }
+foks-metadata-core = { path = "../../../../../../crates/foks-metadata-core", optional = true, default-features = false, features = ["owned-list"] }
+'''
+
+
+@contextmanager
+def foundation_fixture(root):
+    """Synthetic two-patch source; never reads or replaces actual runtime/source."""
+    extra = {name: ("upstream " + name + "\n").encode() for name in p.FOUNDATION_PATHS if name not in p.PATCH_PATHS and name not in p.FOUNDATION_ADDITIONS}
+    pins, archive, base_series, _, _ = a2_fixture(root, extra)
+    native, binding = root / "v8.gz", root / "binding.rs"
+    native.write_bytes(gzip.compress(b"!<arch>\n" + b"native" * 100))
+    binding.write_bytes(b"// reviewed binding\n")
+    for key, path in (("archive", native), ("binding", binding)):
+        pins["v8"][key].update(bytes=path.stat().st_size, sha256=p.file_hash(path))
+    save_pins(root, pins)
+    accepted = p.prepare(archive, root)
+    p.prepare_assets(native, binding, root)
+    preserved = root / Path(p.FOUNDATION_MANIFEST).parent
+    preserved.mkdir(parents=True)
+    (root / "runtime/source").rename(preserved / "source")
+    (root / "runtime/source-manifest.json").rename(preserved / "source-manifest.json")
+    (root / "node.lock.json").write_bytes(b'{"synthetic_accepted_node":true}\n')
+    (root / "Cargo.toml").write_bytes(b'[package]\nname = "foks-celld-guarded"\nversion = "0.0.0"\n[features]\nnode-qualification = ["celld/foks-guarded-node-qualification"]\n')
+    before = b'version = 3\n[[package]]\nname = "celld"\nversion = "0.6.2"\ndependencies = []\n'
+    expected = before.replace(b'dependencies = []', b'dependencies = ["foks-hosted-transport", "foks-metadata-core"]')
+    (root / "Cargo.lock").write_bytes(before)
+    files, chunks = [], []
+    final = {row["path"]: dict(row) for row in accepted["files"]}
+    for name in p.FOUNDATION_PATHS:
+        path = preserved / "source" / name
+        original = path.read_bytes() if path.exists() else None
+        changed = foundation_celld_manifest() if name == "crates/celld/Cargo.toml" else ("foundation " + name + "\n").encode()
+        files.append({"path": name, "mode": "100644", "before": None if original is None else p.image_identity(original), "after": p.image_identity(changed)})
+        old_lines = [] if original is None else original.splitlines(keepends=True)
+        new_lines = changed.splitlines(keepends=True)
+        chunks.append(("--- " + ("/dev/null" if original is None else "a/" + name) + "\n+++ b/" + name + "\n@@ -" + str(1 if old_lines else 0) + "," + str(len(old_lines)) + " +1," + str(len(new_lines)) + " @@\n").encode() + b"".join(b"-" + line for line in old_lines) + b"".join(b"+" + line for line in new_lines))
+        final[name] = {"path": name, "mode": "100644", **p.image_identity(changed)}
+    (root / p.FOUNDATION_PATCH).write_bytes(b"".join(chunks))
+    base = {name: foundation_file(root, path) for name, (path, _) in p.FOUNDATION_BASE_IMAGES.items()}
+    series = {"format": 1, "profile": p.FOUNDATION, "accepted_a2_commit": p.NODE_BASE, "accepted_a3a_commit": p.FOUNDATION_BASE, "base_series": base["patch_series"], "patches": [copy.deepcopy(base_series["patches"][0]), {**foundation_file(root, p.FOUNDATION_PATCH), "files": files}]}
+    (root / p.FOUNDATION_SERIES).write_text(json.dumps(series))
+    rows = sorted(final.values(), key=lambda item: item["path"])
+    program = {name: {"bytes": len(name), "sha256": p.digest(name.encode())} for name in ("primary_js", "fixture_js", "primary_metadata", "fixture_metadata")}
+    program["wasm"] = copy.deepcopy(pins["qualification"]["program"]["wasm"])
+    profile = {"format": 1, "profile": p.FOUNDATION, "target": p.TARGET, "accepted_a2_commit": p.NODE_BASE, "accepted_a3a_commit": p.FOUNDATION_BASE, "base": base, "pins": pins, "node_series": foundation_file(root, p.FOUNDATION_SERIES), "cargo_lock": {"before": foundation_file(root, "Cargo.lock"), "expected": {"path": "Cargo.lock", "bytes": len(expected), "sha256": p.digest(expected)}, "added_edges": [{"from": "celld", "to": name} for name in p.FOUNDATION_EDGES]}, "qualification": {"claim": "b1-foundation-only", "source_roster": list(p.FOUNDATION_PATHS), "tree": {"files": len(rows), "payload_bytes": sum(row["bytes"] for row in rows), "inventory_sha256": p.digest(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode())}, "program": program, "deployments": {name: {"version": "1" * 16, "prefix": "deploy/foks-guarded-node-" + name + "/" + "1" * 16} for name in ("primary", "fixture")}, "tests": {"prefix": p.FOUNDATION_TEST_PREFIX, "names": p.FOUNDATION_TESTS.copy(), "threads": 1}, "modes": copy.deepcopy(p.FOUNDATION_MODES), "not_qualified": p.FOUNDATION_EXCLUSIONS.copy()}}
+    (root / p.FOUNDATION_PROFILE).write_text(json.dumps(profile))
+    base_hashes = {name: (entry["path"], entry["sha256"]) for name, entry in base.items()}
+    with patch.object(p, "FOUNDATION_BASE_IMAGES", base_hashes), patch.object(p, "FOUNDATION_LOCK_BEFORE", p.digest(before)):
+        yield {"pins": pins, "archive": archive, "native": native, "binding": binding, "profile": profile, "series": series, "expected_lock": expected, "rows": rows, "accepted": accepted}
+
+
+def repin_foundation(root, data, patch_bytes=None):
+    if patch_bytes is not None:
+        (root / p.FOUNDATION_PATCH).write_bytes(patch_bytes)
+        data["series"]["patches"][1].update(foundation_file(root, p.FOUNDATION_PATCH))
+    (root / p.FOUNDATION_SERIES).write_text(json.dumps(data["series"]))
+    data["profile"]["node_series"] = foundation_file(root, p.FOUNDATION_SERIES)
+    (root / p.FOUNDATION_PROFILE).write_text(json.dumps(data["profile"]))
 
 
 class ArchiveTests(unittest.TestCase):
@@ -493,6 +568,462 @@ class PatchTests(unittest.TestCase):
                 if mutation == "receipt":
                     with self.assertRaises(ValueError):
                         p.verify_source(root)
+
+
+class FoundationTests(unittest.TestCase):
+    def test_chain_roundtrip_and_full_inventory_are_stage_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with foundation_fixture(root) as data:
+                pins = p.load_pins(root, p.FOUNDATION)
+                original = p.inspect_archive(data["archive"], root, stage=p.FOUNDATION)
+                self.assertEqual((original["format"], original["kind"]), (3, "upstream-archive-only"))
+                self.assertNotEqual(original["files"], data["rows"])
+                source = p.prepare(data["archive"], root, p.FOUNDATION)
+                self.assertEqual(source["files"], data["rows"])
+                self.assertEqual(source["profile"], p.FOUNDATION)
+                self.assertEqual(source["kind"], "patched-source")
+                self.assertEqual(source["base_input_sha256"], p.file_hash(root / "runtime.lock.json"))
+                self.assertEqual(source["patch_series_sha256"], p.file_hash(root / p.FOUNDATION_SERIES))
+                self.assertEqual(p.prepare(data["archive"], root, p.FOUNDATION), source)
+                changes = p.parse_patch(root, pins, p.inventory(root, pins))
+                self.assertEqual(sum(entry["path"] == "crates/celld/guarded_execution.rs" for entry, _ in changes), 2)
+                data["archive"].unlink()
+                self.assertEqual(p.verify_source(root, p.FOUNDATION), source)
+                self.assertEqual(p.read_json(root / p.FOUNDATION_MANIFEST), data["accepted"])
+                with self.assertRaises(ValueError):
+                    p.verify_source(root)
+
+    def test_prepared_historical_tree_is_not_implicitly_replaced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with foundation_fixture(root) as data:
+                preserved = root / Path(p.FOUNDATION_MANIFEST).parent
+                import shutil
+                shutil.copytree(preserved / "source", root / "runtime/source")
+                shutil.copyfile(preserved / "source-manifest.json", root / "runtime/source-manifest.json")
+                before = (root / "runtime/source-manifest.json").read_bytes()
+                with self.assertRaises(ValueError):
+                    p.prepare(data["archive"], root, p.FOUNDATION)
+                self.assertEqual((root / "runtime/source-manifest.json").read_bytes(), before)
+                self.assertEqual(p.verify_source(root), data["accepted"])
+
+    def test_profile_closed_fields_bounds_and_accepted_inputs(self):
+        mutations = (
+            lambda x: x.update(format=True), lambda x: x.update(profile=p.A2),
+            lambda x: x.update(extra=0), lambda x: x.update(accepted_a3a_commit="0" * 40),
+            lambda x: x["base"]["source_manifest"].update(path="runtime/source-manifest.json"),
+            lambda x: x["base"]["node_profile"].update(sha256="0" * 64),
+            lambda x: x["pins"]["build"].update(maximum_target_bytes=1),
+            lambda x: x["cargo_lock"]["before"].update(sha256="0" * 64),
+            lambda x: x["cargo_lock"]["expected"].update(bytes=True),
+            lambda x: x["cargo_lock"]["added_edges"].append({"from": "celld", "to": "foks-server"}),
+            lambda x: x["qualification"]["tree"].update(files=True),
+            lambda x: x["qualification"]["tree"].update(payload_bytes=p.MAXIMUM_FOUNDATION_SOURCE + 1),
+            lambda x: x["qualification"]["tree"].update(inventory_sha256="A" * 64),
+            lambda x: x["qualification"]["source_roster"].append("crates/celld/main.rs"),
+            lambda x: x["qualification"]["program"]["wasm"].update(sha256="0" * 64),
+            lambda x: x["qualification"]["deployments"]["fixture"].update(prefix="deploy/other/" + "1" * 16),
+            lambda x: x["qualification"]["tests"].update(threads=True),
+            lambda x: x["qualification"]["tests"]["names"].pop(),
+            lambda x: x["qualification"]["modes"]["node-foundation-default"].update(direct_root_tokio=0),
+            lambda x: x["qualification"]["not_qualified"].pop(),
+        )
+        for index, mutation in enumerate(mutations):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with foundation_fixture(root) as data:
+                    mutation(data["profile"])
+                    (root / p.FOUNDATION_PROFILE).write_text(json.dumps(data["profile"]))
+                    with self.assertRaises(ValueError):
+                        p.load_pins(root, p.FOUNDATION)
+
+    def test_series_exact_order_roster_and_limits(self):
+        mutations = (
+            lambda x: x.update(format=True), lambda x: x.update(extra=0),
+            lambda x: x["patches"].reverse(), lambda x: x["patches"].append(copy.deepcopy(x["patches"][1])),
+            lambda x: x["patches"][0]["files"][0]["after"].update(sha256="0" * 64),
+            lambda x: x["patches"][1].update(bytes=p.MAXIMUM_FOUNDATION_PATCH + 1),
+            lambda x: x["patches"][1].update(path="patches/0003.patch"),
+            lambda x: x["patches"][1]["files"].reverse(),
+            lambda x: x["patches"][1]["files"][0].update(mode="100755"),
+            lambda x: x["patches"][1]["files"][0].update(path="crates/celld/main.rs"),
+            lambda x: next(row for row in x["patches"][1]["files"] if row["path"] in p.FOUNDATION_ADDITIONS).update(before=p.image_identity(b"old\n")),
+        )
+        for index, mutation in enumerate(mutations):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with foundation_fixture(root) as data:
+                    mutation(data["series"])
+                    repin_foundation(root, data)
+                    with self.assertRaises(ValueError):
+                        p.prepare(data["archive"], root, p.FOUNDATION)
+                    self.assertFalse((root / "runtime/source").exists())
+
+    def test_second_preimage_must_match_first_patch_postimage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with foundation_fixture(root) as data:
+                first = data["series"]["patches"][0]["files"][0]
+                second = next(row for row in data["series"]["patches"][1]["files"] if row["path"] == first["path"])
+                second["before"] = copy.deepcopy(first["before"])
+                repin_foundation(root, data)
+                with self.assertRaisesRegex(ValueError, "preceding blob"):
+                    p.prepare(data["archive"], root, p.FOUNDATION)
+                self.assertFalse((root / "runtime/source").exists())
+
+    def test_full_intermediate_hash_and_inventory_cannot_be_forged(self):
+        for mutation in ("intermediate", "inventory", "payload", "source"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with foundation_fixture(root) as data:
+                    p.prepare(data["archive"], root, p.FOUNDATION)
+                    if mutation == "intermediate":
+                        # Git identity still matches; reverse reconstruction
+                        # must verify SHA256 of the actual intermediate bytes.
+                        next(row for row in data["series"]["patches"][1]["files"] if row["path"] == "crates/celld/guarded_execution.rs")["before"]["sha256"] = "0" * 64
+                    elif mutation == "inventory":
+                        data["profile"]["qualification"]["tree"]["inventory_sha256"] = "0" * 64
+                    elif mutation == "payload":
+                        data["profile"]["qualification"]["tree"]["payload_bytes"] += 1
+                    else:
+                        (root / "runtime/source/crates/celld/guarded_execution.rs").write_bytes(b"changed\n")
+                    repin_foundation(root, data)
+                    with self.assertRaises(ValueError):
+                        p.verify_source(root, p.FOUNDATION)
+
+    def test_bad_late_postimage_never_publishes_partial_chain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with foundation_fixture(root) as data:
+                data["series"]["patches"][1]["files"][-1]["after"]["sha256"] = "0" * 64
+                repin_foundation(root, data)
+                with self.assertRaises(ValueError):
+                    p.prepare(data["archive"], root, p.FOUNDATION)
+                self.assertFalse((root / "runtime/source").exists())
+                self.assertFalse(list((root / "runtime").glob("source-staging-*")))
+                self.assertEqual(p.read_json(root / p.FOUNDATION_MANIFEST), data["accepted"])
+
+    def test_preparation_lock_preimage_never_authorizes_graph_or_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with foundation_fixture(root) as data:
+                pins = p.load_pins(root, p.FOUNDATION)
+                with self.assertRaisesRegex(ValueError, "size/hash"):
+                    p.foundation_lock(root, pins)
+                p.prepare(data["archive"], root, p.FOUNDATION)
+                (root / "Cargo.lock").write_bytes(data["expected_lock"])
+                p.foundation_lock(root, p.load_pins(root, p.FOUNDATION))
+                (root / "Cargo.lock").write_bytes(data["expected_lock"] + b"\n")
+                with self.assertRaisesRegex(ValueError, "neither reviewed"):
+                    p.load_pins(root, p.FOUNDATION)
+
+    def test_assets_reuse_bytes_and_preserve_historical_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with foundation_fixture(root) as data:
+                path = root / "runtime/artifacts/assets.json"
+                before = path.read_bytes()
+                identities = {item.name: (item.stat().st_ino, p.file_hash(item)) for item in path.parent.iterdir()}
+                with self.assertRaises(ValueError):
+                    p.verify_assets(root, p.FOUNDATION)
+                receipt = p.prepare_assets(data["native"], data["binding"], root, p.FOUNDATION)
+                self.assertEqual(receipt["profile"], p.FOUNDATION)
+                self.assertEqual(receipt["base_receipt_sha256"], p.digest(before))
+                self.assertEqual(p.verify_assets(root, p.FOUNDATION), receipt)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual({item.name: (item.stat().st_ino, p.file_hash(item)) for item in path.parent.iterdir()}, identities)
+                p.verify_assets(root)
+                for altered in ({**receipt, "profile": p.A2}, {**receipt, "format": True}):
+                    (root / "runtime/assets-node-foundation.json").write_text(json.dumps(altered))
+                    with self.subTest(receipt=altered), self.assertRaisesRegex(ValueError, "foundation native asset"):
+                        p.prepare_assets(data["native"], data["binding"], root, p.FOUNDATION)
+                    self.assertEqual(path.read_bytes(), before)
+
+    def test_three_modes_bind_features_targets_and_exact_test_filter(self):
+        pins = {**historical_pins(), "profile": p.FOUNDATION}
+        with patch.object(p, "network_command", side_effect=lambda argv: list(map(str, argv))):
+            for mode, contract in p.FOUNDATION_MODES.items():
+                commands = p.build_commands(Path("/fixture"), Path("/toolchain"), pins, mode)
+                build = commands["build"]
+                self.assertEqual("--features" in build, bool(contract["root_features"]))
+                if contract["root_features"]:
+                    self.assertEqual(build[build.index("--features") + 1], "foks-celld-guarded/" + contract["root_features"][0])
+                self.assertEqual(build[build.index("--bin") + 1], "foks-celld-guarded" if mode.endswith("lifecycle") else "celld")
+                self.assertEqual("lifecycle" in commands, mode.endswith("lifecycle"))
+                self.assertEqual(commands["clippy"][-3:], ["--", "-D", "warnings"])
+            commands = p.foundation_test_commands(Path("/fixture"), Path("/toolchain"), pins)
+            for name, argv in commands.items():
+                self.assertIn("--locked", argv)
+                self.assertIn("--offline", argv)
+                self.assertIn("--lib", argv)
+                self.assertEqual(argv.count("--package"), 2)
+                self.assertEqual(argv[-3:], [p.FOUNDATION_TEST_PREFIX, "--", "--list" if name == "list" else "--test-threads=1"])
+        for mode in ("identity", "lifecycle", "node-baseline", "node-foundation-future"):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                p.selected_mode(pins, mode)
+        for mode in p.FOUNDATION_MODES:
+            with self.assertRaises(ValueError):
+                p.selected_mode(historical_pins(), mode)
+
+    def test_component_output_requires_all_twenty_one_passed_without_extras(self):
+        listing = "\n".join(name + ": test" for name in p.FOUNDATION_TESTS) + "\n\n21 tests, 0 benchmarks\n"
+        run = "running 21 tests\n" + "\n".join("test " + name + " ... ok" for name in p.FOUNDATION_TESTS) + "\n\ntest result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 123 filtered out; finished in 0.12s\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output"
+            for is_list, text in ((True, listing), (False, run)):
+                path.write_text(text)
+                self.assertEqual(p.foundation_test_output(path, is_list), p.FOUNDATION_TESTS)
+                for altered in ("", text.replace(p.FOUNDATION_TESTS[0], "unknown"), text.replace(p.FOUNDATION_TESTS[0], p.FOUNDATION_TESTS[1]), text.replace("21 tests", "20 tests"), text + "unexpected output\n", text.replace(": test", ": benchmark", 1) if is_list else text.replace(" ... ok", " ... ignored", 1)):
+                    path.write_text(altered)
+                    with self.subTest(listing=is_list, text=altered[:30]), self.assertRaises(ValueError):
+                        p.foundation_test_output(path, is_list)
+
+    @staticmethod
+    def layout_record():
+        # Synthetic parser input, not a substitute for the compiled record.
+        layouts = {
+            "request_arc": (256, 8), "control_arc": (128, 8),
+            "registry_arc": (1024, 8), "owner_factory": (128, 8),
+            "original_owner": (48, 8), "header_cell": (16, 8),
+            "cleanup_credits": (2, 1), "control_observation": (104, 8),
+            "node_arc": (256, 8),
+        }
+        return {"format": 1, "claim": "b1-native-layouts-only", "arc_convention": "repr-c-two-atomic-usize", "layouts": {name: {"bytes": size, "alignment": alignment} for name, (size, alignment) in layouts.items()}, "role_caps": [1048576, 8388608, 65536], "role_counts": [1, 2, 1], "initial_process_debt": 67 * 256 + 128 + 1024, "cleanup_reserve": 204800, "weak_limit": 66}
+
+    def test_compiled_layout_record_schema_and_raw_evidence(self):
+        record = self.layout_record()
+        prefix = b"FOKS_B1_LAYOUT "
+
+        def encode(value):
+            return prefix + json.dumps(value, separators=(",", ":")).encode() + b"\n"
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tests-run.stderr"
+
+            def observe(raw):
+                path.write_bytes(raw)
+                result = p.foundation_layout_output(path, hashlib.sha256(raw).hexdigest())
+                self.assertEqual(path.read_bytes(), raw)
+                return result
+
+            tagged = encode(record)
+            for raw in (tagged, b"ordinary Cargo output\n\xffnative warning\n" + tagged + b"other stderr\n"):
+                self.assertEqual(observe(raw), {"record": record, "raw_record_bytes": len(tagged), "raw_record_sha256": hashlib.sha256(tagged).hexdigest()})
+            padded = tagged[:-1] + b" " * (4096 - len(tagged)) + b"\n"
+            self.assertEqual(len(padded), 4096)
+            result = observe(padded)
+            self.assertEqual(result["record"], record)
+            self.assertEqual(result["raw_record_bytes"], 4096)
+            self.assertEqual(result["raw_record_sha256"], hashlib.sha256(padded).hexdigest())
+            self.assertEqual(observe(b"x" * (1024 * 1024 - len(tagged) - 1) + b"\n" + tagged)["record"], record)
+            maxima = copy.deepcopy(record)
+            for name, value in maxima["layouts"].items():
+                value.update(bytes=4096 if name == "request_arc" else 65536, alignment=16)
+            maxima["initial_process_debt"] = 67 * 4096 + 2 * 65536
+            self.assertEqual(observe(encode(maxima))["record"], maxima)
+
+            malformed = []
+            for key in record:
+                changed = copy.deepcopy(record)
+                del changed[key]
+                malformed.append(("missing " + key, changed))
+            malformed.append(("extra field", {**record, "future": 1}))
+            for key, values in {
+                "format": (True, 1.0, 2, "1"),
+                "claim": ("production-ready", None),
+                "arc_convention": ("guessed-pointer-header", None),
+                "role_caps": ([1048576, 8388608, 65537], [1048576.0, 8388608, 65536]),
+                "role_counts": ([True, 2, 1], [1, 1, 1], [1, 2]),
+                "initial_process_debt": (True, record["initial_process_debt"] + 1, float(record["initial_process_debt"]), None),
+                "cleanup_reserve": (204801, 204800.0, True),
+                "weak_limit": (65, 66.0, True),
+                "layouts": ([], None),
+            }.items():
+                for value in values:
+                    malformed.append((key + " wrong value/type " + repr(value), {**record, key: value}))
+            for name in record["layouts"]:
+                changed = copy.deepcopy(record)
+                del changed["layouts"][name]
+                malformed.append(("missing layout " + name, changed))
+            changed = copy.deepcopy(record)
+            changed["layouts"]["future"] = {"bytes": 8, "alignment": 8}
+            malformed.append(("extra layout", changed))
+            for value in ([], None, {"bytes": 8}, {"alignment": 8}, {"bytes": 8, "alignment": 8, "extra": 1}):
+                changed = copy.deepcopy(record)
+                changed["layouts"]["node_arc"] = value
+                malformed.append(("layout shape " + repr(value), changed))
+            for key, values in {
+                "bytes": (True, 0, -1, 65537, 257, 256.0, "256", None, float("nan"), float("inf"), -float("inf")),
+                "alignment": (True, 0, -1, 3, 32, 8.0, "8", None),
+            }.items():
+                for value in values:
+                    changed = copy.deepcopy(record)
+                    changed["layouts"]["node_arc"][key] = value
+                    malformed.append(("layout " + key + " " + repr(value), changed))
+            changed = copy.deepcopy(record)
+            changed["layouts"]["request_arc"]["bytes"] = 4104
+            changed["initial_process_debt"] = 67 * 4104 + 128 + 1024
+            malformed.append(("oversized request with matching debt", changed))
+            for label, value in malformed:
+                with self.subTest(case=label), self.assertRaises(ValueError):
+                    observe(encode(value))
+
+            duplicates = (
+                tagged.replace(b'"format":1', b'"format":1,"format":1', 1),
+                tagged.replace(b'"bytes":256', b'"bytes":256,"bytes":256', 1),
+                tagged.replace(b'"request_arc":', b'"request_arc":{"bytes":256,"alignment":8},"request_arc":', 1),
+            )
+            malformed_raw = [
+                b"ordinary stderr only\n", tagged + tagged,
+                b" " + tagged, tagged.replace(prefix, b"FOKS_B1_LAYOUT\t", 1),
+                tagged.replace(prefix, b"FOKS_B1_LAYOUT", 1),
+                tagged.replace(b"\n", b"\r\n"), tagged[:-1],
+                prefix + b"\xff\n", tagged[:-1] + b"{}\n",
+                tagged.replace(b'"bytes":256', b'"bytes":1e999', 1),
+                prefix + b"[]\n", prefix + b"null\n",
+                padded[:-1] + b" \n", b"x" * (1024 * 1024 - len(tagged)) + b"\n" + tagged,
+                *duplicates,
+            ]
+            for index, raw in enumerate(malformed_raw):
+                with self.subTest(raw_case=index), self.assertRaises(ValueError):
+                    observe(raw)
+
+    def test_compiled_layout_stderr_binds_owned_hash_and_stable_regular_file(self):
+        raw = b"Cargo diagnostic\nFOKS_B1_LAYOUT " + json.dumps(self.layout_record()).encode() + b"\n"
+        checksum = hashlib.sha256(raw).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "tests-run.stderr"
+            path.write_bytes(raw)
+            for expected in (None, True, "", "A" * 64, "0" * 63, "0" * 64):
+                with self.subTest(expected=expected), self.assertRaises(ValueError):
+                    p.foundation_layout_output(path, expected)
+            path.write_bytes(raw.replace(b"Cargo diagnostic", b"other diagnostic"))
+            with self.assertRaisesRegex(ValueError, "differs from owned command"):
+                p.foundation_layout_output(path, checksum)
+            path.write_bytes(raw)
+            link = root / "link"
+            link.symlink_to(path)
+            fifo = root / "fifo"
+            os.mkfifo(fifo)
+            for invalid in (link, fifo, root, root / "missing"):
+                with self.subTest(path=str(invalid)), self.assertRaises(ValueError):
+                    p.foundation_layout_output(invalid, checksum)
+
+            real_open = os.open
+
+            def replace_before_open(candidate, flags):
+                replacement = root / "replacement-before"
+                replacement.write_bytes(raw)
+                replacement.replace(path)
+                return real_open(candidate, flags)
+
+            with patch.object(p.os, "open", side_effect=replace_before_open), self.assertRaisesRegex(ValueError, "replaced before read"):
+                p.foundation_layout_output(path, checksum)
+            path.write_bytes(raw)
+            real_fstat = os.fstat
+            calls = 0
+
+            def replace_after_read(descriptor):
+                nonlocal calls
+                calls += 1
+                observed = real_fstat(descriptor)
+                if calls == 2:
+                    replacement = root / "replacement-after"
+                    replacement.write_bytes(raw)
+                    replacement.replace(path)
+                return observed
+
+            with patch.object(p.os, "fstat", side_effect=replace_after_read), self.assertRaisesRegex(ValueError, "replaced or resized"):
+                p.foundation_layout_output(path, checksum)
+            self.assertEqual(calls, 2)
+
+    def test_actual_binary_probe_output_has_closed_positive_and_refusal_shapes(self):
+        # Render the unchanged pinned source literally, rather than inventing a
+        # short prefix fixture that could hide a changed/truncated CLI surface.
+        cli = (ROOT / "runtime/source/crates/celld/main/cli.rs").read_text()
+        help_literal = cli.split("pub(crate) fn print_help() -> anyhow::Result<()> {", 1)[1].split('r#"', 1)[1].split('"#,', 1)[0]
+        self.assertEqual(help_literal.count("{shutdown_total_ms}"), 1)
+        self.assertEqual(help_literal.count("{"), 1)
+        self.assertIn("pub const DEFAULT_SHUTDOWN_TOTAL_MS: u64 = 40_000;", (ROOT / "runtime/source/crates/celld/env_vars.rs").read_text())
+        help_output = (help_literal.replace("{shutdown_total_ms}", "40000") + "\n").encode()
+        self.assertEqual((len(help_output), hashlib.sha256(help_output).hexdigest()), (7752, "421243bdfe4c6f4e89834852eadd8becb82a1b3931f4d29fd80b5f9da4f6c4f9"))
+        allocator = b"<jemalloc>: option background_thread currently supports pthread only\n"
+        memory = b"2026-10-16T21:55:19.715603Z  WARN celld::memory: the allocator will not run a background thread, so freed pages return only when a thread allocates again error=`name` or `mib` specifies an unknown/invalid value.\n"
+        refusal = b"Error: unknown command or option: --foks-guarded-node-qualification; run `celld --help` for usage\n"
+        outputs = {
+            "version": (b"celld 0.6.2 (debug)\n", b""),
+            "help": (help_output, b""),
+            "invalid-option": (b"", refusal),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def observe(name, stdout, stderr):
+                for stream, data in (("stdout", stdout), ("stderr", stderr)):
+                    (root / (name + "." + stream)).write_bytes(data)
+                result = p.foundation_probe_output(root, name)
+                for stream, data in (("stdout", stdout), ("stderr", stderr)):
+                    self.assertEqual((root / (name + "." + stream)).read_bytes(), data)
+                    self.assertEqual(result[stream + "_bytes"], len(data))
+                    self.assertEqual(result[stream + "_sha256"], hashlib.sha256(data).hexdigest())
+                return result
+
+            for name, (stdout, stderr) in outputs.items():
+                variants = [(stdout, [])]
+                if name != "invalid-option":
+                    for before, after in ((b"", stdout), (stdout, b"")):
+                        variants.append((before + memory + after, [{"id": "celld-allocator-background-thread-unavailable", "stream": "stdout", "line": before.count(b"\n") + 1, "text": memory.decode().removesuffix("\n")}]))
+                    if name == "help":
+                        first, rest = stdout.split(b"\n", 1)
+                        variants.append((first + b"\n" + memory + rest, [{"id": "celld-allocator-background-thread-unavailable", "stream": "stdout", "line": 2, "text": memory.decode().removesuffix("\n")}]))
+                for actual_stdout, expected_warnings in variants:
+                    for prefix in (b"", allocator):
+                        warnings = ([{"id": "jemalloc-background-thread-unsupported", "stream": "stderr", "line": 1, "text": allocator.decode().removesuffix("\n")}] if prefix else []) + expected_warnings
+                        with self.subTest(name=name, warnings=len(warnings), stdout=actual_stdout[:40]):
+                            self.assertEqual(observe(name, actual_stdout, prefix + stderr)["recognized_warnings"], warnings)
+                malformed = [
+                    (stdout + b"--foks-guarded-node-qualification\n", stderr),
+                    (stdout + b"unrelated trailing log\n", stderr),
+                    (b"unexpected leading log\n" + stdout, stderr),
+                    (stdout, b"unknown warning\n" + stderr),
+                    (stdout, allocator + allocator + stderr),
+                    (stdout, allocator.replace(b"pthread", b"other") + stderr),
+                    (allocator + stdout, stderr),
+                    (stdout, memory + stderr),
+                    (stdout + b"\x00", stderr),
+                    (stdout + b"\xff", stderr),
+                ]
+                if name == "invalid-option":
+                    malformed += [(memory, stderr), (stdout, stderr + allocator), (stdout, b" " + stderr), (stdout, stderr.removesuffix(b"\n")), (stdout, stderr.replace(b"\n", b"\r\n"))]
+                else:
+                    malformed += [(memory + memory + stdout, stderr), (stdout.removesuffix(b"\n"), stderr), (stdout.replace(b"\n", b"\r\n"), stderr)]
+                    for changed in (memory.replace(b"WARN", b"INFO"), memory.replace(b"celld::memory", b"celld::other"), memory.replace(b"unknown/invalid", b"different"), memory.replace(b".715603Z", b".715603123Z"), memory.replace(b"2026-", b"xxxx-", 1), memory.replace(b"\n", b"\r\n"), memory.removesuffix(b"\n"), b"\x1b[33m" + memory):
+                        malformed.append((changed + stdout, stderr))
+                for actual_stdout, actual_stderr in malformed:
+                    with self.subTest(name=name, rejected=(actual_stdout[:40], actual_stderr[:40])), self.assertRaises(ValueError):
+                        observe(name, actual_stdout, actual_stderr)
+            for altered in (help_output.split(b"OPTIONS:", 1)[0], help_output.replace(b"40000", b"40001"), help_output + b"another option\n"):
+                with self.assertRaises(ValueError):
+                    observe("help", altered, b"")
+            with self.assertRaises(ValueError):
+                observe("version", b"celld 0.6.3 (debug)\n", b"")
+            with self.assertRaises(ValueError):
+                observe("future", b"", b"")
+
+    def test_nonzero_refusal_requires_the_exact_expected_exit_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with p.BuildSlot(root) as slot:
+                argv = [sys.executable, "-I", "-S", "-B", "-c", "raise SystemExit(1)"]
+                record = p.run_owned(argv, root, {}, root, "expected", slot, 5, expected_exit_code=1)
+                self.assertEqual(record["exit_code"], 1)
+                self.assertEqual(record["reason"], "completed")
+                self.assertIs(record["cleanup_established"], True)
+                with self.assertRaisesRegex(ValueError, "command failed"):
+                    p.run_owned(argv, root, {}, root, "unexpected", slot, 5)
+                self.assertTrue(slot.clean)
 
 
 class AssetTests(unittest.TestCase):
@@ -1235,6 +1766,14 @@ class NodeInputTests(unittest.TestCase):
                 output.write_text("".join(json.dumps(message) + "\n" for message in messages))
             write([artifact, finished])
             self.assertEqual(p.verify_node_artifact(output, {"node_target": target}, root)["sha256"], p.digest(b"actual executable"))
+            foundation = {**target, "features": p.FOUNDATION_MODES["node-foundation"]["celld_features"]}
+            write([{**artifact, "features": foundation["features"]}, finished])
+            self.assertEqual(p.verify_node_artifact(output, {"node_target": foundation}, root)["artifact"], foundation)
+            with self.assertRaisesRegex(ValueError, "unexpected executable"):
+                p.verify_node_artifact(output, {"node_target": target}, root)
+            write([artifact, finished])
+            with self.assertRaisesRegex(ValueError, "unexpected executable"):
+                p.verify_node_artifact(output, {"node_target": foundation}, root)
             changes = [lambda item: item.update(package_id="harness-id"), lambda item: item.update(features=["foks-guarded-qualification"]), lambda item: item["target"].update(src_path="/unreviewed/main.rs"), lambda item: item["target"].update(kind=["lib"]), lambda item: item.update(executable="/different/celld"), lambda item: item["profile"].update(test=True)]
             for change in changes:
                 altered = copy.deepcopy(artifact)

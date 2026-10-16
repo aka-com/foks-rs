@@ -1,5 +1,6 @@
 """Closed graph/lock evidence tests; no Cargo invocation or dependency fetch."""
 import copy
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import tempfile
@@ -7,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import check_graph as c
-from test_prepare_runtime import a2_fixture, historical_pins
+from test_prepare_runtime import a2_fixture, foundation_fixture, historical_pins, p
 
 
 def fixture(mode="identity", profile=c.preparation.A1):
@@ -49,6 +50,31 @@ def add_package(metadata, name, version="1.0.0", identity=None, features=None, s
     metadata["packages"].append({"id": identity, "name": name, "version": version, "source": source, "manifest_path": "/fixture/" + identity + "/Cargo.toml"})
     metadata["resolve"]["nodes"].append({"id": identity, "features": features or [], "deps": []})
     return identity
+
+
+@contextmanager
+def foundation_graph_fixture(root, mode):
+    root.parent.mkdir(parents=True, exist_ok=True)
+    with foundation_fixture(root) as data, patch.object(c.preparation, "FOUNDATION_BASE_IMAGES", p.FOUNDATION_BASE_IMAGES), patch.object(c.preparation, "FOUNDATION_LOCK_BEFORE", p.FOUNDATION_LOCK_BEFORE):
+        p.prepare(data["archive"], root, p.FOUNDATION)
+        (root / "Cargo.lock").write_bytes(data["expected_lock"])
+        pins = c.preparation.load_pins(root, p.FOUNDATION)
+        metadata, _ = fixture("lifecycle" if mode.endswith("lifecycle") else "identity", p.A2)
+        contract = p.FOUNDATION_MODES[mode]
+        for node in metadata["resolve"]["nodes"]:
+            if node["id"] == c.FIXTURE:
+                node["features"] = contract["root_features"].copy()
+            elif node["id"] == "celld":
+                node["features"] = contract["celld_features"].copy()
+        for package in metadata["packages"]:
+            if package["source"] is None:
+                package["manifest_path"] = str(root / "Cargo.toml" if package["name"] == c.FIXTURE else root / "runtime/source/crates/celld/Cargo.toml" if package["name"] == "celld" else root.parents[1] / "crates" / package["name"] / "Cargo.toml")
+        celld = next(package for package in metadata["packages"] if package["name"] == "celld")
+        celld["targets"] = [{"name": "celld", "kind": ["bin"], "crate_types": ["bin"], "src_path": str(root / "runtime/source/crates/celld/main.rs")}]
+        celld["dependencies"] = [{"name": name, "source": None, "req": "*", "kind": None, "rename": None, "optional": True, "uses_default_features": False, "features": ["qualification" if name == "foks-hosted-transport" else "owned-list"], "target": None, "registry": None, "path": str(root.parents[1] / "crates" / name)} for name in p.FOUNDATION_EDGES]
+        for name in contract["celld_foks_edges"]:
+            edge(metadata, "celld", name)
+        yield metadata, pins, data
 
 
 class GraphTests(unittest.TestCase):
@@ -449,6 +475,205 @@ def lock_fixture(parent):
     pins["foks_additional_versions"]["allowed"] = [new]
     (root / "runtime.lock.json").write_text(json.dumps(pins))
     return root, before, after, baseline
+
+
+class FoundationGraphTests(unittest.TestCase):
+    def test_all_three_modes_separate_declarations_from_actual_edges(self):
+        for mode, contract in p.FOUNDATION_MODES.items():
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode) as (metadata, pins, _):
+                    report = c.graph_report(metadata, pins, mode, root)
+                    self.assertEqual(report["profile"], p.FOUNDATION)
+                    self.assertEqual(report["foundation"]["declared_foks_edges"], p.FOUNDATION_EDGES)
+                    self.assertEqual(report["foundation"]["celld_foks_edges"], contract["celld_foks_edges"])
+                    self.assertEqual(report["foundation"]["cargo_lock_sha256"], p.file_hash(root / "Cargo.lock"))
+                    if not mode.endswith("lifecycle"):
+                        self.assertEqual(report["node_target"]["features"], contract["celld_features"])
+                    self.assertFalse({"rusqlite", "libsqlite3-sys"} & set(report["foks_subclosure"]))
+                    for other in (*p.FOUNDATION_MODES, "identity", "lifecycle", "node-baseline"):
+                        if other != mode:
+                            with self.subTest(other=other), self.assertRaises(ValueError):
+                                c.graph_report(metadata, pins, other, root)
+
+    def test_optional_declarations_reject_each_kind_path_and_feature_escape(self):
+        mutations = (
+            lambda entry: entry.update(optional=False),
+            lambda entry: entry.update(optional=1),
+            lambda entry: entry.update(uses_default_features=True),
+            lambda entry: entry.update(features=["test-support"]),
+            lambda entry: entry.update(source=p.CRATES_IO),
+            lambda entry: entry.update(req="=0.5.0"),
+            lambda entry: entry.update(registry=p.CRATES_IO),
+            lambda entry: entry.update(kind="build"),
+            lambda entry: entry.update(kind="dev"),
+            lambda entry: entry.update(rename="other"),
+            lambda entry: entry.update(target='cfg(target_os = "macos")'),
+            lambda entry: entry.update(path="/unreviewed/crate"),
+            lambda entry: entry.pop("path"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, "node-foundation-default") as (metadata, pins, _):
+                for index, mutation in enumerate(mutations):
+                    altered = copy.deepcopy(metadata)
+                    celld = next(package for package in altered["packages"] if package["name"] == "celld")
+                    mutation(celld["dependencies"][0])
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        c.graph_report(altered, pins, "node-foundation-default", root)
+                for operation in ("missing", "duplicate", "extra"):
+                    altered = copy.deepcopy(metadata)
+                    dependencies = next(package for package in altered["packages"] if package["name"] == "celld")["dependencies"]
+                    if operation == "missing":
+                        dependencies.pop()
+                    else:
+                        dependencies.append({**dependencies[0], **({"name": "foks-server"} if operation == "extra" else {})})
+                    with self.subTest(operation=operation), self.assertRaises(ValueError):
+                        c.graph_report(altered, pins, "node-foundation-default", root)
+
+    def test_raw_manifest_rejects_hidden_or_mandatory_alternative(self):
+        suffixes = (
+            '\n[build-dependencies]\nfoks-metadata-core = "0.4"\n',
+            '\n[dev-dependencies]\nalias = {package="foks-metadata-core", version="0.4"}\n',
+            '\n[target.\'cfg(unix)\'.dependencies]\nfoks-hosted-transport = "0.4"\n',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, "node-foundation") as (metadata, pins, _):
+                path = root / "runtime/source/crates/celld/Cargo.toml"
+                original = path.read_text()
+                changes = [original + suffix for suffix in suffixes]
+                changes += [original.replace("optional = true", "optional = false", 1), original.replace('"dep:foks-metadata-core"', '"foks-metadata-core"', 1), original.replace("../../../../../../crates/foks-metadata-core", "/other/foks-metadata-core", 1)]
+                for index, changed in enumerate(changes):
+                    path.write_text(changed)
+                    with self.subTest(index=index), self.assertRaises(ValueError):
+                        c.graph_report(metadata, pins, "node-foundation", root)
+                path.write_text(original)
+                outer = root / "Cargo.toml"
+                outer.write_text(outer.read_text().replace('"celld/foks-guarded-node-qualification"', '"celld/foks-guarded-qualification"'))
+                with self.assertRaisesRegex(ValueError, "outer feature"):
+                    c.graph_report(metadata, pins, "node-foundation", root)
+
+    def test_active_edges_cannot_disappear_leak_or_be_targeted(self):
+        for mode in p.FOUNDATION_MODES:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode) as (metadata, pins, _):
+                    altered = copy.deepcopy(metadata)
+                    node = next(row for row in altered["resolve"]["nodes"] if row["id"] == "celld")
+                    if mode == "node-foundation":
+                        node["deps"] = [entry for entry in node["deps"] if entry["pkg"] != "foks-metadata-core"]
+                    else:
+                        edge(altered, "celld", "foks-metadata-core")
+                    with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "active celld FOKS"):
+                        c.graph_report(altered, pins, mode, root)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, "node-foundation") as (metadata, pins, _):
+                for kind in ({"kind": "build", "target": None}, {"kind": None, "target": 'cfg(unix)'}, {"kind": "dev", "target": None}):
+                    altered = copy.deepcopy(metadata)
+                    node = next(row for row in altered["resolve"]["nodes"] if row["id"] == "celld")
+                    next(entry for entry in node["deps"] if entry["pkg"] == "foks-metadata-core")["dep_kinds"] = [kind]
+                    with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "active celld FOKS"):
+                        c.graph_report(altered, pins, "node-foundation", root)
+                for field, value in (("version", "0.5.0"), ("source", p.CRATES_IO), ("manifest_path", "/other/Cargo.toml")):
+                    altered = copy.deepcopy(metadata)
+                    next(row for row in altered["packages"] if row["name"] == "foks-metadata-core")[field] = value
+                    with self.subTest(field=field), self.assertRaises(ValueError):
+                        c.graph_report(altered, pins, "node-foundation", root)
+
+    def test_graph_and_build_commands_share_the_exact_selected_stage(self):
+        for mode in p.FOUNDATION_MODES:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "tools/fixture"
+                with foundation_graph_fixture(root, mode), patch.object(c.preparation, "network_command", side_effect=lambda argv: list(map(str, argv))):
+                    commands = c.commands(root, Path("/toolchain"), mode)
+                    for name, argv in commands.items():
+                        self.assertIn("--locked", argv)
+                        self.assertIn("--offline", argv)
+                        self.assertIn("--no-default-features", argv)
+                        target = "--filter-platform" if name == "metadata" else "--target"
+                        self.assertEqual(argv[argv.index(target) + 1], c.TARGET)
+                        self.assertEqual("--features" in argv, mode != "node-foundation-default")
+                    self.assertEqual(commands["tree"].count("--package"), 2)
+                    self.assertIn("celld@0.6.2", commands["tree"])
+
+    def test_foundation_source_inventory_includes_new_and_preserved_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            root = repo / "tools/fixture"
+            with foundation_graph_fixture(root, "node-foundation") as (metadata, pins, _):
+                for name in c.source_paths(pins, "node-foundation"):
+                    path = root / name
+                    if not path.exists():
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(("reviewed " + name + "\n").encode())
+                (repo / "Cargo.toml").write_bytes(b"reviewed workspace\n")
+                baseline = repo / pins["foks_additional_versions"]["baseline_lock"]
+                baseline.parent.mkdir(parents=True, exist_ok=True)
+                baseline.write_bytes(b"reviewed baseline lock\n")
+                for name in p.FOUNDATION_EDGES:
+                    path = repo / "crates" / name / "Cargo.toml"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"reviewed FOKS manifest\n")
+                report = c.graph_report(metadata, pins, "node-foundation", root)
+                reached = {row["id"] for row in report["packages"]}
+                with patch.object(c.preparation, "config_inputs", return_value={}):
+                    before = c.candidate_inputs(root, "node-foundation")
+                    selected = c.selected_inputs(metadata, reached, root, "node-foundation")
+                self.assertTrue(all(before.get(path) == checksum for path, checksum in selected.items()))
+                for name in (*c.FOUNDATION_SOURCE_PATHS, *c.A2_SOURCE_PATHS):
+                    self.assertIn(str(root / name), selected)
+                self.assertNotIn("run-node.py", c.source_paths(pins, "node-foundation"))
+                for historical in ("identity", "lifecycle", "node-baseline"):
+                    with self.assertRaises(ValueError):
+                        c.source_paths(pins, historical)
+
+    def test_saved_graph_refuses_a_historical_profile_or_omitted_foundation_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, "node-foundation"):
+                evidence = root / "evidence"
+                evidence.mkdir()
+                record = {"format": 1, "target": p.TARGET, "profile": p.FOUNDATION, "manifest": str(root / "Cargo.toml"), "cwd": str(root)}
+                for changed in ({}, {"mode": "identity"}, {"profile": p.A2, "mode": "node-foundation"}):
+                    (evidence / "evidence.json").write_text(json.dumps({**record, **changed}))
+                    with patch.object(c.preparation, "controlled_environment") as environment, self.assertRaises(ValueError):
+                        c.verify(evidence, root, "node-foundation")
+                    environment.assert_not_called()
+
+    def test_expected_lock_is_required_before_any_graph_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, "node-foundation") as (_, _, data):
+                (root / "Cargo.lock").write_bytes(b'version = 3\n[[package]]\nname = "celld"\nversion = "0.6.2"\ndependencies = []\n')
+                self.assertEqual(p.file_hash(root / "Cargo.lock"), data["profile"]["cargo_lock"]["before"]["sha256"])
+                with patch.object(c.preparation, "run_owned") as execute, self.assertRaisesRegex(ValueError, "size/hash"):
+                    c.collect(root / "unqualified-graph", root, "node-foundation")
+                execute.assert_not_called()
+
+    def test_upstream_exception_is_only_two_exact_selected_celld_edges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tools/fixture"
+            with foundation_graph_fixture(root, "node-foundation") as (metadata, _, _):
+                packages = {row["id"]: row for row in metadata["packages"]}
+                locked = {}
+                for name in ("celld", "v8", "rusqlite", "sqlite-vec", "tokio", "libsqlite3-sys"):
+                    row = packages[name]
+                    locked[(name, row["version"], row["source"])] = {"name": name, "version": row["version"], "source": row["source"]}
+                locked[("celld", "0.6.2", None)]["dependencies"] = ["v8", "rusqlite", "sqlite-vec", "tokio"]
+                locked[("rusqlite", "0.31.0", p.CRATES_IO)]["dependencies"] = ["libsqlite3-sys"]
+                reached = set(packages)
+                with patch.object(c.preparation, "lock_inventory", return_value=locked):
+                    edges = c.preparation.upstream_edges(metadata, reached, root, "node-foundation")
+                    self.assertTrue({("celld", name) for name in p.FOUNDATION_EDGES} <= {(entry["from"], entry["to"]) for entry in edges})
+                    for mode in ("identity", "node-foundation-default", "node-foundation-lifecycle"):
+                        with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "replaced or extended"):
+                            c.preparation.upstream_edges(metadata, reached, root, mode)
+                    altered = copy.deepcopy(metadata)
+                    edge(altered, "tokio", "foks-metadata-core")
+                    with self.assertRaisesRegex(ValueError, "replaced or extended"):
+                        c.preparation.upstream_edges(altered, reached, root, "node-foundation")
 
 
 class LockTests(unittest.TestCase):

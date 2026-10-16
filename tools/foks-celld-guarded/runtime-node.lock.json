@@ -1,0 +1,349 @@
+{
+  "accepted_a2_commit": "dca38eecb08263a3594f70025df7a309ed3682a5",
+  "accepted_a3a_commit": "fee8db31ae8df590e32bc02f8c8de815d9f7ecea",
+  "base": {
+    "node_profile": {
+      "bytes": 35289,
+      "path": "node.lock.json",
+      "sha256": "af0c4f23c08fd2c1d17126c0b7c2d68720ecd275840945de444eae7d46bcc866"
+    },
+    "patch_series": {
+      "bytes": 4041,
+      "path": "patches/series.json",
+      "sha256": "bf15b77b32416914a1d96426aa58fc65d1b436e0645c73dcc11ad91f6e9c0ea6"
+    },
+    "runtime_lock": {
+      "bytes": 6545,
+      "path": "runtime.lock.json",
+      "sha256": "4e94be5e3a8f86007bcdc9c0814ce2fa6dfb043d612d006a20e47b490df67b49"
+    },
+    "source_manifest": {
+      "bytes": 70180,
+      "path": "runtime/evidence/accepted-a3a/prepared-inputs/source-manifest.json",
+      "sha256": "0b618d7be50b44d5a8eeecbbab851ef0e3c3c9b2de64c5e33afbc6f9259489c5"
+    }
+  },
+  "cargo_lock": {
+    "added_edges": [
+      {
+        "from": "celld",
+        "to": "foks-hosted-transport"
+      },
+      {
+        "from": "celld",
+        "to": "foks-metadata-core"
+      }
+    ],
+    "before": {
+      "bytes": 106772,
+      "path": "Cargo.lock",
+      "sha256": "6d838801444d99b44acf0b8ef6872c80e24929660557ec4dc0a39a704c6dcb0d"
+    },
+    "expected": {
+      "bytes": 106821,
+      "path": "Cargo.lock",
+      "sha256": "e05fe62986b04425769de96caae00224aeafa9513a9c38468a81410c28d65053"
+    }
+  },
+  "format": 1,
+  "node_series": {
+    "bytes": 11180,
+    "path": "patches/node-series.json",
+    "sha256": "6716ff40c680dddfc597ee0ce708e3a0140d3dd9fd81c925d97d54162bfa6073"
+  },
+  "pins": {
+    "build": {
+      "admission": "remaining-target-allowance",
+      "debug": 0,
+      "free_floor_bytes": 2147483648,
+      "identity_timeout_seconds": 30,
+      "incremental": false,
+      "jobs": 2,
+      "kill_grace_seconds": 3,
+      "maximum_command_log_bytes": 134217728,
+      "maximum_target_bytes": 4294967296,
+      "minimum_free_bytes": 6442450944,
+      "profile": "dev",
+      "term_grace_seconds": 3,
+      "timeout_seconds": 1800,
+      "v8_opt_level": 1
+    },
+    "cargo_config_sha256": [
+      "f727a8aca8728ea53823d61cf4e797ec2cb716bab5b3c1c67d7c7d8ead8df347"
+    ],
+    "foks_additional_versions": {
+      "allowed": [
+        {
+          "checksum": "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa",
+          "name": "block-buffer",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.12.1"
+        },
+        {
+          "checksum": "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c",
+          "name": "const-oid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.10.2"
+        },
+        {
+          "checksum": "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453",
+          "name": "crypto-common",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.2.2"
+        },
+        {
+          "checksum": "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2",
+          "name": "digest",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.11.3"
+        },
+        {
+          "checksum": "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4",
+          "name": "sha2",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.11.0"
+        },
+        {
+          "checksum": "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f",
+          "name": "syn",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "3.0.4"
+        },
+        {
+          "checksum": "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f",
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "2.0.20"
+        },
+        {
+          "checksum": "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af",
+          "name": "thiserror-impl",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "2.0.20"
+        }
+      ],
+      "baseline_lock": "tools/foks-hosted-transport-check/Cargo.lock",
+      "baseline_lock_sha256": "b012709ac33093d0d0a5116af4693207e794c44ca67bd02662ccefea5a6d1013"
+    },
+    "foks_baseline": "cc7777864c1eb1752e28425d9f6f5dcf2d15b352",
+    "format": 2,
+    "patch_series_sha256": "bf15b77b32416914a1d96426aa58fc65d1b436e0645c73dcc11ad91f6e9c0ea6",
+    "profile": "a2-physical-lifetimes",
+    "qualification": {
+      "base_commit": "8e31944080e03651caaa3512169fe468f8375342",
+      "execution_slots": 2,
+      "program": {
+        "js": {
+          "bytes": 1734,
+          "sha256": "6f81c5275a0d4b7e6bab2136153b7a42e018b7c4c005d412dd513a472e4b1497"
+        },
+        "wasm": {
+          "bytes": 161,
+          "sha256": "132f90ed059cd55eccfa9f1e48deac799adde38e30d8ec5f3540ef0ca3d96727"
+        }
+      },
+      "wasm_bytes_per_slot": 67108864
+    },
+    "registry_engines": {
+      "libsqlite3-sys": {
+        "checksum": "0c10584274047cb335c23d3e61bcef8e323adae7c5c8c760540f73610177fc3f",
+        "version": "0.28.0"
+      },
+      "rusqlite": {
+        "checksum": "b838eba278d213a8beaf485bd313fd580ca4505a00d5871caeb1457c55322cae",
+        "version": "0.31.0"
+      },
+      "sqlite-vec": {
+        "checksum": "d0ba424237a9a5db2f6071f193319e2b6a32f7f3961debb2fbbfe67067abce3f",
+        "version": "0.1.9"
+      },
+      "v8": {
+        "checksum": "eb60870e5cff45e02719ab782f1c67507d33c4ef184755656bcc11a9795ccf83",
+        "version": "152.1.0"
+      }
+    },
+    "sdk": {
+      "cc": "/Library/Developer/CommandLineTools/usr/bin/clang",
+      "cxx": "/Library/Developer/CommandLineTools/usr/bin/clang++",
+      "path": "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "version": "26.5"
+    },
+    "target": "aarch64-apple-darwin",
+    "toolchain": {
+      "channel": "1.95.0",
+      "files": {
+        "bin/cargo": "c512bff73c86143b557463f021d0c3d5b0490d97d65040ba59ea2b3427784758",
+        "bin/cargo-clippy": "2ea40177fa3012adef8b57c093ce114ace8030cc51958571cfb1a09f88efd641",
+        "bin/clippy-driver": "5c769ecd068eed4aeec1265fd8777c4d2227ec1bb4b7775c800ec2961e2b8307",
+        "bin/rustc": "b829b733131d4e1673eeebd1f34d06ae1e9ff4977b051313cf42e2a9e79ecf1c",
+        "lib/librustc_driver-eea6b8737cd03a8e.dylib": "d41766d9ed6e9c7959eeb7678b9a6bb301f70948664cd39a8a0d2d83ad23d54e"
+      },
+      "host": "aarch64-apple-darwin",
+      "llvm": "22.1.2",
+      "rustc_commit": "59807616e1fa2540724bfbac14d7976d7e4a3860"
+    },
+    "upstream": {
+      "archive_bytes": 1641375,
+      "archive_root": "denoland-celld-90b4301",
+      "archive_sha256": "9f0c391ee9b592e1c384dc696a8a3bb307b06f5d5dc57950cdff7573fa18b206",
+      "archive_url": "https://api.github.com/repos/denoland/celld/tarball/90b43017241f81189453d326d05948f388b34652",
+      "cargo_lock_sha256": "d6a17422788aa910ba76bed9cf59ac15767f93fe107ebdb336954d0e9efe052b",
+      "commit": "90b43017241f81189453d326d05948f388b34652",
+      "directories": 49,
+      "directory_mode": 509,
+      "file_mode": 436,
+      "files": 279,
+      "inventory_sha256": "8ea2a3ea73908bd1780b90e6701d636e29cf340e9b8a0b09e53bcc99a6cb28b0",
+      "payload_bytes": 6326405,
+      "tree": "8f52d32fd372bbc5d396fd73b47fc653ec78d5ee",
+      "version": "0.6.2"
+    },
+    "v8": {
+      "archive": {
+        "bytes": 40641117,
+        "name": "librusty_v8_release_aarch64-apple-darwin.a.gz",
+        "sha256": "7317c9c45d9ee3166f1ad1abd5704a2617882dc0e56d3e6f452ad409e86ce9b4"
+      },
+      "binding": {
+        "bytes": 40056,
+        "name": "src_binding_release_aarch64-apple-darwin.rs",
+        "sha256": "b9d5652ebca515eb2bf4c2ee4a6551b2567117b5aa720f430d2032616dd7e3b5"
+      },
+      "build_rs_sha256": "daebca36604ff3e03b6a123bf9b78fad7233c6b03c0fbc1bcda3983aada91c4d",
+      "cargo_toml_orig_sha256": "cf9f467f738dfda05e33395d4eb9ad614e39ad72dddfb2cbeee3e9f540c97200",
+      "crate_checksum": "eb60870e5cff45e02719ab782f1c67507d33c4ef184755656bcc11a9795ccf83",
+      "expanded_maximum_bytes": 536870912,
+      "features": [
+        "default",
+        "use_custom_libcxx"
+      ],
+      "release_base": "https://github.com/denoland/rusty_v8/releases/download/v152.1.0/",
+      "source_commit": "8149304f6924411df09a1917cd6de0fc90fa7fec",
+      "version": "152.1.0"
+    }
+  },
+  "profile": "node-foundation",
+  "qualification": {
+    "claim": "b1-foundation-only",
+    "deployments": {
+      "fixture": {
+        "prefix": "deploy/foks-guarded-node-fixture/1fdd2523a443ea95",
+        "version": "1fdd2523a443ea95"
+      },
+      "primary": {
+        "prefix": "deploy/foks-guarded-node-primary/b19584ba0ac8c37f",
+        "version": "b19584ba0ac8c37f"
+      }
+    },
+    "modes": {
+      "node-foundation": {
+        "celld_features": [
+          "foks-guarded-node-qualification",
+          "foks-guarded-qualification"
+        ],
+        "celld_foks_edges": [
+          "foks-hosted-transport",
+          "foks-metadata-core"
+        ],
+        "direct_root_tokio": false,
+        "root_features": [
+          "node-qualification"
+        ]
+      },
+      "node-foundation-default": {
+        "celld_features": [],
+        "celld_foks_edges": [],
+        "direct_root_tokio": false,
+        "root_features": []
+      },
+      "node-foundation-lifecycle": {
+        "celld_features": [
+          "foks-guarded-qualification"
+        ],
+        "celld_foks_edges": [],
+        "direct_root_tokio": true,
+        "root_features": [
+          "lifecycle"
+        ]
+      }
+    },
+    "not_qualified": [
+      "guarded-readiness",
+      "guarded-action",
+      "same-process-serving",
+      "host-az-recovery",
+      "whole-node-retirement"
+    ],
+    "program": {
+      "fixture_js": {
+        "bytes": 1905,
+        "sha256": "a21ee5a395c193e47faad9e9363693e994129cf3f0dc0d864f68fc8db9521614"
+      },
+      "fixture_metadata": {
+        "bytes": 164,
+        "sha256": "867ad9159c2e5acb52f8078ddbbd7dc1356b76e8ec1dc4131871f9d41816e041"
+      },
+      "primary_js": {
+        "bytes": 79,
+        "sha256": "b8d074a06ce1a7a26c7ea498ac3a33cd3cdcc8fe0b2427e453139a9a50b4f0bf"
+      },
+      "primary_metadata": {
+        "bytes": 147,
+        "sha256": "691b5a7cbeb12c1d180f69da035c8b20d882d08aa403381a0f9cffb6956c6256"
+      },
+      "wasm": {
+        "bytes": 161,
+        "sha256": "132f90ed059cd55eccfa9f1e48deac799adde38e30d8ec5f3540ef0ca3d96727"
+      }
+    },
+    "source_roster": [
+      "crates/celld/Cargo.toml",
+      "crates/celld/actor.rs",
+      "crates/celld/actor/effects.rs",
+      "crates/celld/generation.rs",
+      "crates/celld/guarded_execution.rs",
+      "crates/celld/guarded_node.rs",
+      "crates/celld/guarded_node/control.rs",
+      "crates/celld/guarded_node/tests.rs",
+      "crates/celld/js.rs",
+      "crates/celld/js/guarded_node.rs",
+      "crates/celld/lib.rs",
+      "crates/celld/runtime.rs",
+      "crates/logic/lib.rs",
+      "crates/logic/types.rs"
+    ],
+    "tests": {
+      "names": [
+        "guarded_execution::node::tests::b1_role_geometry_counts_process_owner",
+        "guarded_execution::node::tests::b1_last_strong_and_registry_retirement_hold_role",
+        "guarded_execution::node::tests::b1_control_headroom_survives_full_invocation_debt",
+        "guarded_execution::node::tests::b1_control_lane_busy_does_not_consume_cleanup",
+        "guarded_execution::node::tests::b1_header_cells_are_process_owned_and_bounded",
+        "guarded_execution::node::tests::b1_original_stamp_never_renews",
+        "guarded_execution::node::tests::b1_debt_failure_sticky_and_cleanup_one_use",
+        "guarded_execution::node::tests::b1_owner_construction_and_payload_drop_order",
+        "guarded_execution::node::tests::b1_layout_and_role_ledger",
+        "guarded_execution::node::tests::b1_descriptor_accepts_exact_projection",
+        "guarded_execution::node::tests::b1_descriptor_rejects_each_extra_capability",
+        "guarded_execution::node::tests::b1_boot_reload_share_construction_selection",
+        "guarded_execution::node::tests::b1_marked_worker_refuses_before_engine_use",
+        "guarded_execution::node::tests::b1_generic_refusal_inventory",
+        "guarded_execution::node::tests::b1_exact_generation_never_falls_back",
+        "guarded_execution::node::tests::b1_resident_gate_accepts_exact_parent",
+        "guarded_execution::node::tests::b1_resident_gate_refuses_binding_matrix",
+        "guarded_execution::node::tests::b1_resident_gate_duplicate_is_inert",
+        "guarded_execution::node::tests::b1_soft_swap_gate_and_ordinary_gate_regression",
+        "guarded_execution::node::tests::b1_inactive_observation_is_not_processed_finish",
+        "guarded_execution::node::tests::b1_foundation_has_no_ready_or_action"
+      ],
+      "prefix": "guarded_execution::node::tests::b1_",
+      "threads": 1
+    },
+    "tree": {
+      "files": 286,
+      "inventory_sha256": "17eeb47a1ccf164af95b3b26b6d75bcfffbfc97cc289a6226434f39dffff7b40",
+      "payload_bytes": 6524494
+    }
+  },
+  "target": "aarch64-apple-darwin"
+}
