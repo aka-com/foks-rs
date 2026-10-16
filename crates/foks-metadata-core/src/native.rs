@@ -1,9 +1,12 @@
 //! Synchronous host for an already-open native transaction. It does not commit.
-use crate::{catalog::Kind, Error, Result, Sql, Statement, Value, MAX_BLOB_BYTES, MAX_SQL_CALLS};
+use crate::{Error, Result, Sql, Statement, Value, MAX_SQL_CALLS};
+
 use rusqlite::{
     types::{Value as SqlValue, ValueRef},
     Connection,
 };
+
+mod scalar;
 
 pub struct NativeSql<'a> {
     connection: &'a Connection,
@@ -33,15 +36,7 @@ impl<'a> NativeSql<'a> {
         if self.calls > MAX_SQL_CALLS || statement.spec().write != write {
             return Err(Error::Bounds);
         }
-        Ok(parameters
-            .iter()
-            .map(|v| match v {
-                Value::Null => SqlValue::Null,
-                Value::Integer(n) => SqlValue::Text(n.to_string()),
-                Value::Text(s) => SqlValue::Text(s.clone()),
-                Value::Blob(b) => SqlValue::Blob(b.clone()),
-            })
-            .collect())
+        scalar::bindings(parameters)
     }
 }
 impl Sql for NativeSql<'_> {
@@ -151,34 +146,7 @@ impl Sql for NativeSql<'_> {
         let Some(row) = rows.next().map_err(|_| Error::Storage)? else {
             return Ok(None);
         };
-        let mut values = Vec::with_capacity(spec.columns.len());
-        for (index, kind) in spec.columns.iter().enumerate() {
-            let value = row.get_ref(index).map_err(|_| Error::Storage)?;
-            values.push(match (value, kind) {
-                (ValueRef::Text(text), Kind::Integer) if text.len() <= 20 => {
-                    let text = std::str::from_utf8(text).map_err(|_| Error::Storage)?;
-                    let n: i64 = text.parse().map_err(|_| Error::IntegerRange)?;
-                    if n.to_string() != text {
-                        return Err(Error::Storage);
-                    }
-                    Value::Integer(n)
-                }
-                (ValueRef::Blob(bytes), Kind::Blob | Kind::NullableBlob)
-                    if bytes.len() <= MAX_BLOB_BYTES =>
-                {
-                    Value::Blob(bytes.to_vec())
-                }
-                (ValueRef::Text(bytes), Kind::Text) if bytes.len() <= MAX_BLOB_BYTES => {
-                    Value::Text(
-                        std::str::from_utf8(bytes)
-                            .map_err(|_| Error::Storage)?
-                            .to_owned(),
-                    )
-                }
-                (ValueRef::Null, Kind::NullableBlob) => Value::Null,
-                _ => return Err(Error::Bounds),
-            });
-        }
+        let values = scalar::row(row, spec.columns)?;
         if rows.next().map_err(|_| Error::Storage)?.is_some() {
             return Err(Error::Bounds);
         }
