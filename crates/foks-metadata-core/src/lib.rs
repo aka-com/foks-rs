@@ -19,6 +19,8 @@ pub mod personal;
 pub mod read_context;
 pub mod read_schema;
 pub mod read_token;
+#[cfg(any(feature = "native", target_arch = "wasm32", test))]
+mod scalar;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 pub mod wire;

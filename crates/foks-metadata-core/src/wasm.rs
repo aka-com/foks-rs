@@ -3,12 +3,12 @@
 //! synchronously while an exported call/import is active.
 #[cfg(feature = "list-allocation-qualification")]
 mod list_charge;
+use crate::scalar::{codec, response};
 use crate::{wire, Error, Result, Sql, Statement, Value, MAX_INPUT_BYTES, MAX_SQL_CALLS};
 use std::cell::RefCell;
 
 thread_local! {
     static INPUT: RefCell<Vec<u8>>=const {RefCell::new(Vec::new())};
-    static RESPONSE: RefCell<Vec<u8>>=const {RefCell::new(Vec::new())};
     static OUTPUT: RefCell<Vec<u8>>=const {RefCell::new(Vec::new())};
     static PAGE_RESPONSE: RefCell<Vec<u8>>=const {RefCell::new(Vec::new())};
 }
@@ -23,9 +23,19 @@ extern "C" {
 /// Private decoder qualification only: no caller authentication or service route.
 #[no_mangle]
 pub extern "C" fn run_directory_key() -> u32 {
+    let _invocation = match response::Invocation::begin(false) {
+        Ok(guard) => guard,
+        Err(error) => {
+            OUTPUT.with(|b| *b.borrow_mut() = error.code().as_bytes().to_vec());
+            return 1;
+        }
+    };
     let input = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
     let result = crate::directory::qualify(&mut Host { calls: 0 }, input);
-    let (status, bytes) = match result {
+    let (status, bytes) = match response::check()
+        .map_err(crate::personal::PersonalError::Kernel)
+        .and(result)
+    {
         Ok(bytes) => (0, bytes),
         Err(error) => (
             1,
@@ -45,6 +55,9 @@ pub extern "C" fn page_abi_version() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn page_catalog() -> u32 {
+    if !response::idle() {
+        return 1;
+    }
     match crate::page::catalog_artifact() {
         Ok(bytes) => {
             OUTPUT.with(|b| *b.borrow_mut() = bytes);
@@ -59,6 +72,9 @@ pub extern "C" fn page_catalog() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn page_input_alloc(length: u32) -> u32 {
+    if !response::idle() {
+        return 0;
+    }
     INPUT.with(|b| b.borrow_mut().clear());
     OUTPUT.with(|b| b.borrow_mut().clear());
     PAGE_RESPONSE.with(|b| b.borrow_mut().clear());
@@ -75,6 +91,9 @@ pub extern "C" fn page_input_alloc(length: u32) -> u32 {
 
 #[no_mangle]
 pub extern "C" fn page_response_alloc(length: u32) -> u32 {
+    if !response::page_response_allowed() {
+        return 0;
+    }
     PAGE_RESPONSE.with(|b| b.borrow_mut().clear());
     if length < crate::page::HEADER_BYTES as u32 || length as usize > crate::page::MAX_PAGE_BYTES {
         return 0;
@@ -92,10 +111,17 @@ pub extern "C" fn page_response_alloc(length: u32) -> u32 {
 /// Private fixture entry only. It has no personal-authority or production route.
 #[no_mangle]
 pub extern "C" fn run_page() -> u32 {
+    let _invocation = match response::Invocation::begin(false) {
+        Ok(guard) => guard,
+        Err(error) => {
+            OUTPUT.with(|b| *b.borrow_mut() = error.code().as_bytes().to_vec());
+            return 1;
+        }
+    };
     let input = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
     let result = crate::page::decode_parameters(input)
         .and_then(|(statement, parameters)| Host { calls: 0 }.query_page(statement, &parameters));
-    let (status, bytes) = match result {
+    let (status, bytes) = match response::checked(result) {
         Ok(page) => (0, page.into_bytes()),
         Err(error) => (1, error.code().as_bytes().to_vec()),
     };
@@ -105,6 +131,9 @@ pub extern "C" fn run_page() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn input_alloc(length: u32) -> u32 {
+    if !response::input_output_allowed() {
+        return 0;
+    }
     if length as usize > MAX_INPUT_BYTES {
         return 0;
     }
@@ -116,22 +145,20 @@ pub extern "C" fn input_alloc(length: u32) -> u32 {
 }
 #[no_mangle]
 pub extern "C" fn response_alloc(length: u32) -> u32 {
-    // A single row / change-count response is much smaller than a command.
-    if length > 64 * 1024 {
-        return 0;
-    }
-    RESPONSE.with(|buffer| {
-        let mut b = buffer.borrow_mut();
-        *b = vec![0; length as usize];
-        b.as_mut_ptr() as u32
-    })
+    response::allocate(length as usize).map_or(0, |pointer| pointer as u32)
 }
 #[no_mangle]
 pub extern "C" fn output_pointer() -> u32 {
+    if !response::input_output_allowed() {
+        return 0;
+    }
     OUTPUT.with(|b| b.borrow().as_ptr() as u32)
 }
 #[no_mangle]
 pub extern "C" fn output_length() -> u32 {
+    if !response::input_output_allowed() {
+        return 0;
+    }
     OUTPUT.with(|b| b.borrow().len() as u32)
 }
 
@@ -139,6 +166,9 @@ pub extern "C" fn output_length() -> u32 {
 /// Rejected allocation invalidates the preceding request and result.
 #[no_mangle]
 pub extern "C" fn small_box_input_alloc(length: u32) -> u32 {
+    if !response::idle() {
+        return 0;
+    }
     INPUT.with(|b| b.borrow_mut().clear());
     OUTPUT.with(|b| b.borrow_mut().clear());
     if length == 0 || length > 65_536 {
@@ -151,6 +181,9 @@ pub extern "C" fn small_box_input_alloc(length: u32) -> u32 {
 /// never a JS Number; failures cannot become durable domain rejections.
 #[no_mangle]
 pub extern "C" fn small_box_ciphertext_length() -> u32 {
+    if !response::idle() {
+        return 1;
+    }
     let bytes = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
     let result = if bytes.is_empty() || bytes.len() > 65_536 {
         Err("input_bound")
@@ -175,19 +208,19 @@ struct Host {
     calls: usize,
 }
 impl Host {
-    fn invoke<T: serde::de::DeserializeOwned>(
+    fn invoke(
         &mut self,
         statement: Statement,
         parameters: &[Value],
         write: bool,
-    ) -> Result<T> {
+    ) -> Result<Vec<u8>> {
         statement.validate_parameters(parameters)?;
         self.calls += 1;
         if self.calls > MAX_SQL_CALLS || statement.spec().write != write {
             return Err(Error::Bounds);
         }
-        let encoded = serde_json::to_vec(parameters).map_err(|_| Error::Bounds)?;
-        RESPONSE.with(|b| b.borrow_mut().clear());
+        let encoded = codec::encode(parameters)?;
+        let scope = response::Scope::begin(response::Phase::Scalar)?;
         // SAFETY: the imported host reads this live immutable slice during this
         // synchronous call only. It writes solely to the buffer allocated by
         // response_alloc; no Rust reference to that buffer is held across SQL.
@@ -199,11 +232,8 @@ impl Host {
                 u32::from(write),
             )
         };
-        if failed != 0 {
-            return Err(Error::Storage);
-        }
-        let response = RESPONSE.with(|b| std::mem::take(&mut *b.borrow_mut()));
-        serde_json::from_slice(&response).map_err(|_| Error::Storage)
+        drop(encoded);
+        scope.finish(failed != 0)
     }
 }
 impl Sql for Host {
@@ -234,11 +264,22 @@ impl Sql for Host {
         Ok(page)
     }
     fn query(&mut self, s: Statement, p: &[Value]) -> Result<Option<Vec<Value>>> {
-        self.invoke(s, p, false)
+        let result = self
+            .invoke(s, p, false)
+            .and_then(|bytes| codec::decode_query(&s.spec(), &bytes));
+        if let Err(error) = &result {
+            response::fail(error.clone());
+        }
+        result
     }
     fn execute(&mut self, s: Statement, p: &[Value]) -> Result<u64> {
-        let value: Value = self.invoke(s, p, true)?;
-        crate::unsigned(&value)
+        let result = self
+            .invoke(s, p, true)
+            .and_then(|bytes| codec::decode_changes(&bytes));
+        if let Err(error) = &result {
+            response::fail(error.clone());
+        }
+        result
     }
     fn domain(&mut self, input: &[u8]) -> Result<wire::Reply> {
         #[derive(serde::Deserialize)]
@@ -257,17 +298,18 @@ impl Sql for Host {
         if input.len() > MAX_INPUT_BYTES {
             return Err(Error::Bounds);
         }
-        RESPONSE.with(|b| b.borrow_mut().clear());
+        let scope = response::Scope::begin(response::Phase::Domain)?;
         // SAFETY: input is an owned immutable domain serialization. JS copies it
         // before reentering run(), which has its own stack Host. No thread-local
         // buffer borrow or reference to this Host crosses the import. The JS
         // aggregate call/deadline guards remain active across both Wasm entries.
         let failed = unsafe { domain(input.as_ptr(), input.len() as u32) };
-        if failed != 0 {
-            return Err(Error::Storage);
+        let bytes = scope.finish(failed != 0)?;
+        let result = serde_json::from_slice(&bytes).map_err(|_| Error::Storage);
+        if let Err(error) = &result {
+            response::fail(error.clone());
         }
-        let response = RESPONSE.with(|b| std::mem::take(&mut *b.borrow_mut()));
-        match serde_json::from_slice(&response).map_err(|_| Error::Storage)? {
+        match result? {
             DomainResult::Success(reply) => Ok(reply),
             DomainResult::Rejected(Rejection::Conflict) => Err(Error::Conflict),
             DomainResult::Rejected(Rejection::Permission) => Err(Error::Permission),
@@ -278,48 +320,40 @@ impl Sql for Host {
 
 #[no_mangle]
 pub extern "C" fn run() -> u32 {
+    let _invocation = match response::Invocation::begin(true) {
+        Ok(guard) => guard,
+        Err(error) => return generic_output::<()>(Err(error)),
+    };
     let bytes = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
     let result = wire::run(&mut Host { calls: 0 }, &bytes);
-    let (status, output) = match result {
-        Ok(reply) => (
-            0,
-            serde_json::to_vec(&reply).expect("serializable bounded reply"),
-        ),
-        Err(error) => (
-            1,
-            serde_json::to_vec(error.code()).expect("static error code"),
-        ),
-    };
-    OUTPUT.with(|b| *b.borrow_mut() = output);
-    status
+    generic_output(result)
 }
 
 /// Private trusted-host entry point; the host authenticates and constructs caller
 /// context. Public request bodies cannot choose controller capability.
 #[no_mangle]
 pub extern "C" fn run_authority() -> u32 {
+    let _invocation = match response::Invocation::begin(false) {
+        Ok(guard) => guard,
+        Err(error) => return generic_output::<()>(Err(error)),
+    };
     let bytes = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
     let result = serde_json::from_slice::<crate::authority::Invocation>(&bytes)
         .map_err(|_| Error::Invalid("authority invocation"))
         .and_then(|invocation| crate::authority::run(&mut Host { calls: 0 }, invocation));
-    let (status, output) = match result {
-        Ok(reply) => (
-            0,
-            serde_json::to_vec(&reply).expect("bounded authority reply"),
-        ),
-        Err(error) => (
-            1,
-            serde_json::to_vec(error.code()).expect("static error code"),
-        ),
-    };
-    OUTPUT.with(|b| *b.borrow_mut() = output);
-    status
+    generic_output(result)
 }
 
 /// Separate real-personal qualification entry. It accepts no synthetic principal
 /// or controller selector. Only the trusted host constructs parsed peer parts.
 #[no_mangle]
 pub extern "C" fn run_personal() -> u32 {
+    let _invocation = match response::Invocation::begin(false) {
+        Ok(guard) => guard,
+        Err(error) => {
+            return personal_output::<()>(Err(crate::personal::PersonalError::Kernel(error)))
+        }
+    };
     let bytes = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
     let result = serde_json::from_slice::<crate::authority::PersonalInvocation>(&bytes)
         .map_err(|_| crate::personal::PersonalError::Kernel(Error::Invalid("personal invocation")))
@@ -329,6 +363,12 @@ pub extern "C" fn run_personal() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn read_personal() -> u32 {
+    let _invocation = match response::Invocation::begin(false) {
+        Ok(guard) => guard,
+        Err(error) => {
+            return personal_output::<()>(Err(crate::personal::PersonalError::Kernel(error)))
+        }
+    };
     let bytes = INPUT.with(|b| std::mem::take(&mut *b.borrow_mut()));
     let result = serde_json::from_slice::<crate::authority::PersonalPointInvocation>(&bytes)
         .map_err(|_| {
@@ -340,7 +380,25 @@ pub extern "C" fn read_personal() -> u32 {
     personal_output(result)
 }
 
+fn generic_output<T: serde::Serialize>(result: Result<T>) -> u32 {
+    let (status, output) = match response::checked(result) {
+        Ok(reply) => (
+            0,
+            serde_json::to_vec(&reply).expect("bounded qualification reply"),
+        ),
+        Err(error) => (
+            1,
+            serde_json::to_vec(error.code()).expect("static error code"),
+        ),
+    };
+    OUTPUT.with(|b| *b.borrow_mut() = output);
+    status
+}
+
 fn personal_output<T: serde::Serialize>(result: crate::personal::Result<T>) -> u32 {
+    let result = response::check()
+        .map_err(crate::personal::PersonalError::Kernel)
+        .and(result);
     let (status, output) = match result {
         Ok(reply) => (
             0,

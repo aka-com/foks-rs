@@ -19,6 +19,7 @@ export function validateChargeModule(module,feature){
 
 export class ListChargeHost extends Kernel {
   #pageRefusal=null;
+  #scalarRefusal=null;
   constructor(module,catalog,storage,pageArtifact){
     validateChargeModule(module,true);
     // Wrap exports before page activation: a setup trap must also discard the
@@ -31,6 +32,7 @@ export class ListChargeHost extends Kernel {
       // Only this normal return can create the scoped refusal. A thrown export
       // never reaches here and is already poisoned by ownedExport.
       if(name==='page_response_alloc'&&result===0&&this.#pageRefusal!==null)throw this.#pageRefusal;
+      if(name==='response_alloc'&&result===0&&this.#scalarRefusal!==null)throw this.#scalarRefusal;
       return result;
     }:value;
     this.instance={exports};
@@ -38,6 +40,13 @@ export class ListChargeHost extends Kernel {
       if(exports.memory.buffer.byteLength>MAX_CHARGE_MEMORY)throw new Error('trace memory bound');
       this.pageSpec=activatePages(this.instance,pageArtifact);
     }catch(error){this.poisonAndDiscard();throw error;}
+  }
+  // Already wrapped exports own trap retirement. In particular, the private
+  // page-refusal sentinel is thrown after a normal export return and is caught
+  // inside sqlPage; a second catch here must not poison that ordinary refusal.
+  invokeExport(name,...args){
+    if(this.poisoned)throw new Error('poisoned trace instance');
+    return this.instance.exports[name](...args);
   }
   ownedExport(fn,args){
     if(this.poisoned)throw new Error('poisoned trace instance');
@@ -57,7 +66,15 @@ export class ListChargeHost extends Kernel {
   domain(){throw new Error('trace domain import forbidden');}
   sql(id,pointer,length,write){
     if(!this.running||write!==0)throw new Error('trace SQL phase/write');
-    return super.sql(id,pointer,length,write);
+    if(this.#scalarRefusal!==null)throw new Error('trace nested scalar import');
+    const refusal={};this.#scalarRefusal=refusal;
+    try{return super.sql(id,pointer,length,write);}
+    catch(error){
+      // Only normal response_alloc(…) == 0 can create this import-local token.
+      // An exported trap/imported exception retains outermost retirement.
+      if(error===refusal)return 1;
+      throw error;
+    }finally{this.#scalarRefusal=null;}
   }
   sqlPage(...args){
     if(this.#pageRefusal!==null)throw new Error('trace nested page import');

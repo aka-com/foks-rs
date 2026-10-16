@@ -7,36 +7,7 @@ use rusqlite::{
 };
 use std::mem::size_of;
 
-/// Canonical i64 decimal text without an intermediate heap allocation.
-struct Decimal {
-    bytes: [u8; 20],
-    start: usize,
-}
-impl Decimal {
-    fn new(value: i64) -> Self {
-        let mut result = Self {
-            bytes: [0; 20],
-            start: 20,
-        };
-        let mut magnitude = value.unsigned_abs();
-        loop {
-            result.start -= 1;
-            result.bytes[result.start] = b'0' + (magnitude % 10) as u8;
-            magnitude /= 10;
-            if magnitude == 0 {
-                break;
-            }
-        }
-        if value < 0 {
-            result.start -= 1;
-            result.bytes[result.start] = b'-';
-        }
-        result
-    }
-    fn bytes(&self) -> &[u8] {
-        &self.bytes[self.start..]
-    }
-}
+use crate::scalar::Decimal;
 
 fn add(total: usize, bytes: usize) -> Result<usize> {
     total.checked_add(bytes).ok_or(Error::Bounds)

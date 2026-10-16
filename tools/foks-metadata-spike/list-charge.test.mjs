@@ -240,6 +240,53 @@ test('same-code imported bounds failure is never mistaken for the private alloca
   }finally{host.poisonAndDiscard();db.close();}
 });
 
+test('scalar same-code import failure and allocator trap cannot impersonate ordinary refusal',()=>{
+  const fixture=manifest.fixtures.find(f=>f.name==='small');
+  for(const mode of ['import','allocator']){
+    const db=seed(fixture),failure=new KernelError('bounds');
+    const backing=mode==='import'?{sql:{exec(){throw failure;}}}:storage(db);
+    const host=new ListChargeHost(module,scalar,backing,page),memory=host.instance.exports.memory;
+    if(mode==='allocator'){
+      const exports=host.instance.exports;
+      exports.response_alloc=()=>exports.trap();
+    }
+    try{
+      const input=fixture.cases.find(v=>v.input.count==='1').input;
+      db.exec('BEGIN');try{
+        assert.throws(()=>host.runCharge(JSON.stringify(input)),error=>mode==='import'?error===failure:error instanceof WebAssembly.RuntimeError);
+      }finally{db.exec('ROLLBACK');}
+      assert.equal(host.poisoned,true);assert.equal(host.instance,null);assert.equal(host.lastWipe.complete,true);
+      assert.ok(new Uint8Array(memory.buffer).every(value=>value===0));assertState(db,fixture);
+    }finally{host.poisonAndDiscard();db.close();}
+  }
+});
+
+test('ignored scalar phase violation produces only failure diagnostics and permits normal reuse',()=>{
+  const fixture=manifest.fixtures.find(f=>f.name==='small'),db=seed(fixture);
+  class ViolatingHost extends ListChargeHost{
+    inject=true;
+    sql(...args){
+      const status=super.sql(...args);
+      if(this.inject){
+        this.inject=false;
+        assert.equal(this.invokeExport('small_box_ciphertext_length'),1);
+      }
+      return status;
+    }
+  }
+  const host=new ViolatingHost(module,scalar,storage(db),page);
+  try{
+    host.layout();
+    const input=fixture.cases.find(v=>v.input.count==='1').input;
+    const report=call(db,host,input);
+    assert.equal(report.outcome,'storage');
+    assert.equal(report.response_bytes,'0');assert.equal(report.frame_bytes,'0');
+    assert.equal(report.list_sha256,null);assert.equal(report.frame_sha256,null);
+    assert.equal(host.poisoned,false);
+    const again=call(db,host,input);checkReport(again,host);assert.equal(again.outcome,'ok');assertState(db,fixture);
+  }finally{host.poisonAndDiscard();db.close();}
+});
+
 test('a trap during the allocator callback still discards the instance',()=>{
   const fixture=manifest.fixtures.find(f=>f.name==='small'),db=seed(fixture),host=new ListChargeHost(module,scalar,storage(db),page);
   const exports=host.instance.exports;

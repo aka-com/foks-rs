@@ -101,8 +101,11 @@ export class FoksMetadata {
     const replyEqual=sameData(reply,vector.reply);
     const childEmpty=storage.sql.exec('SELECT count(*) AS n FROM m0_child').one().n===0;
     if((vector.authority===true||vector.personal) && Date.now()>=outputDeadline)throw new Error('authority output deadline expired');
-    const passed=equal&&replyEqual&&sameData(outcome,vector.outcome)&&childEmpty;
-    return Response.json({name:vector.name,passed,equal,replyEqual,outcome,message,calls:kernel.calls,memory_bytes:kernel.instance.exports.memory.buffer.byteLength,page_declared_working_peak_bytes:kernel.lastPageWorkingBytes??null,schema_version:fixture.schema_version},{status:passed?200:500});
+    // A thrown export has physically retired the instance. Retired bytes are
+    // disposal evidence, not live memory or an observed execution peak.
+    const retirementValid=!kernel.poisoned||(kernel.instance===null&&kernel.lastWipe?.complete===true);
+    const passed=equal&&replyEqual&&sameData(outcome,vector.outcome)&&childEmpty&&retirementValid;
+    return Response.json({name:vector.name,passed,equal,replyEqual,outcome,message,calls:kernel.calls,memory_bytes:kernel.instance?.exports.memory.buffer.byteLength??null,instance_retired:kernel.poisoned,retired_memory_bytes:kernel.lastWipe?.bytes??null,retirement_complete:kernel.lastWipe?.complete??null,page_declared_working_peak_bytes:kernel.lastPageWorkingBytes??null,schema_version:fixture.schema_version},{status:passed?200:500});
   }
 }
 export default {async fetch(request,env) {

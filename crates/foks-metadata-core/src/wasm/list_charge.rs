@@ -1,5 +1,5 @@
 //! Feature-only fixture exports. Never part of the guarded artifact allowlist.
-use super::{Host, OUTPUT};
+use super::{response, Host, OUTPUT};
 use crate::allocation_trace::{self, MAX_INPUT};
 use std::cell::{Cell, RefCell};
 thread_local! {
@@ -34,6 +34,9 @@ fn fail(message: &'static [u8]) -> u32 {
 }
 #[no_mangle]
 pub extern "C" fn list_charge_input_alloc(length: u32) -> u32 {
+    if !response::idle() {
+        return 0;
+    }
     let Some(_guard) = Guard::enter() else {
         return 0;
     };
@@ -52,6 +55,9 @@ pub extern "C" fn list_charge_input_alloc(length: u32) -> u32 {
 }
 #[no_mangle]
 pub extern "C" fn list_charge_layout() -> u32 {
+    if !response::idle() {
+        return 1;
+    }
     let Some(_guard) = Guard::enter() else {
         return 1;
     };
@@ -66,6 +72,10 @@ pub extern "C" fn list_charge_layout() -> u32 {
 }
 #[no_mangle]
 pub extern "C" fn run_list_charge() -> u32 {
+    let _invocation = match response::Invocation::begin(false) {
+        Ok(guard) => guard,
+        Err(_) => return 1,
+    };
     let Some(_guard) = Guard::enter() else {
         return 1;
     };
@@ -82,7 +92,24 @@ pub extern "C" fn run_list_charge() -> u32 {
     if VIOLATION.with(Cell::get) {
         return fail(b"trace phase violation");
     }
-    match report.and_then(|r| allocation_trace::encode_report(&r)) {
+    // This feature emits only diagnostics. An ordinary scalar refusal must
+    // retain its recorded charge index, but no sticky error may expose even a
+    // response hash/length or a successful outcome. Default serving exports
+    // continue to reject the entire response through response::checked.
+    match report.and_then(|mut r| {
+        if let Err(error) = response::check() {
+            r.outcome = if error == crate::Error::Bounds && r.first_refusal != 0 {
+                "trace_refused"
+            } else {
+                error.code()
+            };
+            r.response_bytes = 0;
+            r.frame_bytes = 0;
+            r.list_sha256 = None;
+            r.frame_sha256 = None;
+        }
+        allocation_trace::encode_report(&r)
+    }) {
         Ok(bytes) => {
             OUTPUT.with(|o| *o.borrow_mut() = bytes);
             0

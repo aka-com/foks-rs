@@ -42,9 +42,12 @@ export class Kernel {
     this.storage=storage;
     this.catalog=new Map(catalog.map(spec=>[spec.id,spec]));
     this.instance=new WebAssembly.Instance(module,{foks:{sql:(...args)=>this.sql(...args),domain:(...args)=>this.domain(...args),sql_page:(...args)=>this.sqlPage(...args)}});
-    this.pageSpec=pageArtifact===null?null:activatePages(this.instance,pageArtifact);
     this.pageMode=false;this.poisoned=false;
-    this.running=false;this.domainActive=false;
+    this.running=false;this.domainActive=false;this.exportDepth=0;this.lastWipe=null;
+    // Activation uses raw setup exports before subclass wrappers exist. Any
+    // failure retires the new instance only after that synchronous call unwinds.
+    try{this.pageSpec=pageArtifact===null?null:activatePages(this.instance,pageArtifact);}
+    catch(error){this.poisonAndDiscard();throw error;}
   }
   range(pointer,length,maximum) {
     const memory=this.instance.exports.memory.buffer;
@@ -77,19 +80,32 @@ export class Kernel {
         try{writer.push(row.value);}catch{throw new KernelError('bounds');}
       }
       if(this.failAfter===this.calls||this.failStatement===id)throw new Error('injected page host failure');
-      if(this.trapAfter===this.calls||this.trapStatement===id)this.instance.exports.trap();
+      if(this.trapAfter===this.calls||this.trapStatement===id)this.invokeExport('trap');
       const bytes=writer.finish();
-      const destination=this.instance.exports.page_response_alloc(bytes.length);
+      const destination=this.invokeExport('page_response_alloc',bytes.length);
       if(!destination)throw new KernelError('bounds');
       this.range(destination,bytes.length,MAX_PAGE).set(bytes);
     } finally {release();this.lastPageWorkingBytes=this.pageWorking.peak;}
     return 0;
   }
-  invokePageExport(name,...args){
-    // Allocation exports can trap while a RefCell is borrowed as well.
+  invokeExport(name,...args){
+    if(this.poisoned)throw new Error('poisoned kernel instance');
+    // Nested imports can reenter allocation exports. Physical cleanup waits for
+    // the outermost export to exit; a normal returned refusal never enters catch.
+    this.exportDepth++;
     try {return this.instance.exports[name](...args);}
     catch(error){this.poisoned=true;throw error;}
+    finally{if(--this.exportDepth===0&&this.poisoned)this.poisonAndDiscard();}
   }
+  poisonAndDiscard(){
+    this.poisoned=true;
+    const start=performance.now();let bytes=0,complete=false;
+    try{
+      const buffer=this.instance?.exports.memory?.buffer;
+      if(buffer){bytes=Math.min(buffer.byteLength,64*1024*1024);new Uint8Array(buffer,0,bytes).fill(0);complete=bytes===buffer.byteLength;}
+    }finally{this.instance=null;this.lastWipe={bytes,complete,elapsed_ms:performance.now()-start};}
+  }
+  invokePageExport(name,...args){return this.invokeExport(name,...args);}
   runPage(bytes,controls={}){return this.runPageEntry('run_page',bytes,controls);}
   runDirectory(bytes,controls={}){return this.runPageEntry('run_directory_key',bytes,controls);}
   runPageEntry(entry,bytes,{deadline=Date.now()+1000,failAfter=0,trapAfter=0,failStatement=0,trapStatement=0,workingLimit=8*MAX_PAGE}={}){
@@ -107,7 +123,7 @@ export class Kernel {
       // An imported exception/trap skips Rust destructors. Never reuse this
       // instance after an export throws; a normal returned error remains safe.
       const status=this.invokePageExport(entry);
-      const output=this.range(this.instance.exports.output_pointer(),this.instance.exports.output_length(),MAX_PAGE);
+      const output=this.range(this.invokeExport('output_pointer'),this.invokeExport('output_length'),MAX_PAGE);
       if(status!==0)throw new KernelError(decoder.decode(output));
       if(Date.now()>=deadline)throw new KernelError('expired');
       let release;try{release=this.pageWorking.reserve(output.length);}catch{throw new KernelError('bounds');}
@@ -138,13 +154,13 @@ export class Kernel {
     }
     // Injected failures are qualification-only, after a real SQL statement.
     if(this.failAfter===this.calls||this.failStatement===id)throw new Error('injected host failure');
-    if(this.trapAfter===this.calls||this.trapStatement===id)this.instance.exports.trap();
+    if(this.trapAfter===this.calls||this.trapStatement===id)this.invokeExport('trap');
     return this.respond(result);
   }
   respond(result) {
     const bytes=encoder.encode(JSON.stringify(result));
     if(bytes.length>65536)throw new Error('SQL reply bound');
-    const destination=this.instance.exports.response_alloc(bytes.length);
+    const destination=this.invokeExport('response_alloc',bytes.length);
     if(!destination)throw new Error('SQL reply allocation');
     this.range(destination,bytes.length,65536).set(bytes);
     return 0;
@@ -185,12 +201,12 @@ export class Kernel {
     if(typeof command!=='string'||command.length>MAX_INPUT)throw new Error('input bound');
     const bytes=encoder.encode(command);
     if(bytes.length>MAX_INPUT)throw new Error('input byte bound');
-    const pointer=this.instance.exports.input_alloc(bytes.length);
+    const pointer=this.invokeExport('input_alloc',bytes.length);
     if(!pointer)throw new Error('input allocation');
     this.range(pointer,bytes.length,MAX_INPUT).set(bytes);
     const entry=authority==='personal'?'run_personal':authority==='personal_point'?'read_personal':authority?'run_authority':'run';
-    const status=this.instance.exports[entry]();
-    const result=JSON.parse(decoder.decode(this.range(this.instance.exports.output_pointer(),this.instance.exports.output_length(),65536)));
+    const status=this.invokeExport(entry);
+    const result=JSON.parse(decoder.decode(this.range(this.invokeExport('output_pointer'),this.invokeExport('output_length'),65536)));
     if(status!==0)throw statusError(result);
     return result;
   }

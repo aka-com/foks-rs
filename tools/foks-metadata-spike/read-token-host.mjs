@@ -36,6 +36,11 @@ export class ReadTokenHost extends Kernel {
       this.lastWipe={bytes,complete,elapsed_ms:performance.now()-started};
     }
   }
+  // These exports already carry the subclass's outermost ownership wrapper.
+  invokeExport(name,...args){
+    if(this.poisoned)throw new Error('poisoned kernel instance');
+    return this.instance.exports[name](...args);
+  }
   tokenExport(name,...args){
     if(this.poisoned)throw new Error('poisoned kernel instance');
     return this.instance.exports[name](...args);
