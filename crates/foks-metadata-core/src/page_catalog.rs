@@ -238,7 +238,7 @@ const DIRECTORY_SLICE_COLUMNS: &[Column] = &[INTEGER, text(7), INTEGER, blob(512
 
 macro_rules! list_projection {
     () => {
-        "SELECT c.dirent_id,c.name_mac,CAST(c.creation_time AS TEXT),c.node_id,typeof(d.exact_dirent),CAST(COALESCE(length(CAST(d.exact_dirent AS BLOB)),-1) AS TEXT),CASE WHEN typeof(d.exact_dirent)='blob' AND length(d.exact_dirent)<=4096 THEN d.exact_dirent ELSE NULL END,CAST(n.node_id IS NOT NULL AS TEXT),typeof(n.exact_node),CAST(COALESCE(length(CAST(n.exact_node AS BLOB)),-1) AS TEXT),CASE WHEN typeof(n.exact_node)='blob' AND length(n.exact_node)<=65536 THEN n.exact_node ELSE NULL END "
+        "SELECT c.dirent_id,c.name_mac,CAST(c.creation_time AS TEXT),c.node_id,typeof(d.exact_dirent),CAST(COALESCE(length(CAST(d.exact_dirent AS BLOB)),-1) AS TEXT),CASE WHEN typeof(d.exact_dirent)='blob' AND length(d.exact_dirent)<=4096 THEN d.exact_dirent ELSE NULL END,CAST(n.node_id IS NOT NULL AS TEXT),typeof(n.exact_node),CAST(COALESCE(length(CAST(n.exact_node AS BLOB)),-1) AS TEXT),CASE WHEN typeof(n.node_type)='integer' AND n.node_type>=0 AND typeof(n.exact_node)='blob' AND length(n.exact_node)<=65536 THEN n.exact_node ELSE NULL END "
     };
 }
 macro_rules! current_join {

@@ -135,7 +135,7 @@ fn generate() -> BTreeMap<String, Vec<u8>> {
     );
     assert_eq!(
         hex(&hash(&page_bytes)),
-        "9e19c35cc1de83118c6d502c8b17ca503f564bd13be8dfc8156c3533ce6a4915"
+        "a2b83eb458c38a39b3245fbcaa669bd9bd85255db0be08c4124813248b4f955b"
     );
     files.insert("scalar-catalog.json".into(), scalar_bytes);
     files.insert("page-catalog.json".into(), page_bytes);

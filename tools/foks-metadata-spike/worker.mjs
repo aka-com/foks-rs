@@ -34,10 +34,15 @@ function seed(storage,vector) {
   storage.transactionSync(()=>{
     storage.sql.exec('PRAGMA defer_foreign_keys=ON');
     for(const object of fixture.objects.filter(o=>o.kind==='table'))storage.sql.exec(object.sql);
+    const malformedNode=vector.page===true&&['list_negative_node_type','list_zero_node_type','list_mismatched_positive_node_type'].includes(vector.name);
+    if(malformedNode)storage.sql.exec('PRAGMA ignore_check_constraints=ON');
+    try {
     for(const table of vector.before)for(const row of table.rows) {
       const placeholders=row.map(v=>v!=='null'&&'integer' in v?'CAST(? AS INTEGER)':'?');
       storage.sql.exec(`INSERT INTO ${quote(table.name)} VALUES(${placeholders.join(',')})`,...row.map(value=>seedBind(value,fixtureMaximum)));
     }
+    } finally {if(malformedNode)storage.sql.exec('PRAGMA ignore_check_constraints=OFF');}
+    if(storage.sql.exec('PRAGMA ignore_check_constraints').raw().next().value?.[0]!==0)throw new Error('fixture check constraints not restored');
     for(const object of fixture.objects.filter(o=>o.kind!=='table'))storage.sql.exec(object.sql);
     if(!storage.sql.exec('PRAGMA foreign_key_check').raw().next().done)throw new Error('fixture foreign key');
     storage.sql.exec('CREATE TABLE m0_parent(id INTEGER PRIMARY KEY)');
