@@ -124,6 +124,11 @@ function desktopFeatureRule(segments, features) {
   const others = features
     .filter((feature) => feature !== segments[0])
     .map(escapeRegExp);
+  // The feature's own folder, named relative to this one: `.` at the top,
+  // `..` one level down, and by name from the features folder.
+  const ownRoot =
+    segments.length === 1 ? '\\.' : `\\.\\.(/\\.\\.){${segments.length - 2}}`;
+  const ownName = `(\\.\\./){${segments.length}}${escapeRegExp(segments[0])}`;
   return {
     files: [`apps/desktop/${featuresPath}/${segments.join('/')}/*.{ts,tsx}`],
     rules: {
@@ -140,6 +145,11 @@ function desktopFeatureRule(segments, features) {
                   },
                 ]
               : []),
+            {
+              regex: `^(${ownRoot}|${ownName})(/(index(\\.ts)?)?)?$`,
+              message:
+                "A feature's own modules import each other directly, not through its index.ts.",
+            },
           ],
         },
       ],

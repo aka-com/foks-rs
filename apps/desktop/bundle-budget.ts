@@ -7,6 +7,9 @@
  * src/app/deferred-screens.tsx load later, in chunks of their own, and do
  * not count. A build whose startup JavaScript exceeds the budget fails, so
  * growth is a decision recorded here rather than a side effect of an import.
+ * The budget does not measure the deferred chunks: vite.config.ts declares the
+ * feature barrels free of side effects so that one screen's chunk does not
+ * load the modules another feature's barrel re-exports for other screens.
  */
 
 import type { Plugin } from 'vite';

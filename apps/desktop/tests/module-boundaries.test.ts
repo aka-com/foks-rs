@@ -234,8 +234,8 @@ test('no layer names a module in a folder layers.json forbids it', async () => {
 test('a feature is named from outside it only by its folder, except by the composition root', async () => {
   // eslint.config.mjs matches the same rule against static import
   // specifiers. A feature's index.ts is what the other features, the shell and
-  // the remaining screens may use; src/app/ loads the screens themselves,
-  // several by dynamic import into chunks of their own.
+  // the modules at the src/ root may use; src/app/ loads the screens
+  // themselves, several by dynamic import into chunks of their own.
   const app = fileURLToPath(new URL('../', import.meta.url));
   const features = join(app, layering.features.path);
   const composer = join(app, layering.features.composer) + sep;
@@ -263,6 +263,34 @@ test('a feature is named from outside it only by its folder, except by the compo
           `${relative(app, file)} imports ${relative(app, target)}: ${layering.features.description}`,
         );
     }
+  }
+  assert.deepEqual(problems, []);
+});
+
+test("a feature's index.ts only re-exports, as vite.config.ts assumes", async () => {
+  // vite.config.ts declares these files free of side effects, so that a
+  // deferred screen's chunk loads only the re-exported modules it uses. A
+  // statement other than `export ... from` would make that declaration false.
+  const app = fileURLToPath(new URL('../', import.meta.url));
+  const features = join(app, layering.features.path);
+  const indexes = (await sources(features)).filter(
+    (file) =>
+      dirname(dirname(file)) === features && file.endsWith(`${sep}index.ts`),
+  );
+  assert.ok(indexes.length > 0);
+  const problems: string[] = [];
+  for (const path of indexes) {
+    const source = ts.createSourceFile(
+      path,
+      await readFile(path, 'utf8'),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    for (const statement of source.statements)
+      if (!ts.isExportDeclaration(statement) || !statement.moduleSpecifier)
+        problems.push(
+          `${relative(app, path)}:${source.getLineAndCharacterOfPosition(statement.getStart()).line + 1} is not a re-export`,
+        );
   }
   assert.deepEqual(problems, []);
 });

@@ -888,8 +888,8 @@ no agent operation and no protocol change.
   `src/commands/validation.rs`, `src/agent.rs` (binary validation, launch,
   takeover), `src/close_guard.rs`, `PERMISSIONS.md`,
   `linux/com.aka.foks.desktop.policy`.
-- `apps/desktop/src/exposure-review.ts` and
-  `apps/desktop/src/screens/exposure-review.tsx`: the exposure review.
+- `apps/desktop/src/features/teams/exposure-review-model.ts` and
+  `apps/desktop/src/features/teams/exposure-review.tsx`: the exposure review.
 - `apps/desktop/src/chat`: `notification-consumer.ts`, `inbox-service.ts`,
   `deadline-timer.ts`, `backoff.ts`, `use-chat-history.ts`, `history-cache.ts`;
   `apps/desktop/src/chat-contract.ts`.

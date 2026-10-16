@@ -18,6 +18,18 @@ export default defineConfig({
   build: {
     outDir: resolve(here, 'dist'),
     emptyOutDir: true,
+    // A feature's index.ts only re-exports. Declared free of side effects, it
+    // lets Rolldown resolve each import through it to the defining module, so
+    // a deferred screen's chunk loads only the modules it uses. Otherwise
+    // every module a barrel re-exports joins one chunk group, and a screen
+    // that uses one export also loads the chunks holding the others.
+    rolldownOptions: {
+      treeshake: {
+        moduleSideEffects: [
+          { test: /\/src\/features\/[^/]+\/index\.ts$/, sideEffects: false },
+        ],
+      },
+    },
   },
   // app-root.render.test.tsx boots src/main.tsx through `vite.ssrLoadModule`,
   // which externalises bare imports by default. `@tauri-apps/api` must be bundled
