@@ -2097,6 +2097,7 @@ dependencies = [
  "foks-merkle-store",
  "foks-proto",
  "foks-rpc",
+ "foks-schema-contract",
  "foks-server-db",
  "foks-snowpack",
  "getrandom 0.4.3",
