@@ -3,6 +3,8 @@
 //! The frontend, not this module, proves TLS possession and parses the exact
 //! certificate. No result here commits, publishes, or establishes a tenant fence.
 pub(crate) mod catalog;
+mod generations;
+pub use generations::current_key_generations;
 
 use crate::{Sql, Statement as S, Value as V};
 use foks_proto::{EntityId, Role, RoleAndGeneration};

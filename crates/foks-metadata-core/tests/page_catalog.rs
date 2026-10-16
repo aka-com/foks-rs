@@ -309,7 +309,7 @@ fn catalog_contract_limits_and_exact_integer_type_probe() {
         assert_eq!(PageStatement::from_id(statement as u32), Some(statement));
     }
     assert!(PageStatement::from_id(0).is_none());
-    assert!(PageStatement::from_id(10).is_none());
+    assert!(PageStatement::from_id(11).is_none());
     assert_eq!(
         PageStatement::ListInitial.spec().effective_rows().unwrap(),
         15
@@ -744,6 +744,43 @@ fn export_real_schema_binary_pages_for_native_wasm_and_celld_qualification() {
     let (s, mut p) = start(None, true, 15);
     p[0] = Value::Blob(vec![99; 33]);
     vectors.push(vector(&c, "list_empty_namespace", s, &p));
+    // Exact integer/rowid transport for bounded role batches, including distinct
+    // visibility extremes, missing roles and duplicate requested positions.
+    for (role, generation) in [
+        (Role::OWNER, i64::MAX),
+        (Role::member(i16::MIN), 9_007_199_254_740_993),
+        (Role::member(i16::MAX), 2),
+    ] {
+        c.execute("INSERT INTO shared_keys(uid,role_type,visibility,generation,verify_key,exact_hepk) VALUES(?1,?2,?3,?4,zeroblob(33),X'01')",params![UID,role.protocol_value() as i64,role.visibility().unwrap_or(0),generation]).unwrap();
+    }
+    let roles = [
+        Role::OWNER,
+        Role::member(i16::MIN),
+        Role::member(123),
+        Role::member(i16::MAX),
+        Role::OWNER,
+        Role::member(-123),
+        Role::member(i16::MIN),
+    ];
+    for count in 1..=7 {
+        let p = foks_metadata_core::page_catalog::role_generation_parameters(&UID, &roles[..count])
+            .unwrap();
+        vectors.push(vector(
+            &c,
+            &format!("role_generations_{count}"),
+            PageStatement::RoleGenerations,
+            &p,
+        ));
+    }
+    let mut absent = UID;
+    absent[32] = 99;
+    let p = foks_metadata_core::page_catalog::role_generation_parameters(&absent, &roles).unwrap();
+    vectors.push(vector(
+        &c,
+        "role_generations_absent_namespace",
+        PageStatement::RoleGenerations,
+        &p,
+    ));
     // Preserve the probe distinction on oversized legacy data; these vectors
     // qualify SQL transport, not admission or public List decoding.
     c.execute(

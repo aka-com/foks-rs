@@ -9,7 +9,7 @@ const paths={wasm:process.env.FOKS_PAGE_WASM,vectors:process.env.FOKS_PAGE_VECTO
 for(const [kind,path] of Object.entries(paths))if(!path||statSync(path).size>(kind==='catalog'?65536:64*1024*1024))throw new Error(`reviewed FOKS_PAGE_${kind.toUpperCase()} artifact required`);
 const module=new WebAssembly.Module(readFileSync(paths.wasm));
 const fixture=JSON.parse(readFileSync(paths.vectors,'utf8')),artifact=JSON.parse(readFileSync(paths.catalog,'utf8'));
-assert.equal(fixture.vectors.length,26);
+assert.equal(fixture.vectors.length,34);
 const quote=s=>'"'+s.replaceAll('"','""')+'"';
 function seeded(vector){
   const db=new DatabaseSync(':memory:');db.exec('PRAGMA foreign_keys=ON;BEGIN;PRAGMA defer_foreign_keys=ON');
